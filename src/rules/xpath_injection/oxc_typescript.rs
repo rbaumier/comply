@@ -14,6 +14,27 @@ const XPATH_METHODS: &[&str] = &[
     "selectSingleNode",
 ];
 
+/// Last identifier segment of a member expression's receiver, e.g. `scope` for
+/// `state.scope.evaluate(...)` or `document` for `document.evaluate(...)`.
+/// Returns `None` for receivers without a trailing name (calls, `this`, etc.).
+fn receiver_name<'a>(object: &'a Expression<'a>) -> Option<&'a str> {
+    match object {
+        Expression::Identifier(id) => Some(id.name.as_str()),
+        Expression::StaticMemberExpression(m) => Some(m.property.name.as_str()),
+        _ => None,
+    }
+}
+
+/// `evaluate` is a common method name on non-XPath APIs (AST/scope evaluators,
+/// Playwright `page.evaluate`, expression evaluators). Only treat it as the DOM
+/// XPath API (`document.evaluate`) or an `xpath`-package evaluator when the
+/// receiver name signals XPath; the other method names in `XPATH_METHODS` are
+/// XPath-specific enough to fire on their own.
+fn is_xpath_receiver(object: &Expression) -> bool {
+    let Some(name) = receiver_name(object) else { return false };
+    name == "document" || name == "xpath" || name.to_ascii_lowercase().contains("xpath")
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -38,6 +59,12 @@ impl OxcCheck for Check {
         let Expression::StaticMemberExpression(member) = &call.callee else { return };
         let method_name = member.property.name.as_str();
         if !XPATH_METHODS.contains(&method_name) {
+            return;
+        }
+
+        // `evaluate` is ambiguous: only flag it when the receiver looks like an
+        // XPath processor, otherwise it matches AST/scope evaluators and the like.
+        if method_name == "evaluate" && !is_xpath_receiver(&member.object) {
             return;
         }
 
@@ -68,5 +95,71 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn run(code: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, code, "t.ts")
+    }
+
+    #[test]
+    fn flags_dom_evaluate_with_dynamic_query() {
+        assert_eq!(run("document.evaluate(query, doc)").len(), 1);
+    }
+
+    #[test]
+    fn flags_xpath_package_evaluate() {
+        assert_eq!(run("xpath.evaluate(expr, doc)").len(), 1);
+    }
+
+    #[test]
+    fn flags_select_nodes_template() {
+        assert_eq!(run("dom.selectNodes(`//user[@name='${name}']`)").len(), 1);
+    }
+
+    #[test]
+    fn flags_select_single_node_concat() {
+        assert_eq!(run("dom.selectSingleNode('//user[@id=' + id + ']')").len(), 1);
+    }
+
+    #[test]
+    fn allows_static_dom_evaluate() {
+        assert!(run("document.evaluate('//user', doc)").is_empty());
+    }
+
+    // Regression for #1763: `.evaluate()` on a non-XPath receiver (Svelte's
+    // compiler-internal Scope) is an AST evaluation, not an XPath query.
+    #[test]
+    fn allows_scope_evaluate() {
+        assert!(run("const evaluated = scope.evaluate(expression);").is_empty());
+    }
+
+    #[test]
+    fn allows_nested_scope_evaluate() {
+        assert!(run("const evaluated = state.scope.evaluate(node.expression);").is_empty());
+    }
+
+    #[test]
+    fn allows_playwright_page_evaluate() {
+        assert!(run("page.evaluate(selectorFn)").is_empty());
     }
 }
