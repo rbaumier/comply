@@ -24,8 +24,9 @@ impl OxcCheck for Check {
         let scoping = semantic.scoping();
         let nodes = semantic.nodes();
 
-        // Phase 1: collect named imports as `local_name -> (module_specifier, symbol_id)`.
-        let mut imports: HashMap<&str, (&str, Option<SymbolId>)> = HashMap::new();
+        // Phase 1: collect named imports as
+        // `local_name -> (module_specifier, symbol_id, is_type_only)`.
+        let mut imports: HashMap<&str, (&str, Option<SymbolId>, bool)> = HashMap::new();
         for stmt in &program.body {
             let Statement::ImportDeclaration(import) = stmt else {
                 continue;
@@ -34,13 +35,17 @@ impl OxcCheck for Check {
                 continue;
             };
             let specifier = import.source.value.as_str();
+            // `import type { ... }` marks the whole declaration as type-only.
+            let decl_is_type = import.import_kind == ImportOrExportKind::Type;
             for spec in specifiers {
                 let ImportDeclarationSpecifier::ImportSpecifier(named) = spec else {
                     continue;
                 };
                 let local_name = named.local.name.as_str();
                 let symbol_id = named.local.symbol_id.get();
-                imports.insert(local_name, (specifier, symbol_id));
+                // `import { type X }` marks the individual specifier as type-only.
+                let is_type_only = decl_is_type || named.import_kind == ImportOrExportKind::Type;
+                imports.insert(local_name, (specifier, symbol_id, is_type_only));
             }
         }
 
@@ -61,9 +66,20 @@ impl OxcCheck for Check {
             if export.declaration.is_some() {
                 continue;
             }
+            // `export type { ... }` marks the whole declaration as type-only.
+            let decl_is_type = export.export_kind == ImportOrExportKind::Type;
             for spec in &export.specifiers {
                 let local_name = spec.local.name().as_str();
-                if let Some((module_specifier, sym_id)) = imports.get(local_name) {
+                if let Some((module_specifier, sym_id, import_is_type)) = imports.get(local_name) {
+                    // `export { type X }` marks the individual specifier as type-only.
+                    let export_is_type =
+                        decl_is_type || spec.export_kind == ImportOrExportKind::Type;
+                    // When the binding is imported type-only AND re-exported type-only,
+                    // the value-export consolidation this rule suggests would drop the
+                    // `type` keyword and change tree-shaking semantics. Leave it alone.
+                    if *import_is_type && export_is_type {
+                        continue;
+                    }
                     // Skip if the symbol is also used locally — converting to a
                     // re-export would remove the local binding.
                     if let Some(symbol_id) = sym_id {
@@ -182,6 +198,36 @@ mod tests {
     fn no_fp_when_import_aliased_used_locally_and_exported() {
         let src = "import { foo as bar } from './m';\nconsole.log(bar);\nexport { bar };";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_type_only_import_then_type_only_reexport() {
+        // Regression test for issue #1958: the `import type` + `export type`
+        // two-statement idiom (858 occurrences in mantinedev/mantine). The
+        // value-export consolidation the rule would suggest drops the `type`
+        // keyword and changes tree-shaking semantics, so it must not fire.
+        let src = "import type { YearViewProps, YearViewFactory } from './YearView';\n\
+                   export { YearView } from './YearView';\n\
+                   export type { YearViewProps, YearViewFactory };";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_inline_type_import_then_inline_type_reexport() {
+        // Specifier-level `import { type X }` + `export { type X }` is the same
+        // type-erasure idiom expressed inline; it must not fire either.
+        let src = "import { type Foo } from './m';\nexport { type Foo };";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_type_only_import_then_value_reexport() {
+        // Mismatch: imported as type, re-exported as value. Consolidating is a
+        // real improvement here, so the rule must still flag it.
+        let src = "import type { Foo } from './m';\nexport { Foo };";
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("export { Foo } from './m'"));
     }
 
     #[test]
