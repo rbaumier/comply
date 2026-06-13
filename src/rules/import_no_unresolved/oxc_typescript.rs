@@ -45,6 +45,13 @@ impl OxcCheck for Check {
             {
                 continue;
             }
+            // An import resolving into the nearest tsconfig's
+            // `compilerOptions.outDir` (e.g. pnpm's `outDir: lib`) targets
+            // compiled output: gitignored and absent in a clean checkout, so the
+            // import is expected to be unresolved at lint time.
+            if resolves_into_out_dir(ctx, &imp.specifier) {
+                continue;
+            }
             // CSS, CSS Modules, SVG, and other static assets are imported via
             // build-tool support (Webpack, Vite, Next.js) and never enter the
             // TS/JS index. When such a non-source file exists on disk next to
@@ -132,6 +139,57 @@ pub(super) fn is_existing_source_import(importer: &Path, specifier: &str) -> boo
         .any(|ext| raw.join(format!("index.{ext}")).is_file())
 }
 
+/// Resolve a path lexically — collapse `.`/`..` segments without touching the
+/// filesystem, since the tsconfig `outDir` is gitignored and absent in a clean
+/// checkout. `..` pops the last normal segment; a `..` with nothing left to pop
+/// is preserved.
+fn normalize_lexical(path: &Path) -> std::path::PathBuf {
+    let mut out = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// True when `specifier`, resolved relative to the importer, lands inside the
+/// compiled-output directory declared by the nearest tsconfig's
+/// `compilerOptions.outDir`. Lexical comparison only — the outDir is absent in a
+/// clean checkout, so canonicalizing would fail.
+fn resolves_into_out_dir(ctx: &CheckCtx, specifier: &str) -> bool {
+    let Some(out_dir) = ctx.project.tsconfig_out_dir(ctx.path) else {
+        return false;
+    };
+    let Some(base_dir) = ctx.path.parent() else {
+        return false;
+    };
+    let resolved = normalize_lexical(&base_dir.join(specifier));
+    resolved.starts_with(normalize_lexical(&out_dir))
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
 #[cfg(test)]
 mod oxc_tests {
     use crate::rules::path_utils::{is_build_output_specifier, is_generated_file_specifier};
@@ -172,5 +230,74 @@ mod oxc_tests {
         assert!(!is_build_output_specifier("./does-not-exist"));
         assert!(!is_build_output_specifier("../utils/helper"));
         assert!(!is_build_output_specifier("./generated-things")); // substring, not a segment
+    }
+}
+
+#[cfg(test)]
+mod out_dir_tests {
+    use super::Check;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn run_with_tsconfig(
+        importer_rel: &str,
+        source: &str,
+        tsconfig_rel: &str,
+        tsconfig: &str,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
+        let ts_path = dir.path().join(tsconfig_rel);
+        fs::create_dir_all(ts_path.parent().unwrap()).unwrap();
+        fs::write(&ts_path, tsconfig).unwrap();
+        let importer = dir.path().join(importer_rel);
+        fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        fs::write(&importer, source).unwrap();
+        let canon = fs::canonicalize(&importer).unwrap();
+        let source_file = SourceFile {
+            path: canon.clone(),
+            language: Language::from_path(&canon).unwrap(),
+        };
+        let project = ProjectCtx::load(&[&source_file], &Config::default());
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    #[test]
+    fn no_fp_for_tsconfig_out_dir_import_issue_1972() {
+        // pnpm reproducer: a package whose tsconfig declares `outDir: lib`. A
+        // test imports compiled output under `lib/`, gitignored and absent in a
+        // clean checkout, so the import must not be flagged.
+        let source = "import type { NodeId } from '../lib/nextNodeId.js';";
+        let diags = run_with_tsconfig(
+            "deps-resolver/test/dedupeDepPaths.test.ts",
+            source,
+            "deps-resolver/tsconfig.json",
+            r#"{"compilerOptions":{"outDir":"lib","rootDir":"src"}}"#,
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_missing_lib_import_without_out_dir_issue_1005() {
+        // A project whose tsconfig does NOT declare `outDir: lib` keeps `lib/` as
+        // real source: a missing `./lib/util.js` is still a genuine broken import.
+        let source = "import { util } from './lib/util.js';";
+        let diags = run_with_tsconfig(
+            "pkg/app.ts",
+            source,
+            "pkg/tsconfig.json",
+            r#"{"compilerOptions":{"rootDir":"src"}}"#,
+        );
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("lib/util.js"));
     }
 }
