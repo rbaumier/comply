@@ -179,14 +179,19 @@ fn preceded_by_ts_expect_error(
 
 fn has_side_effects(expr: &Expression) -> bool {
     match expr {
-        // Always side-effectful
+        // Always side-effectful. JSX compiles to function calls
+        // (`React.createElement` / `_$createComponent`) that execute component
+        // code and register reactive subscriptions, so a bare `<Component />;`
+        // statement is the side effect, not a discarded value.
         Expression::CallExpression(_)
         | Expression::NewExpression(_)
         | Expression::AwaitExpression(_)
         | Expression::YieldExpression(_)
         | Expression::AssignmentExpression(_)
         | Expression::UpdateExpression(_)
-        | Expression::TaggedTemplateExpression(_) => true,
+        | Expression::TaggedTemplateExpression(_)
+        | Expression::JSXElement(_)
+        | Expression::JSXFragment(_) => true,
 
         // Unary: only delete/void are side-effectful
         Expression::UnaryExpression(unary) => {
@@ -302,6 +307,10 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    fn run_on_tsx(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
     }
 
     #[test]
@@ -485,6 +494,28 @@ mod tests {
         let src = "// @ts-ignore\nderived.actions;";
         let d = run_on(src);
         assert_eq!(d.len(), 1, "{:?}", d);
+    }
+
+    // Regression #1854: a bare JSX element/fragment statement compiles to a
+    // function call that executes component code and registers reactive
+    // subscriptions — it is the side effect, not a discarded value.
+    #[test]
+    fn allows_bare_jsx_element_statement_issue_1854() {
+        let src = r#"createRoot(dispose => { disposer = dispose; <Component />; });"#;
+        assert!(run_on_tsx(src).is_empty(), "{:?}", run_on_tsx(src));
+    }
+
+    #[test]
+    fn allows_bare_jsx_fragment_statement_issue_1854() {
+        let src = r#"createRoot(dispose => { disposer = dispose; <><Component /></>; });"#;
+        assert!(run_on_tsx(src).is_empty(), "{:?}", run_on_tsx(src));
+    }
+
+    #[test]
+    fn still_flags_bare_identifier_in_tsx() {
+        // JSX exemption must not mask a genuine unused expression in a .tsx file.
+        let d = run_on_tsx("let x = 1; x;");
+        assert_eq!(d.len(), 1);
     }
 
     #[test]
