@@ -179,6 +179,9 @@ const TAILWIND_HELPERS: &[&str] = &[
 /// Decide whether a string-literal node sits in a context where
 /// extracting it to a constant doesn't make sense:
 ///
+/// - A direct element of an array literal (categorized lookup / keyword
+///   tables, where the same value validly recurs across sibling
+///   category arrays).
 /// - JSX `className` / `class` attribute values (Tailwind class lists
 ///   in React/JSX are repeated by design).
 /// - The source specifier of an `import` / `export … from` statement
@@ -190,6 +193,16 @@ const TAILWIND_HELPERS: &[&str] = &[
 /// conditional expression, or array passed to one of these helpers
 /// is still recognized.
 pub(super) fn should_ignore_string_node(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
+    // A string that is a direct element of an array literal is pure data —
+    // a categorized lookup/keyword table (e.g. CSS-property or TS-global
+    // arrays). The same value validly recurs across sibling category
+    // arrays, so it is not a hard-coded business constant worth extracting.
+    if node
+        .parent()
+        .is_some_and(|parent| parent.kind() == "array_expression")
+    {
+        return true;
+    }
     let mut current = node;
     while let Some(parent) = current.parent() {
         match parent.kind() {

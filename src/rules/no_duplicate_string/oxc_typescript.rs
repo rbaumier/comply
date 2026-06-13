@@ -82,11 +82,24 @@ impl OxcCheck for Check {
 }
 
 /// Decide whether a string-literal node sits in a context where
-/// extracting it to a constant doesn't make sense.
+/// extracting it to a constant doesn't make sense — a direct element of
+/// an array literal (categorized lookup / keyword tables), import/export
+/// specifiers, equality comparisons, `switch` cases, JSX
+/// `className` / `class` values, or Tailwind class-composition helpers.
 fn should_ignore_oxc_node<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
+    // A string that is a direct element of an array literal is pure data —
+    // a categorized lookup/keyword table (`const ES_5 = ["Array", ...]`).
+    // The same value validly recurs across sibling category arrays, so it
+    // is not a hard-coded business constant worth extracting.
+    if matches!(
+        semantic.nodes().parent_kind(node.id()),
+        AstKind::ArrayExpression(_)
+    ) {
+        return true;
+    }
     for ancestor in semantic.nodes().ancestors(node.id()) {
         match ancestor.kind() {
             // `import "x"` / `import x from "y"` / `export … from "z"`.
@@ -230,6 +243,33 @@ mod tests {
             }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_same_value_across_categorized_arrays() {
+        // Categorized keyword/lookup tables: the same value validly
+        // appears in several standalone category arrays (e.g. CSS
+        // properties grouped by feature). Intentional data, not a
+        // hard-coded constant worth extracting. Values are >= min_length
+        // so they would otherwise count.
+        let src = r#"
+            const SHORTHAND = ["align-content", "flex-direction"];
+            const ANIMATABLE = ["align-content", "border-color"];
+            const TRANSITION = ["align-content", "margin-bottom"];
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_value_duplicated_in_call_arguments() {
+        // A genuine duplicate hard-coded across call arguments (not array
+        // data) is still extractable.
+        let src = r#"
+            track("checkout-completed");
+            track("checkout-completed");
+            track("checkout-completed");
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
