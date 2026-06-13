@@ -163,6 +163,15 @@ pub fn is_browser_asset_dir_path(path: &Path) -> bool {
     has_path_segment(path, &["public", "static", "assets"])
 }
 
+/// True when `path` lives under a `__mocks__/` directory, the Jest/Vitest
+/// manual-mock convention. These files are auto-loaded by the test runner to
+/// replace a module during tests; they import the package they mock and other
+/// test-only dependencies, and never ship in the published package. Segment
+/// match keeps an unrelated `src/my__mocks__data/` from matching.
+pub fn is_auto_mock_dir_path(path: &Path) -> bool {
+    has_path_segment(path, &["__mocks__"])
+}
+
 /// True for a test file that never ships in the published package: one under a
 /// `__tests__/`, `__testUtils__/`, `test/`, `tests/`, or `e2e/` directory, one
 /// carrying a `.test.`/`.spec.`/`.setup.`/`.tp.` infix, one whose whole stem is
@@ -494,6 +503,18 @@ mod aux_path_tests {
         // Segment (not substring) match.
         assert!(!is_scaffold_template_path(&PathBuf::from("src/templated/index.ts")));
         assert!(!is_scaffold_template_path(&PathBuf::from("src/app/login.ts")));
+    }
+
+    #[test]
+    fn auto_mock_dir_path_segments() {
+        // Issue #1755: Jest/Vitest `__mocks__/` manual-mock convention.
+        assert!(is_auto_mock_dir_path(&PathBuf::from(
+            "apps/react-vite/__mocks__/zustand.ts"
+        )));
+        assert!(is_auto_mock_dir_path(&PathBuf::from("__mocks__/fs.js")));
+        // Segment (not substring) match.
+        assert!(!is_auto_mock_dir_path(&PathBuf::from("src/my__mocks__data/index.ts")));
+        assert!(!is_auto_mock_dir_path(&PathBuf::from("src/app/login.ts")));
     }
 
     #[test]
