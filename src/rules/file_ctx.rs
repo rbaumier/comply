@@ -45,8 +45,10 @@ pub struct PathSegments {
     pub in_node_modules: bool,
     pub in_storybook: bool,
     pub is_vendored: bool,
-    /// `examples/`, `benches/`, or `fixtures/` anywhere in the path —
-    /// directories where api/rust/security rules are intentionally relaxed.
+    /// `examples/`, `benches/`, `fixtures/`, `samples/`, or `docs/` anywhere in
+    /// the path — directories where api/rust/security rules are intentionally
+    /// relaxed and where intentional duplication (multi-bundler/standalone demos)
+    /// is documentation, not a smell.
     pub is_relaxed_dir: bool,
     /// An auxiliary, non-shipped directory segment (scripts/bin/config/
     /// migrations/samples/examples/templates/scaffold/boilerplate). The broad
@@ -277,7 +279,7 @@ fn has_storybook_segment(normalized: &str) -> bool {
     normalized.split('/').any(|seg| STORYBOOK_SEGMENTS.contains(&seg))
 }
 
-fn scan_path(path: &Path) -> PathSegments {
+pub(crate) fn scan_path(path: &Path) -> PathSegments {
     let lower = path.to_string_lossy().replace('\\', "/");
     PathSegments {
         in_app_router: lower.contains("/app/") || lower.starts_with("app/"),
@@ -318,9 +320,13 @@ fn scan_path(path: &Path) -> PathSegments {
         is_relaxed_dir: lower.starts_with("examples/")
             || lower.starts_with("benches/")
             || lower.starts_with("fixtures/")
+            || lower.starts_with("samples/")
+            || lower.starts_with("docs/")
             || lower.contains("/examples/")
             || lower.contains("/benches/")
-            || lower.contains("/fixtures/"),
+            || lower.contains("/fixtures/")
+            || lower.contains("/samples/")
+            || lower.contains("/docs/"),
         in_aux_dir: crate::rules::path_utils::is_aux_dir_path(path),
         in_fuzz_targets: crate::rules::path_utils::is_fuzz_targets_path(path),
     }
@@ -535,6 +541,19 @@ mod tests {
     fn normal_files_not_vendored() {
         assert!(!scan_path(&PathBuf::from("src/app.ts")).is_vendored);
         assert!(!scan_path(&PathBuf::from("lib/utils.js")).is_vendored);
+    }
+
+    #[test]
+    fn relaxed_dirs_cover_samples_and_docs() {
+        // examples/benches/fixtures plus samples/ and docs/ (issue #1124).
+        assert!(scan_path(&PathBuf::from("examples/foo.ts")).is_relaxed_dir);
+        assert!(scan_path(&PathBuf::from("benches/foo.rs")).is_relaxed_dir);
+        assert!(scan_path(&PathBuf::from("fixtures/foo.ts")).is_relaxed_dir);
+        assert!(scan_path(&PathBuf::from("samples/foo.ts")).is_relaxed_dir);
+        assert!(scan_path(&PathBuf::from("a/b/samples/x.ts")).is_relaxed_dir);
+        assert!(scan_path(&PathBuf::from("docs/y.ts")).is_relaxed_dir);
+        assert!(scan_path(&PathBuf::from("a/b/docs/y.ts")).is_relaxed_dir);
+        assert!(!scan_path(&PathBuf::from("src/foo.ts")).is_relaxed_dir);
     }
 
     #[test]

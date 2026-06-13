@@ -59,6 +59,17 @@ type RawClone = (usize, usize, usize, usize, usize, usize);
 
 #[must_use]
 pub fn lint_files(files: &[&SourceFile]) -> Vec<Diagnostic> {
+    // Sample/example/docs/fixture/bench directories hold intentionally
+    // self-contained, duplicated code (multi-bundler demos, standalone sample
+    // apps). Drop them up front so a relaxed file is neither reported nor used
+    // as a canonical match, and downstream `file_data`/`files` indices stay
+    // internally consistent.
+    let files: Vec<&SourceFile> = files
+        .iter()
+        .copied()
+        .filter(|file| !crate::rules::file_ctx::scan_path(&file.path).is_relaxed_dir)
+        .collect();
+
     if files.len() < 2 {
         return vec![];
     }
@@ -69,7 +80,7 @@ pub fn lint_files(files: &[&SourceFile]) -> Vec<Diagnostic> {
         .collect();
 
     let mut raw = find_raw_clones(&file_data);
-    merge_and_emit(&mut raw, &file_data, files)
+    merge_and_emit(&mut raw, &file_data, &files)
 }
 
 /// Number of hash shards `find_raw_clones` fans out over. Each window hash
@@ -606,6 +617,52 @@ mod tests {
         let block = large_ts_block(5);
         let (fa, fb) = write_pair(&dir, "ts", &block);
         assert!(lint_files(&[&fa, &fb]).is_empty());
+    }
+
+    #[test]
+    fn no_clones_in_relaxed_sample_dirs() {
+        // Intentionally-duplicated sample apps (Azure SDK multi-bundler demos,
+        // standalone Expo samples) live under `samples/` — duplication there is
+        // documentation, not a smell, so no clone is reported (issue #1124).
+        let dir = tempfile::tempdir().unwrap();
+        let block = large_ts_block(20);
+        let pa = dir.path().join("samples/a/index.ts");
+        let pb = dir.path().join("samples/b/index.ts");
+        std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(pb.parent().unwrap()).unwrap();
+        std::fs::write(&pa, &block).unwrap();
+        std::fs::write(&pb, &block).unwrap();
+        let fa = SourceFile {
+            path: pa,
+            language: Language::TypeScript,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::TypeScript,
+        };
+        assert!(lint_files(&[&fa, &fb]).is_empty());
+    }
+
+    #[test]
+    fn detects_clone_outside_relaxed_dirs() {
+        // Guard for the relaxed-dir suppression: the identical content under
+        // production `src/` is still flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let block = large_ts_block(20);
+        let pa = dir.path().join("src/a.ts");
+        let pb = dir.path().join("src/b.ts");
+        std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
+        std::fs::write(&pa, &block).unwrap();
+        std::fs::write(&pb, &block).unwrap();
+        let fa = SourceFile {
+            path: pa,
+            language: Language::TypeScript,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::TypeScript,
+        };
+        assert_eq!(lint_files(&[&fa, &fb]).len(), 1);
     }
 
     #[test]
