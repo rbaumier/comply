@@ -41,6 +41,9 @@ impl OxcCheck for Check {
         if is_sample_file(ctx.path) {
             return;
         }
+        if is_scaffold_template_file(ctx.path) {
+            return;
+        }
 
         let specifier = import.source.value.as_str();
         if !is_bare_specifier(specifier) {
@@ -135,6 +138,21 @@ fn is_build_script(path: &Path) -> bool {
 fn is_sample_file(path: &Path) -> bool {
     let s = path.to_string_lossy().replace('\\', "/");
     ["samples", "samples-dev", "examples", "example-apps"]
+        .iter()
+        .any(|dir| s.contains(&format!("/{dir}/")) || s.starts_with(&format!("{dir}/")))
+}
+
+/// Source files under a `template/`, `templates/`, `scaffold/`, or
+/// `boilerplate/` directory are scaffold output shipped by a generator CLI: the
+/// CLI reads them from disk and writes them into the project it generates. Their
+/// imports describe the *generated* project's dependency graph, not the
+/// generator's own runtime closure, so the framework packages they reference are
+/// devDependencies of the host CLI (used to type-check the templates) rather than
+/// runtime dependencies. These files never execute as part of the CLI, so
+/// importing a devDependency from them is the correct classification.
+fn is_scaffold_template_file(path: &Path) -> bool {
+    let s = path.to_string_lossy().replace('\\', "/");
+    ["template", "templates", "scaffold", "boilerplate"]
         .iter()
         .any(|dir| s.contains(&format!("/{dir}/")) || s.starts_with(&format!("{dir}/")))
 }
@@ -332,6 +350,51 @@ import type { ApiItem, ApiPackage } from "@microsoft/api-extractor-model";
 "#;
         let d = run_with_pkg_at_path(pkg, "config/helpers.ts", src);
         assert!(d.is_empty(), "config/ build tooling should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_scaffold_template_file() {
+        // Issue #2072: a scaffold CLI (e.g. create-t3-app) ships source files
+        // under `cli/template/` that are copied into the generated project. Their
+        // imports (`postgres`, `react`, `@trpc/server`, …) describe the generated
+        // app's dependency graph; in the CLI's own package.json those packages are
+        // devDependencies (used to type-check the templates). These files never run
+        // as part of the CLI, so importing a devDependency must not flag.
+        let pkg = r#"{
+            "dependencies": {"commander": "^12"},
+            "devDependencies": {"postgres": "^3.4.4", "@trpc/server": "^11"}
+        }"#;
+        let src = r#"
+import postgres from "postgres";
+import { initTRPC } from "@trpc/server";
+"#;
+        let d = run_with_pkg_at_path(
+            pkg,
+            "cli/template/extras/src/server/db/with-postgres.ts",
+            src,
+        );
+        assert!(d.is_empty(), "scaffold template file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_templates_dir() {
+        // Issue #2072: the plural `templates/` convention is exempt for the same
+        // reason as `template/`.
+        let pkg = r#"{"devDependencies":{"react":"^19"}}"#;
+        let src = r#"import { useState } from "react";"#;
+        let d = run_with_pkg_at_path(pkg, "templates/app/page.tsx", src);
+        assert!(d.is_empty(), "templates/ file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_outside_template_dirs() {
+        // Guard against over-relaxing: a path that merely contains "template" as a
+        // substring of another segment (not its own directory) must still flag.
+        let pkg = r#"{"devDependencies":{"react":"^19"}}"#;
+        let src = r#"import { useState } from "react";"#;
+        let d = run_with_pkg_at_path(pkg, "src/templated/index.ts", src);
+        assert_eq!(d.len(), 1, "non-template dir should still flag: {d:?}");
+        assert!(d[0].message.contains("react"));
     }
 
     #[test]
