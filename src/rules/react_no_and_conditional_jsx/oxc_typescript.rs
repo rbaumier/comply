@@ -35,8 +35,10 @@ impl OxcCheck for Check {
         if !is_jsx_expr(&logical.right) {
             return;
         }
-        // Exempt boolean predicate calls (e.g. isError(), hasPermission()).
-        if is_boolean_predicate_call(&logical.left) {
+        // Exempt boolean-prefixed predicates: calls (isError(), hasPermission())
+        // and identifier references (withTimeBubble, showThumb) whose name
+        // follows the boolean-naming convention, hence `boolean | undefined`.
+        if is_boolean_predicate(&logical.left) {
             return;
         }
         let (line, column) =
@@ -65,20 +67,27 @@ fn is_jsx_expr(expr: &Expression) -> bool {
 
 // mirrors jsx_ensure_booleans::BOOLEAN_PREFIXES
 const BOOLEAN_PREFIXES: &[&str] = &[
-    "is", "has", "should", "can", "will", "did", "show", "hide",
+    "is", "has", "should", "can", "will", "did", "show", "hide", "with",
     "enable", "disable", "visible", "active", "open", "loading",
     "loaded", "allow", "need", "must",
 ];
 
-fn is_boolean_predicate_call(expr: &Expression) -> bool {
-    let expr = expr.without_parentheses();
-    if let Expression::CallExpression(call) = expr {
-        if let Expression::Identifier(id) = &call.callee {
-            let lower = id.name.as_str().to_lowercase();
-            return BOOLEAN_PREFIXES.iter().any(|p| lower.starts_with(p));
+fn has_boolean_prefix(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    BOOLEAN_PREFIXES.iter().any(|p| lower.starts_with(p))
+}
+
+// True when the operand is a boolean-prefixed predicate: a call (isError())
+// or a bare identifier reference (withTimeBubble), both `boolean | undefined`
+// by naming convention and therefore safe in `&&`.
+fn is_boolean_predicate(expr: &Expression) -> bool {
+    match expr.without_parentheses() {
+        Expression::CallExpression(call) => {
+            matches!(&call.callee, Expression::Identifier(id) if has_boolean_prefix(id.name.as_str()))
         }
+        Expression::Identifier(id) => has_boolean_prefix(id.name.as_str()),
+        _ => false,
     }
-    false
 }
 
 #[cfg(test)]
@@ -107,14 +116,14 @@ mod tests {
     #[test]
     fn flags_and_conditional_jsx() {
         assert_eq!(
-            run_on("const x = <div>{isAdmin && <Panel />}</div>;").len(),
+            run_on("const x = <div>{admin && <Panel />}</div>;").len(),
             1
         );
     }
 
     #[test]
     fn allows_ternary() {
-        assert!(run_on("const x = <div>{isAdmin ? <Panel /> : null}</div>;").is_empty());
+        assert!(run_on("const x = <div>{admin ? <Panel /> : null}</div>;").is_empty());
     }
 
     #[test]
@@ -136,6 +145,25 @@ mod tests {
     fn flags_numeric_expression() {
         assert_eq!(
             run_on("const x = <div>{count && <span>{count}</span>}</div>;").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_boolean_prefixed_identifier() {
+        assert!(run_on("const x = <div>{withTimeBubble && <div />}</div>;").is_empty());
+        assert!(run_on("const x = <div>{showThumb && <div />}</div>;").is_empty());
+    }
+
+    #[test]
+    fn flags_non_boolean_identifier() {
+        assert_eq!(run_on("const x = <div>{count && <div />}</div>;").len(), 1);
+    }
+
+    #[test]
+    fn flags_length_member_expression() {
+        assert_eq!(
+            run_on("const x = <div>{items.length && <div />}</div>;").len(),
             1
         );
     }
