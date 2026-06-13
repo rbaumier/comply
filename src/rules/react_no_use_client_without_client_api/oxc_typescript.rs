@@ -25,12 +25,20 @@ const CLIENT_GLOBALS: &[&str] = &[
 const CLIENT_FACTORY_APIS: &[&str] = &["createContext", "createSvgIcon"];
 
 /// Packages whose re-exports implicitly use client APIs (hooks, event listeners,
-/// resize observers, etc.) that are invisible to static analysis.
+/// resize observers, etc.) that are invisible to static analysis. The `next/*`
+/// entries are Next.js client components/hooks that already ship `"use client"`,
+/// so a barrel re-export propagating the directive is the idiomatic pattern.
 const CLIENT_ONLY_PACKAGE_PREFIXES: &[&str] = &[
     "@base-ui/react",
     "@radix-ui/",
     "motion/react",
     "framer-motion",
+    "next/link",
+    "next/image",
+    "next/navigation",
+    "next/router",
+    "next/headers",
+    "next/dynamic",
 ];
 
 pub struct Check;
@@ -417,6 +425,38 @@ export function useThing() { return React.useState(0); }
     fn still_flags_use_client_without_any_client_api_oxc() {
         let src = r#"'use client';
 export const x = 1;
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression tests for #2006 — barrel files re-exporting Next.js client-only
+    // packages (next/link, next/image, …) legitimately need `"use client"`.
+    #[test]
+    fn no_fp_for_next_link_reexport_oxc() {
+        let src = r#"'use client';
+import Link from 'next/link';
+
+export default Link;
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_next_image_reexport_oxc() {
+        let src = r#"'use client';
+import Image from 'next/image';
+
+export default Image;
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_client_package_reexport_oxc() {
+        let src = r#"'use client';
+import { chunk } from 'lodash';
+
+export default chunk;
 "#;
         assert_eq!(run(src).len(), 1);
     }
