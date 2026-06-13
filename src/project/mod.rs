@@ -20,7 +20,7 @@
 //! - Lazy fields use `OnceLock<Option<T>>`; parse failures cache as `None`
 //!   (no retry within the run) and emit one stderr warning per field.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -80,6 +80,12 @@ pub struct PackageJson {
     /// `scripts` field (e.g. `"seed:dev": "bun run src/db/seed/dev.ts"`).
     /// Stored with forward slashes and without a leading `./`.
     pub script_entry_files: Vec<String>,
+    /// Test-runner binaries invoked as a command by any `scripts` entry
+    /// (e.g. `vitest` from `"test": "vitest run"`). A dependency listed in
+    /// `devDependencies` alone does not appear here — only binaries actually
+    /// run by a script — so consumers can tell "uses X as its runner" apart
+    /// from "ships an integration/plugin for X".
+    pub script_test_runners: BTreeSet<String>,
 }
 
 impl PackageJson {
@@ -126,6 +132,16 @@ impl PackageJson {
                         .collect()
                 })
                 .unwrap_or_default(),
+            script_test_runners: json
+                .get("scripts")
+                .and_then(|node| node.as_object())
+                .map(|obj| {
+                    obj.values()
+                        .filter_map(|v| v.as_str())
+                        .flat_map(extract_script_test_runners)
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 
@@ -152,6 +168,13 @@ impl PackageJson {
             || self.optional_dependencies.contains_key(name)
             || self.engines.contains_key(name)
     }
+
+    /// True if any `scripts` entry runs `name` (e.g. `vitest`) as a command.
+    /// Evidence the package uses `name` as its test runner, as opposed to
+    /// merely listing it in `devDependencies` to exercise an integration.
+    pub fn scripts_invoke_test_runner(&self, name: &str) -> bool {
+        self.script_test_runners.contains(name)
+    }
 }
 
 /// Extract source-file paths from a package.json script command value.
@@ -164,6 +187,23 @@ fn extract_script_entry_files(cmd: &str) -> Vec<String> {
     cmd.split_whitespace()
         .filter(|token| SOURCE_EXTS.iter().any(|ext| token.ends_with(ext)))
         .map(|token| token.strip_prefix("./").unwrap_or(token).to_string())
+        .collect()
+}
+
+/// Test-runner binaries (`vitest`, `jest`) invoked as a command by a script.
+///
+/// Tokenizes the command on shell separators and whitespace, strips any path /
+/// `.bin` prefix from each token, and keeps tokens whose basename names a known
+/// runner — so `vitest run`, `npx vitest`, and `node_modules/.bin/jest` all
+/// count, while a bare `vitest.config.ts` path or a `--reporter=vitest` flag do
+/// not (they are not command heads of the form the runner binary takes).
+fn extract_script_test_runners(cmd: &str) -> Vec<String> {
+    const RUNNERS: &[&str] = &["vitest", "jest"];
+    cmd.split(|c: char| c.is_whitespace() || matches!(c, '&' | '|' | ';' | '(' | ')'))
+        .filter(|token| !token.is_empty())
+        .map(|token| token.rsplit('/').next().unwrap_or(token))
+        .filter(|name| RUNNERS.contains(name))
+        .map(str::to_string)
         .collect()
 }
 

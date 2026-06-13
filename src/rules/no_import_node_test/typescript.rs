@@ -38,10 +38,9 @@ crate::ast_check! { on ["program"] prefilter = ["node:test"] => |node, source, c
     }
 
     let mixes_runners = same_file_has_runner
-        || ctx
-            .project
-            .nearest_package_json(ctx.path)
-            .is_some_and(|pkg| pkg.has_dep_or_engine("vitest") || pkg.has_dep_or_engine("jest"));
+        || ctx.project.nearest_package_json(ctx.path).is_some_and(|pkg| {
+            pkg.scripts_invoke_test_runner("vitest") || pkg.scripts_invoke_test_runner("jest")
+        });
     if !mixes_runners {
         return;
     }
@@ -115,19 +114,30 @@ mod tests {
     }
 
     #[test]
-    fn flags_node_test_when_package_uses_vitest() {
-        let pkg = r#"{"devDependencies":{"vitest":"^1"}}"#;
+    fn flags_node_test_when_test_script_runs_vitest() {
+        let pkg = r#"{"scripts":{"test":"vitest run"},"devDependencies":{"vitest":"^1"}}"#;
         let src = "import { describe, it } from 'node:test';";
         let d = run_with_pkg(pkg, "test/path.test.ts", src);
-        assert_eq!(d.len(), 1, "node:test in a vitest package mixes runners");
+        assert_eq!(d.len(), 1, "node:test in a vitest-run package mixes runners");
     }
 
     #[test]
-    fn flags_node_test_when_package_uses_jest() {
-        let pkg = r#"{"devDependencies":{"jest":"^29"}}"#;
+    fn flags_node_test_when_test_script_runs_jest() {
+        let pkg = r#"{"scripts":{"test":"jest"},"devDependencies":{"jest":"^29"}}"#;
         let src = "import test from 'node:test';";
         let d = run_with_pkg(pkg, "src/foo.test.ts", src);
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_node_test_when_vitest_is_devdep_only() {
+        // Issue #2057: vitest in devDependencies to exercise an integration,
+        // node:test as the actual runner — no script invokes vitest.
+        let pkg = r#"{"scripts":{"test":"astro-scripts test \"test/**/*.test.ts\""},"devDependencies":{"vitest":"^2"}}"#;
+        let src = "import assert from 'node:assert/strict';\n\
+                   import { before, describe, it } from 'node:test';";
+        let d = run_with_pkg(pkg, "test/html-escape.test.ts", src);
+        assert!(d.is_empty(), "vitest devDep-only must not flag node:test: {d:?}");
     }
 
     #[test]
