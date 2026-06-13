@@ -233,6 +233,12 @@ impl OxcCheck for Check {
         if has_throwing_query_call(body_text) {
             return;
         }
+        // React render calls (`render`, `renderToString`, `renderHook`, …) throw
+        // when the component/hook crashes, so a "does not throw" smoke test built
+        // only out of them is a real test, not a silent pass.
+        if crate::rules::test_assertion_helpers::has_render_assertion_call(body_text) {
+            return;
+        }
         // `@ts-expect-error` is TypeScript's compile-time assertion: the
         // compiler itself fails the build if the expected type error is absent.
         // Tests that rely solely on this directive have a valid assertion.
@@ -607,5 +613,46 @@ mod tests {
     fn still_flags_test_with_throw_only_in_string() {
         let src = r#"it("x", () => { log("this should throw eventually"); });"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for #1870 — a React Testing Library smoke test whose body is
+    // only `render(<App/>)` is a "does not throw" assertion: render throws if
+    // the component crashes, so reaching the end means it rendered. Uses a
+    // `.tsx` path so the JSX argument parses.
+    #[test]
+    fn allows_test_with_render_only() {
+        let src = r#"it("should not throw error when register with non input ref", () => { render(<App />); });"#;
+        assert!(run_at(src, "/tmp/x.test.tsx").is_empty(), "{:?}", run_at(src, "/tmp/x.test.tsx"));
+    }
+
+    // Regression for #1870 — SSR smoke test built only on `renderToString`.
+    #[test]
+    fn allows_test_with_render_to_string_only() {
+        let src = r#"it("should render correctly with as with component", () => { renderToString(<Component />); });"#;
+        assert!(run_at(src, "/tmp/x.test.tsx").is_empty(), "{:?}", run_at(src, "/tmp/x.test.tsx"));
+    }
+
+    // Regression for #1870 — hook smoke test built only on `renderHook` + `act`
+    // (no JSX, so a plain `.test.ts` path is fine).
+    #[test]
+    fn allows_test_with_render_hook_only() {
+        let src = r#"it("should reset value", () => { const { result } = renderHook(() => useForm()); result.current.register("test"); act(() => result.current.reset({ test: "test" })); });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Word-boundary guard: a custom identifier whose tail spells `render` must
+    // not be mistaken for the React render call.
+    #[test]
+    fn still_flags_test_with_custom_render_identifier() {
+        let src = r#"it("x", () => { customRender(<App />); });"#;
+        assert_eq!(run_at(src, "/tmp/x.test.tsx").len(), 1, "{:?}", run_at(src, "/tmp/x.test.tsx"));
+    }
+
+    // True positive guard: a test with no assertion and no render call still
+    // fires — the render carve-out must not swallow genuinely empty tests.
+    #[test]
+    fn still_flags_test_without_render_or_assertion() {
+        let src = r#"it("x", () => { const x = 1; });"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
