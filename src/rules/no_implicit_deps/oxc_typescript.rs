@@ -34,6 +34,19 @@ impl OxcCheck for Check {
         let Some(pkg) = ctx.project.nearest_package_json(ctx.path) else {
             return;
         };
+        // Deno subtree: a `deno.json`/`deno.jsonc` at or below the nearest
+        // `package.json` governs this file's imports via its own import map
+        // (which this rule does not parse). Validating its imports against the
+        // npm manifest would false-positive on every mapped specifier.
+        if let Some(deno_dir) = ctx.project.nearest_deno_config_dir(ctx.path) {
+            let deno_governs = ctx
+                .project
+                .nearest_package_json_dir(ctx.path)
+                .is_none_or(|pkg_dir| deno_dir.starts_with(&pkg_dir));
+            if deno_governs {
+                return;
+            }
+        }
         let alias_prefixes = ctx
             .project
             .nearest_tsconfig(ctx.path)
@@ -442,6 +455,96 @@ mod tests {
         assert!(
             diags.is_empty(),
             "sibling-package dep from a manifestless integration dir must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Regression #1946: a file inside a Deno subtree governed by its own
+    // `deno.json` import map must not be validated against the root
+    // `package.json`. Both `@std/assert` (a JSR import) and `axios` (a relative
+    // file mapping) are declared in `deno.json`, not the npm manifest.
+    #[test]
+    fn allows_deno_subtree_imports_issue_1946() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"root","dependencies":{}}"#,
+        )
+        .unwrap();
+        let deno = dir.path().join("tests").join("smoke").join("deno");
+        let tests = deno.join("tests");
+        fs::create_dir_all(&tests).unwrap();
+        fs::write(
+            deno.join("deno.json"),
+            r#"{"imports":{"@std/assert":"jsr:@std/assert@1","axios":"../x.js"}}"#,
+        )
+        .unwrap();
+        let file = tests.join("x.test.ts");
+        let source =
+            "import { assertEquals } from '@std/assert';\nimport axios from 'axios';\n";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "imports in a deno.json-governed subtree must not be flagged, got {diags:?}"
+        );
+    }
+
+    // A `deno.jsonc` (JSONC variant) at the subtree root governs it just the
+    // same as `deno.json`.
+    #[test]
+    fn allows_deno_jsonc_subtree_imports_issue_1946() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"root","dependencies":{}}"#,
+        )
+        .unwrap();
+        let deno = dir.path().join("scripts").join("deno");
+        fs::create_dir_all(&deno).unwrap();
+        fs::write(
+            deno.join("deno.jsonc"),
+            "{\n  // import map\n  \"imports\": { \"@std/fs\": \"jsr:@std/fs@1\" }\n}",
+        )
+        .unwrap();
+        let file = deno.join("build.ts");
+        let source = "import { exists } from '@std/fs';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "imports in a deno.jsonc-governed subtree must not be flagged, got {diags:?}"
+        );
+    }
+
+    // A normal file under the root `package.json` with no `deno.json` in its
+    // ancestry must still be flagged for an undeclared import — the Deno carve-out
+    // only applies inside a Deno subtree.
+    #[test]
+    fn flags_undeclared_dep_outside_deno_subtree_issue_1946() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"root","dependencies":{}}"#,
+        )
+        .unwrap();
+        let deno = dir.path().join("tests").join("smoke").join("deno");
+        fs::create_dir_all(&deno).unwrap();
+        fs::write(
+            deno.join("deno.json"),
+            r#"{"imports":{"axios":"../x.js"}}"#,
+        )
+        .unwrap();
+        // Sibling source file outside the deno subtree, under the root manifest.
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("app.ts");
+        let source = "import axios from 'axios';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "undeclared dep outside the deno subtree must still fire, got {diags:?}"
         );
     }
 

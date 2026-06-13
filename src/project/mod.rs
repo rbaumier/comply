@@ -1067,6 +1067,22 @@ impl ProjectCtx {
         walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "package.json")
     }
 
+    /// Walk up from `path` to the nearest Deno config (`deno.json` or
+    /// `deno.jsonc`) and return the *directory* containing it. `deno.json` is
+    /// Deno's authoritative manifest, declaring its own import map; a file under
+    /// such a directory belongs to a Deno subtree, not the surrounding npm
+    /// project. When both names sit at different depths the closer (deeper) one
+    /// wins. Shares the manifest-dir cache with the other `nearest_*` walks.
+    pub fn nearest_deno_config_dir(&self, path: &Path) -> Option<PathBuf> {
+        let start_dir = path.parent()?;
+        let json = walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "deno.json");
+        let jsonc = walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "deno.jsonc");
+        match (json, jsonc) {
+            (Some(a), Some(b)) => Some(deeper_dir(a, b)),
+            (found, None) | (None, found) => found,
+        }
+    }
+
     /// Walk up from `path` to the nearest `package.json`, cache the parsed
     /// result by manifest directory. Returns the same `Arc` on repeated
     /// lookups against any file under the same manifest.
@@ -1603,6 +1619,17 @@ fn common_ancestor(files: &[&SourceFile]) -> Option<PathBuf> {
         }
     }
     Some(common)
+}
+
+/// Of two ancestor directories on the same root-to-leaf chain, the one closer
+/// to the file — i.e. with more path components. Ties (equal depth, hence equal
+/// directories) return `a`.
+fn deeper_dir(a: PathBuf, b: PathBuf) -> PathBuf {
+    if b.components().count() > a.components().count() {
+        b
+    } else {
+        a
+    }
 }
 
 pub(crate) fn walk_up_finding(start: &Path, target: &str) -> Option<PathBuf> {
