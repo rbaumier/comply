@@ -8,6 +8,24 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// Recognized JS/TS source extensions. Only these are stripped when deriving a
+/// module name — companion suffixes like `.utils` or `.css` are part of the name.
+const SOURCE_EXTENSIONS: &[&str] = &[
+    "ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs",
+];
+
+/// Strip a single recognized source extension from a file name, leaving the
+/// module name. `CodeBlock.tsx` → `CodeBlock`, `CodeBlock.utils` → `CodeBlock.utils`,
+/// `App.css` → `App.css`.
+fn module_name(name: &str) -> &str {
+    if let Some((stem, ext)) = name.rsplit_once('.')
+        && SOURCE_EXTENSIONS.contains(&ext)
+    {
+        return stem;
+    }
+    name
+}
+
 fn is_self_import(spec: &str, file_path: &Path) -> bool {
     let file_is_index = file_path
         .file_stem()
@@ -29,20 +47,20 @@ fn is_self_import(spec: &str, file_path: &Path) -> bool {
         return true;
     }
 
-    if let Some(file_stem) = file_path.file_stem().and_then(|s| s.to_str()) {
-        let import_stem = spec.trim_start_matches("./");
-        if !import_stem.contains('/') {
-            let import_base = Path::new(import_stem)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or(import_stem);
-            if import_base == file_stem && spec.starts_with("./") {
-                return true;
-            }
-        }
+    // A self-import resolves to the same file. Two relative siblings are the same
+    // module only when their module names (file name minus a source extension)
+    // are equal. Companion files (`Foo.utils`, `Foo.css`) keep their suffix in the
+    // module name, so `Foo` ≠ `Foo.utils` — not a self-import.
+    let Some(import_stem) = spec.strip_prefix("./") else {
+        return false;
+    };
+    if import_stem.contains('/') {
+        return false;
     }
-
-    false
+    let Some(file_name) = file_path.file_name().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    module_name(import_stem) == module_name(file_name)
 }
 
 impl OxcCheck for Check {
@@ -127,5 +145,52 @@ mod tests {
     fn allows_different_module() {
         let src = "import { foo } from './other';\n";
         assert!(run(src, "src/utils.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_companion_module_files() {
+        // `CodeBlock.tsx` importing `./CodeBlock.utils` / `.helpers` / `.types` —
+        // distinct companion files, not self-imports.
+        for spec in [
+            "./CodeBlock.utils",
+            "./CodeBlock.helpers",
+            "./CodeBlock.types",
+            "./CodeBlock.styles",
+            "./CodeBlock.constants",
+        ] {
+            let src = format!("import {{ foo }} from '{spec}';\n");
+            assert!(
+                run(&src, "src/CodeBlock/CodeBlock.tsx").is_empty(),
+                "{spec} should not be a self-import"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_css_module_import() {
+        // `App.jsx` importing `./App.css` — different extension, different file.
+        let src = "import './App.css';\n";
+        assert!(run(src, "src/App.jsx").is_empty());
+    }
+
+    #[test]
+    fn allows_compound_component_submodules() {
+        // `Message.tsx` importing `./Message.Actions` — a separate sub-component file.
+        for spec in ["./Message.Actions", "./Message.Context", "./Message.Display"] {
+            let src = format!("import {{ foo }} from '{spec}';\n");
+            assert!(
+                run(&src, "src/Message/Message.tsx").is_empty(),
+                "{spec} should not be a self-import"
+            );
+        }
+    }
+
+    #[test]
+    fn flags_self_import_with_explicit_extension() {
+        // True positive: a file importing its own path resolves to itself.
+        let src = "import { foo } from './utils.ts';\n";
+        let diags = run(src, "src/utils.ts");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("imports itself"));
     }
 }
