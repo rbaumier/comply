@@ -413,6 +413,36 @@ import { animated } from "@react-spring/web";
     }
 
     #[test]
+    fn allows_dev_dep_in_storybook_config_dir() {
+        // Issue #1860: recharts places its Storybook configuration in a plain
+        // top-level `storybook/` directory (not the dotted `.storybook/`). Config
+        // and entry files directly under `storybook/` (`storybook/main.ts`,
+        // `storybook/manager.ts`) import Storybook devDependencies and are never
+        // bundled into the published library, so they must not flag.
+        let pkg = r#"{
+            "devDependencies": {
+                "@storybook/react-vite": "^8",
+                "storybook": "^8"
+            }
+        }"#;
+        let main_src = r#"
+import type { StorybookConfig } from '@storybook/react-vite';
+const config: StorybookConfig = { framework: { name: '@storybook/react-vite', options: {} } };
+export default config;
+"#;
+        let d = run_with_pkg_at_path(pkg, "storybook/main.ts", main_src);
+        assert!(d.is_empty(), "storybook/main.ts should not flag devDeps: {d:?}");
+
+        let manager_src = r#"
+import { addons } from 'storybook/manager-api';
+import { RechartsTheme } from './RechartsTheme';
+addons.setConfig({ theme: RechartsTheme });
+"#;
+        let d = run_with_pkg_at_path(pkg, "storybook/manager.ts", manager_src);
+        assert!(d.is_empty(), "storybook/manager.ts should not flag devDeps: {d:?}");
+    }
+
+    #[test]
     fn allows_dev_dep_in_dot_stories_file() {
         // A `*.stories.*` file is the canonical story convention and must be
         // exempt for the same reason as files inside `stories/`.
