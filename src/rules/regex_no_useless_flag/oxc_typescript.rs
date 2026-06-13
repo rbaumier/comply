@@ -7,45 +7,51 @@ use std::sync::Arc;
 
 pub struct Check;
 
-fn has_useless_flag(pattern: &str, flags: &str) -> bool {
-    let pbytes = pattern.as_bytes();
+/// A letter `/i` can fold: alphabetic with a distinct upper/lowercase form.
+/// Covers non-ASCII case pairs (`č`/`Č`, `é`/`É`, `ñ`/`Ñ`) and excludes
+/// caseless alphabetics (CJK, etc.) where `/i` truly has no effect.
+fn is_case_variable_letter(c: char) -> bool {
+    c.is_alphabetic() && (c.to_lowercase().next() != Some(c) || c.to_uppercase().next() != Some(c))
+}
 
-    // `i` is useless only when the pattern has no ASCII letter to case-fold.
-    // Letters inside a character class (`[a-z]`, `[jfmasond]`) ARE
-    // case-sensitive without `i`, so they count too.
-    if flags.contains('i') {
-        let mut has_letter = false;
-        let mut k = 0;
-        while k < pbytes.len() {
-            if pbytes[k] == b'\\' {
+/// `/i` matters iff the pattern holds a letter with a case to fold. Letters
+/// inside a character class (`[a-z]`, `[cč]`) are case-sensitive too, so they
+/// count. Iterates by `char` so multi-byte UTF-8 letters are seen as letters,
+/// not as ASCII-failing continuation bytes.
+fn pattern_has_case_variable_letter(pattern: &str) -> bool {
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut k = 0;
+    while k < chars.len() {
+        match chars[k] {
+            '\\' => {
                 k += 2; // escape sequence (`\d`, `\w`, …) — never a literal letter
-                continue;
             }
-            if pbytes[k] == b'[' {
+            '[' => {
                 // Scan the class body: any letter inside is case-sensitive.
                 k += 1;
-                while k < pbytes.len() && pbytes[k] != b']' {
-                    if pbytes[k] == b'\\' {
+                while k < chars.len() && chars[k] != ']' {
+                    if chars[k] == '\\' {
                         k += 1;
-                    } else if pbytes[k].is_ascii_alphabetic() {
-                        has_letter = true;
+                    } else if is_case_variable_letter(chars[k]) {
+                        return true;
                     }
                     k += 1;
                 }
-                if has_letter {
-                    break;
-                }
-                continue;
+                k += 1; // past `]`
             }
-            if pbytes[k].is_ascii_alphabetic() {
-                has_letter = true;
-                break;
-            }
-            k += 1;
+            c if is_case_variable_letter(c) => return true,
+            _ => k += 1,
         }
-        if !has_letter {
-            return true;
-        }
+    }
+    false
+}
+
+fn has_useless_flag(pattern: &str, flags: &str) -> bool {
+    let pbytes = pattern.as_bytes();
+
+    // `i` is useless only when the pattern has no foldable letter.
+    if flags.contains('i') && !pattern_has_case_variable_letter(pattern) {
+        return true;
     }
 
     // `m` flag with no ^ or $
