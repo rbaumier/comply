@@ -98,10 +98,15 @@ impl OxcCheck for Check {
 
         for stmt in body {
             match stmt {
-                Statement::ImportDeclaration(_) => {
+                // ES `import ... from "..."` and TS import-equals declarations
+                // (`import X = Namespace.Type;`, `import x = require("x");`) are
+                // all import statements subject to the ordering rule.
+                Statement::ImportDeclaration(_)
+                | Statement::TSImportEqualsDeclaration(_) => {
                     if saw_non_import {
                         let span = match stmt {
                             Statement::ImportDeclaration(d) => d.span,
+                            Statement::TSImportEqualsDeclaration(d) => d.span,
                             _ => unreachable!(),
                         };
                         let (line, column) =
@@ -266,6 +271,45 @@ import React from 'react';
 import ReactDOMServer from 'react-dom/server';
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    // Regression test for https://github.com/rbaumier/comply/issues/1143
+    // `import X = Namespace.Type;` is a TypeScript namespace import alias: a
+    // declaration with no runtime effect. Placed between ES imports it must not
+    // flip the imports block and flag the following imports.
+    #[test]
+    fn allows_namespace_import_alias_between_imports() {
+        let src = r#"import { LRUCache } from "lru-cache";
+import LRUCacheOptions = LRUCache.Options;
+import { logger } from "./logger.js";
+import { DateType } from "./logicalTypes/dateType.js";
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // An `import x = require("x")` (CommonJS import-equals) is the legacy TS
+    // equivalent of an ES import and likewise belongs in the import block.
+    #[test]
+    fn allows_import_equals_require_between_imports() {
+        let src = r#"import { a } from "a";
+import fs = require("fs");
+import { b } from "b";
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // A genuine runtime statement before an import-equals declaration must still
+    // flag it — import-equals is an import statement, so it is subject to the
+    // same ordering rule as ES imports.
+    #[test]
+    fn still_flags_import_equals_after_runtime_code() {
+        let src = r#"import { a } from "a";
+
+const x = compute();
+
+import LRUCacheOptions = LRUCache.Options;
+"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 
     // `jest.unmock()` / `vi.mock()` / `vi.unmock()` follow the same hoisting
