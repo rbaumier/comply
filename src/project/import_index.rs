@@ -1772,6 +1772,32 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
     })
 }
 
+/// Named export names declared in a TypeScript declaration file (`.d.ts` and
+/// variants). Reads and parses the file on demand — declaration files are
+/// excluded from the indexed set, so their exports are not in `get_exports`.
+///
+/// Returns `None` when the declaration cannot be enumerated reliably: the file
+/// is unreadable, fails to parse, or contains an `export * from '...'` star
+/// re-export (which pulls in names this single-file parse cannot see). A `None`
+/// result means "cannot prove the name is absent", so callers must not flag.
+#[must_use]
+pub fn declaration_file_exports(path: &Path) -> Option<HashSet<String>> {
+    let source = std::fs::read_to_string(path).ok()?;
+    let extract = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        extract_ts_oxc(&source, path)
+    }))
+    .ok()
+    .flatten()?;
+    if extract
+        .exports
+        .iter()
+        .any(|e| e.kind == ExportKind::StarReExport)
+    {
+        return None;
+    }
+    Some(extract.exports.into_iter().map(|e| e.name).collect())
+}
+
 fn oxc_extract_import(
     lines: &[usize],
     import: &oxc_ast::ast::ImportDeclaration,
