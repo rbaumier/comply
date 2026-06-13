@@ -1,6 +1,12 @@
 //! ts-no-use-before-define oxc backend — accurate TDZ detection via
 //! oxc_semantic scope/symbol analysis.
 //!
+//! Only value references are considered. Type-only references (type
+//! annotations, type arguments, `extends`/`implements` type clauses, `typeof X`
+//! queries) are erased at compile time and carry no runtime ordering
+//! constraint, so a forward reference to a class/interface/type name in type
+//! position is never a use-before-define hazard.
+//!
 //! Skips forward references to bindings initialized via TanStack Router's
 //! `createFileRoute(...)` / `createLazyFileRoute(...)` factories. The
 //! generated `Route` object is referenced (e.g. `Route.useSearch()`) inside
@@ -84,6 +90,14 @@ impl OxcCheck for Check {
                 scoping.symbol_scope_id(symbol_id) == scoping.root_scope_id();
 
             for reference in scoping.get_resolved_references(symbol_id) {
+                // Type-only references (type annotations, type arguments,
+                // `extends`/`implements` type clauses, `typeof X` queries) are
+                // erased at compile time, so they carry no TDZ ordering
+                // constraint — a forward reference to a class/interface/type
+                // name in type position is always safe.
+                if !reference.is_value() {
+                    continue;
+                }
                 let ref_node_id = reference.node_id();
                 let ref_span = nodes.kind(ref_node_id).span();
                 if ref_span.start < decl_span.start {
@@ -739,5 +753,85 @@ mod tests {
              }",
         );
         assert_eq!(d.len(), 1, "intra-method local TDZ must still be flagged");
+    }
+
+    // Regression for #1851: a module-scoped binding is typed with a class name
+    // declared later in the same file. The forward reference is in a pure type
+    // annotation position, which TypeScript erases at compile time — no TDZ
+    // hazard.
+    #[test]
+    fn no_fp_class_name_in_type_annotation_before_declaration_issue_1851() {
+        let source = "export const collectMotionValues: { current: MotionValue[] | undefined } = {\n\
+                      current: undefined,\n\
+                      };\n\
+                      export class MotionValue {}";
+        assert!(
+            run_on(source).is_empty(),
+            "class name in a type annotation before its declaration should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_class_name_in_let_type_annotation_before_declaration_issue_1851() {
+        let source = "let pendingBuilders: LayoutAnimationBuilder[] | undefined;\n\
+                      export class LayoutAnimationBuilder {}";
+        assert!(
+            run_on(source).is_empty(),
+            "class name in a let type annotation before its declaration should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_interface_name_in_type_annotation_before_declaration_issue_1851() {
+        // Interfaces are pure type-space: a forward reference is always safe.
+        let source = "let config: Settings | undefined;\n\
+                      interface Settings { enabled: boolean; }";
+        assert!(
+            run_on(source).is_empty(),
+            "interface name in a type annotation before its declaration should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_class_name_in_function_param_type_before_declaration_issue_1851() {
+        let source = "function f(x: Foo) { return x; }\n\
+                      class Foo {}";
+        assert!(
+            run_on(source).is_empty(),
+            "class name in a parameter type annotation before its declaration should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_typeof_query_in_type_alias_before_declaration_issue_1851() {
+        // `typeof Collab` is a value-as-type query: the symbol resolves to a
+        // value but the reference is erased at compile time, so the forward
+        // reference is safe.
+        let source = "type CollabInstance = InstanceType<typeof Collab>;\n\
+                      class Collab {}";
+        assert!(
+            run_on(source).is_empty(),
+            "typeof query in a type alias before its declaration should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn still_flags_class_value_used_before_define_with_later_type_use() {
+        // A genuine VALUE use-before-define (`new C()`) is still a real TDZ
+        // hazard even though `C` is also referenced in type position.
+        let d = run_on(
+            "const x: C = new C();\n\
+             class C {}",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "value use of a class before its definition must still be flagged: {d:?}"
+        );
     }
 }
