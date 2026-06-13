@@ -26,6 +26,20 @@ fn normalize_body(text: &str) -> String {
         .join("\n")
 }
 
+/// Build the normalized type signature of a function: the parameter list text
+/// joined with its return-type annotation, both whitespace-collapsed. Two
+/// functions with identical bodies but differing signatures (e.g. a
+/// `T -> any` serializer and an `any -> T` deserializer) are not
+/// interchangeable, so extracting a shared helper is inapplicable; comparing
+/// signatures alongside bodies suppresses that false positive.
+fn normalize_sig(source: &str, params: oxc_span::Span, return_type: Option<oxc_span::Span>) -> String {
+    let params_text = normalize_body(&source[params.start as usize..params.end as usize]);
+    let return_text = return_type
+        .map(|span| normalize_body(&source[span.start as usize..span.end as usize]))
+        .unwrap_or_default();
+    format!("{params_text}->{return_text}")
+}
+
 fn body_meets_threshold(
     raw: &str,
     normalized: &str,
@@ -76,12 +90,14 @@ fn enclosing_test_scope_id(
         .map(oxc_semantic::AstNode::id)
 }
 
-/// One collected function: name, declaration line, normalized body, and
-/// the enclosing test-block scope (if any) used to suppress cross-test FPs.
+/// One collected function: name, declaration line, normalized body,
+/// normalized type signature, and the enclosing test-block scope (if any)
+/// used to suppress cross-test FPs.
 struct CollectedFunction {
     name: String,
     line: usize,
     normalized: String,
+    signature: String,
     test_scope: Option<oxc_semantic::NodeId>,
 }
 
@@ -98,6 +114,14 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        // Generated code (AutoRest `models.ts`, codegen output) routinely emits
+        // structurally identical functions; flagging them is pure noise and the
+        // "extract a shared helper" advice is inapplicable to files marked
+        // DO NOT EDIT.
+        if ctx.file.is_generated {
+            return Vec::new();
+        }
+
         let min_body_lines =
             ctx.config
                 .threshold("no-identical-functions", "min_body_lines", ctx.lang);
@@ -128,10 +152,16 @@ impl OxcCheck for Check {
                             ctx.source,
                             id.span.start as usize,
                         );
+                        let signature = normalize_sig(
+                            ctx.source,
+                            func.params.span,
+                            func.return_type.as_ref().map(|rt| rt.span),
+                        );
                         local_functions.push(CollectedFunction {
                             name,
                             line,
                             normalized,
+                            signature,
                             test_scope: enclosing_test_scope_id(node, semantic),
                         });
                     }
@@ -141,16 +171,26 @@ impl OxcCheck for Check {
                         continue;
                     };
                     let Some(init) = &decl.init else { continue };
-                    let body_span = match init {
+                    let (body_span, signature) = match init {
                         Expression::ArrowFunctionExpression(arrow) => {
                             if arrow.expression {
                                 continue;
                             }
-                            arrow.body.span
+                            let signature = normalize_sig(
+                                ctx.source,
+                                arrow.params.span,
+                                arrow.return_type.as_ref().map(|rt| rt.span),
+                            );
+                            (arrow.body.span, signature)
                         }
                         Expression::FunctionExpression(func) => {
                             let Some(ref body) = func.body else { continue };
-                            body.span
+                            let signature = normalize_sig(
+                                ctx.source,
+                                func.params.span,
+                                func.return_type.as_ref().map(|rt| rt.span),
+                            );
+                            (body.span, signature)
                         }
                         _ => continue,
                     };
@@ -171,6 +211,7 @@ impl OxcCheck for Check {
                             name: id.name.to_string(),
                             line,
                             normalized,
+                            signature,
                             test_scope: enclosing_test_scope_id(node, semantic),
                         });
                     }
@@ -186,6 +227,7 @@ impl OxcCheck for Check {
         for i in 1..local_functions.len() {
             for j in 0..i {
                 if local_functions[i].normalized == local_functions[j].normalized
+                    && local_functions[i].signature == local_functions[j].signature
                     && !in_distinct_test_scopes(&local_functions[i], &local_functions[j])
                 {
                     diagnostics.push(Diagnostic {
@@ -251,6 +293,18 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
+    }
+
+    /// Run with a `FileCtx` built from the source so a generated-header marker
+    /// sets `is_generated` (the default helper uses an empty `FileCtx`).
+    fn run_with_file_ctx(source: &str, path: &str) -> Vec<Diagnostic> {
+        use crate::files::Language;
+        use crate::rules::file_ctx::FileCtx;
+        let path = std::path::Path::new(path);
+        let lang = Language::from_path(path).unwrap_or(Language::TypeScript);
+        let project = crate::project::default_static_project_ctx();
+        let file = FileCtx::build(path, source, lang, project);
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, path, project, &file)
     }
 
     #[test]
@@ -358,5 +412,73 @@ it('renders', () => {
 });
 "#;
         assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    // Regression for #1126 — an AutoRest serializer/deserializer pair shares an
+    // identical body but has mirror-image type signatures (`CorsRule -> any`
+    // vs `any -> CorsRule`). The functions are not interchangeable, so the
+    // "extract a shared helper" advice is inapplicable and the pair must not
+    // be flagged.
+    #[test]
+    fn allows_identical_body_with_differing_signatures() {
+        let src = r#"
+export function corsRuleSerializer(item: CorsRule): any {
+    const mapped = item["allowedOrigins"].map((p: any) => { return p; });
+    const result = { allowedOrigins: mapped };
+    return result;
+}
+
+export function corsRuleDeserializer(item: any): CorsRule {
+    const mapped = item["allowedOrigins"].map((p: any) => { return p; });
+    const result = { allowedOrigins: mapped };
+    return result;
+}
+"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // Identical bodies AND identical signatures are a genuine duplicate — the
+    // rule's real target — and must still be flagged after the signature fix.
+    #[test]
+    fn flags_identical_body_with_identical_signatures() {
+        let src = r#"
+function alpha(item: CorsRule): CorsRule {
+    const mapped = item["allowedOrigins"].map((p: any) => { return p; });
+    const result = { allowedOrigins: mapped };
+    return result;
+}
+
+function beta(item: CorsRule): CorsRule {
+    const mapped = item["allowedOrigins"].map((p: any) => { return p; });
+    const result = { allowedOrigins: mapped };
+    return result;
+}
+"#;
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    // Generated files (AutoRest `models.ts` carrying a DO NOT EDIT header) emit
+    // structurally identical functions by design; the rule skips them entirely.
+    #[test]
+    fn skips_generated_file() {
+        let src = r#"// Code generated by AutoRest.
+// DO NOT EDIT.
+function alpha(item: CorsRule): CorsRule {
+    const mapped = item["allowedOrigins"].map((p: any) => { return p; });
+    const result = { allowedOrigins: mapped };
+    return result;
+}
+
+function beta(item: CorsRule): CorsRule {
+    const mapped = item["allowedOrigins"].map((p: any) => { return p; });
+    const result = { allowedOrigins: mapped };
+    return result;
+}
+"#;
+        assert!(
+            run_with_file_ctx(src, "src/models.ts").is_empty(),
+            "{:?}",
+            run_with_file_ctx(src, "src/models.ts")
+        );
     }
 }
