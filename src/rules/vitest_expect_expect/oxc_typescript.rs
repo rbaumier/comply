@@ -111,6 +111,47 @@ fn has_assertion_prefixed_call(text: &str) -> bool {
     false
 }
 
+/// True when `text` contains a Testing Library query that throws on a missing
+/// element — `getBy*`, `getAllBy*`, `findBy*`, `findAllBy*` (e.g.
+/// `screen.getByText('x')`, `await screen.findByRole('button')`). These act as
+/// implicit assertions: the test fails if the queried element is absent, so a
+/// body relying solely on them is a real test, not a silent pass.
+///
+/// `queryBy*` / `queryAllBy*` are deliberately excluded — they return `null`
+/// instead of throwing, so they are not assertions on their own.
+fn has_throwing_query_call(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    for prefix in ["getBy", "getAllBy", "findBy", "findAllBy"] {
+        let plen = prefix.len();
+        let mut from = 0usize;
+        while let Some(rel) = text[from..].find(prefix) {
+            let i = from + rel;
+            // Word boundary on the left so `myGetByText` doesn't match.
+            let prev_ok = i == 0
+                || !(bytes[i - 1].is_ascii_alphanumeric()
+                    || bytes[i - 1] == b'_'
+                    || bytes[i - 1] == b'$');
+            if prev_ok {
+                // The query is the start of an identifier (`getByText`,
+                // `findByRole`, …); skip the rest of it and require a `(`.
+                let mut j = i + plen;
+                while j < bytes.len()
+                    && (bytes[j].is_ascii_alphanumeric()
+                        || bytes[j] == b'_'
+                        || bytes[j] == b'$')
+                {
+                    j += 1;
+                }
+                if bytes.get(j) == Some(&b'(') {
+                    return true;
+                }
+            }
+            from = i + plen;
+        }
+    }
+    false
+}
+
 /// True when a TS `satisfies` expression lies within `body_span`.
 fn body_contains_satisfies(
     semantic: &oxc_semantic::Semantic<'_>,
@@ -184,6 +225,12 @@ impl OxcCheck for Check {
         // `assertResponse(…)`, in line with eslint-plugin-vitest's
         // `assertFunctionNames` defaults.
         if has_assertion_prefixed_call(body_text) {
+            return;
+        }
+        // Testing Library `getBy*` / `findBy*` queries throw when the element
+        // is missing, so they are implicit assertions — a test built only out
+        // of them still fails when the UI is wrong.
+        if has_throwing_query_call(body_text) {
             return;
         }
         // `@ts-expect-error` is TypeScript's compile-time assertion: the
@@ -458,5 +505,42 @@ mod tests {
         // A regular `*.spec.ts` is NOT a snippet file and must still flag.
         let src = r#"it("does nothing", () => { const x = 1 + 1; });"#;
         assert_eq!(run_at(src, "/tmp/feature.spec.ts").len(), 1);
+    }
+
+    // Regression for #1389 — Testing Library `getBy*` / `findBy*` queries throw
+    // when the element is missing, so they are implicit assertions.
+    #[test]
+    fn allows_test_with_testing_library_get_and_find_queries() {
+        let src = r#"
+            it("should respect requests after key has changed", async () => {
+                renderWithConfig(<Page />);
+                screen.getByText("data:");
+                await screen.findByText("data:short request");
+                screen.getByText("data:short request");
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_test_with_get_all_by_and_find_all_by() {
+        let src = r#"it("ok", () => { screen.getAllByRole("listitem"); });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // `queryBy*` / `queryAllBy*` return `null` instead of throwing, so they are
+    // NOT assertions — a test built only out of them still passes silently.
+    #[test]
+    fn still_flags_test_with_only_query_by() {
+        let src = r#"it("x", () => { screen.queryByText("data:"); });"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Word-boundary guard: a custom identifier whose tail spells `getByText`
+    // must not be mistaken for the Testing Library query.
+    #[test]
+    fn still_flags_test_with_custom_identifier_containing_query_name() {
+        let src = r#"it("x", () => { const n = config.my_getByText; log(n); });"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
