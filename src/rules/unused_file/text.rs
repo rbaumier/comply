@@ -232,6 +232,7 @@ fn is_test_file(path: &Path) -> bool {
     let path_str = path.to_str().unwrap_or("");
     name.contains(".test.")
         || name.contains(".spec.")
+        || name.contains(".setup.")
         || path_str.contains("/__tests__/")
         || path_str.contains("/tests/")
 }
@@ -974,6 +975,52 @@ mod tests {
         assert!(
             diags[0].path.to_str().unwrap().contains("orphan"),
             "only the genuine orphan must be flagged; the sample script is an entry point: {diags:?}"
+        );
+    }
+
+    // Regression for #1815: test setup files (`vitest.setup.mts`,
+    // `jest.setup.ts`) are referenced from the test runner config via the
+    // `setupFiles` string property, not via a TypeScript `import`, so the import
+    // graph cannot reach them. They are test infrastructure, not dead code, and
+    // must not be flagged. `vitest.workspace.mjs` is a workspace test config
+    // (already covered by `is_config_file`'s `.workspace` classifier).
+    #[test]
+    fn test_setup_files_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("vitest.config.mts", "export default { test: { setupFiles: './vitest.setup.mts' } };\n"),
+            (
+                "vitest.setup.mts",
+                "import '@testing-library/jest-dom/vitest';\n\
+                 import { cleanup } from '@testing-library/react';\n\
+                 import { afterEach } from 'vitest';\n\
+                 afterEach(() => { cleanup(); });\n",
+            ),
+            ("jest.config.js", "module.exports = { setupFilesAfterEach: ['./jest.setup.ts'] };\n"),
+            ("jest.setup.ts", "import '@testing-library/jest-dom';\n"),
+            ("vitest.workspace.mjs", "import { defineWorkspace } from 'vitest/config';\nexport default defineWorkspace(['./packages/*']);\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "test setup/workspace files are test-runner infrastructure, not dead code: {diags:?}"
+        );
+    }
+
+    // Regression for #1815: the setup exemption is precise — a genuinely
+    // orphaned ordinary source file is still a true positive even when the
+    // project contains test setup files.
+    #[test]
+    fn orphan_file_beside_test_setup_still_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/index.ts", "export const app = 1;\n"),
+            ("vitest.setup.ts", "import 'vitest';\n"),
+            ("src/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "only the genuine orphan must be flagged; the setup file is test infrastructure: {diags:?}"
         );
     }
 
