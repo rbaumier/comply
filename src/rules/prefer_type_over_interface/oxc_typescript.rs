@@ -38,19 +38,35 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
-        // First pass: collect all names used in `implements` clauses.
-        let mut implemented = HashSet::new();
+        // First pass: collect all names used in `implements` clauses (by classes)
+        // and in `extends` clauses (by other interfaces). An interface that any
+        // class implements or any sibling interface extends must stay an
+        // `interface`: it serves as an extension base and supports declaration
+        // merging, neither of which a `type` alias provides.
+        let mut referenced_as_base = HashSet::new();
         for node in semantic.nodes().iter() {
-            if let AstKind::TSClassImplements(impl_clause) = node.kind() {
-                // The expression is a TSTypeName — extract the identifier.
-                let name = type_name_str(&impl_clause.expression);
-                if let Some(n) = name {
-                    implemented.insert(n.to_string());
+            match node.kind() {
+                AstKind::TSClassImplements(impl_clause) => {
+                    // The expression is a TSTypeName — extract the identifier.
+                    if let Some(n) = type_name_str(&impl_clause.expression) {
+                        referenced_as_base.insert(n.to_string());
+                    }
                 }
+                AstKind::TSInterfaceDeclaration(iface) => {
+                    for heritage in &iface.extends {
+                        // The expression is an `Expression`; the base name is an
+                        // identifier reference (`extends Resource`).
+                        if let Some(n) = heritage_base_name(&heritage.expression) {
+                            referenced_as_base.insert(n.to_string());
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
-        // Second pass: flag interface declarations without extends and not implemented.
+        // Second pass: flag interface declarations without extends that no class
+        // implements and no other interface extends.
         let mut diagnostics = Vec::new();
         for node in semantic.nodes().iter() {
             let AstKind::TSInterfaceDeclaration(iface) = node.kind() else {
@@ -61,7 +77,7 @@ impl OxcCheck for Check {
                 continue;
             }
             let name = iface.id.name.as_str();
-            if implemented.contains(name) {
+            if referenced_as_base.contains(name) {
                 continue;
             }
             // Interfaces inside `declare module` are for augmentation / merging.
@@ -120,6 +136,16 @@ fn is_inside_declare_module<'a>(
         }
     }
     false
+}
+
+/// Base interface name in an `extends` heritage expression. For `extends Foo`
+/// the expression is an identifier reference; qualified bases (`extends a.B`)
+/// reference an imported namespace, not a sibling interface, so they are ignored.
+fn heritage_base_name<'a>(expr: &'a oxc_ast::ast::Expression<'a>) -> Option<&'a str> {
+    match expr {
+        oxc_ast::ast::Expression::Identifier(id) => Some(id.name.as_str()),
+        _ => None,
+    }
 }
 
 fn type_name_str<'a>(name: &'a oxc_ast::ast::TSTypeName<'a>) -> Option<&'a str> {
@@ -300,6 +326,41 @@ mod tests {
     #[test]
     fn flags_empty_interface() {
         assert_eq!(run_on("interface Empty {}").len(), 1);
+    }
+
+    #[test]
+    fn allows_interface_extended_by_other_interface() {
+        // https://github.com/rbaumier/comply/issues/1168
+        let code = r#"
+            export interface Resource {
+              id?: string;
+              name?: string;
+            }
+            export interface TrackedResource extends Resource {
+              location: string;
+            }
+            export interface ProxyResource extends Resource {}
+        "#;
+        assert!(
+            run_on(code).is_empty(),
+            "an interface used as an extends base by other interfaces enables \
+             extension and declaration merging — keep it as `interface`"
+        );
+    }
+
+    #[test]
+    fn flags_standalone_interface_not_extended_by_anyone() {
+        // A plain interface with no extends clause that no other interface
+        // extends and no class implements is still flagged.
+        let code = r#"
+            export interface Resource {
+              id?: string;
+            }
+            export interface Other {
+              name: string;
+            }
+        "#;
+        assert_eq!(run_on(code).len(), 2);
     }
 
     #[test]
