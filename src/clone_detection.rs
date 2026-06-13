@@ -409,7 +409,34 @@ fn are_symmetric_name_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
 
 // --- Tokenization ---
 
+/// Package-manager lockfiles. These are machine-generated and record the
+/// resolved dependency tree for reproducible installs; identical sections
+/// across files in a monorepo are intentional, not copy-pasted logic, so
+/// clone detection must never tokenize them.
+const LOCKFILE_NAMES: &[&str] = &[
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "bun.lockb",
+    "bun.lock",
+    "Cargo.lock",
+    "composer.lock",
+    "poetry.lock",
+    "Gemfile.lock",
+];
+
+fn is_lockfile(file: &SourceFile) -> bool {
+    file.path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| LOCKFILE_NAMES.contains(&n))
+}
+
 fn tokenize_file(parser: &mut Parser, file: &SourceFile) -> Option<FileTokens> {
+    if is_lockfile(file) {
+        return None;
+    }
     let grammar_tag = grammar_family(file.language)?;
     let source_str = std::fs::read_to_string(&file.path).ok()?;
     let source = source_str.into_bytes();
@@ -965,6 +992,56 @@ mod tests {
             "expected no clones for low-entropy boilerplate, got {}: {:?}",
             diags.len(),
             diags.iter().map(|d| &d.message).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn lockfiles_not_flagged() {
+        // Regression test for issue #2017.
+        // Package-manager lockfiles are machine-generated and contain
+        // intentionally duplicated sections across a monorepo. Two
+        // `pnpm-lock.yaml` files with identical content must NOT be flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let block: String = (1..=40)
+            .map(|i| format!("  package_{i}@1.0.0:\n    resolution: {{integrity: sha512-deadbeef{i}}}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let content = format!("lockfileVersion: '9.0'\n\npackages:\n{block}\n");
+        let dir_a = dir.path().join("app-a");
+        let dir_b = dir.path().join("app-b");
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let pa = dir_a.join("pnpm-lock.yaml");
+        let pb = dir_b.join("pnpm-lock.yaml");
+        std::fs::write(&pa, &content).unwrap();
+        std::fs::write(&pb, &content).unwrap();
+        let fa = SourceFile { path: pa, language: Language::Yaml };
+        let fb = SourceFile { path: pb, language: Language::Yaml };
+        assert!(
+            lint_files(&[&fa, &fb]).is_empty(),
+            "generated lockfiles must not be flagged as clones"
+        );
+    }
+
+    #[test]
+    fn non_lockfile_yaml_still_flagged() {
+        // True-positive guard: the lockfile exemption is name-scoped, so
+        // genuine duplicated YAML in non-lockfile files is still detected.
+        let dir = tempfile::tempdir().unwrap();
+        let block: String = (1..=60)
+            .map(|i| format!("step_{i}:\n  run: deploy_service_{i} --region eu-west-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let pa = dir.path().join("a.yaml");
+        let pb = dir.path().join("b.yaml");
+        std::fs::write(&pa, &block).unwrap();
+        std::fs::write(&pb, &block).unwrap();
+        let fa = SourceFile { path: pa, language: Language::Yaml };
+        let fb = SourceFile { path: pb, language: Language::Yaml };
+        assert_eq!(
+            lint_files(&[&fa, &fb]).len(),
+            1,
+            "duplicated non-lockfile YAML must still be flagged"
         );
     }
 }
