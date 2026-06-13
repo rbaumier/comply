@@ -22,6 +22,12 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Vitest/Playwright setup/teardown hook files are resolved by path and
+        // invoked via their default export, so an anonymous default export is
+        // the framework convention, not a smell.
+        if ctx.file.path_segments.is_framework_hook_file {
+            return;
+        }
         let AstKind::ExportDefaultDeclaration(export) = node.kind() else {
             return;
         };
@@ -78,6 +84,10 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_gated(&Check, source, path)
+    }
+
     #[test]
     fn flags_anonymous_function() {
         let d = run_on("export default function() {}");
@@ -105,5 +115,54 @@ mod tests {
     #[test]
     fn allows_identifier_export() {
         assert!(run_on("export default myVariable;").is_empty());
+    }
+
+    #[test]
+    fn allows_vitest_global_setup_file_issue1154() {
+        // Vitest globalSetup file: anonymous default export by convention.
+        let src = "export default async function ({ provide }) {}";
+        assert!(
+            run_on_path(src, "sdk/servicebus/service-bus/test/utils/setup.ts").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_playwright_global_teardown_file_issue1154() {
+        // Playwright global-setup / global-teardown files use anonymous default
+        // exports by design (resolved by file path, not function name).
+        let setup = "export default async function globalSetup() {}";
+        assert!(run_on_path(setup, "samples/v1/ts/global-setup.ts").is_empty());
+        let teardown = "export default async function() {}";
+        assert!(run_on_path(teardown, "samples/v1/ts/global-teardown.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_fixture_file_anonymous_default_issue1154() {
+        // Dev-tool test fixture demonstrating the anti-pattern on purpose.
+        let src = "export default async function (value, ms) {}";
+        assert!(
+            run_on_path(
+                src,
+                "common/tools/dev-tool/test/samples/files/inputs/cjs-forms/hasDefaultExport.ts"
+            )
+            .is_empty()
+        );
+        // The `__fixtures__/` convention is also exempt.
+        assert!(run_on_path(src, "src/__fixtures__/anon.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_anonymous_default_in_normal_source_issue1154() {
+        // A regular source module is not a hook file or a fixture — still flagged.
+        let d = run_on_path("export default function() {}", "src/widgets/index.ts");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("function"));
+    }
+
+    #[test]
+    fn still_flags_setup_like_named_module_issue1154() {
+        // `setupRouter.ts` is a regular module (stem is not exactly `setup`).
+        let d = run_on_path("export default function() {}", "src/setupRouter.ts");
+        assert_eq!(d.len(), 1);
     }
 }
