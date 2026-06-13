@@ -27,14 +27,21 @@
 //! - TanStack Start entry files (`app/{client,router,server}.{ts,tsx}` or
 //!   `src/app/…`) when the `tanstack-router` framework is detected;
 //! - `startTransition(...)` calls whose callee resolves to an import from
-//!   `"react"` (React 18 top-level hydration pattern).
+//!   `"react"` (React 18 top-level hydration pattern);
+//! - data-initialization `forEach`: a top-level
+//!   `localArray.forEach(item => localLookup.set(...))` whose receiver is a
+//!   module-scoped `const` and whose callback only populates another
+//!   module-scoped `const` lookup in place (`map.set`, `set.add`, `obj[k] = v`)
+//!   with pure values — a deterministic local data build, not an external
+//!   side effect.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use crate::rules::path_utils::{is_config_file, is_framework_entry_point};
 use oxc_ast::ast::{
-    Expression, ImportDeclarationSpecifier, Program, Statement,
+    Argument, AssignmentTarget, BindingPattern, Expression, ImportDeclarationSpecifier,
+    Program, Statement,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -306,6 +313,187 @@ fn is_tanstack_start_entry(path: &std::path::Path, project: &crate::project::Pro
         || s == "app/server.ts" || s == "app/server.tsx"
 }
 
+/// Collect the names of identifiers bound by top-level `const` declarations
+/// with a simple binding (`const lookup = …`). Destructuring patterns are
+/// skipped — the data-init exemption only reasons about plain named bindings.
+fn module_const_bindings(program: &Program) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for stmt in &program.body {
+        let decl = match stmt {
+            Statement::VariableDeclaration(decl) => decl,
+            _ => continue,
+        };
+        if decl.kind != oxc_ast::ast::VariableDeclarationKind::Const {
+            continue;
+        }
+        for declarator in &decl.declarations {
+            if let BindingPattern::BindingIdentifier(id) = &declarator.id {
+                out.insert(id.name.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Root identifier name of a member-access assignment target (`obj.k`,
+/// `obj[k]`, `a.b.c`). Returns `None` for a bare identifier target (a plain
+/// reassignment, which is not a local-state mutation).
+fn assignment_target_root<'a>(target: &'a AssignmentTarget<'a>) -> Option<&'a str> {
+    match target {
+        AssignmentTarget::StaticMemberExpression(m) => member_object_root(&m.object),
+        AssignmentTarget::ComputedMemberExpression(m) => member_object_root(&m.object),
+        _ => None,
+    }
+}
+
+/// Root identifier name of a member-access object chain (`a` in `a.b.c`).
+fn member_object_root<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
+    match expr {
+        Expression::Identifier(id) => Some(id.name.as_str()),
+        Expression::StaticMemberExpression(m) => member_object_root(&m.object),
+        Expression::ComputedMemberExpression(m) => member_object_root(&m.object),
+        _ => None,
+    }
+}
+
+/// True when a value expression (an argument to `lookup.set(...)`, or the RHS
+/// of `obj[k] = v`) is free of statements/effects that would make the
+/// surrounding `forEach` genuinely impure: a bare free-function call
+/// (`transform(x)`), a `new` expression, `await`, or `yield`. Method calls on
+/// the iterated data (`name.toLowerCase()`) are pure value transformations and
+/// remain allowed, so the exemption still covers the issue's example while a
+/// callback that invokes an external function keeps firing.
+fn is_pure_value_expr(expr: &Expression) -> bool {
+    match expr {
+        Expression::NewExpression(_)
+        | Expression::AwaitExpression(_)
+        | Expression::YieldExpression(_) => false,
+        Expression::CallExpression(call) => {
+            // A bare `fn(...)` callee is a free function call — impure. A
+            // `obj.method(...)` callee is a value transformation — keep
+            // walking its receiver and arguments.
+            if matches!(call.callee, Expression::Identifier(_)) {
+                return false;
+            }
+            is_pure_value_expr(&call.callee)
+                && call.arguments.iter().all(is_pure_argument)
+        }
+        Expression::StaticMemberExpression(m) => is_pure_value_expr(&m.object),
+        Expression::ComputedMemberExpression(m) => {
+            is_pure_value_expr(&m.object) && is_pure_value_expr(&m.expression)
+        }
+        Expression::BinaryExpression(b) => {
+            is_pure_value_expr(&b.left) && is_pure_value_expr(&b.right)
+        }
+        Expression::LogicalExpression(l) => {
+            is_pure_value_expr(&l.left) && is_pure_value_expr(&l.right)
+        }
+        Expression::ConditionalExpression(c) => {
+            is_pure_value_expr(&c.test)
+                && is_pure_value_expr(&c.consequent)
+                && is_pure_value_expr(&c.alternate)
+        }
+        Expression::ParenthesizedExpression(p) => is_pure_value_expr(&p.expression),
+        Expression::UnaryExpression(u) => is_pure_value_expr(&u.argument),
+        Expression::TemplateLiteral(t) => t.expressions.iter().all(is_pure_value_expr),
+        Expression::ArrayExpression(_) | Expression::ObjectExpression(_) => false,
+        Expression::TSAsExpression(a) => is_pure_value_expr(&a.expression),
+        Expression::TSNonNullExpression(n) => is_pure_value_expr(&n.expression),
+        Expression::TSSatisfiesExpression(s) => is_pure_value_expr(&s.expression),
+        Expression::Identifier(_)
+        | Expression::ThisExpression(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::NullLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::BigIntLiteral(_)
+        | Expression::RegExpLiteral(_)
+        | Expression::StringLiteral(_) => true,
+        _ => false,
+    }
+}
+
+fn is_pure_argument(arg: &Argument) -> bool {
+    match arg.as_expression() {
+        Some(expr) => is_pure_value_expr(expr),
+        None => false,
+    }
+}
+
+/// True when a callback-body statement only mutates module-local state:
+/// - `lookup.set(...)` / `lookup.add(...)` where `lookup` is a module-scoped
+///   `const` (a `Map`/`Set` populated in place), with pure arguments; or
+/// - `obj[k] = v` / `obj.k = v` where the assignment target roots at a
+///   module-scoped `const`, with a pure right-hand side.
+fn is_local_mutation_stmt(stmt: &Statement, locals: &HashSet<String>) -> bool {
+    let Statement::ExpressionStatement(es) = stmt else {
+        return false;
+    };
+    match &es.expression {
+        Expression::CallExpression(call) => {
+            let Expression::StaticMemberExpression(m) = &call.callee else {
+                return false;
+            };
+            if !matches!(m.property.name.as_str(), "set" | "add") {
+                return false;
+            }
+            let Expression::Identifier(obj) = &m.object else {
+                return false;
+            };
+            locals.contains(obj.name.as_str())
+                && call.arguments.iter().all(is_pure_argument)
+        }
+        Expression::AssignmentExpression(assign) => {
+            let Some(root) = assignment_target_root(&assign.left) else {
+                return false;
+            };
+            locals.contains(root) && is_pure_value_expr(&assign.right)
+        }
+        _ => false,
+    }
+}
+
+/// True when `call` is a module-level data-initialization `forEach` whose only
+/// effect is populating a module-scoped `const` lookup:
+/// `localArray.forEach(item => localLookup.set(item.k, item.v))`. The receiver
+/// is a module-scoped `const`, the single callback argument is a function/arrow,
+/// and every statement in its body is a local mutation (see
+/// `is_local_mutation_stmt`). Any other statement, an external call, I/O,
+/// `throw`, or a non-local receiver keeps the rule firing.
+fn is_data_init_foreach(
+    call: &oxc_ast::ast::CallExpression,
+    locals: &HashSet<String>,
+) -> bool {
+    let Expression::StaticMemberExpression(m) = &call.callee else {
+        return false;
+    };
+    if m.property.name != "forEach" {
+        return false;
+    }
+    let Expression::Identifier(receiver) = &m.object else {
+        return false;
+    };
+    if !locals.contains(receiver.name.as_str()) {
+        return false;
+    }
+    if call.arguments.len() != 1 {
+        return false;
+    }
+    let body = match &call.arguments[0] {
+        Argument::ArrowFunctionExpression(arrow) => &arrow.body,
+        Argument::FunctionExpression(func) => match &func.body {
+            Some(body) => body,
+            None => return false,
+        },
+        _ => return false,
+    };
+    if body.statements.is_empty() {
+        return false;
+    }
+    body.statements
+        .iter()
+        .all(|stmt| is_local_mutation_stmt(stmt, locals))
+}
+
 fn effectful_expression_label(expr: &Expression) -> Option<&'static str> {
     match expr {
         Expression::CallExpression(_) => Some("call"),
@@ -364,6 +552,7 @@ impl OxcCheck for Check {
         }
 
         let start_transition_names = react_start_transition_bindings(program);
+        let module_locals = module_const_bindings(program);
 
         let mut diagnostics = Vec::new();
         for stmt in &program.body {
@@ -373,7 +562,8 @@ impl OxcCheck for Check {
             };
 
             if let Expression::CallExpression(call) = &expr_stmt.expression
-                && is_start_transition_call(call, &start_transition_names)
+                && (is_start_transition_call(call, &start_transition_names)
+                    || is_data_init_foreach(call, &module_locals))
             {
                 continue;
             }
@@ -854,6 +1044,116 @@ mod tests {
             diags.len(),
             1,
             "binary.ts is an ordinary module and must still be flagged, got {diags:?}"
+        );
+    }
+
+    // --- (h) Data-initialization `forEach` (Closes #2033) ------------------
+
+    // Regression for #2033: a module-level `forEach` populating a locally
+    // declared `Map` from a locally declared `const` array is a pure data
+    // build — it reads no external state and mutates only module-local state.
+    #[test]
+    fn allows_foreach_populating_local_map() {
+        let src = "\
+            const svg_attributes = 'accent-height accumulate'.split(' ');\n\
+            const svg_attribute_lookup = new Map();\n\
+            svg_attributes.forEach((name) => {\n\
+              svg_attribute_lookup.set(name.toLowerCase(), name);\n\
+            });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/fix-attribute-casing.js");
+        assert!(
+            diags.is_empty(),
+            "forEach populating a local Map is data init, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_foreach_set_add_concise_body() {
+        // Concise arrow body, `Set.add`.
+        let src = "\
+            const items = getItems();\n\
+            const seen = new Set();\n\
+            items.forEach((it) => seen.add(it.id));\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/lookup.ts");
+        assert!(
+            diags.is_empty(),
+            "forEach populating a local Set is data init, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_foreach_object_index_assignment() {
+        // `obj[k] = v` / `obj.k = v` into a local object.
+        let src = "\
+            const entries = [['a', 1], ['b', 2]];\n\
+            const lookup = {};\n\
+            entries.forEach(([k, v]) => { lookup[k] = v; });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/lookup.ts");
+        assert!(
+            diags.is_empty(),
+            "forEach assigning into a local object is data init, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_foreach_calling_external_function() {
+        // The callback invokes a free function — a genuine side effect.
+        let src = "\
+            const items = getItems();\n\
+            items.forEach((it) => { registerSideEffect(it); });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/effect.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "forEach calling a free function must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_foreach_mutating_non_local_receiver() {
+        // The lookup is not declared in this module (imported/global) — the
+        // mutation escapes the module, so it stays a flagged side effect.
+        let src = "\
+            import { registry } from './registry';\n\
+            const items = getItems();\n\
+            items.forEach((it) => { registry.set(it.k, it.v); });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/effect.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "forEach mutating an imported receiver must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_foreach_with_impure_value_argument() {
+        // The value passed to `.set` is produced by a free function call — an
+        // embedded side effect, so the exemption must not apply.
+        let src = "\
+            const items = getItems();\n\
+            const lookup = new Map();\n\
+            items.forEach((it) => { lookup.set(it.k, sideEffectfulCompute(it)); });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/effect.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "forEach whose value comes from a free call must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_foreach_on_non_local_receiver_array() {
+        // The receiver array is imported, not a module-local const — the
+        // iteration source escapes the module, so it stays flagged.
+        let src = "\
+            import { data } from './data';\n\
+            const lookup = new Map();\n\
+            data.forEach((d) => { lookup.set(d.k, d.v); });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/effect.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "forEach over an imported array must still be flagged, got {diags:?}"
         );
     }
 
