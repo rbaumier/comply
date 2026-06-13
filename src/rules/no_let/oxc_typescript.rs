@@ -3,6 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -37,6 +38,11 @@ impl OxcCheck for Check {
         {
             return;
         }
+        // Exempt a C-style for-loop index whose value the loop mutates via its
+        // update expression (`for (let i = 0; …; i++)`) — `const` is invalid there.
+        if is_for_index_mutated_by_update(node, ctx, semantic) {
+            return;
+        }
         let (line, column) = byte_offset_to_line_col(ctx.source, decl.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -48,6 +54,59 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// True when `node` is the `init` of a `ForStatement` and one of its declared
+/// bindings is referenced in the loop's `update` expression — the variable must
+/// be reassignable, so `const` is not a valid alternative.
+fn is_for_index_mutated_by_update<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    ctx: &CheckCtx,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let AstKind::ForStatement(for_stmt) = semantic.nodes().parent_node(node.id()).kind() else {
+        return false;
+    };
+    let Some(oxc_ast::ast::ForStatementInit::VariableDeclaration(init)) = &for_stmt.init else {
+        return false;
+    };
+    if init.span != node.kind().span() {
+        return false;
+    }
+    let Some(update) = &for_stmt.update else {
+        return false;
+    };
+    let update = &ctx.source[update.span().start as usize..update.span().end as usize];
+    init.declarations.iter().any(|declarator| {
+        let span = declarator.id.span();
+        let name = &ctx.source[span.start as usize..span.end as usize];
+        text_references_word(update, name)
+    })
+}
+
+/// Whole-word match: true if `word` appears in `text` not surrounded by other
+/// identifier characters.
+fn text_references_word(text: &str, word: &str) -> bool {
+    if word.is_empty() {
+        return false;
+    }
+    let bytes = text.as_bytes();
+    let mut start = 0;
+    while let Some(pos) = text[start..].find(word) {
+        let abs = start + pos;
+        let before_ok = abs == 0 || !is_ident_byte(bytes[abs - 1]);
+        let after = abs + word.len();
+        let after_ok = after >= bytes.len() || !is_ident_byte(bytes[after]);
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs + word.len();
+    }
+    false
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
 }
 
 #[cfg(test)]
@@ -111,5 +170,29 @@ mod tests {
     fn flags_let_inside_function_in_spec_file() {
         // Inside a function scope, not module scope → still flagged.
         assert_eq!(run_spec("function f() { let x = 1; }").len(), 1);
+    }
+
+    #[test]
+    fn ignores_for_loop_index_with_increment_update() {
+        // Regression for #1176 — `i` is mutated by `i++`, so `const` is invalid.
+        assert!(run("for (let i = 0; i < n; i++) { use(i); }").is_empty());
+    }
+
+    #[test]
+    fn ignores_for_loop_index_with_compound_assign_update() {
+        // Regression for #1176 — `i += 1` mutates `i`, so `const` is invalid.
+        assert!(run("for (let i = 0; i < keys.length - 1; i += 1) { use(i); }").is_empty());
+    }
+
+    #[test]
+    fn flags_for_loop_init_not_mutated_by_update() {
+        // `i` is the loop driver but `j` is never mutated by the loop → `j` can be const.
+        assert_eq!(run("for (let j = 0; cond; i++) { use(j); }").len(), 1);
+    }
+
+    #[test]
+    fn flags_let_outside_for_init() {
+        // A normal mutable-state `let` outside a for-init is still flagged.
+        assert_eq!(run("let total = 0; total += compute();").len(), 1);
     }
 }
