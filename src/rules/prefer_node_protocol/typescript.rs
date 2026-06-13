@@ -203,4 +203,19 @@ mod tests {
         // not parsed as `import_statement`, so the rule never fires.
         assert!(run(r#"// import fs from "fs";"#).is_empty());
     }
+
+    #[test]
+    fn one_finding_per_import_site() {
+        // Regression for #2012: each bare-builtin import must be flagged
+        // exactly once. `import-enforce-node-protocol-usage` was a duplicate
+        // rule that fired on the same lines; it was removed in favour of this
+        // rule, which is its functional superset.
+        let src = "import { execSync } from \"child_process\";\n\
+                   import { readFileSync } from \"fs\";\n";
+        let d = run(src);
+        assert_eq!(d.len(), 2);
+        assert!(d.iter().all(|diag| diag.rule_id == "prefer-node-protocol"));
+        assert!(d.iter().any(|diag| diag.message.contains("node:child_process")));
+        assert!(d.iter().any(|diag| diag.message.contains("node:fs")));
+    }
 }
