@@ -6,7 +6,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, Statement};
+use oxc_ast::ast::{Declaration, Expression, Statement};
 use std::sync::Arc;
 
 pub struct Check;
@@ -51,6 +51,30 @@ fn is_test_framework_config(stmt: &Statement) -> bool {
     }
 
     false
+}
+
+/// TypeScript type-namespace-only declarations: `type X = ...`,
+/// `interface X {}`, and `declare`-ambient module/namespace blocks. They are
+/// fully erased by the compiler, carry no runtime presence and no import side
+/// effects, so they must not flip `saw_non_import` when placed between imports
+/// (e.g. a `type Props = {...}` declared next to a component). `enum` is
+/// excluded because it emits runtime code.
+fn is_type_only_declaration(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::TSTypeAliasDeclaration(_) | Statement::TSInterfaceDeclaration(_) => true,
+        Statement::TSModuleDeclaration(decl) => decl.declare,
+        // `export type X = ...`, `export interface X {}`, and `export type { Foo }`.
+        Statement::ExportNamedDeclaration(export) => {
+            if export.export_kind.is_type() {
+                return true;
+            }
+            matches!(
+                &export.declaration,
+                Some(Declaration::TSTypeAliasDeclaration(_) | Declaration::TSInterfaceDeclaration(_))
+            )
+        }
+        _ => false,
+    }
 }
 
 impl OxcCheck for Check {
@@ -101,6 +125,11 @@ impl OxcCheck for Check {
                 // before imports are a widespread convention with no import side
                 // effects — they must not flip `saw_non_import`.
                 _ if is_test_framework_config(stmt) => {}
+                // TypeScript type-only declarations (`type`/`interface`,
+                // `declare` modules, `export type`) are erased at compile time
+                // and have no import side effects — they must not break the
+                // imports block.
+                _ if is_type_only_declaration(stmt) => {}
                 _ => {
                     saw_non_import = true;
                 }
@@ -108,5 +137,111 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
+    }
+
+    // Regression test for https://github.com/rbaumier/comply/issues/2047
+    // A `type` alias declared between two imports is type-namespace-only and
+    // erased at compile time — it must not flag the following import.
+    #[test]
+    fn allows_type_alias_between_imports() {
+        let src = r#"import { Link, routes } from '@redwoodjs/router'
+import { Metadata } from '@redwoodjs/web'
+
+type BlogPostPageProps = {
+  id: number
+}
+
+import BlogPostCell from 'src/components/BlogPostCell'
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_interface_between_imports() {
+        let src = r#"import { a } from 'a'
+
+interface Props {
+  id: number
+}
+
+import { b } from 'b'
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_export_type_and_interface_between_imports() {
+        let src = r#"import { a } from 'a'
+
+export type Props = { id: number }
+export interface State { count: number }
+export type { Helper } from './helper'
+
+import { b } from 'b'
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_declare_module_between_imports() {
+        let src = r#"import { a } from 'a'
+
+declare module 'virtual:config' {
+  export const value: string
+}
+
+import { b } from 'b'
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // True positive: a runtime statement between imports must still flag the
+    // following import. The type-only exemption must not weaken this.
+    #[test]
+    fn still_flags_runtime_statement_between_imports() {
+        let src = r#"import { a } from 'a'
+
+const x = compute()
+
+import { b } from 'b'
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // A runtime `enum` emits code, so it is not exempt and must still flag.
+    #[test]
+    fn still_flags_enum_between_imports() {
+        let src = r#"import { a } from 'a'
+
+enum Color { Red, Green }
+
+import { b } from 'b'
+"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
