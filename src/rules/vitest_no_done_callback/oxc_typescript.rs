@@ -4,6 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Argument, BindingPattern, Expression, FormalParameters};
+use std::path::Path;
 use std::sync::Arc;
 
 pub struct Check;
@@ -17,11 +18,45 @@ const TEST_FUNCTIONS: &[&str] = &[
     "afterAll",
 ];
 
+/// Karma config filenames that mark a subtree as running under Karma/Jasmine,
+/// where the `done` callback is the canonical async API rather than a Vitest
+/// anti-pattern.
+const KARMA_CONFIG_NAMES: &[&str] =
+    &["karma.conf.js", "karma.conf.ts", "karma.conf.cjs", "karma.conf.mjs"];
+
 fn has_done_param(params: &FormalParameters) -> bool {
     params.items.iter().any(|p| match &p.pattern {
         BindingPattern::BindingIdentifier(id) => id.name.as_str() == "done",
         _ => false,
     })
+}
+
+/// True when `dir` holds any `karma.conf.*` file.
+fn dir_has_karma_config(dir: &Path) -> bool {
+    KARMA_CONFIG_NAMES.iter().any(|name| dir.join(name).is_file())
+}
+
+/// True when `path` sits in a subtree configured to run under Karma/Jasmine —
+/// i.e. a `karma.conf.*` exists in its directory or any ancestor up to (and
+/// including) the project root. In such a subtree the test runner is Jasmine,
+/// not Vitest, and `done` is the canonical async callback.
+///
+/// The walk is bounded by the nearest `package.json` directory; when no
+/// manifest is found it falls back to walking to the filesystem root.
+fn runs_under_karma(ctx: &CheckCtx, path: &Path) -> bool {
+    let Some(start) = path.parent() else {
+        return false;
+    };
+    let root = ctx.project.nearest_package_json_dir(path);
+    for dir in start.ancestors() {
+        if dir_has_karma_config(dir) {
+            return true;
+        }
+        if root.as_deref() == Some(dir) {
+            break;
+        }
+    }
+    false
 }
 
 impl OxcCheck for Check {
@@ -63,6 +98,9 @@ impl OxcCheck for Check {
         if !has_done_param(params) {
             return;
         }
+        if runs_under_karma(ctx, ctx.path) {
+            return;
+        }
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -96,9 +134,31 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser as OxcParser;
+    use oxc_semantic::SemanticBuilder;
+    use oxc_span::SourceType;
+    use tempfile::TempDir;
 
     fn run(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    /// Run the check against an on-disk `path` so the Karma-config walk can see
+    /// sibling files. Mirrors the production per-node dispatch.
+    fn run_on_disk(path: &Path, src: &str) -> Vec<Diagnostic> {
+        crate::oxc_helpers::reset_file_caches();
+        let allocator = Allocator::default();
+        let parse_ret = OxcParser::new(&allocator, src, SourceType::ts()).parse();
+        let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+        let ctx = CheckCtx::for_test(path, src);
+        let mut diagnostics = Vec::new();
+        for node in semantic.nodes().iter() {
+            if Check.interested_kinds().contains(&node.kind().ty()) {
+                Check.run(node, &ctx, &semantic, &mut diagnostics);
+            }
+        }
+        diagnostics
     }
 
     #[test]
@@ -117,5 +177,69 @@ mod tests {
     fn allows_promise_callback() {
         let src = r#"test("x", async () => { await waitFor(); });"#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression #1747: a test file under a directory configured to run with
+    // Karma/Jasmine (a sibling `karma.conf.js`) legitimately uses the `done`
+    // callback — Jasmine's canonical async API — and must not be flagged.
+    #[test]
+    fn allows_done_in_karma_jasmine_subtree_issue_1747() {
+        let dir = TempDir::new().unwrap();
+        let test_dir = dir.path().join("test").join("transition");
+        std::fs::create_dir_all(&test_dir).unwrap();
+        std::fs::write(
+            test_dir.join("karma.conf.js"),
+            "module.exports = function (config) { config.set({ frameworks: ['jasmine'] }) }",
+        )
+        .unwrap();
+        let file = test_dir.join("helpers.ts");
+        let source = r#"
+afterEach(done => {
+  const warned = msg =>
+    asserted.some(assertedMsg => msg.toString().indexOf(assertedMsg) > -1)
+  let count = console.error.calls.count()
+  let args
+  while (count--) {
+    args = console.error.calls.argsFor(count)
+    if (!warned(args[0])) {
+      done.fail(`Unexpected console.error message: ${args[0]}`)
+      return
+    }
+  }
+  done()
+})
+"#;
+        std::fs::write(&file, source).unwrap();
+        let diags = run_on_disk(&file, source);
+        assert!(
+            diags.is_empty(),
+            "Karma/Jasmine test file must not be flagged, got {diags:?}"
+        );
+    }
+
+    // A `done` callback in a file with no Karma config in any ancestor is a
+    // genuine Vitest anti-pattern and must still fire.
+    #[test]
+    fn flags_done_without_karma_config() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("helpers.test.ts");
+        let source = r#"afterEach(done => { done() })"#;
+        std::fs::write(&file, source).unwrap();
+        assert_eq!(run_on_disk(&file, source).len(), 1);
+    }
+
+    // The exemption applies to the whole subtree: a `karma.conf.js` in a parent
+    // directory covers nested spec files.
+    #[test]
+    fn allows_done_in_nested_karma_subtree() {
+        let dir = TempDir::new().unwrap();
+        let karma_root = dir.path().join("test");
+        let nested = karma_root.join("transition").join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(karma_root.join("karma.conf.js"), "module.exports = {}").unwrap();
+        let file = nested.join("scroll.spec.ts");
+        let source = r#"it("scrolls", done => { done() })"#;
+        std::fs::write(&file, source).unwrap();
+        assert!(run_on_disk(&file, source).is_empty());
     }
 }
