@@ -2,6 +2,11 @@
 //! expression statements whose expression is a call or `new` expression.
 //!
 //! Exemptions:
+//! - demonstration scripts under a relaxed directory (`examples/`, `example/`,
+//!   `demo/`, `demos/`, `samples/`, …): the rule is gated off there via
+//!   `skip_in_relaxed_dir`, since such files are run directly to show library
+//!   usage and are never imported as library modules, so the tree-shaking
+//!   concern does not apply;
 //! - test files (path heuristic);
 //! - test-runner setup files matched by convention path/name (`*.setup.*`,
 //!   `setup.*`, `setup-*`, `*-setup`, `globalSetup`, `setupTests.*`, anything
@@ -1956,6 +1961,57 @@ mod tests {
             diags.len(),
             1,
             "Object.assign onto a global must still be flagged, got {diags:?}"
+        );
+    }
+
+    // --- (g) examples/ demonstration scripts (Closes #1918) ----------------
+
+    // Regression for #1918: date-fns ships small runnable demonstration scripts
+    // under `examples/` whose whole purpose is a top-level `console.log(...)`
+    // showing library output. They are never imported as library modules, so the
+    // tree-shaking concern does not apply. The relaxed-dir gate exempts them.
+    #[test]
+    fn allows_example_dir_demo_script() {
+        let src = "\
+            import { maxTime } from 'date-fns/constants';\n\
+            console.log(maxTime === 8640000000000000);\n";
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            src,
+            "pkgs/core/examples/node-esm/constants.js",
+        );
+        assert!(
+            diags.is_empty(),
+            "demonstration scripts under examples/ are exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_demo_dir_demo_script() {
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            "console.log(formatDate(new Date()));\n",
+            "demo/usage.ts",
+        );
+        assert!(
+            diags.is_empty(),
+            "demonstration scripts under demo/ are exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_library_module_in_src() {
+        // A genuine library module with an accidental top-level side effect is
+        // still flagged — the relaxed-dir gate only covers demonstration dirs.
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            "console.log('loaded');\n",
+            "src/index.ts",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "library module under src/ must still be flagged, got {diags:?}"
         );
     }
 
