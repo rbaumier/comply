@@ -140,6 +140,19 @@ pub fn is_sample_dir_path(path: &Path) -> bool {
     has_path_segment(path, &["samples", "samples-dev", "examples", "example-apps"])
 }
 
+/// True for source files housed in a scaffold CLI's template directory
+/// (`template/`, `templates/`, `scaffold/`, `boilerplate/`). A scaffold tool
+/// (create-react-app, create-t3-app, `create-vite`, …) assembles these template
+/// files — drawn from different subdirectories — into the generated project,
+/// where cross-file relative imports resolve. Before assembly, those imports
+/// point at not-yet-colocated siblings, so path-resolution rules must skip them.
+/// Narrower than [`is_aux_dir_path`] on purpose: it omits `config`/`scripts`/
+/// `migrations`/`examples`, where an unresolved relative import is still a real
+/// error. Segment match.
+pub fn is_scaffold_template_path(path: &Path) -> bool {
+    has_path_segment(path, &["template", "templates", "scaffold", "boilerplate"])
+}
+
 /// True for files under a static-asset directory (`public/`, `static/`,
 /// `assets/`). These are the conventional locations for files served verbatim
 /// by the web server — vanilla `<script>`-loaded browser scripts, not ES
@@ -461,6 +474,26 @@ mod aux_path_tests {
         assert!(is_sample_dir_path(&PathBuf::from("samples-dev/x.ts")));
         assert!(is_sample_dir_path(&PathBuf::from("examples/app.ts")));
         assert!(!is_sample_dir_path(&PathBuf::from("src/mysamples/index.ts")));
+    }
+
+    #[test]
+    fn scaffold_template_path_is_narrow() {
+        // Scaffold template dirs (issue #1753): create-t3-app layout.
+        assert!(is_scaffold_template_path(&PathBuf::from(
+            "cli/template/extras/src/app/page/base.tsx"
+        )));
+        assert!(is_scaffold_template_path(&PathBuf::from("templates/app/page.tsx")));
+        assert!(is_scaffold_template_path(&PathBuf::from("scaffold/index.ts")));
+        assert!(is_scaffold_template_path(&PathBuf::from("boilerplate/main.ts")));
+        // Narrower than is_aux_dir_path: these must NOT be skipped — an
+        // unresolved relative import in config/scripts/migrations/examples is a
+        // real error.
+        assert!(!is_scaffold_template_path(&PathBuf::from("config/next.config.js")));
+        assert!(!is_scaffold_template_path(&PathBuf::from("scripts/gen.ts")));
+        assert!(!is_scaffold_template_path(&PathBuf::from("examples/app/page.tsx")));
+        // Segment (not substring) match.
+        assert!(!is_scaffold_template_path(&PathBuf::from("src/templated/index.ts")));
+        assert!(!is_scaffold_template_path(&PathBuf::from("src/app/login.ts")));
     }
 
     #[test]
