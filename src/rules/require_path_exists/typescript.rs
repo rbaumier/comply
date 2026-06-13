@@ -23,13 +23,16 @@ fn is_relative_path(spec: &str) -> bool {
     spec.starts_with("./") || spec.starts_with("../")
 }
 
-/// True for specifiers pointing at a build-time generated file whose final
-/// segment ends in `.gen` (e.g. `./routeTree.gen`) or carries a `.gen.`
-/// extension stem (e.g. `./routeTree.gen.ts`). Such files are gitignored and
-/// often absent at lint time, yet always present at build/dev time.
+/// True for specifiers pointing at a build-time generated file. Such files are
+/// produced by a build step, gitignored and often absent at lint time, yet
+/// always present at build/dev time. Recognised conventions:
+/// - a `.gen` final segment (e.g. `./routeTree.gen`) or `.gen.` extension stem
+///   (e.g. `./routeTree.gen.ts`);
+/// - a `.prebuilt.` extension stem (e.g. `./idle.prebuilt.js`), the suffix used
+///   for inlined/minified build outputs that live beside their `.ts` source.
 fn is_generated_specifier(spec: &str) -> bool {
     let last = spec.rsplit('/').next().unwrap_or(spec);
-    last.ends_with(".gen") || last.contains(".gen.")
+    last.ends_with(".gen") || last.contains(".gen.") || last.contains(".prebuilt.")
 }
 
 fn resolve_and_check(base_dir: &Path, import_spec: &str) -> bool {
@@ -141,5 +144,15 @@ mod tests {
         assert!(is_generated_specifier("../app/routeTree.gen"));
         assert!(!is_generated_specifier("./routeTree"));
         assert!(!is_generated_specifier("./generated"));
+    }
+
+    #[test]
+    fn detects_prebuilt_suffix_issue_2065() {
+        // `.prebuilt.js` build outputs (astro) live beside their `.ts` source
+        // and are absent in a clean checkout.
+        assert!(is_generated_specifier("../../runtime/client/idle.prebuilt.js"));
+        assert!(is_generated_specifier("./visible.prebuilt.js"));
+        assert!(!is_generated_specifier("./idle.js"));
+        assert!(!is_generated_specifier("./prebuilt"));
     }
 }
