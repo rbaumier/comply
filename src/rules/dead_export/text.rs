@@ -30,6 +30,11 @@
 //!     Sequelize, Knex, node-pg-migrate, …) is discovered and run by the ORM's
 //!     migration runner via directory convention, never through a static
 //!     import. Those two exports are treated as live entry points.
+//!   - Nextra meta files (`_meta.{tsx,ts,js,jsx}`) — Nextra's file-system
+//!     router consumes the per-directory `default` route-metadata export by
+//!     filename convention at build time, so it never has a static importer.
+//!     The whole file is treated as a framework entry point. The leading
+//!     underscore is required: an ordinary `meta.ts` stays subject to the rule.
 //!
 //! False-positive guards:
 //!   - If any file imports the current module via a namespace import
@@ -81,6 +86,18 @@ const FIXTURE_DIRS: &[&str] = &[
 fn is_in_fixture_dir(path: &Path) -> bool {
     let normalised = path.to_string_lossy().replace('\\', "/");
     FIXTURE_DIRS.iter().any(|seg| normalised.contains(seg))
+}
+
+/// True when `path`'s basename is a Nextra meta file (`_meta.tsx`, `_meta.ts`,
+/// `_meta.js`, `_meta.jsx`). Nextra's file-system router consumes the
+/// per-directory `default` route-metadata export by this filename convention at
+/// build time, so the file never appears as an importer in the index. The
+/// leading underscore is required so an ordinary `meta.ts` is not exempted.
+fn is_nextra_meta_file(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|n| n.to_str()),
+        Some("_meta.tsx" | "_meta.ts" | "_meta.js" | "_meta.jsx")
+    )
 }
 
 /// Named exports that make up a yargs command module. yargs discovers these
@@ -149,6 +166,9 @@ impl TextCheck for Check {
             return Vec::new();
         }
         if is_in_fixture_dir(ctx.path) {
+            return Vec::new();
+        }
+        if is_nextra_meta_file(ctx.path) {
             return Vec::new();
         }
         if ctx.project.nearest_package_json(ctx.path).is_some_and(|pkg| {
@@ -1221,6 +1241,48 @@ mod tests {
             "lone up export (no down) must still be flagged, got: {diags:?}"
         );
         assert!(diags[0].message.contains("up"));
+    }
+
+    #[test]
+    fn no_fp_for_nextra_meta_file() {
+        // Regression for #2041 — Nextra's per-directory `_meta.tsx` files export
+        // a `default` route-metadata object consumed by Nextra's file-system
+        // router by filename convention at build time. No TS file imports them,
+        // so the `default` export looks dead; dead-export must not flag it.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/content/ko/_meta.tsx",
+                "import type { MetaRecord } from 'nextra'\n\
+                 export default {\n\
+                   index: { type: 'page', display: 'hidden' },\n\
+                   docs: { type: 'page', title: '문서' },\n\
+                 } satisfies MetaRecord\n",
+            ),
+            ("src/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/content/ko/_meta.tsx");
+        assert!(
+            diags.is_empty(),
+            "Nextra _meta.tsx default export must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_meta_file_without_leading_underscore() {
+        // Sibling guard for #2041 — an ordinary `meta.ts` (no leading
+        // underscore) is not a Nextra convention file and must still be flagged
+        // when its export has no importer.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/content/meta.ts", "export default { title: 'x' };"),
+            ("src/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/content/meta.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "ordinary meta.ts (no underscore) must still be flagged, got: {diags:?}"
+        );
+        assert!(diags[0].message.contains("default"));
     }
 
     #[test]
