@@ -8,7 +8,8 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 use super::{
-    is_bare_specifier, is_node_builtin, is_virtual_module, matches_alias, root_package_name,
+    is_bare_specifier, is_node_builtin, is_subpath_import, is_virtual_module, matches_alias,
+    root_package_name,
 };
 
 pub struct Check;
@@ -45,6 +46,9 @@ impl OxcCheck for Check {
             return;
         }
         if is_node_builtin(spec) {
+            return;
+        }
+        if is_subpath_import(spec) {
             return;
         }
         if is_virtual_module(spec) {
@@ -204,6 +208,28 @@ mod tests {
         fs::write(&file, source).unwrap();
         let diags = run_oxc_in_project(&file, source);
         assert_eq!(diags.len(), 1, "unlisted dep in flat project must be flagged, got {diags:?}");
+    }
+
+    // Regression #1385: Node.js subpath imports (`#`-prefixed aliases from the
+    // package.json `imports` field) are not npm packages and must not be flagged.
+    #[test]
+    fn allows_node_subpath_import_issue_1385() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r##"{"name":"@storybook/core","imports":{"#manager-stores":{"default":"./src/manager/manager-stores.ts"},"#utils":{"default":"./template/stories/utils.ts"}}}"##,
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("TestingWidget.tsx");
+        let source = "import { managerStore } from '#manager-stores';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "Node.js subpath import must not be flagged, got {diags:?}"
+        );
     }
 
     // Regression #1060: a nested tsconfig.json with path aliases AND a trailing
