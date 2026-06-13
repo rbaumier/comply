@@ -62,6 +62,26 @@ fn peel_parens<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
     current
 }
 
+/// `true` when any enclosing function/arrow of `node_id` has a type-predicate
+/// (`value is T`) return-type annotation. Such a function IS the user-defined
+/// type guard this rule recommends; the `as` casts in its body are needed to
+/// read properties off the loosely-typed input, so flagging them is circular.
+fn is_inside_type_predicate_fn(node_id: oxc_semantic::NodeId, nodes: &oxc_semantic::AstNodes) -> bool {
+    for ancestor in nodes.ancestors(node_id) {
+        let return_type = match ancestor.kind() {
+            AstKind::Function(f) => f.return_type.as_deref(),
+            AstKind::ArrowFunctionExpression(a) => a.return_type.as_deref(),
+            _ => None,
+        };
+        if let Some(rt) = return_type
+            && matches!(rt.type_annotation, TSType::TSTypePredicate(_))
+        {
+            return true;
+        }
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::TSAsExpression]
@@ -120,6 +140,14 @@ impl OxcCheck for Check {
         if let Expression::TSAsExpression(inner) = peel_parens(&as_expr.expression)
             && matches!(inner.type_annotation, TSType::TSUnknownKeyword(_))
         {
+            return;
+        }
+
+        // Skip `as` casts inside the body of a type-predicate function
+        // (`value is T`). That function IS the custom type guard this rule
+        // recommends; the cast is needed to read properties off the
+        // loosely-typed input, so flagging it would be circular advice.
+        if is_inside_type_predicate_fn(node.id(), semantic.nodes()) {
             return;
         }
 
@@ -281,5 +309,35 @@ mod tests {
         let src = "declare const x: unknown; const y = ((x as A) as unknown) as B;";
         let diags = run_on(src);
         assert!(!diags.is_empty(), "expected at least one diag for inner `as A` cast");
+    }
+
+    #[test]
+    fn allows_as_in_arrow_type_predicate_body() {
+        // Regression for #1976: an arrow whose return type is a type predicate
+        // (`api is WithDispatch`) IS the custom type guard this rule
+        // recommends; the `as` casts in its body read properties off the
+        // `unknown` input and must not be flagged.
+        let src = "const shouldDispatchFromDevtools = (api: unknown): api is WithDispatch =>\n\
+                   !!(api as WithDispatch).dispatchFromDevtools &&\n\
+                   typeof (api as WithDispatch).dispatch === 'function';";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_as_in_function_type_predicate_body() {
+        // Regression for #1976: a `function isFoo(x): x is Foo` guard body.
+        let src = "function isFoo(x: unknown): x is Foo { return (x as Foo).bar !== undefined; }";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_as_in_non_predicate_function() {
+        // Control for #1976: the same cast in a function WITHOUT a
+        // type-predicate return type is still a narrowing and must fire.
+        let src = "function f(x: unknown) { return (x as Foo).bar; }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
     }
 }
