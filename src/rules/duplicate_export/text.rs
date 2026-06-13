@@ -17,6 +17,11 @@
 //!     is aggregating a single canonical path, not adding an ambiguous one. A
 //!     group is flagged only when two or more barrels re-export the name from an
 //!     origin outside the group.
+//!   - Multi-entry barrels — a package that publishes several barrels as
+//!     distinct `exports` subpath entry points (e.g. `.` → `index.ts`,
+//!     `./dom` → `dom.ts`) may re-export shared symbols across them for
+//!     backward compatibility. Every declared entry-point barrel collapses to a
+//!     single canonical public surface, so overlap among them is not ambiguity.
 //!
 //! Runs once per project, anchored on the lexicographically smallest indexed
 //! path so that a single pass emits all diagnostics deterministically. Barrel
@@ -99,13 +104,25 @@ impl TextCheck for Check {
             // lies outside the group do. Flag only when two or more such
             // independent barrels remain.
             let group: std::collections::HashSet<&Path> = barrels.iter().copied().collect();
-            let independent = barrels.iter().filter(|barrel| {
-                match index.reexport_target(barrel, name) {
+            let independent: Vec<&Path> = barrels
+                .iter()
+                .copied()
+                .filter(|barrel| match index.reexport_target(barrel, name) {
                     Some(origin) => !group.contains(origin),
                     None => true,
-                }
-            });
-            if independent.count() < 2 {
+                })
+                .collect();
+            // A package may publish several barrels as distinct `exports`
+            // subpath entry points (e.g. `.` → `index.ts`, `./dom` → `dom.ts`)
+            // that intentionally re-export shared symbols for backward
+            // compatibility. Those barrels form one canonical public surface,
+            // not several ambiguous paths — collapse every declared entry-point
+            // barrel into a single effective path before counting.
+            let (entry_barrels, plain_barrels): (Vec<&Path>, Vec<&Path>) = independent
+                .into_iter()
+                .partition(|barrel| ctx.project.is_declared_entry_barrel(barrel));
+            let effective_paths = plain_barrels.len() + usize::from(!entry_barrels.is_empty());
+            if effective_paths < 2 {
                 continue;
             }
             // Anchor the diagnostic on the first occurrence (sorted by path)
@@ -350,6 +367,62 @@ mod tests {
             diags
         );
         assert!(diags[0].message.contains("toFile"));
+    }
+
+    /// #1848: a package that publishes two barrels as distinct `exports`
+    /// subpath entry points (`.` → `index.ts`, `./dom` → `dom.ts`) may
+    /// re-export the same symbols across them for backward compatibility. The
+    /// exports targets point at built `dist/` artifacts; matching by stem ties
+    /// the source barrels to those entries. Overlap between entry points is
+    /// intentional and must not be flagged.
+    #[test]
+    fn allows_symbol_shared_by_distinct_entry_point_barrels() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"name":"framer-motion","exports":{".":{"import":"./dist/es/index.mjs"},"./dom":{"import":"./dist/es/dom.mjs"}}}"#,
+            ),
+            (
+                "src/dom.ts",
+                "export { delayInSeconds as delay, type DelayedFunction } from \"motion-dom\";",
+            ),
+            (
+                "src/index.ts",
+                "export { delay, type DelayedFunction } from \"motion-dom\";",
+            ),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert!(
+            diags.is_empty(),
+            "symbol shared by two declared entry-point barrels is intentional BC, got: {:?}",
+            diags
+        );
+    }
+
+    /// A rogue non-entry barrel re-exporting a symbol the entry points already
+    /// share adds a genuine ambiguous import path beyond the public surface, so
+    /// it still flags even though two of the three barrels are entry points.
+    #[test]
+    fn flags_non_entry_barrel_duplicating_entry_point_symbol() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"name":"framer-motion","exports":{".":{"import":"./dist/es/index.mjs"},"./dom":{"import":"./dist/es/dom.mjs"}}}"#,
+            ),
+            ("src/dom.ts", "export { delay } from \"motion-dom\";"),
+            ("src/index.ts", "export { delay } from \"motion-dom\";"),
+            ("src/internal.ts", "export { delay } from \"motion-dom\";"),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert_eq!(
+            diags.len(),
+            1,
+            "rogue non-entry barrel adds a second ambiguous path — flag, got: {:?}",
+            diags
+        );
+        assert!(diags[0].message.contains("delay"));
     }
 
     /// #1082: barrel paths in the message are relative to the project root —
