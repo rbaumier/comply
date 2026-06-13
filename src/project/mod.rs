@@ -102,6 +102,14 @@ pub struct PackageJson {
     /// compiled away into the shipped artifact, so a devDependency imported from
     /// `src/` is bundled at build time, not a runtime dependency.
     pub entries_outside_src: bool,
+    /// File stems (basename without extension) of every published entry across
+    /// all `exports` subpaths plus `main`/`module` — e.g. `framer-motion`'s
+    /// `.`→`dist/es/index.mjs`, `./dom`→`dist/es/dom.mjs` yield `{index, dom}`.
+    /// Published entries point at built `dist/` artifacts while the source
+    /// barrels (`src/index.ts`, `src/dom.ts`) carry the same stem, so stems
+    /// identify which source files are distinct public entry points of a
+    /// multi-entry package.
+    pub export_entry_stems: BTreeSet<String>,
 }
 
 impl PackageJson {
@@ -165,6 +173,7 @@ impl PackageJson {
                 .unwrap_or_default(),
             entry_files: collect_entry_files(&json),
             entries_outside_src: entries_outside_src(&json),
+            export_entry_stems: collect_export_entry_stems(&json),
         })
     }
 
@@ -394,6 +403,40 @@ fn entries_outside_src(json: &Value) -> bool {
         collect_substitute_targets(native, &mut targets);
     }
     !targets.is_empty() && targets.iter().all(|rel| !rel.starts_with("src/"))
+}
+
+/// File stem (basename without its final extension) of a relative target path,
+/// e.g. `dist/es/index.mjs` → `index`, `dist/cjs/dom.js` → `dom`. Compound
+/// extensions like `.d.ts` collapse to the base name (`dom.d.ts` → `dom`).
+fn entry_target_stem(rel: &str) -> Option<String> {
+    let file = rel.rsplit('/').next().unwrap_or(rel);
+    let stem = file.split('.').next().unwrap_or(file);
+    if stem.is_empty() {
+        return None;
+    }
+    Some(stem.to_string())
+}
+
+/// Stems of every published entry of `json` — every `exports` subpath target
+/// plus `main` and `module`. The stems identify the package's distinct public
+/// entry points independent of the built file's directory or extension, so a
+/// source barrel can be matched to the entry it compiles into.
+fn collect_export_entry_stems(json: &Value) -> BTreeSet<String> {
+    let mut targets = BTreeSet::new();
+    if let Some(main) = json.get("main").and_then(Value::as_str)
+        && let Some(rel) = normalize_main_path(main)
+    {
+        targets.insert(rel);
+    }
+    if let Some(module) = json.get("module").and_then(Value::as_str)
+        && let Some(rel) = normalize_main_path(module)
+    {
+        targets.insert(rel);
+    }
+    if let Some(exports) = json.get("exports") {
+        collect_export_targets(exports, &mut targets);
+    }
+    targets.iter().filter_map(|rel| entry_target_stem(rel)).collect()
 }
 
 fn parse_dep_map(json: &Value, section: &str) -> BTreeMap<String, String> {
@@ -1204,6 +1247,23 @@ impl ProjectCtx {
         pkg.entry_files
             .iter()
             .any(|entry| manifest_dir.join(entry) == path)
+    }
+
+    /// True when `path`'s file stem matches one of the published entry-point
+    /// stems its nearest `package.json` declares (any `exports` subpath, plus
+    /// `main`/`module`). A multi-entry package ships built artifacts under
+    /// `dist/` whose stems (`index`, `dom`, ...) carry over to the source
+    /// barrels (`src/index.ts`, `src/dom.ts`); matching by stem identifies those
+    /// source files as distinct public entry points even though the declared
+    /// targets point at the build output, not the source.
+    pub fn is_declared_entry_barrel(&self, path: &Path) -> bool {
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            return false;
+        };
+        let Some(pkg) = self.nearest_package_json(path) else {
+            return false;
+        };
+        pkg.export_entry_stems.contains(stem)
     }
 
     /// True when `path` is the public-API entry file an ng-packagr Angular
@@ -2282,6 +2342,22 @@ mod tests {
         assert!(ctx.is_package_entry_file(&dir.path().join("index.mjs")));
         assert!(ctx.is_package_entry_file(&dir.path().join("index.cjs")));
         assert!(!ctx.is_package_entry_file(&dir.path().join("other.js")));
+    }
+
+    #[test]
+    fn is_declared_entry_barrel_matches_source_by_exports_subpath_stem() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"framer-motion","exports":{".":{"import":"./dist/es/index.mjs"},"./dom":{"import":"./dist/es/dom.mjs"}}}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx::empty();
+        // Source barrels carry the stem of the built artifact each subpath ships.
+        assert!(ctx.is_declared_entry_barrel(&dir.path().join("src/index.ts")));
+        assert!(ctx.is_declared_entry_barrel(&dir.path().join("src/dom.ts")));
+        assert!(!ctx.is_declared_entry_barrel(&dir.path().join("src/internal.ts")));
     }
 
     #[test]
