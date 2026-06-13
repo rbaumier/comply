@@ -8,6 +8,24 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// Cypress Testing Library (`@testing-library/cypress`) adds `findBy*` /
+/// `findAllBy*` methods to the `cy` object. They return a `Cypress.Chainable`
+/// (resolved through Cypress's command queue), not a Promise — awaiting them
+/// breaks the test — so a `findBy*` whose receiver chain roots at `cy` is not
+/// an unawaited async query.
+fn receiver_roots_at_cy(object: &Expression) -> bool {
+    match object {
+        Expression::Identifier(id) => id.name.as_str() == "cy",
+        Expression::StaticMemberExpression(m) => receiver_roots_at_cy(&m.object),
+        Expression::CallExpression(call) => match &call.callee {
+            Expression::StaticMemberExpression(m) => receiver_roots_at_cy(&m.object),
+            Expression::Identifier(id) => id.name.as_str() == "cy",
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 /// `react-test-renderer`'s synchronous tree-search methods. They share the
 /// `findBy`/`findAllBy` prefix with Testing Library by coincidence but return a
 /// `ReactTestInstance` (or array) immediately — they are not Promises and must
@@ -80,7 +98,12 @@ impl OxcCheck for Check {
         };
         let name = match &call.callee {
             Expression::Identifier(id) => id.name.as_str(),
-            Expression::StaticMemberExpression(m) => m.property.name.as_str(),
+            Expression::StaticMemberExpression(m) => {
+                if receiver_roots_at_cy(&m.object) {
+                    return;
+                }
+                m.property.name.as_str()
+            }
             _ => return,
         };
         if !is_find_query(name) {
@@ -155,6 +178,31 @@ mod tests {
         for name in ["findByProps", "findAllByType", "findAllByProps"] {
             let src = format!("const r = tree.root.{name}(View);");
             assert!(run(&src, "t.tsx").is_empty(), "{name}: {:?}", run(&src, "t.tsx"));
+        }
+    }
+
+    // Regression for #1793: `@testing-library/cypress` adds `findBy*` /
+    // `findAllBy*` to the `cy` object; they return a Cypress chainable, not a
+    // Promise, so unawaited `cy.findBy*` calls are correct and must not flag.
+    #[test]
+    fn skips_cypress_find_by_queries() {
+        let src = r#"
+            describe('Select', () => {
+              it('should submit and react to changes', () => {
+                cy.findByText('buy').click();
+                cy.findByText(/t-shirt size/).should('include.text', 'size M');
+                cy.findByLabelText(/choose a size/).click();
+              });
+            });
+        "#;
+        assert!(run(src, "Select.cy.ts").is_empty(), "{:?}", run(src, "Select.cy.ts"));
+    }
+
+    #[test]
+    fn skips_cypress_find_by_chained_on_cy() {
+        for q in ["cy.get('form').findByRole('button')", "cy.findAllByText('x')"] {
+            let src = format!("{q};");
+            assert!(run(&src, "t.cy.ts").is_empty(), "{q}: {:?}", run(&src, "t.cy.ts"));
         }
     }
 }
