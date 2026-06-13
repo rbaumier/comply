@@ -14,6 +14,9 @@
 //! Generic type parameters live in the type namespace, so a type parameter
 //! sharing a name with a value declaration (`<t>(t: t)`) is legal —
 //! skipped when any declaration of a symbol is a `TSTypeParameter` node.
+//! `infer` type variables (`T extends ... infer U ...`) surface as the same
+//! `TSTypeParameter` node (parented by a `TSInferType`), so reusing one `infer`
+//! name across the arms of a union conditional type is covered by this skip too.
 //!
 //! Namespace declaration merging: a `namespace`/`module`
 //! (`TSModuleDeclaration`) may share a name with an interface, class,
@@ -120,7 +123,9 @@ impl OxcCheck for Check {
             // Generic type parameter sharing a name with a value declaration
             // (e.g. `<input extends object>(input: input) => input`): the type
             // parameter lives in the type namespace, so coexisting with a
-            // value-namespace name is always legal.
+            // value-namespace name is always legal. `infer U` bindings also
+            // surface as `TSTypeParameter` nodes, so reusing one `infer` name
+            // across the arms of a union conditional type is covered here too.
             let is_type_param =
                 |id| -> bool { matches!(nodes.kind(id), AstKind::TSTypeParameter(_)) };
             if decl_ids.iter().any(|&id| is_type_param(id)) {
@@ -344,6 +349,26 @@ export function make<F extends FilterMap, const C extends SortColumns>(
         // Regression for #969: function + namespace declaration merging is
         // also intentional TypeScript.
         let d = run("function fn() {}\nnamespace fn {\n  export const x = 1;\n}");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_infer_in_union_conditional_arms() {
+        // Regression for #1122: each arm of a union of conditional-type extends
+        // clauses independently introduces `infer TPage`; together they form
+        // union-branch inference. `infer` type variables are not lexical
+        // redeclarations and must not be flagged.
+        let d = run(
+            "export type PaginateReturn<TResult> = TResult extends\n  | { body: { value?: infer TPage } }\n  | { body: { Value?: infer TPage } }\n  ? GetArrayType<TPage> : Array<unknown>;",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_single_infer_in_conditional() {
+        // A single conditional type with one `infer T` used normally must not
+        // be flagged.
+        let d = run("type Unwrap<T> = T extends Promise<infer U> ? U : T;");
         assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
     }
 
