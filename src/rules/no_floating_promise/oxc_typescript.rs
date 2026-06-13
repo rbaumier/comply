@@ -109,6 +109,9 @@ fn is_async_looking_member_call(call: &CallExpression) -> bool {
     if is_redux_store_dispatch(member) {
         return false;
     }
+    if is_editor_view_dispatch(member) {
+        return false;
+    }
     if is_diagnostics_channel_publish(member) {
         return false;
     }
@@ -192,6 +195,27 @@ fn is_redux_store_dispatch(member: &StaticMemberExpression) -> bool {
         return false;
     }
     matches!(&member.object, Expression::Identifier(id) if id.name.as_str().to_lowercase().contains("store"))
+}
+
+/// ProseMirror's `EditorView.dispatch(tr)` synchronously commits a transaction and
+/// returns `void` — there is nothing to await or catch.
+/// Matches `.dispatch(...)` whose receiver is a bare identifier named `view` or
+/// `editorView` (`view.dispatch(tr)`), or a member access ending in `.view`
+/// (`editor.view.dispatch(tr)`, `this.editor.view.dispatch(tr)`).
+fn is_editor_view_dispatch(member: &StaticMemberExpression) -> bool {
+    if member.property.name.as_str() != "dispatch" {
+        return false;
+    }
+    match &member.object {
+        Expression::Identifier(id) => {
+            let name = id.name.as_str().to_lowercase();
+            name == "view" || name == "editorview"
+        }
+        Expression::StaticMemberExpression(inner) => {
+            inner.property.name.as_str().to_lowercase() == "view"
+        }
+        _ => false,
+    }
 }
 
 /// `ReadableStreamDefaultController.close()` / `WritableStreamDefaultController.close()` etc.
@@ -507,6 +531,31 @@ store.dispatch(
         // stays flagged.
         let d = run_on("emitter.dispatch(event);");
         assert_eq!(d.len(), 1);
+    }
+
+    // Regression tests for issue #1818: ProseMirror's `EditorView.dispatch(tr)`
+    // synchronously commits a transaction and returns void — there is nothing to
+    // await — so a `.dispatch(...)` on a `view`/`editorView` receiver, or one
+    // hanging off a `.view` member access, must not be flagged.
+
+    #[test]
+    fn allows_editor_view_dispatch() {
+        let src = "\
+view.dispatch(tr);
+this.editor.view.dispatch(tr);
+view.dispatch(transaction);
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_editor_dot_view_dispatch() {
+        assert!(run_on("editor.view.dispatch(tr);").is_empty());
+    }
+
+    #[test]
+    fn allows_named_editor_view_dispatch() {
+        assert!(run_on("editorView.dispatch(tr);").is_empty());
     }
 
     // Regression tests for issue #1817: tiptap's fluent command builder
