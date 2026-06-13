@@ -13,7 +13,8 @@
 //!
 //! A file is considered a test file (and therefore allowed to consume
 //! `devDependencies`) when its path contains any of `__tests__/`, `.test.`,
-//! `.spec.`, `.stories.`, `/test/`, or `/tests/`.
+//! `.spec.`, `.stories.`, `/test/`, or `/tests/`, or when its name (minus
+//! extension) is exactly `test` or `spec` (e.g. `endOfWeek/test.ts`).
 
 mod oxc_typescript;
 #[cfg(test)]

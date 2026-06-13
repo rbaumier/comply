@@ -91,14 +91,28 @@ fn package_root(specifier: &str) -> &str {
 
 fn is_test_file(path: &Path) -> bool {
     let path_str = path.to_string_lossy();
-    path_str.contains("__tests__")
+    let is_marked = path_str.contains("__tests__")
         || path_str.contains(".test.")
         || path_str.contains(".spec.")
         || path_str.contains(".stories.")
         || path_str.contains(".setup.")
         || path_str.contains("/test/")
         || path_str.contains("/tests/")
-        || path_str.contains("/e2e/")
+        || path_str.contains("/e2e/");
+    is_marked || has_test_file_stem(path)
+}
+
+/// Co-located test files whose entire name (minus extension) is `test` or
+/// `spec` — e.g. `src/endOfWeek/test.ts`. These never ship in the published
+/// package and legitimately import test-only devDependencies.
+fn has_test_file_stem(path: &Path) -> bool {
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs")
+    ) && (stem == "test" || stem == "spec")
 }
 
 /// Build/codegen scripts under a `scripts/` directory run at dev/CI time and
@@ -251,6 +265,37 @@ export default defineConfig({});"#;
         let src = r#"import { DefaultAzureCredential } from "@azure/identity";"#;
         let d = run_with_pkg_at_path(pkg, "samples-dev/managementGroupsGetSample.ts", src);
         assert!(d.is_empty(), "samples-dev file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_co_located_test_ts_file() {
+        // Issue #1390: date-fns `src/endOfWeek/test.ts` is a co-located test
+        // file whose whole name is `test.ts` (no `.test.` infix). It imports
+        // vitest + @date-fns/tz from devDependencies, which is correct — these
+        // files never ship in the published package.
+        let pkg = r#"{
+            "devDependencies": {
+                "vitest": "^1",
+                "@date-fns/tz": "^1"
+            }
+        }"#;
+        let src = r#"
+import { describe, it, expect } from "vitest";
+import { TZDate } from "@date-fns/tz";
+import { endOfWeek } from "..";
+"#;
+        let d = run_with_pkg_at_path(pkg, "src/endOfWeek/test.ts", src);
+        assert!(d.is_empty(), "co-located test.ts should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_co_located_spec_ts_file() {
+        // Issue #1390: a `spec.ts` whole-name file is the spec sibling of the
+        // `test.ts` convention and must be exempt for the same reason.
+        let pkg = r#"{"devDependencies":{"vitest":"^1"}}"#;
+        let src = r#"import { describe, it, expect } from "vitest";"#;
+        let d = run_with_pkg_at_path(pkg, "src/startOfWeek/spec.ts", src);
+        assert!(d.is_empty(), "co-located spec.ts should not flag devDeps: {d:?}");
     }
 
     #[test]
