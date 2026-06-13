@@ -71,6 +71,15 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A `renderXxx` declared at module top-level has a stable identity
+        // across renders — calling it in JSX is just an expression, not a
+        // remount hazard. Only an in-component render closure should fire.
+        if let Expression::Identifier(id) = &call.callee
+            && callee_is_module_scoped(id, semantic)
+        {
+            return;
+        }
+
         // Must be inside a JSX expression container.
         if !is_inside_jsx_expression(node, semantic) {
             return;
@@ -89,6 +98,23 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// Returns true when `id` resolves to a binding declared at the program
+/// (module) top-level scope — a stable helper, not a per-render closure.
+/// Unresolved references (no binding in this file) are treated as in-component.
+fn callee_is_module_scoped<'a>(
+    id: &oxc_ast::ast::IdentifierReference<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Some(ref_id) = id.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(symbol_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    scoping.symbol_scope_id(symbol_id) == scoping.root_scope_id()
 }
 
 fn is_inside_jsx_expression(
@@ -111,5 +137,66 @@ fn is_inside_jsx_expression(
             AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return false,
             _ => continue,
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
+    }
+
+    #[test]
+    fn flags_in_component_render_closure() {
+        let diags = run(r#"
+function App() {
+    const renderHeader = () => <header>Title</header>;
+    return <div>{renderHeader()}</div>;
+}
+"#);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("renderHeader"));
+    }
+
+    #[test]
+    fn allows_module_level_function_helper() {
+        let diags = run(r#"
+function renderCells(items, props, cfg) {
+    return items.map((item) => <Cell key={item.id} {...props} />);
+}
+export default function Row(props) {
+    return <tr>{renderCells(props.row, props, {})}</tr>;
+}
+"#);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_module_level_arrow_helper() {
+        let diags = run(r#"
+const renderFoo = () => <Foo />;
+function App() {
+    return <div>{renderFoo()}</div>;
+}
+"#);
+        assert!(diags.is_empty());
     }
 }
