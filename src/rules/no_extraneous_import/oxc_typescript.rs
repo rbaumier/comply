@@ -34,6 +34,7 @@ impl OxcCheck for Check {
         if ctx.file.path_segments.in_test_dir
             || crate::rules::path_utils::is_extraneous_test_file(ctx.path)
             || crate::rules::path_utils::is_auto_mock_dir_path(ctx.path)
+            || crate::rules::path_utils::is_test_infra_dir_path(ctx.path)
         {
             return;
         }
@@ -334,6 +335,36 @@ import * as zustand from 'zustand';
         let d = run_with_pkg_at_path(pkg, "src/my__mocks__data/index.ts", src);
         assert_eq!(d.len(), 1, "non-mock dir should still flag: {d:?}");
         assert!(d[0].message.contains("vitest"));
+    }
+
+    #[test]
+    fn allows_dev_dep_in_testing_dir() {
+        // Issue #1756: bulletproof-react `src/testing/mocks/utils.ts` is test
+        // infrastructure (MSW handlers, test-data generators) loaded only by the
+        // test runner. It imports `js-cookie` and `msw` from devDependencies,
+        // which is correct — files under a `testing/` directory never ship in the
+        // published bundle.
+        let pkg = r#"{
+            "dependencies": {"react": "^19"},
+            "devDependencies": {"js-cookie": "^3", "msw": "^2"}
+        }"#;
+        let src = r#"
+import Cookies from "js-cookie";
+import { http, HttpResponse } from "msw";
+"#;
+        let d = run_with_pkg_at_path(pkg, "apps/react-vite/src/testing/mocks/utils.ts", src);
+        assert!(d.is_empty(), "testing/ infra file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_outside_testing_dir() {
+        // Guard against over-relaxing: a path where "testing" is a substring of
+        // another segment (not its own directory) must still flag.
+        let pkg = r#"{"devDependencies":{"msw":"^2"}}"#;
+        let src = r#"import { http } from "msw";"#;
+        let d = run_with_pkg_at_path(pkg, "src/testingLibraryWrapper.ts", src);
+        assert_eq!(d.len(), 1, "non-testing dir should still flag: {d:?}");
+        assert!(d[0].message.contains("msw"));
     }
 
     #[test]

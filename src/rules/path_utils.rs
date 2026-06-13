@@ -172,6 +172,16 @@ pub fn is_auto_mock_dir_path(path: &Path) -> bool {
     has_path_segment(path, &["__mocks__"])
 }
 
+/// True when `path` lives under a `testing/` directory, the test-infrastructure
+/// convention (popularised by bulletproof-react) for housing test utilities,
+/// mock handlers, test setup files, and test-data generators co-located with
+/// source. These files are loaded only by the test runner, never bundled into
+/// production code, so they legitimately import test-only devDependencies.
+/// Segment match keeps an unrelated `src/testingLibraryWrapper.ts` from matching.
+pub fn is_test_infra_dir_path(path: &Path) -> bool {
+    has_path_segment(path, &["testing"])
+}
+
 /// True for a test file that never ships in the published package: one under a
 /// `__tests__/`, `__testUtils__/`, `test/`, `tests/`, or `e2e/` directory, one
 /// carrying a `.test.`/`.spec.`/`.setup.`/`.tp.` infix, one whose whole stem is
@@ -515,6 +525,20 @@ mod aux_path_tests {
         // Segment (not substring) match.
         assert!(!is_auto_mock_dir_path(&PathBuf::from("src/my__mocks__data/index.ts")));
         assert!(!is_auto_mock_dir_path(&PathBuf::from("src/app/login.ts")));
+    }
+
+    #[test]
+    fn test_infra_dir_path_segments() {
+        // Issue #1756: the `testing/` test-infrastructure convention.
+        assert!(is_test_infra_dir_path(&PathBuf::from(
+            "apps/react-vite/src/testing/mocks/utils.ts"
+        )));
+        assert!(is_test_infra_dir_path(&PathBuf::from(
+            "apps/react-vite/src/testing/setup-tests.ts"
+        )));
+        // Segment (not substring) match.
+        assert!(!is_test_infra_dir_path(&PathBuf::from("src/testingLibraryWrapper.ts")));
+        assert!(!is_test_infra_dir_path(&PathBuf::from("src/app/login.ts")));
     }
 
     #[test]
