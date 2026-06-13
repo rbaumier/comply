@@ -43,6 +43,20 @@ const DESCRIPTIVE_SUFFIXES: &[&str] = &[
 /// `_ID`/`_KEY` exemption in `DESCRIPTIVE_SUFFIXES`.
 const DESCRIPTIVE_CAMEL_SUFFIXES: &[&str] = &["Id", "Status", "Type", "Key", "Json", "At"];
 
+/// Number of capitalized word segments in `suffix` (each uppercase letter
+/// preceded by a non-uppercase character, or at position 0, starts a segment).
+/// `BeforeUnload` → 2, `CommandOnSnapshot` → 3, `Task` → 1, `NpmAudit` → 2.
+fn capitalized_word_count(suffix: &str) -> usize {
+    let bytes = suffix.as_bytes();
+    bytes
+        .iter()
+        .enumerate()
+        .filter(|(i, b)| {
+            b.is_ascii_uppercase() && (*i == 0 || !bytes[i - 1].is_ascii_uppercase())
+        })
+        .count()
+}
+
 /// True when `name` ends with one of `DESCRIPTIVE_CAMEL_SUFFIXES` on a camelCase
 /// boundary (the character preceding the suffix is lowercase or a digit). This
 /// keeps generic verbs flagged (`runTask`, `dataSource`) while exempting
@@ -115,6 +129,12 @@ fn matched_banned_prefix(name: &str) -> Option<&'static str> {
             // `runWith*` is the idiomatic AsyncLocalStorage wrapper pattern —
             // the `run` comes from `AsyncLocalStorage.run()`, not a generic verb.
             if prefix == "run" && name[plen..].starts_with("With") {
+                continue;
+            }
+            // A `run`-prefixed compound whose suffix names *what* is run with
+            // ≥2 capitalized words (`runBeforeUnload`, `runNpmAudit`) is
+            // self-documenting; only single-word fillers (`runTask`) stay generic.
+            if prefix == "run" && capitalized_word_count(&name[plen..]) >= 2 {
                 continue;
             }
             // A domain-identifying suffix (`runId`, `RunStatus`, `dataType`)
@@ -855,6 +875,31 @@ mod tests {
         // `runMigration` uses `run` as a generic verb — must still flag.
         let src = r#"function runMigration() {}"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_run_compound_with_specific_multiword_suffix_issue_1394() {
+        // Regression for #1394 — a `run`-prefixed compound whose suffix names
+        // *what* is run with ≥2 capitalized words is self-documenting.
+        let src = r#"
+            function runBeforeUnload(frame) { return frame; }
+            async function runCommandOnSnapshot(snapshot, command) { return command; }
+            async function runNpmAudit() { return 0; }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_run_single_word_filler_suffix_issue_1394() {
+        // Negative: single-word suffixes stay generic fillers — `runTask`,
+        // `runJob`, `runStuff`, `runProcess` carry no more meaning than `run`.
+        let src = r#"
+            function runTask() {}
+            function runJob() {}
+            function runStuff() {}
+            function runProcess() {}
+        "#;
+        assert_eq!(run(src).len(), 4);
     }
 
     #[test]
