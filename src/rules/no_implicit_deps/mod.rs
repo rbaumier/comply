@@ -88,6 +88,7 @@ pub(super) fn is_node_builtin(specifier: &str) -> bool {
 const VIRTUAL_PREFIXES: &[&str] = &[
     "virtual:",
     "@theme/",
+    "@theme-original/",
     "@docusaurus/",
     "@internal/",
     "~react-pages",
