@@ -4,12 +4,19 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
 
 const TEST_REGISTRARS: &[&str] = &["test", "it", "describe", "bench"];
 const TEST_FILE_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test."];
+
+/// Higher-order utilities that synchronously invoke their callback argument and
+/// return its result. A callback passed to one of these is called now and never
+/// stored, so it cannot capture a stale loop variable — flagging it is a false
+/// positive. Curated allow-list; extend with additional synchronous invokers.
+const SYNC_INVOKERS: &[&str] = &["untracked", "batch", "runInAction", "computed"];
 
 fn is_test_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
@@ -52,6 +59,19 @@ fn callee_is_test_registrar(callee: &Expression<'_>) -> bool {
     }
 }
 
+/// Returns true when `callee` resolves to a known synchronous-invoker utility
+/// (bare ident `untracked(...)` or static member `mobx.runInAction(...)`, matched
+/// on the property name).
+fn callee_is_sync_invoker(callee: &Expression<'_>) -> bool {
+    match callee {
+        Expression::Identifier(ident) => SYNC_INVOKERS.contains(&ident.name.as_str()),
+        Expression::StaticMemberExpression(member) => {
+            SYNC_INVOKERS.contains(&member.property.name.as_str())
+        }
+        _ => false,
+    }
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[
@@ -73,6 +93,19 @@ impl OxcCheck for Check {
             if let AstKind::CallExpression(call) = parent.kind()
                 && callee_is_test_registrar(&call.callee)
             {
+                return;
+            }
+        }
+
+        // Callback passed to a synchronous-invoker utility (e.g. `untracked(() => ...)`):
+        // it is called now and never stored, so no stale-loop-variable hazard.
+        // Applies in production code too, not just test files.
+        let parent = semantic.nodes().parent_node(node.id());
+        if let AstKind::CallExpression(call) = parent.kind()
+            && callee_is_sync_invoker(&call.callee)
+        {
+            let node_span = node.kind().span();
+            if call.arguments.iter().any(|arg| arg.span() == node_span) {
                 return;
             }
         }
@@ -240,6 +273,61 @@ mod tests {
         let src = r#"
             for (const c of cases) {
                 test(c.label, async () => {});
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_untracked_callback_in_for_of_prod_code() {
+        let src = r#"
+            for (const entry of entries) {
+                const collision = untracked(() => detect(entry));
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn allows_batch_run_in_action_computed_callbacks() {
+        for callee in ["batch", "runInAction", "computed"] {
+            let src = format!(
+                "for (const x of xs) {{ const r = {callee}(() => use(x)); }}"
+            );
+            let d = run(&src, "src/app.ts");
+            assert!(d.is_empty(), "{callee}: expected no diagnostics, got {d:?}");
+        }
+    }
+
+    #[test]
+    fn allows_static_member_sync_invoker_callback() {
+        let src = r#"
+            for (const x of xs) {
+                const r = mobx.runInAction(() => use(x));
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn flags_stored_closure_pushed_in_loop() {
+        let src = r#"
+            for (let i = 0; i < 10; i++) {
+                arr.push(() => i);
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_unknown_single_arg_callee_in_loop() {
+        let src = r#"
+            for (let i = 0; i < 10; i++) {
+                register(() => i);
             }
         "#;
         let d = run(src, "src/app.ts");
