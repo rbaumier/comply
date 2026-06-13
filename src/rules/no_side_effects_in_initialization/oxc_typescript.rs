@@ -63,15 +63,24 @@
 //!   module-local object that has not escaped, so it is no external side effect
 //!   and no tree-shaking hazard. A method call on anything else (an imported
 //!   singleton, a `const x = getThing()` whose init is a plain call) is still
-//!   flagged.
+//!   flagged;
+//! - exports augmentation: a top-level `Object.assign(target, ...)` call whose
+//!   `target` is the module's own export object — a bare identifier this module
+//!   re-exports (`export default styled` / `export { styled }`) or the CommonJS
+//!   `exports` / `module.exports` object. Attaching a secondary namespace to the
+//!   module's own export before any consumer observes it (e.g.
+//!   `Object.assign(styled, secondary)`, React's `React.useState = useState`)
+//!   initializes that export, not external state, so it is no tree-shaking
+//!   hazard. `Object.assign` onto an imported singleton, a global (`window`,
+//!   `globalThis`), or any non-exported binding is still flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use crate::rules::path_utils::{is_config_file, is_framework_entry_point};
 use oxc_ast::ast::{
-    Argument, AssignmentTarget, BindingPattern, Expression, ImportDeclarationSpecifier,
-    Program, Statement,
+    Argument, AssignmentTarget, BindingPattern, ExportDefaultDeclarationKind, Expression,
+    ImportDeclarationSpecifier, Program, Statement,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -625,6 +634,69 @@ fn is_local_const_config_call(
     new_locals.contains(obj.name.as_str())
 }
 
+/// Collect the local binding names this module re-exports: the identifier of a
+/// `export default <id>` and the *local* name of every named export specifier
+/// (`export { styled }` → `styled`, `export { foo as bar }` → `foo`). These are
+/// the bindings whose object is the module's own public contract, so augmenting
+/// one before consumers observe it is module initialization, not external state.
+fn module_exported_local_bindings(program: &Program) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for stmt in &program.body {
+        match stmt {
+            Statement::ExportDefaultDeclaration(export) => {
+                if let ExportDefaultDeclarationKind::Identifier(id) = &export.declaration {
+                    out.insert(id.name.to_string());
+                }
+            }
+            Statement::ExportNamedDeclaration(export) => {
+                for spec in &export.specifiers {
+                    if let Some(local) = spec.local.identifier_name() {
+                        out.insert(local.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// True when `call` augments the module's own export object:
+/// `Object.assign(target, ...)` where `target` is either a bare identifier this
+/// module re-exports (`exported`) or the CommonJS `exports` / `module.exports`
+/// object. Such a call initializes the module's public contract before any
+/// consumer observes it, so it is no external side effect. `Object.assign` onto
+/// an imported singleton, a global (`window`/`globalThis`), or any non-exported
+/// binding is not matched and stays flagged.
+fn is_export_object_assign(
+    call: &oxc_ast::ast::CallExpression,
+    exported: &HashSet<String>,
+) -> bool {
+    let Expression::StaticMemberExpression(m) = &call.callee else {
+        return false;
+    };
+    let Expression::Identifier(obj) = &m.object else {
+        return false;
+    };
+    if obj.name != "Object" || m.property.name != "assign" {
+        return false;
+    }
+    let Some(first) = call.arguments.first().and_then(Argument::as_expression) else {
+        return false;
+    };
+    match first {
+        Expression::Identifier(target) => {
+            target.name == "exports" || exported.contains(target.name.as_str())
+        }
+        // CommonJS `module.exports`.
+        Expression::StaticMemberExpression(member) => {
+            member.property.name == "exports"
+                && matches!(&member.object, Expression::Identifier(o) if o.name == "module")
+        }
+        _ => false,
+    }
+}
+
 /// Root identifier name of a member-access assignment target (`obj.k`,
 /// `obj[k]`, `a.b.c`). Returns `None` for a bare identifier target (a plain
 /// reassignment, which is not a local-state mutation).
@@ -847,6 +919,7 @@ impl OxcCheck for Check {
         let start_transition_names = react_start_transition_bindings(program);
         let module_locals = module_const_bindings(program);
         let new_locals = module_const_new_bindings(program);
+        let exported_locals = module_exported_local_bindings(program);
 
         let mut diagnostics = Vec::new();
         for stmt in &program.body {
@@ -858,7 +931,8 @@ impl OxcCheck for Check {
             if let Expression::CallExpression(call) = &expr_stmt.expression
                 && (is_start_transition_call(call, &start_transition_names)
                     || is_data_init_foreach(call, &module_locals)
-                    || is_local_const_config_call(call, &new_locals))
+                    || is_local_const_config_call(call, &new_locals)
+                    || is_export_object_assign(call, &exported_locals))
             {
                 continue;
             }
@@ -1702,6 +1776,90 @@ mod tests {
             diags.len(),
             1,
             "a bare top-level side-effect call must still be flagged, got {diags:?}"
+        );
+    }
+
+    // --- (l) Exports augmentation via `Object.assign` (Closes #1906) -------
+
+    // Regression for #1906: a library entry attaches its secondary namespace to
+    // the default export with `Object.assign(styled, secondary)` before
+    // re-exporting it. That augments the module's own export object — the
+    // standard library pattern (React does `React.useState = useState`) — so it
+    // is module initialization, not an external side effect.
+    #[test]
+    fn allows_object_assign_onto_default_export() {
+        let src = "\
+            import * as secondary from './base';\n\
+            import styled from './constructors/styled';\n\
+            Object.assign(styled, secondary);\n\
+            export default styled;\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/index-standalone.ts");
+        assert!(
+            diags.is_empty(),
+            "Object.assign onto a re-exported binding is exports augmentation, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_object_assign_onto_named_export() {
+        let src = "\
+            import * as extra from './extra';\n\
+            const api = makeApi();\n\
+            Object.assign(api, extra);\n\
+            export { api };\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/api.ts");
+        assert!(
+            diags.is_empty(),
+            "Object.assign onto a named-exported binding is exports augmentation, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_object_assign_onto_commonjs_exports() {
+        let src = "Object.assign(exports, require('./extra'));\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/index.js");
+        assert!(
+            diags.is_empty(),
+            "Object.assign onto the CommonJS exports object is exports augmentation, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_object_assign_onto_module_exports() {
+        let src = "Object.assign(module.exports, require('./extra'));\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/index.js");
+        assert!(
+            diags.is_empty(),
+            "Object.assign onto module.exports is exports augmentation, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_object_assign_onto_imported_singleton() {
+        // The target is imported, not re-exported by this module — augmenting it
+        // is an external side effect, so it stays flagged.
+        let src = "\
+            import { registry } from './registry';\n\
+            import * as extra from './extra';\n\
+            Object.assign(registry, extra);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "Object.assign onto an imported singleton must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_object_assign_onto_global() {
+        // Mutating a global (`window`) is a genuine side effect — `window` is
+        // not a re-exported binding, so the call stays flagged.
+        let src = "Object.assign(window, { __APP__: true });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/boot.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "Object.assign onto a global must still be flagged, got {diags:?}"
         );
     }
 
