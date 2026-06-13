@@ -8,7 +8,17 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// `react-test-renderer`'s synchronous tree-search methods. They share the
+/// `findBy`/`findAllBy` prefix with Testing Library by coincidence but return a
+/// `ReactTestInstance` (or array) immediately — they are not Promises and must
+/// not be awaited.
+const REACT_TEST_RENDERER_QUERIES: &[&str] =
+    &["findByType", "findByProps", "findAllByType", "findAllByProps"];
+
 fn is_find_query(name: &str) -> bool {
+    if REACT_TEST_RENDERER_QUERIES.contains(&name) {
+        return false;
+    }
     name.starts_with("findBy") || name.starts_with("findAllBy")
 }
 
@@ -92,5 +102,59 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, path)
+    }
+
+    #[test]
+    fn flags_unawaited_find_by_query() {
+        let src = r#"const el = screen.findByText("hi");"#;
+        assert_eq!(run(src, "t.ts").len(), 1);
+    }
+
+    #[test]
+    fn skips_awaited_find_by_query() {
+        let src = r#"const el = await screen.findByText("hi");"#;
+        assert!(run(src, "t.ts").is_empty());
+    }
+
+    // Regression for #1897: react-test-renderer's `findByType`/`findByProps`
+    // (and their `findAllBy*` variants) are synchronous — they return a
+    // `ReactTestInstance`, not a Promise — so an unawaited call is correct.
+    #[test]
+    fn skips_react_test_renderer_find_by_type() {
+        let src = r#"const view = tree.root.findByType(View);"#;
+        assert!(run(src, "createTheme.test.tsx").is_empty(), "{:?}", run(src, "createTheme.test.tsx"));
+    }
+
+    #[test]
+    fn skips_react_test_renderer_sync_queries() {
+        for name in ["findByProps", "findAllByType", "findAllByProps"] {
+            let src = format!("const r = tree.root.{name}(View);");
+            assert!(run(&src, "t.tsx").is_empty(), "{name}: {:?}", run(&src, "t.tsx"));
+        }
     }
 }
