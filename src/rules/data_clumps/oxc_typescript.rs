@@ -16,6 +16,24 @@ const FRAMEWORK_CALLBACK_METHODS: &[&str] = &[
     "all",
 ];
 
+/// Well-known Node.js HTTP middleware signatures (Connect/Express/NestJS), as
+/// sorted, deduped parameter-name sets. The framework invokes these callbacks by
+/// arity and position, so the group cannot be refactored into a single object
+/// parameter — it is a contract, not a data clump.
+const FRAMEWORK_MIDDLEWARE_SIGNATURES: &[&[&str]] = &[
+    &["next", "req", "res"],          // (req, res, next)
+    &["err", "next", "req", "res"],   // (err, req, res, next)
+];
+
+/// A 3-param subset is exempt when it is contained in a known middleware
+/// signature: every subset of `(req, res, next)` / `(err, req, res, next)` is a
+/// framework-mandated group, not a refactorable clump.
+fn is_framework_middleware_subset(subset: &[String]) -> bool {
+    FRAMEWORK_MIDDLEWARE_SIGNATURES
+        .iter()
+        .any(|sig| subset.iter().all(|name| sig.contains(&name.as_str())))
+}
+
 fn is_test_path(path: &std::path::Path) -> bool {
     let lower = path.to_string_lossy().replace('\\', "/");
     lower.contains("/tests/")
@@ -190,6 +208,9 @@ impl OxcCheck for Check {
         let mut subset_occurrences: HashMap<Vec<String>, Vec<FnLocation>> = HashMap::new();
         for (loc, params) in &fn_params {
             for combo in combinations(params, 3) {
+                if is_framework_middleware_subset(&combo) {
+                    continue;
+                }
                 subset_occurrences
                     .entry(combo)
                     .or_default()
@@ -296,5 +317,28 @@ function createUser(name: string, email: string, age: number) {}
 function updateUser(name: string, email: string, age: number) {}
 "#;
         assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn no_fp_on_express_nest_middleware_signature() {
+        // Regression for issue #2035 — (req, res, next) is the Node.js HTTP
+        // middleware contract, invoked by arity/position, not a data clump.
+        let src = r#"
+export class AppModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer
+      .apply((req, res, next) => res.end(MIDDLEWARE_VALUE))
+      .forRoutes({ path: MIDDLEWARE_VALUE })
+      .apply((req, res, next) => res.status(201).end(MIDDLEWARE_VALUE))
+      .forRoutes({ path: MIDDLEWARE_VALUE })
+      .apply((req, res, next) => res.end(MIDDLEWARE_PARAM_VALUE))
+      .forRoutes({ path: MIDDLEWARE_VALUE });
+  }
+}
+function logger(req, res, next) { next(); }
+function auth(req, res, next) { next(); }
+function errorHandler(err, req, res, next) { next(err); }
+"#;
+        assert!(run(src).is_empty());
     }
 }
