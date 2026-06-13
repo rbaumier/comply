@@ -56,6 +56,11 @@ const KNOWN_TAGS: &[&str] = &[
     "instance",
     "interface",
     "internal",
+    // JSX compiler pragmas recognized by TypeScript and Babel, not JSDoc tags.
+    "jsx",
+    "jsxFrag",
+    "jsxImportSource",
+    "jsxRuntime",
     "kind",
     "lends",
     "license",
@@ -222,6 +227,15 @@ mod tests {
         // A decorator reference inside a JSDoc example is PascalCase.
         let src = "/**\n * @example\n * @Module({\n *   imports: [],\n * })\n */\n";
         assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_jsx_compiler_pragmas_issue_1406() {
+        // JSX compiler pragmas recognized by TypeScript/Babel, not JSDoc tags.
+        assert!(run("/** @jsx jsx */\n").is_empty());
+        assert!(run("/** @jsxRuntime classic */\n").is_empty());
+        assert!(run("/** @jsxImportSource @emotion/react */\n").is_empty());
+        assert!(run("/** @jsxFrag jsx.Fragment */\n").is_empty());
     }
 
     #[test]
