@@ -24,6 +24,15 @@ impl OxcCheck for Check {
             let AstKind::VariableDeclaration(decl) = node.kind() else {
                 continue;
             };
+            // Skip the binding in the head of a `for-in` / `for-of` loop: the
+            // loop mechanism assigns the variable on each iteration, so it
+            // structurally has no initializer and cannot be given one.
+            if matches!(
+                semantic.nodes().parent_kind(node.id()),
+                AstKind::ForInStatement(_) | AstKind::ForOfStatement(_)
+            ) {
+                continue;
+            }
             // Skip `const` — TS/JS already errors on uninitialized const.
             if decl.kind == VariableDeclarationKind::Const {
                 continue;
@@ -173,6 +182,35 @@ function f(storageAccount: string, containerName: string, credential: unknown) {
     containerClient = new ContainerClient(storageAccount, containerName, credential);
   }
   return containerClient;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_for_of_loop_variable() {
+        // The binding in a `for-of` head is assigned by the loop on each
+        // iteration — it has no meaningful initializer. (Closes #1780)
+        let src = r#"
+function f(directives: Record<string, unknown>) {
+  for (var key of Object.keys(directives)) {
+    if (directives[key]) { return key; }
+  }
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_for_in_loop_variable() {
+        // The binding in a `for-in` head is assigned by the loop on each
+        // iteration — it has no meaningful initializer. (Closes #1780)
+        let src = r#"
+function f(value: Record<string, unknown>) {
+  for (let key in value) {
+    const prop = value[key];
+    return prop;
+  }
 }
 "#;
         assert!(run(src).is_empty());
