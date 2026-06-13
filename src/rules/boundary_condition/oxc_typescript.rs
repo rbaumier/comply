@@ -71,6 +71,15 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `arr[0]` where `arr` is a same-scope `const` bound to a non-empty array
+        // literal is provably in-bounds — the literal's element count is known.
+        if is_first
+            && let Expression::Identifier(obj_ident) = &member.object
+            && resolves_to_nonempty_array_literal(node, obj_ident.name.as_str(), semantic)
+        {
+            return;
+        }
+
         // Cypress idiom: `$el[0]` inside a `.then(($el) => ...)` callback unwraps the
         // underlying DOM node from the jQuery wrapper. Cypress invokes the callback
         // only when the queried element exists (it fails the test otherwise), so the
@@ -366,6 +375,63 @@ fn has_preceding_guard(
     }
 }
 
+/// Returns true when `name` resolves to a same-scope `const` whose initializer
+/// is a non-empty array literal — making `name[0]` provably in-bounds. Walks
+/// ancestors innermost-first, so the closest binding wins (a shadowing inner
+/// `const` is honored over an outer one). Only a direct `ArrayExpression`
+/// literal qualifies: a call initializer (`getColors()`) or a `let` is unknown
+/// and stays flagged. A spread element makes the length non-static, so an array
+/// literal containing one does not qualify either.
+fn resolves_to_nonempty_array_literal(
+    node: &oxc_semantic::AstNode,
+    name: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        let stmts: &[Statement] = match ancestor.kind() {
+            AstKind::Program(prog) => &prog.body,
+            AstKind::FunctionBody(body) => &body.statements,
+            AstKind::BlockStatement(block) => &block.body,
+            _ => continue,
+        };
+        for stmt in stmts {
+            let Statement::VariableDeclaration(decl) = stmt else {
+                continue;
+            };
+            if decl.kind != VariableDeclarationKind::Const {
+                continue;
+            }
+            for declarator in &decl.declarations {
+                let BindingPattern::BindingIdentifier(id) = &declarator.id else {
+                    continue;
+                };
+                if id.name.as_str() != name {
+                    continue;
+                }
+                // Closest binding wins: the first declarator matching `name`
+                // decides, even if its initializer is not a qualifying literal.
+                return matches!(
+                    &declarator.init,
+                    Some(Expression::ArrayExpression(arr)) if is_static_nonempty_array(arr)
+                );
+            }
+        }
+    }
+    false
+}
+
+/// Returns true when the array literal has at least one statically-present
+/// element and no spread (a spread's length is unknown, so it disqualifies).
+fn is_static_nonempty_array(arr: &ArrayExpression) -> bool {
+    if arr.elements.is_empty() {
+        return false;
+    }
+    !arr.elements
+        .iter()
+        .any(|el| matches!(el, ArrayExpressionElement::SpreadElement(_)))
+}
+
 /// Returns true when the index access lives inside a function whose parameter
 /// list binds `name`, and that function is the argument of a `.then(...)` member
 /// call — i.e. `something.then((name) => ... name[0] ...)`. This is the Cypress
@@ -533,6 +599,55 @@ mod tests {
     #[test]
     fn still_flags_dollar_var_not_then_param_issue_1993() {
         let src = "const $x = getList(); $x[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_index0_of_same_scope_array_literal_issue_1967() {
+        let src = "const colors = ['a', 'b', 'c']; const x = colors[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_index0_of_array_literal_in_block_issue_1967() {
+        let src = "function f() { const colors = ['a', 'b']; return colors[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_index0_of_call_init_issue_1967() {
+        let src = "const colors = getColors(); const x = colors[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_of_param_issue_1967() {
+        let src = "function f(arr) { return arr[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_of_spread_array_literal_issue_1967() {
+        let src = "const colors = [...other]; const x = colors[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_of_empty_array_literal_issue_1967() {
+        let src = "const colors = []; const x = colors[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_last_index_of_array_literal_issue_1967() {
+        // The exemption is scoped to index 0; `arr[arr.length - 1]` stays flagged.
+        let src = "const colors = ['a', 'b']; const x = colors[colors.length - 1];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_of_reassigned_let_issue_1967() {
+        let src = "let colors = ['a', 'b']; const x = colors[0];";
         assert_eq!(run_on(src).len(), 1);
     }
 
