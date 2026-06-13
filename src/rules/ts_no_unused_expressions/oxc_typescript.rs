@@ -14,6 +14,25 @@ const SOLID_REACTIVE_PRIMITIVES: &[&str] = &[
     "createComputed",
 ];
 
+/// DOM geometry properties whose read forces the browser to flush pending style
+/// changes and recompute layout — a real side effect. Reading one in a bare
+/// statement is the canonical reflow-forcing idiom (animation libs, benchmarks),
+/// so it must not be flagged as an unused expression.
+const LAYOUT_REFLOW_PROPS: &[&str] = &[
+    "offsetWidth",
+    "offsetHeight",
+    "offsetTop",
+    "offsetLeft",
+    "clientWidth",
+    "clientHeight",
+    "clientTop",
+    "clientLeft",
+    "scrollWidth",
+    "scrollHeight",
+    "scrollTop",
+    "scrollLeft",
+];
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -210,6 +229,14 @@ fn has_side_effects(expr: &Expression) -> bool {
         // Optional chaining: `f?.()` is a side-effectful call exactly like
         // `f()`; `obj?.prop` is an unused expression exactly like `obj.prop`.
         Expression::ChainExpression(chain) => chain_element_has_side_effects(&chain.expression),
+
+        // Reading a DOM geometry property (`el.offsetWidth`) forces a synchronous
+        // layout reflow — a real side effect, not a dead read.
+        Expression::StaticMemberExpression(member)
+            if LAYOUT_REFLOW_PROPS.contains(&member.property.name.as_str()) =>
+        {
+            true
+        }
 
         // Getter assertions: `expect(x).to.be.true` (Chai) and
         // `expectTypeOf(x).toBeString` (expect-type) access a getter that
@@ -410,6 +437,22 @@ mod tests {
         // Only member reads are the reactive-subscription pattern; a genuinely
         // dead expression inside the same callback must still fire.
         let d = run_on("createEffect(() => { 1 + 1; });");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression #1953: reading a DOM geometry property forces a synchronous
+    // layout reflow — a real side effect, not an unused expression.
+    #[test]
+    fn allows_dom_geometry_read_forcing_reflow_issue_1953() {
+        let src = "if (document.body) { document.body.offsetWidth; }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+        assert!(run_on("el.scrollTop;").is_empty(), "{:?}", run_on("el.scrollTop;"));
+    }
+
+    #[test]
+    fn still_flags_non_geometry_member_read() {
+        // A bare read of a property that does NOT force reflow is still unused.
+        let d = run_on("obj.foo;");
         assert_eq!(d.len(), 1);
     }
 
