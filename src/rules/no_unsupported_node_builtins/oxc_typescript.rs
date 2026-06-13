@@ -7,7 +7,10 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
-use super::{lookup_global, lookup_instance_method, lookup_static_method, min_node_major};
+use super::{
+    is_browser_dom_global, lookup_global, lookup_instance_method, lookup_static_method,
+    min_node_major, targets_browser,
+};
 
 pub struct Check;
 
@@ -56,6 +59,8 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
+        let browser_target = targets_browser(ctx);
+
         let mut diagnostics = Vec::new();
 
         for node in semantic.nodes().iter() {
@@ -65,6 +70,9 @@ impl OxcCheck for Check {
                         continue;
                     }
                     let text = ident.name.as_str();
+                    if browser_target && is_browser_dom_global(text) {
+                        continue;
+                    }
                     if let Some(required) = lookup_global(text).filter(|&r| r > min_version) {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, ident.span.start as usize);
@@ -152,9 +160,13 @@ mod tests {
         source: &str,
         rel_path: &str,
     ) -> Vec<crate::diagnostic::Diagnostic> {
-        let dir = TempDir::new().unwrap();
         let pkg =
             format!(r#"{{"name":"t","version":"0.0.0","engines":{{"node":"{node_version}"}}}}"#);
+        setup_with_pkg(&pkg, source, rel_path)
+    }
+
+    fn setup_with_pkg(pkg: &str, source: &str, rel_path: &str) -> Vec<crate::diagnostic::Diagnostic> {
+        let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("package.json"), pkg).unwrap();
 
         let full = dir.path().join(rel_path);
@@ -242,5 +254,53 @@ mod tests {
         let d = setup_at_path(">=12", "structuredClone({});", "src/clone.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("structuredClone"));
+    }
+
+    #[test]
+    fn exempts_browser_dom_globals_in_browser_framework_package_issue_1834() {
+        // Regression for issue #1834: ionic's @ionic/core depends on @stencil/core
+        // and ships a browser bundle, so engines.node gates build tooling, not the
+        // runtime. CustomEvent / navigator are browser DOM globals and must not flag.
+        let pkg = r#"{"name":"@ionic/core","engines":{"node":">= 16"},"dependencies":{"@stencil/core":"4.43.5"}}"#;
+
+        let transition = setup_with_pkg(
+            pkg,
+            "export const lifecycle = (el: HTMLElement | undefined, eventName: string) => { if (el) { const ev = new CustomEvent(eventName, { bubbles: false }); el.dispatchEvent(ev); } };",
+            "core/src/utils/transition/index.ts",
+        );
+        assert!(transition.is_empty(), "{transition:?}");
+
+        let haptic = setup_with_pkg(
+            pkg,
+            "export const available = () => typeof navigator !== 'undefined' && navigator.vibrate !== undefined;",
+            "core/src/utils/native/haptic.ts",
+        );
+        assert!(haptic.is_empty(), "{haptic:?}");
+    }
+
+    #[test]
+    fn still_flags_non_dom_global_in_browser_framework_package_issue_1834() {
+        // Browser-target exemption only covers browser DOM globals. A genuine Node
+        // bug — structuredClone on Node 16 — must still flag even with a stencil dep.
+        let pkg = r#"{"name":"@ionic/core","engines":{"node":">= 16"},"dependencies":{"@stencil/core":"4.43.5"}}"#;
+        let d = setup_with_pkg(pkg, "const c = structuredClone({});", "core/src/util.ts");
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(d[0].message.contains("structuredClone"));
+    }
+
+    #[test]
+    fn still_flags_browser_dom_global_without_browser_signal() {
+        // No browserslist, no electron/vscode engine, no browser framework dep:
+        // CustomEvent is a genuine Node-version bug and must still flag.
+        let d = setup_at_path(">=16", "const ev = new CustomEvent('x');", "src/server.ts");
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(d[0].message.contains("CustomEvent"));
+    }
+
+    #[test]
+    fn exempts_browser_dom_globals_with_browserslist() {
+        let pkg = r#"{"name":"t","engines":{"node":">= 16"},"browserslist":["last 2 versions"]}"#;
+        let d = setup_with_pkg(pkg, "const ev = new CustomEvent('x');", "src/widget.ts");
+        assert!(d.is_empty(), "{d:?}");
     }
 }

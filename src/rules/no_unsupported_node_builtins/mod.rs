@@ -38,7 +38,9 @@ pub fn register() -> RuleDef {
 
 // ── shared helpers (used by both tree-sitter and oxc backends) ──────
 
-/// Minimum Node major version at which each global API became available.
+/// One global API: name, minimum Node major version it became available at, and
+/// whether it is a browser DOM global (a member of `lib.dom.d.ts` that exists
+/// natively in browsers and was only later added to Node's global scope).
 ///
 /// The WHATWG web-platform value types (`Request`, `Response`, `Headers`,
 /// `FormData`, `Blob`, `File`) are intentionally NOT version-gated: they are
@@ -46,18 +48,35 @@ pub fn register() -> RuleDef {
 /// Deno, Bun, Cloudflare Workers, Node 18+) and the core abstraction of
 /// multi-runtime frameworks, so gating them by `engines.node` produces false
 /// positives. `fetch` itself (the I/O function) stays gated.
-const GLOBAL_APIS: &[(&str, u32)] = &[
-    ("AbortController", 15),
-    ("AbortSignal", 15),
-    ("BroadcastChannel", 15),
-    ("atob", 16),
-    ("btoa", 16),
-    ("structuredClone", 17),
-    ("fetch", 18),
-    ("CustomEvent", 19),
-    ("navigator", 21),
-    ("WebSocket", 22),
+///
+/// Browser-DOM globals (`browser_dom = true`) are additionally exempt when the
+/// project targets the browser (see [`targets_browser`]): in a browser bundle
+/// `engines.node` constrains the build toolchain, not the runtime, so flagging
+/// `CustomEvent`/`navigator` there is a false positive.
+struct GlobalApi {
+    name: &'static str,
+    min_version: u32,
+    browser_dom: bool,
+}
+
+const GLOBAL_APIS: &[GlobalApi] = &[
+    GlobalApi { name: "AbortController", min_version: 15, browser_dom: false },
+    GlobalApi { name: "AbortSignal", min_version: 15, browser_dom: false },
+    GlobalApi { name: "BroadcastChannel", min_version: 15, browser_dom: true },
+    GlobalApi { name: "atob", min_version: 16, browser_dom: false },
+    GlobalApi { name: "btoa", min_version: 16, browser_dom: false },
+    GlobalApi { name: "structuredClone", min_version: 17, browser_dom: false },
+    GlobalApi { name: "fetch", min_version: 18, browser_dom: false },
+    GlobalApi { name: "CustomEvent", min_version: 19, browser_dom: true },
+    GlobalApi { name: "navigator", min_version: 21, browser_dom: true },
+    GlobalApi { name: "WebSocket", min_version: 22, browser_dom: true },
 ];
+
+/// Dependencies whose presence means the package's source compiles to a browser
+/// bundle (web-component compilers / browser-only UI runtimes). For such a
+/// package `engines.node` describes the build toolchain, not where the shipped
+/// code runs, so browser DOM globals are legitimate.
+const BROWSER_FRAMEWORK_DEPS: &[&str] = &["@stencil/core", "lit", "lit-element", "lit-html"];
 
 /// Instance methods introduced on Array.prototype / typed array prototypes.
 const INSTANCE_METHODS: &[(&str, u32)] = &[
@@ -84,8 +103,34 @@ const STATIC_METHODS: &[(&str, &str, u32)] = &[
 pub(super) fn lookup_global(name: &str) -> Option<u32> {
     GLOBAL_APIS
         .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, v)| *v)
+        .find(|api| api.name == name)
+        .map(|api| api.min_version)
+}
+
+/// True if `name` is a browser DOM global (exists natively in browsers, added to
+/// Node later). These are exempt when the file targets the browser.
+pub(super) fn is_browser_dom_global(name: &str) -> bool {
+    GLOBAL_APIS
+        .iter()
+        .any(|api| api.name == name && api.browser_dom)
+}
+
+/// True if the file at `path` ships in a browser bundle, so its `engines.node`
+/// constraint applies to build tooling rather than the runtime.
+///
+/// Signals (any one suffices): the nearest `package.json` declares a browser
+/// runtime target (`browserslist`, `engines.electron`, `engines.vscode`) or
+/// depends on a browser-bundling UI framework (see [`BROWSER_FRAMEWORK_DEPS`]).
+pub(super) fn targets_browser(ctx: &crate::rules::backend::CheckCtx) -> bool {
+    let Some(pkg) = ctx.project.nearest_package_json(ctx.path) else {
+        return false;
+    };
+    pkg.has_browserslist
+        || pkg.engines.contains_key("electron")
+        || pkg.engines.contains_key("vscode")
+        || BROWSER_FRAMEWORK_DEPS
+            .iter()
+            .any(|dep| pkg.has_dep_or_engine(dep))
 }
 
 pub(super) fn lookup_instance_method(name: &str) -> Option<u32> {
