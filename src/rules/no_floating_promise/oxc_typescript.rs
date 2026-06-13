@@ -96,6 +96,9 @@ fn is_async_looking_member_call(call: &CallExpression) -> bool {
     let Expression::StaticMemberExpression(member) = &call.callee else {
         return false;
     };
+    if receiver_is_cast(member) {
+        return false;
+    }
     if is_process_std_stream_write(member) {
         return false;
     }
@@ -110,6 +113,23 @@ fn is_async_looking_member_call(call: &CallExpression) -> bool {
     }
     let method = member.property.name.as_str();
     ASYNC_LOOKING_METHODS.contains(&method)
+}
+
+/// True when the call receiver is a type assertion, e.g. `(api as any).dispatch(...)`.
+/// A cast erases any type basis the heuristic could rely on, so the purely
+/// speculative async-looking-method match must not fire — `(foo as Bar).dispatch(x)`
+/// could be a synchronous Redux/zustand-style `dispatch`.
+fn receiver_is_cast(member: &StaticMemberExpression) -> bool {
+    matches!(peel_parens(&member.object), Expression::TSAsExpression(_))
+}
+
+/// Unwrap any `ParenthesizedExpression` wrappers around `expr`.
+fn peel_parens<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
+    let mut current = expr;
+    while let Expression::ParenthesizedExpression(p) = current {
+        current = &p.expression;
+    }
+    current
 }
 
 /// `XMLHttpRequest.prototype.send(...)` returns `void` per `lib.dom.d.ts` — the
@@ -382,6 +402,27 @@ channel.asyncEnd.publish(context);
     #[test]
     fn still_flags_non_channel_publish() {
         let d = run_on("broker.publish(topic, message);");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression tests for issue #1978: a method call whose receiver is a type
+    // assertion (`(api as any).dispatch(...)`) gives the heuristic no type basis
+    // to infer a Promise return — Redux/zustand-style `dispatch(action)` on a cast
+    // receiver is synchronous — so it must not be flagged.
+
+    #[test]
+    fn allows_dispatch_on_cast_receiver() {
+        assert!(run_on(";(api as any).dispatch({ type: 'INCREMENT' })").is_empty());
+    }
+
+    #[test]
+    fn allows_method_on_named_cast_receiver() {
+        assert!(run_on("(foo as Bar).dispatch(x);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_method_on_non_cast_receiver() {
+        let d = run_on("emitter.dispatch(action);");
         assert_eq!(d.len(), 1);
     }
 }
