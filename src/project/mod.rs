@@ -1168,6 +1168,66 @@ impl ProjectCtx {
             .is_some_and(|m| m <= 18)
     }
 
+    /// True when Vitest is the test runner governing `path`. Vitest with
+    /// `@testing-library/react` auto-runs `cleanup()` after each test, so a
+    /// manual `afterEach(cleanup)` is redundant only here; under Jest it is the
+    /// documented, required pattern. Evidence, in order: `vitest` declared in any
+    /// dep section of the nearest package.json, a `scripts` entry that invokes
+    /// `vitest`, or a `vitest.config.*` file in the directory walk up to the
+    /// project root. Returns false when none is present, so test-runner-specific
+    /// rules stay silent in Jest (and ambiguous) projects.
+    pub fn uses_vitest(&self, path: &Path) -> bool {
+        if let Some(pkg) = self.nearest_package_json(path)
+            && (pkg.has_dep_or_engine("vitest") || pkg.scripts_invoke_test_runner("vitest"))
+        {
+            return true;
+        }
+        self.has_vitest_config(path)
+    }
+
+    /// True when a `vitest.config.*` (or `vite.config.*` declaring a `test`
+    /// block) sits between `path`'s directory and the project root. Only the
+    /// dedicated `vitest.config.*` name is treated as a signal — a plain
+    /// `vite.config.*` may belong to a build that does not run Vitest, so its
+    /// presence alone is not evidence of the runner.
+    fn has_vitest_config(&self, path: &Path) -> bool {
+        const VITEST_CONFIG_FILES: &[&str] = &[
+            "vitest.config.ts",
+            "vitest.config.js",
+            "vitest.config.mts",
+            "vitest.config.mjs",
+            "vitest.config.cts",
+            "vitest.config.cjs",
+            "vitest.workspace.ts",
+            "vitest.workspace.js",
+        ];
+
+        // Upper bound for the config-file walk: the explicit project root, else
+        // the first ancestor that owns a `package.json`. Never escapes upward.
+        let stop_at: Option<PathBuf> = self.project_root.clone().or_else(|| {
+            let mut d = path.parent();
+            loop {
+                let Some(dir) = d else { break None };
+                if dir.join("package.json").is_file() {
+                    break Some(dir.to_path_buf());
+                }
+                d = dir.parent();
+            }
+        });
+
+        let mut dir = path.parent();
+        while let Some(d) = dir {
+            if VITEST_CONFIG_FILES.iter().any(|name| d.join(name).is_file()) {
+                return true;
+            }
+            if stop_at.as_deref() == Some(d) {
+                break;
+            }
+            dir = d.parent();
+        }
+        false
+    }
+
     /// True when the project ships React Compiler — declared as a dependency
     /// or referenced from a bundler / babel config between `path`'s directory
     /// and the project root. Memoized by directory: the answer is identical for
@@ -1880,6 +1940,51 @@ mod tests {
         std::fs::write(dir.path().join("package.json"), r#"{"name":"app"}"#).unwrap();
         let ctx = ProjectCtx::empty();
         assert!(!ctx.react_supports_v18(&dir.path().join("t.tsx")));
+    }
+
+    #[test]
+    fn uses_vitest_true_for_vitest_dependency() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","devDependencies":{"vitest":"^1"}}"#,
+        )
+        .unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.uses_vitest(&dir.path().join("App.test.tsx")));
+    }
+
+    #[test]
+    fn uses_vitest_true_for_vitest_test_script() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","scripts":{"test":"vitest run"}}"#,
+        )
+        .unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.uses_vitest(&dir.path().join("App.test.tsx")));
+    }
+
+    #[test]
+    fn uses_vitest_true_when_only_vitest_config_present() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"app"}"#).unwrap();
+        std::fs::write(dir.path().join("vitest.config.ts"), "export default {}").unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.uses_vitest(&dir.path().join("App.test.tsx")));
+    }
+
+    #[test]
+    fn uses_vitest_false_for_jest_project() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","scripts":{"test":"jest"},"devDependencies":{"jest":"^29"}}"#,
+        )
+        .unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(!ctx.uses_vitest(&dir.path().join("App.test.tsx")));
     }
 
     #[test]
