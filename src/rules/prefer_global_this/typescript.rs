@@ -140,6 +140,37 @@ fn is_in_browser_eval_callback(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
+/// True if the file feature-detects `name` (`window`/`self`/`global`) anywhere
+/// with a `typeof` check (`typeof window !== "undefined"`). Such a file is
+/// deliberately environment-aware code where the bare alias is the intended
+/// object, not a portability oversight, so `prefer-global-this` stays silent on
+/// it. Scans the whole tree from the root reachable through `node`.
+fn file_has_typeof_guard(node: tree_sitter::Node, source: &[u8], name: &str) -> bool {
+    let mut root = node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    let mut cursor = root.walk();
+    let mut stack = vec![root];
+    while let Some(current) = stack.pop() {
+        if current.kind() == "unary_expression"
+            && current
+                .child_by_field_name("operator")
+                .and_then(|o| o.utf8_text(source).ok())
+                == Some("typeof")
+            && current
+                .child_by_field_name("argument")
+                .filter(|a| a.kind() == "identifier")
+                .and_then(|a| a.utf8_text(source).ok())
+                == Some(name)
+        {
+            return true;
+        }
+        stack.extend(current.children(&mut cursor));
+    }
+    false
+}
+
 /// True if `node` is the operand of a `typeof` unary expression.
 fn is_under_typeof(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cur = node;
@@ -198,6 +229,13 @@ crate::ast_check! { on ["member_expression"] => |node, source, ctx, diagnostics|
     // Inside a Playwright/Puppeteer `*.evaluate(...)` callback the code runs in
     // the browser page realm, where `window` is the intended global.
     if is_in_browser_eval_callback(node, source) {
+        return;
+    }
+
+    // A file that feature-detects this global with a `typeof` check
+    // (`typeof window !== "undefined"`) is deliberately environment-aware code
+    // where the bare alias is the intended object, not a portability oversight.
+    if file_has_typeof_guard(node, source, name) {
         return;
     }
 
@@ -401,5 +439,44 @@ mod tests {
     fn flags_window_in_non_evaluate_callback() {
         // `window.X` in an ordinary callback (not a browser-eval API) still fires.
         assert_eq!(run_ts("arr.map(() => window.foo);").len(), 1);
+    }
+
+    // ── `typeof window` feature-detection guards (#1843) ──
+
+    #[test]
+    fn ignores_window_when_file_typeof_guards_it() {
+        // Exact reproduction from issue #1843 (framer/motion, motion-dom).
+        let src = "const isBrowser = typeof window !== \"undefined\"\n\
+                   export function initPrefersReducedMotion() {\n  \
+                   if (!isBrowser) return\n  \
+                   if (window.matchMedia) {\n    \
+                   const q = window.matchMedia(\"(prefers-reduced-motion)\")\n  \
+                   }\n\
+                   }";
+        assert!(
+            run_ts(src).is_empty(),
+            "window.X in a file that feature-detects window must not be flagged: {:?}",
+            run_ts(src)
+        );
+    }
+
+    #[test]
+    fn ignores_self_when_file_typeof_guards_it() {
+        let src = "if (typeof self !== 'undefined') {\n  self.postMessageQueue.push(1);\n}";
+        assert!(run_ts(src).is_empty());
+    }
+
+    #[test]
+    fn flags_window_without_typeof_guard() {
+        // Isomorphic/Node-targeting code that never feature-detects `window` is
+        // still flagged — `globalThis` is preferable there.
+        assert_eq!(run_ts("const url = window.location;").len(), 1);
+    }
+
+    #[test]
+    fn typeof_guard_is_per_global() {
+        // A `typeof window` guard does not exempt `global.X` in the same file.
+        let src = "if (typeof window !== 'undefined') {}\nconst env = global.process;";
+        assert_eq!(run_ts(src).len(), 1);
     }
 }

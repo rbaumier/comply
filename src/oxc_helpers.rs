@@ -71,6 +71,43 @@ pub const SLOT_PLAYWRIGHT: usize = 3;
 pub const SLOT_DELETED_AT_COLUMN: usize = 4;
 const FILE_BOOL_SLOTS: usize = 5;
 
+/// Per-file memo backing [`file_typeof_guards`]: the set of global identifiers
+/// (`window`/`self`/`global`) the current file feature-detects with a `typeof`
+/// check. Keyed by the source `(ptr, len)` identity and rebuilt when that
+/// changes, like the other per-file caches.
+#[derive(Default, Clone, Copy)]
+struct TypeofGuardSlot {
+    ptr: usize,
+    len: usize,
+    guards: Option<TypeofGuards>,
+}
+
+/// Which of the three global aliases a file guards with a `typeof` check.
+#[derive(Default, Clone, Copy)]
+pub struct TypeofGuards {
+    pub window: bool,
+    pub self_: bool,
+    pub global: bool,
+}
+
+impl TypeofGuards {
+    /// True if `name` (`window`/`self`/`global`) is `typeof`-guarded in the file.
+    #[must_use]
+    pub fn guards(&self, name: &str) -> bool {
+        match name {
+            "window" => self.window,
+            "self" => self.self_,
+            "global" => self.global,
+            _ => false,
+        }
+    }
+}
+
+thread_local! {
+    static TYPEOF_GUARDS: std::cell::Cell<TypeofGuardSlot> =
+        const { std::cell::Cell::new(TypeofGuardSlot { ptr: 0, len: 0, guards: None }) };
+}
+
 thread_local! {
     static FILE_BOOLS: std::cell::Cell<[FileBoolSlot; FILE_BOOL_SLOTS]> = const {
         std::cell::Cell::new([FileBoolSlot { ptr: 0, len: 0, val: None }; FILE_BOOL_SLOTS])
@@ -118,6 +155,7 @@ pub fn reset_file_caches() {
         c.starts.clear();
     });
     FILE_BOOLS.with(|c| c.set([FileBoolSlot::default(); FILE_BOOL_SLOTS]));
+    TYPEOF_GUARDS.with(|c| c.set(TypeofGuardSlot::default()));
 }
 
 /// Memoized `source.contains(needle)` for the current file. `source.contains`
@@ -565,6 +603,60 @@ pub fn is_in_browser_eval_callback<'a>(
         }
     }
     false
+}
+
+/// Which of `window`/`self`/`global` the file feature-detects via a `typeof`
+/// check (`typeof window !== "undefined"`, `typeof self`, …). A file that probes
+/// for a global before using it is deliberately writing environment-aware code:
+/// the guarded alias is the intended object there (a browser-only library uses
+/// `window` on purpose), so `prefer-global-this` must not push `globalThis` onto
+/// those accesses. Scans the semantic tree once per file (memoized by source
+/// `(ptr, len)`) since `OxcCheck::run` queries it from every `window.X` node.
+#[must_use]
+pub fn file_typeof_guards<'a>(
+    source: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> TypeofGuards {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{Expression, UnaryOperator};
+
+    let ptr = source.as_ptr() as usize;
+    let len = source.len();
+    let cur = TYPEOF_GUARDS.with(std::cell::Cell::get);
+    if cur.ptr == ptr && cur.len == len && let Some(guards) = cur.guards {
+        return guards;
+    }
+
+    let mut guards = TypeofGuards::default();
+    for node in semantic.nodes().iter() {
+        let AstKind::UnaryExpression(unary) = node.kind() else {
+            continue;
+        };
+        if unary.operator != UnaryOperator::Typeof {
+            continue;
+        }
+        let Expression::Identifier(id) = &unary.argument else {
+            continue;
+        };
+        match id.name.as_str() {
+            "window" => guards.window = true,
+            "self" => guards.self_ = true,
+            "global" => guards.global = true,
+            _ => {}
+        }
+        if guards.window && guards.self_ && guards.global {
+            break;
+        }
+    }
+
+    TYPEOF_GUARDS.with(|c| {
+        c.set(TypeofGuardSlot {
+            ptr,
+            len,
+            guards: Some(guards),
+        });
+    });
+    guards
 }
 
 /// True when `node_id` sits inside an ambient (`declare`) module context —
