@@ -6,16 +6,19 @@
 //! anything specific — it asserts "whatever the code currently produces".
 //! Assert on specific fields instead.
 //!
-//! Exempt: files whose path contains `contract`, `serial`, `wire`, or `protocol`
-//! are dedicated to pinning protocol/wire-format contracts — snapshots are the
-//! correct assertion tool there.
+//! Exempt: files whose path contains `contract`, `serial`, `wire`, `protocol`,
+//! or `snapshot`. The first four pin a protocol/wire-format contract; `snapshot`
+//! marks files testing the snapshot mechanism itself (a test framework asserting
+//! on its own `toMatchSnapshot` output), where the inline location is intentional.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 
-/// Path segments that identify files dedicated to protocol/contract/serialization
-/// testing, where snapshots are the correct tool (they pin a wire format).
-const CONTRACT_MARKERS: &[&str] = &["contract", "serial", "wire", "protocol"];
+/// Path markers that identify files where snapshots are the correct tool:
+/// protocol/contract/serialization tests pin a wire format, and files testing
+/// the snapshot mechanism itself (a test framework asserting on its own
+/// `toMatchSnapshot` output) intentionally embed the exact output inline.
+const CONTRACT_MARKERS: &[&str] = &["contract", "serial", "wire", "protocol", "snapshot"];
 
 fn is_contract_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy().replace('\\', "/").to_lowercase();
@@ -161,6 +164,22 @@ mod tests {
             )
             .len(),
             1
+        );
+    }
+
+    // Regression #1392 — a test framework testing its own snapshot output uses
+    // inline snapshots intentionally; the file path identifies snapshot as the
+    // subject under test, so it must not be flagged.
+    #[test]
+    fn no_fp_in_snapshot_subject_test_file() {
+        let src = "it('renders snapshot', () => { expect(render()).toMatchInlineSnapshot(`\"...\"`); });";
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                src,
+                "test/ui/fixtures/snapshot.test.ts"
+            )
+            .is_empty()
         );
     }
 }
