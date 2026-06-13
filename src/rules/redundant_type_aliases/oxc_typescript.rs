@@ -1,7 +1,8 @@
 //! redundant-type-aliases oxc backend — flag `type X = Y` where Y is a single type.
 //!
-//! Skip when the alias is `export`ed (public API surface) or carries a leading
-//! `/** … */` JSDoc block (the comment proves documentation value).
+//! Skip when the alias is `export`ed (public API surface), carries a leading
+//! `/** … */` JSDoc block (the comment proves documentation value), or is a
+//! `$`-prefixed escape-hatch marker (`$FixMe`, `$TODO`, `$FlowFixMe`, …).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -42,6 +43,13 @@ impl OxcCheck for Check {
 
         // Skip aliases preceded by a JSDoc (`/** … */`) block — the comment is documentation.
         if has_leading_jsdoc(ctx.source, semantic, alias.span.start as usize) {
+            return;
+        }
+
+        // Skip `$`-prefixed escape-hatch markers (`$FixMe`, `$TODO`, `$FlowFixMe`, …).
+        // The leading `$` is the established Flow/TS convention for a deliberate,
+        // grep-able tech-debt alias; the name carries meaning beyond its expansion.
+        if alias.id.name.starts_with('$') {
             return;
         }
 
@@ -250,5 +258,32 @@ function resetFilter(v: ListFilterValues) {}
         // Declaration + 1 use = 2 occurrences — still a redundant rename.
         let src = "type Alias = string;\nfunction foo(v: Alias) {}";
         assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
+    }
+
+    #[test]
+    fn skips_dollar_escape_hatch_markers_regression_1902() {
+        // Regression for https://github.com/rbaumier/comply/issues/1902 — `$`-prefixed
+        // names are the conventional escape-hatch / tech-debt markers (Flow `$FlowFixMe`,
+        // adopted in TS as `$FixMe`, `$TODO`, `$TSFixMe`); the name is intentional signal.
+        for src in [
+            "type $FixMe = any;",
+            "type $TODO = any;",
+            "type $FlowFixMe = any;",
+            "type $TSFixMe = string;",
+        ] {
+            assert!(
+                crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty(),
+                "expected no diagnostic for {src}"
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_non_dollar_rename() {
+        // A genuinely redundant alias without the `$` marker is still flagged.
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, "type FixMe = any;", "t.ts").len(),
+            1
+        );
     }
 }
