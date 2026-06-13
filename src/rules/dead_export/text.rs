@@ -20,6 +20,11 @@
 //!     consumed only from test files, often through tooling-generated path
 //!     aliases (e.g. SvelteKit's `@test-data`) that the index can't resolve,
 //!     so their exports look unimported even though tests use them.
+//!   - yargs command modules — a module exporting the characteristic command
+//!     shape (`command` AND `handler`, alongside `builder`/`describe`/
+//!     `description`/`aliases`/`deprecated`) is loaded dynamically by yargs via
+//!     `commandDir()` / `.command(require(...))`. Those named exports have no
+//!     static importer, so the signature exports are treated as live.
 //!
 //! False-positive guards:
 //!   - If any file imports the current module via a namespace import
@@ -71,6 +76,27 @@ const FIXTURE_DIRS: &[&str] = &[
 fn is_in_fixture_dir(path: &Path) -> bool {
     let normalised = path.to_string_lossy().replace('\\', "/");
     FIXTURE_DIRS.iter().any(|seg| normalised.contains(seg))
+}
+
+/// Named exports that make up a yargs command module. yargs discovers these
+/// dynamically (`commandDir()` / `.command(require(...))`), so they never have
+/// a static importer.
+const YARGS_COMMAND_EXPORTS: &[&str] = &[
+    "command",
+    "handler",
+    "builder",
+    "describe",
+    "description",
+    "aliases",
+    "deprecated",
+];
+
+/// True when the module's export set has the characteristic yargs command-module
+/// shape: both `command` and `handler` are present. The co-occurrence of these
+/// two signature exports is required so that an ordinary module merely exporting
+/// a `handler` (or a `command`) is not blanket-exempted.
+fn is_yargs_command_module<'a>(export_names: &HashSet<&'a str>) -> bool {
+    export_names.contains("command") && export_names.contains("handler")
 }
 
 /// True if the source carries a `@generated` marker in its leading comments.
@@ -154,6 +180,13 @@ impl TextCheck for Check {
         let magic: std::collections::HashSet<&str> =
             ctx.project.framework_magic_exports().collect();
 
+        // yargs command modules export `command`/`handler`/`builder`/`describe`
+        // (etc.) which yargs loads dynamically — no static importer ever
+        // references them. When the file has the command-module shape, its
+        // signature exports are entry points consumed at runtime, not dead.
+        let export_names: HashSet<&str> = exports.iter().map(|e| e.name.as_str()).collect();
+        let is_yargs_command = is_yargs_command_module(&export_names);
+
         // The two source scans below each tree-sitter-parse the whole file, so
         // they are computed lazily: only an export that already survived the
         // cheap index checks (almost none, in a healthy project) pays for them.
@@ -178,6 +211,9 @@ impl TextCheck for Check {
                 continue;
             }
             if magic.contains(export.name.as_str()) {
+                continue;
+            }
+            if is_yargs_command && YARGS_COMMAND_EXPORTS.contains(&export.name.as_str()) {
                 continue;
             }
             if !index.get_usages(&canon, &export.name).is_empty() {
@@ -1069,6 +1105,48 @@ mod tests {
             diags.iter().any(|d| d.message.contains("__DEAD")),
             "frontend dead export must still be flagged, got: {diags:?}"
         );
+    }
+
+    #[test]
+    fn no_fp_for_yargs_command_module() {
+        // Regression for #1417 — redwood's CLI command modules export the
+        // yargs command shape (`command`/`description`/`builder`/`handler`).
+        // yargs loads these via `commandDir()` / `.command(require(...))`, so
+        // there is no static importer; dead-export must not flag them.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "packages/cli/src/commands/destroy/page/page.js",
+                "export const command = 'page <name> [path]'\n\
+                 export const description = 'Destroy a page and route component'\n\
+                 export const builder = (yargs) => {}\n\
+                 export const handler = async ({ name, path }) => {}\n",
+            ),
+            ("packages/cli/src/index.js", "export const z = 1;"),
+        ];
+        let (_dir, diags) =
+            run_on_project(&files, "packages/cli/src/commands/destroy/page/page.js");
+        assert!(
+            diags.is_empty(),
+            "yargs command module exports must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_ordinary_handler_export() {
+        // Sibling guard for #1417 — a module that merely exports a `handler`
+        // (no co-occurring `command`) is not a yargs command module and must
+        // still be flagged when no importer references it.
+        let files: Vec<(&str, &str)> = vec![
+            ("handler.ts", "export const handler = () => {};"),
+            ("other.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "handler.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "lone handler export (no command) must still be flagged, got: {diags:?}"
+        );
+        assert!(diags[0].message.contains("handler"));
     }
 
     #[test]
