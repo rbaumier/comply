@@ -15,17 +15,12 @@ const INFRA_PATHS: &[&str] = &[
     "/healthz", "/health", "/readyz", "/ready", "/livez", "/live", "/metrics",
 ];
 
+/// Test, fixture, and mock infrastructure files are exempt: their route-shaped
+/// calls (MSW handlers, fixtures) are deliberate test scaffolding, not server
+/// routes. Delegates to the shared path classifier so the exemption stays in
+/// sync with every other rule's test-directory handling.
 fn is_test_file(path: &std::path::Path) -> bool {
-    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-    if name.contains(".test.") || name.contains(".spec.") {
-        return true;
-    }
-    path.components().any(|c| {
-        matches!(
-            c.as_os_str().to_str(),
-            Some("__tests__") | Some("__test__") | Some("tests") | Some("test")
-        )
-    })
+    crate::rules::file_ctx::scan_path(path).in_test_dir
 }
 
 fn is_infra_path(path: &str) -> bool {
@@ -205,6 +200,40 @@ mod tests {
     fn ignores_test_file() {
         let d = crate::rules::test_helpers::run_rule(&Check, "app.get('/users', handler);", "src/routes.test.ts");
         assert!(d.is_empty());
+    }
+
+    #[test]
+    fn ignores_msw_mock_handlers_in_mocks_dir() {
+        // Issue #1883: MSW mock handlers under `mocks/` intercept network
+        // calls in test/example setup; their unversioned paths are deliberate.
+        let src = "export const handlers = [\n  rest.get('/posts', (req, res, ctx) => res(ctx.json({}))),\n  rest.post('/posts', (req, res, ctx) => res(ctx.json({}))),\n];";
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            src,
+            "examples/query/react/pagination/src/mocks/db.ts",
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn ignores_jest_mocks_dir() {
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "app.get('/users', handler);",
+            "src/__mocks__/server.ts",
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn flags_production_route_outside_mocks() {
+        // A real route file (not under mocks/test dirs) still flags.
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "app.get('/users', handler);",
+            "src/api/routes.ts",
+        );
+        assert_eq!(d.len(), 1);
     }
 
     #[test]
