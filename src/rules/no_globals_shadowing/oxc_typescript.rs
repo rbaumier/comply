@@ -26,11 +26,16 @@ fn is_declaration_file(path: &Path) -> bool {
         .is_some_and(|n| n.ends_with(".d.ts"))
 }
 
-/// True when a binding named `document` is annotated with a `*Document` type
-/// (e.g. `TextDocument`, `lsp.TextDocument`). In Node.js Language Server
-/// Protocol code `document: TextDocument` is the idiomatic name for an LSP
-/// document and shadows no real DOM global, so it must not be flagged.
-fn is_lsp_text_document<'a>(
+/// True when a binding named after a global is explicitly annotated with the
+/// type of that global, i.e. it deliberately *injects* the global object rather
+/// than accidentally colliding with its name. Examples that are exempt:
+///   - `document: Document | ShadowRoot` (DOM dependency injection, #1880)
+///   - `window: Window & typeof globalThis`
+///   - `document: TextDocument` / `document: lsp.TextDocument` (LSP convention)
+/// A binding with no annotation, or annotated with an unrelated type
+/// (`document: string`), is not injection and stays flagged.
+fn is_global_typed_di_binding<'a>(
+    name: &str,
     symbol_id: oxc_semantic::SymbolId,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
@@ -43,13 +48,13 @@ fn is_lsp_text_document<'a>(
                 return param
                     .type_annotation
                     .as_ref()
-                    .is_some_and(|ann| type_ends_with_document(&ann.type_annotation));
+                    .is_some_and(|ann| type_matches_global(name, &ann.type_annotation));
             }
             AstKind::VariableDeclarator(decl) => {
                 return decl
                     .type_annotation
                     .as_ref()
-                    .is_some_and(|ann| type_ends_with_document(&ann.type_annotation));
+                    .is_some_and(|ann| type_matches_global(name, &ann.type_annotation));
             }
             // Stop at function / program boundaries — no annotation found.
             AstKind::Function(_)
@@ -86,16 +91,39 @@ fn is_ambient_declaration<'a>(
     false
 }
 
-/// True when `ty` is a type reference whose rightmost name ends with `Document`
-/// (`TextDocument`, `Document`, `lsp.TextDocument`, …).
-fn type_ends_with_document(ty: &TSType) -> bool {
-    let TSType::TSTypeReference(type_ref) = ty else { return false };
-    let name = match &type_ref.type_name {
-        TSTypeName::IdentifierReference(ident) => ident.name.as_str(),
-        TSTypeName::QualifiedName(qualified) => qualified.right.name.as_str(),
-        TSTypeName::ThisExpression(_) => return false,
-    };
-    name.ends_with("Document")
+/// True when `ty` carries — directly, or as a member of a union/intersection —
+/// a type reference whose rightmost name corresponds to the global `name`. The
+/// correspondence is: `document` accepts any `*Document` type (DOM `Document`
+/// plus the LSP `TextDocument` convention), `window` accepts `Window`.
+fn type_matches_global(name: &str, ty: &TSType) -> bool {
+    match ty {
+        TSType::TSUnionType(union) => union
+            .types
+            .iter()
+            .any(|member| type_matches_global(name, member)),
+        TSType::TSIntersectionType(intersection) => intersection
+            .types
+            .iter()
+            .any(|member| type_matches_global(name, member)),
+        TSType::TSTypeReference(type_ref) => {
+            let type_name = match &type_ref.type_name {
+                TSTypeName::IdentifierReference(ident) => ident.name.as_str(),
+                TSTypeName::QualifiedName(qualified) => qualified.right.name.as_str(),
+                TSTypeName::ThisExpression(_) => return false,
+            };
+            global_accepts_type(name, type_name)
+        }
+        _ => false,
+    }
+}
+
+/// True when `type_name` is a valid injected type for the global `name`.
+fn global_accepts_type(name: &str, type_name: &str) -> bool {
+    match name {
+        "document" => type_name.ends_with("Document"),
+        "window" => type_name == "Window",
+        _ => false,
+    }
 }
 
 impl OxcCheck for Check {
@@ -119,7 +147,7 @@ impl OxcCheck for Check {
             if is_ambient_declaration(symbol_id, semantic) {
                 continue;
             }
-            if name == "document" && is_lsp_text_document(symbol_id, semantic) {
+            if is_global_typed_di_binding(name, symbol_id, semantic) {
                 continue;
             }
             let span = scoping.symbol_span(symbol_id);
@@ -226,6 +254,44 @@ mod tests {
     fn flags_document_param_non_document_type() {
         assert_eq!(
             run_on("function f(document: string) { return document; }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_document_param_union_with_document() {
+        // DOM dependency-injection: `document: Document | ShadowRoot` passes the
+        // global object type explicitly (testing-library/user-event). See #1880.
+        assert!(
+            run_on(
+                "export function getActiveElement(document: Document | ShadowRoot): Element | null { return document.activeElement; }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_window_param_intersection_with_window() {
+        // `window: Window & typeof globalThis` injects the global window type.
+        assert!(
+            run_on("function f(window: Window & typeof globalThis) { return window; }").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_window_param_window_type() {
+        assert!(run_on("function f(window: Window) { return window; }").is_empty());
+    }
+
+    #[test]
+    fn flags_window_param_no_annotation() {
+        assert_eq!(run_on("function f(window) { return window; }").len(), 1);
+    }
+
+    #[test]
+    fn flags_window_param_non_window_type() {
+        assert_eq!(
+            run_on("function f(window: string) { return window; }").len(),
             1
         );
     }
