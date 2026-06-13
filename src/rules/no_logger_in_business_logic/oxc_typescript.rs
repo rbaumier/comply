@@ -50,6 +50,14 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // A test file inside a business-logic directory (e.g.
+        // `core/__tests__/logger.test.ts`) exercises the logger to assert on
+        // its behaviour — it is not production business logic, so `logger.*`
+        // calls there are expected, not a leak of a cross-cutting concern.
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
+
         if !is_business_logic_path(ctx.path) {
             return;
         }
@@ -87,5 +95,65 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_rule_gated;
+
+    #[test]
+    fn flags_logger_in_core() {
+        let diags = run_rule_gated(&Check, "logger.info('order placed');", "src/core/order.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_console_log_in_service() {
+        let diags = run_rule_gated(&Check, "console.log('creating user');", "src/service/user.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn skips_logger_test_inside_core_dir() {
+        // Issue #1821: a unit test for the logger module lives inside a
+        // business-logic directory and calls `logger.*` to observe behaviour.
+        let src = "describe('basic logging functionality', () => {\n\
+                       it('should log messages at appropriate levels', () => {\n\
+                           logger.error('error message');\n\
+                           logger.warn('warn message');\n\
+                           logger.info('info message');\n\
+                           logger.debug('debug message');\n\
+                       });\n\
+                   });";
+        let diags = run_rule_gated(
+            &Check,
+            src,
+            "packages/clerk-js/src/core/modules/debug/__tests__/logger.test.ts",
+        );
+        assert!(diags.is_empty(), "test file should not flag logger.* calls");
+    }
+
+    #[test]
+    fn skips_spec_file_in_business_dir() {
+        let diags = run_rule_gated(&Check, "logger.info('x');", "src/domain/order.spec.ts");
+        assert!(diags.is_empty());
     }
 }
