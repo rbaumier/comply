@@ -84,4 +84,9 @@ mod tests {
         let diags = run("const retryDelays = [100, 200, 400];");
         assert_eq!(diags.len(), 1);
     }
+
+    #[test]
+    fn allows_empty_array_collection() {
+        assert!(run("const listeners: Array<(state: State) => void> = [];").is_empty());
+    }
 }
