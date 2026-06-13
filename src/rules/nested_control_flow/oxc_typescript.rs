@@ -1,26 +1,12 @@
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
+use crate::rules::path_utils;
 use oxc_span::GetSpan;
 use std::collections::HashSet;
-use std::path::Path;
 use std::sync::Arc;
 
 pub struct Check;
-
-/// True for files under a developer-only directory (scripts, bin, migrations).
-/// One-off data-processing and migration scripts trade readability for getting
-/// the job done; deep `switch`/`for`/`if` nesting there is expected, not a
-/// maintainability smell worth refactoring.
-fn is_developer_script_path(path: &Path) -> bool {
-    path.components().any(|c| {
-        if let std::path::Component::Normal(s) = c {
-            matches!(s.to_str(), Some("scripts") | Some("bin") | Some("migrations"))
-        } else {
-            false
-        }
-    })
-}
 
 fn is_control_flow(kind: &AstKind) -> bool {
     matches!(
@@ -50,7 +36,9 @@ impl OxcCheck for Check {
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
-        if is_developer_script_path(ctx.path) {
+        // Narrow scripts/bin/migrations exemption only — NOT the broad
+        // `in_aux_dir`, which would wrongly exempt config/examples/templates.
+        if path_utils::is_developer_script_path(ctx.path) {
             return diagnostics;
         }
         let nodes = semantic.nodes();

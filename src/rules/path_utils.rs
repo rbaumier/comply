@@ -66,6 +66,143 @@ pub fn is_codemod_fixture_file(path: &Path) -> bool {
     })
 }
 
+/// True when any `Normal` path segment equals one of `names`. Segment (not
+/// substring) matching is what keeps `src/appconfig/` from matching `config`
+/// and `src/mysamples/` from matching `samples`.
+fn has_path_segment(path: &Path, names: &[&str]) -> bool {
+    path.components().any(|c| {
+        matches!(c, std::path::Component::Normal(s) if s.to_str().is_some_and(|seg| names.contains(&seg)))
+    })
+}
+
+/// Directory names where dev-only tooling lives and rules that exempt
+/// "not shipped in the published package" code (e.g. `no-extraneous-import`)
+/// are relaxed. The broad set: build/CI scripts, demonstration code, and
+/// generator scaffold templates. Matched as exact path segments.
+const AUX_DIR_SEGMENTS: &[&str] = &[
+    "scripts",
+    "bin",
+    "config",
+    "migrations",
+    "samples",
+    "samples-dev",
+    "examples",
+    "example-apps",
+    "templates",
+    "template",
+    "scaffold",
+    "boilerplate",
+];
+
+/// True when `path` lives under any auxiliary (non-shipped) directory: build
+/// scripts, config/migrations, demonstration samples/examples, or generator
+/// scaffold templates. The broad superset consumed by `no-extraneous-import`;
+/// narrower rules use [`is_developer_script_path`] instead. Segment match.
+pub fn is_aux_dir_path(path: &Path) -> bool {
+    has_path_segment(path, AUX_DIR_SEGMENTS)
+}
+
+/// True when any path segment is cargo-fuzz's `fuzz_targets/` directory. In a
+/// libfuzzer-sys target, `panic!` is the deliberate crash-signaling mechanism
+/// the fuzzer catches, so panic/abort rules exempt these files.
+pub fn is_fuzz_targets_path(path: &Path) -> bool {
+    path.components().any(|c| c.as_os_str() == "fuzz_targets")
+}
+
+/// True for files under a developer-only directory (`scripts/`, `bin/`,
+/// `migrations/`). One-off data-processing and migration scripts trade
+/// readability for getting the job done; this is the narrow subset of
+/// [`is_aux_dir_path`] used where exempting config/examples would be wrong
+/// (e.g. `nested-control-flow`). Segment match.
+pub fn is_developer_script_path(path: &Path) -> bool {
+    has_path_segment(path, &["scripts", "bin", "migrations"])
+}
+
+/// True for build/codegen scripts under a `scripts/` or `config/` directory.
+/// These run at dev/CI time and are not part of the shipped bundle.
+pub fn is_build_script_path(path: &Path) -> bool {
+    has_path_segment(path, &["scripts", "config"])
+}
+
+/// True for demonstration code under `samples/`, `samples-dev/`, `examples/`,
+/// or `example-apps/`. Compiled and run at dev time to show library usage; it
+/// never ships in the published package.
+pub fn is_sample_dir_path(path: &Path) -> bool {
+    has_path_segment(path, &["samples", "samples-dev", "examples", "example-apps"])
+}
+
+/// True for a test file that never ships in the published package: one under a
+/// `__tests__/`, `__testUtils__/`, `test/`, `tests/`, or `e2e/` directory, one
+/// carrying a `.test.`/`.spec.`/`.setup.` infix, or one whose whole stem is
+/// `test`/`spec` (a co-located `endOfWeek/test.ts`). Consumed by
+/// `no-extraneous-import` to allow test-only devDependency imports.
+pub fn is_extraneous_test_file(path: &Path) -> bool {
+    let path_str = path.to_string_lossy();
+    let is_marked = path_str.contains("__tests__")
+        || path_str.contains("__testUtils__")
+        || path_str.contains(".test.")
+        || path_str.contains(".spec.")
+        || path_str.contains(".setup.")
+        || path_str.contains("/test/")
+        || path_str.contains("/tests/")
+        || path_str.contains("/e2e/");
+    is_marked || has_test_file_stem(path)
+}
+
+/// Co-located test files whose entire name (minus extension) is `test` or
+/// `spec` — e.g. `src/endOfWeek/test.ts`.
+fn has_test_file_stem(path: &Path) -> bool {
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs")
+    ) && (stem == "test" || stem == "spec")
+}
+
+/// True when the file name carries a `.test-d.` infix (e.g.
+/// `Component.test-d.tsx`), the tsd type-testing convention for files that
+/// live beside their source rather than in a `test-d/` directory.
+pub fn has_test_d_infix(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name.to_ascii_lowercase().contains(".test-d."))
+}
+
+/// True for an import specifier that traverses into a build-output or
+/// code-generated directory (`dist`/`build`/`out` bundles, `generated`/
+/// `__generated__`/`.prisma`/`prisma`/`gen` codegen output) or `node_modules`.
+/// These artifacts are produced by a build step, gitignored, and absent in a
+/// clean checkout, so an unresolved import into them is expected. Segment match
+/// over the `/`-split specifier (so `./distance` is NOT a `dist` match).
+pub fn is_build_output_specifier(spec: &str) -> bool {
+    spec.split('/').any(|seg| {
+        matches!(
+            seg,
+            "dist"
+                | "build"
+                | "out"
+                | "generated"
+                | "__generated__"
+                | ".prisma"
+                | "prisma"
+                | "gen"
+                | "node_modules"
+        )
+    })
+}
+
+/// True for an import specifier pointing at a build-time generated file: a
+/// final segment ending in `.gen` (e.g. `./routeTree.gen`), a `.gen.` extension
+/// stem (e.g. `./routeTree.gen.ts`), or a `.prebuilt.` extension stem (e.g.
+/// `./idle.prebuilt.js`). Such files are gitignored and often absent at lint
+/// time, yet always present at build/dev time.
+pub fn is_generated_file_specifier(spec: &str) -> bool {
+    let last = spec.rsplit('/').next().unwrap_or(spec);
+    last.ends_with(".gen") || last.contains(".gen.") || last.contains(".prebuilt.")
+}
+
 /// True when `path` matches a framework entry point via FILES, SUFFIXES, or
 /// ROOT_FILES only — does NOT check dirs. Used by `dead-export` to bail out
 /// for framework-specific files even when the user has configured additional
@@ -211,4 +348,120 @@ pub fn is_framework_entry_point(path: &Path, project: &ProjectCtx) -> bool {
 
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     project.framework_root_files().any(|entry| entry == stem)
+}
+
+#[cfg(test)]
+mod aux_path_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn aux_dir_segments_match() {
+        for dir in [
+            "scripts",
+            "bin",
+            "config",
+            "migrations",
+            "samples",
+            "samples-dev",
+            "examples",
+            "example-apps",
+            "templates",
+            "template",
+            "scaffold",
+            "boilerplate",
+        ] {
+            assert!(
+                is_aux_dir_path(&PathBuf::from(format!("pkg/{dir}/file.ts"))),
+                "{dir}/ should be an aux dir"
+            );
+        }
+        // Segment (not substring) match — guards no-extraneous-import's
+        // still_flags_dev_dep_outside_config_dir / _sample_dirs tests.
+        assert!(!is_aux_dir_path(&PathBuf::from("src/appconfig/index.ts")));
+        assert!(!is_aux_dir_path(&PathBuf::from("src/mysamples/index.ts")));
+        assert!(!is_aux_dir_path(&PathBuf::from("src/templated/index.ts")));
+        assert!(!is_aux_dir_path(&PathBuf::from("src/app/login.ts")));
+    }
+
+    #[test]
+    fn developer_script_path_is_narrow() {
+        assert!(is_developer_script_path(&PathBuf::from("scripts/import-legacy-data.ts")));
+        assert!(is_developer_script_path(&PathBuf::from("pkg/bin/cli.ts")));
+        assert!(is_developer_script_path(&PathBuf::from("db/migrations/0001.ts")));
+        // The narrow predicate must NOT cover config/examples/templates.
+        assert!(!is_developer_script_path(&PathBuf::from("config/helpers.ts")));
+        assert!(!is_developer_script_path(&PathBuf::from("examples/app/page.tsx")));
+        assert!(!is_developer_script_path(&PathBuf::from("templates/app/page.tsx")));
+    }
+
+    #[test]
+    fn build_script_and_sample_dir_segments() {
+        assert!(is_build_script_path(&PathBuf::from("scripts/gen.ts")));
+        assert!(is_build_script_path(&PathBuf::from("config/helpers.ts")));
+        assert!(!is_build_script_path(&PathBuf::from("src/appconfig/index.ts")));
+        assert!(is_sample_dir_path(&PathBuf::from("samples-dev/x.ts")));
+        assert!(is_sample_dir_path(&PathBuf::from("examples/app.ts")));
+        assert!(!is_sample_dir_path(&PathBuf::from("src/mysamples/index.ts")));
+    }
+
+    #[test]
+    fn fuzz_targets_path_match() {
+        assert!(is_fuzz_targets_path(&PathBuf::from("fuzz/fuzz_targets/parse.rs")));
+        assert!(!is_fuzz_targets_path(&PathBuf::from("src/lib.rs")));
+    }
+
+    #[test]
+    fn extraneous_test_file_union() {
+        assert!(is_extraneous_test_file(&PathBuf::from("src/login-form.test.tsx")));
+        assert!(is_extraneous_test_file(&PathBuf::from("src/foo.spec.ts")));
+        assert!(is_extraneous_test_file(&PathBuf::from("src/__testUtils__/expectJSON.ts")));
+        assert!(is_extraneous_test_file(&PathBuf::from("src/endOfWeek/test.ts")));
+        assert!(is_extraneous_test_file(&PathBuf::from("src/startOfWeek/spec.ts")));
+        assert!(!is_extraneous_test_file(&PathBuf::from("src/app/login.ts")));
+    }
+
+    #[test]
+    fn test_d_infix_filename() {
+        assert!(has_test_d_infix(&PathBuf::from("src/Component.test-d.tsx")));
+        assert!(has_test_d_infix(&PathBuf::from("schema.test-d.ts")));
+        // A `test-d/` directory without the filename infix is NOT a filename
+        // match (the directory branch lives in file_ctx::scan_path).
+        assert!(!has_test_d_infix(&PathBuf::from("test-d/schema.ts")));
+        assert!(!has_test_d_infix(&PathBuf::from("src/Component.tsx")));
+    }
+
+    #[test]
+    fn build_output_specifier_segments() {
+        // Build artifacts (issue #1005) and codegen dirs (issue #1420).
+        assert!(is_build_output_specifier("../../../dist/cjs/index.js"));
+        assert!(is_build_output_specifier("../build/index.js"));
+        assert!(is_build_output_specifier("./out/index.js"));
+        assert!(is_build_output_specifier("./generated/prisma/client"));
+        assert!(is_build_output_specifier("../src/__generated__/graphql"));
+        assert!(is_build_output_specifier("./.prisma/client"));
+        assert!(is_build_output_specifier("./prisma/client"));
+        assert!(is_build_output_specifier("./gen/api"));
+        assert!(is_build_output_specifier("./node_modules/@prisma/client"));
+        // Segment match — substrings of another segment still flag.
+        assert!(!is_build_output_specifier("./src/index.js"));
+        assert!(!is_build_output_specifier("../distance/index.js"));
+        assert!(!is_build_output_specifier("./distribution/x"));
+        assert!(!is_build_output_specifier("./lib/util.js"));
+        assert!(!is_build_output_specifier("./generated-things"));
+        assert!(!is_build_output_specifier("./does-not-exist"));
+    }
+
+    #[test]
+    fn generated_file_specifier_suffixes() {
+        assert!(is_generated_file_specifier("./routeTree.gen"));
+        assert!(is_generated_file_specifier("./routeTree.gen.ts"));
+        assert!(is_generated_file_specifier("../app/routeTree.gen"));
+        assert!(is_generated_file_specifier("../../runtime/client/idle.prebuilt.js"));
+        assert!(is_generated_file_specifier("./visible.prebuilt.js"));
+        assert!(!is_generated_file_specifier("./routeTree"));
+        assert!(!is_generated_file_specifier("./generated"));
+        assert!(!is_generated_file_specifier("./idle.js"));
+        assert!(!is_generated_file_specifier("./prebuilt"));
+    }
 }

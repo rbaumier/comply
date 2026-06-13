@@ -48,6 +48,14 @@ pub struct PathSegments {
     /// `examples/`, `benches/`, or `fixtures/` anywhere in the path —
     /// directories where api/rust/security rules are intentionally relaxed.
     pub is_relaxed_dir: bool,
+    /// An auxiliary, non-shipped directory segment (scripts/bin/config/
+    /// migrations/samples/examples/templates/scaffold/boilerplate). The broad
+    /// set consumed by `no-extraneous-import`; see
+    /// [`crate::rules::path_utils::is_aux_dir_path`].
+    pub in_aux_dir: bool,
+    /// A cargo-fuzz `fuzz_targets/` directory segment — where `panic!` is the
+    /// deliberate crash-signaling mechanism.
+    pub in_fuzz_targets: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -287,6 +295,7 @@ fn scan_path(path: &Path) -> PathSegments {
             || lower.starts_with("test-helper/")
             || lower.contains("/test-d/")
             || lower.starts_with("test-d/")
+            || crate::rules::path_utils::has_test_d_infix(path)
             || lower.contains("/dtslint/")
             || lower.starts_with("dtslint/")
             || lower.contains("/__tests__/")
@@ -312,6 +321,8 @@ fn scan_path(path: &Path) -> PathSegments {
             || lower.contains("/examples/")
             || lower.contains("/benches/")
             || lower.contains("/fixtures/"),
+        in_aux_dir: crate::rules::path_utils::is_aux_dir_path(path),
+        in_fuzz_targets: crate::rules::path_utils::is_fuzz_targets_path(path),
     }
 }
 
@@ -445,6 +456,45 @@ mod tests {
             ))
             .in_test_dir
         );
+    }
+
+    #[test]
+    fn closes_test_d_filename_infix_gap_pr2144() {
+        // PR #2144 gap: a `.test-d.` FILENAME infix with NO `/test-d/`
+        // directory (the tsd co-located convention) must classify as a test
+        // dir, so every rule reading `ctx.file.path_segments.in_test_dir`
+        // treats it as a test for free.
+        assert!(scan_path(&PathBuf::from("src/Component.test-d.tsx")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("schema.test-d.ts")).in_test_dir);
+        // A plain co-located source file is still not a test dir.
+        assert!(!scan_path(&PathBuf::from("src/Component.tsx")).in_test_dir);
+    }
+
+    #[test]
+    fn in_aux_dir_set_for_non_shipped_dirs() {
+        for dir in [
+            "scripts",
+            "bin",
+            "config",
+            "migrations",
+            "samples",
+            "examples",
+            "templates",
+            "scaffold",
+            "boilerplate",
+        ] {
+            assert!(
+                scan_path(&PathBuf::from(format!("pkg/{dir}/file.ts"))).in_aux_dir,
+                "{dir}/ should set in_aux_dir"
+            );
+        }
+        assert!(!scan_path(&PathBuf::from("src/app.ts")).in_aux_dir);
+    }
+
+    #[test]
+    fn in_fuzz_targets_set_for_cargo_fuzz_path() {
+        assert!(scan_path(&PathBuf::from("fuzz/fuzz_targets/x.rs")).in_fuzz_targets);
+        assert!(!scan_path(&PathBuf::from("src/lib.rs")).in_fuzz_targets);
     }
 
     #[test]

@@ -112,7 +112,10 @@ impl OxcCheck for Check {
             return;
         }
 
-        if is_test_file(ctx.path)
+        // Dual-read: the unit-test harness injects an empty default FileCtx, so
+        // `in_test_dir` is false in tests — fall back to the local check, which
+        // also covers the `_test.` infix that `in_test_dir` does not.
+        if (ctx.file.path_segments.in_test_dir || is_test_file(ctx.path))
             && is_placeholder_callback_position(semantic.nodes(), node.id())
         {
             return;

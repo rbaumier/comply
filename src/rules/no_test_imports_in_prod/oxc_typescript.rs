@@ -36,8 +36,10 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Dual-read: the unit-test harness injects an empty default FileCtx, so
+        // `in_test_dir` is false in tests — fall back to the local marker scan.
         let current_path = ctx.path.to_string_lossy();
-        if is_test_path(&current_path) {
+        if ctx.file.path_segments.in_test_dir || is_test_path(&current_path) {
             return;
         }
         let AstKind::ImportDeclaration(import) = node.kind() else {

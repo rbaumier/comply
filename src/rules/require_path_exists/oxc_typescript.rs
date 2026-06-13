@@ -26,18 +26,6 @@ fn is_relative_path(spec: &str) -> bool {
     spec.starts_with("./") || spec.starts_with("../")
 }
 
-/// True for specifiers pointing at a build-time generated file. Such files are
-/// produced by a build step, gitignored and often absent at lint time, yet
-/// always present at build/dev time. Recognised conventions:
-/// - a `.gen` final segment (e.g. `./routeTree.gen`) or `.gen.` extension stem
-///   (e.g. `./routeTree.gen.ts`);
-/// - a `.prebuilt.` extension stem (e.g. `./idle.prebuilt.js`), the suffix used
-///   for inlined/minified build outputs that live beside their `.ts` source.
-fn is_generated_specifier(spec: &str) -> bool {
-    let last = spec.rsplit('/').next().unwrap_or(spec);
-    last.ends_with(".gen") || last.contains(".gen.") || last.contains(".prebuilt.")
-}
-
 fn resolve_and_check(base_dir: &Path, import_spec: &str) -> bool {
     let resolved = base_dir.join(import_spec);
 
@@ -115,7 +103,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        if is_generated_specifier(&import_spec) {
+        if crate::rules::path_utils::is_generated_file_specifier(&import_spec) {
             return;
         }
 
