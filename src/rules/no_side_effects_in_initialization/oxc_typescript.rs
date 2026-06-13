@@ -4,9 +4,10 @@
 //! Exemptions:
 //! - test files (path heuristic);
 //! - test-runner setup files matched by convention path/name (`*.setup.*`,
-//!   `setup.*`, `setup-*`, `*-setup`, `globalSetup`, or anything under
-//!   `test-helpers/`), or by content shape where every top-level call is a
-//!   Vitest hook with a `"vitest"` import present;
+//!   `setup.*`, `setup-*`, `*-setup`, `globalSetup`, `setupTests.*`, anything
+//!   under `test-helpers/`, or any Cypress support file under `cypress/support/`),
+//!   or by content shape where every top-level call is a Vitest hook with a
+//!   `"vitest"` import present;
 //! - server application entry points by content shape: any module with a
 //!   top-level `listen(...)` / `*.listen(...)` call (Fastify/Express/Node HTTP
 //!   servers start the server this way, so the surrounding route/hook/
@@ -51,6 +52,12 @@ fn is_test_setup_path(path: &std::path::Path) -> bool {
     if s.contains("/test-helpers/") || s.starts_with("test-helpers/") {
         return true;
     }
+    // Cypress support files (`cypress/support/component.ts`, `…/e2e.ts`,
+    // `…/commands.ts`) are loaded by the test runner before each run for their
+    // top-level registrations — that is the Cypress support-file contract.
+    if s.contains("/cypress/support/") || s.starts_with("cypress/support/") {
+        return true;
+    }
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -64,6 +71,7 @@ fn is_test_setup_path(path: &std::path::Path) -> bool {
     stem == "setup"
         || stem.starts_with("setup-")
         || stem.ends_with("-setup")
+        || stem == "setuptests"
         || stem == "globalsetup"
         || stem == "global-setup"
 }
@@ -389,6 +397,28 @@ mod tests {
         // `setupRouter.ts` is an ordinary module, not a runner setup file.
         let diags = crate::rules::test_helpers::run_rule(&Check, "buildRouter();", "src/setupRouter.ts");
         assert_eq!(diags.len(), 1, "setupRouter.ts must still be flagged, got {diags:?}");
+    }
+
+    #[test]
+    fn allows_setup_tests_file() {
+        let diags = crate::rules::test_helpers::run_rule(&Check, "installMatchers();", "src/setupTests.ts");
+        assert!(diags.is_empty(), "setupTests.ts should be exempt, got {diags:?}");
+    }
+
+    // Regression for #1419: Cypress support files run top-level registrations
+    // by contract — the runner loads them before each test run for exactly
+    // those side effects.
+    #[test]
+    fn allows_cypress_support_file() {
+        let src = "\
+            import { addQwikLoader } from 'cypress-ct-qwik';\n\
+            addQwikLoader();\n\
+            import './commands';\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "starters/features/cypress/cypress/support/component.ts");
+        assert!(
+            diags.is_empty(),
+            "cypress/support/ files are test-runner entry points, got {diags:?}"
+        );
     }
 
     #[test]
