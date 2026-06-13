@@ -120,16 +120,22 @@ fn has_side_effects(expr: &Expression) -> bool {
         Expression::TSAsExpression(inner) => has_side_effects(&inner.expression),
         Expression::TSSatisfiesExpression(inner) => has_side_effects(&inner.expression),
 
+        // Type-assertion instantiation: `expectTypeOf(x).toEqualTypeOf<T>` is a
+        // member access with explicit type arguments and no trailing call. The
+        // generic getter triggers a compile-time error when the types mismatch,
+        // so it is an intentional assertion rooted at the assertion call.
+        Expression::TSInstantiationExpression(inner) => chain_roots_at_assertion(&inner.expression),
+
         // Optional chaining: `f?.()` is a side-effectful call exactly like
         // `f()`; `obj?.prop` is an unused expression exactly like `obj.prop`.
         Expression::ChainExpression(chain) => chain_element_has_side_effects(&chain.expression),
 
-        // Chai getter assertions: `expect(x).to.be.true` accesses a getter
-        // that checks the value and throws AssertionError on failure — the
-        // property access IS the side effect. Recognise a member-access
-        // chain rooted at an `expect(...)` call.
+        // Getter assertions: `expect(x).to.be.true` (Chai) and
+        // `expectTypeOf(x).toBeString` (expect-type) access a getter that
+        // checks the value — the property access IS the assertion. Recognise a
+        // member-access chain rooted at an assertion call.
         Expression::StaticMemberExpression(_)
-        | Expression::ComputedMemberExpression(_) => chain_roots_at_expect(expr),
+        | Expression::ComputedMemberExpression(_) => chain_roots_at_assertion(expr),
 
         _ => false,
     }
@@ -146,18 +152,23 @@ fn chain_element_has_side_effects(elem: &ChainElement) -> bool {
     }
 }
 
-/// True when `expr` is a member-access chain whose innermost object is a
-/// call to the identifier `expect` — i.e. a Chai assertion chain such as
-/// `expect(x).to.be.true`. The terminating getter access is the assertion.
-fn chain_roots_at_expect(expr: &Expression) -> bool {
+/// True when `expr` is a member-access chain whose innermost object is a call
+/// to a known assertion root — `expect` (Chai) or `expectTypeOf` / `assertType`
+/// (expect-type / Vitest). The terminating getter access is the assertion, such
+/// as `expect(x).to.be.true` or `expectTypeOf(x).toBeString`.
+fn chain_roots_at_assertion(expr: &Expression) -> bool {
     match expr {
         Expression::CallExpression(call) => {
-            matches!(&call.callee, Expression::Identifier(id) if id.name.as_str() == "expect")
+            matches!(
+                &call.callee,
+                Expression::Identifier(id)
+                    if matches!(id.name.as_str(), "expect" | "expectTypeOf" | "assertType")
+            )
         }
-        Expression::StaticMemberExpression(m) => chain_roots_at_expect(&m.object),
-        Expression::ComputedMemberExpression(m) => chain_roots_at_expect(&m.object),
-        Expression::ParenthesizedExpression(p) => chain_roots_at_expect(&p.expression),
-        Expression::TSNonNullExpression(n) => chain_roots_at_expect(&n.expression),
+        Expression::StaticMemberExpression(m) => chain_roots_at_assertion(&m.object),
+        Expression::ComputedMemberExpression(m) => chain_roots_at_assertion(&m.object),
+        Expression::ParenthesizedExpression(p) => chain_roots_at_assertion(&p.expression),
+        Expression::TSNonNullExpression(n) => chain_roots_at_assertion(&n.expression),
         _ => false,
     }
 }
@@ -266,6 +277,27 @@ mod tests {
     fn still_flags_optional_member_access() {
         // `foo?.bar;` is an unused expression just like `foo.bar;`.
         let d = run_on("foo?.bar;");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression #2028: expect-type / Vitest type assertions are intentional
+    // compile-time checks, not unused expressions. The generic getter form
+    // `expectTypeOf(x).toEqualTypeOf<T>` (no trailing call) and the bare getter
+    // form `expectTypeOf(x).toBeString` must not flag.
+    #[test]
+    fn allows_expect_type_assertions_issue_2028() {
+        let src = r#"expectTypeOf(dataState).toEqualTypeOf<"empty" | "streaming" | "complete" | "partial">;"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+        assert!(run_on("expectTypeOf(x).toBeString;").is_empty());
+        assert!(run_on("expectTypeOf(x).toEqualTypeOf<number>();").is_empty());
+        assert!(run_on("assertType<string>(x);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_instantiation_on_unrelated_object() {
+        // `foo.bar<T>;` is a type instantiation on an unrelated object, not an
+        // assertion chain — still an unused expression.
+        let d = run_on("foo.bar<number>;");
         assert_eq!(d.len(), 1);
     }
 }
