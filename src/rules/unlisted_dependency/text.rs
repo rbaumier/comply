@@ -277,6 +277,28 @@ mod tests {
     }
 
     #[test]
+    fn allows_astro_virtual_module_protocol() {
+        // Regression for #1933 — Astro virtual modules (`astro:content`,
+        // `astro:transitions/client`) carry the `astro:` scheme, recognized as
+        // a plugin-provided virtual namespace by the generic colon-scheme rule
+        // (#1975) — a `:` is invalid in an npm name. They must not be flagged
+        // even though `astro` is not a declared dependency.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "a.ts",
+                "import { defineCollection, z } from 'astro:content';\n\
+                 import { navigate } from 'astro:transitions/client';",
+            ),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, Some(r#"{ "dependencies": {} }"#), None);
+        assert!(
+            diags.is_empty(),
+            "astro virtual module specifiers must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
     fn allows_listed_dependency() {
         let files: Vec<(&str, &str)> = vec![
             ("a.ts", "import _ from 'lodash';"),
