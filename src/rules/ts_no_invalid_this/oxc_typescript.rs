@@ -63,6 +63,59 @@ fn is_prototype_method_assignment(
     is_prototype_object(object, semantic)
 }
 
+/// Mocha test/suite globals whose `function` callback is invoked with a
+/// Test/Suite context bound to `this` (`this.timeout`, `this.retries`,
+/// `this.skip`, `this.slow`).
+const MOCHA_GLOBALS: &[&str] = &[
+    "describe", "it", "before", "after", "beforeEach", "afterEach", "context",
+    "specify",
+];
+
+/// True when `callee` is a Mocha global, either bare (`it(...)`) or a
+/// `.only`/`.skip` variant (`describe.only(...)`, `it.skip(...)`).
+fn callee_is_mocha_global(callee: &Expression) -> bool {
+    match callee {
+        Expression::Identifier(ident) => {
+            MOCHA_GLOBALS.contains(&ident.name.as_str())
+        }
+        Expression::StaticMemberExpression(member)
+            if matches!(member.property.name.as_str(), "only" | "skip") =>
+        {
+            matches!(
+                &member.object,
+                Expression::Identifier(ident)
+                    if MOCHA_GLOBALS.contains(&ident.name.as_str())
+            )
+        }
+        _ => false,
+    }
+}
+
+/// True when `func_id` is a `function` expression passed directly as an argument
+/// to a Mocha global (`describe`/`it`/`before`/... and `.only`/`.skip`
+/// variants). Mocha binds a Test/Suite context to `this` in such callbacks, so
+/// `this` inside the function body is valid. The function expression is the
+/// parent or grandparent's child of the `CallExpression` depending on whether
+/// the AST wraps arguments.
+fn is_mocha_callback(
+    func_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let parent_id = nodes.parent_id(func_id);
+    let call = match nodes.kind(parent_id) {
+        AstKind::CallExpression(call) => call,
+        _ => {
+            let gp_id = nodes.parent_id(parent_id);
+            let AstKind::CallExpression(call) = nodes.kind(gp_id) else {
+                return false;
+            };
+            call
+        }
+    };
+    callee_is_mocha_global(&call.callee)
+}
+
 fn is_valid_this_context(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -84,6 +137,12 @@ fn is_valid_this_context(
                 // of a `*.prototype` object is a method — `this` is the
                 // instance at call time, so it's valid.
                 if is_prototype_method_assignment(ancestor.id(), semantic) {
+                    return true;
+                }
+                // Mocha callback: a `function` passed to `describe`/`it`/hooks
+                // is invoked with a Test/Suite context bound to `this`
+                // (`this.timeout()`, `this.retries()`), so `this` is valid.
+                if is_mocha_callback(ancestor.id(), semantic) {
                     return true;
                 }
                 // Mark that we've entered a function scope; need to
@@ -234,6 +293,36 @@ mod tests {
         // A function assigned to a plain (non-prototype) object member is still
         // a standalone function — `this` is unbound and must fire.
         let diags = run_on("obj.m = function () { return this.x; };");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_mocha_it_callback() {
+        // Regression for #2023: Mocha binds a Test context to `this` inside an
+        // `it(name, function() {...})` callback.
+        let src = "it('/POST (concurrent)', function () {\n  this.retries(10);\n  return request(server).post('/concurrent').expect(200);\n});";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_mocha_describe_skip_callback() {
+        // Regression for #2023: `describe.skip(name, function() {...})` with
+        // `this.timeout()` / `this.retries()`.
+        let src = "describe.skip('Kafka transport', function () {\n  this.timeout(50000);\n  this.retries(10);\n});";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_mocha_hook_callback() {
+        let src = "before('Start app', function () {\n  this.timeout(10000);\n});";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_non_mocha_callback() {
+        // A `function` passed to a non-Mocha call gets no context — `this` is
+        // still unbound and must fire.
+        let diags = run_on("arr.forEach(function () { return this.x; });");
         assert_eq!(diags.len(), 1);
     }
 }
