@@ -19,7 +19,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::JSXAttribute(attr) = node.kind() else {
@@ -29,6 +29,16 @@ impl OxcCheck for Check {
             return;
         };
         if name_ident.name.as_str() != "onSubmit" {
+            return;
+        }
+
+        // Only the native HTML `<form>` element fires a real DOM submit event
+        // that needs `preventDefault()`. On a PascalCase React component
+        // (e.g. `<Form onSubmit={...}>`) the `onSubmit` prop is a
+        // library-defined data callback whose submission handling — including
+        // `preventDefault` — lives inside the component, so it must not be
+        // flagged.
+        if !parent_is_native_form(node, semantic) {
             return;
         }
 
@@ -94,6 +104,22 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// True when the attribute's enclosing JSX opening element is the native
+/// lowercase HTML `<form>` element. PascalCase components and any other tag
+/// resolve to `false`.
+fn parent_is_native_form<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let AstKind::JSXOpeningElement(opening) = semantic.nodes().parent_node(node.id()).kind() else {
+        return false;
+    };
+    let JSXElementName::Identifier(tag_ident) = &opening.name else {
+        return false;
+    };
+    tag_ident.name.as_str() == "form"
 }
 
 fn first_param_name(params: &FormalParameters) -> Option<String> {
@@ -228,6 +254,25 @@ mod tests {
     fn allows_call_expression_pass_through() {
         let src = r#"const f = <form onSubmit={form.handleSubmit(onSubmit)} />;"#;
         // This goes through the non-arrow path which already passes.
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_onsubmit_on_pascal_case_component() {
+        // Regression for rbaumier/comply#1754 — a custom `<Form>` component
+        // takes a library-defined onSubmit callback; preventDefault is handled
+        // inside the component, not by the caller's handler.
+        let src = r#"const f = (
+          <Form
+            id="create-comment"
+            onSubmit={(values) => {
+              createCommentMutation.mutate({ data: values });
+            }}
+            schema={createCommentInputSchema}
+          >
+            {({ register, formState }) => null}
+          </Form>
+        );"#;
         assert!(run(src).is_empty());
     }
 }
