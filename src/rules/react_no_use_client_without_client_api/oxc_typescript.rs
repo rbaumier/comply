@@ -16,6 +16,12 @@ const CLIENT_GLOBALS: &[&str] = &[
     "fetch",
 ];
 
+/// Factory calls that produce client-only React values, so a file calling one
+/// legitimately needs `"use client"` even without hooks or event handlers:
+/// `createContext` (context must be created on the client) and `createSvgIcon`
+/// (MUI's component factory wrapping JSX into a client icon component).
+const CLIENT_FACTORY_APIS: &[&str] = &["createContext", "createSvgIcon"];
+
 /// Packages whose re-exports implicitly use client APIs (hooks, event listeners,
 /// resize observers, etc.) that are invisible to static analysis.
 const CLIENT_ONLY_PACKAGE_PREFIXES: &[&str] = &[
@@ -87,6 +93,11 @@ impl OxcCheck for Check {
                         found_client_api = true;
                         break;
                     }
+                    // Member-access factories: `React.createContext`, `React.createSvgIcon`.
+                    if CLIENT_FACTORY_APIS.contains(&name) {
+                        found_client_api = true;
+                        break;
+                    }
                 }
                 _ => {}
             }
@@ -145,6 +156,9 @@ fn is_client_api_name(name: &str) -> bool {
     if name.starts_with("on") && name.len() > 2 && name.as_bytes()[2].is_ascii_uppercase() {
         return true;
     }
+    if CLIENT_FACTORY_APIS.contains(&name) {
+        return true;
+    }
     CLIENT_GLOBALS.contains(&name)
 }
 
@@ -196,5 +210,43 @@ export const Provider = Tooltip.Provider;
 export function Title() { return <div>Hi</div>; }
 "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression tests for #1428 — factory files that legitimately need `"use client"`
+    #[test]
+    fn no_fp_for_react_create_context_oxc() {
+        let src = r#"'use client';
+import * as React from 'react';
+
+const ButtonGroupContext = React.createContext({});
+
+export default ButtonGroupContext;
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_bare_create_context_oxc() {
+        let src = r#"'use client';
+import { createContext } from 'react';
+
+const Ctx = createContext(null);
+
+export default Ctx;
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_create_svg_icon_factory_oxc() {
+        let src = r#"'use client';
+import createSvgIcon from '../../utils/createSvgIcon';
+
+export default createSvgIcon(
+  <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" />,
+  'NavigateNext',
+);
+"#;
+        assert!(run(src).is_empty());
     }
 }
