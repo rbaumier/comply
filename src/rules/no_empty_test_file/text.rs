@@ -5,6 +5,11 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 pub struct Check;
 
 fn is_test_file(path: &std::path::Path) -> bool {
+    // Files under a `__fixtures__/` directory are input data (e.g. Babel transform
+    // input fixtures), not test specs, even when nested inside `__tests__/`.
+    if path.components().any(|c| c.as_os_str() == "__fixtures__") {
+        return false;
+    }
     let s = path.to_string_lossy();
     s.contains(".test.") || s.contains(".spec.") || s.contains("__tests__")
 }
@@ -85,6 +90,22 @@ mod tests {
     #[test]
     fn allows_non_test_file() {
         assert!(run("utils.ts", "export const foo = 1;").is_empty());
+    }
+
+    #[test]
+    fn allows_fixtures_input_file() {
+        assert!(
+            run(
+                "packages/babel-plugin/__tests__/__fixtures__/dynamic.js",
+                "const x = <div/>"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_nested_fixtures_input_file() {
+        assert!(run("__tests__/dynamic/__fixtures__/foo.js", "import './bar';").is_empty());
     }
 
     #[test]
