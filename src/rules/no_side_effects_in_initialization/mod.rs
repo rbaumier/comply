@@ -32,7 +32,11 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["code-quality"],
 
     skip_in_test_dir: false,
-    skip_in_relaxed_dir: false,
+    // Files under examples/example/demo(s)/samples directories are demonstration
+    // scripts: meant to be run directly to show library usage, never imported as
+    // library modules, so their top-level side effects are intentional and the
+    // tree-shaking concern does not apply.
+    skip_in_relaxed_dir: true,
 };
 
 pub fn register() -> RuleDef {
