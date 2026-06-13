@@ -49,6 +49,13 @@ struct SigInfo {
     name: String,
     required_params: usize,
     params: Vec<ParamType>,
+    /// Head type names of the first parameter's annotation (recursing unions,
+    /// ignoring generic arguments), or `None` when the first parameter is
+    /// missing or its annotation is not a clean named-type / union-of-named.
+    /// Two overloads whose first-parameter head sets are both present and
+    /// disjoint accept structurally incompatible discriminating arguments and
+    /// have no specific-to-general relationship.
+    first_param_heads: Option<BTreeSet<String>>,
     span: oxc_span::Span,
     has_body: bool,
 }
@@ -67,9 +74,44 @@ fn extract_sig_info(stmt: &Statement, source: &str) -> Option<SigInfo> {
         name,
         required_params: count_required_params(&f.params),
         params: param_types(&f.params, source),
+        first_param_heads: first_param_type_heads(&f.params),
         span: f.span,
         has_body: f.body.is_some(),
     })
+}
+
+/// Head type names of the first parameter's annotation. Unlike
+/// [`union_type_names`], this keeps the head identifier of generic references
+/// (`IObservableValue<T>` → `IObservableValue`) because the disjointness check
+/// only needs to know whether two overloads name the same container type, not
+/// how their generic arguments relate. Returns `None` when there is no first
+/// parameter or its annotation is not a named type (or union of named types).
+fn first_param_type_heads(params: &FormalParameters) -> Option<BTreeSet<String>> {
+    let ann = params.items.first()?.type_annotation.as_ref()?;
+    let mut heads = BTreeSet::new();
+    if collect_type_heads(&ann.type_annotation, &mut heads) && !heads.is_empty() {
+        Some(heads)
+    } else {
+        None
+    }
+}
+
+/// Push the head identifier of every named type in `ty` into `heads`, recursing
+/// through unions and keeping generic references by their head name. Returns
+/// `false` on the first member that is not a named reference, since the head set
+/// is only a reliable disjointness basis when every member is a named type.
+fn collect_type_heads(ty: &TSType, heads: &mut BTreeSet<String>) -> bool {
+    match ty {
+        TSType::TSTypeReference(type_ref) => match &type_ref.type_name {
+            TSTypeName::IdentifierReference(id) => {
+                heads.insert(id.name.to_string());
+                true
+            }
+            _ => false,
+        },
+        TSType::TSUnionType(union) => union.types.iter().all(|t| collect_type_heads(t, heads)),
+        _ => false,
+    }
 }
 
 fn count_required_params(params: &FormalParameters) -> usize {
@@ -199,6 +241,17 @@ fn check_statements(
         if group.len() >= 2 {
             'outer: for a in 0..group.len() {
                 for b in (a + 1)..group.len() {
+                    // Disjoint first-parameter types mean the overloads accept
+                    // structurally incompatible discriminating arguments;
+                    // TypeScript resolves them regardless of order, so neither
+                    // arity nor type-generality implies a misordering.
+                    // Disjoint first-parameter types mean the overloads accept
+                    // structurally incompatible discriminating arguments;
+                    // TypeScript resolves them regardless of order, so neither
+                    // arity nor type-generality implies a misordering.
+                    if first_params_disjoint(group[a], group[b]) {
+                        continue;
+                    }
                     // Flag if earlier has strictly fewer required params.
                     if group[a].required_params < group[b].required_params {
                         let (line, column) = byte_offset_to_line_col(
@@ -224,6 +277,7 @@ fn check_statements(
                 // Same arity — compare type specificity.
                 for b in (a + 1)..group.len() {
                     if group[a].required_params != group[b].required_params { continue; }
+                    if first_params_disjoint(group[a], group[b]) { continue; }
                     if earlier_param_types_more_general(group[a], group[b]) {
                         let (line, column) = byte_offset_to_line_col(
                             ctx.source,
@@ -295,6 +349,18 @@ fn compare_param(a: &ParamType, b: &ParamType) -> ParamRel {
         ParamRel::AMoreSpecific
     } else {
         ParamRel::Incomparable
+    }
+}
+
+/// True when both overloads annotate their first parameter with named types
+/// (or unions of named types) whose head sets share no name. Such overloads
+/// discriminate on incompatible argument types, so no specific-to-general
+/// ordering applies and they must not be flagged. Returns `false` whenever
+/// either head set is unknown, so the conservative scoring path still runs.
+fn first_params_disjoint(a: &SigInfo, b: &SigInfo) -> bool {
+    match (&a.first_param_heads, &b.first_param_heads) {
+        (Some(ha), Some(hb)) => ha.is_disjoint(hb),
+        _ => false,
     }
 }
 
@@ -379,5 +445,47 @@ function f(x: Foo): void;
 function f(x: Foo | Bar): void;
 function f(x: unknown): void {}";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn disjoint_arity_observable_overloads_do_not_flag() {
+        // Issue #1873: MobX `interceptReads` — 2-param overloads over disjoint
+        // observable container types followed by a 3-param object+property
+        // overload. The first-parameter types are structurally incompatible, so
+        // the lower-arity overloads are not "less specific" than the 3-param one.
+        let src = "\
+export function interceptReads<T>(value: IObservableValue<T>, handler: ReadInterceptor<T>): Lambda
+export function interceptReads<T>(
+    observableArray: IObservableArray<T>,
+    handler: ReadInterceptor<T>
+): Lambda
+export function interceptReads<K, V>(
+    observableMap: ObservableMap<K, V>,
+    handler: ReadInterceptor<V>
+): Lambda
+export function interceptReads<V>(
+    observableSet: ObservableSet<V>,
+    handler: ReadInterceptor<V>
+): Lambda
+export function interceptReads(
+    object: Object,
+    property: string,
+    handler: ReadInterceptor<any>
+): Lambda
+export function interceptReads(thing, property?, handler?): Lambda {
+    return () => {};
+}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn same_head_lower_arity_before_higher_still_flags() {
+        // Same first-parameter type (`Foo`), the lower-arity overload first:
+        // a genuine specific-to-general violation that must still fire.
+        let src = "\
+function f(a: Foo): void;
+function f(a: Foo, b: Bar): void;
+function f(a: Foo, b?: Bar): void {}";
+        assert_eq!(run(src).len(), 1);
     }
 }
