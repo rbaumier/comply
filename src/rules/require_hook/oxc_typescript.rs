@@ -79,6 +79,40 @@ fn callee_is_allowed_test_call(expr: &Expression) -> bool {
     false
 }
 
+/// Is this argument a function body — an arrow or function expression — i.e.
+/// the suite callback that registers the nested tests?
+fn is_callback_arg(arg: &Argument) -> bool {
+    matches!(
+        arg.as_expression(),
+        Some(Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_))
+    )
+}
+
+/// Is `expr` a curried test-suite-factory invocation of the shape
+/// `factory(options)('suite name', () => { ... })`?
+///
+/// The callee is itself a call (the double-invocation), and the outer call
+/// carries a string-literal title plus a function callback — the exact
+/// `describe(name, fn)` registration signature. A factory that ultimately
+/// expands to `test.describe(...)` registers a suite declaratively, so it
+/// belongs at module scope and cannot be moved into a hook. Requiring both
+/// the title and the callback keeps genuine side-effectful double-calls
+/// (`makeCounter()(5)`, `getInit()()`) flagged.
+fn is_suite_factory_call(expr: &Expression) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    if !matches!(&call.callee, Expression::CallExpression(_)) {
+        return false;
+    }
+    let has_title = call
+        .arguments
+        .first()
+        .and_then(Argument::as_expression)
+        .is_some_and(|e| matches!(e, Expression::StringLiteral(_)));
+    has_title && call.arguments.iter().any(is_callback_arg)
+}
+
 /// Calls that *must* live at module scope because the test runner hoists
 /// or otherwise binds them to file-level evaluation.
 fn is_hoisted_test_api(expr: &Expression) -> bool {
@@ -286,6 +320,9 @@ fn top_level_is_allowed(stmt: &Statement, node_test_mode: bool) -> bool {
                 return false;
             }
             if is_hoisted_test_api(expr) {
+                return true;
+            }
+            if is_suite_factory_call(expr) {
                 return true;
             }
             callee_is_allowed_test_call(expr)
@@ -757,6 +794,62 @@ Deno.test('x', () => {});
             d.len(),
             1,
             "a member call whose property is not a test callee (foo.bar()) must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_curried_suite_factory_call_at_top_level() {
+        let src = r#"
+import { expect, test } from '@playwright/test';
+import { appConfigs } from '../presets';
+import { createTestUtils, testAgainstRunningApps } from '../testUtils';
+
+testAgainstRunningApps({ withEnv: [appConfigs.envs.withEmailCodes] })('sign out smoke test @generic', ({ app }) => {
+  test.describe.configure({ mode: 'serial' });
+
+  let fakeUser;
+
+  test.beforeAll(async () => {
+    const u = createTestUtils({ app });
+    fakeUser = u.services.users.createFakeUser();
+    await u.services.users.createBapiUser(fakeUser);
+  });
+});
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "sign-out-smoke.test.ts");
+        assert!(
+            d.is_empty(),
+            "a curried suite-factory call factory(opts)('title', cb) must be allowed at top level: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_side_effectful_double_call_without_suite_shape() {
+        let src = r#"
+makeCounter()(5);
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a double-call lacking a string title + callback must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_double_call_with_title_but_no_callback() {
+        let src = r#"
+register('feature')('flag');
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a double-call with a string title but no callback must still be flagged: {d:?}"
         );
     }
 
