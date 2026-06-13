@@ -1,6 +1,8 @@
 //! sql-require-transaction-timeout oxc backend — flag `new Pool(...)`,
 //! `drizzle(...)`, and `createPool(...)` calls when the file never
-//! references `statement_timeout`.
+//! references `statement_timeout`. Files using a serverless or embedded
+//! driver that has no `statement_timeout` option (libsql/SQLite,
+//! PlanetScale serverless) are exempt.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -54,6 +56,37 @@ mod tests {
 });"#;
         assert!(run_in_test_file(src).is_empty());
     }
+
+    #[test]
+    fn no_fp_libsql_sqlite_driver() {
+        // Regression: issue #1750 — libsql/SQLite has no `statement_timeout`.
+        let src = r#"import { createClient, type Client } from "@libsql/client";
+import { drizzle } from "drizzle-orm/libsql";
+
+export const client =
+  globalForDb.client ?? createClient({ url: env.DATABASE_URL });
+
+export const db = drizzle(client, { schema });"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_planetscale_serverless_driver() {
+        // Regression: issue #1750 — PlanetScale serverless has no `statement_timeout`.
+        let src = r#"import { Client } from "@planetscale/database";
+import { drizzle } from "drizzle-orm/planetscale-serverless";
+
+export const db = drizzle(new Client({ url: env.DATABASE_URL }), { schema });"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_postgres_drizzle_without_timeout() {
+        // A standard node-postgres drizzle() with no timeout must still flag.
+        let src = r#"import { drizzle } from "drizzle-orm/node-postgres";
+const db = drizzle({ connectionString: url });"#;
+        assert_eq!(run(src).len(), 1);
+    }
 }
 
 pub struct Check;
@@ -63,6 +96,22 @@ fn callee_name<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
         Expression::Identifier(id) => Some(id.name.as_str()),
         _ => None,
     }
+}
+
+/// Import sources of Drizzle drivers (and their underlying clients) that have
+/// no `statement_timeout` option: libsql/SQLite is embedded with no server
+/// process, and PlanetScale serverless is accessed over HTTP with no pool.
+const DRIVERS_WITHOUT_STATEMENT_TIMEOUT: &[&str] = &[
+    "drizzle-orm/libsql",
+    "drizzle-orm/planetscale-serverless",
+    "@libsql/client",
+    "@planetscale/database",
+];
+
+fn uses_driver_without_statement_timeout(ctx: &CheckCtx) -> bool {
+    DRIVERS_WITHOUT_STATEMENT_TIMEOUT
+        .iter()
+        .any(|source| ctx.source_contains(source))
 }
 
 impl OxcCheck for Check {
@@ -82,6 +131,10 @@ impl OxcCheck for Check {
         }
         // File-level guard.
         if ctx.source_contains("statement_timeout") {
+            return;
+        }
+        // Drivers with no `statement_timeout` option are exempt.
+        if uses_driver_without_statement_timeout(ctx) {
             return;
         }
 
