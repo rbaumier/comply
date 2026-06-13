@@ -3,6 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::{Argument, BindingPattern, MethodDefinitionKind, NewExpression};
 use std::sync::Arc;
 
 pub struct Check;
@@ -42,6 +43,16 @@ impl OxcCheck for Check {
             }
         }
 
+        // Lit Reactive Controller / plugin registration idiom: inside a class
+        // constructor, `new SomeController(this | ctorParam)` hands the new
+        // instance a reference to the host, which retains it. No assignment is
+        // needed, so the unassigned `new` is intentional rather than a discarded
+        // side effect. Requires a `this`/constructor-param argument as the
+        // hand-off signal — `new Logger('x')` (literal-only args) stays flagged.
+        if is_controller_registration(new_expr, node, semantic) {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, new_expr.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -52,6 +63,66 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+/// True when `new_expr` is an unassigned controller/plugin registration inside a
+/// class constructor body: the `new` is lexically in the constructor (not a
+/// nested closure) AND at least one argument is `this` or one of the
+/// constructor's formal parameter names.
+fn is_controller_registration<'a>(
+    new_expr: &NewExpression<'a>,
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    // Find the nearest enclosing function-like node. It must be the
+    // constructor's own function — a nested arrow/function does not count.
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::Function(func) => {
+                let parent = semantic.nodes().parent_node(ancestor.id());
+                let AstKind::MethodDefinition(method) = parent.kind() else {
+                    return false;
+                };
+                if method.kind != MethodDefinitionKind::Constructor {
+                    return false;
+                }
+                let param_names: Vec<&str> = func
+                    .params
+                    .items
+                    .iter()
+                    .filter_map(|param| binding_identifier_name(&param.pattern))
+                    .collect();
+                return new_expr
+                    .arguments
+                    .iter()
+                    .any(|arg| arg_is_host_reference(arg, &param_names));
+            }
+            // A nested closure between the `new` and the constructor means the
+            // `new` is not in the constructor's own body.
+            AstKind::ArrowFunctionExpression(_) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Name of a simple `BindingIdentifier` parameter; `None` for destructuring or
+/// other binding patterns (no plain name to match against an argument).
+fn binding_identifier_name<'a>(pattern: &'a BindingPattern<'a>) -> Option<&'a str> {
+    match pattern {
+        BindingPattern::BindingIdentifier(ident) => Some(ident.name.as_str()),
+        _ => None,
+    }
+}
+
+/// True when the argument is `this` or an identifier matching a constructor
+/// parameter name — the host reference handed off to the controller.
+fn arg_is_host_reference(arg: &Argument, param_names: &[&str]) -> bool {
+    match arg {
+        Argument::ThisExpression(_) => true,
+        Argument::Identifier(ident) => param_names.contains(&ident.name.as_str()),
+        _ => false,
     }
 }
 
@@ -95,5 +166,58 @@ mod tests {
     fn allows_new_assigned() {
         let src = "const m = new Map();";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_controller_registration_with_ctor_param() {
+        // Regression for #1928 — Lit Reactive Controller idiom (TanStack/store).
+        let src = r#"
+            class TanStackStoreAtom {
+              constructor(host, getAtom, options) {
+                this.getAtom = getAtom;
+                new TanStackStoreSelector(host, getAtom, undefined, options);
+                this.set = this.set.bind(this);
+              }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_controller_registration_with_this() {
+        let src = r#"
+            class Widget {
+              constructor() {
+                new SomeController(this);
+              }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_discarded_new_in_constructor() {
+        // Literal-only args, no `this`/ctor-param hand-off — genuine side effect.
+        let src = r#"
+            class Widget {
+              constructor() {
+                new Logger('global');
+              }
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_controller_registration_in_nested_closure() {
+        // The `new X(host)` sits in a nested arrow, not the constructor body.
+        let src = r#"
+            class Widget {
+              constructor(host) {
+                queueMicrotask(() => { new SomeController(host); });
+              }
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 }
