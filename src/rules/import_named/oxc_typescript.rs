@@ -426,6 +426,42 @@ mod tests {
     }
 
     #[test]
+    fn no_fp_on_export_namespace_import_issue_1774() {
+        // Regression for #1774 — sst pattern: `link.ts` declares `Link` as a
+        // TypeScript `export namespace Link {}` and `rpc.ts` declares `rpc` the
+        // same way. A named import of either must not be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "components/link.ts",
+                "export namespace Link {\n\
+                 export interface Definition { properties: Record<string, unknown>; }\n\
+                 export function reset() {}\n\
+                 }\n\
+                 export interface Linkable { urn: string; }\n",
+            ),
+            (
+                "components/rpc/rpc.ts",
+                "export namespace rpc {\n\
+                 export class MethodNotFoundError extends Error {}\n\
+                 export async function call(method: string) { return method; }\n\
+                 }\n",
+            ),
+            (
+                "auto/run.ts",
+                "import { Link } from '../components/link';\n\
+                 import { rpc } from '../components/rpc/rpc.js';\n\
+                 Link.reset();\n\
+                 rpc.call('x');\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "auto/run.ts");
+        assert!(
+            diags.is_empty(),
+            "named import of an `export namespace` must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
     fn still_flags_bad_import_from_regular_file() {
         // Guard: import-named still fires on a misspelled import from a
         // normal (non-generated, non-framework) source file.
