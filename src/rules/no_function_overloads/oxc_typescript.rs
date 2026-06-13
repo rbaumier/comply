@@ -52,6 +52,15 @@ fn returns_type_predicate(f: &Function) -> bool {
     type_annotation_is_type_predicate(f.return_type.as_deref())
 }
 
+/// The source text of the signature's return-type annotation, normalized of
+/// surrounding whitespace. `None` when the signature has no return annotation.
+fn return_type_text(source: &str, f: &Function) -> Option<String> {
+    let return_type = f.return_type.as_ref()?;
+    source
+        .get(return_type.span.start as usize..return_type.span.end as usize)
+        .map(|s| s.trim().to_string())
+}
+
 impl OxcCheck for Check {
     fn run_on_semantic<'a>(
         &self,
@@ -75,6 +84,9 @@ impl OxcCheck for Check {
                         continue;
                     }
                     if preserves_type_predicate_narrowing(&sigs) {
+                        continue;
+                    }
+                    if preserves_call_context_return(&sigs) {
                         continue;
                     }
                     for sig in sigs {
@@ -109,6 +121,10 @@ struct OverloadSig {
     generics_in_return: Vec<String>,
     /// True when this signature returns a `x is T` type predicate.
     returns_predicate: bool,
+    /// Number of declared parameters in this signature.
+    param_count: usize,
+    /// Source text of this signature's return-type annotation, if any.
+    return_type: Option<String>,
 }
 
 /// True when ALL overload signatures share at least one generic type parameter
@@ -141,6 +157,27 @@ fn preserves_type_predicate_narrowing(sigs: &[OverloadSig]) -> bool {
     sigs.iter().all(|sig| sig.returns_predicate)
 }
 
+/// True when the overloads select distinct return types by parameter presence —
+/// the call context (e.g. a TC39 `@decorator` vs a plain call) is determined by
+/// whether an extra parameter is supplied. Such overloads carry at least two
+/// different return-type annotations AND at least two different arities, so a
+/// single optional/union parameter cannot reproduce them: collapsing would widen
+/// the return to a union (e.g. `T | void`) and break callers that rely on the
+/// per-context return type.
+fn preserves_call_context_return(sigs: &[OverloadSig]) -> bool {
+    let mut return_types = sigs.iter().filter_map(|s| s.return_type.as_deref());
+    let Some(first_return) = return_types.next() else {
+        return false;
+    };
+    let distinct_return_types = return_types.any(|r| r != first_return);
+    if !distinct_return_types {
+        return false;
+    }
+    let mut arities = sigs.iter().map(|s| s.param_count);
+    let first_arity = arities.next().expect("group has at least two signatures");
+    arities.any(|a| a != first_arity)
+}
+
 /// Extract overload signature info if `stmt` is a function declaration without a body.
 fn extract_overload_sig(source: &str, stmt: &Statement) -> Option<OverloadSig> {
     match stmt {
@@ -168,6 +205,8 @@ fn sig_from_function(source: &str, f: &Function) -> Option<OverloadSig> {
         span_start: f.span.start,
         generics_in_return,
         returns_predicate: returns_type_predicate(f),
+        param_count: f.params.items.len(),
+        return_type: return_type_text(source, f),
     })
 }
 
@@ -290,6 +329,48 @@ function foo(x: number | string): boolean { return true; }
 function foo<T>(x: T): T;
 function foo<T>(x: T): string;
 function foo<T>(x: T): any { return x; }
+";
+        assert_eq!(run_on(source).len(), 2);
+    }
+
+    #[test]
+    fn allows_decorator_aware_overloads_with_distinct_return_types() {
+        // Regression for #1874: mobx-react `observer` has a decorator form
+        // (extra `ClassDecoratorContext` param → `void`) and a function-call
+        // form (no extra param → `T`). The return types differ and are selected
+        // by parameter presence; a union/optional param would widen the return
+        // to `T | void` and break callers that use the wrapped component.
+        let source = r#"
+export function observer<T extends IReactComponent>(component: T, context: ClassDecoratorContext): void;
+export function observer<T extends IReactComponent>(component: T): T;
+export function observer<T extends IReactComponent>(component: T, context?: ClassDecoratorContext): T {
+  return component;
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_distinct_return_types_at_same_arity() {
+        // Same arity (one param each) with different return types is collapsible
+        // into `foo(x: number | string): string | number` — not call-context
+        // selected, so it still fires.
+        let source = "
+function foo(x: number): string;
+function foo(x: string): number;
+function foo(x: number | string): string | number { return x as any; }
+";
+        assert_eq!(run_on(source).len(), 2);
+    }
+
+    #[test]
+    fn flags_distinct_arity_with_same_return_type() {
+        // Differing arity but identical return type collapses to one optional
+        // param — no per-overload return inference to preserve, so it fires.
+        let source = "
+function foo<T>(x: T): string;
+function foo<T>(x: T, y: number): string;
+function foo<T>(x: T, y?: number): string { return ''; }
 ";
         assert_eq!(run_on(source).len(), 2);
     }
