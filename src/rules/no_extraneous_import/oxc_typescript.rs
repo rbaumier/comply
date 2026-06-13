@@ -116,13 +116,15 @@ fn has_test_file_stem(path: &Path) -> bool {
     ) && (stem == "test" || stem == "spec")
 }
 
-/// Build/codegen scripts under a `scripts/` directory run at dev/CI time and
-/// are not part of the shipped bundle, so importing a devDependency from them
-/// is the correct classification — promoting the tool to `dependencies` would
-/// wrongly bloat the production dependency closure.
+/// Build/codegen scripts under a `scripts/` or `config/` directory run at
+/// dev/CI time and are not part of the shipped bundle, so importing a
+/// devDependency from them is the correct classification — promoting the tool
+/// to `dependencies` would wrongly bloat the production dependency closure.
 fn is_build_script(path: &Path) -> bool {
     let s = path.to_string_lossy().replace('\\', "/");
-    s.contains("/scripts/") || s.starts_with("scripts/")
+    ["scripts", "config"]
+        .iter()
+        .any(|dir| s.contains(&format!("/{dir}/")) || s.starts_with(&format!("{dir}/")))
 }
 
 /// Demonstration code under `samples/`, `samples-dev/`, `examples/`, or
@@ -309,6 +311,38 @@ import { endOfWeek } from "..";
         let src = r#"import { expect } from "chai";"#;
         let d = run_with_pkg_at_path(pkg, "src/__testUtils__/expectJSON.ts", src);
         assert!(d.is_empty(), "__testUtils__ file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_config_dir_build_tooling() {
+        // Issue #2034: apollo-client `config/helpers.ts` is build tooling (API
+        // extraction, compilation) that runs at dev/CI time and never ships in
+        // the published package. It imports `@microsoft/api-extractor`, a
+        // devDependency, which is the correct classification — files inside a
+        // `config/` directory are build configuration, like `scripts/`.
+        let pkg = r#"{
+            "devDependencies": {
+                "@microsoft/api-extractor": "^7",
+                "@microsoft/api-extractor-model": "^7"
+            }
+        }"#;
+        let src = r#"
+import { ApiModelGenerator } from "@microsoft/api-extractor/lib/generators/ApiModelGenerator.js";
+import type { ApiItem, ApiPackage } from "@microsoft/api-extractor-model";
+"#;
+        let d = run_with_pkg_at_path(pkg, "config/helpers.ts", src);
+        assert!(d.is_empty(), "config/ build tooling should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_outside_config_dir() {
+        // Guard against over-relaxing: a path where "config" is a substring of
+        // another segment (not its own directory) must still flag.
+        let pkg = r#"{"devDependencies":{"vitest":"^1"}}"#;
+        let src = r#"import { describe } from "vitest";"#;
+        let d = run_with_pkg_at_path(pkg, "src/appconfig/index.ts", src);
+        assert_eq!(d.len(), 1, "non-config dir should still flag: {d:?}");
+        assert!(d[0].message.contains("vitest"));
     }
 
     #[test]
