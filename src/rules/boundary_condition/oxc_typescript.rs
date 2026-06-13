@@ -71,6 +71,17 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Cypress idiom: `$el[0]` inside a `.then(($el) => ...)` callback unwraps the
+        // underlying DOM node from the jQuery wrapper. Cypress invokes the callback
+        // only when the queried element exists (it fails the test otherwise), so the
+        // index is always present.
+        if let Expression::Identifier(obj_ident) = &member.object
+            && obj_ident.name.starts_with('$')
+            && is_then_callback_param(node, obj_ident.name.as_str(), semantic)
+        {
+            return;
+        }
+
         let which = if is_first { "first" } else { "last" };
         let at_arg = if is_first { "0" } else { "-1" };
         // Report at the opening `[` of this access, not at `member.span().start`.
@@ -355,6 +366,47 @@ fn has_preceding_guard(
     }
 }
 
+/// Returns true when the index access lives inside a function whose parameter
+/// list binds `name`, and that function is the argument of a `.then(...)` member
+/// call — i.e. `something.then((name) => ... name[0] ...)`. This is the Cypress
+/// `.then(($el) => $el[0])` pattern, where the wrapper is guaranteed non-empty.
+fn is_then_callback_param(
+    node: &oxc_semantic::AstNode,
+    name: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        let params = match ancestor.kind() {
+            AstKind::ArrowFunctionExpression(arrow) => &arrow.params,
+            AstKind::Function(func) => &func.params,
+            _ => continue,
+        };
+        // `name` must be bound by this callback's parameter list. If not, the
+        // enclosing function is not the binder — stop, the wrapper is not a
+        // `.then` parameter.
+        if !params_bind_name(params, name) {
+            return false;
+        }
+        let parent = nodes.parent_node(ancestor.id());
+        return matches!(parent.kind(), AstKind::CallExpression(call) if callee_is_then(&call.callee));
+    }
+    false
+}
+
+/// Returns true if a simple identifier parameter named `name` is present.
+fn params_bind_name(params: &FormalParameters, name: &str) -> bool {
+    params.items.iter().any(|param| {
+        matches!(&param.pattern, BindingPattern::BindingIdentifier(id) if id.name.as_str() == name)
+    })
+}
+
+/// Returns true if `callee` is a member access whose property is `then`
+/// (e.g. `cy.get(...).then`), including optional-chained `?.then`.
+fn callee_is_then(callee: &Expression) -> bool {
+    matches!(callee, Expression::StaticMemberExpression(member) if member.property.name.as_str() == "then")
+}
+
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
     fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
@@ -458,6 +510,30 @@ mod tests {
             run_on("const i = (arr: number[]) => arr[arr.length - 1];").len(),
             1
         );
+    }
+
+    #[test]
+    fn no_fp_cypress_then_dollar_unwrap_issue_1993() {
+        let src = "cy.findByRole('listbox').then(($content) => { $content[0].parentElement; });";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_cypress_then_dollar_click_issue_1993() {
+        let src = "cy.findByText('x').then(($button) => { $button[0].click(); });";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_plain_array_first_access_issue_1993() {
+        let src = "const arr = getArr(); arr[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_dollar_var_not_then_param_issue_1993() {
+        let src = "const $x = getList(); $x[0];";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
