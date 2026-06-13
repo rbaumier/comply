@@ -556,6 +556,49 @@ export default class CustomReporter implements Reporter {}
     }
 
     #[test]
+    fn allows_dev_dep_in_performance_tests_dir() {
+        // Issue #1892: immerjs/immer's `__performance_tests__/incremental.mjs` is a
+        // performance benchmark that imports comparison libraries (`lodash.clonedeep`,
+        // `immutable`) from devDependencies. Benchmark files never ship in the
+        // published package, so importing a devDependency is correct.
+        let pkg = r#"{
+            "devDependencies": {
+                "lodash.clonedeep": "^4",
+                "immutable": "^4"
+            }
+        }"#;
+        let src = r#"
+import cloneDeep from "lodash.clonedeep";
+import { List } from "immutable";
+"#;
+        let d = run_with_pkg_at_path(pkg, "__performance_tests__/incremental.mjs", src);
+        assert!(d.is_empty(), "__performance_tests__ file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_perf_testing_dir() {
+        // Issue #1892: a `perf-testing/immutability-benchmarks.mjs` benchmark imports
+        // the `mitata` benchmark runner from devDependencies. The `perf-testing/`
+        // convention is a performance test suite that never ships, so the import is
+        // correct.
+        let pkg = r#"{"devDependencies":{"mitata":"^1"}}"#;
+        let src = r#"import { run, bench, summary } from "mitata";"#;
+        let d = run_with_pkg_at_path(pkg, "perf-testing/immutability-benchmarks.mjs", src);
+        assert!(d.is_empty(), "perf-testing file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_outside_perf_dirs() {
+        // Guard against over-relaxing: a path where "performance" is a substring of
+        // another segment (not its own directory) must still flag.
+        let pkg = r#"{"devDependencies":{"mitata":"^1"}}"#;
+        let src = r#"import { bench } from "mitata";"#;
+        let d = run_with_pkg_at_path(pkg, "src/performanceMonitor/index.ts", src);
+        assert_eq!(d.len(), 1, "non-perf dir should still flag: {d:?}");
+        assert!(d[0].message.contains("mitata"));
+    }
+
+    #[test]
     fn still_flags_dev_dep_in_production_code() {
         // Guard against over-relaxing: production code outside test/config
         // paths must still flag devDependency imports.

@@ -77,8 +77,9 @@ fn has_path_segment(path: &Path, names: &[&str]) -> bool {
 
 /// Directory names where dev-only tooling lives and rules that exempt
 /// "not shipped in the published package" code (e.g. `no-extraneous-import`)
-/// are relaxed. The broad set: build/CI scripts, demonstration code, and
-/// generator scaffold templates. Matched as exact path segments.
+/// are relaxed. The broad set: build/CI scripts, demonstration code,
+/// generator scaffold templates, and performance benchmark suites. Matched as
+/// exact path segments.
 const AUX_DIR_SEGMENTS: &[&str] = &[
     "scripts",
     "bin",
@@ -92,6 +93,13 @@ const AUX_DIR_SEGMENTS: &[&str] = &[
     "template",
     "scaffold",
     "boilerplate",
+    "benchmarks",
+    "bench",
+    "perf",
+    "perf-testing",
+    "performance",
+    "performance-tests",
+    "__performance_tests__",
 ];
 
 /// True when `path` lives under any auxiliary (non-shipped) directory: build
@@ -402,6 +410,13 @@ mod aux_path_tests {
             "template",
             "scaffold",
             "boilerplate",
+            "benchmarks",
+            "bench",
+            "perf",
+            "perf-testing",
+            "performance",
+            "performance-tests",
+            "__performance_tests__",
         ] {
             assert!(
                 is_aux_dir_path(&PathBuf::from(format!("pkg/{dir}/file.ts"))),
