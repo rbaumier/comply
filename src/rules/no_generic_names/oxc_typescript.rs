@@ -70,6 +70,19 @@ const DATA_PASCAL_CASE_ALLOWED_COMPOUNDS: &[&str] = &[
     "DataTag",
 ];
 
+/// Standard DOM / Web API type names whose camelCase form is the conventional
+/// identifier for a value of that type. `dataTransfer: DataTransfer` mirrors
+/// `DragEvent.dataTransfer`; the name specifically refers to the web platform
+/// object, so it is not a generic `data*` compound. Stored in their camelCase
+/// form (first letter lowered) for a direct full-name match.
+const DOM_API_NAME_ALLOWLIST: &[&str] = &["dataTransfer"];
+
+/// True when `name` exactly mirrors a standard DOM/Web API type name in
+/// camelCase (e.g. `dataTransfer` for `DataTransfer`).
+fn mirrors_dom_api_name(name: &str) -> bool {
+    DOM_API_NAME_ALLOWLIST.contains(&name)
+}
+
 /// Return the banned prefix matching `name` on a word boundary, or None.
 fn matched_banned_prefix(name: &str) -> Option<&'static str> {
     let bytes = name.as_bytes();
@@ -497,6 +510,12 @@ impl OxcCheck for Check {
         }
 
         if let Some(prefix) = matched_banned_prefix(name) {
+            // An identifier mirroring a standard DOM/Web API type name in
+            // camelCase (`dataTransfer` for `DataTransfer`) refers to the web
+            // platform object, not a generic `data*` compound.
+            if mirrors_dom_api_name(name) {
+                return;
+            }
             if prefix == "data" && DATA_PASCAL_CASE_ALLOWED_COMPOUNDS.iter().any(|allowed| match name.strip_prefix(allowed) {
                 Some("") => true,
                 Some(rest) => rest.as_bytes().first().is_some_and(|b| b.is_ascii_uppercase()),
@@ -882,6 +901,28 @@ mod tests {
         // Negative: `Value`/`Result` declared as variables (not type
         // parameters) carry no meaning and must still flag.
         let src = r#"const Value = 1; const Result = 2;"#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn no_fp_data_transfer_mirrors_dom_api_name_issue_1388() {
+        // Regression for #1388 — `dataTransfer` mirrors the DOM `DataTransfer`
+        // type name (`DragEvent.dataTransfer`); it refers to the web platform
+        // object, not a generic `data*` compound.
+        let src = r#"
+            type ScheduleProps = {
+                onExternalEventDrop?: (dataTransfer: DataTransfer, dropDateTime: string) => void;
+            };
+            function handleDrop(dataTransfer: DataTransfer) { return dataTransfer; }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_generic_data_compound_not_in_dom_allowlist_issue_1388() {
+        // Negative: the DOM allowlist is exact-name only. `dataPayload`/
+        // `dataResponse` are generic `data*` compounds and must still flag.
+        let src = r#"const dataPayload = 1; const dataResponse = 2;"#;
         assert_eq!(run(src).len(), 2);
     }
 
