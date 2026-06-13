@@ -48,6 +48,29 @@ fn is_tanstack_dynamic_route(path: &std::path::Path, file_name: &str) -> bool {
         .any(|c| c.as_os_str() == std::ffi::OsStr::new("routes"))
 }
 
+/// Returns `true` for Next.js Pages Router file-router names that the framework
+/// mandates, living under any `pages/` ancestor directory:
+/// - a bracket-wrapped dynamic segment (`[id].tsx`, `[...slug].tsx`,
+///   `[[...slug]].tsx`), whose routing base starts with `[` and ends with `]`;
+/// - a purely numeric error-page stem (`404.tsx`, `500.tsx`).
+///
+/// Both forms are dictated by Next.js file-based routing and cannot adopt
+/// kebab/camel/Pascal case without breaking the route.
+/// See https://nextjs.org/docs/pages/building-your-application/routing/dynamic-routes.
+fn is_nextjs_pages_router_file(path: &std::path::Path, file_name: &str, stem: &str) -> bool {
+    // Catch-all segments (`[...slug].tsx`) contain dots inside the brackets, so
+    // the routing base is the text before the *file* extension, not the
+    // dot-split stem. Strip a single trailing extension to recover it.
+    let routing_base = file_name.rsplit_once('.').map_or(file_name, |(base, _)| base);
+    let is_dynamic_segment = routing_base.starts_with('[') && routing_base.ends_with(']');
+    let is_numeric_page = !stem.is_empty() && stem.bytes().all(|b| b.is_ascii_digit());
+    if !is_dynamic_segment && !is_numeric_page {
+        return false;
+    }
+    path.components()
+        .any(|c| c.as_os_str() == std::ffi::OsStr::new("pages"))
+}
+
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
