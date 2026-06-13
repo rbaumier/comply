@@ -471,6 +471,14 @@ pub struct ProjectCtx {
     // fall back to the old "fire on all" behaviour). Populated lazily on
     // first access, cached for the lifetime of the run.
     prisma_soft_delete_models: OnceLock<Option<HashSet<String>>>,
+
+    // Frameworks detected from the *nearest* package.json to a file, keyed by
+    // that manifest's directory. Root-level `detected_frameworks` misses an app
+    // nested in a subdirectory (a Next.js example under a library's `app/`, or
+    // any monorepo package) because detection only reads the root manifest; this
+    // resolves the framework owning each file. Memoized per manifest dir — the
+    // answer is identical for every file under the same package.json.
+    path_frameworks_cache: Mutex<HashMap<PathBuf, Vec<&'static FrameworkDef>>>,
 }
 
 impl ProjectCtx {
@@ -691,6 +699,31 @@ impl ProjectCtx {
         self.detected_frameworks
             .iter()
             .flat_map(|f| f.tooling_deps.names.iter().map(String::as_str))
+    }
+
+    /// Frameworks owning `path`, detected from its nearest package.json.
+    ///
+    /// Root-level `detected_frameworks` only inspects the root manifest, so a
+    /// framework app nested in a subdirectory (e.g. a Next.js example under a
+    /// library's `app/`, or a monorepo package) goes undetected. This walks up
+    /// to the package.json closest to `path` and detects frameworks from it,
+    /// memoized by manifest directory.
+    pub fn frameworks_for_path(&self, path: &Path) -> Vec<&'static FrameworkDef> {
+        let Some(manifest_dir) = self.nearest_package_json_dir(path) else {
+            return Vec::new();
+        };
+        if let Some(found) = self.path_frameworks_cache.lock().unwrap().get(&manifest_dir) {
+            return found.clone();
+        }
+        let detected = self
+            .nearest_package_json(path)
+            .map(|pkg| crate::frameworks::detect_frameworks(&pkg, Some(&manifest_dir)))
+            .unwrap_or_default();
+        self.path_frameworks_cache
+            .lock()
+            .unwrap()
+            .insert(manifest_dir, detected.clone());
+        detected
     }
 
     #[cfg(test)]

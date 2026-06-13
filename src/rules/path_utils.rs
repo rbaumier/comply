@@ -115,6 +115,29 @@ pub fn is_framework_entry_point(path: &Path, project: &ProjectCtx) -> bool {
         return true;
     }
 
+    // Fall back to the framework owning this file via its nearest package.json:
+    // a framework app nested in a subdirectory (a Next.js example under a
+    // library's `app/`, a monorepo package) is invisible to the root-anchored
+    // `detected_frameworks`. Its `dirs`/`files`/`suffixes` are path-relative,
+    // so they identify file-system-routed entry points (Next.js `pages/`,
+    // Remix `routes/`, SvelteKit `src/routes/`) regardless of detection depth.
+    for fw in project.frameworks_for_path(path) {
+        if fw.entry_points.dirs.iter().any(|dir| path_str.contains(dir.as_str())) {
+            return true;
+        }
+        if fw.entry_points.files.iter().any(|entry| entry == name) {
+            return true;
+        }
+        if fw
+            .entry_points
+            .file_suffixes
+            .iter()
+            .any(|suffix| name.ends_with(suffix.as_str()))
+        {
+            return true;
+        }
+    }
+
     let Some(root) = project.project_root.as_deref() else {
         return false;
     };
