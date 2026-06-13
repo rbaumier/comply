@@ -1,6 +1,9 @@
-//! react-no-sync-layout-effect-in-ssr — `useLayoutEffect` runs only on the
-//! client. In a server-rendered file (no `'use client'` directive) it
+//! react-no-sync-layout-effect-in-ssr — React's `useLayoutEffect` runs only on
+//! the client. In a server-rendered file (no `'use client'` directive) it
 //! emits the well-known "useLayoutEffect does nothing on the server" warning.
+//! Only the `react`-sourced hook is flagged; a `useLayoutEffect` imported from
+//! another library (e.g. `preact/hooks`) has different SSR semantics and is
+//! left alone.
 
 mod typescript;
 
