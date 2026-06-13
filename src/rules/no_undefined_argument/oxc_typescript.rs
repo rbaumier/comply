@@ -22,6 +22,12 @@ fn preceded_by_block_comment(source: &str, start: usize) -> bool {
     i >= 2 && bytes[i - 1] == b'/' && bytes[i - 2] == b'*'
 }
 
+/// True when `arg` is a bare `undefined` reference (the `undefined` keyword is
+/// an `IdentifierReference`, not a syntactic keyword, in oxc's AST).
+fn is_undefined_arg(arg: &Argument) -> bool {
+    matches!(arg, Argument::Identifier(id) if id.name == "undefined")
+}
+
 fn is_create_context_call(call: &oxc_ast::ast::CallExpression) -> bool {
     match &call.callee {
         Expression::Identifier(id) => id.name == "createContext",
@@ -109,12 +115,15 @@ impl OxcCheck for Check {
             return;
         }
 
-        for arg in &call.arguments {
-            let is_undefined = match arg {
-                Argument::Identifier(id) => id.name == "undefined",
-                _ => false,
-            };
-            if is_undefined {
+        let args = &call.arguments;
+        for (idx, arg) in args.iter().enumerate() {
+            if is_undefined_arg(arg) {
+                // A positional placeholder: any non-`undefined` argument after
+                // this one means the `undefined` is required to reach that later
+                // argument (JS has no named arguments), so it cannot be omitted.
+                if args[idx + 1..].iter().any(|later| !is_undefined_arg(later)) {
+                    continue;
+                }
                 let span = arg.span();
                 if preceded_by_block_comment(ctx.source, span.start as usize) {
                     continue;
@@ -202,6 +211,56 @@ mod tests {
     #[test]
     fn still_flags_outside_create_context() {
         assert_eq!(crate::rules::test_helpers::run_rule(&Check, "doStuff(undefined);", "t.ts").len(), 1);
+    }
+
+    #[test]
+    fn allows_undefined_placeholder_before_later_arg_issue_1909() {
+        // `undefined` skips an optional positional param to reach a later one;
+        // omitting it would shift the remaining arguments.
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                "assembleFinalStyle(compiled, media, ctx, theme, undefined, elementProps);",
+                "t.ts"
+            )
+            .is_empty()
+        );
+        // Multiple consecutive placeholders before a real later argument.
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                "evaluateForFastPath(source, {} as never, undefined, undefined, fragments);",
+                "t.ts"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_trailing_undefined() {
+        // Trailing `undefined` with no meaningful argument after it is omittable.
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, "foo(x, undefined);", "t.ts").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_trailing_undefined_after_placeholder() {
+        // Both `undefined`s are trailing (nothing meaningful follows either).
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, "foo(x, undefined, undefined);", "t.ts").len(),
+            2
+        );
+    }
+
+    #[test]
+    fn allows_placeholder_before_spread_arg() {
+        // A spread after `undefined` may expand to real arguments, so the
+        // placeholder is required.
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, "foo(undefined, ...rest);", "t.ts").is_empty()
+        );
     }
 
     #[test]
