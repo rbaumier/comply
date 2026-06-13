@@ -26,6 +26,26 @@ const CLIENT_GLOBALS: &[&str] = &[
 /// (MUI's component factory wrapping JSX into a client icon component).
 const CLIENT_FACTORY_APIS: &[&str] = &["createContext", "createSvgIcon"];
 
+/// Component-factory / higher-order-component call names that build React
+/// components which use hooks, `forwardRef`, and context internally. A module
+/// whose only client behavior is binding a component to one of these calls
+/// (`export const Box = chakra("div")`,
+/// `export const Badge = withContext("span")`) is inherently a client module,
+/// even though no hook is called directly in the file. Matched only when the
+/// name is the callee of a call expression, so importing or re-exporting the
+/// factory itself does not count. These are Chakra UI's styled-system factories
+/// (`chakra`), context factories (`createRecipeContext`,
+/// `createSlotRecipeContext`), and the HOCs they return (`withContext`,
+/// `withProvider`, `withRootProvider`).
+const CLIENT_COMPONENT_FACTORY_CALLS: &[&str] = &[
+    "chakra",
+    "createRecipeContext",
+    "createSlotRecipeContext",
+    "withContext",
+    "withProvider",
+    "withRootProvider",
+];
+
 /// Packages whose re-exports implicitly use client APIs (hooks, event listeners,
 /// resize observers, etc.) that are invisible to static analysis. The `next/*`
 /// entries are Next.js client components/hooks that already ship `"use client"`,
@@ -152,6 +172,19 @@ impl OxcCheck for Check {
                 AstKind::JSXSpreadAttribute(_) => {
                     found_client_api = true;
                     break;
+                }
+                // Calls to a recognized component-factory / HOC
+                // (`chakra("div")`, `createRecipeContext({...})`,
+                // `withContext("span")`). The produced component uses hooks and
+                // `forwardRef` internally, so the calling file is a client
+                // module even with no direct hook usage.
+                AstKind::CallExpression(call) => {
+                    if let Expression::Identifier(callee) = &call.callee
+                        && CLIENT_COMPONENT_FACTORY_CALLS.contains(&callee.name.as_str())
+                    {
+                        found_client_api = true;
+                        break;
+                    }
                 }
                 AstKind::IdentifierName(id) => {
                     let name = id.name.as_str();
@@ -542,5 +575,50 @@ export const Select = (props: SelectFieldProps) => {
 };
 "#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression tests for #1781 — files that build components via Chakra UI's
+    // component-factory / HOC calls, which use hooks and `forwardRef` internally.
+    #[test]
+    fn no_fp_for_chakra_factory_call_oxc() {
+        let src = r#""use client"
+
+import { type HTMLChakraProps, chakra } from "../../styled-system"
+
+export interface BoxProps extends HTMLChakraProps<"div"> {}
+
+export const Box = chakra("div")
+Box.displayName = "Box"
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_create_recipe_context_factory_call_oxc() {
+        let src = r#""use client"
+
+import {
+  type HTMLChakraProps,
+  type RecipeProps,
+  type UnstyledProp,
+  createRecipeContext,
+} from "../../styled-system"
+
+export interface BadgeProps extends HTMLChakraProps<"span"> {}
+
+export const { PropsProvider, withContext } = createRecipeContext({ key: "badge" })
+export const Badge = withContext<HTMLSpanElement, BadgeProps>("span")
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_factory_call_oxc() {
+        let src = r#""use client";
+import { chunk } from "lodash";
+
+export const parts = chunk([1, 2, 3], 2);
+"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
