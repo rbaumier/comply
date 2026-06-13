@@ -42,6 +42,12 @@ fn is_type_only(import: &ImportDeclaration) -> bool {
 }
 
 fn emit(ctx: &CheckCtx, diagnostics: &mut Vec<Diagnostic>, spec: &str, offset: usize) {
+    // The package's own declared entry file (package.json `main`/`exports` `.`)
+    // exists to dispatch to the prebuilt `./dist/` artifact — telling it to
+    // import from the entry point is circular. Non-entry files still fire.
+    if ctx.project.is_package_entry_file(ctx.path) {
+        return;
+    }
     let (line, column) = byte_offset_to_line_col(ctx.source, offset);
     diagnostics.push(Diagnostic {
         path: Arc::clone(&ctx.path_arc),
@@ -181,5 +187,45 @@ mod tests {
         // A default binding is always a value, even alongside inline types.
         let src = r#"import Foo, { type Bar } from "pkg/dist/foo";"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_package_own_entry_dispatching_to_dist() {
+        // Issue #1996 — a package root entry file (declared as `main`) whose job
+        // is to conditionally require the prebuilt ./dist/ artifact. A sibling
+        // non-entry file importing from dist/ must still fire.
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"vue","main":"index.js"}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        let project = crate::project::ProjectCtx::empty();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+
+        let entry = dir.path().join("index.js");
+        let entry_src = r#"if (process.env.NODE_ENV === 'production') {
+  module.exports = require('./dist/vue.cjs.prod.js')
+} else {
+  module.exports = require('./dist/vue.cjs.js')
+}"#;
+        let entry_diags =
+            crate::rules::test_helpers::run_rule_with_ctx(&Check, entry_src, &entry, &project, file);
+        assert!(
+            entry_diags.is_empty(),
+            "the declared entry file should be exempt, got: {entry_diags:?}"
+        );
+
+        let other = dir.path().join("src").join("foo.ts");
+        let other_src = r#"import { x } from "./dist/x";"#;
+        let other_diags =
+            crate::rules::test_helpers::run_rule_with_ctx(&Check, other_src, &other, &project, file);
+        assert_eq!(
+            other_diags.len(),
+            1,
+            "a non-entry file importing from dist/ must still fire"
+        );
     }
 }
