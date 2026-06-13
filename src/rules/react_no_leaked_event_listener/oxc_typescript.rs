@@ -106,4 +106,57 @@ mod tests {
         let src = r#"window.addEventListener("resize", handler);"#;
         assert!(run(src).is_empty());
     }
+
+    #[test]
+    fn allows_cleanup_returned_inside_if_guard() {
+        let src = r#"
+            function C() {
+                React.useEffect(() => {
+                    const control = ref.current;
+                    if (control) {
+                        const handleChange = () => updateControlValidity(control);
+                        control.addEventListener('change', handleChange);
+                        return () => control.removeEventListener('change', handleChange);
+                    }
+                }, [updateControlValidity]);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_block_cleanup_returned_inside_if_guard() {
+        let src = r#"
+            function C() {
+                React.useEffect(() => {
+                    if (trigger && content) {
+                        const handleTriggerLeave = (event) => handleCreateGraceArea(event, content);
+                        const handleContentLeave = (event) => handleCreateGraceArea(event, trigger);
+                        trigger.addEventListener('pointerleave', handleTriggerLeave);
+                        content.addEventListener('pointerleave', handleContentLeave);
+                        return () => {
+                            trigger.removeEventListener('pointerleave', handleTriggerLeave);
+                            content.removeEventListener('pointerleave', handleContentLeave);
+                        };
+                    }
+                }, [trigger, content]);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_missing_cleanup_inside_if_guard() {
+        let src = r#"
+            function C() {
+                useEffect(() => {
+                    const control = ref.current;
+                    if (control) {
+                        control.addEventListener('change', handler);
+                    }
+                }, []);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
 }

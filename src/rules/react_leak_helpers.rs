@@ -67,30 +67,60 @@ fn callee_is_use_effect(expr: &Expression) -> bool {
 
 /// True if the body contains a `return` whose argument (textually)
 /// mentions any of the cleanup keywords. Heuristic — no full type
-/// resolution, but catches the documented React cleanup pattern:
+/// resolution, but catches the documented React cleanup pattern, including
+/// the guard variant where registration and cleanup are both nested in an
+/// `if` block:
 ///
 /// ```ts
 /// useEffect(() => {
-///   target.addEventListener(...);
-///   return () => target.removeEventListener(...);
+///   const el = ref.current;
+///   if (el) {
+///     el.addEventListener(...);
+///     return () => el.removeEventListener(...);
+///   }
 /// }, []);
 /// ```
 pub fn body_returns_cleanup(body: &FunctionBody, source: &str, keywords: &[&str]) -> bool {
-    for stmt in &body.statements {
-        if let Statement::ReturnStatement(ret) = stmt
-            && let Some(arg) = &ret.argument
-        {
-            let start = arg.span().start as usize;
-            let end = arg.span().end as usize;
-            if end <= source.len() {
-                let arg_text = &source[start..end];
-                if keywords.iter().any(|kw| arg_text.contains(kw)) {
-                    return true;
-                }
-            }
+    statements_return_cleanup(&body.statements, source, keywords)
+}
+
+/// Recursively scan a statement list for a cleanup `return`, descending into
+/// `if`/`else` and nested block statements — the only block-level shapes the
+/// React cleanup return idiomatically lives inside.
+fn statements_return_cleanup(statements: &[Statement], source: &str, keywords: &[&str]) -> bool {
+    statements
+        .iter()
+        .any(|stmt| statement_returns_cleanup(stmt, source, keywords))
+}
+
+fn statement_returns_cleanup(stmt: &Statement, source: &str, keywords: &[&str]) -> bool {
+    match stmt {
+        Statement::ReturnStatement(ret) => ret
+            .argument
+            .as_ref()
+            .is_some_and(|arg| return_argument_mentions_keyword(arg, source, keywords)),
+        Statement::BlockStatement(block) => {
+            statements_return_cleanup(&block.body, source, keywords)
         }
+        Statement::IfStatement(if_stmt) => {
+            statement_returns_cleanup(&if_stmt.consequent, source, keywords)
+                || if_stmt
+                    .alternate
+                    .as_ref()
+                    .is_some_and(|alt| statement_returns_cleanup(alt, source, keywords))
+        }
+        _ => false,
     }
-    false
+}
+
+fn return_argument_mentions_keyword(arg: &Expression, source: &str, keywords: &[&str]) -> bool {
+    let start = arg.span().start as usize;
+    let end = arg.span().end as usize;
+    if end > source.len() {
+        return false;
+    }
+    let arg_text = &source[start..end];
+    keywords.iter().any(|kw| arg_text.contains(kw))
 }
 
 use oxc_span::GetSpan;
