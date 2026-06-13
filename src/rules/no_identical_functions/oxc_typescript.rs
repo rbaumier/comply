@@ -72,20 +72,43 @@ fn callee_is_test_base(callee: &Expression) -> bool {
     }
 }
 
+/// True when the call passes a function or arrow-function callback as an
+/// argument — the shape of every test wrapper, `it(name, () => {...})` and
+/// custom variants like `itShouldSkipForReactCanary(name, () => {...})`
+/// alike. Used in test files to treat any such call as a scope boundary
+/// without enumerating wrapper names.
+fn call_has_callback_arg(call: &CallExpression) -> bool {
+    call.arguments.iter().any(|arg| {
+        matches!(
+            arg,
+            Argument::ArrowFunctionExpression(_) | Argument::FunctionExpression(_)
+        )
+    })
+}
+
 /// NodeId of the nearest enclosing test-block call expression
 /// (`it(...)`, `describe(...)`, …), or `None` when the function is not
 /// nested inside any test block. Two functions whose enclosing test
 /// blocks differ live in separate test scopes: the duplicate body is
 /// intentional per-test isolation, not a shared-helper opportunity.
+///
+/// In test files (`in_test_file`), any call with a callback argument also
+/// counts as a scope boundary, so custom `it`-wrappers
+/// (`itShouldSkipForReactCanary`, `itIf`, …) are recognised without
+/// enumerating their names. Outside test files only the built-in
+/// `TEST_BASES` are recognised.
 fn enclosing_test_scope_id(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
+    in_test_file: bool,
 ) -> Option<oxc_semantic::NodeId> {
     semantic
         .nodes()
         .ancestors(node.id())
         .find(|ancestor| {
-            matches!(ancestor.kind(), AstKind::CallExpression(call) if callee_is_test_base(&call.callee))
+            matches!(ancestor.kind(), AstKind::CallExpression(call)
+                if callee_is_test_base(&call.callee)
+                    || (in_test_file && call_has_callback_arg(call)))
         })
         .map(oxc_semantic::AstNode::id)
 }
@@ -129,6 +152,7 @@ impl OxcCheck for Check {
             ctx.config
                 .threshold("no-identical-functions", "min_normalized_chars", ctx.lang);
 
+        let in_test_file = ctx.file.path_segments.in_test_dir;
         let nodes = semantic.nodes();
         let mut local_functions: Vec<CollectedFunction> = Vec::new();
 
@@ -162,7 +186,7 @@ impl OxcCheck for Check {
                             line,
                             normalized,
                             signature,
-                            test_scope: enclosing_test_scope_id(node, semantic),
+                            test_scope: enclosing_test_scope_id(node, semantic, in_test_file),
                         });
                     }
                 }
@@ -212,7 +236,7 @@ impl OxcCheck for Check {
                             line,
                             normalized,
                             signature,
-                            test_scope: enclosing_test_scope_id(node, semantic),
+                            test_scope: enclosing_test_scope_id(node, semantic, in_test_file),
                         });
                     }
                 }
@@ -455,6 +479,75 @@ function beta(item: CorsRule): CorsRule {
 }
 "#;
         assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    // Regression for #1937 — in a test file, two test cases each call a custom
+    // `it`-wrapper (`itShouldSkipForReactCanary`) whose callback defines an
+    // identical inline `Page` component. Each wrapper call is its own test
+    // scope; the components close over distinct state and extracting them would
+    // break test isolation, so the cross-test duplication must not be flagged.
+    #[test]
+    fn allows_identical_components_in_custom_it_wrappers_in_test_file() {
+        let src = r#"
+itShouldSkipForReactCanary('should revalidate on focus', async () => {
+    function Page() {
+        const { data } = useSWR(key1, fetcher);
+        const value = data ?? 'fallback';
+        console.log(value);
+        return <div>{value}</div>;
+    }
+    render(<Page />);
+});
+
+itShouldSkipForReactCanary('should revalidate on reconnect', async () => {
+    function Page() {
+        const { data } = useSWR(key1, fetcher);
+        const value = data ?? 'fallback';
+        console.log(value);
+        return <div>{value}</div>;
+    }
+    render(<Page />);
+});
+"#;
+        assert!(
+            run_with_file_ctx(src, "test/use-swr-focus.test.tsx").is_empty(),
+            "{:?}",
+            run_with_file_ctx(src, "test/use-swr-focus.test.tsx")
+        );
+    }
+
+    // The custom-wrapper generalization is test-file-only. In a non-test file,
+    // two identical functions inside two `wrapper(() => {...})` calls are not
+    // a recognised test scope, so the duplicate stays flagged.
+    #[test]
+    fn flags_identical_functions_in_callback_calls_in_non_test_file() {
+        let src = r#"
+wrapper(() => {
+    function build() {
+        const a = compute();
+        const b = a * 2;
+        console.log(b);
+        return b;
+    }
+    build();
+});
+
+wrapper(() => {
+    function build() {
+        const a = compute();
+        const b = a * 2;
+        console.log(b);
+        return b;
+    }
+    build();
+});
+"#;
+        assert_eq!(
+            run_with_file_ctx(src, "src/setup.ts").len(),
+            1,
+            "{:?}",
+            run_with_file_ctx(src, "src/setup.ts")
+        );
     }
 
     // Generated files (AutoRest `models.ts` carrying a DO NOT EDIT header) emit
