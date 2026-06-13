@@ -1,12 +1,28 @@
 use std::sync::Arc;
 
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Expression, StaticMemberExpression};
+use oxc_span::GetSpan;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 
 pub struct Check;
+
+/// True when `member` is the left-hand side (assignment target) of an
+/// `AssignmentExpression`, i.e. a CommonJS `exports.x = …` write rather than a
+/// read of an `exports.x` property.
+fn is_assignment_target(
+    node: &oxc_semantic::AstNode,
+    member: &StaticMemberExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let parent = semantic.nodes().parent_node(node.id());
+    let AstKind::AssignmentExpression(assign) = parent.kind() else {
+        return false;
+    };
+    assign.left.span() == member.span
+}
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
@@ -29,7 +45,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         if !crate::rules::module_system::is_es_module_context_cached(ctx) {
@@ -103,7 +119,7 @@ impl OxcCheck for Check {
                         severity: Severity::Warning,
                         span: None,
                     });
-                } else if obj_name == "exports" {
+                } else if obj_name == "exports" && is_assignment_target(node, member, semantic) {
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, member.span.start as usize);
                     diagnostics.push(Diagnostic {
@@ -121,5 +137,54 @@ impl OxcCheck for Check {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "module.mjs")
+    }
+
+    #[test]
+    fn flags_exports_assignment() {
+        let d = run_on("exports.foo = 1;");
+        assert!(d.iter().any(|d| d.message.contains("exports.x")));
+    }
+
+    #[test]
+    fn allows_exports_member_read() {
+        let d = run_on(
+            r#"
+            const exports = (await import('axios'));
+            exports.isCancel;
+            (exports.axios ?? exports.default);
+            "#,
+        );
+        assert!(d.is_empty(), "reads of `exports.x` must not be flagged: {d:?}");
+    }
+
+    #[test]
+    fn flags_module_exports() {
+        let d = run_on("module.exports = foo;");
+        assert!(d.iter().any(|d| d.message.contains("module.exports")));
     }
 }
