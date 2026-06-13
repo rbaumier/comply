@@ -76,6 +76,21 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Implicit label association: a control nested inside a <label> element is
+        // associated with it without htmlFor/id (e.g. `<label><input /> text</label>`).
+        let wrapped_in_label = semantic.nodes().ancestors(node.id()).any(|ancestor| {
+            let AstKind::JSXElement(element) = ancestor.kind() else {
+                return false;
+            };
+            let JSXElementName::Identifier(name) = &element.opening_element.name else {
+                return false;
+            };
+            name.name.as_str() == "label"
+        });
+        if wrapped_in_label {
+            return;
+        }
+
         // For <button> elements, check parent JSXElement for text content
         if tag == "button"
             && let Some(parent) = semantic.nodes().ancestors(node.id()).nth(1)
@@ -214,5 +229,55 @@ mod tests {
     #[test]
     fn no_fp_on_select_with_spread_props() {
         assert!(run_on(r#"const x = <select {...props} />;"#).is_empty());
+    }
+
+    // Regression #2001: implicit label association by wrapping the control in <label>.
+    #[test]
+    fn no_fp_on_input_wrapped_in_label() {
+        assert!(run_on(r#"
+            const x = (
+                <label style={{ display: 'block' }}>
+                    <input type="checkbox" checked={v} onChange={f} /> Dismiss on escape?
+                </label>
+            );
+        "#).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_select_wrapped_in_label() {
+        assert!(run_on(r#"
+            const x = (
+                <label>
+                    Fruit
+                    <select>
+                        <option value="a">A</option>
+                    </select>
+                </label>
+            );
+        "#).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_textarea_wrapped_in_label() {
+        assert!(run_on(r#"const x = <label>Bio<textarea /></label>;"#).is_empty());
+    }
+
+    // Guard: a bare control with no label ancestor and no aria-label still fires.
+    #[test]
+    fn still_flags_bare_input_without_label_ancestor() {
+        assert_eq!(run_on(r#"const x = <input type="text" />;"#).len(), 1);
+    }
+
+    // Guard: a sibling <label> (not an ancestor) does not satisfy implicit association.
+    #[test]
+    fn still_flags_input_with_sibling_label() {
+        assert_eq!(run_on(r#"
+            const x = (
+                <div>
+                    <label>Name</label>
+                    <input type="text" />
+                </div>
+            );
+        "#).len(), 1);
     }
 }
