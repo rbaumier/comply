@@ -195,6 +195,35 @@ fn is_function_param<'a>(
     false
 }
 
+/// True when the identifier is the loop variable of a `for...of` /
+/// `for await...of` / `for...in` statement (`for (const item of items)`). The
+/// singular form of the collection name is the idiomatic, self-documenting
+/// choice for an iteration variable — the same rationale that exempts
+/// `PARAM_ALLOWED_WORDS` for function parameters. The walk stops at a
+/// `BlockStatement`/function/program boundary so loop *body* declarations,
+/// which reach the `ForOfStatement` only through its body block, are not
+/// mistaken for the binding.
+fn is_for_of_or_in_binding<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    for kind in semantic.nodes().ancestor_kinds(node.id()) {
+        if matches!(kind, AstKind::ForOfStatement(_) | AstKind::ForInStatement(_)) {
+            return true;
+        }
+        if matches!(
+            kind,
+            AstKind::BlockStatement(_)
+                | AstKind::Function(_)
+                | AstKind::ArrowFunctionExpression(_)
+                | AstKind::Program(_)
+        ) {
+            break;
+        }
+    }
+    false
+}
+
 /// True when the identifier sits inside an `import { … }` / `import x from …`
 /// / `import * as x from …` declaration. The author has no rename freedom
 /// for a third-party export (e.g. `import { Result } from "better-result"`).
@@ -476,7 +505,8 @@ impl OxcCheck for Check {
                 let lower = name.to_ascii_lowercase();
                 if BANNED_WORDS.contains(&lower.as_str()) {
                     if PARAM_ALLOWED_WORDS.contains(&lower.as_str())
-                        && is_function_param(node, semantic)
+                        && (is_function_param(node, semantic)
+                            || is_for_of_or_in_binding(node, semantic))
                     {
                         return;
                     }
@@ -991,6 +1021,43 @@ mod tests {
         // generic `dataValue` compound carry no domain meaning and still flag.
         let src = r#"const data = 1; const dataValue = 2;"#;
         assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn no_fp_item_in_for_await_of_loop_binding_issue_1163() {
+        // Regression for #1163 — `item` as a for-await-of loop variable is the
+        // idiomatic singular form of the collection, like a function parameter.
+        let src = r#"
+            const resArray = [];
+            for await (let item of client.entities.list()) {
+                resArray.push(item);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_item_value_in_for_of_and_for_in_loop_bindings_issue_1163() {
+        // Both `for...of` and `for...in` loop bindings exempt PARAM_ALLOWED_WORDS.
+        assert!(run("for (const item of items) { use(item); }").is_empty());
+        assert!(run("for (const value of values) { use(value); }").is_empty());
+        assert!(run("for (const item in obj) { use(item); }").is_empty());
+    }
+
+    #[test]
+    fn still_flags_item_as_bare_const_not_loop_binding_issue_1163() {
+        // Negative: a plain `const item = ...` is neither a parameter nor a loop
+        // binding — it must still flag.
+        let src = r#"function f() { const item = compute(); return item; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_item_declared_in_for_of_loop_body_issue_1163() {
+        // Negative: the exemption is for the loop *binding* only — a generic
+        // name declared inside the loop body is still flagged.
+        let src = r#"for (const entity of entities) { const item = entity.x; use(item); }"#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
