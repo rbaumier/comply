@@ -18,7 +18,6 @@
 //! in `[package].categories`.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::path::Path;
 
 crate::ast_check! { on ["enum_item"] => |node, source, ctx, diagnostics|
     let path_str = ctx.path.to_string_lossy();
@@ -32,7 +31,7 @@ crate::ast_check! { on ["enum_item"] => |node, source, ctx, diagnostics|
     let Ok(name_text) = name.utf8_text(source) else { return; };
     if !name_text.contains("Error") { return; }
 
-    if crate_is_no_std(ctx.path) { return; }
+    if ctx.project.nearest_cargo_manifest(ctx.path).is_some_and(|m| m.is_no_std()) { return; }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -55,43 +54,6 @@ fn is_pub(item: tree_sitter::Node, source: &[u8]) -> bool {
     }
     false
 }
-
-/// Returns `true` when the nearest `Cargo.toml` ancestor of `path` lists
-/// `"no-std"` in `[package].categories`. Returns `false` (safe default —
-/// keep flagging) when no `Cargo.toml` is found or it cannot be parsed.
-fn crate_is_no_std(path: &Path) -> bool {
-    let Some(cargo_toml_path) = nearest_cargo_toml(path) else {
-        return false;
-    };
-    let Ok(content) = std::fs::read_to_string(&cargo_toml_path) else {
-        return false;
-    };
-    let Ok(value) = content.parse::<toml::Value>() else {
-        return false;
-    };
-    value
-        .get("package")
-        .and_then(|package| package.get("categories"))
-        .and_then(toml::Value::as_array)
-        .is_some_and(|categories| {
-            categories
-                .iter()
-                .any(|category| category.as_str() == Some("no-std"))
-        })
-}
-
-fn nearest_cargo_toml(path: &Path) -> Option<std::path::PathBuf> {
-    let mut dir = path.parent();
-    while let Some(d) = dir {
-        let candidate = d.join("Cargo.toml");
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        dir = d.parent();
-    }
-    None
-}
-
 
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
@@ -120,7 +82,8 @@ mod tests {
     }
 
     /// Run on a file in `dir/src/x.rs` with the given `Cargo.toml` contents,
-    /// so `crate_is_no_std` resolves the temp crate's manifest.
+    /// so the `nearest_cargo_manifest` no-std check resolves the temp crate's
+    /// manifest.
     fn run_on_with_cargo(cargo_toml_contents: &str, source: &str) -> Vec<Diagnostic> {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("Cargo.toml"), cargo_toml_contents).unwrap();
