@@ -1,7 +1,7 @@
 //! no-property-mutation OXC backend — flag property mutations.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_local_object_builder_binding};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
 use oxc_span::GetSpan;
@@ -210,7 +210,8 @@ impl OxcCheck for Check {
                         if is_inside_sentry_hook(node, semantic) { return; }
                         if root_object_name(&m.object) == Some("set") { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
-                            && is_created_dom_element(id, semantic) { return; }
+                            && (is_created_dom_element(id, semantic)
+                                || is_local_object_builder_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
 
                         let (line, column) = byte_offset_to_line_col(ctx.source, assign.span.start as usize);
@@ -234,7 +235,8 @@ impl OxcCheck for Check {
                         if is_inside_sentry_hook(node, semantic) { return; }
                         if root_object_name(&m.object) == Some("set") { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
-                            && is_created_dom_element(id, semantic) { return; }
+                            && (is_created_dom_element(id, semantic)
+                                || is_local_object_builder_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
 
                         let (line, column) = byte_offset_to_line_col(ctx.source, assign.span.start as usize);
@@ -369,6 +371,64 @@ mod tests {
             });
         "#;
         assert!(run_in_test_file(src).is_empty());
+    }
+
+    #[test]
+    fn allows_property_assignment_on_local_object_spread_builder() {
+        // Regression for rbaumier/comply#1930 — dnd-kit boundingRectangle:
+        // `value` is a fresh local copy via object spread, built up via
+        // conditional property assignments before being returned.
+        let src = r#"
+            export function boundingRectangle(transform, shape, boundingRect) {
+                const value = { ...transform };
+                if (cond) {
+                    value.y = boundingRect.top - shape.boundingRectangle.top;
+                } else if (cond2) {
+                    value.y = boundingRect.bottom;
+                }
+                if (cond3) {
+                    value.x = boundingRect.left;
+                }
+                return value;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_property_assignment_on_local_object_literal_builder() {
+        let src = r#"
+            function build() {
+                const value = { a: 1 };
+                value.b = 2;
+                return value;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_property_assignment_on_function_parameter() {
+        // A function parameter is external state, not a local object builder.
+        let src = r#"
+            function mutate(value) {
+                value.x = 1;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_property_assignment_on_const_from_external_call() {
+        // A `const` initialized from a function call (not an object literal /
+        // spread) references external state — mutating it is still flagged.
+        let src = r#"
+            function mutate() {
+                const value = getConfig();
+                value.x = 1;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]

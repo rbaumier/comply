@@ -385,6 +385,47 @@ pub fn is_fixed_signature_library_callback<'a>(
     TANSTACK_QUERY_FACTORIES.contains(&callee_name)
 }
 
+/// True when `ident` resolves to a local binding declared with `const` whose
+/// initializer is a plain object literal or object-spread (`Expression::Object\
+/// Expression`, which covers both `{ key: val }` and `{ ...other }`). Such a
+/// binding is a freshly-created local builder, not a reference to shared state:
+/// assigning its properties (`value.x = ...`) before returning it is the object
+/// analogue of the `const items = []; items.push(x)` accumulator pattern, and
+/// mutates no external state.
+///
+/// Resolves the binding via `reference_id` → symbol → declaration node, then
+/// inspects the `VariableDeclarator` (whose `kind` carries the const-ness). A
+/// function parameter, imported binding, `this`, or a `let`/`var` resolves to a
+/// non-`VariableDeclarator` declaration or a non-const kind, so it is rejected
+/// and any mutation through it is still flagged.
+#[must_use]
+pub fn is_local_object_builder_binding(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{Expression, VariableDeclarationKind};
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            return decl.kind == VariableDeclarationKind::Const
+                && matches!(decl.init, Some(Expression::ObjectExpression(_)));
+        }
+    }
+    false
+}
+
 /// True when `name` matches a generic type parameter declared on any enclosing
 /// function, method, class, interface, or type alias of `node`.
 #[must_use]
