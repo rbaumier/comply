@@ -521,6 +521,37 @@ export const DevHooks: {
         assert!(run_on(src).is_empty());
     }
 
+    /// Regression for #1783: a PascalCase `const` bound to a non-component
+    /// expression (here a Commander.js `Command` builder chain) must not cause
+    /// callback parameters nested arbitrarily deep inside it to be treated as
+    /// React component props. The arrow `(v: ChakraProBlockVariant) => ...` is a
+    /// `.map()` callback, not the component's render function, so none of the
+    /// `ChakraProBlockVariant` fields may be flagged.
+    #[test]
+    fn allows_typed_callback_param_inside_pascalcase_non_component_const() {
+        let src = r#"
+interface ChakraProBlockVariant {
+  id: string;
+  name: string;
+  categoryId: string;
+  accessLevel: "free" | "pro";
+}
+
+export const BlocksCommand = new Command("blocks")
+  .action(async (blockId, flags) => {
+    const allBlocks = await fetchProBlocks();
+
+    const blockOptions = allBlocks.flatMap((block: ChakraProBlock) =>
+      block.variants.map((v: ChakraProBlockVariant) => ({
+        value: `${block.id}/${v.id}`,
+        label: `${block.group}/${block.name} - ${v.name}`,
+      })),
+    );
+  });
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
     /// Regression for #2032: a body-less `declare`d PascalCase function inside a
     /// `declare namespace` is an ambient type declaration, not a React
     /// component. Its parameter's interface fields must not be flagged.
