@@ -10,25 +10,34 @@ pub struct Check;
 fn has_useless_flag(pattern: &str, flags: &str) -> bool {
     let pbytes = pattern.as_bytes();
 
-    // `i` flag with no unescaped letters outside character classes.
+    // `i` is useless only when the pattern has no ASCII letter to case-fold.
+    // Letters inside a character class (`[a-z]`, `[jfmasond]`) ARE
+    // case-sensitive without `i`, so they count too.
     if flags.contains('i') {
         let mut has_letter = false;
         let mut k = 0;
         while k < pbytes.len() {
             if pbytes[k] == b'\\' {
-                k += 2;
+                k += 2; // escape sequence (`\d`, `\w`, …) — never a literal letter
                 continue;
             }
             if pbytes[k] == b'[' {
+                // Scan the class body: any letter inside is case-sensitive.
                 k += 1;
                 while k < pbytes.len() && pbytes[k] != b']' {
                     if pbytes[k] == b'\\' {
                         k += 1;
+                    } else if pbytes[k].is_ascii_alphabetic() {
+                        has_letter = true;
                     }
                     k += 1;
                 }
+                if has_letter {
+                    break;
+                }
+                continue;
             }
-            if k < pbytes.len() && pbytes[k].is_ascii_alphabetic() {
+            if pbytes[k].is_ascii_alphabetic() {
                 has_letter = true;
                 break;
             }

@@ -17,26 +17,34 @@ use crate::diagnostic::{Diagnostic, Severity};
 fn has_useless_flag(pattern: &str, flags: &str) -> bool {
     let pbytes = pattern.as_bytes();
 
-    // `i` flag with no unescaped letters outside character classes.
+    // `i` is useless only when the pattern has no ASCII letter to case-fold.
+    // Letters inside a character class (`[a-z]`, `[jfmasond]`) ARE
+    // case-sensitive without `i`, so they count too.
     if flags.contains('i') {
         let mut has_letter = false;
         let mut k = 0;
         while k < pbytes.len() {
             if pbytes[k] == b'\\' {
-                k += 2; // skip escape sequences like \d, \w, \s
+                k += 2; // escape sequence (`\d`, `\w`, …) — never a literal letter
                 continue;
             }
             if pbytes[k] == b'[' {
-                // skip character class content — not a literal match
+                // Scan the class body: any letter inside is case-sensitive.
                 k += 1;
                 while k < pbytes.len() && pbytes[k] != b']' {
                     if pbytes[k] == b'\\' {
                         k += 1;
+                    } else if pbytes[k].is_ascii_alphabetic() {
+                        has_letter = true;
                     }
                     k += 1;
                 }
+                if has_letter {
+                    break;
+                }
+                continue;
             }
-            if k < pbytes.len() && pbytes[k].is_ascii_alphabetic() {
+            if pbytes[k].is_ascii_alphabetic() {
                 has_letter = true;
                 break;
             }
@@ -183,5 +191,32 @@ mod tests {
     fn ignores_tailwind_arbitrary_value() {
         let src = r#"const x = "has-[>svg]:grid-cols-[auto_1fr]";"#;
         assert!(run_on(src).is_empty());
+    }
+
+    // --- Regression: letters inside character classes are case-sensitive,
+    //     so `/i` is meaningful there (issue #1907). These run through the
+    //     production oxc backend via the rule registry. ---
+
+    fn run_oxc(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_by_id("regex-no-useless-flag", source, "t.ts")
+    }
+
+    #[test]
+    fn allows_i_flag_with_letters_only_in_char_class() {
+        // /^[jfmasond]/i — without /i this misses "J", "F", … so /i matters.
+        assert!(run_oxc(r#"const re = /^[jfmasond]/i;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_i_flag_with_letter_range_in_char_class() {
+        assert!(run_oxc(r#"const re = /[a-z]/i;"#).is_empty());
+        assert!(run_oxc(r#"const re = /[A-Za-z]/i;"#).is_empty());
+    }
+
+    #[test]
+    fn flags_useless_i_flag_no_letters_anywhere_oxc() {
+        // No letters at all (even inside classes) → /i is genuinely useless.
+        assert_eq!(run_oxc(r#"const re = /\d+/i;"#).len(), 1);
+        assert_eq!(run_oxc(r#"const re = /[0-9]/i;"#).len(), 1);
     }
 }
