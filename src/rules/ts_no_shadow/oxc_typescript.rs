@@ -6,6 +6,7 @@ use crate::oxc_helpers::{
 };
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
+use oxc_semantic::{AstNodes, NodeId};
 use std::sync::Arc;
 
 pub struct Check;
@@ -51,6 +52,17 @@ impl OxcCheck for Check {
                 {
                     continue;
                 }
+                // Static methods cannot access the enclosing class's type
+                // parameters, so a type parameter on a static method that
+                // reuses the class generic's name is a separate binding, not
+                // shadowing (`AnimatedArray.create<T>` over `class
+                // AnimatedArray<T>`). This applies only when the outer binding
+                // is the class's own type parameter.
+                if is_type_param_on_static_method(nodes, decl_node)
+                    && is_class_type_param(nodes, outer_decl)
+                {
+                    continue;
+                }
                 let span = scoping.symbol_span(symbol_id);
                 let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
                 diagnostics.push(Diagnostic {
@@ -67,6 +79,26 @@ impl OxcCheck for Check {
 
         diagnostics
     }
+}
+
+/// True when `decl` declares a generic type parameter whose nearest enclosing
+/// function is the value of a `static` method.
+fn is_type_param_on_static_method(nodes: &AstNodes, decl: NodeId) -> bool {
+    if !matches!(nodes.kind(decl), AstKind::TSTypeParameter(_)) {
+        return false;
+    }
+    let mut ids = nodes.ancestor_ids(decl);
+    let Some(function_id) = ids.find(|&id| matches!(nodes.kind(id), AstKind::Function(_))) else {
+        return false;
+    };
+    matches!(nodes.parent_kind(function_id), AstKind::MethodDefinition(m) if m.r#static)
+}
+
+/// True when `decl` declares a type parameter that belongs directly to a class's
+/// type-parameter list (`class Foo<T>`), as opposed to a method or function.
+fn is_class_type_param(nodes: &AstNodes, decl: NodeId) -> bool {
+    matches!(nodes.kind(decl), AstKind::TSTypeParameter(_))
+        && matches!(nodes.parent_kind(nodes.parent_id(decl)), AstKind::Class(_))
 }
 
 #[cfg(test)]
@@ -203,6 +235,45 @@ mod tests {
         let d = run_on(
             "import { Argv } from 'yargs';\n\
              export function builder(Argv: number) { return Argv; }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_static_method_type_param_shadowing_class_type_param() {
+        // Static methods cannot access the class's type parameters, so reusing
+        // the class generic's name on a static method is a separate binding,
+        // not shadowing. react-spring AnimatedArray pattern.
+        let d = run_on(
+            "class AnimatedArray<T extends ReadonlyArray<Value> = Value[]> extends AnimatedObject {\n\
+             constructor(source: T) { super(source); }\n\
+             static create<T extends ReadonlyArray<Value>>(source: T) { return new AnimatedArray(source); }\n\
+             }",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_instance_method_type_param_shadowing_class_type_param() {
+        // Instance methods CAN access the class's type parameters, so reusing
+        // the class generic's name on an instance method is real shadowing.
+        let d = run_on(
+            "class Box<T> {\n\
+             map<T>(fn: (value: T) => T): T { return fn(undefined as T); }\n\
+             }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_static_method_value_param_shadowing_outer_value() {
+        // The static-method exemption is scoped to type parameters; a value
+        // parameter on a static method that shadows an outer value still fires.
+        let d = run_on(
+            "const source = 1;\n\
+             class Factory {\n\
+             static create(source: number) { return source; }\n\
+             }",
         );
         assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
     }
