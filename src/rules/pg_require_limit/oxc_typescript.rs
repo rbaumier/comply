@@ -56,6 +56,9 @@ impl OxcCheck for Check {
         if is_implicitly_bounded(&lower) {
             return;
         }
+        if is_plpgsql_select_into(&lower) {
+            return;
+        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, span_start as usize);
         diagnostics.push(Diagnostic {
@@ -101,6 +104,31 @@ fn is_implicitly_bounded(lower: &str) -> bool {
     }
 
     false
+}
+
+/// True for a PL/pgSQL `SELECT ... INTO <variable>` single-row assignment.
+///
+/// `SELECT col INTO var FROM ...` fetches at most one row into a PL/pgSQL
+/// variable — it is semantically `LIMIT 1`, and adding `LIMIT` is redundant
+/// or a syntax error. The SQL table-creation form (`SELECT ... INTO
+/// [TEMP|TEMPORARY|UNLOGGED] [TABLE] new_table FROM ...`) is still an
+/// unbounded query, so it is excluded by inspecting the token after `INTO`.
+fn is_plpgsql_select_into(lower: &str) -> bool {
+    let Some(after_into) = next_word_after(lower, "into") else {
+        return false;
+    };
+    !matches!(after_into, "table" | "temp" | "temporary" | "unlogged")
+}
+
+/// Returns the whole-word token that immediately follows a whole-word
+/// `keyword`, stripped of surrounding non-identifier characters.
+fn next_word_after<'a>(lower: &'a str, keyword: &str) -> Option<&'a str> {
+    let strip = |word: &'a str| word.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_');
+    let mut words = lower.split_whitespace().map(strip);
+    words
+        .by_ref()
+        .position(|word| word == keyword)
+        .and_then(|_| words.next())
 }
 
 fn contains_phrase(lower: &str, phrase: &str) -> bool {
@@ -151,4 +179,35 @@ fn has_id_equality(lower: &str) -> bool {
 
 fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
+}
+
+#[cfg(test)]
+mod tests {
+    fn run(source: &str) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_rule_by_id("pg-require-limit", source, "t.ts")
+    }
+
+    #[test]
+    fn flags_select_without_limit() {
+        let source = r#"const q = "SELECT * FROM users WHERE active = true";"#;
+        assert_eq!(run(source).len(), 1);
+    }
+
+    // Regression for #1790: a PL/pgSQL `SELECT col INTO var FROM ...` is a
+    // single-row variable assignment (implicit `LIMIT 1`), not an unbounded
+    // result set — the supabase pg-meta `SELECT conname INTO r` pattern.
+    #[test]
+    fn allows_plpgsql_select_into_variable() {
+        let source = r#"const q = "SELECT conname INTO r FROM pg_constraint WHERE contype = 'p'";"#;
+        assert!(run(source).is_empty());
+    }
+
+    // The explicit SQL table-creation form (`SELECT ... INTO TABLE new_table`)
+    // is still an unbounded query and must remain flagged.
+    #[test]
+    fn flags_select_into_table_creation() {
+        let source =
+            r#"const q = "SELECT * INTO TABLE archived_users FROM users WHERE active = false";"#;
+        assert_eq!(run(source).len(), 1);
+    }
 }
