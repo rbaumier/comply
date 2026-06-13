@@ -887,6 +887,33 @@ impl ProjectCtx {
         Some(arc)
     }
 
+    /// Walk up from `path` to the nearest `tsconfig.json` and return the
+    /// *directory* containing it. Shares the manifest-dir cache and walk
+    /// semantics with `nearest_tsconfig`.
+    pub fn nearest_tsconfig_dir(&self, path: &Path) -> Option<PathBuf> {
+        let start_dir = path.parent()?;
+        walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "tsconfig.json")
+    }
+
+    /// True if a non-relative `spec` resolves to a local source file via the
+    /// nearest tsconfig's `baseUrl` (e.g. `baseUrl: "."` turns `src/types/Foo`
+    /// into `<tsconfig_dir>/src/types/Foo.ts`). Such imports are project files,
+    /// not npm packages. Returns `false` when no `baseUrl` is configured or the
+    /// candidate does not exist on disk, so genuine package imports still fire.
+    pub fn resolves_via_tsconfig_base_url(&self, importer: &Path, spec: &str) -> bool {
+        let Some(tsconfig_dir) = self.nearest_tsconfig_dir(importer) else {
+            return false;
+        };
+        let Some(tsconfig) = self.nearest_tsconfig(importer) else {
+            return false;
+        };
+        let Some(base_url) = tsconfig.base_url.as_ref() else {
+            return false;
+        };
+        let candidate = tsconfig_dir.join(base_url).join(spec);
+        local_source_exists(&candidate)
+    }
+
     /// Lazily-loaded Tailwind theme. Stub returns `None`; future chantier
     /// populates this from CSS `@theme` blocks and static v3 TS configs.
     pub fn tailwind_theme(&self) -> Option<&TailwindTheme> {
@@ -1124,6 +1151,38 @@ fn walk_up_finding_cached(
             .insert(start.to_path_buf(), resolved.clone());
     }
     resolved
+}
+
+/// Extensions TypeScript appends when resolving an extension-less module
+/// specifier. Mirrors the resolver's extension list so a `baseUrl` import like
+/// `src/types/Foo` matches `Foo.ts`, `Foo/index.ts`, etc.
+const TS_SOURCE_EXTENSIONS: &[&str] =
+    &["ts", "tsx", "d.ts", "mts", "cts", "js", "jsx", "mjs", "cjs", "vue", "json"];
+
+/// True if `candidate` (an extension-less module path) points at an existing
+/// local source file — directly, with a TS/JS extension appended, or as a
+/// directory containing an `index.*` entry.
+fn local_source_exists(candidate: &Path) -> bool {
+    if candidate.is_file() {
+        return true;
+    }
+    if let Some(name) = candidate.file_name().and_then(|n| n.to_str()) {
+        if let Some(parent) = candidate.parent() {
+            for ext in TS_SOURCE_EXTENSIONS {
+                if parent.join(format!("{name}.{ext}")).is_file() {
+                    return true;
+                }
+            }
+        }
+    }
+    if candidate.is_dir() {
+        for ext in TS_SOURCE_EXTENSIONS {
+            if candidate.join(format!("index.{ext}")).is_file() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn load_manifest_at<T>(
