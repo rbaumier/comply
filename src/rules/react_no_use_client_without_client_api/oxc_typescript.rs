@@ -3,6 +3,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::ImportDeclarationSpecifier;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 const CLIENT_GLOBALS: &[&str] = &[
@@ -60,6 +62,42 @@ impl OxcCheck for Check {
             }
         }
 
+        // Collect local binding names whose *imported* (original) name is a hook,
+        // so a re-export through an alias still counts. Handles
+        // `import { useX as y } from '...'` paired with `export { y }` /
+        // `export const z = y`, where the reference is to the alias `y` and the
+        // `use*` shape is invisible on the local name. Also treat a direct
+        // `export { useX as y } from '...'` as client usage when the *source*
+        // name is a hook.
+        let mut aliased_hook_locals: HashSet<&str> = HashSet::new();
+        for node in semantic.nodes().iter() {
+            match node.kind() {
+                AstKind::ImportDeclaration(decl) => {
+                    let Some(specifiers) = &decl.specifiers else {
+                        continue;
+                    };
+                    for spec in specifiers {
+                        if let ImportDeclarationSpecifier::ImportSpecifier(named) = spec
+                            && is_hook_name(named.imported.name().as_str())
+                        {
+                            aliased_hook_locals.insert(named.local.name.as_str());
+                        }
+                    }
+                }
+                AstKind::ExportNamedDeclaration(export) => {
+                    if export.source.is_none() {
+                        continue;
+                    }
+                    for spec in &export.specifiers {
+                        if is_hook_name(spec.local.name().as_str()) {
+                            return Vec::new();
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // Scan all nodes (excluding imports) for client API usage
         let mut found_client_api = false;
         for node in semantic.nodes().iter() {
@@ -78,7 +116,7 @@ impl OxcCheck for Check {
             match node.kind() {
                 AstKind::IdentifierReference(id) => {
                     let name = id.name.as_str();
-                    if is_client_api_name(name) {
+                    if is_client_api_name(name) || aliased_hook_locals.contains(name) {
                         found_client_api = true;
                         break;
                     }
@@ -149,8 +187,14 @@ fn has_use_client_directive(source: &str) -> bool {
     false
 }
 
+/// True for React-hook-shaped names: `use` followed by an uppercase letter
+/// (`useState`, `useSuspenseQuery`, …).
+fn is_hook_name(name: &str) -> bool {
+    name.starts_with("use") && name.len() > 3 && name.as_bytes()[3].is_ascii_uppercase()
+}
+
 fn is_client_api_name(name: &str) -> bool {
-    if name.starts_with("use") && name.len() > 3 && name.as_bytes()[3].is_ascii_uppercase() {
+    if is_hook_name(name) {
         return true;
     }
     if name.starts_with("on") && name.len() > 2 && name.as_bytes()[2].is_ascii_uppercase() {
@@ -248,5 +292,46 @@ export default createSvgIcon(
 );
 "#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression tests for #2039 — hook re-exports through aliased import names.
+    #[test]
+    fn no_fp_for_aliased_hook_reexport_const_oxc() {
+        let src = r#"'use client'
+import {
+  useSuspenseQuery as original_useSuspenseQuery,
+} from '@tanstack/react-query'
+
+export const useSuspenseQuery = original_useSuspenseQuery
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_aliased_hook_reexport_named_oxc() {
+        let src = r#"'use client'
+import { useFoo as renamedUseFoo } from './foo'
+
+export { renamedUseFoo }
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_direct_aliased_hook_reexport_oxc() {
+        let src = r#"'use client'
+export { useFoo as useThing } from './foo'
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_hook_aliased_reexport_oxc() {
+        let src = r#"'use client'
+import { helper as renamedHelper } from './helper'
+
+export const helper = renamedHelper
+"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
