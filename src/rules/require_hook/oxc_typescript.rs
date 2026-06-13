@@ -137,6 +137,14 @@ fn is_pure_initializer(expr: &Expression) -> bool {
             ObjectPropertyKind::SpreadProperty(_) => false,
         }),
         Expression::UnaryExpression(u) => is_pure_initializer(&u.argument),
+        // A binary expression (comparison, `in`, `instanceof`, arithmetic) is a
+        // pure read when both operands are pure — e.g. `process.platform === 'win32'`
+        // or `'rolldownVersion' in vite`. An impure operand (a call) still fires.
+        Expression::BinaryExpression(b) => {
+            is_pure_initializer(&b.left) && is_pure_initializer(&b.right)
+        }
+        // Property access (`process.platform`) is a pure read when its object is pure.
+        Expression::StaticMemberExpression(m) => is_pure_initializer(&m.object),
         Expression::ParenthesizedExpression(p) => is_pure_initializer(&p.expression),
         Expression::TSAsExpression(e) => is_pure_initializer(&e.expression),
         Expression::TSTypeAssertion(e) => is_pure_initializer(&e.expression),
@@ -372,6 +380,49 @@ describe("x", () => { it("works", () => {}); });
             d.len(),
             1,
             "a bare side-effect call statement must still be flagged in node:test mode: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_const_comparison_initializer() {
+        let src = r#"
+const isWindows = process.platform === 'win32'
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert!(
+            d.is_empty(),
+            "module-scope const with a pure comparison initializer must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_const_in_operator_initializer() {
+        let src = r#"
+const isRolldownVite = 'rolldownVersion' in vite
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert!(
+            d.is_empty(),
+            "module-scope const with a pure `in` initializer must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_const_binary_with_call_operand() {
+        let src = r#"
+const x = sideEffect() === 1
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a binary expression with a call operand must still be flagged: {d:?}"
         );
     }
 }
