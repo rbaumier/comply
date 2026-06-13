@@ -4,7 +4,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{BinaryOperator, Expression};
 use oxc_span::GetSpan;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -116,6 +116,22 @@ impl OxcCheck for Check {
                             }
                     }
                 }
+                // `expr in EnumName` reads every member value off the compiled
+                // enum object at runtime, so all members are reachable.
+                AstKind::BinaryExpression(bin) => {
+                    if bin.operator == BinaryOperator::In
+                        && let Expression::Identifier(rhs) = &bin.right {
+                            let enum_name = rhs.name.as_str();
+                            if let Some(members) = enums.get(enum_name) {
+                                for (member_name, _) in members {
+                                    used.insert((
+                                        enum_name.to_string(),
+                                        member_name.clone(),
+                                    ));
+                                }
+                            }
+                        }
+                }
                 _ => {}
             }
         }
@@ -140,5 +156,84 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn flags_unused_member() {
+        let source = r#"
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+const x = Color.Red;
+const y = Color.Green;
+"#;
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Blue"));
+    }
+
+    #[test]
+    fn in_operator_marks_all_members_used() {
+        let source = r#"
+enum clickableInputTypes {
+    'button' = 'button',
+    'color' = 'color',
+    'file' = 'file',
+    'image' = 'image',
+    'reset' = 'reset',
+    'submit' = 'submit',
+    'checkbox' = 'checkbox',
+    'radio' = 'radio',
+}
+function isClickableInput(element: HTMLInputElement) {
+    return element.type in clickableInputTypes;
+}
+"#;
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn in_operator_unrelated_enum_still_flags_unused() {
+        let source = r#"
+enum Looked {
+    A,
+    B,
+}
+enum Other {
+    X,
+    Y,
+}
+const k = "A" in Looked;
+"#;
+        let diags = run(source);
+        assert_eq!(diags.len(), 2);
+        assert!(diags.iter().all(|d| d.message.contains("Other")));
     }
 }
