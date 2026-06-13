@@ -249,4 +249,45 @@ function header(response: Response) {
 "#;
         assert!(run_on(src).is_empty(), "got: {:?}", run_on(src));
     }
+
+    #[test]
+    fn allows_error_with_searchparams_get() {
+        // Issue #1788, example 1: `url.searchParams.get(` is not a route registration.
+        let src = r#"
+const jobParam = url.searchParams.get('job')
+function pick(answer: string) {
+    reject(new Error(`Invalid selection: ${answer}`))
+}
+"#;
+        assert!(run_on(src).is_empty(), "got: {:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_error_with_map_get_and_headers_get() {
+        // Issue #1788, example 2: `byModule.get(` + `request.headers.get(`.
+        let src = r#"
+const existing = byModule.get(adv.module_name) ?? []
+function check(request: Request) {
+    if (!isValidConnString(request.headers.get('x-connection-encrypted'))) {
+        throw new Error("invalid")
+    }
+}
+"#;
+        assert!(run_on(src).is_empty(), "got: {:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_error_with_headers_get_on_request_and_response() {
+        // Issue #1788, example 3: `request.headers.get(` and `response.headers.get(`.
+        let src = r#"
+function client(request: Request, response: Response) {
+    const retryAfterHeader = request.headers.get('Retry-After')
+    const contentType = response.headers.get('Content-Type')
+    if (!contentType) {
+        throw new Error("no content type")
+    }
+}
+"#;
+        assert!(run_on(src).is_empty(), "got: {:?}", run_on(src));
+    }
 }
