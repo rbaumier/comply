@@ -8,6 +8,12 @@
 //!   under `test-helpers/`, or any Cypress support file under `cypress/support/`),
 //!   or by content shape where every top-level call is a Vitest hook with a
 //!   `"vitest"` import present;
+//! - CLI entry points: files whose name is `bin.{ts,mts,js,mjs}` (the Node.js
+//!   `package.json` `"bin"` convention) or any file starting with a `#!`
+//!   shebang. Such files are executed directly (`tsx ./bin.ts`, `node ./bin.js`),
+//!   never imported as a library, so their top-level CLI bootstrap
+//!   (`yargs(hideBin(process.argv)).parse()`, `process.stdin.pipe(...)`, …) is
+//!   intentional and not tree-shakeable;
 //! - server application entry points by content shape: any module with a
 //!   top-level `listen(...)` / `*.listen(...)` call (Fastify/Express/Node HTTP
 //!   servers start the server this way, so the surrounding route/hook/
@@ -79,6 +85,21 @@ fn is_test_setup_path(path: &std::path::Path) -> bool {
         || stem == "setuptests"
         || stem == "globalsetup"
         || stem == "global-setup"
+}
+
+/// CLI entry points are executed directly, never imported as a library, so
+/// their top-level bootstrap is intentional and not tree-shakeable. Two
+/// unambiguous signals mark such a file:
+/// - a `#!` shebang (a directly-executed script); or
+/// - the `bin.{ts,mts,js,mjs}` filename — the Node.js `package.json` `"bin"`
+///   convention. The stem must be exactly `bin`, so an ordinary `binary.ts`
+///   module is still flagged.
+fn is_cli_entry(path: &std::path::Path, source: &str) -> bool {
+    if source.starts_with("#!") {
+        return true;
+    }
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    matches!(name, "bin.ts" | "bin.mts" | "bin.js" | "bin.mjs")
 }
 
 const VITEST_HOOK_IDENTS: &[&str] =
@@ -327,6 +348,7 @@ impl OxcCheck for Check {
         let program = semantic.nodes().program();
 
         if is_test_setup_path(ctx.path)
+            || is_cli_entry(ctx.path, ctx.source)
             || shape_is_vitest_setup(program)
             || is_server_entry_shape(program)
             || is_react_entry_shape(program)
@@ -767,6 +789,71 @@ mod tests {
             diags.len(),
             2,
             "unrelated .render() must not exempt the module, got {diags:?}"
+        );
+    }
+
+    // --- (g) CLI entry points (Closes #2050) ------------------------------
+
+    // Regression for #2050: a yargs-based CLI entry named `bin.ts` runs the CLI
+    // at module level (`yargs(hideBin(process.argv)).parse()`) with no shebang.
+    // It is executed directly (`tsx ./bin.ts`), never imported, so the top-level
+    // call is intentional and not tree-shakeable.
+    #[test]
+    fn allows_yargs_bin_ts_cli_entry_without_shebang() {
+        let src = "\
+            import yargs from 'yargs/yargs';\n\
+            import { hideBin } from 'yargs/helpers';\n\
+            yargs(hideBin(process.argv))\n\
+              .scriptName('rw-server')\n\
+              .strict()\n\
+              .command('$0', 'start', () => {}, () => {})\n\
+              .parse();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "packages/api-server/src/bin.ts");
+        assert!(
+            diags.is_empty(),
+            "bin.ts CLI entry without shebang should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_bin_mts_cli_entry() {
+        let src = "\
+            process.stdin.pipe(formatter()).pipe(process.stdout);\n\
+            process.on('SIGINT', () => {});\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/logFormatter/bin.mts");
+        assert!(
+            diags.is_empty(),
+            "bin.mts CLI entry should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_shebang_cli_entry() {
+        // A non-`bin` filename with a `#!` shebang is still a directly-executed
+        // script, never imported.
+        let src = "\
+            #!/usr/bin/env tsx\n\
+            import yargs from 'yargs/yargs';\n\
+            yargs(process.argv).parse();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/bins/rw-fwtools-attw.ts");
+        assert!(
+            diags.is_empty(),
+            "shebang CLI script should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_non_bin_module_with_side_effect() {
+        // `binary.ts` merely contains "bin" — not the `bin` convention — and has
+        // no shebang, so its top-level side effect still blocks tree-shaking.
+        let src = "\
+            import yargs from 'yargs/yargs';\n\
+            yargs(process.argv).parse();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/binary.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "binary.ts is an ordinary module and must still be flagged, got {diags:?}"
         );
     }
 
