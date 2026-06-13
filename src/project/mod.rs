@@ -90,6 +90,11 @@ pub struct PackageJson {
     /// run by a script — so consumers can tell "uses X as its runner" apart
     /// from "ships an integration/plugin for X".
     pub script_test_runners: BTreeSet<String>,
+    /// Relative paths this package declares as its own entry point: the `main`
+    /// value plus the `exports` `.` target(s). Stored manifest-dir-relative,
+    /// forward-slash, no leading `./`, so a consumer can join them onto the
+    /// manifest directory and compare against a file path.
+    pub entry_files: BTreeSet<String>,
 }
 
 impl PackageJson {
@@ -151,6 +156,7 @@ impl PackageJson {
                         .collect()
                 })
                 .unwrap_or_default(),
+            entry_files: collect_entry_files(&json),
         })
     }
 
@@ -235,6 +241,74 @@ fn extract_script_test_runners(cmd: &str) -> Vec<String> {
         .filter(|name| RUNNERS.contains(name))
         .map(str::to_string)
         .collect()
+}
+
+/// Normalize a `main` value (a relative file path) to the shape consumers
+/// compare against: forward slashes, optional leading `./` stripped. `main`
+/// values are bare relative (`index.js`, `dist/index.js`) or `./`-prefixed.
+fn normalize_main_path(target: &str) -> Option<String> {
+    let rel = target.strip_prefix("./").unwrap_or(target);
+    if rel.is_empty() {
+        return None;
+    }
+    Some(rel.replace('\\', "/"))
+}
+
+/// Normalize an `exports` target. Per the Node spec an `exports` file target
+/// must start with `./`; a value without it is a bare specifier (a re-export of
+/// another package, not a file here), so reject it.
+fn normalize_export_path(target: &str) -> Option<String> {
+    let rel = target.strip_prefix("./")?;
+    if rel.is_empty() {
+        return None;
+    }
+    Some(rel.replace('\\', "/"))
+}
+
+/// Recursively gather every relative target string out of an `exports`
+/// conditions value. A condition value is a string (`"./index.js"`) or a nested
+/// object keyed by condition (`{ "import": "./x.mjs", "require": "./x.cjs" }`).
+fn collect_export_targets(node: &Value, out: &mut BTreeSet<String>) {
+    match node {
+        Value::String(s) => {
+            if let Some(rel) = normalize_export_path(s) {
+                out.insert(rel);
+            }
+        }
+        Value::Object(map) => {
+            for value in map.values() {
+                collect_export_targets(value, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The relative paths this package declares as its own entry point: the `main`
+/// value plus the `exports` `.` target(s) (including conditional `import`/
+/// `require`/`default` variants). A string `exports` (no subpath map) is itself
+/// the `.` target.
+fn collect_entry_files(json: &Value) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    if let Some(main) = json.get("main").and_then(Value::as_str)
+        && let Some(rel) = normalize_main_path(main)
+    {
+        out.insert(rel);
+    }
+    match json.get("exports") {
+        Some(Value::String(s)) => {
+            if let Some(rel) = normalize_export_path(s) {
+                out.insert(rel);
+            }
+        }
+        Some(Value::Object(map)) => {
+            if let Some(dot) = map.get(".") {
+                collect_export_targets(dot, &mut out);
+            }
+        }
+        _ => {}
+    }
+    out
 }
 
 fn parse_dep_map(json: &Value, section: &str) -> BTreeMap<String, String> {
@@ -892,6 +966,23 @@ impl ProjectCtx {
             "package.json",
             PackageJson::parse,
         )
+    }
+
+    /// True when `path` is the entry point its own `package.json` declares —
+    /// the file named by `main` or the `exports` `.` target of the nearest
+    /// manifest. Such a file's job is to dispatch to the built artifact (e.g. a
+    /// CJS root that `require`s `./dist/...` based on `NODE_ENV`); rules about
+    /// "import from the package entry point" must not fire on the entry itself.
+    pub fn is_package_entry_file(&self, path: &Path) -> bool {
+        let Some(manifest_dir) = self.nearest_package_json_dir(path) else {
+            return false;
+        };
+        let Some(pkg) = self.nearest_package_json(path) else {
+            return false;
+        };
+        pkg.entry_files
+            .iter()
+            .any(|entry| manifest_dir.join(entry) == path)
     }
 
     /// True when the project ships React Compiler — declared as a dependency
@@ -1585,6 +1676,35 @@ mod tests {
             "sibling files should share the same cached Arc"
         );
         assert_eq!(first.name.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn is_package_entry_file_matches_declared_main() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"vue","main":"index.js"}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.is_package_entry_file(&dir.path().join("index.js")));
+        assert!(!ctx.is_package_entry_file(&dir.path().join("other.js")));
+    }
+
+    #[test]
+    fn is_package_entry_file_matches_exports_dot_targets() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"vue","exports":{".":{"import":"./index.mjs","require":"./index.cjs"}}}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.is_package_entry_file(&dir.path().join("index.mjs")));
+        assert!(ctx.is_package_entry_file(&dir.path().join("index.cjs")));
+        assert!(!ctx.is_package_entry_file(&dir.path().join("other.js")));
     }
 
     #[test]
