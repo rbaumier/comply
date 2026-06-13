@@ -105,6 +105,9 @@ fn is_async_looking_member_call(call: &CallExpression) -> bool {
     if is_xml_http_request_send(member) {
         return false;
     }
+    if is_diagnostics_channel_publish(member) {
+        return false;
+    }
     let method = member.property.name.as_str();
     ASYNC_LOOKING_METHODS.contains(&method)
 }
@@ -133,6 +136,26 @@ fn is_stream_controller_close(member: &StaticMemberExpression) -> bool {
         return false;
     }
     matches!(&member.object, Expression::Identifier(id) if id.name.as_str().to_lowercase().contains("controller"))
+}
+
+/// `node:diagnostics_channel` `Channel.prototype.publish(message)` returns `void`
+/// — it fires subscribers synchronously, so there is nothing to await.
+/// Matches when the `.publish(...)` receiver is, or hangs off, a bare identifier
+/// whose name (case-insensitive) reads as a diagnostics channel, e.g.
+/// `channel.publish(ctx)` or `channel.error.publish(ctx)`.
+fn is_diagnostics_channel_publish(member: &StaticMemberExpression) -> bool {
+    if member.property.name.as_str() != "publish" {
+        return false;
+    }
+    let root = match &member.object {
+        Expression::Identifier(id) => id.name.as_str(),
+        Expression::StaticMemberExpression(inner) => match &inner.object {
+            Expression::Identifier(id) => id.name.as_str(),
+            _ => return false,
+        },
+        _ => return false,
+    };
+    root.to_lowercase().contains("channel")
 }
 
 /// `process.stdout.write(...)` / `process.stderr.write(...)` return `boolean`
@@ -334,6 +357,31 @@ function httpGetAsync(targetUrl, callback) {
     #[test]
     fn still_flags_non_xhr_send() {
         let d = run_on("producer.send(message);");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression tests for issue #2051: `node:diagnostics_channel`
+    // `Channel.publish(message)` returns void — it fires subscribers synchronously,
+    // so `channel.X.publish(...)` must not be flagged.
+
+    #[test]
+    fn allows_diagnostics_channel_publish() {
+        let src = "\
+channel.error.publish(context);
+channel.end.publish(context);
+channel.asyncEnd.publish(context);
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_direct_channel_publish() {
+        assert!(run_on("channel.publish(context);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_channel_publish() {
+        let d = run_on("broker.publish(topic, message);");
         assert_eq!(d.len(), 1);
     }
 }
