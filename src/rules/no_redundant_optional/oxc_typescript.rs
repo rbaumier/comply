@@ -72,6 +72,13 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Under `exactOptionalPropertyTypes`, `?: T` and `?: T | undefined`
+        // diverge: only the latter accepts an explicit `undefined`. The union
+        // member is then meaningful, not redundant, so suppress the diagnostic.
+        if ctx.project.uses_exact_optional_property_types(ctx.path) {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, span_start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -107,6 +114,48 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    /// Run the rule against `source` inside a TempDir that also holds a
+    /// `tsconfig.json` with the given `compiler_options` body, so the predicate
+    /// `uses_exact_optional_property_types` resolves against a real tsconfig.
+    fn run_with_tsconfig(source: &str, compiler_options: &str) -> Vec<Diagnostic> {
+        use crate::project::ProjectCtx;
+        use crate::rules::file_ctx::FileCtx;
+        use crate::files::Language;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            format!(r#"{{"compilerOptions":{compiler_options}}}"#),
+        )
+        .unwrap();
+        let file_path = dir.path().join("t.ts");
+        std::fs::write(&file_path, source).unwrap();
+
+        let project = ProjectCtx::empty();
+        let file = FileCtx::build(&file_path, source, Language::TypeScript, &project);
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &file_path, &project, &file)
+    }
+
+    #[test]
+    fn allows_optional_with_undefined_under_exact_optional() {
+        // Regression #2075: with exactOptionalPropertyTypes, `?: T | undefined`
+        // is NOT redundant — the union member additionally permits an explicit
+        // `undefined`, which `?` alone does not.
+        let src = "export interface JSONSchemaMeta { id?: string | undefined; }";
+        assert!(run_with_tsconfig(src, r#"{"exactOptionalPropertyTypes":true}"#).is_empty());
+    }
+
+    #[test]
+    fn flags_optional_with_undefined_when_exact_optional_off() {
+        // Guard: without the option the union member IS redundant — true
+        // positive must still fire.
+        let src = "export interface JSONSchemaMeta { id?: string | undefined; }";
+        assert_eq!(
+            run_with_tsconfig(src, r#"{"exactOptionalPropertyTypes":false}"#).len(),
+            1
+        );
     }
 
     #[test]
