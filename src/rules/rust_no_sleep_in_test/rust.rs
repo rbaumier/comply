@@ -11,7 +11,7 @@
 //! condition wait (channel, polled deadline) or with tokio's
 //! virtual-time helpers (`tokio::time::pause` + `advance`).
 //!
-//! Three legitimate sleep patterns are exempt:
+//! Five legitimate sleep patterns are exempt:
 //! - Files under Cargo's `tests/` integration-test directory:
 //!   integration tests are black-box clients of real systems, where
 //!   a wall-clock wait on external readiness (e.g. a remote consumer
@@ -24,6 +24,13 @@
 //!   `break`): polling a condition with an early exit is the correct
 //!   way to wait when no sync primitive exists, not a flaky fixed
 //!   wait.
+//! - Sleeps inside a concurrency test — a test whose body also spawns
+//!   OS threads (`thread::spawn`, `thread::scope`, `scope.spawn`). The
+//!   sleep widens the race window so a broken lock-free/seqlock
+//!   implementation is actually observed, and it forces real OS-thread
+//!   preemption; Tokio's virtual clock cannot replace either role.
+//! - `thread::sleep(Duration::ZERO)`: a pure scheduling yield that
+//!   gives other threads a chance to run, never a wall-clock wait.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -64,6 +71,12 @@ impl AstCheck for Check {
             return;
         }
         if is_in_bounded_retry_loop(node) {
+            return;
+        }
+        if is_zero_duration_sleep(node, source_bytes) {
+            return;
+        }
+        if is_in_concurrency_test(node, source_bytes) {
             return;
         }
         let pos = node.start_position();
@@ -175,6 +188,66 @@ fn subtree_contains_break(node: tree_sitter::Node) -> bool {
     node.children(&mut cursor)
         .filter(|child| !SCOPE_BOUNDARY_KINDS.contains(&child.kind()))
         .any(subtree_contains_break)
+}
+
+/// True if the sleep `call_expression` `node` has a single argument
+/// that is `Duration::ZERO` — a pure scheduling yield, never a
+/// wall-clock wait.
+fn is_zero_duration_sleep(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(args) = node.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut cursor = args.walk();
+    let named: Vec<_> = args.named_children(&mut cursor).collect();
+    if named.len() != 1 {
+        return false;
+    }
+    named[0]
+        .utf8_text(source)
+        .is_ok_and(|text| text.ends_with("Duration::ZERO"))
+}
+
+/// True if the sleep `node` sits in a test that also spawns OS threads.
+/// Walks up to the enclosing test function, then scans its body for a
+/// thread-spawning call (`thread::spawn`, `thread::scope`,
+/// `scope.spawn`). Such tests exercise real concurrency: the sleep
+/// widens the race window and forces OS-thread preemption, so it is the
+/// test's correctness mechanism rather than a flaky wait. A sleep in a
+/// test that spawns no threads is not exempted.
+fn is_in_concurrency_test(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "function_item" {
+            let Some(body) = parent.child_by_field_name("body") else {
+                return false;
+            };
+            return subtree_spawns_thread(body, source);
+        }
+        cur = parent;
+    }
+    false
+}
+
+/// True if `node`'s subtree contains a call to a thread-spawning
+/// function. Descends through nested functions/closures because a
+/// spawn is commonly wrapped in a `thread::scope` closure.
+fn subtree_spawns_thread(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() == "call_expression"
+        && let Some(name) = call_function_name(node, source)
+        && is_thread_spawn_fn(name)
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| subtree_spawns_thread(child, source))
+}
+
+/// True if `name` is a thread-spawning call: `thread::spawn`,
+/// `thread::scope`, or a `scope.spawn` method call (matched by the
+/// `.spawn` suffix, e.g. `s.spawn`).
+fn is_thread_spawn_fn(name: &str) -> bool {
+    name.ends_with("thread::spawn") || name.ends_with("thread::scope") || name.ends_with(".spawn")
 }
 
 #[cfg(test)]
@@ -292,6 +365,45 @@ mod tests {
     fn flags_sleep_when_start_paused_is_false() {
         let source =
             "#[tokio::test(start_paused = false)]\nasync fn t() { tokio::time::sleep(d).await; }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_race_widening_sleep_in_concurrency_test_issue_1431() {
+        // qdrant lib/trififo/src/seqlock.rs: the test spawns reader
+        // threads and uses thread::sleep to widen the race window so a
+        // broken seqlock is actually observed.
+        let source = "#[test]\nfn seqlock_no_split_writes() { \
+                      let h = thread::spawn(move || { reader.read(); }); \
+                      for i in 1..=n { \
+                      writer.write(|p| { p.a = i; \
+                      thread::sleep(Duration::from_nanos(100)); p.b = i; }); } \
+                      h.join().unwrap(); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_sleep_in_scoped_thread_stress_test() {
+        // thread::scope + scope.spawn stress test against a lock-free
+        // structure: the sleep forces OS-thread preemption.
+        let source = "#[test]\nfn stress() { std::thread::scope(|s| { \
+                      s.spawn(|| { ds.push(1); }); \
+                      thread::sleep(Duration::from_micros(10)); }); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_zero_duration_yield_sleep() {
+        let source = "#[test]\nfn yields() { thread::sleep(Duration::ZERO); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_sleep_in_test_that_spawns_no_threads() {
+        // A sequential "wait for X" sleep in a test with no spawned
+        // threads is still the flaky pattern the rule targets.
+        let source = "#[test]\nfn waits() { setup(); \
+                      thread::sleep(Duration::from_secs(1)); assert!(ready()); }";
         assert_eq!(run_on(source).len(), 1);
     }
 }
