@@ -328,6 +328,7 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
             || lower.contains(".test.")
             || lower.contains(".spec.")
             || lower.contains(".e2e.")
+            || lower.contains(".cy.")
             || lower.contains("_test.")
             || lower.ends_with("/test.ts")
             || lower.ends_with("/test.tsx")
@@ -488,6 +489,20 @@ mod tests {
             ))
             .in_test_dir
         );
+    }
+
+    #[test]
+    fn closes_cypress_cy_extension_gap_issue1868() {
+        // Issue #1868: Cypress E2E specs use the `.cy.*` extension. They are
+        // loaded by the Cypress runner, never imported as modules, so every
+        // rule reading `ctx.file.path_segments.in_test_dir` must treat them as
+        // tests.
+        assert!(scan_path(&PathBuf::from("cypress/e2e/manualRegisterForm.cy.ts")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("src/Login.cy.js")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("src/Login.cy.tsx")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("src/Login.cy.jsx")).in_test_dir);
+        // A plain co-located source file is still not a test dir.
+        assert!(!scan_path(&PathBuf::from("src/Login.tsx")).in_test_dir);
     }
 
     #[test]

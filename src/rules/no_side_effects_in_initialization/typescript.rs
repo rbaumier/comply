@@ -57,6 +57,7 @@ fn is_test_file(path: &std::path::Path) -> bool {
         "__tests__",
         "_test.",
         ".e2e.",
+        ".cy.",
     ]
     .iter()
     .any(|m| s.contains(m))

@@ -101,7 +101,7 @@ pub struct Check;
 
 fn is_test_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
-    [".test.", ".test-d.", ".spec.", "__tests__", "_test.", ".e2e."]
+    [".test.", ".test-d.", ".spec.", "__tests__", "_test.", ".e2e.", ".cy."]
         .iter()
         .any(|m| s.contains(m))
         || s.contains("/dtslint/")
@@ -1041,6 +1041,32 @@ mod tests {
     fn skips_test_files() {
         let diags = crate::rules::test_helpers::run_rule(&Check, "expectType<string>(foo());", "main.test-d.ts");
         assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn skips_cypress_e2e_file_by_extension() {
+        // Issue #1868: Cypress E2E specs use the `.cy.*` extension and always
+        // open with a top-level `describe(...)` — required Cypress API. These
+        // files are loaded by the Cypress runner, never imported as modules, so
+        // tree-shaking does not apply.
+        let src = "describe('manual register form validation', () => {\n\
+                       it('should validate the form', () => {\n\
+                           cy.visit('http://localhost:3000/manual-register-form');\n\
+                       });\n\
+                   });";
+        for path in [
+            "cypress/e2e/manualRegisterForm.cy.ts",
+            "cypress/e2e/manualRegisterForm.cy.js",
+            "cypress/e2e/manualRegisterForm.cy.tsx",
+            "cypress/e2e/manualRegisterForm.cy.jsx",
+        ] {
+            let diags = crate::rules::test_helpers::run_rule(&Check, src, path);
+            assert!(diags.is_empty(), "{path} should be exempt, got {diags:?}");
+        }
+        // The `.cy.` infix is what grants the exemption: the same top-level
+        // call in a genuine production module still flags.
+        let prod = crate::rules::test_helpers::run_rule(&Check, "describe('x', () => {});", "src/index.ts");
+        assert_eq!(prod.len(), 1, "production src/index.ts must still flag");
     }
 
     // --- (a) Vitest setup file exemption ----------------------------------
