@@ -23,6 +23,10 @@ pub struct Check;
 /// the last sentence requiring terminal punctuation. The label that
 /// introduces such a block (a line ending in `:`, like `Example:`) is a
 /// code-block heading, not a concluding sentence, so it too is dropped.
+///
+/// A trailing bare URL (a reference link, e.g. `https://docs.example/`) is
+/// not prose either: it ends with a path or query, not with `.`, `!`, or
+/// `?`, so it is excluded and never gates the punctuation check.
 fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
     let mut description_lines = Vec::new();
     let mut in_fence = false;
@@ -56,13 +60,37 @@ fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
         description_lines.push((content.to_string(), i));
     }
 
+    drop_trailing_bare_url(&mut description_lines);
     description_lines
 }
 
-/// Drop a trailing `:`-terminated label that introduces a fenced code
-/// block (e.g. `Example:`). Such a heading is not the concluding
-/// sentence of the description, so it must not gate the punctuation
-/// check.
+/// Drop a trailing line that is a bare URL (e.g. a reference link like
+/// `https://docs.example/`). Such a line is not a prose sentence, so it
+/// must not gate the terminal-punctuation check. The `:`-terminated label
+/// that introduces the link (e.g. `Learn more:`) is a heading for the
+/// reference, not a concluding sentence, so it is dropped too.
+fn drop_trailing_bare_url(description_lines: &mut Vec<(String, usize)>) {
+    if description_lines
+        .last()
+        .is_some_and(|(text, _)| is_bare_url(text))
+    {
+        description_lines.pop();
+        drop_trailing_code_block_label(description_lines);
+    }
+}
+
+/// Whether a line is a bare URL: a single `http(s)://` token with no
+/// surrounding prose.
+fn is_bare_url(text: &str) -> bool {
+    let trimmed = text.trim();
+    (trimmed.starts_with("http://") || trimmed.starts_with("https://"))
+        && !trimmed.contains(char::is_whitespace)
+}
+
+/// Drop a trailing `:`-terminated label that introduces a non-prose
+/// block — a fenced code block (`Example:`) or a reference link
+/// (`Learn more:`). Such a heading is not the concluding sentence of the
+/// description, so it must not gate the punctuation check.
 fn drop_trailing_code_block_label(description_lines: &mut Vec<(String, usize)>) {
     if description_lines
         .last()
@@ -270,6 +298,36 @@ export function makeCommandInfo(name: string): void {}
         let source = r#"
 /**
  * Adds two numbers together
+ */
+function add(a: number, b: number) {}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn ignores_trailing_bare_url_in_description() {
+        // Regression for rbaumier/comply#1160 — a description ending with a
+        // bare reference URL must not flag the URL line as missing punctuation;
+        // URLs end with paths/queries, not `.`, `!`, or `?`.
+        let source = r#"
+/**
+ * Learn more about light and dark modes:
+ * https://docs.expo.dev/guides/color-schemes/
+ */
+export function useThemeColor(): void {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_prose_after_url_line() {
+        // Only a *trailing* bare URL is exempt — a URL mid-description followed
+        // by a prose sentence missing terminal punctuation must still flag.
+        let source = r#"
+/**
+ * See https://example.com/docs for details
+ * but remember to read the notes
  */
 function add(a: number, b: number) {}
 "#;
