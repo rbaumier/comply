@@ -50,6 +50,8 @@ const KNOWN_TAGS: &[&str] = &[
     "host",
     "ignore",
     "implements",
+    // TypeScript 5.5 JSDoc tag for type-only imports in `.js` files.
+    "import",
     "inheritdoc",
     "inheritDoc",
     "inner",
@@ -75,6 +77,8 @@ const KNOWN_TAGS: &[&str] = &[
     "name",
     "namespace",
     "nosideeffects",
+    // TypeScript JSDoc tag for documenting function overloads in `.js` files.
+    "overload",
     "override",
     "overview",
     "package",
@@ -236,6 +240,14 @@ mod tests {
         assert!(run("/** @jsxRuntime classic */\n").is_empty());
         assert!(run("/** @jsxImportSource @emotion/react */\n").is_empty());
         assert!(run("/** @jsxFrag jsx.Fragment */\n").is_empty());
+    }
+
+    #[test]
+    fn allows_typescript_import_and_overload_tags_issue_1414() {
+        // TypeScript 5.5 JSDoc tags for type-only imports and function overloads.
+        assert!(run("/** @import { AST } from 'svelte/compiler' */\n").is_empty());
+        let src = "/**\n * @template Output\n * @overload\n * @param {() => Output} fn\n */\n";
+        assert!(run(src).is_empty(), "{:?}", run(src));
     }
 
     #[test]
