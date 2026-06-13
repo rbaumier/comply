@@ -1692,4 +1692,54 @@ mod tests {
             "secondary ng-packagr entry barrel must seed reachability, got: {diags:?}"
         );
     }
+
+    #[test]
+    fn no_fp_for_symbol_consumed_through_star_reexport_barrel() {
+        // Regression for #1881 — a utility module's export is re-exported via
+        // `export * from './misc/getTreeDiff'` in a barrel and consumed by
+        // importing the symbol from the barrel. No file imports the source
+        // module directly, so without following `export *` chains the symbol
+        // looks dead even though it is used transitively.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/utils/misc/getTreeDiff.ts",
+                "export function getTreeDiff(prev: unknown, next: unknown): unknown {\n  return [prev, next];\n}\n",
+            ),
+            (
+                "src/utils/index.ts",
+                "export * from './misc/getTreeDiff';\n",
+            ),
+            (
+                "src/system/pointer/pointer.ts",
+                "import { getTreeDiff } from '../../utils';\ngetTreeDiff(null, null);\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/utils/misc/getTreeDiff.ts");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("getTreeDiff")),
+            "symbol re-exported via `export *` barrel and imported from it must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_symbol_in_star_reexported_module_when_barrel_unused() {
+        // Sibling guard — a module re-exported via `export *` from a barrel
+        // that nobody imports the symbol from is genuinely dead.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/utils/misc/getTreeDiff.ts",
+                "export function getTreeDiff(prev: unknown, next: unknown): unknown {\n  return [prev, next];\n}\n",
+            ),
+            (
+                "src/utils/index.ts",
+                "export * from './misc/getTreeDiff';\n",
+            ),
+            ("src/other.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/utils/misc/getTreeDiff.ts");
+        assert!(
+            diags.iter().any(|d| d.message.contains("getTreeDiff")),
+            "symbol nobody imports through the barrel is still dead, got: {diags:?}"
+        );
+    }
 }

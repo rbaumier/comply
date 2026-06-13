@@ -383,16 +383,16 @@ impl ImportIndex {
             }
         }
 
-        // Fourth pass: propagate re-exports. When barrel.ts does
-        // `export { X } from './impl'`, usages on barrel flow to impl.
-        propagate_reexports(&exports, &imports, &mut symbol_usages);
-
-        // Resolve each `export { name } from './m'` to its origin file. Reuses
-        // the same specifier resolver as imports so tsconfig aliases and
-        // extension probing stay consistent. Only relative specifiers that
-        // land on an indexed file are recorded.
+        // Resolve each `export … from './m'` to its origin file. Reuses the
+        // same specifier resolver as imports so tsconfig aliases and extension
+        // probing stay consistent. Only relative specifiers that land on an
+        // indexed file are recorded. `star_edges` keeps the `export * from`
+        // subset so re-export propagation can flow barrel usages into the
+        // wildcard-re-exported origins (named edges are matched separately by
+        // `propagate_reexports`).
         let mut reexport_targets: HashMap<(PathBuf, String), PathBuf> = HashMap::new();
         let mut reexport_edges: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+        let mut star_edges: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
         for (path, exps) in &exports {
             for exp in exps {
                 if !matches!(exp.kind, ExportKind::ReExport | ExportKind::StarReExport) {
@@ -407,6 +407,11 @@ impl ImportIndex {
                 };
                 if matches!(exp.kind, ExportKind::ReExport) {
                     reexport_targets.insert((path.clone(), exp.name.clone()), origin.clone());
+                } else {
+                    let star = star_edges.entry(path.clone()).or_default();
+                    if !star.contains(&origin) {
+                        star.push(origin.clone());
+                    }
                 }
                 let edges = reexport_edges.entry(path.clone()).or_default();
                 if !edges.contains(&origin) {
@@ -414,6 +419,11 @@ impl ImportIndex {
                 }
             }
         }
+
+        // Fourth pass: propagate re-exports. When barrel.ts does
+        // `export { X } from './impl'`, usages on barrel flow to impl; the same
+        // applies to `export * from './impl'` for whichever name `impl` exports.
+        propagate_reexports(&exports, &imports, &star_edges, &mut symbol_usages);
 
         // Fifth pass: collect bare specifiers (npm packages).
         let bare_specifiers = collect_bare_specifiers(&imports);
@@ -662,10 +672,14 @@ impl ImportIndex {
 }
 
 /// Fixed-point propagation: when `barrel.ts` re-exports `{ X } from './impl'`,
-/// any usage of `X` on barrel should count as a usage of `X` on impl.
+/// any usage of `X` on barrel should count as a usage of `X` on impl. The same
+/// holds for `export * from './impl'`: a usage of `X` on barrel flows to impl
+/// when impl exports `X`, since the wildcard re-export is the only thing that
+/// makes `import { X } from './barrel'` resolve.
 fn propagate_reexports(
     exports: &HashMap<PathBuf, Vec<ExportedSymbol>>,
     imports: &HashMap<PathBuf, Vec<ImportedSymbol>>,
+    star_edges: &HashMap<PathBuf, Vec<PathBuf>>,
     symbol_usages: &mut HashMap<(PathBuf, String), Vec<Usage>>,
 ) {
     // Build re-export edges: for each `export { X } from './m'` or
@@ -717,6 +731,20 @@ fn propagate_reexports(
         }
     }
 
+    // Star re-export edges: for each `export * from './m'` on a barrel, a usage
+    // of name `X` on the barrel is a usage of `X` on whichever module in the
+    // star chain actually declares `X`. Walk the star-edge graph from each
+    // barrel to its terminal modules, then link (barrel, X) → (terminal, X) for
+    // every runtime name the terminal exports. Following the chain to the
+    // declaring file (rather than each intermediate barrel) lets a single edge
+    // cover nested `export *` barrels without those intermediates needing the
+    // name in their own export list.
+    for barrel_path in star_edges.keys() {
+        for (name, terminal) in star_reexported_names(barrel_path, star_edges, exports) {
+            reexport_edges.push((barrel_path.clone(), name.clone(), terminal, name));
+        }
+    }
+
     // Fixed-point: propagate usages through re-export chains.
     let mut changed = true;
     let mut iterations = 0;
@@ -745,6 +773,47 @@ fn propagate_reexports(
             }
         }
     }
+}
+
+/// Runtime export names made available on `barrel` through its `export * from`
+/// chain, paired with the module that actually declares each name. Walks
+/// `star_edges` breadth-first from `barrel`; at each visited module it records
+/// the module's own non-star exports (a name closer to the barrel in the chain
+/// shadows a deeper one, matching JS `export *` resolution) and follows that
+/// module's further star edges. Type-only exports are skipped — they leave no
+/// runtime symbol for `dead-export` to reason about.
+fn star_reexported_names(
+    barrel: &Path,
+    star_edges: &HashMap<PathBuf, Vec<PathBuf>>,
+    exports: &HashMap<PathBuf, Vec<ExportedSymbol>>,
+) -> Vec<(String, PathBuf)> {
+    let mut resolved: HashMap<String, PathBuf> = HashMap::new();
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+    let mut queue: std::collections::VecDeque<PathBuf> = star_edges
+        .get(barrel)
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect();
+    while let Some(module) = queue.pop_front() {
+        if !visited.insert(module.clone()) {
+            continue;
+        }
+        for exp in exports.get(&module).map_or(&[][..], Vec::as_slice) {
+            if matches!(exp.kind, ExportKind::StarReExport) {
+                continue;
+            }
+            resolved.entry(exp.name.clone()).or_insert_with(|| module.clone());
+        }
+        if let Some(next) = star_edges.get(&module) {
+            for src in next {
+                if !visited.contains(src) {
+                    queue.push_back(src.clone());
+                }
+            }
+        }
+    }
+    resolved.into_iter().collect()
 }
 
 /// Extract bare specifier → package name mapping from all imports.
