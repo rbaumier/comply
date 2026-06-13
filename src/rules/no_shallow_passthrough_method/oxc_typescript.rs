@@ -45,6 +45,17 @@ impl OxcCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::MethodDefinition(method) = node.kind() else { return };
+
+        // A decorated method carries external significance beyond its body: the
+        // decorator binds it to a framework (e.g. NestJS `@MessagePattern` /
+        // `@EventPattern` / `@Get`) that resolves the method via metadata
+        // reflection at runtime. The forwarding body cannot be inlined or
+        // removed without breaking that registration, so the passthrough is
+        // intentional and required.
+        if !method.decorators.is_empty() {
+            return;
+        }
+
         let Some(ref body) = method.value.body else { return };
 
         // Body must contain exactly one statement, a return statement.
@@ -74,5 +85,51 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, s, "t.ts")
+    }
+
+    #[test]
+    fn flags_passthrough() {
+        let src = "class A { foo(a, b) { return this.bar(a, b); } }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_reordered_args() {
+        let src = "class A { foo(a, b) { return this.bar(b, a); } }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_decorated_message_handler() {
+        // Regression for #2020: a NestJS `@MessagePattern` handler forwards its
+        // parameter but the decorator registers it as an RPC entry point — it
+        // cannot be inlined or removed.
+        let src = "class NatsController { @MessagePattern('streaming.*') streaming(data) { return from(data); } }";
+        assert!(run(src).is_empty(), "expected no diagnostics, got: {:?}", run(src));
     }
 }

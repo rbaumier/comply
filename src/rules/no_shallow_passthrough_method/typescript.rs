@@ -38,7 +38,36 @@ fn argument_names<'a>(args: &tree_sitter::Node<'a>, source: &'a [u8]) -> Option<
     Some(out)
 }
 
+fn has_decorator(method: &tree_sitter::Node) -> bool {
+    let mut cursor = method.walk();
+    if method.named_children(&mut cursor).any(|c| c.kind() == "decorator") {
+        return true;
+    }
+    // In the TS grammar a method's decorators are emitted as preceding
+    // siblings inside the `class_body`, not as children of the method.
+    let Some(parent) = method.parent() else { return false };
+    let mut cursor = parent.walk();
+    let mut decorator_before_current = false;
+    for child in parent.named_children(&mut cursor) {
+        if child.kind() == "decorator" {
+            decorator_before_current = true;
+            continue;
+        }
+        if child.start_byte() == method.start_byte() && child.end_byte() == method.end_byte() {
+            return decorator_before_current;
+        }
+        decorator_before_current = false;
+    }
+    false
+}
+
 crate::ast_check! { on ["method_definition"] => |node, source, ctx, diagnostics|
+    // A decorated method carries external significance beyond its body: the
+    // decorator binds it to a framework (e.g. NestJS `@MessagePattern` /
+    // `@EventPattern` / `@Get`) that resolves the method via metadata
+    // reflection at runtime. The forwarding body cannot be inlined or removed
+    // without breaking that registration, so the passthrough is intentional.
+    if has_decorator(&node) { return; }
     let Some(params) = node.child_by_field_name("parameters") else { return };
     let Some(body) = node.child_by_field_name("body") else { return };
     if body.kind() != "statement_block" { return; }
@@ -101,5 +130,13 @@ mod tests {
     fn allows_added_logic() {
         let src = "class A { foo(a, b) { const x = a + 1; return this.bar(x, b); } }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_decorated_message_handler() {
+        // Regression for #2020: a NestJS `@MessagePattern` handler forwards its
+        // parameter but the decorator registers it as an RPC entry point.
+        let src = "class NatsController { @MessagePattern('streaming.*') streaming(data) { return from(data); } }";
+        assert!(run(src).is_empty(), "expected no diagnostics, got: {:?}", run(src));
     }
 }
