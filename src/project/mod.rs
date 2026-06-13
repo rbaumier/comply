@@ -458,6 +458,14 @@ pub struct ProjectCtx {
     // JSON parse of every member manifest happens once, not once per import.
     workspace_package_names_cache: OnceLock<Vec<String>>,
 
+    // Union of every dependency name declared in every `package.json` under the
+    // project root tree (excluding `node_modules`), keyed by the resolved root
+    // directory. Monorepos that don't declare a `workspaces` field (so the
+    // workspace walk never runs) still hoist sibling packages' deps at runtime;
+    // this lets `no-implicit-deps` recognize a dep declared in any sibling
+    // manifest. Built lazily on first miss and reused for the rest of the run.
+    tree_dep_names_cache: Mutex<HashMap<PathBuf, Arc<HashSet<String>>>>,
+
     // Files the engine read and found to contain no `comply-ignore` substring.
     // The post-filter (`ignore_comments::apply_to_all`) otherwise re-reads every
     // discovered file from disk just to run that one substring check; for files
@@ -940,6 +948,51 @@ impl ProjectCtx {
         })
     }
 
+    /// True if `name` is declared as a dependency in *any* `package.json` under
+    /// the project root tree of `importer` (excluding `node_modules`).
+    ///
+    /// Monorepos that manage packages without a `workspaces` field (e.g. nest)
+    /// keep their shared (dev)dependencies in sibling `packages/*/package.json`
+    /// manifests and hoist them at runtime. A file in a sibling directory with
+    /// no manifest of its own (an `integration/` test tree) imports those
+    /// packages legitimately, so `no-implicit-deps` consults the union of every
+    /// declared dep across the tree before flagging. The set is built once per
+    /// resolved root and memoized; a genuinely undeclared package is absent from
+    /// it and still fires.
+    pub fn dep_declared_in_tree(&self, importer: &Path, name: &str) -> bool {
+        let Some(root) = self.tree_dep_root(importer) else {
+            return false;
+        };
+        if let Some(hit) = self.tree_dep_names_cache.lock().unwrap().get(&root) {
+            return hit.contains(name);
+        }
+        let names = Arc::new(collect_tree_dep_names(&root));
+        let found = names.contains(name);
+        self.tree_dep_names_cache
+            .lock()
+            .unwrap()
+            .insert(root, names);
+        found
+    }
+
+    /// Resolve the project root used to scope [`dep_declared_in_tree`]: the
+    /// explicit `project_root` when known, else the topmost ancestor directory
+    /// of `importer` that owns a `package.json`.
+    fn tree_dep_root(&self, importer: &Path) -> Option<PathBuf> {
+        if let Some(root) = self.project_root.clone() {
+            return Some(root);
+        }
+        let mut topmost: Option<PathBuf> = None;
+        let mut dir = importer.parent();
+        while let Some(d) = dir {
+            if d.join("package.json").is_file() {
+                topmost = Some(d.to_path_buf());
+            }
+            dir = d.parent();
+        }
+        topmost
+    }
+
     /// Lazily-loaded set of Prisma model names (lowercase) that declare a
     /// `deletedAt` field in the project's `schema.prisma`. Returns `None` when
     /// no `schema.prisma` is found — callers should fire on all models in that
@@ -1053,6 +1106,45 @@ fn resolve_workspace_roots(project_root: Option<&Path>, pkg: &PackageJson) -> Ve
         }
     }
     roots
+}
+
+/// Collect the union of every dependency name declared in every `package.json`
+/// under `root` (excluding `node_modules` and dot-directories), bounded by a
+/// depth limit so a pathologically deep tree can't blow the stack or stall.
+fn collect_tree_dep_names(root: &Path) -> HashSet<String> {
+    const MAX_DEPTH: u32 = 8;
+    let mut names = HashSet::new();
+    let mut stack: Vec<(PathBuf, u32)> = vec![(root.to_path_buf(), 0)];
+
+    while let Some((dir, depth)) = stack.pop() {
+        if let Ok(raw) = std::fs::read_to_string(dir.join("package.json"))
+            && let Some(pkg) = PackageJson::parse(&raw)
+        {
+            names.extend(pkg.all_deps().map(str::to_string));
+            names.extend(pkg.engines.keys().cloned());
+        }
+        if depth >= MAX_DEPTH {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let skip = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_none_or(|n| n == "node_modules" || n.starts_with('.'));
+            if skip {
+                continue;
+            }
+            stack.push((path, depth + 1));
+        }
+    }
+    names
 }
 
 /// Walk up from `path` to the nearest `filename`, returning a cached parse.
