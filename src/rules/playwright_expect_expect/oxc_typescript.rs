@@ -16,15 +16,24 @@ fn is_test_file(path: &std::path::Path) -> bool {
 
 const TEST_FNS: &[&str] = &["test", "it"];
 
+/// Member-expression properties on `test`/`it` that are NOT individual test
+/// cases: `test.describe(...)` groups cases and the hooks run setup/teardown.
+/// Their callbacks legitimately contain no `expect(...)` of their own, so they
+/// must not be checked for assertions. Modifiers that still define a single
+/// case (`test.only`, `test.skip`, `test.concurrent`, …) are not listed and
+/// remain subject to the check.
+const NON_TEST_CASE_PROPS: &[&str] =
+    &["describe", "beforeEach", "afterEach", "beforeAll", "afterAll"];
+
 fn is_test_callee(expr: &Expression) -> bool {
     match expr {
         Expression::Identifier(id) => TEST_FNS.contains(&id.name.as_str()),
         Expression::StaticMemberExpression(member) => {
-            if let Expression::Identifier(obj) = &member.object {
-                TEST_FNS.contains(&obj.name.as_str())
-            } else {
-                false
-            }
+            let Expression::Identifier(obj) = &member.object else {
+                return false;
+            };
+            TEST_FNS.contains(&obj.name.as_str())
+                && !NON_TEST_CASE_PROPS.contains(&member.property.name.as_str())
         }
         _ => false,
     }
@@ -105,5 +114,83 @@ impl OxcCheck for Check {
                 span: None,
             });
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, &format!("{PW_IMPORT}{src}"), "login.spec.ts")
+    }
+
+    #[test]
+    fn flags_test_without_expect() {
+        let d = run("test('should work', () => { const x = 1; });");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "playwright-expect-expect");
+    }
+
+    #[test]
+    fn allows_test_with_expect() {
+        let d = run("test('should work', () => { expect(1).toBe(1); });");
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    // Regression for #1397 — `test.describe(...)` is the grouping container,
+    // not an individual test case; the assertions live in the nested `test(...)`
+    // calls. Flagging the describe block for "no assertions" is a false positive.
+    #[test]
+    fn does_not_flag_describe_block() {
+        let d = run(
+            "test.describe('Keyboard shortcuts', () => {\n  \
+                test.beforeEach(({page}) => initialize({page}));\n  \
+                test('Can use bold format', async ({page}) => {\n    \
+                    expect(await getSelectedFormat(page)).toBe('bold');\n  \
+                });\n\
+            });",
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    #[test]
+    fn does_not_flag_hooks() {
+        let d = run(
+            "test.beforeEach(({page}) => initialize({page}));\n\
+             test.afterEach(({page}) => cleanup({page}));\n\
+             test.beforeAll(() => setup());\n\
+             test.afterAll(() => teardown());",
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    // True positive must still fire: a real `test(...)` case with no assertion.
+    #[test]
+    fn still_flags_real_test_without_assertion_inside_describe() {
+        let d = run(
+            "test.describe('group', () => {\n  \
+                test('does nothing', async ({page}) => { await page.click('#btn'); });\n\
+            });",
+        );
+        assert_eq!(d.len(), 1, "{d:?}");
     }
 }
