@@ -109,6 +109,9 @@ impl TextCheck for Check {
         if super::is_tanstack_dynamic_route(ctx.path, file_name) {
             return Vec::new();
         }
+        if super::is_nextjs_pages_router_file(ctx.path, file_name, stem) {
+            return Vec::new();
+        }
         if is_kebab_case(stem) {
             return Vec::new();
         }
@@ -326,6 +329,49 @@ mod tests {
     fn flags_screaming_snake_not_locale_issue_1994() {
         assert_eq!(run("src/API_KEYS.ts").len(), 1);
         assert!(!is_locale_tag("API_KEYS"));
+    }
+
+    // Regression for #1758: Next.js Pages Router dynamic-segment and numeric
+    // error-page filenames are framework-mandated and must not be flagged.
+    #[test]
+    fn allows_nextjs_pages_dynamic_segment_issue_1758() {
+        assert!(run("apps/nextjs-pages/src/pages/app/discussions/[discussionId].tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_nextjs_pages_numeric_error_page_issue_1758() {
+        assert!(run("apps/nextjs-pages/src/pages/404.tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_nextjs_pages_nested_dynamic_segment_issue_1758() {
+        assert!(run("apps/nextjs-pages/src/pages/public/discussions/[discussionId].tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_nextjs_pages_catch_all_segment_issue_1758() {
+        assert!(run("src/pages/posts/[...slug].tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_nextjs_pages_optional_catch_all_segment_issue_1758() {
+        assert!(run("src/pages/posts/[[...slug]].tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_nextjs_pages_500_error_page_issue_1758() {
+        assert!(run("src/pages/500.tsx").is_empty());
+    }
+
+    // Guard: the bracket/numeric exemption only applies inside a `pages/` tree.
+    #[test]
+    fn flags_numeric_stem_outside_pages_issue_1758() {
+        assert_eq!(run("src/app/404.tsx").len(), 1);
+    }
+
+    #[test]
+    fn flags_bracket_stem_outside_pages_issue_1758() {
+        assert_eq!(run("src/app/[discussionId].tsx").len(), 1);
     }
 
     #[test]
