@@ -13,6 +13,11 @@ use std::sync::Arc;
 /// `size` is excluded as a count-like name: a pool/batch/page `size` is a
 /// dimensionless capacity, not a physical measurement, so unit suffixes
 /// like `sizeMs`/`sizeBytes` are nonsensical.
+///
+/// `width`/`height` are excluded as spatial dimensions: their overwhelming
+/// convention across DOM/CSS/canvas/image code is CSS pixels (`innerWidth`,
+/// `clientHeight`, `getBoundingClientRect().width`), so they are not
+/// genuinely unit-ambiguous and `widthMs`/`heightBytes` are nonsensical.
 const AMBIGUOUS_BASES: &[&str] = &[
     "delay",
     "timeout",
@@ -23,8 +28,6 @@ const AMBIGUOUS_BASES: &[&str] = &[
     "wait",
     "distance",
     "offset",
-    "width",
-    "height",
     "limit",
     "rate",
     "frequency",
@@ -250,9 +253,21 @@ mod tests {
     #[test]
     fn allows_handle_words_after_bases() {
         assert!(run_on("const offsetKey: number = 0;").is_empty());
-        assert!(run_on("const heightIndex: number = 0;").is_empty());
-        assert!(run_on("const widthRef: number = 0;").is_empty());
+        assert!(run_on("const intervalIndex: number = 0;").is_empty());
+        assert!(run_on("const timeoutRef: number = 0;").is_empty());
         assert!(run_on("const delayHandle: number = 0;").is_empty());
+    }
+
+    #[test]
+    fn allows_width_height_dom_dimensions() {
+        // `width`/`height` are CSS pixel dimensions by overwhelming DOM/canvas
+        // convention, not durations — `widthMs`/`heightBytes` are nonsensical.
+        assert!(
+            run_on("export const useWindowResize = (callback: (width: number, height: number) => void) => {};")
+                .is_empty()
+        );
+        assert!(run_on("const WIDTH = 1200;").is_empty());
+        assert!(run_on("const HEIGHT = 600;").is_empty());
     }
 
     #[test]
