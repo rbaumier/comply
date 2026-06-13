@@ -543,4 +543,37 @@ mod tests {
         let src = r#"it("x", () => { const n = config.my_getByText; log(n); });"#;
         assert_eq!(run(src).len(), 1);
     }
+
+    // Regression for #1391 — Node.js native test runner exposes assertions on
+    // the test context: `t.assert.strictEqual(...)`, `t.assert.deepStrictEqual(...)`,
+    // `t.assert.ifError(...)`. These throw on failure, so a body relying on them
+    // is a real test, not a silent pass.
+    #[test]
+    fn allows_test_with_node_test_context_assertions() {
+        let src = r#"
+            test("code should handle null/undefined/float", (t, done) => {
+                t.plan(8);
+                fastify.inject({ method: "GET", url: "/null" }, (error, res) => {
+                    t.assert.ifError(error);
+                    t.assert.strictEqual(res.statusCode, 500);
+                    t.assert.deepStrictEqual(res.json(), { ok: true });
+                });
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // True-positive guard for #1391: a Node.js native test whose body has no
+    // assertion at all must still fire.
+    #[test]
+    fn still_flags_node_test_without_any_assertion() {
+        let src = r#"
+            test("code should handle null/undefined/float", (t, done) => {
+                fastify.inject({ method: "GET", url: "/null" }, (error, res) => {
+                    log(res.statusCode);
+                });
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
 }
