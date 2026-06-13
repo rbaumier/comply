@@ -1,4 +1,4 @@
-//! filename-naming-convention — Vue backend (PascalCase).
+//! filename-naming-convention — Vue backend (PascalCase or kebab-case).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -36,7 +36,7 @@ impl TextCheck for Check {
         if super::is_sveltekit_route_file(file_name) {
             return Vec::new();
         }
-        if stem.is_empty() || is_pascal_case(stem) {
+        if stem.is_empty() || is_pascal_case(stem) || super::text::is_kebab_case(stem) {
             return Vec::new();
         }
         vec![Diagnostic {
@@ -45,7 +45,7 @@ impl TextCheck for Check {
             column: 1,
             rule_id: "filename-naming-convention".into(),
             message: format!(
-                "Vue SFC `{file_name}` should use PascalCase (e.g. `UserProfile.vue`)."
+                "Vue SFC `{file_name}` should use PascalCase (e.g. `UserProfile.vue`) or kebab-case (e.g. `user-profile.vue`)."
             ),
             severity: Severity::Warning,
             span: None,
@@ -83,8 +83,20 @@ mod tests {
     }
 
     #[test]
-    fn flags_kebab_case() {
-        assert_eq!(run("src/components/user-profile.vue").len(), 1);
+    fn allows_kebab_case() {
+        assert!(run("src/components/user-profile.vue").is_empty());
+    }
+
+    // Regression for #1424: kebab-case Vue SFC filenames are endorsed by the
+    // official Vue style guide and must not be flagged.
+    #[test]
+    fn allows_kebab_case_panel_issue_1424() {
+        assert!(run("app/src/panels/time-series/panel-time-series.vue").is_empty());
+    }
+
+    #[test]
+    fn allows_kebab_case_app_root_issue_1424() {
+        assert!(run("app/src/app.vue").is_empty());
     }
 
     #[test]

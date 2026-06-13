@@ -13,7 +13,7 @@ use crate::rules::meta::RuleMeta;
 pub const META: RuleMeta = RuleMeta {
     id: "filename-naming-convention",
     description: "Filename does not match the expected naming convention for its language.",
-    remediation: "Use kebab-case for JS/TS filenames (e.g. `user-profile.ts`), PascalCase for Vue SFC filenames (e.g. `UserProfile.vue`), and snake_case for Rust filenames (e.g. `user_profile.rs`).",
+    remediation: "Use kebab-case for JS/TS filenames (e.g. `user-profile.ts`), PascalCase or kebab-case for Vue SFC filenames (e.g. `UserProfile.vue` or `user-profile.vue`), and snake_case for Rust filenames (e.g. `user_profile.rs`).",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["code-quality"],

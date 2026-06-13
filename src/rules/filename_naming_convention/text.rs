@@ -7,7 +7,7 @@ pub struct Check;
 /// Returns `true` when `stem` matches kebab-case: a lowercase ASCII letter
 /// followed by lowercase alphanumerics optionally separated by single dashes.
 /// Equivalent to the pattern `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`.
-fn is_kebab_case(stem: &str) -> bool {
+pub(super) fn is_kebab_case(stem: &str) -> bool {
     if stem.is_empty() {
         return false;
     }
