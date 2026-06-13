@@ -94,14 +94,17 @@ fn is_in_return_type_position(
         }
         let parent = nodes.get_node(parent_id);
         match parent.kind() {
-            AstKind::Function(_)
-            | AstKind::ArrowFunctionExpression(_)
-            | AstKind::TSMethodSignature(_)
-            | AstKind::TSFunctionType(_) => {
-                // Check if we're the return type, not a parameter type.
-                // We're in return type position if we walked up through
-                // TSTypeAnnotation nodes that are the return_type child.
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
+                // Concrete callable with a body. `Promise<T> | T` here is a real
+                // mixed annotation worth flagging. (Class methods reach this arm
+                // via their inner `Function` value.)
                 return true;
+            }
+            AstKind::TSMethodSignature(_) | AstKind::TSFunctionType(_) => {
+                // Type-level signature (type alias, interface member, object
+                // type). `Promise<T> | T` is a contract meaning "an impl may be
+                // sync or async", not a concrete body mixing returns — never flag.
+                return false;
             }
             AstKind::TSTypeAnnotation(_)
             | AstKind::TSParenthesizedType(_) => {
@@ -292,5 +295,54 @@ fn classify_return_expr(expr: &Expression, source: &str) -> ReturnKind {
         | Expression::ObjectExpression(_) => ReturnKind::Sync,
         Expression::Identifier(_) => ReturnKind::Sync,
         _ => ReturnKind::Unknown,
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    #[test]
+    fn allows_mixed_in_type_alias_function() {
+        let src = "type F = (a: number) => Promise<void> | void;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mixed_in_generic_type_alias_function() {
+        let src = "type G = <T>(x: T) => T | Promise<T>;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mixed_in_interface_property_and_method_signature() {
+        let src = "interface I { transform?: (r: R) => Promise<E[]> | E[]; m(): Promise<x> | x; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_concrete_function_body_mixing_returns() {
+        let src = "function f(c: boolean): Promise<number> | number { if (c) return 1; return Promise.resolve(2); }";
+        assert!(!run(src).is_empty());
     }
 }
