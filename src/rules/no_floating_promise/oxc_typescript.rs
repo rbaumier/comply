@@ -102,8 +102,41 @@ fn is_async_looking_member_call(call: &CallExpression) -> bool {
     if is_diagnostics_channel_publish(member) {
         return false;
     }
+    if is_fluent_builder_run(member) {
+        return false;
+    }
     let method = member.property.name.as_str();
     ASYNC_LOOKING_METHODS.contains(&method)
+}
+
+/// A fluent command-builder `.run()` terminal — e.g. tiptap's
+/// `editor.chain().focus().toggleBold().run()` — returns `boolean` (whether the
+/// queued commands applied), not a Promise, so it must not be flagged.
+/// Matches `.run()` whose receiver is a method-call chain rooted in a `.chain()`
+/// call.
+fn is_fluent_builder_run(member: &StaticMemberExpression) -> bool {
+    if member.property.name.as_str() != "run" {
+        return false;
+    }
+    chain_is_rooted_in_chain_call(peel_parens(&member.object))
+}
+
+/// Walk a `a.b().c().d()` method-call chain from the outside in, returning true
+/// when any link is a `.chain()` call.
+fn chain_is_rooted_in_chain_call(expr: &Expression) -> bool {
+    let mut current = expr;
+    loop {
+        let Expression::CallExpression(call) = current else {
+            return false;
+        };
+        let Expression::StaticMemberExpression(member) = &call.callee else {
+            return false;
+        };
+        if member.property.name.as_str() == "chain" {
+            return true;
+        }
+        current = peel_parens(&member.object);
+    }
 }
 
 /// True when the call receiver is a type assertion, e.g. `(api as any).dispatch(...)`.
@@ -414,6 +447,43 @@ channel.asyncEnd.publish(context);
     #[test]
     fn still_flags_method_on_non_cast_receiver() {
         let d = run_on("emitter.dispatch(action);");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression tests for issue #1817: tiptap's fluent command builder
+    // `editor.chain()...run()` ends in a `.run()` that returns `boolean` (whether
+    // the queued commands applied), not a Promise — it must not be flagged.
+
+    #[test]
+    fn allows_tiptap_chain_run() {
+        assert!(
+            run_on("editor.chain().setContent('<code>test</code>').setTextSelection({ from: 2, to: 3 }).run()").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_tiptap_chain_run_short() {
+        assert!(run_on("editor.chain().focus().toggleBold().run()").is_empty());
+    }
+
+    #[test]
+    fn allows_tiptap_chain_run_with_command() {
+        let src = "\
+editor
+  .chain()
+  .command(({ tr }) => { return true; })
+  .setTextSelection({ from, to })
+  .focus(undefined, { scrollIntoView: false })
+  .run();
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_run_without_chain() {
+        // A bare `.run()` whose receiver is not a `.chain()`-rooted builder stays
+        // flagged — e.g. a job/task runner.
+        let d = run_on("job.run();");
         assert_eq!(d.len(), 1);
     }
 }
