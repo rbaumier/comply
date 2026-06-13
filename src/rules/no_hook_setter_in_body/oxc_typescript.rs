@@ -2,12 +2,32 @@
 //! called directly in a React component body (causes infinite re-renders).
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::files::Language;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
 pub struct Check;
+
+/// The PascalCase-callee heuristic is too broad on its own: any PascalCase
+/// function (e.g. a Vite plugin factory `TypeDocPlugin`) calling a `set*()`
+/// method would match. A `set*()` call is only a React `useState` setter when
+/// the file is actually React: a `.tsx`/`.jsx` file (JSX implies React) or a
+/// `.ts`/`.js` module that imports React. Plain TypeScript is out of scope.
+fn in_react_context(ctx: &CheckCtx) -> bool {
+    matches!(ctx.lang, Language::Tsx) || imports_react(ctx.source)
+}
+
+fn imports_react(source: &str) -> bool {
+    use crate::oxc_helpers::source_contains;
+    source_contains(source, "from \"react\"")
+        || source_contains(source, "from 'react'")
+        || source_contains(source, "from \"react/")
+        || source_contains(source, "from 'react/")
+        || source_contains(source, "require(\"react\")")
+        || source_contains(source, "require('react')")
+}
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
@@ -21,6 +41,10 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if !in_react_context(ctx) {
+            return;
+        }
+
         let AstKind::CallExpression(call) = node.kind() else {
             return;
         };
@@ -138,6 +162,10 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
     }
 
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, path)
+    }
+
     #[test]
     fn flags_setter_in_body() {
         let src = r#"
@@ -176,5 +204,42 @@ function App() {
 }
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_set_call_in_pascalcase_factory_in_plain_ts() {
+        // Regression for #1739: a non-React PascalCase factory in a `.ts` file
+        // with no React import is not a component; its `set*()` call is not a
+        // hook setter.
+        let src = r#"
+export default function TypeDocPlugin(
+  config: Partial<TypeDocOptions> = {}
+): Plugin {
+  const { serve, setTargetMode } = createTypeDocApp(config)
+  setTargetMode('serve')
+
+  return {
+    name: 'typedoc',
+    apply: 'serve',
+    buildStart() {
+      return serve()
+    },
+  }
+}
+"#;
+        assert!(run_on_path(src, "vite-typedoc-plugin.ts").is_empty());
+    }
+
+    #[test]
+    fn flags_setter_in_plain_ts_that_imports_react() {
+        let src = r#"
+import { useState } from 'react';
+function App() {
+  const [count, setCount] = useState(0);
+  setCount(1);
+  return null;
+}
+"#;
+        assert_eq!(run_on_path(src, "app.ts").len(), 1);
     }
 }
