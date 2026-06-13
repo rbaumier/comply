@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::ImportDeclarationSpecifier;
+use oxc_ast::ast::{BindingPattern, Expression, ImportDeclarationSpecifier};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -133,8 +133,34 @@ impl OxcCheck for Check {
                         found_client_api = true;
                         break;
                     }
-                    // Member-access factories: `React.createContext`, `React.createSvgIcon`.
-                    if CLIENT_FACTORY_APIS.contains(&name) {
+                    // Qualified hook calls (`React.useContext`, `React.useState`, …)
+                    // and member-access factories (`React.createContext`,
+                    // `React.createSvgIcon`). A static-member property is an
+                    // `IdentifierName`, so this is the bare-identifier hook check
+                    // applied to the qualified form.
+                    if is_hook_name(name) || CLIENT_FACTORY_APIS.contains(&name) {
+                        found_client_api = true;
+                        break;
+                    }
+                }
+                // Defining a hook is itself client API presence:
+                // `function useTheme() {}` / named function expressions.
+                AstKind::Function(func) => {
+                    if let Some(id) = &func.id
+                        && is_hook_name(id.name.as_str())
+                    {
+                        found_client_api = true;
+                        break;
+                    }
+                }
+                // `const useX = () => ...` / `const useX = function () {}`.
+                AstKind::VariableDeclarator(decl) => {
+                    if matches!(
+                        decl.init,
+                        Some(Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_))
+                    ) && let BindingPattern::BindingIdentifier(id) = &decl.id
+                        && is_hook_name(id.name.as_str())
+                    {
                         found_client_api = true;
                         break;
                     }
@@ -360,6 +386,37 @@ export { useFoo as useThing } from './foo'
 import { helper as renamedHelper } from './helper'
 
 export const helper = renamedHelper
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression tests for #2004 — qualified hook calls and hook definitions.
+    #[test]
+    fn no_fp_for_qualified_react_hook_call_oxc() {
+        let src = r#"'use client';
+import * as React from 'react';
+export default function useTheme<T = DefaultTheme>(): T {
+  const theme = React.useContext(ThemeContext);
+  React.useDebugValue(theme);
+  return theme;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_hook_definition_with_qualified_state_oxc() {
+        let src = r#"'use client';
+import * as React from 'react';
+export function useThing() { return React.useState(0); }
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_use_client_without_any_client_api_oxc() {
+        let src = r#"'use client';
+export const x = 1;
 "#;
         assert_eq!(run(src).len(), 1);
     }
