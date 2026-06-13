@@ -331,6 +331,7 @@ pub struct Tsconfig {
     pub strict: bool,
     pub exact_optional_property_types: bool,
     pub jsx: Option<String>,
+    pub out_dir: Option<PathBuf>,
 }
 
 impl Tsconfig {
@@ -382,6 +383,10 @@ impl Tsconfig {
                 .and_then(|x| x.get("jsx"))
                 .and_then(|s| s.as_str())
                 .map(String::from),
+            out_dir: co
+                .and_then(|x| x.get("outDir"))
+                .and_then(|s| s.as_str())
+                .map(PathBuf::from),
         })
     }
 
@@ -489,11 +494,16 @@ fn parse_tsconfig_value(json: &Value) -> Tsconfig {
             .and_then(|x| x.get("jsx"))
             .and_then(|s| s.as_str())
             .map(String::from),
+        out_dir: co
+            .and_then(|x| x.get("outDir"))
+            .and_then(|s| s.as_str())
+            .map(PathBuf::from),
     }
 }
 
 /// Overlay `child` onto `parent`. Scalars (`base_url`, `module`,
-/// `module_resolution`, `jsx`) are taken from the child when present; `paths`
+/// `module_resolution`, `jsx`, `out_dir`) are taken from the child when present;
+/// `paths`
 /// are merged key-by-key so parent-only aliases survive. Boolean flags
 /// (`strict`, `exact_optional_property_types`) default to false in
 /// `parse_tsconfig_value`, so a child that omits the flag inherits the parent's
@@ -512,6 +522,7 @@ fn merge_tsconfig(parent: Tsconfig, child: Tsconfig) -> Tsconfig {
         exact_optional_property_types: child.exact_optional_property_types
             || parent.exact_optional_property_types,
         jsx: child.jsx.or(parent.jsx),
+        out_dir: child.out_dir.or(parent.out_dir),
     }
 }
 
@@ -1203,6 +1214,16 @@ impl ProjectCtx {
     pub fn nearest_tsconfig_dir(&self, path: &Path) -> Option<PathBuf> {
         let start_dir = path.parent()?;
         walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "tsconfig.json")
+    }
+
+    /// Absolute path of the compiled-output directory declared by the nearest
+    /// tsconfig's `compilerOptions.outDir`, if any. Lets the import-resolution
+    /// rules treat per-project build output (e.g. `lib/`) as a build artifact
+    /// without hardcoding a directory name.
+    pub fn tsconfig_out_dir(&self, path: &Path) -> Option<PathBuf> {
+        let dir = self.nearest_tsconfig_dir(path)?;
+        let tsc = self.nearest_tsconfig(path)?;
+        tsc.out_dir.as_ref().map(|o| dir.join(o))
     }
 
     /// Walk up from `path` to the nearest `Cargo.toml`, returning the parsed
