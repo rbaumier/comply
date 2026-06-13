@@ -93,9 +93,13 @@ const KNOWN_TAGS: &[&str] = &[
     "public",
     "readonly",
     "record",
+    // TypeDoc/TSDoc tag for supplemental documentation beyond the description.
+    "remarks",
     "requires",
     "returns",
     "satisfies",
+    // TypeDoc/TSDoc tag marking a class as not intended to be subclassed.
+    "sealed",
     "see",
     "since",
     "static",
@@ -256,6 +260,16 @@ mod tests {
         // `@desc` is the documented JSDoc alias for `@description`.
         let src = "/**\n * @desc The gutter between columns.\n * @type {number}\n */\n";
         assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_typedoc_tags_issue_1735() {
+        // `@remarks` is a standard TypeDoc/TSDoc tag (graphql-js src/type/schema.ts).
+        let src = "/**\n * Description.\n * @remarks\n * This function is called when the schema is first created.\n */\n";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+        // `@sealed` is the all-lowercase TypeDoc/TSDoc tag the issue also names;
+        // `@typeParam`/`@defaultValue` carry an uppercase letter and are exempt already.
+        assert!(run("/**\n * @sealed\n */\n").is_empty());
     }
 
     #[test]
