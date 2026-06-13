@@ -15,6 +15,9 @@
 //!   - Tooling packages used without explicit imports (`typescript`, `eslint`,
 //!     `prettier`, `webpack`, `vite`, `turbo`, `jest`, `vitest`, `mocha`,
 //!     `cypress`, `playwright`).
+//!   - CLI-runner packages whose binary is invoked by a `scripts` command
+//!     (`@changesets/cli` → `changeset publish`) — they run as a binary, not
+//!     as an `import`.
 //!
 //! Only inspects `dependencies` (production). `devDependencies`,
 //! `peerDependencies`, and `optionalDependencies` are out of scope — they
@@ -77,6 +80,11 @@ impl TextCheck for Check {
                 continue;
             }
             if bare.contains_key(dep) {
+                continue;
+            }
+            // A CLI-runner package (`@changesets/cli`) is run via a `scripts`
+            // command, never ES-imported, so the import index sees no usage.
+            if pkg.scripts_invoke_dep_binary(dep) {
                 continue;
             }
             diagnostics.push(Diagnostic {
@@ -253,6 +261,55 @@ mod tests {
         assert!(
             diags.is_empty(),
             "tooling packages must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn skips_cli_runner_invoked_via_scripts() {
+        // Issue #2076 pattern 1: `@changesets/cli` and `@manypkg/cli` provide
+        // binaries (`changeset`, `manypkg`) run by package.json scripts, never
+        // ES-imported. Their bin name appears as a command head in `scripts`.
+        let pkg = r#"{
+            "name": "demo",
+            "scripts": {
+                "release": "changeset publish",
+                "check": "manypkg check"
+            },
+            "dependencies": {
+                "@changesets/cli": "^2.0.0",
+                "@manypkg/cli": "^0.21.0"
+            }
+        }"#;
+        let files: Vec<(&str, &str)> = vec![("a.ts", "export const x = 1;")];
+        let (_dir, diags) = run_on_project(&files, pkg, "a.ts");
+        assert!(
+            diags.is_empty(),
+            "CLI runner packages invoked via scripts must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn skips_eslint_flat_config_plugin() {
+        // Issue #2076 pattern 2: an ESLint flat config imports a plugin that no
+        // app source file imports. The import inside `eslint.config.js` is the
+        // package's only usage and must count as evidence.
+        let pkg = r#"{
+            "name": "demo",
+            "dependencies": {
+                "eslint-plugin-import-x": "^4.0.0"
+            }
+        }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "eslint.config.js",
+                "import importPlugin from 'eslint-plugin-import-x';\nexport default [importPlugin.configs.recommended];",
+            ),
+            ("a.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, pkg, "a.ts");
+        assert!(
+            diags.is_empty(),
+            "ESLint flat config plugins imported in eslint.config.js must not be flagged, got: {diags:?}"
         );
     }
 }
