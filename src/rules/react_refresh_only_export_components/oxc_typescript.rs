@@ -15,6 +15,22 @@ fn is_pascal_case(name: &str) -> bool {
     name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
+/// Next.js Pages Router data-fetching exports. The framework requires these to
+/// live alongside the default page component in a page file — they cannot be
+/// moved to a separate module, so flagging them as Fast-Refresh-breaking
+/// non-component exports is a false positive.
+const NEXT_PAGES_ROUTER_EXPORTS: &[&str] =
+    &["getStaticProps", "getStaticPaths", "getServerSideProps"];
+
+/// A file is a Next.js Pages Router page when it lives under a `pages/`
+/// directory or imports from the `next` package (where `GetStaticProps`,
+/// `GetServerSideProps`, etc. are declared).
+fn is_next_pages_router_file(ctx: &CheckCtx) -> bool {
+    ctx.file.path_segments.in_pages_router
+        || crate::oxc_helpers::source_contains(ctx.source, "from 'next'")
+        || crate::oxc_helpers::source_contains(ctx.source, "from \"next\"")
+}
+
 impl OxcCheck for Check {
     fn run_on_semantic<'a>(
         &self,
@@ -33,6 +49,7 @@ impl OxcCheck for Check {
         }
 
         let program = semantic.nodes().program();
+        let next_pages_router = is_next_pages_router_file(ctx);
 
         let mut component_exports: Vec<String> = Vec::new();
         let mut non_component_exports: Vec<(String, usize)> = Vec::new();
@@ -41,6 +58,11 @@ impl OxcCheck for Check {
             match stmt {
                 Statement::ExportNamedDeclaration(named) => {
                     if let Some(name) = extract_named_export_name(named, ctx.source) {
+                        if next_pages_router
+                            && NEXT_PAGES_ROUTER_EXPORTS.contains(&name.as_str())
+                        {
+                            continue;
+                        }
                         let offset = named.span.start as usize;
                         let (line, _) = byte_offset_to_line_col(ctx.source, offset);
                         if is_pascal_case(&name) {
@@ -219,5 +241,66 @@ export function useSidebar() { return useContext(SidebarContext); }
 export function SidebarProvider({ children }) { return <div>{children}</div>; }
 "#;
         assert!(run_tanstack(source).is_empty());
+    }
+
+    // Regression tests for issue #1896 — Next.js Pages Router data-fetching
+    // exports (getStaticProps/getStaticPaths/getServerSideProps) are framework
+    // conventions that must live alongside the page component.
+
+    #[test]
+    fn no_fp_next_pages_router_get_static_exports() {
+        // website/src/pages/docs/[...slug].tsx (issue #1896)
+        let source = r#"
+import { GetStaticPaths, GetStaticProps } from 'next';
+
+export default function DocsPage() { return <div />; }
+
+export const getStaticProps: GetStaticProps = async (context) => { return { props: {} }; };
+
+export const getStaticPaths: GetStaticPaths = async () => { return { paths: [], fallback: false }; };
+"#;
+        let d = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            source,
+            "website/src/pages/docs/[...slug].tsx",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn no_fp_next_pages_router_get_server_side_props() {
+        let source = r#"
+export default function Page() { return <div />; }
+export const getServerSideProps = async () => { return { props: {} }; };
+"#;
+        let d =
+            crate::rules::test_helpers::run_rule_gated(&Check, source, "src/pages/profile.tsx");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn flags_non_convention_export_in_pages_router() {
+        // A genuine non-component export still breaks Fast Refresh, even in a
+        // Pages Router file — the exemption is scoped to the convention names.
+        let source = r#"
+export default function Page() { return <div />; }
+export const helper = () => {};
+"#;
+        let d = crate::rules::test_helpers::run_rule_gated(&Check, source, "src/pages/index.tsx");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("helper"));
+    }
+
+    #[test]
+    fn flags_get_static_props_outside_next_context() {
+        // Same name but neither under pages/ nor importing from next — not a
+        // Pages Router page, so the export is still flagged.
+        let source = r#"
+export function MyComponent() { return <div />; }
+export const getStaticProps = async () => {};
+"#;
+        let d = crate::rules::test_helpers::run_rule_gated(&Check, source, "src/components/Foo.tsx");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("getStaticProps"));
     }
 }
