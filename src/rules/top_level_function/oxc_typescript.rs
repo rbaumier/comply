@@ -237,4 +237,20 @@ mod tests {
             crate::rules::test_helpers::run_rule(&Check, "const ordinalNumber = (n: number) => n + 1;", "t.ts");
         assert_eq!(diags.len(), 1, "untyped top-level arrow should still flag");
     }
+
+    #[test]
+    fn no_fp_indexed_access_typed_arrow_issue_1179() {
+        // An exported async arrow whose binding carries an indexed-access type
+        // annotation (`Config["onInit"]`): the annotation supplies contextual
+        // typing a `function` declaration cannot reproduce. (#1179)
+        let src = "export const seed: Config[\"onInit\"] = async (payload) => {\n  return payload;\n};";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
+        assert!(diags.is_empty(), "indexed-access typed top-level arrow should not flag, got {diags:#?}");
+    }
+
+    #[test]
+    fn still_flags_untyped_const_arrow_no_annotation() {
+        let diags = crate::rules::test_helpers::run_rule(&Check, "const fn = () => {};", "t.ts");
+        assert_eq!(diags.len(), 1, "untyped top-level const arrow with no annotation should still flag");
+    }
 }
