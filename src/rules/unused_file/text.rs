@@ -689,6 +689,95 @@ mod tests {
         );
     }
 
+    // Regression for #1850: in a Yarn/npm/pnpm workspace monorepo, one package
+    // imports another by its package NAME (`import { x } from "motion-utils"`).
+    // The root package.json has no main/exports (is_library=false, rule runs),
+    // but the depended-upon package's source files ARE reachable through the
+    // cross-package name import. Resolution must map the workspace package name
+    // to its on-disk source entry so those files are not flagged as unused.
+    #[test]
+    fn cross_package_name_imports_keep_sibling_source_reachable() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"workspaces":["packages/*","dev/*"],"packageManager":"yarn@3.6.4"}"#,
+            ),
+            // A non-library dev app — its package.json has no main/exports, so it
+            // is the anchor (smallest indexed path) and the rule is NOT globally
+            // skipped. It pulls in motion-dom by name.
+            (
+                "dev/app/package.json",
+                r#"{"name":"dev-app"}"#,
+            ),
+            (
+                "dev/app/index.ts",
+                "import { useIt } from 'motion-dom';\nuseIt();\n",
+            ),
+            (
+                "packages/motion-utils/package.json",
+                r#"{"name":"motion-utils","main":"./dist/cjs/index.js","module":"./dist/es/index.mjs"}"#,
+            ),
+            (
+                "packages/motion-utils/src/index.ts",
+                "export { isEasingArray } from './easing/utils/is-easing-array';\n",
+            ),
+            (
+                "packages/motion-utils/src/easing/utils/is-easing-array.ts",
+                "export const isEasingArray = (ease: unknown): boolean => Array.isArray(ease);\n",
+            ),
+            (
+                "packages/motion-dom/package.json",
+                r#"{"name":"motion-dom","main":"./dist/cjs/index.js"}"#,
+            ),
+            (
+                "packages/motion-dom/src/index.ts",
+                "import { isEasingArray } from 'motion-utils';\nexport const useIt = () => isEasingArray([]);\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "source files of a workspace package imported by its name must stay reachable: {diags:?}"
+        );
+    }
+
+    // Regression for #1850: the cross-package resolution is precise — a genuinely
+    // orphaned file inside a workspace member (imported by nothing, not reachable
+    // through any cross-package import) is still a true positive.
+    #[test]
+    fn orphan_inside_workspace_member_still_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"workspaces":["packages/*","dev/*"]}"#,
+            ),
+            // Non-library dev app: the anchor, so the rule runs.
+            ("dev/app/package.json", r#"{"name":"dev-app"}"#),
+            (
+                "dev/app/index.ts",
+                "import { used } from 'utils';\nused;\n",
+            ),
+            (
+                "packages/utils/package.json",
+                r#"{"name":"utils","main":"./dist/index.js"}"#,
+            ),
+            (
+                "packages/utils/src/index.ts",
+                "export const used = 1;\n",
+            ),
+            (
+                "packages/utils/src/orphan.ts",
+                "export const orphan = 1;\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "the genuinely orphaned file inside the workspace member must be flagged: {diags:?}"
+        );
+    }
+
     // Regression for #1948: files referenced as VALUES in a package.json
     // `browser` (or `react-native`) substitution map are the browser/native
     // build bundlers swap in at build time. They are never `import`ed, so the

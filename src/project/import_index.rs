@@ -232,6 +232,11 @@ pub struct ImportIndex {
     /// barrel re-exporting through another) from independent barrels that both
     /// re-export the same name.
     reexport_targets: HashMap<(PathBuf, String), PathBuf>,
+    /// Re-exporting file → resolved source files of its `export … from './m'`
+    /// declarations (both `export { x } from` and `export * from`). A barrel
+    /// reached through the import graph keeps the files it re-exports reachable,
+    /// so reachability traversal follows these edges as well as import edges.
+    reexport_edges: HashMap<PathBuf, Vec<PathBuf>>,
 }
 
 impl ImportIndex {
@@ -387,18 +392,25 @@ impl ImportIndex {
         // extension probing stay consistent. Only relative specifiers that
         // land on an indexed file are recorded.
         let mut reexport_targets: HashMap<(PathBuf, String), PathBuf> = HashMap::new();
+        let mut reexport_edges: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
         for (path, exps) in &exports {
             for exp in exps {
-                if !matches!(exp.kind, ExportKind::ReExport) {
+                if !matches!(exp.kind, ExportKind::ReExport | ExportKind::StarReExport) {
                     continue;
                 }
                 let Some(spec) = &exp.reexport_source else {
                     continue;
                 };
-                if let Some(origin) =
-                    resolve_specifier(path, spec, &known_paths, &path_resolver)
-                {
-                    reexport_targets.insert((path.clone(), exp.name.clone()), origin);
+                let Some(origin) = resolve_specifier(path, spec, &known_paths, &path_resolver)
+                else {
+                    continue;
+                };
+                if matches!(exp.kind, ExportKind::ReExport) {
+                    reexport_targets.insert((path.clone(), exp.name.clone()), origin.clone());
+                }
+                let edges = reexport_edges.entry(path.clone()).or_default();
+                if !edges.contains(&origin) {
+                    edges.push(origin);
                 }
             }
         }
@@ -444,6 +456,7 @@ impl ImportIndex {
             min_indexed,
             namespace_imported,
             reexport_targets,
+            reexport_edges,
         }
     }
 
@@ -601,6 +614,15 @@ impl ImportIndex {
                     && !visited.contains(src)
                 {
                     queue.push_back(src.clone());
+                }
+            }
+            // A barrel reached here re-exports through `export … from './m'`;
+            // its source files are reachable too.
+            if let Some(edges) = self.reexport_edges.get(&current) {
+                for src in edges {
+                    if !visited.contains(src) {
+                        queue.push_back(src.clone());
+                    }
                 }
             }
         }
@@ -2272,6 +2294,13 @@ fn ts_counterpart_exts(ext: &str) -> &'static [&'static str] {
     }
 }
 
+/// Read the `name` field of a `package.json`, or `None` when the file is
+/// absent, unparseable, or declares no `name`.
+fn read_package_name(manifest: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(manifest).ok()?;
+    crate::project::PackageJson::parse(&raw)?.name
+}
+
 fn probe_path(raw: &Path, known: &std::collections::HashSet<PathBuf>) -> Option<PathBuf> {
     const EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mts", "mjs", "cts", "cjs", "vue"];
 
@@ -2419,6 +2448,14 @@ struct OxcPathResolver {
     /// (tsconfig_dir, path_aliases, oxc_resolver) sorted longest-path-first.
     resolvers: Vec<TsconfigResolver>,
     fallback: Option<Resolver>,
+    /// Workspace member package `name` → directory of its `package.json`,
+    /// sorted longest-name-first so a scoped name (`@scope/pkg`) is tried before
+    /// a shorter prefix. Lets a bare specifier that names a workspace sibling
+    /// (`import x from "motion-utils"`) resolve to that package's on-disk source
+    /// entry — the published `main`/`exports` point at compiled `dist/` output
+    /// that is not in the indexed source set, so oxc resolution alone would
+    /// leave the sibling's source files unreferenced.
+    workspace_packages: Vec<(String, PathBuf)>,
 }
 
 #[derive(Debug)]
@@ -2432,6 +2469,9 @@ impl OxcPathResolver {
     fn discover(known_paths: &std::collections::HashSet<PathBuf>) -> Self {
         let mut seen_dirs: HashSet<PathBuf> = HashSet::new();
         let mut tsconfig_dirs: HashMap<PathBuf, PathBuf> = HashMap::new();
+        // Workspace member name → its manifest directory. Built from every
+        // named `package.json` reachable above an indexed file.
+        let mut workspace_packages: HashMap<String, PathBuf> = HashMap::new();
 
         for path in known_paths {
             let Some(mut dir) = path.parent() else {
@@ -2446,10 +2486,19 @@ impl OxcPathResolver {
                 if candidate.exists() {
                     tsconfig_dirs.entry(dir.to_path_buf()).or_insert(candidate);
                 }
+                if let Some(name) = read_package_name(&dir.join("package.json")) {
+                    workspace_packages.entry(name).or_insert_with(|| dir.to_path_buf());
+                }
                 let Some(parent) = dir.parent() else { break };
                 dir = parent;
             }
         }
+
+        // Longest name first so `@scope/pkg` wins over a `@scope` prefix when a
+        // specifier could match either.
+        let mut workspace_packages: Vec<(String, PathBuf)> =
+            workspace_packages.into_iter().collect();
+        workspace_packages.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
 
         let mut resolvers: Vec<TsconfigResolver> = tsconfig_dirs
             .into_iter()
@@ -2467,6 +2516,7 @@ impl OxcPathResolver {
         Self {
             resolvers,
             fallback,
+            workspace_packages,
         }
     }
 
@@ -2544,12 +2594,58 @@ impl OxcPathResolver {
                 return Some(resolved);
             }
 
+        // Cross-package workspace import by name: a bare specifier whose head is
+        // a sibling package's `name` resolves to that package's on-disk source,
+        // not its published `dist/` entry (which oxc would find but isn't in the
+        // indexed source set).
+        if let Some(resolved) = self.resolve_workspace_package(specifier, known) {
+            return Some(resolved);
+        }
+
         // Fall through to oxc_resolver for node_modules / other resolution.
         let oxc = entry.map(|e| &e.oxc).or(self.fallback.as_ref())?;
         let importer_dir = importer.parent()?;
         let resolved = oxc.resolve(importer_dir, specifier).ok()?;
         let canonical = std::fs::canonicalize(resolved.path()).ok()?;
         known.contains(&canonical).then_some(canonical)
+    }
+
+    /// Resolve a bare specifier that names a workspace sibling package to its
+    /// on-disk source entry. `motion-utils` → `<pkg-dir>/src/index.ts`;
+    /// `@scope/pkg/foo/bar` → the source file under `<pkg-dir>` for subpath
+    /// `foo/bar`. Returns `None` when the specifier matches no member or no
+    /// candidate source file exists in the indexed set.
+    fn resolve_workspace_package(
+        &self,
+        specifier: &str,
+        known: &std::collections::HashSet<PathBuf>,
+    ) -> Option<PathBuf> {
+        for (name, dir) in &self.workspace_packages {
+            let subpath = if specifier == name {
+                ""
+            } else if let Some(rest) = specifier
+                .strip_prefix(name)
+                .and_then(|r| r.strip_prefix('/'))
+            {
+                rest
+            } else {
+                continue;
+            };
+
+            // Bare package name → the package's source index. A subpath →
+            // that path under the package dir (with or without a `src/` root).
+            let candidates: Vec<PathBuf> = if subpath.is_empty() {
+                vec![dir.join("src").join("index"), dir.join("index")]
+            } else {
+                vec![dir.join("src").join(subpath), dir.join(subpath)]
+            };
+            for candidate in candidates {
+                if let Some(resolved) = probe_path(&candidate, known) {
+                    return Some(resolved);
+                }
+            }
+        }
+        None
     }
 
     fn resolve_alias(
@@ -3109,6 +3205,63 @@ mod tests {
         let refs: Vec<&SourceFile> = source_files.iter().collect();
         let index = ImportIndex::build(&refs);
         (dir, index, paths)
+    }
+
+    // Regression for #1850: a bare specifier that names a workspace sibling
+    // package resolves to that package's on-disk source entry, not its published
+    // `dist/` entry — so the importer's `source_path` points at the sibling's
+    // `src/index.ts` and the cross-package edge is recorded.
+    #[test]
+    fn cross_package_name_import_resolves_to_sibling_source_index() {
+        let dir = TempDir::new().unwrap();
+        // The depended-upon package: published entry points at dist/, source
+        // lives in src/index.ts.
+        fs::create_dir_all(dir.path().join("packages/lib/src")).unwrap();
+        fs::write(
+            dir.path().join("packages/lib/package.json"),
+            r#"{"name":"@scope/lib","main":"./dist/index.js"}"#,
+        )
+        .unwrap();
+        let lib_index = dir.path().join("packages/lib/src/index.ts");
+        fs::write(&lib_index, "export const value = 1;\n").unwrap();
+
+        // The consumer imports it by name.
+        fs::create_dir_all(dir.path().join("packages/app/src")).unwrap();
+        fs::write(
+            dir.path().join("packages/app/package.json"),
+            r#"{"name":"@scope/app"}"#,
+        )
+        .unwrap();
+        let app_index = dir.path().join("packages/app/src/index.ts");
+        fs::write(
+            &app_index,
+            "import { value } from '@scope/lib';\nexport const used = value;\n",
+        )
+        .unwrap();
+
+        let lib_src = SourceFile {
+            path: lib_index.clone(),
+            language: Language::TypeScript,
+        };
+        let app_src = SourceFile {
+            path: app_index.clone(),
+            language: Language::TypeScript,
+        };
+        let refs = vec![&lib_src, &app_src];
+        let index = ImportIndex::build(&refs);
+
+        let canon_app = fs::canonicalize(&app_index).unwrap();
+        let canon_lib = fs::canonicalize(&lib_index).unwrap();
+        let imp = index
+            .get_imports(&canon_app)
+            .iter()
+            .find(|i| i.specifier == "@scope/lib")
+            .expect("import of @scope/lib must be indexed");
+        assert_eq!(
+            imp.source_path.as_ref(),
+            Some(&canon_lib),
+            "cross-package name import must resolve to the sibling's source index"
+        );
     }
 
     /// Index a project reached through a symlinked directory, mirroring macOS
