@@ -25,6 +25,19 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
+        // Library packages (package.json declares `main`/`module`/`exports`)
+        // expose interfaces as public API so consumers can augment them via
+        // declaration merging (`declare module 'pkg' { interface Foo { ... } }`),
+        // which only works with `interface`, not `type`. A non-extends interface
+        // here is a deliberate public-contract choice, not a smell.
+        if ctx
+            .project
+            .nearest_package_json(ctx.path)
+            .is_some_and(|pkg| pkg.is_library)
+        {
+            return Vec::new();
+        }
+
         // First pass: collect all names used in `implements` clauses.
         let mut implemented = HashSet::new();
         for node in semantic.nodes().iter() {
@@ -137,6 +150,73 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    /// Run the check against `source` with a real `ProjectCtx` rooted at a
+    /// tempdir whose `package.json` is `pkg_json` — exercises the library
+    /// relaxation, which depends on `nearest_package_json`.
+    fn run_with_pkg(pkg_json: &str, source: &str) -> Vec<Diagnostic> {
+        use crate::config::Config;
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        use oxc_allocator::Allocator;
+        use oxc_parser::Parser as OxcParser;
+        use oxc_semantic::SemanticBuilder;
+        use oxc_span::SourceType;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), pkg_json).unwrap();
+        let file_path = dir.path().join("src/mapBuilders.ts");
+        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        std::fs::write(&file_path, source).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: Language::TypeScript,
+        };
+        let refs = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = std::fs::canonicalize(&file_path).unwrap();
+
+        let allocator = Allocator::default();
+        let parse_ret = OxcParser::new(&allocator, source, SourceType::ts()).parse();
+        let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+        let ctx = CheckCtx::for_test_with_project(&canon, source, &project);
+        Check.run_on_semantic(&semantic, &ctx)
+    }
+
+    // Issue #1886: redux-toolkit's public-API interfaces in a library package.
+    const ACTION_REDUCER_MAP_BUILDER: &str = r#"
+        export interface ActionReducerMapBuilder<State> {
+          addCase<ActionCreator extends TypedActionCreator<string>>(
+            actionCreator: ActionCreator,
+            reducer: CaseReducer<State, ReturnType<ActionCreator>>,
+          ): ActionReducerMapBuilder<State>
+          addMatcher<A>(
+            matcher: TypeGuard<A>,
+            reducer: CaseReducer<State, A>,
+          ): Omit<ActionReducerMapBuilder<State>, 'addCase'>
+          addDefaultCase(reducer: CaseReducer<State, AnyAction>): {}
+        }
+    "#;
+
+    #[test]
+    fn allows_interface_in_library_package() {
+        let pkg = r#"{ "name": "@reduxjs/toolkit", "exports": { ".": "./dist/index.js" } }"#;
+        assert!(
+            run_with_pkg(pkg, ACTION_REDUCER_MAP_BUILDER).is_empty(),
+            "interfaces in library packages support declaration merging"
+        );
+    }
+
+    #[test]
+    fn flags_interface_in_non_library_package() {
+        let pkg = r#"{ "name": "my-app", "private": true }"#;
+        assert_eq!(
+            run_with_pkg(pkg, ACTION_REDUCER_MAP_BUILDER).len(),
+            1,
+            "application code still gets flagged"
+        );
     }
 
     #[test]
