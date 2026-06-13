@@ -223,6 +223,8 @@ const WELL_KNOWN_TEST_CREDENTIALS: &[&str] = &[
     "admin:admin@localhost",
     "user:password@localhost",
     "sa:sa@localhost",
+    "root:password@localhost",
+    "postgres:password@localhost",
 ];
 
 fn contains_password_in_url(line: &str) -> bool {
@@ -600,5 +602,29 @@ mod tests {
         // A genuine credential assignment must continue to fire.
         assert_eq!(run(r#"const API_KEY = "abcd1234567890abcdef";"#).len(), 1);
         assert_eq!(run(r#"const CLIENT_SECRET = "Abc123XYZqwertyuiop";"#).len(), 1);
+    }
+
+    // Regression tests for #2078 — canonical MySQL/PostgreSQL dev placeholders.
+    #[test]
+    fn allows_mysql_root_password_localhost_placeholder() {
+        assert!(
+            run(r#"DATABASE_URL="mysql://root:password@localhost:3306/myapp""#).is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_postgres_password_localhost_placeholder() {
+        assert!(
+            run(r#"DATABASE_URL="postgresql://postgres:password@localhost:5432/myapp""#)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_non_localhost_db_password() {
+        assert_eq!(
+            run(r#"const db = "mysql://admin:s3cretProd@db.prod.example.com:3306/app";"#).len(),
+            1
+        );
     }
 }
