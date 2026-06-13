@@ -494,6 +494,33 @@ function Banner({ foo }: Props) {
         assert!(d[0].message.contains("`bar`"));
     }
 
+    /// Regression for #1855: a PascalCase `const` typed with an object literal
+    /// whose properties are function types (`((owner: Owner) => void) | null`) is
+    /// not a React component. The `owner` parameter is a type-level construct, not
+    /// a destructured prop, so the `Owner` interface fields must not be flagged.
+    #[test]
+    fn allows_pascalcase_const_with_function_type_properties() {
+        let src = r#"
+export interface Owner {
+  owned: Computation<any>[] | null;
+  cleanups: (() => void)[] | null;
+  owner: Owner | null;
+  context: any | null;
+}
+
+export const DevHooks: {
+  afterUpdate: (() => void) | null;
+  afterCreateOwner: ((owner: Owner) => void) | null;
+  afterCreateSignal: ((signal: SignalState<any>) => void) | null;
+} = {
+  afterUpdate: null,
+  afterCreateOwner: null,
+  afterCreateSignal: null,
+};
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
     /// Regression for #2032: a body-less `declare`d PascalCase function inside a
     /// `declare namespace` is an ambient type declaration, not a React
     /// component. Its parameter's interface fields must not be flagged.
