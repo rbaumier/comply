@@ -131,6 +131,45 @@ fn in_distinct_test_scopes(a: &CollectedFunction, b: &CollectedFunction) -> bool
     matches!((a.test_scope, b.test_scope), (Some(x), Some(y)) if x != y)
 }
 
+/// The plain-identifier tag names of every JSX opening element in the program
+/// (`Foo` for both `<Foo />` and `<div />`). Capitalised component tags parse
+/// as `IdentifierReference`, lowercase host tags as `Identifier`; both carry a
+/// `name`. Namespaced (`<a:b/>`) and member (`<a.b/>`) tags are irrelevant to
+/// the component-identity signal and are skipped.
+fn collect_jsx_element_names(semantic: &oxc_semantic::Semantic) -> HashSet<String> {
+    semantic
+        .nodes()
+        .iter()
+        .filter_map(|node| match node.kind() {
+            AstKind::JSXOpeningElement(element) => match &element.name {
+                JSXElementName::Identifier(id) => Some(id.name.to_string()),
+                JSXElementName::IdentifierReference(id) => Some(id.name.to_string()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// True when the flagged pair is a pair of distinct React component types
+/// rendered in the same test file. React's reconciler keys mount/unmount on
+/// the function reference identity, so two identically-bodied components used
+/// as JSX elements (`<Foo/>` and `<Bar/>`) are intentionally distinct types:
+/// merging them into one shared helper would change which subtree remounts.
+/// Restricted to test files and to differently-named functions that are BOTH
+/// used as JSX elements, so genuine duplicate helpers stay flagged.
+fn is_distinct_jsx_component_pair(
+    a: &CollectedFunction,
+    b: &CollectedFunction,
+    in_test_file: bool,
+    jsx_names: &HashSet<String>,
+) -> bool {
+    in_test_file
+        && a.name != b.name
+        && jsx_names.contains(&a.name)
+        && jsx_names.contains(&b.name)
+}
+
 impl OxcCheck for Check {
     fn run_on_semantic<'a>(
         &self,
@@ -153,6 +192,7 @@ impl OxcCheck for Check {
                 .threshold("no-identical-functions", "min_normalized_chars", ctx.lang);
 
         let in_test_file = ctx.file.path_segments.in_test_dir;
+        let jsx_names = collect_jsx_element_names(semantic);
         let nodes = semantic.nodes();
         let mut local_functions: Vec<CollectedFunction> = Vec::new();
 
@@ -253,6 +293,12 @@ impl OxcCheck for Check {
                 if local_functions[i].normalized == local_functions[j].normalized
                     && local_functions[i].signature == local_functions[j].signature
                     && !in_distinct_test_scopes(&local_functions[i], &local_functions[j])
+                    && !is_distinct_jsx_component_pair(
+                        &local_functions[i],
+                        &local_functions[j],
+                        in_test_file,
+                        &jsx_names,
+                    )
                 {
                     diagnostics.push(Diagnostic {
                         path: Arc::clone(&ctx.path_arc),
@@ -547,6 +593,77 @@ wrapper(() => {
             1,
             "{:?}",
             run_with_file_ctx(src, "src/setup.ts")
+        );
+    }
+
+    // Regression for #1940 — two sibling React components with identical bodies
+    // in the same `it()` block of a test file. They MUST stay distinct function
+    // types: React keys mount/unmount on reference identity, and `<Foo/>` is
+    // rendered inside a scoped provider while `<Bar/>` is outside, so the test
+    // depends on their separate identities. Both are used as JSX elements, so
+    // merging them into one helper would change behaviour — not flagged.
+    #[test]
+    fn allows_distinct_jsx_component_siblings_in_test_file() {
+        let src = r#"
+it('should retain the correct cache hierarchy', async () => {
+    function Foo() {
+        const { data } = useSWR(key, fetcher);
+        const value = String(data);
+        console.log(value);
+        return <>{value}</>;
+    }
+    function Bar() {
+        const { data } = useSWR(key, fetcher);
+        const value = String(data);
+        console.log(value);
+        return <>{value}</>;
+    }
+    function Page() {
+        return (
+            <div>
+                <SWRConfig value={{}}><Foo /></SWRConfig>
+                <Bar />
+            </div>
+        );
+    }
+    renderWithConfig(<Page />);
+});
+"#;
+        assert!(
+            run_with_file_ctx(src, "test/use-swr-cache.test.tsx").is_empty(),
+            "{:?}",
+            run_with_file_ctx(src, "test/use-swr-cache.test.tsx")
+        );
+    }
+
+    // The JSX-identity exemption is narrow: two identically-bodied helpers in a
+    // test file that are NOT used as JSX elements have no observable component
+    // identity, so they remain a genuine "extract a shared helper" opportunity
+    // and stay flagged.
+    #[test]
+    fn flags_identical_non_jsx_helpers_in_test_file() {
+        let src = r#"
+it('computes both', () => {
+    function buildFoo() {
+        const a = compute();
+        const b = a * 2;
+        console.log(b);
+        return b;
+    }
+    function buildBar() {
+        const a = compute();
+        const b = a * 2;
+        console.log(b);
+        return b;
+    }
+    expect(buildFoo()).toBe(buildBar());
+});
+"#;
+        assert_eq!(
+            run_with_file_ctx(src, "test/compute.test.tsx").len(),
+            1,
+            "{:?}",
+            run_with_file_ctx(src, "test/compute.test.tsx")
         );
     }
 
