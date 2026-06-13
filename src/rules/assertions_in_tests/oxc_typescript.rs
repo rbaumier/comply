@@ -218,6 +218,11 @@ impl OxcCheck for Check {
                 // containing one is a type-level test that passes iff the
                 // file compiles, so it counts as asserted.
                 AstKind::TSSatisfiesExpression(_) => true,
+                // A `throw` is a valid assertion mechanism: timing/property/
+                // fuzzing tests fail by throwing on a violated condition
+                // (`if (after - before > 10) throw new Error(...)`), which the
+                // runner reports as a failure — equivalent to `expect(...)`.
+                AstKind::ThrowStatement(_) => true,
                 _ => false,
             };
 
@@ -500,6 +505,31 @@ mod tests {
               reject(new Error("nope"));
             });
         "#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #2036 — a timing/ReDoS-safety test asserts by throwing
+    // when the elapsed time exceeds a budget; the `throw` is the assertion.
+    #[test]
+    fn allows_test_asserting_via_conditional_throw() {
+        let src = r#"
+            test("REGEX_VALID_TAG_NAME no ReDoS", () => {
+                const before = performance.now();
+                REGEX_VALID_TAG_NAME.test("a-----------------------------------!");
+                const after = performance.now();
+                if (after - before > 10) {
+                    throw new Error("REGEX_VALID_TAG_NAME is vulnerable to ReDoS");
+                }
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // True positive guard: the word "throw" inside a string literal is not a
+    // `throw` statement, so an assertion-less test still fires.
+    #[test]
+    fn still_flags_test_with_throw_only_in_string() {
+        let src = r#"it("x", () => { log("this should throw eventually"); });"#;
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
