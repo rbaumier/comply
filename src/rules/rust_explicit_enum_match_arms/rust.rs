@@ -11,7 +11,10 @@
 //!   text is exactly `_`.
 //! - "enum-like": node kind is one of `scoped_identifier`,
 //!   `tuple_struct_pattern`, `struct_pattern`, or the pattern text
-//!   either contains `::` or starts with an ASCII uppercase letter.
+//!   contains `::`, or it is a bare PascalCase identifier (uppercase
+//!   lead with at least one lowercase letter). Range patterns
+//!   (`'a'..='z'`, `0..=9`) and SCREAMING_SNAKE_CASE constants
+//!   (`EOF_CHAR`) apply only to scalar types and are never enum-like.
 //!   Or-patterns (`Foo::A | Foo::B`) are unwrapped and any disjunct
 //!   that qualifies makes the whole arm enum-like.
 //!
@@ -132,6 +135,12 @@ fn pattern_is_enum_like(pattern: tree_sitter::Node, source: &[u8]) -> bool {
     if pattern.kind() == "tuple_pattern" {
         return false;
     }
+    // Range patterns (`'a'..='z'`, `0..=9`, `b'A'..=b'Z'`) only apply to
+    // scalar types — `char`, integers, bytes — never enums. The `_` arm
+    // on such a match is compiler-mandated, so a range is never enum-like.
+    if pattern.kind() == "range_pattern" {
+        return false;
+    }
     // Or-pattern: recurse into each disjunct.
     if pattern.kind() == "or_pattern" {
         let mut cursor = pattern.walk();
@@ -158,12 +167,16 @@ fn pattern_is_enum_like(pattern: tree_sitter::Node, source: &[u8]) -> bool {
     if text.contains("::") {
         return true;
     }
-    // Leading identifier starts with ASCII uppercase → looks like a
-    // variant or tuple struct (e.g. `Some(x)`, `None`, `Direction`).
+    // Bare uppercase identifiers are ambiguous: PascalCase ones look like
+    // unqualified variants (`Some`, `None`, `North`), while
+    // SCREAMING_SNAKE_CASE ones are named constants (`EOF_CHAR`, `NUL`)
+    // matched in scalar lexers where the `_` arm is mandatory. Require a
+    // lowercase letter so a const pattern is not treated as enum-like.
     let first_ident_char = text
         .chars()
         .find(|c| c.is_ascii_alphanumeric() || *c == '_');
     matches!(first_ident_char, Some(c) if c.is_ascii_uppercase())
+        && text.chars().any(|c| c.is_ascii_lowercase())
 }
 
 /// True if `pattern` references a variant of a known stdlib closed or
@@ -311,5 +324,63 @@ mod tests {
         let src = "fn f(x: (Result<i32, E>, Result<i32, E>)) -> i32 { \
                    match x { (Ok(a), Ok(b)) => a + b, _ => 0 } }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_on_char_literal_arms_with_enum_bodies() {
+        // Issue #1409: scrutinee is a `char`; arm patterns are char
+        // literals (not enum variants), and the `_` arm is compiler-
+        // mandated because `char` cannot be enumerated. Enum names in the
+        // arm bodies must not make this look enum-like.
+        let src = "fn f(c: char) -> i32 { match c { \
+                   'r' => CFormatType::Repr, \
+                   's' => CFormatType::Str, \
+                   _ => return Err(0), } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_on_byte_literal_arms() {
+        // Issue #1409: scrutinee is a `u8` byte; literal byte patterns
+        // cannot be enumerated, so the `_` arm is required.
+        let src = "fn f(b: u8) -> i32 { match b { \
+                   b'a' => 1, b'b' => 2, _ => 0 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_on_integer_arms_with_enum_bodies() {
+        // Issue #1409: scrutinee is an `i32`; integer literal patterns
+        // with enum-valued bodies must not be flagged.
+        let src = "fn f(n: i32) -> Token { match n { \
+                   1 => Token::One, 2 => Token::Two, _ => Token::Other } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_on_char_range_patterns() {
+        // Issue #1409: range patterns apply only to scalar types, so the
+        // uppercase bound `'A'` must not be read as an enum variant.
+        let src = "fn classify(c: char) -> i32 { match c { \
+                   'A'..='Z' => 1, 'a'..='z' => 2, _ => 0 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_on_named_char_const_patterns() {
+        // Issue #1409: SCREAMING_SNAKE_CASE patterns are named constants
+        // (lexer sentinels like `EOF_CHAR`/`NUL`), not enum variants.
+        let src = "fn lex(c: char) -> i32 { match c { \
+                   EOF_CHAR => 0, NUL => 1, '0'..='9' => 2, _ => 3 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_wildcard_with_bare_pascal_case_variants() {
+        // True positive: unqualified PascalCase variants (e.g. via
+        // `use Direction::*`) still need explicit arms.
+        let src = "use Direction::*; \
+                   fn f(x: Direction) -> i32 { match x { North => 1, South => 2, _ => 0 } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
