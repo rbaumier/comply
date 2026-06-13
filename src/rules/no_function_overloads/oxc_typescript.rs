@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use crate::diagnostic::Diagnostic;
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, type_annotation_is_type_predicate};
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Declaration, Function, Statement, TSType};
+use oxc_ast::ast::{Declaration, Function, Statement};
 use std::sync::Arc;
 
 pub struct Check;
@@ -49,9 +49,7 @@ fn generics_in_return_type(source: &str, f: &Function) -> Option<Vec<String>> {
 /// overloads narrow the return type per input variant and cannot collapse into
 /// a single union signature without erasing that narrowing at every call site.
 fn returns_type_predicate(f: &Function) -> bool {
-    f.return_type
-        .as_ref()
-        .is_some_and(|ann| matches!(ann.type_annotation, TSType::TSTypePredicate(_)))
+    type_annotation_is_type_predicate(f.return_type.as_deref())
 }
 
 impl OxcCheck for Check {

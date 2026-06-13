@@ -479,6 +479,176 @@ pub fn is_in_ambient_declaration(
     })
 }
 
+/// Walk up from `node_id` to its nearest enclosing `Class`, returning the class
+/// AST node. Stops at the first `Class` ancestor (a method's own class), or
+/// `None` if the node has no enclosing class.
+#[must_use]
+pub fn enclosing_class<'a>(
+    node_id: oxc_semantic::NodeId,
+    nodes: &oxc_semantic::AstNodes<'a>,
+) -> Option<&'a oxc_ast::ast::Class<'a>> {
+    use oxc_ast::AstKind;
+    let mut current = node_id;
+    loop {
+        let parent_id = nodes.parent_id(current);
+        if parent_id == current {
+            return None;
+        }
+        let parent = nodes.get_node(parent_id);
+        if let AstKind::Class(class) = parent.kind() {
+            return Some(class);
+        }
+        current = parent_id;
+    }
+}
+
+/// The heritage/decorator shape of a class, with each axis exposed separately so
+/// callers exempt on exactly the axis they care about. `has_super_class`
+/// (`extends Base`) and `has_implements` (`implements I`) are kept distinct
+/// rather than bundled: rules that only care about `extends` must not also
+/// exempt on `implements`, which would introduce false negatives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClassShape {
+    pub is_decorated: bool,
+    pub has_super_class: bool,
+    pub has_implements: bool,
+}
+
+impl ClassShape {
+    #[must_use]
+    pub fn of(class: &oxc_ast::ast::Class) -> ClassShape {
+        ClassShape {
+            is_decorated: !class.decorators.is_empty(),
+            has_super_class: class.super_class.is_some(),
+            has_implements: !class.implements.is_empty(),
+        }
+    }
+}
+
+/// Peel any nested `ParenthesizedExpression` wrappers off `expr`, returning the
+/// first non-parenthesized inner expression. Used by the cast rules so that
+/// `(x as unknown) as T` is analyzed identically to `x as unknown as T`.
+#[must_use]
+pub fn peel_parens<'a>(
+    expr: &'a oxc_ast::ast::Expression<'a>,
+) -> &'a oxc_ast::ast::Expression<'a> {
+    use oxc_ast::ast::Expression;
+    let mut current = expr;
+    while let Expression::ParenthesizedExpression(p) = current {
+        current = &p.expression;
+    }
+    current
+}
+
+/// True when `as_expr` is the **outer** half of an `x as unknown as T` chain —
+/// its inner expression (after peeling parentheses) is itself a `TSAsExpression`
+/// whose target is the `unknown` keyword. This is the canonical
+/// contravariant-boundary escape hatch; the outer cast is then not a narrowing.
+#[must_use]
+pub fn is_outer_as_unknown_double_cast(as_expr: &oxc_ast::ast::TSAsExpression) -> bool {
+    use oxc_ast::ast::{Expression, TSType};
+    matches!(
+        peel_parens(&as_expr.expression),
+        Expression::TSAsExpression(inner) if matches!(inner.type_annotation, TSType::TSUnknownKeyword(_))
+    )
+}
+
+/// True when `as_expr` participates in an `x as unknown as T` chain on **either**
+/// half:
+///  - the outer half (its inner is `_ as unknown`, see
+///    [`is_outer_as_unknown_double_cast`]); or
+///  - the inner `_ as unknown` half whose parent chain (walking past
+///    `ParenthesizedExpression` wrappers) reaches an enclosing `TSAsExpression`.
+///
+/// `ts-no-as-narrowing` exempts only the outer half, so it must use
+/// [`is_outer_as_unknown_double_cast`]; `no-type-assertion` exempts both halves
+/// and uses this.
+#[must_use]
+pub fn is_as_unknown_double_cast(
+    node_id: oxc_semantic::NodeId,
+    as_expr: &oxc_ast::ast::TSAsExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::TSType;
+
+    if is_outer_as_unknown_double_cast(as_expr) {
+        return true;
+    }
+
+    // Inner half: `_ as unknown` whose parent (past parentheses) is another
+    // TSAsExpression.
+    if matches!(as_expr.type_annotation, TSType::TSUnknownKeyword(_)) {
+        let nodes = semantic.nodes();
+        let mut cur = node_id;
+        loop {
+            let parent_id = nodes.parent_id(cur);
+            if parent_id == cur {
+                break;
+            }
+            match nodes.kind(parent_id) {
+                AstKind::TSAsExpression(_) => return true,
+                AstKind::ParenthesizedExpression(_) => {
+                    cur = parent_id;
+                }
+                _ => break,
+            }
+        }
+    }
+    false
+}
+
+/// True when `annotation` is a `x is T` type predicate (`TSTypePredicate`).
+/// Such a return type narrows per call site and cannot collapse into a plain
+/// union without erasing the narrowing.
+#[must_use]
+pub fn type_annotation_is_type_predicate(
+    annotation: Option<&oxc_ast::ast::TSTypeAnnotation>,
+) -> bool {
+    use oxc_ast::ast::TSType;
+    annotation.is_some_and(|ann| matches!(ann.type_annotation, TSType::TSTypePredicate(_)))
+}
+
+/// True when `kind` is a type-only binding context — a node whose parameter or
+/// member names live purely in the type namespace and are erased at runtime
+/// (function/constructor types, call/construct/method/index signatures, mapped
+/// types, `infer`). A value binding sharing such a name shadows nothing
+/// observable.
+#[must_use]
+pub fn is_type_only_binding_context(kind: oxc_ast::AstKind<'_>) -> bool {
+    use oxc_ast::AstKind;
+    matches!(
+        kind,
+        AstKind::TSFunctionType(_)
+            | AstKind::TSConstructorType(_)
+            | AstKind::TSCallSignatureDeclaration(_)
+            | AstKind::TSConstructSignatureDeclaration(_)
+            | AstKind::TSMethodSignature(_)
+            | AstKind::TSIndexSignature(_)
+            | AstKind::TSMappedType(_)
+            | AstKind::TSInferType(_)
+    )
+}
+
+/// True when `decl_node` declares a binding from a type-only import — either a
+/// whole `import type ...` declaration or an individual `import { type X }`
+/// specifier. These exist only in the type namespace and are erased at runtime,
+/// so a value binding of the same name does not shadow them.
+#[must_use]
+pub fn is_type_only_import_binding(
+    nodes: &oxc_semantic::AstNodes<'_>,
+    decl_node: oxc_semantic::NodeId,
+) -> bool {
+    use oxc_ast::AstKind;
+    std::iter::once(nodes.kind(decl_node))
+        .chain(nodes.ancestor_kinds(decl_node))
+        .any(|kind| match kind {
+            AstKind::ImportDeclaration(import) => import.import_kind.is_type(),
+            AstKind::ImportSpecifier(spec) => spec.import_kind.is_type(),
+            _ => false,
+        })
+}
+
 #[cfg(test)]
 mod oxc_helpers_tests {
     use super::{byte_offset_to_line_col, reset_file_caches, source_contains};
@@ -564,5 +734,181 @@ mod oxc_helpers_tests {
         // Different source, no explicit reset — the index must rebuild itself.
         let b = String::from("x\ny\nz\nw");
         assert_eq!(byte_offset_to_line_col(&b, 6), (4, 1)); // start of "w"
+    }
+
+    use super::{
+        ClassShape, is_as_unknown_double_cast, is_outer_as_unknown_double_cast, peel_parens,
+        type_annotation_is_type_predicate, with_semantic,
+    };
+    use oxc_ast::AstKind;
+    use oxc_span::SourceType;
+
+    #[test]
+    fn class_shape_separates_decorator_super_and_implements() {
+        // Each axis is reported independently so callers exempt on exactly the
+        // axis they care about (no bundled "has_heritage").
+        with_semantic("class A {}", SourceType::ts(), |sem| {
+            let class = find_class(sem);
+            let shape = ClassShape::of(class);
+            assert!(!shape.is_decorated && !shape.has_super_class && !shape.has_implements);
+        });
+        with_semantic("class A extends B {}", SourceType::ts(), |sem| {
+            let shape = ClassShape::of(find_class(sem));
+            assert!(shape.has_super_class && !shape.has_implements && !shape.is_decorated);
+        });
+        with_semantic("class A implements I {}", SourceType::ts(), |sem| {
+            let shape = ClassShape::of(find_class(sem));
+            assert!(shape.has_implements && !shape.has_super_class && !shape.is_decorated);
+        });
+        with_semantic("@Dec()\nclass A {}", SourceType::ts(), |sem| {
+            let shape = ClassShape::of(find_class(sem));
+            assert!(shape.is_decorated && !shape.has_super_class && !shape.has_implements);
+        });
+    }
+
+    #[test]
+    fn peel_parens_unwraps_nested_parentheses() {
+        // `((x))` peels through both parenthesized layers to the identifier `x`.
+        with_semantic("const y = ((x));", SourceType::ts(), |sem| {
+            let init = sem
+                .nodes()
+                .iter()
+                .find_map(|n| match n.kind() {
+                    AstKind::VariableDeclarator(d) => d.init.as_ref(),
+                    _ => None,
+                })
+                .expect("a variable initializer");
+            assert!(
+                matches!(init, oxc_ast::ast::Expression::ParenthesizedExpression(_)),
+                "outermost init is parenthesized"
+            );
+            assert!(
+                matches!(peel_parens(init), oxc_ast::ast::Expression::Identifier(id) if id.name == "x"),
+                "peeling reaches the bare identifier"
+            );
+        });
+    }
+
+    #[test]
+    fn double_cast_helpers_match_both_rule_semantics() {
+        // Outer half: the outer `as T` of `x as unknown as T`.
+        // - is_outer_as_unknown_double_cast (ts-no-as-narrowing) → true
+        // - is_as_unknown_double_cast (no-type-assertion) → also true
+        with_semantic(
+            "declare const x: unknown; const y = x as unknown as Foo;",
+            SourceType::ts(),
+            |sem| {
+                let (node_id, outer) = as_expr_with_target(sem, "Foo");
+                assert!(
+                    is_outer_as_unknown_double_cast(outer),
+                    "outer half is the canonical escape hatch"
+                );
+                assert!(
+                    is_as_unknown_double_cast(node_id, outer, sem),
+                    "no-type-assertion exempts the outer half too"
+                );
+            },
+        );
+
+        // A double cast WITHOUT an `unknown` middle (`x as any as Foo`) is not
+        // the escape hatch — neither helper exempts the outer cast.
+        with_semantic(
+            "declare const x: unknown; const y = x as any as Foo;",
+            SourceType::ts(),
+            |sem| {
+                let (node_id, outer) = as_expr_with_target(sem, "Foo");
+                assert!(!is_outer_as_unknown_double_cast(outer));
+                assert!(!is_as_unknown_double_cast(node_id, outer, sem));
+            },
+        );
+
+        // Inner half: the `as unknown` of `x as unknown as Foo`. Only
+        // no-type-assertion (is_as_unknown_double_cast) exempts this half;
+        // is_outer_as_unknown_double_cast must NOT, since its inner is `x`.
+        with_semantic(
+            "declare const x: unknown; const y = x as unknown as Foo;",
+            SourceType::ts(),
+            |sem| {
+                let (node_id, inner) = as_expr_to_unknown(sem);
+                assert!(
+                    !is_outer_as_unknown_double_cast(inner),
+                    "ts-no-as-narrowing does NOT exempt the inner `as unknown`"
+                );
+                assert!(
+                    is_as_unknown_double_cast(node_id, inner, sem),
+                    "no-type-assertion DOES exempt the inner `as unknown` half"
+                );
+            },
+        );
+
+        // Second hoisted predicate benefiting a rule with no tree-sitter twin
+        // (no-redundant-null-undefined-check): a `value is T` return type is a
+        // type predicate.
+        with_semantic(
+            "function isT(v: unknown): v is T { return true as boolean; }",
+            SourceType::ts(),
+            |sem| {
+                let func = sem.nodes().iter().find_map(|n| match n.kind() {
+                    AstKind::Function(f) => Some(f),
+                    _ => None,
+                });
+                let f = func.expect("a function declaration");
+                assert!(type_annotation_is_type_predicate(f.return_type.as_deref()));
+            },
+        );
+    }
+
+    /// First `Class` node in the program.
+    fn find_class<'a>(sem: &'a oxc_semantic::Semantic<'a>) -> &'a oxc_ast::ast::Class<'a> {
+        sem.nodes()
+            .iter()
+            .find_map(|n| match n.kind() {
+                AstKind::Class(c) => Some(c),
+                _ => None,
+            })
+            .expect("a class declaration")
+    }
+
+    /// The `TSAsExpression` whose target type is the identifier `target`, with
+    /// its `NodeId`.
+    fn as_expr_with_target<'a>(
+        sem: &'a oxc_semantic::Semantic<'a>,
+        target: &str,
+    ) -> (oxc_semantic::NodeId, &'a oxc_ast::ast::TSAsExpression<'a>) {
+        use oxc_ast::ast::{TSType, TSTypeName};
+        sem.nodes()
+            .iter()
+            .find_map(|n| match n.kind() {
+                AstKind::TSAsExpression(a) => match &a.type_annotation {
+                    TSType::TSTypeReference(r) => match &r.type_name {
+                        TSTypeName::IdentifierReference(id) if id.name.as_str() == target => {
+                            Some((n.id(), a))
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("a TSAsExpression with the target type")
+    }
+
+    /// The `TSAsExpression` whose target type is the `unknown` keyword, with its
+    /// `NodeId`.
+    fn as_expr_to_unknown<'a>(
+        sem: &'a oxc_semantic::Semantic<'a>,
+    ) -> (oxc_semantic::NodeId, &'a oxc_ast::ast::TSAsExpression<'a>) {
+        use oxc_ast::ast::TSType;
+        sem.nodes()
+            .iter()
+            .find_map(|n| match n.kind() {
+                AstKind::TSAsExpression(a)
+                    if matches!(a.type_annotation, TSType::TSUnknownKeyword(_)) =>
+                {
+                    Some((n.id(), a))
+                }
+                _ => None,
+            })
+            .expect("an `as unknown` expression")
     }
 }

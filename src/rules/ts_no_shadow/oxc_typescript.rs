@@ -1,7 +1,9 @@
 //! ts-no-shadow OXC backend — variable shadowing detection via oxc_semantic.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{
+    byte_offset_to_line_col, is_type_only_binding_context, is_type_only_import_binding,
+};
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
 use std::sync::Arc;
@@ -61,37 +63,6 @@ impl OxcCheck for Check {
 
         diagnostics
     }
-}
-
-/// True when the binding is in a type-only context (function/index/mapped/infer)
-/// whose names are not accessible at runtime.
-fn is_type_only_binding_context(kind: AstKind<'_>) -> bool {
-    matches!(
-        kind,
-        AstKind::TSFunctionType(_)
-            | AstKind::TSConstructorType(_)
-            | AstKind::TSCallSignatureDeclaration(_)
-            | AstKind::TSConstructSignatureDeclaration(_)
-            | AstKind::TSMethodSignature(_)
-            | AstKind::TSIndexSignature(_)
-            | AstKind::TSMappedType(_)
-            | AstKind::TSInferType(_)
-    )
-}
-
-/// True when `decl_node` declares a binding from a type-only import — either a
-/// whole `import type ...` declaration (default, namespace, or named) or an
-/// individual `import { type X }` specifier. These exist only in the type
-/// namespace and are erased at runtime, so a value binding of the same name
-/// does not shadow them.
-fn is_type_only_import_binding(nodes: &oxc_semantic::AstNodes<'_>, decl_node: oxc_semantic::NodeId) -> bool {
-    std::iter::once(nodes.kind(decl_node))
-        .chain(nodes.ancestor_kinds(decl_node))
-        .any(|kind| match kind {
-            AstKind::ImportDeclaration(import) => import.import_kind.is_type(),
-            AstKind::ImportSpecifier(spec) => spec.import_kind.is_type(),
-            _ => false,
-        })
 }
 
 #[cfg(test)]

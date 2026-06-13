@@ -1,5 +1,5 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{ClassShape, byte_offset_to_line_col, enclosing_class};
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
@@ -61,12 +61,11 @@ impl OxcCheck for Check {
             // the method may be required by the base-class or interface
             // contract (e.g. NestJS DI factories, overrides), so making it
             // `static` or extracting it would break polymorphism.
-            if let Some(class) = enclosing_class(node.id(), nodes)
-                && (!class.decorators.is_empty()
-                    || class.super_class.is_some()
-                    || !class.implements.is_empty())
-            {
-                continue;
+            if let Some(class) = enclosing_class(node.id(), nodes) {
+                let shape = ClassShape::of(class);
+                if shape.is_decorated || shape.has_super_class || shape.has_implements {
+                    continue;
+                }
             }
 
             // Check if body contains `this`
@@ -163,25 +162,6 @@ fn body_contains_this(
         }
     }
     false
-}
-
-/// Walk up from a method node to its enclosing `Class`.
-fn enclosing_class<'a>(
-    method_node_id: oxc_semantic::NodeId,
-    nodes: &oxc_semantic::AstNodes<'a>,
-) -> Option<&'a oxc_ast::ast::Class<'a>> {
-    let mut current = method_node_id;
-    loop {
-        let parent_id = nodes.parent_id(current);
-        if parent_id == current {
-            return None;
-        }
-        let parent = nodes.get_node(parent_id);
-        if let AstKind::Class(class) = parent.kind() {
-            return Some(class);
-        }
-        current = parent_id;
-    }
 }
 
 #[cfg(test)]

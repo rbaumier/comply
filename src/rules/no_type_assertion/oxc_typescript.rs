@@ -1,7 +1,10 @@
 //! no-type-assertion OXC backend.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::{byte_offset_to_line_col, name_is_generic_type_param_in_scope};
+use crate::oxc_helpers::{
+    byte_offset_to_line_col, is_as_unknown_double_cast, name_is_generic_type_param_in_scope,
+    peel_parens,
+};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Expression, TSArrayType, TSType, TSTypeName};
 use oxc_span::GetSpan;
@@ -49,14 +52,6 @@ fn type_arg_is_generic_param(
     }
     let TSTypeName::IdentifierReference(id) = &r.type_name else { return false };
     name_is_generic_type_param_in_scope(id.name.as_str(), node_id, semantic)
-}
-
-fn peel_parens<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
-    let mut current = expr;
-    while let Expression::ParenthesizedExpression(p) = current {
-        current = &p.expression;
-    }
-    current
 }
 
 /// Returns `true` when this `as` expression is `[] as T[]` used as the initial
@@ -174,36 +169,12 @@ impl OxcCheck for Check {
 
         // Allow either half of an `x as unknown as T` chain — the chain is
         // the canonical contravariant-boundary escape hatch (matches the
-        // `no-double-cast` skip). Without these two checks, the outer cast
-        // and the inner `as unknown` still fire even though `no-double-cast`
-        // correctly stays silent.
-        //  - Outer half: `x as unknown as T` whose inner is `_ as unknown`.
-        //    Peel any parentheses so `(x as unknown) as T` is treated the
-        //    same as `x as unknown as T`.
-        if let Expression::TSAsExpression(inner) = peel_parens(&as_expr.expression)
-            && matches!(inner.type_annotation, TSType::TSUnknownKeyword(_))
-        {
+        // `no-double-cast` skip). Without this check, the outer cast and the
+        // inner `as unknown` still fire even though `no-double-cast` correctly
+        // stays silent. Parentheses are peeled so `(x as unknown) as T` is
+        // treated identically to `x as unknown as T`.
+        if is_as_unknown_double_cast(node.id(), as_expr, semantic) {
             return;
-        }
-        //  - Inner half: `_ as unknown` whose parent is another TSAsExpression.
-        //    Walk past any ParenthesizedExpression parents so `(x as unknown)`
-        //    inside a double-cast is still exempted.
-        if matches!(as_expr.type_annotation, TSType::TSUnknownKeyword(_)) {
-            let nodes = semantic.nodes();
-            let mut cur = node.id();
-            loop {
-                let parent_id = nodes.parent_id(cur);
-                if parent_id == cur {
-                    break;
-                }
-                match nodes.kind(parent_id) {
-                    AstKind::TSAsExpression(_) => return,
-                    AstKind::ParenthesizedExpression(_) => {
-                        cur = parent_id;
-                    }
-                    _ => break,
-                }
-            }
         }
 
         // Allow `[] as T[]` as the initial accumulator of `.reduce()` /

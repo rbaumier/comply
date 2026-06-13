@@ -3,9 +3,11 @@
 use std::sync::Arc;
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::{byte_offset_to_line_col, name_is_generic_type_param_in_scope};
+use crate::oxc_helpers::{
+    byte_offset_to_line_col, is_outer_as_unknown_double_cast, name_is_generic_type_param_in_scope,
+};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, TSType, TSTypeName};
+use oxc_ast::ast::{TSType, TSTypeName};
 use oxc_span::GetSpan;
 
 pub struct Check;
@@ -52,14 +54,6 @@ fn target_is_narrowing(ty: &TSType, _source: &str) -> bool {
         }
         _ => false,
     }
-}
-
-fn peel_parens<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
-    let mut current = expr;
-    while let Expression::ParenthesizedExpression(p) = current {
-        current = &p.expression;
-    }
-    current
 }
 
 /// `true` when any enclosing function/arrow of `node_id` has a type-predicate
@@ -134,12 +128,10 @@ impl OxcCheck for Check {
         // contravariant-boundary escape hatch (e.g. Drizzle relational types
         // invariant in `TablesRelationalConfig`). The inner cast must be to
         // the `unknown` keyword specifically; `x as Foo as Bar` is NOT
-        // exempted. Peel any parentheses wrapping the inner expression so
-        // that `(x as unknown) as T` is treated identically to
-        // `x as unknown as T`.
-        if let Expression::TSAsExpression(inner) = peel_parens(&as_expr.expression)
-            && matches!(inner.type_annotation, TSType::TSUnknownKeyword(_))
-        {
+        // exempted. This rule exempts ONLY the outer half (not the inner
+        // `as unknown`); parentheses are peeled so `(x as unknown) as T` is
+        // treated identically to `x as unknown as T`.
+        if is_outer_as_unknown_double_cast(as_expr) {
             return;
         }
 
