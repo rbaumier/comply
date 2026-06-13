@@ -23,6 +23,11 @@
 //!   `ReactDOM.createRoot(...).render(...)`, `hydrateRoot(...)`, or legacy
 //!   `ReactDOM.render(...)` (mounting the app at module level is the entry
 //!   file's purpose, and entry points are never imported by other modules);
+//! - Gulp task-registration files by content shape: a module that imports
+//!   `gulp` and registers tasks at the top level (`task(...)`, `gulp.task(...)`,
+//!   `series(...)`, `parallel(...)`, …). The registrations are the file's whole
+//!   purpose — Gulp runs them by importing the build script — so they are
+//!   intentional side effects, not tree-shakeable library code;
 //! - framework entry points reported by `is_framework_entry_point`;
 //! - TanStack Start entry files (`app/{client,router,server}.{ts,tsx}` or
 //!   `src/app/…`) when the `tanstack-router` framework is detected;
@@ -254,6 +259,62 @@ fn is_react_entry_shape(program: &Program) -> bool {
         let Statement::ExpressionStatement(es) = stmt else { return false };
         let Expression::CallExpression(call) = &es.expression else { return false };
         is_react_bootstrap_call(call)
+    })
+}
+
+const GULP_REGISTRATION_IDENTS: &[&str] = &["task", "series", "parallel", "watch"];
+
+/// True when the program imports the `gulp` module at the top level, in any
+/// form: an ESM `import` from `"gulp"` (or a `"gulp/"` sub-path), or a
+/// `require("gulp")` / `require("gulp/...")` call in a top-level declaration.
+fn has_gulp_import(program: &Program) -> bool {
+    fn is_gulp_specifier(src: &str) -> bool {
+        src == "gulp" || src.starts_with("gulp/")
+    }
+    program.body.iter().any(|stmt| match stmt {
+        Statement::ImportDeclaration(import) => is_gulp_specifier(import.source.value.as_str()),
+        Statement::VariableDeclaration(decl) => decl.declarations.iter().any(|d| {
+            let Some(Expression::CallExpression(call)) = &d.init else { return false };
+            let Expression::Identifier(id) = &call.callee else { return false };
+            if id.name != "require" {
+                return false;
+            }
+            matches!(call.arguments.first(), Some(Argument::StringLiteral(s)) if is_gulp_specifier(s.value.as_str()))
+        }),
+        _ => false,
+    })
+}
+
+/// True when `call`'s callee is a Gulp task-registration function — either a
+/// bare identifier (`task(...)`, `series(...)`, `parallel(...)`, `watch(...)`)
+/// or the same property on a `gulp` object (`gulp.task(...)`, …).
+fn is_gulp_registration_call(call: &oxc_ast::ast::CallExpression) -> bool {
+    match &call.callee {
+        Expression::Identifier(id) => GULP_REGISTRATION_IDENTS.contains(&id.name.as_str()),
+        Expression::StaticMemberExpression(m) => {
+            let Expression::Identifier(obj) = &m.object else { return false };
+            obj.name == "gulp" && GULP_REGISTRATION_IDENTS.contains(&m.property.name.as_str())
+        }
+        _ => false,
+    }
+}
+
+/// True when the program is a Gulp task-registration file: it imports `gulp`
+/// and registers at least one task at the top level (`task(...)`,
+/// `gulp.task(...)`, `series(...)`, `parallel(...)`, …). Such a file is a
+/// build-script entry point consumed by the Gulp task runner — importing it to
+/// run the registrations is its sole purpose, so the top-level calls are
+/// intentional side effects, not tree-shakeable library code. The `gulp` import
+/// is required so an ordinary module that happens to call a local `task()` is
+/// still flagged.
+fn is_gulp_task_file(program: &Program) -> bool {
+    if !has_gulp_import(program) {
+        return false;
+    }
+    program.body.iter().any(|stmt| {
+        let Statement::ExpressionStatement(es) = stmt else { return false };
+        let Expression::CallExpression(call) = &es.expression else { return false };
+        is_gulp_registration_call(call)
     })
 }
 
@@ -540,6 +601,7 @@ impl OxcCheck for Check {
             || shape_is_vitest_setup(program)
             || is_server_entry_shape(program)
             || is_react_entry_shape(program)
+            || is_gulp_task_file(program)
         {
             return Vec::new();
         }
@@ -1047,7 +1109,72 @@ mod tests {
         );
     }
 
-    // --- (h) Data-initialization `forEach` (Closes #2033) ------------------
+    // --- (h) Gulp task-registration files (Closes #2024) ------------------
+
+    // Regression for #2024: a Gulp build file imports `gulp` and registers
+    // tasks at the top level via `task(...)`. That IS the gulpfile's purpose —
+    // Gulp runs the registrations by importing the file — so the top-level
+    // calls are intentional side effects, not tree-shakeable library code.
+    #[test]
+    fn allows_gulp_task_registration_file() {
+        let src = "\
+            import { task } from 'gulp';\n\
+            async function run(script) { return script; }\n\
+            task('install:samples', async () => run('npm install'));\n\
+            task('build:samples', async () => run('npm run build'));\n";
+        let diags =
+            crate::rules::test_helpers::run_rule(&Check, src, "tools/gulp/tasks/samples.ts");
+        assert!(
+            diags.is_empty(),
+            "gulp task-registration file should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_gulp_namespace_series_parallel() {
+        // `gulp.task(...)` member calls plus `series(...)`/`parallel(...)`
+        // registrations from a `gulp` namespace import are all exempt.
+        let src = "\
+            import gulp, { series, parallel } from 'gulp';\n\
+            gulp.task('clean', () => {});\n\
+            series('a', 'b');\n\
+            parallel('c', 'd');\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "gulpfile.ts");
+        assert!(
+            diags.is_empty(),
+            "gulp.task/series/parallel registrations should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_gulp_require_task_registration() {
+        let src = "\
+            const gulp = require('gulp');\n\
+            gulp.task('default', () => {});\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "gulpfile.js");
+        assert!(
+            diags.is_empty(),
+            "require('gulp') task registration should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_local_task_call_without_gulp_import() {
+        // No `gulp` import — a local `task()` call is an ordinary top-level side
+        // effect that still blocks tree-shaking.
+        let src = "\
+            import { task } from './scheduler';\n\
+            task('do-it', () => {});\n\
+            doSideEffect();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/jobs.ts");
+        assert_eq!(
+            diags.len(),
+            2,
+            "non-gulp module with top-level side effects must still be flagged, got {diags:?}"
+        );
+    }
+
+    // --- (i) Data-initialization `forEach` (Closes #2033) ------------------
 
     // Regression for #2033: a module-level `forEach` populating a locally
     // declared `Map` from a locally declared `const` array is a pure data
