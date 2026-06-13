@@ -15,6 +15,11 @@
 //!   - Generated files (containing a `// @generated` or `/* @generated */`
 //!     header in the first ~40 lines) — code generators emit a fixed export
 //!     surface that callers may pick from gradually.
+//!   - Fixture / test-data directories (`__fixtures__/`, `fixtures/`,
+//!     `test-data/`, `testdata/`, …) — these hold factories and fixtures
+//!     consumed only from test files, often through tooling-generated path
+//!     aliases (e.g. SvelteKit's `@test-data`) that the index can't resolve,
+//!     so their exports look unimported even though tests use them.
 //!
 //! False-positive guards:
 //!   - If any file imports the current module via a namespace import
@@ -54,7 +59,14 @@ fn is_in_ui_library(path: &Path) -> bool {
     UI_LIBRARY_DIRS.iter().any(|seg| normalised.contains(seg))
 }
 
-const FIXTURE_DIRS: &[&str] = &["__testfixtures__", "__fixtures__", "fixtures", "test-fixtures"];
+const FIXTURE_DIRS: &[&str] = &[
+    "__testfixtures__",
+    "__fixtures__",
+    "fixtures",
+    "test-fixtures",
+    "test-data",
+    "testdata",
+];
 
 fn is_in_fixture_dir(path: &Path) -> bool {
     let normalised = path.to_string_lossy().replace('\\', "/");
@@ -846,6 +858,36 @@ mod tests {
     }
 
     // Regression tests for issue #446
+
+    #[test]
+    fn no_fp_for_factory_in_test_data_dir() {
+        // Regression for #1395 — immich's `web/src/test-data/factories/*`
+        // factories are imported only from `.spec.ts` files through the
+        // SvelteKit `@test-data/*` alias. That alias lives in the generated
+        // (gitignored) `.svelte-kit/tsconfig.json`, so the import index can't
+        // resolve it and every factory export looks dead. Files under a
+        // `test-data/` directory are fixtures consumed from tests — skip them.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "web/src/test-data/factories/user-factory.ts",
+                "export const userFactory = createUserResponseDto();\n\
+                 export const userAdminFactory = createUserResponseDto();",
+            ),
+            (
+                // Imports the factory via an unresolvable alias, mirroring the
+                // SvelteKit `@test-data/*` setup. The index drops the import,
+                // leaving the factory exports with zero recorded usages.
+                "web/src/lib/utils.spec.ts",
+                "import { userFactory } from '@test-data/factories/user-factory';\nuserFactory;",
+            ),
+            ("web/src/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "web/src/test-data/factories/user-factory.ts");
+        assert!(
+            diags.is_empty(),
+            "factories under test-data/ must not be flagged, got: {diags:?}"
+        );
+    }
 
     #[test]
     fn no_fp_for_export_consumed_by_test_file() {
