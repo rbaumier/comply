@@ -1,7 +1,7 @@
 //! sql-no-select-star — oxc backend for TS / JS / TSX.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, file_imports_db_library};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
@@ -16,7 +16,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let (text, offset) = match node.kind() {
@@ -28,6 +28,14 @@ impl OxcCheck for Check {
             _ => return,
         };
         if !super::contains_select_star(&text) {
+            return;
+        }
+        // `SELECT * FROM …` strings also appear in SQL-inspired graph query
+        // languages (e.g. Azure Digital Twins, where `*` means "all twin
+        // properties" and is idiomatic). The column-explicitness advice only
+        // applies to relational SQL, so fire only when the file imports a known
+        // SQL/ORM library.
+        if !file_imports_db_library(semantic) {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, offset);
@@ -69,13 +77,33 @@ mod tests {
 
     #[test]
     fn flags_select_star_in_template() {
-        let src = r#"const q = `SELECT * FROM users`;"#;
+        let src = r#"import { Pool } from "pg";
+const q = `SELECT * FROM users`;"#;
         assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
     fn allows_explicit_columns() {
-        let src = r#"const q = `SELECT id, name FROM users`;"#;
+        let src = r#"import { Pool } from "pg";
+const q = `SELECT id, name FROM users`;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_select_star_string_when_file_imports_sql_library() {
+        let src = r#"import { Pool } from "pg";
+const query = "SELECT * FROM users";"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_select_star_in_file_without_sql_import() {
+        // Azure Digital Twins Query Language: `SELECT * FROM digitaltwins` is
+        // idiomatic ADT, not relational SQL — must not be flagged (issue #1138).
+        let src = r#"import { DigitalTwinsClient } from "@azure/digital-twins-core";
+const serviceClient = new DigitalTwinsClient(url, credential);
+const query = "SELECT * FROM digitaltwins";
+const queryResult = serviceClient.queryTwins(query);"#;
         assert!(run_on(src).is_empty());
     }
 }
