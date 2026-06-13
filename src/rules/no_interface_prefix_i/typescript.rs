@@ -45,4 +45,45 @@ mod tests {
     fn ignores_type_alias() {
         assert!(run("type IFoo = { x: number };").is_empty());
     }
+
+    #[test]
+    fn allows_initialism_ip_rule() {
+        assert!(run("interface IPRule {}").is_empty());
+    }
+
+    #[test]
+    fn allows_initialism_ipv4_settings() {
+        assert!(run("interface IPv4FirewallSettings {}").is_empty());
+    }
+
+    #[test]
+    fn allows_initialism_ipv4_rule() {
+        assert!(run("interface IPv4FirewallRule {}").is_empty());
+    }
+
+    #[test]
+    fn allows_initialism_io_stream() {
+        assert!(run("interface IOStream {}").is_empty());
+    }
+
+    #[test]
+    fn flags_i_on_foo() {
+        let diags = run("interface IFoo {}");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Foo"));
+    }
+
+    #[test]
+    fn flags_i_on_logger_callback() {
+        let diags = run("interface ILoggerCallback {}");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("LoggerCallback"));
+    }
+
+    #[test]
+    fn flags_i_on_order() {
+        let diags = run("interface IOrder {}");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Order"));
+    }
 }
