@@ -85,6 +85,12 @@ impl OxcCheck for Check {
                     }
                     _ => return,
                 };
+                // Only the implicit CommonJS global is wrong here. A file that
+                // declares its own `const __dirname = …` (the `import.meta.url`
+                // polyfill) is using a legitimate local binding.
+                if !semantic.is_reference_to_global_variable(ident) {
+                    return;
+                }
                 let (line, column) =
                     byte_offset_to_line_col(ctx.source, ident.span.start as usize);
                 diagnostics.push(Diagnostic {
@@ -186,5 +192,31 @@ mod tests {
     fn flags_module_exports() {
         let d = run_on("module.exports = foo;");
         assert!(d.iter().any(|d| d.message.contains("module.exports")));
+    }
+
+    #[test]
+    fn flags_cjs_global_dirname() {
+        let d = run_on("const BENCH_DIR = path.resolve(__dirname, '..');");
+        assert!(
+            d.iter().any(|d| d.message.contains("import.meta.dirname")),
+            "the implicit CJS global `__dirname` must be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_user_defined_dirname() {
+        let d = run_on(
+            r#"
+            import path from 'node:path'
+            import url from 'node:url'
+
+            const __dirname = path.dirname(url.fileURLToPath(import.meta.url))
+            const BENCH_DIR = path.resolve(__dirname, '..')
+            "#,
+        );
+        assert!(
+            d.is_empty(),
+            "a user-defined `const __dirname` binding must not be flagged: {d:?}"
+        );
     }
 }
