@@ -268,6 +268,47 @@ mod tests {
     }
 
     #[test]
+    fn no_fp_on_ambient_declare_function_export_issue_2030() {
+        // Regression for #2030 — `shared.ts` exports `test` via an ambient
+        // `export declare function` and `SimpleCaseData` via `export declare
+        // const`; importing both from it must not be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "shared.ts",
+                "export declare function test(name: string, body: () => void): void;\n\
+                 export declare const SimpleCaseData: number;\n",
+            ),
+            (
+                "useLazyQuery.ts",
+                "import { test, SimpleCaseData } from './shared.js';\n\
+                 test('x', () => {});\n\
+                 const d = SimpleCaseData;\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "useLazyQuery.ts");
+        assert!(
+            diags.is_empty(),
+            "import of ambient `export declare function`/`const` must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_missing_name_from_ambient_module_issue_2030() {
+        // True positive preserved: a name the ambient module does not export is
+        // still reported.
+        let files: Vec<(&str, &str)> = vec![
+            ("shared.ts", "export declare function test(name: string): void;\n"),
+            (
+                "consumer.ts",
+                "import { test, missing } from './shared.js';\ntest('x');\nconst m = missing;\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "consumer.ts");
+        assert_eq!(diags.len(), 1, "absent name must still be flagged: {diags:?}");
+        assert!(diags[0].message.contains("missing"));
+    }
+
+    #[test]
     fn still_flags_bad_import_from_regular_file() {
         // Guard: import-named still fires on a misspelled import from a
         // normal (non-generated, non-framework) source file.
