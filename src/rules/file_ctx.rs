@@ -304,6 +304,8 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
             || lower.contains("-tests/")
             || lower.contains("/test-helpers/")
             || lower.contains("/test-helper/")
+            || lower.contains("/test-vr/")
+            || lower.starts_with("test-vr/")
             || lower.starts_with("tests/")
             || lower.starts_with("test/")
             || lower.starts_with("tests-")
@@ -468,6 +470,9 @@ mod tests {
         assert!(scan_path(&PathBuf::from("src/api/test-helpers/als-proxy.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("src/test-helper/db.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("test-helpers/setup.ts")).in_test_dir);
+        // Visual-regression test directory convention (issue #1866).
+        assert!(scan_path(&PathBuf::from("test-vr/charts.tsx")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("packages/recharts/test-vr/area.tsx")).in_test_dir);
         // tsd type-testing convention (issue #793).
         assert!(scan_path(&PathBuf::from("test-d/schema.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("src/test-d/types.ts")).in_test_dir);

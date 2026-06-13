@@ -379,4 +379,51 @@ export const FieldArray = connect(FieldArrayInner);
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("move"));
     }
+
+    // Regression tests for issue #1866 — test-directory helper .tsx files. React
+    // Fast Refresh is a dev-server HMR concern; test files are loaded by the test
+    // runner (Vitest/Jest), never the HMR runtime, so mixing component test cases
+    // with utility helpers is not a false positive.
+
+    #[test]
+    fn no_fp_test_helper_mixed_exports() {
+        // test/helper/parameterizedTestCases.tsx (issue #1866): component test
+        // cases co-located with an `includingCompact` utility function.
+        let source = r#"
+export const BarChartCase = { name: 'BarChart', Comp: BarChart };
+export function includingCompact(testCases) { return testCases; }
+export const allCartesianChartCases = [BarChartCase];
+"#;
+        let d = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            source,
+            "test/helper/parameterizedTestCases.tsx",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn no_fp_test_vr_directory_mixed_exports() {
+        // Visual-regression test directory (recharts test-vr/) — also never
+        // loaded under Fast Refresh.
+        let source = r#"
+export function Chart() { return <div />; }
+export const helper = () => {};
+"#;
+        let d = crate::rules::test_helpers::run_rule_gated(&Check, source, "test-vr/charts.tsx");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn flags_production_source_mixed_exports() {
+        // Same mixed-export shape in production source still breaks Fast Refresh —
+        // the exemption is scoped to test directories.
+        let source = r#"
+export function Chart() { return <div />; }
+export const helper = () => {};
+"#;
+        let d = crate::rules::test_helpers::run_rule_gated(&Check, source, "src/Foo.tsx");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("helper"));
+    }
 }
