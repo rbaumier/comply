@@ -121,7 +121,14 @@ fn is_pure_initializer(expr: &Expression) -> bool {
         | Expression::ArrowFunctionExpression(_)
         | Expression::FunctionExpression(_)
         | Expression::ClassExpression(_) => true,
-        Expression::TemplateLiteral(t) => t.expressions.is_empty(),
+        // A template literal is a pure read when every interpolation is a plain
+        // identifier reference to an already-bound value (e.g.
+        // `http://localhost:${PORT}/`). Calls or member access can throw or have
+        // side effects, so those still fire. `all` on no interpolations is true.
+        Expression::TemplateLiteral(t) => t
+            .expressions
+            .iter()
+            .all(|e| matches!(e, Expression::Identifier(_))),
         Expression::ArrayExpression(arr) => arr.elements.iter().all(|el| match el {
             ArrayExpressionElement::SpreadElement(_) => false,
             ArrayExpressionElement::Elision(_) => true,
@@ -495,6 +502,80 @@ describe("x", () => { it("works", () => {}); });
             d.len(),
             1,
             "an object spread of a call expression must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_const_template_literal_with_identifier_interpolation() {
+        let src = r#"
+import { REGISTRY_MOCK_PORT } from '@pnpm/testing.registry-mock'
+
+const REGISTRY = `http://localhost:${REGISTRY_MOCK_PORT}/`
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "cacheDelete.cmd.test.ts");
+        assert!(
+            d.is_empty(),
+            "module-scope const built from a template literal interpolating an identifier must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_const_template_literal_with_multiple_identifier_interpolations() {
+        let src = r#"
+const url = `${HOST}-${PORT}`
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert!(
+            d.is_empty(),
+            "a template literal interpolating only identifiers must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_const_template_literal_with_call_interpolation() {
+        let src = r#"
+const url = `http://localhost:${getPort()}/`
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a template literal interpolating a call expression must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_const_template_literal_with_member_interpolation() {
+        let src = r#"
+const url = `http://localhost:${obj.port}/`
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a template literal interpolating a member access must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_const_template_literal_without_interpolation() {
+        let src = r#"
+const url = `http://localhost/`
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert!(
+            d.is_empty(),
+            "a template literal with no interpolation must remain allowed: {d:?}"
         );
     }
 }
