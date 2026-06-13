@@ -59,7 +59,14 @@ fn is_camel_case(stem: &str) -> bool {
 
 fn is_ts_or_jsx_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
-    s.ends_with(".ts") || s.ends_with(".tsx") || s.ends_with(".js") || s.ends_with(".jsx")
+    s.ends_with(".ts")
+        || s.ends_with(".tsx")
+        || s.ends_with(".mts")
+        || s.ends_with(".cts")
+        || s.ends_with(".js")
+        || s.ends_with(".jsx")
+        || s.ends_with(".mjs")
+        || s.ends_with(".cjs")
 }
 
 impl TextCheck for Check {
@@ -219,5 +226,38 @@ mod tests {
     #[test]
     fn flags_dollar_prefix_outside_routes() {
         assert_eq!(run("src/app/$.tsx").len(), 1);
+    }
+
+    // Regression for #1399: TypeScript 4.7+ ESM/CJS extensions (.mts/.cts)
+    // get the same camelCase/PascalCase allowance as .ts/.tsx.
+    #[test]
+    fn allows_camel_case_mts_issue_1399() {
+        assert!(run("src/userProfile.mts").is_empty());
+    }
+
+    #[test]
+    fn allows_pascal_case_cts_issue_1399() {
+        assert!(run("src/UserProfile.cts").is_empty());
+    }
+
+    #[test]
+    fn allows_kebab_case_mts_issue_1399() {
+        assert!(run("src/user-profile.mts").is_empty());
+    }
+
+    #[test]
+    fn allows_pascal_case_declaration_mts_issue_1399() {
+        assert!(run("src/UserProfile.d.mts").is_empty());
+    }
+
+    // True positive: a genuinely snake_cased .mts/.cts filename still fires.
+    #[test]
+    fn flags_snake_case_mts_issue_1399() {
+        assert_eq!(run("src/user_profile.mts").len(), 1);
+    }
+
+    #[test]
+    fn flags_snake_case_cts_issue_1399() {
+        assert_eq!(run("src/user_profile.cts").len(), 1);
     }
 }
