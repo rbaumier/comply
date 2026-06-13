@@ -177,3 +177,115 @@ pub fn has_test_attribute(item: Node, source: &[u8]) -> bool {
     }
     false
 }
+
+/// True if `node` sits inside a trait implementation (`impl Trait for Type`).
+///
+/// Walks up via `node.parent()` to the *nearest* enclosing `impl_item` and
+/// returns whether that impl has a `trait` field. The decision is made for the
+/// nearest impl only: an inherent `impl Type { … }` returns `false`, and a node
+/// with no enclosing impl returns `false`. Rules use this to exempt methods
+/// whose shape is forced by a trait contract (the implementor can't change it).
+pub fn is_in_trait_impl(node: Node) -> bool {
+    let mut current = node.parent();
+    while let Some(ancestor) = current {
+        if ancestor.kind() == "impl_item" {
+            return ancestor.child_by_field_name("trait").is_some();
+        }
+        current = ancestor.parent();
+    }
+    false
+}
+
+/// True if `item` is publicly visible outside the crate, i.e. it carries a bare
+/// `pub` visibility modifier.
+///
+/// Canonical semantics: ONLY bare `pub` counts as public. Restricted forms —
+/// `pub(crate)`, `pub(super)`, and `pub(in path)` — are treated as NON-public,
+/// because the consuming rules only care about items reachable from outside the
+/// crate. The `.trim() == "pub"` comparison is whitespace-robust; the restricted
+/// forms carry their `(…)` qualifier in the modifier text and never trim to
+/// `"pub"`.
+pub fn is_pub(item: Node, source: &[u8]) -> bool {
+    let mut cursor = item.walk();
+    for child in item.children(&mut cursor) {
+        if child.kind() == "visibility_modifier"
+            && let Ok(text) = child.utf8_text(source)
+        {
+            return text.trim() == "pub";
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(source: &str) -> tree_sitter::Tree {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .expect("grammar should load");
+        parser
+            .parse(source, None)
+            .expect("parser should produce a tree")
+    }
+
+    /// Find the first `function_item` node anywhere in the tree.
+    fn first_function_item(node: Node) -> Option<Node> {
+        if node.kind() == "function_item" {
+            return Some(node);
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(found) = first_function_item(child) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn canonical_is_pub_excludes_pub_crate_and_pub_super() {
+        let cases = [
+            ("pub fn f() {}", true),
+            ("pub(crate) fn f() {}", false),
+            ("pub(super) fn f() {}", false),
+            ("pub(in crate::a) fn f() {}", false),
+            ("fn f() {}", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let func = first_function_item(tree.root_node())
+                .expect("snippet should contain a function_item");
+            assert_eq!(
+                is_pub(func, src.as_bytes()),
+                expected,
+                "is_pub mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_in_trait_impl_distinguishes_trait_from_inherent() {
+        let trait_impl = "struct T; impl Tr for T { fn m(&self) {} }";
+        let inherent_impl = "struct T; impl T { fn m(&self) {} }";
+        let free_fn = "fn m() {}";
+
+        let cases = [
+            (trait_impl, true),
+            (inherent_impl, false),
+            (free_fn, false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let func = first_function_item(tree.root_node())
+                .expect("snippet should contain a function_item");
+            assert_eq!(
+                is_in_trait_impl(func),
+                expected,
+                "is_in_trait_impl mismatch for `{src}`"
+            );
+        }
+    }
+}

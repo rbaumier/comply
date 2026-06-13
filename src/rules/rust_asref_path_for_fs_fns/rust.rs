@@ -9,6 +9,7 @@
 use tree_sitter::Node;
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::rust_helpers::is_pub;
 
 crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
     let Some(body) = node.child_by_field_name("body") else { return; };
@@ -81,18 +82,6 @@ fn classify_path_like_type<'a>(type_node: Node<'a>, source: &'a [u8]) -> Option<
         }
         _ => None,
     }
-}
-
-fn is_pub(item: tree_sitter::Node, source: &[u8]) -> bool {
-    let mut cursor = item.walk();
-    for child in item.children(&mut cursor) {
-        if child.kind() == "visibility_modifier"
-            && let Ok(text) = child.utf8_text(source)
-        {
-            return text == "pub";
-        }
-    }
-    false
 }
 
 
