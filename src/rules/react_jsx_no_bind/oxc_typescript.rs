@@ -60,6 +60,14 @@ impl OxcCheck for Check {
             };
             let attr_name = name_ident.name.as_str();
 
+            // `ref` is not a diffed prop: React assigns it outside the
+            // render/prop path and never re-renders on ref identity change, so
+            // an inline ref callback (the standard array-of-refs pattern) is
+            // not a churn concern.
+            if attr_name == "ref" {
+                continue;
+            }
+
             // Value must be an expression container
             let Some(JSXAttributeValue::ExpressionContainer(ec)) = &attr.value else {
                 continue;
@@ -160,5 +168,32 @@ mod tests {
     fn flags_jsx_inside_component_issue_1053() {
         let src = "function App() { return <button onClick={() => f()} />; }";
         assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_arrow_on_ref_attr_issue_1965() {
+        // Regression for issue #1965: per-index ref callbacks in a `.map(...)`
+        // are the standard array-of-refs pattern; `useCallback` cannot capture
+        // a distinct index per element, and `ref` does not trigger re-renders.
+        let src = "function App() { return views.map((view, index) => <HeaderControl ref={(node) => { r.current[index] = node; }} />); }";
+        assert!(run(src).is_empty(), "unexpected: {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_bind_on_ref_attr_issue_1965() {
+        let src = "function App() { return <div ref={this.setRef.bind(this)} />; }";
+        assert!(run(src).is_empty(), "unexpected: {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_arrow_on_non_ref_attr_issue_1965() {
+        let src = "function App() { return <button onClick={() => doThing()} />; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_bind_on_non_ref_attr_issue_1965() {
+        let src = "function App() { return <button onClick={this.f.bind(this)} />; }";
+        assert_eq!(run(src).len(), 1);
     }
 }
