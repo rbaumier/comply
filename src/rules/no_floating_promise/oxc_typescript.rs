@@ -19,6 +19,13 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // `*.test-d.{ts,tsx}` are tsd / `expect-type` type-declaration tests:
+        // call statements there are type assertions checked by `tsc --noEmit`,
+        // never executed, so a "floating" promise can never reject at runtime.
+        if crate::rules::path_utils::has_test_d_infix(ctx.path) {
+            return;
+        }
+
         let AstKind::ExpressionStatement(stmt) = node.kind() else {
             return;
         };
@@ -239,6 +246,10 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    fn run_at(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, path)
     }
 
     #[test]
@@ -484,6 +495,43 @@ editor
         // A bare `.run()` whose receiver is not a `.chain()`-rooted builder stays
         // flagged — e.g. a job/task runner.
         let d = run_on("job.run();");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression tests for issue #1825: `*.test-d.{ts,tsx}` are tsd /
+    // `expect-type` type-declaration tests. Their call statements are type
+    // assertions checked by `tsc --noEmit`, never executed, so a "floating"
+    // promise can never reject at runtime — they must not be flagged.
+
+    #[test]
+    fn allows_floating_call_in_test_d_ts() {
+        let src = "\
+import { graphql, HttpResponse } from 'msw'
+
+it('infers the result type', () => {
+  graphql.query(
+    createTypedDocumentString<{ user: { id: string; name: string } }>(''),
+    () => {
+      return HttpResponse.json({ data: { user: { id: '1', name: 'John Doe' } } })
+    },
+  )
+})
+";
+        assert!(
+            run_at(src, "test/typings/graphql-typed-document-string.test-d.ts").is_empty(),
+            "floating promise in a .test-d.ts type-declaration test must not be flagged"
+        );
+    }
+
+    #[test]
+    fn allows_floating_call_in_test_d_tsx() {
+        assert!(run_at("db.save(user);", "src/Component.test-d.tsx").is_empty());
+    }
+
+    #[test]
+    fn still_flags_floating_call_in_regular_file() {
+        // Control: the same statement still fires outside a `.test-d.` file.
+        let d = run_at("db.save(user);", "src/index.ts");
         assert_eq!(d.len(), 1);
     }
 }
