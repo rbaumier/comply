@@ -20,16 +20,18 @@
 //!     consumed only from test files, often through tooling-generated path
 //!     aliases (e.g. SvelteKit's `@test-data`) that the index can't resolve,
 //!     so their exports look unimported even though tests use them.
-//!   - yargs command modules — a module exporting the characteristic command
-//!     shape (`command` AND `handler`, alongside `builder`/`describe`/
-//!     `description`/`aliases`/`deprecated`) is loaded dynamically by yargs via
-//!     `commandDir()` / `.command(require(...))`. Those named exports have no
-//!     static importer, so the signature exports are treated as live.
-//!   - Database migration modules — a module exporting BOTH `up` AND `down`
-//!     (the canonical migration signature shared by Kysely, TypeORM, Prisma,
-//!     Sequelize, Knex, node-pg-migrate, …) is discovered and run by the ORM's
-//!     migration runner via directory convention, never through a static
-//!     import. Those two exports are treated as live entry points.
+//!   - Co-occurrence conventions (`CO_OCCURRENCE_EXEMPTIONS`) — a fixed set of
+//!     named exports consumed by directory/filename convention at runtime,
+//!     never through a static import. Each convention fires only when its two
+//!     gate names co-occur in the module's export set. They are deliberately
+//!     project-agnostic: the export-shape co-occurrence identifies the
+//!     convention without needing a detected framework. Two conventions today —
+//!     yargs command modules (gated on `command` AND `handler`, alongside
+//!     `builder`/`describe`/`description`/`aliases`/`deprecated`), loaded
+//!     dynamically by yargs via `commandDir()` / `.command(require(...))`; and
+//!     database migration modules (gated on `up` AND `down`, the canonical
+//!     signature shared by Kysely, TypeORM, Prisma, Sequelize, Knex,
+//!     node-pg-migrate, …), discovered and run by the ORM's migration runner.
 //!   - Nextra meta files (`_meta.{tsx,ts,js,jsx}`) — Nextra's file-system
 //!     router consumes the per-directory `default` route-metadata export by
 //!     filename convention at build time, so it never has a static importer.
@@ -105,38 +107,59 @@ fn is_nextra_meta_file(path: &Path) -> bool {
     )
 }
 
-/// Named exports that make up a yargs command module. yargs discovers these
-/// dynamically (`commandDir()` / `.command(require(...))`), so they never have
-/// a static importer.
-const YARGS_COMMAND_EXPORTS: &[&str] = &[
-    "command",
-    "handler",
-    "builder",
-    "describe",
-    "description",
-    "aliases",
-    "deprecated",
-];
-
-/// True when the module's export set has the characteristic yargs command-module
-/// shape: both `command` and `handler` are present. The co-occurrence of these
-/// two signature exports is required so that an ordinary module merely exporting
-/// a `handler` (or a `command`) is not blanket-exempted.
-fn is_yargs_command_module<'a>(export_names: &HashSet<&'a str>) -> bool {
-    export_names.contains("command") && export_names.contains("handler")
+/// A framework convention whose named exports are discovered dynamically by a
+/// runtime/build tool and therefore never have a static importer.
+///
+/// `gate` is the pair of names that must BOTH be present in the file's export
+/// set for the convention to apply — the co-occurrence requirement that keeps
+/// an ordinary module merely exporting one signature name from being
+/// blanket-exempted. `exempt` is the full set of names treated as live once the
+/// gate matches.
+struct CoOccurrenceExemption {
+    gate: [&'static str; 2],
+    exempt: &'static [&'static str],
 }
 
-/// Named exports that make up a database migration module. ORM migration
-/// runners (Kysely, TypeORM, Prisma, Sequelize, Knex, node-pg-migrate, …)
-/// discover these by directory convention and call them at runtime, so they
-/// never have a static importer.
-const MIGRATION_EXPORTS: &[&str] = &["up", "down"];
+/// Conventions where a fixed set of named exports is consumed by directory /
+/// filename convention at runtime or build time, never through a static import.
+/// Each entry is gated on the co-occurrence of two signature names so a module
+/// merely exporting one of them is not blanket-exempted.
+///
+/// These are deliberately project-agnostic (not gated on a detected framework):
+/// the export-shape co-occurrence is specific enough to identify the convention
+/// on its own, and the conventions predate dependency detection here.
+const CO_OCCURRENCE_EXEMPTIONS: &[CoOccurrenceExemption] = &[
+    // yargs command modules — yargs discovers these dynamically via
+    // `commandDir()` / `.command(require(...))`.
+    CoOccurrenceExemption {
+        gate: ["command", "handler"],
+        exempt: &[
+            "command",
+            "handler",
+            "builder",
+            "describe",
+            "description",
+            "aliases",
+            "deprecated",
+        ],
+    },
+    // Database migration modules — ORM migration runners (Kysely, TypeORM,
+    // Prisma, Sequelize, Knex, node-pg-migrate, …) discover `up`/`down` by
+    // directory convention and call them at runtime.
+    CoOccurrenceExemption {
+        gate: ["up", "down"],
+        exempt: &["up", "down"],
+    },
+];
 
-/// True when the module's export set has the canonical migration signature:
-/// both `up` and `down` are present. The co-occurrence is required so a module
-/// merely exporting an `up` (or a `down`) is not blanket-exempted.
-fn is_migration_module<'a>(export_names: &HashSet<&'a str>) -> bool {
-    export_names.contains("up") && export_names.contains("down")
+/// True when `export_name` is exempt under any co-occurrence convention whose
+/// gate is satisfied by the module's `export_names`. A convention contributes
+/// its `exempt` names only when BOTH of its gate names co-occur, preserving the
+/// per-convention co-occurrence requirement.
+fn is_co_occurrence_exempt(export_name: &str, export_names: &HashSet<&str>) -> bool {
+    CO_OCCURRENCE_EXEMPTIONS.iter().any(|conv| {
+        conv.gate.iter().all(|g| export_names.contains(g)) && conv.exempt.contains(&export_name)
+    })
 }
 
 /// True when the project contains a Docusaurus `@site/`-aliased import whose
@@ -272,18 +295,12 @@ impl TextCheck for Check {
         let magic: std::collections::HashSet<&str> =
             ctx.project.framework_magic_exports().collect();
 
-        // yargs command modules export `command`/`handler`/`builder`/`describe`
-        // (etc.) which yargs loads dynamically — no static importer ever
-        // references them. When the file has the command-module shape, its
-        // signature exports are entry points consumed at runtime, not dead.
+        // Co-occurrence-driven exemptions (yargs command modules, ORM migration
+        // modules): a fixed set of named exports is consumed by directory /
+        // filename convention at runtime, never through a static import. Each
+        // convention fires only when its two gate names co-occur in this set, so
+        // a module merely exporting one signature name is not blanket-exempted.
         let export_names: HashSet<&str> = exports.iter().map(|e| e.name.as_str()).collect();
-        let is_yargs_command = is_yargs_command_module(&export_names);
-
-        // Database migration modules export `up`/`down`, which the ORM migration
-        // runner discovers by directory convention and calls at runtime — no
-        // static importer references them. When the file has the migration shape,
-        // those two exports are entry points, not dead.
-        let is_migration = is_migration_module(&export_names);
 
         // The two source scans below each tree-sitter-parse the whole file, so
         // they are computed lazily: only an export that already survived the
@@ -318,10 +335,7 @@ impl TextCheck for Check {
             if magic.contains(export.name.as_str()) {
                 continue;
             }
-            if is_yargs_command && YARGS_COMMAND_EXPORTS.contains(&export.name.as_str()) {
-                continue;
-            }
-            if is_migration && MIGRATION_EXPORTS.contains(&export.name.as_str()) {
+            if is_co_occurrence_exempt(&export.name, &export_names) {
                 continue;
             }
             if !index.get_usages(&canon, &export.name).is_empty() {
@@ -1307,6 +1321,54 @@ mod tests {
             "lone up export (no down) must still be flagged, got: {diags:?}"
         );
         assert!(diags[0].message.contains("up"));
+    }
+
+    #[test]
+    fn yargs_and_migration_share_co_occurrence_mechanism() {
+        // The single declarative `CO_OCCURRENCE_EXEMPTIONS` table services BOTH
+        // the yargs and the migration convention through one
+        // `is_co_occurrence_exempt` check — no per-convention Rust predicate. A
+        // migration file (up+down) and a yargs file (command+handler) are both
+        // exempt, while a lone `up` (gate not satisfied) is still flagged,
+        // proving the gate is the declarative `all(gate)` check, not a
+        // hardcoded module shape.
+        let migration = vec![
+            (
+                "db/migrations/0001-init.ts",
+                "export async function up() {}\nexport async function down() {}\n",
+            ),
+            ("db/index.ts", "export const z = 1;"),
+        ];
+        let (_d1, migration_diags) = run_on_project(&migration, "db/migrations/0001-init.ts");
+        assert!(
+            migration_diags.is_empty(),
+            "up+down migration must be exempt via the shared table, got: {migration_diags:?}"
+        );
+
+        let yargs = vec![
+            (
+                "cli/commands/build.ts",
+                "export const command = 'build';\nexport const handler = () => {};\n",
+            ),
+            ("cli/index.ts", "export const z = 1;"),
+        ];
+        let (_d2, yargs_diags) = run_on_project(&yargs, "cli/commands/build.ts");
+        assert!(
+            yargs_diags.is_empty(),
+            "command+handler yargs module must be exempt via the shared table, got: {yargs_diags:?}"
+        );
+
+        let lone_up = vec![
+            ("db/migrations/lone.ts", "export const up = () => {};"),
+            ("db/index.ts", "export const z = 1;"),
+        ];
+        let (_d3, lone_diags) = run_on_project(&lone_up, "db/migrations/lone.ts");
+        assert_eq!(
+            lone_diags.len(),
+            1,
+            "lone up (gate not satisfied) must still be flagged, got: {lone_diags:?}"
+        );
+        assert!(lone_diags[0].message.contains("up"));
     }
 
     #[test]
