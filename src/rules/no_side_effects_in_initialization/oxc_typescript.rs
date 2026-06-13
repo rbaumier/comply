@@ -28,6 +28,14 @@
 //!   `series(...)`, `parallel(...)`, …). The registrations are the file's whole
 //!   purpose — Gulp runs them by importing the build script — so they are
 //!   intentional side effects, not tree-shakeable library code;
+//! - Storybook addon manager entry files by content shape: a module that
+//!   imports the `addons` API from a Storybook manager package
+//!   (`storybook/manager-api`, `@storybook/manager-api`, `@storybook/addons`,
+//!   `@storybook/manager`) and registers the addon at the top level
+//!   (`addons.register(...)`, `addons.add(...)`, `addons.setConfig(...)`). The
+//!   Storybook manager bundle loads these entry files to run the registrations,
+//!   so the top-level calls are intentional side effects, not tree-shakeable
+//!   library code;
 //! - framework entry points reported by `is_framework_entry_point`;
 //! - TanStack Start entry files (`app/{client,router,server}.{ts,tsx}` or
 //!   `src/app/…`) when the `tanstack-router` framework is detected;
@@ -318,6 +326,88 @@ fn is_gulp_task_file(program: &Program) -> bool {
     })
 }
 
+const STORYBOOK_MANAGER_SPECIFIERS: &[&str] = &[
+    "@storybook/manager-api",
+    "@storybook/addons",
+    "@storybook/manager",
+    "storybook/manager-api",
+];
+
+const STORYBOOK_REGISTRATION_IDENTS: &[&str] = &["register", "add", "setConfig"];
+
+/// Collect local identifier names bound to the default/namespace/`addons`
+/// import from a Storybook manager package. Handles
+/// `import { addons } from "storybook/manager-api"`,
+/// `import { addons as a } from "@storybook/manager-api"`,
+/// `import addons from "@storybook/addons"`, and
+/// `import * as addons from "@storybook/manager-api"`.
+fn storybook_addons_bindings(program: &Program) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for stmt in &program.body {
+        let Statement::ImportDeclaration(import) = stmt else { continue };
+        if !STORYBOOK_MANAGER_SPECIFIERS.contains(&import.source.value.as_str()) {
+            continue;
+        }
+        let Some(specifiers) = &import.specifiers else { continue };
+        for spec in specifiers {
+            match spec {
+                ImportDeclarationSpecifier::ImportSpecifier(named)
+                    if named.imported.name() == "addons" =>
+                {
+                    out.insert(named.local.name.to_string());
+                }
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(def) => {
+                    out.insert(def.local.name.to_string());
+                }
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) => {
+                    out.insert(ns.local.name.to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// True when `call` registers a Storybook addon at the top level —
+/// `addons.register(...)`, `addons.add(...)`, or `addons.setConfig(...)` where
+/// `addons` is the binding imported from a Storybook manager package.
+fn is_storybook_registration_call(
+    call: &oxc_ast::ast::CallExpression,
+    bindings: &HashSet<String>,
+) -> bool {
+    let Expression::StaticMemberExpression(m) = &call.callee else {
+        return false;
+    };
+    if !STORYBOOK_REGISTRATION_IDENTS.contains(&m.property.name.as_str()) {
+        return false;
+    }
+    let Expression::Identifier(obj) = &m.object else {
+        return false;
+    };
+    bindings.contains(obj.name.as_str())
+}
+
+/// True when the program is a Storybook addon manager entry file: it imports
+/// the `addons` API from a Storybook manager package and registers the addon at
+/// the top level (`addons.register(...)`, `addons.add(...)`,
+/// `addons.setConfig(...)`). Such a file is an extension-point entry — the
+/// Storybook manager bundle loads it by glob/import specifically to run those
+/// registrations — so the top-level calls are intentional side effects, not
+/// tree-shakeable library code. The Storybook import is required so an ordinary
+/// module that happens to call a local `addons.register()` is still flagged.
+fn is_storybook_addon_file(program: &Program) -> bool {
+    let bindings = storybook_addons_bindings(program);
+    if bindings.is_empty() {
+        return false;
+    }
+    program.body.iter().any(|stmt| {
+        let Statement::ExpressionStatement(es) = stmt else { return false };
+        let Expression::CallExpression(call) = &es.expression else { return false };
+        is_storybook_registration_call(call, &bindings)
+    })
+}
+
 /// Collect local identifier names that are bound to `startTransition`
 /// imported from `"react"`. Handles `import { startTransition } from "react"`
 /// and `import { startTransition as ST } from "react"`.
@@ -602,6 +692,7 @@ impl OxcCheck for Check {
             || is_server_entry_shape(program)
             || is_react_entry_shape(program)
             || is_gulp_task_file(program)
+            || is_storybook_addon_file(program)
         {
             return Vec::new();
         }
@@ -1174,7 +1265,63 @@ mod tests {
         );
     }
 
-    // --- (i) Data-initialization `forEach` (Closes #2033) ------------------
+    // --- (i) Storybook addon manager entry files (Closes #2058) -----------
+
+    // Regression for #2058: a Storybook addon `manager.tsx` imports `addons`
+    // from a Storybook manager package and registers the addon at the top level
+    // via `addons.register(...)` / `addons.add(...)`. The Storybook manager
+    // bundle loads these entry files to run exactly those registrations, so the
+    // top-level calls are intentional side effects, not tree-shakeable code.
+    #[test]
+    fn allows_storybook_addon_manager_entry() {
+        let src = "\
+            import { addons, types } from 'storybook/manager-api';\n\
+            addons.register(ADDON_ID, (api) => {\n\
+              addons.add(PANEL_ID, {\n\
+                title: Title,\n\
+                type: types.PANEL,\n\
+                render: () => null,\n\
+              });\n\
+            });\n";
+        let diags =
+            crate::rules::test_helpers::run_rule(&Check, src, "code/addons/a11y/src/manager.tsx");
+        assert!(
+            diags.is_empty(),
+            "Storybook addon manager entry should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_storybook_set_config_from_addons_package() {
+        // Legacy `@storybook/addons` default import + `setConfig` registration.
+        let src = "\
+            import addons from '@storybook/addons';\n\
+            addons.setConfig({ panelPosition: 'right' });\n";
+        let diags =
+            crate::rules::test_helpers::run_rule(&Check, src, "code/core/src/manager/setup.ts");
+        assert!(
+            diags.is_empty(),
+            "addons.setConfig from @storybook/addons should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_addons_register_without_storybook_import() {
+        // No Storybook import — a local `addons.register()` is an ordinary
+        // top-level side effect that still blocks tree-shaking.
+        let src = "\
+            import { addons } from './my-registry';\n\
+            addons.register('x', () => {});\n\
+            doSideEffect();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widgets.ts");
+        assert_eq!(
+            diags.len(),
+            2,
+            "non-Storybook module with top-level side effects must still be flagged, got {diags:?}"
+        );
+    }
+
+    // --- (j) Data-initialization `forEach` (Closes #2033) ------------------
 
     // Regression for #2033: a module-level `forEach` populating a locally
     // declared `Map` from a locally declared `const` array is a pure data
