@@ -43,6 +43,12 @@ impl OxcCheck for Check {
         if matches!(parent.kind(), AstKind::TaggedTemplateExpression(_)) {
             return;
         }
+        // Rule-tester test cases embed code-under-test as template literals
+        // whose indentation reflects the structure of the tested source, not
+        // excess whitespace inherited from the surrounding scope.
+        if is_rule_tester_snippet(parent, semantic) {
+            return;
+        }
         // Snapshot assertions intentionally preserve indentation for readability.
         if let AstKind::CallExpression(call) = parent.kind() {
             if let oxc_ast::ast::Expression::StaticMemberExpression(member) = &call.callee {
@@ -81,6 +87,44 @@ impl OxcCheck for Check {
             severity: super::META.severity,
             span: Some((tpl.span.start as usize, (tpl.span.end - tpl.span.start) as usize)),
         });
+    }
+}
+
+/// Whether the template literal is the code-under-test of a rule-tester case.
+///
+/// ESLint / typescript-eslint rule testers express the tested source inline as
+/// a template literal: the value of a `code`/`output` property, or a bare entry
+/// in a `valid`/`invalid` array. Its indentation mirrors the structure of the
+/// source being tested, so stripping it would corrupt the test input.
+fn is_rule_tester_snippet<'a>(
+    parent: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    match parent.kind() {
+        // `{ code: \`...\` }` / `{ output: \`...\` }`
+        AstKind::ObjectProperty(prop) => {
+            matches!(object_property_key(&prop.key), Some("code" | "output"))
+        }
+        // `{ valid: [\`...\`] }` / `{ invalid: [\`...\`] }`
+        AstKind::ArrayExpression(_) => {
+            let grandparent = semantic.nodes().parent_node(parent.id());
+            if let AstKind::ObjectProperty(prop) = grandparent.kind() {
+                matches!(object_property_key(&prop.key), Some("valid" | "invalid"))
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+/// The static name of an object-property key, or `None` for computed keys.
+fn object_property_key<'a>(key: &'a oxc_ast::ast::PropertyKey<'a>) -> Option<&'a str> {
+    use oxc_ast::ast::PropertyKey;
+    match key {
+        PropertyKey::StaticIdentifier(id) => Some(id.name.as_str()),
+        PropertyKey::StringLiteral(s) => Some(s.value.as_str()),
+        _ => None,
     }
 }
 
@@ -265,5 +309,76 @@ expect(() => validate(x)).toThrowErrorMatchingInlineSnapshot(`
 `);
 "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_rule_tester_code_property() {
+        let src = r#"
+ruleTester.run('prefer-optional-chain', rule, {
+    invalid: [
+        {
+            code: `
+                if (foo) {
+                    (foo || {}).bar;
+                }
+            `,
+            errors: [{ messageId: 'preferOptionalChain' }],
+        },
+    ],
+});
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_rule_tester_output_property() {
+        let src = r#"
+ruleTester.run('rule', rule, {
+    invalid: [
+        {
+            code: `let x = 1`,
+            output: `
+                const x = 1;
+            `,
+        },
+    ],
+});
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_rule_tester_bare_valid_case() {
+        let src = r#"
+ruleTester.run('rule', rule, {
+    valid: [
+        `
+            const x = {
+                a: 1,
+            };
+        `,
+    ],
+    invalid: [],
+});
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_indented_template_in_non_tester_property() {
+        let src = r#"
+function render() {
+    return {
+        html: `
+            <div>
+                <p>Hello</p>
+            </div>
+        `,
+    };
+}
+"#;
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("common leading indentation"));
     }
 }
