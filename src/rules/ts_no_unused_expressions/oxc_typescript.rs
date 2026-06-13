@@ -4,6 +4,16 @@ use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::{ChainElement, Expression};
 use std::sync::Arc;
 
+/// SolidJS reactive primitives that re-run their callback whenever a tracked
+/// signal read inside it changes. A bare member access in that callback is the
+/// subscription itself — the proxy getter access registers the dependency.
+const SOLID_REACTIVE_PRIMITIVES: &[&str] = &[
+    "createEffect",
+    "createMemo",
+    "createRenderEffect",
+    "createComputed",
+];
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -41,6 +51,17 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // A bare member-read statement inside a SolidJS reactive callback
+            // registers a reactive subscription — the proxy getter access is the
+            // intended side effect, so the read must not be flagged.
+            if matches!(
+                expr,
+                Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_)
+            ) && is_in_reactive_callback(node, semantic)
+            {
+                continue;
+            }
+
             let (line, column) =
                 byte_offset_to_line_col(ctx.source, stmt.span.start as usize);
             diagnostics.push(Diagnostic {
@@ -75,6 +96,33 @@ fn is_concise_arrow_body(
         arrow_node.kind(),
         AstKind::ArrowFunctionExpression(arrow) if arrow.expression
     )
+}
+
+/// True when `node` sits inside a callback (arrow or function) passed directly
+/// as an argument to a call whose callee is a SolidJS reactive primitive
+/// (`createEffect`, `createMemo`, …). Walks up to the nearest enclosing
+/// function, then checks the call that function is an argument to.
+fn is_in_reactive_callback(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let mut found_callback = false;
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
+                found_callback = true;
+            }
+            AstKind::CallExpression(call) if found_callback => {
+                return matches!(
+                    &call.callee,
+                    Expression::Identifier(id)
+                        if SOLID_REACTIVE_PRIMITIVES.contains(&id.name.as_str())
+                );
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 fn has_side_effects(expr: &Expression) -> bool {
@@ -298,6 +346,37 @@ mod tests {
         // `foo.bar<T>;` is a type instantiation on an unrelated object, not an
         // assertion chain — still an unused expression.
         let d = run_on("foo.bar<number>;");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression #1983: a bare member-read inside a SolidJS reactive callback
+    // registers a reactive subscription (the store proxy getter is the side
+    // effect), so the read must not be flagged.
+    #[test]
+    fn allows_member_read_in_solid_reactive_callback_issue_1983() {
+        let src = r#"createEffect(() => { s(); s2(); state.firstName; });"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_member_read_in_create_memo_callback_issue_1983() {
+        let src = r#"createMemo(() => { props.value; return 1; });"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn still_flags_member_read_at_top_level() {
+        // A bare member read NOT inside a reactive primitive callback is still
+        // an unused expression.
+        let d = run_on("state.firstName;");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_dead_expression_in_reactive_callback() {
+        // Only member reads are the reactive-subscription pattern; a genuinely
+        // dead expression inside the same callback must still fire.
+        let d = run_on("createEffect(() => { 1 + 1; });");
         assert_eq!(d.len(), 1);
     }
 }
