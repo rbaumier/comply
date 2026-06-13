@@ -18,7 +18,56 @@ const COMPARISON_OPS: &[BinaryOperator] = &[
     BinaryOperator::GreaterEqualThan,
 ];
 
-/// Check whether an expression contains a bitwise operator.
+/// Whether an identifier name reads as a bit-flag constant (SCREAMING_SNAKE_CASE),
+/// e.g. `STATIC_BLOCK`, `BIT`.
+fn is_flag_constant_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        && name.chars().any(|c| c.is_ascii_uppercase())
+}
+
+/// Whether an identifier name reads as an enum member / flag accessor
+/// (PascalCase or SCREAMING_SNAKE_CASE), e.g. `Locations`, `STATIC_BLOCK`.
+fn is_flag_member_name(name: &str) -> bool {
+    name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+}
+
+/// Whether an operand is an unambiguous bit-flag signal: a numeric literal,
+/// a SCREAMING_SNAKE constant, a member access to an enum-like flag
+/// (`ScopeFlag.STATIC_BLOCK`, `OptionFlags.Locations`, `FLAGS.X`), or a
+/// bitwise combination of such flags (`ScopeFlag.VAR | ScopeFlag.CLASS_BASE`).
+fn is_flag_operand(expr: &Expression) -> bool {
+    match expr {
+        Expression::NumericLiteral(_) => true,
+        Expression::Identifier(id) => is_flag_constant_name(id.name.as_str()),
+        Expression::StaticMemberExpression(member) => {
+            is_flag_member_name(member.property.name.as_str())
+        }
+        Expression::ParenthesizedExpression(paren) => is_flag_operand(&paren.expression),
+        Expression::BinaryExpression(bin)
+            if matches!(
+                bin.operator,
+                BinaryOperator::BitwiseAnd
+                    | BinaryOperator::BitwiseOR
+                    | BinaryOperator::BitwiseXOR
+            ) =>
+        {
+            is_flag_operand(&bin.left) && is_flag_operand(&bin.right)
+        }
+        _ => false,
+    }
+}
+
+/// Whether a bitwise binary expression is a deliberate bitmask test rather
+/// than a likely `&&`/`||` typo. True when either operand is a flag signal,
+/// applied recursively so combined masks (`ScopeFlag.VAR | ScopeFlag.CLASS`)
+/// remain exempt.
+fn is_bitmask_test(bin: &oxc_ast::ast::BinaryExpression) -> bool {
+    is_flag_operand(&bin.left) || is_flag_operand(&bin.right)
+}
+
+/// Check whether an expression contains a bitwise operator likely standing in
+/// for a logical operator. Deliberate bitmask flag tests are not flagged.
 fn has_bitwise_op(expr: &Expression) -> bool {
     match expr {
         Expression::BinaryExpression(bin) => {
@@ -31,7 +80,7 @@ fn has_bitwise_op(expr: &Expression) -> bool {
                     | BinaryOperator::BitwiseOR
                     | BinaryOperator::BitwiseXOR
             ) {
-                return true;
+                return !is_bitmask_test(bin);
             }
             has_bitwise_op(&bin.left) || has_bitwise_op(&bin.right)
         }
@@ -81,5 +130,77 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn flags_bitwise_and_on_boolean_operands() {
+        assert_eq!(run_on("if (isActive & isReady) {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_bitwise_or_on_boolean_operands() {
+        assert_eq!(run_on("if (isActive | isReady) {}").len(), 1);
+    }
+
+    #[test]
+    fn allows_logical_operators() {
+        assert!(run_on("if (a && b) {}").is_empty());
+        assert!(run_on("if (a || b) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_comparison_bitmask_test() {
+        assert!(run_on("if ((state & FLAG) === 0) {}").is_empty());
+        assert!(run_on("while ((mask & bits) !== 0) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_enum_member_bitmask_test() {
+        // Regression for #2064: `if (flags & EnumMember)` is a deliberate bitmask test.
+        assert!(run_on("if (flags & ScopeFlag.STATIC_BLOCK) { return true; }").is_empty());
+        assert!(run_on("if (optionFlags & OptionFlags.Locations) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_combined_enum_mask_bitmask_test() {
+        assert!(
+            run_on("if (flags & (ScopeFlag.VAR | ScopeFlag.CLASS_BASE)) { return false; }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_screaming_snake_constant_bitmask_test() {
+        assert!(run_on("while (mask & BIT_FLAG) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_numeric_literal_bitmask_test() {
+        assert!(run_on("if (flags & 4) {}").is_empty());
     }
 }
