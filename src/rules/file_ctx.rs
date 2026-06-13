@@ -304,8 +304,12 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
             || lower.starts_with("__tests__/")
             || lower.contains("/fixtures/")
             || lower.contains("/__mocks__/")
+            || lower.contains("/e2e/")
+            || lower.starts_with("e2e/")
             || lower.contains(".test.")
             || lower.contains(".spec.")
+            || lower.contains(".e2e.")
+            || lower.contains("_test.")
             || lower.ends_with("/test.ts")
             || lower.ends_with("/test.tsx")
             || lower.ends_with("/test.js")
@@ -447,6 +451,11 @@ mod tests {
         assert!(scan_path(&PathBuf::from("src/foo.test.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("src/foo.spec.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("__tests__/foo.ts")).in_test_dir);
+        // e2e directory + `.e2e.` marker + `_test.` infix conventions.
+        assert!(scan_path(&PathBuf::from("e2e/foo.spec.ts")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("src/e2e/login.ts")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("src/foo.e2e.ts")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("src/foo_test.ts")).in_test_dir);
         // Test-helper infrastructure directories (issue #481).
         assert!(scan_path(&PathBuf::from("src/api/test-helpers/als-proxy.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("src/test-helper/db.ts")).in_test_dir);
