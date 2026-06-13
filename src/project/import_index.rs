@@ -1389,97 +1389,109 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
     }
 
     // `export function foo` / `export class Foo` / `export const foo = …` /
-    // `export type Foo = …` / `export interface Foo` / `export enum Foo`
+    // `export type Foo = …` / `export interface Foo` / `export enum Foo`.
+    // Ambient `export declare …` wraps its declaration in an
+    // `ambient_declaration` node; recurse into it so the body-less ambient
+    // forms (`export declare function/const/class/namespace/enum`) are indexed
+    // as real named exports.
     for child in node.named_children(&mut node.walk()) {
-        match child.kind() {
-            "function_declaration" | "generator_function_declaration" => {
-                if let Some(id) = child
-                    .named_children(&mut child.walk())
-                    .find(|c| c.kind() == "identifier")
-                {
-                    let params = extract_params(child, source);
-                    out.push(ExportedSymbol {
-                        name: text_of(id, source),
-                        kind: ExportKind::Named,
-                        line,
-                        reexport_source: None,
-                        params,
-                        is_type_only: false,
-                        local_name: None,
-                    });
-                }
-            }
-            "class_declaration" | "abstract_class_declaration" => {
-                if let Some(id) = child
-                    .named_children(&mut child.walk())
-                    .find(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
-                {
-                    out.push(ExportedSymbol {
-                        name: text_of(id, source),
-                        kind: ExportKind::Named,
-                        line,
-                        reexport_source: None,
-                        params: Vec::new(),
-                        is_type_only: false,
-                        local_name: None,
-                    });
-                }
-            }
-            "lexical_declaration" | "variable_declaration" => {
-                // `const a = 1, b = 2` can export multiple names, and the
-                // LHS may also be a destructuring pattern:
-                // `export const { signIn, signOut } = authClient` —
-                // every property identifier in the pattern is a real
-                // export. Same for array patterns and nested ones.
-                let mut inner = child.walk();
-                for decl in child.named_children(&mut inner) {
-                    if decl.kind() != "variable_declarator" {
-                        continue;
-                    }
-                    let Some(name_node) = decl
-                        .named_children(&mut decl.walk())
-                        .find(|c| is_binding_pattern_kind(c.kind()))
-                    else {
-                        continue;
-                    };
-                    let mut names = Vec::new();
-                    collect_pattern_names(name_node, source, &mut names);
-                    for name in names {
+        if child.kind() == "ambient_declaration" {
+            // The inner declaration of `export declare …` is a real named
+            // export. Its body-less `function_signature` is an ambient
+            // function (not an overload), so it must be indexed here — unlike a
+            // bare `function_signature` directly under `export_statement`,
+            // which is an overload signature and is skipped below.
+            if let Some(inner) = child
+                .named_children(&mut child.walk())
+                .find(|c| c.kind() != "comment")
+            {
+                if inner.kind() == "function_signature" {
+                    if let Some(id) = inner
+                        .named_children(&mut inner.walk())
+                        .find(|c| c.kind() == "identifier")
+                    {
                         out.push(ExportedSymbol {
-                            name,
+                            name: text_of(id, source),
                             kind: ExportKind::Named,
                             line,
                             reexport_source: None,
-                            params: Vec::new(),
+                            params: extract_params(inner, source),
                             is_type_only: false,
                             local_name: None,
                         });
                     }
+                } else {
+                    extract_declaration_export(inner, source, line, out);
                 }
             }
-            "type_alias_declaration" | "interface_declaration" => {
-                if let Some(id) = child
-                    .named_children(&mut child.walk())
-                    .find(|c| c.kind() == "type_identifier" || c.kind() == "identifier")
-                {
-                    out.push(ExportedSymbol {
-                        name: text_of(id, source),
-                        kind: ExportKind::Named,
-                        line,
-                        reexport_source: None,
-                        params: Vec::new(),
-                        is_type_only: true,
-                        local_name: None,
-                    });
-                }
+            continue;
+        }
+        extract_declaration_export(child, source, line, out);
+    }
+}
+
+/// Extract exported name(s) from a declaration node directly under an
+/// `export_statement`. A bare `function_signature` (overload signature) is
+/// deliberately not matched, so an overloaded `export function` yields one
+/// export, not two; ambient `export declare function` is handled separately by
+/// the caller.
+fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut Vec<ExportedSymbol>) {
+    match child.kind() {
+        "function_declaration" | "generator_function_declaration" => {
+            if let Some(id) = child
+                .named_children(&mut child.walk())
+                .find(|c| c.kind() == "identifier")
+            {
+                let params = extract_params(child, source);
+                out.push(ExportedSymbol {
+                    name: text_of(id, source),
+                    kind: ExportKind::Named,
+                    line,
+                    reexport_source: None,
+                    params,
+                    is_type_only: false,
+                    local_name: None,
+                });
             }
-            "enum_declaration" => {
-                if let Some(id) = child
-                    .named_children(&mut child.walk())
-                    .find(|c| c.kind() == "type_identifier" || c.kind() == "identifier")
-                {
+        }
+        "class_declaration" | "abstract_class_declaration" => {
+            if let Some(id) = child
+                .named_children(&mut child.walk())
+                .find(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
+            {
+                out.push(ExportedSymbol {
+                    name: text_of(id, source),
+                    kind: ExportKind::Named,
+                    line,
+                    reexport_source: None,
+                    params: Vec::new(),
+                    is_type_only: false,
+                    local_name: None,
+                });
+            }
+        }
+        "lexical_declaration" | "variable_declaration" => {
+            // `const a = 1, b = 2` can export multiple names, and the
+            // LHS may also be a destructuring pattern:
+            // `export const { signIn, signOut } = authClient` —
+            // every property identifier in the pattern is a real
+            // export. Same for array patterns and nested ones.
+            let mut inner = child.walk();
+            for decl in child.named_children(&mut inner) {
+                if decl.kind() != "variable_declarator" {
+                    continue;
+                }
+                let Some(name_node) = decl
+                    .named_children(&mut decl.walk())
+                    .find(|c| is_binding_pattern_kind(c.kind()))
+                else {
+                    continue;
+                };
+                let mut names = Vec::new();
+                collect_pattern_names(name_node, source, &mut names);
+                for name in names {
                     out.push(ExportedSymbol {
-                        name: text_of(id, source),
+                        name,
                         kind: ExportKind::Named,
                         line,
                         reexport_source: None,
@@ -1489,8 +1501,57 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                     });
                 }
             }
-            _ => {}
         }
+        "type_alias_declaration" | "interface_declaration" => {
+            if let Some(id) = child
+                .named_children(&mut child.walk())
+                .find(|c| c.kind() == "type_identifier" || c.kind() == "identifier")
+            {
+                out.push(ExportedSymbol {
+                    name: text_of(id, source),
+                    kind: ExportKind::Named,
+                    line,
+                    reexport_source: None,
+                    params: Vec::new(),
+                    is_type_only: true,
+                    local_name: None,
+                });
+            }
+        }
+        "enum_declaration" => {
+            if let Some(id) = child
+                .named_children(&mut child.walk())
+                .find(|c| c.kind() == "type_identifier" || c.kind() == "identifier")
+            {
+                out.push(ExportedSymbol {
+                    name: text_of(id, source),
+                    kind: ExportKind::Named,
+                    line,
+                    reexport_source: None,
+                    params: Vec::new(),
+                    is_type_only: false,
+                    local_name: None,
+                });
+            }
+        }
+        "internal_module" | "module" => {
+            // `export [declare] namespace Foo { … }` / `module Foo { … }`.
+            if let Some(id) = child
+                .named_children(&mut child.walk())
+                .find(|c| c.kind() == "identifier")
+            {
+                out.push(ExportedSymbol {
+                    name: text_of(id, source),
+                    kind: ExportKind::Named,
+                    line,
+                    reexport_source: None,
+                    params: Vec::new(),
+                    is_type_only: false,
+                    local_name: None,
+                });
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1776,7 +1837,7 @@ fn oxc_extract_export_named(
     export: &oxc_ast::ast::ExportNamedDeclaration,
     out: &mut Vec<ExportedSymbol>,
 ) {
-    use oxc_ast::ast::Declaration;
+    use oxc_ast::ast::{Declaration, TSModuleDeclarationName};
 
     let line = oxc_line_at(lines, export.span.start as usize);
     let reexport_source = export.source.as_ref().map(|s| s.value.as_str().to_string());
@@ -1825,11 +1886,12 @@ fn oxc_extract_export_named(
     // are real named exports (importable by name), so they are indexed too.
     match export.declaration.as_ref().unwrap() {
         Declaration::FunctionDeclaration(func) => {
-            // A body-less function is an overload signature or ambient
-            // declaration; tree-sitter parses those as `function_signature`
-            // (not `function_declaration`) and never emits them. Match that so
-            // an overloaded `export function` yields one export, not two.
-            if func.body.is_some()
+            // An overload signature is body-less and not `declare` — it is
+            // paired with an implementation in the same file, so it is skipped
+            // to avoid double-counting. An ambient `export declare function` is
+            // also body-less but IS the export (no implementation accompanies
+            // it), so `declare` body-less functions are still indexed.
+            if (func.body.is_some() || func.declare)
                 && let Some(id) = &func.id
             {
                 out.push(ExportedSymbol {
@@ -1905,6 +1967,23 @@ fn oxc_extract_export_named(
                 is_type_only: false,
                 local_name: None,
             });
+        }
+        Declaration::TSModuleDeclaration(decl) => {
+            // `export [declare] namespace Foo { … }` / `module Foo { … }` — an
+            // identifier-named namespace is importable by name. String-literal
+            // module names (`declare module '*.css'`) are not importable
+            // bindings, so they are skipped.
+            if let TSModuleDeclarationName::Identifier(id) = &decl.id {
+                out.push(ExportedSymbol {
+                    name: id.name.as_str().to_string(),
+                    kind: ExportKind::Named,
+                    line,
+                    reexport_source: None,
+                    params: Vec::new(),
+                    is_type_only: false,
+                    local_name: None,
+                });
+            }
         }
         _ => {}
     }
@@ -3061,6 +3140,83 @@ mod tests {
     }
 
     #[test]
+    fn indexes_ambient_declare_exports_issue_2030() {
+        // Regression for rbaumier/comply#2030 — ambient `export declare …`
+        // declarations are body-less but importable named exports. `import-named`
+        // reads this index, so every ambient form must be recorded or the import
+        // is wrongly flagged "not exported".
+        let (_dir, index, paths) = build_index(&[(
+            "shared.ts",
+            "export declare function test(name: string): void;\n\
+             export declare const cfg: number;\n\
+             export declare class Helper {}\n\
+             export declare enum Mode { A, B }\n\
+             export declare namespace NS { const x: number; }",
+        )]);
+        let exports = index.get_exports(&paths[0]);
+        let names: Vec<&str> = exports.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"test"), "ambient function must be indexed");
+        assert!(names.contains(&"cfg"), "ambient const must be indexed");
+        assert!(names.contains(&"Helper"), "ambient class must be indexed");
+        assert!(names.contains(&"Mode"), "ambient enum must be indexed");
+        assert!(names.contains(&"NS"), "ambient namespace must be indexed");
+    }
+
+    #[test]
+    fn ambient_function_import_links_usage_issue_2030() {
+        // The end-to-end shape from the issue: importing `{ test }` from a module
+        // that exports it via `export declare function` must link as a usage (so
+        // `import-named` sees the export) — while a name the module does NOT
+        // export stays unlinked (true positive preserved).
+        let (_dir, index, paths) = build_index(&[
+            (
+                "shared.ts",
+                "export declare function test(name: string): void;",
+            ),
+            (
+                "app.ts",
+                "import { test, missing } from './shared.js';\ntest('x');",
+            ),
+        ]);
+        let shared = &paths[0];
+        assert_eq!(
+            index.get_usages(shared, "test").len(),
+            1,
+            "ambient-exported `test` import must link to the exporting file"
+        );
+        // The export set drives `import-named`: `test` is present (no FP),
+        // `missing` is absent (true positive stays). The usage map links by
+        // import statement and does not encode export presence, so the export
+        // set is what the rule checks against.
+        let names: Vec<&str> = index
+            .get_exports(shared)
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        assert!(names.contains(&"test"));
+        assert!(!names.contains(&"missing"));
+    }
+
+    #[test]
+    fn overload_signature_yields_single_export() {
+        // A body-less overload signature paired with an implementation is one
+        // export, not two — the ambient-declaration handling must not regress
+        // this dedup.
+        let (_dir, index, paths) = build_index(&[(
+            "m.ts",
+            "export function f(a: string): void;\n\
+             export function f(a: number): void;\n\
+             export function f(a: any): void {}",
+        )]);
+        let count = index
+            .get_exports(&paths[0])
+            .iter()
+            .filter(|e| e.name == "f")
+            .count();
+        assert_eq!(count, 1, "overloaded export must yield exactly one export");
+    }
+
+    #[test]
     fn indexes_destructured_object_export() {
         // Regression for rbaumier/comply#37 — names introduced by a
         // destructured `export const { ... } = obj` are real exports.
@@ -3725,6 +3881,18 @@ mod tests {
         "export type Alias = number;",
         "export interface Iface { x: number; }",
         "export enum Color { Red, Green }",
+        // ambient `export declare …` — body-less but real named exports
+        "export declare function ambientFn(name: string): void;",
+        "export declare const ambientConst: number;",
+        "export declare let ambientLet: number;",
+        "export declare var ambientVar: number;",
+        "export declare class AmbientClass {}",
+        "export declare enum AmbientEnum { A, B }",
+        "export declare namespace AmbientNs { const x: number; }",
+        // overload signatures: body-less + implementation must yield ONE export
+        "export function overloaded(a: string): void;\n\
+         export function overloaded(a: number): void;\n\
+         export function overloaded(a: any): void {}",
         // --- calls / new ---
         "f(a, b);",
         "f(a, obj.x, 42, ...spread);",
