@@ -22,6 +22,9 @@ fn is_directive(stmt: &Statement) -> bool {
 /// imports:
 /// - `jest.setTimeout(N)` — sets the default test timeout for the file
 /// - `vi.setConfig({ testTimeout: N })` — Vitest equivalent
+/// - `jest.mock(...)` / `jest.unmock(...)` / `vi.mock(...)` / `vi.unmock(...)` —
+///   module mocks that the test runner hoists above the imports they mock, so
+///   placing them before imports is required for the mock to take effect
 /// - `jasmine.DEFAULT_TIMEOUT_INTERVAL = N` — Jasmine equivalent (assignment)
 ///
 /// These are zero-import-side-effect statements and must not flip `saw_non_import`.
@@ -30,14 +33,16 @@ fn is_test_framework_config(stmt: &Statement) -> bool {
         return false;
     };
 
-    // `jest.setTimeout(N)` / `vi.setConfig(...)`
+    // `jest.setTimeout(N)` / `vi.setConfig(...)` / `jest.mock(...)` etc.
     if let Expression::CallExpression(call) = &expr_stmt.expression
         && let Expression::StaticMemberExpression(member) = &call.callee
         && let Expression::Identifier(obj) = &member.object
     {
         return matches!(
             (obj.name.as_str(), member.property.name.as_str()),
-            ("jest", "setTimeout") | ("vi", "setConfig")
+            ("jest", "setTimeout")
+                | ("vi", "setConfig")
+                | ("jest" | "vi", "mock" | "unmock")
         );
     }
 
@@ -243,5 +248,37 @@ enum Color { Red, Green }
 import { b } from 'b'
 "#;
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Regression test for https://github.com/rbaumier/comply/issues/1899
+    // Jest hoists `jest.mock()` calls above the imports it mocks, so placing
+    // them before imports is required, not disorganized — they must not flag
+    // the following imports.
+    #[test]
+    fn allows_jest_mock_before_imports() {
+        let src = r#"jest.mock('react', () => {
+  const actual = jest.requireActual('react');
+  return { ...actual, cache: (fn) => fn };
+});
+jest.mock('../utils/isRsc', () => ({ IS_RSC: true }));
+
+import React from 'react';
+import ReactDOMServer from 'react-dom/server';
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // `jest.unmock()` / `vi.mock()` / `vi.unmock()` follow the same hoisting
+    // convention and must not flip the imports block either.
+    #[test]
+    fn allows_unmock_and_vi_mock_before_imports() {
+        let src = r#"jest.unmock('../legacy');
+vi.mock('./db');
+vi.unmock('./cache');
+
+import { a } from 'a';
+import { b } from 'b';
+"#;
+        assert!(run_on(src).is_empty());
     }
 }
