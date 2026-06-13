@@ -35,6 +35,28 @@ const DESCRIPTIVE_SUFFIXES: &[&str] = &[
     "_LEN", "_COUNT", "_MAX", "_MIN", "_TIMEOUT", "_INTERVAL", "_LIMIT", "_TTL", "_ROOT", "_BASE",
 ];
 
+/// camelCase/PascalCase suffixes that turn a banned prefix into a specific
+/// domain noun rather than a generic action. `run` is a generic verb but
+/// `runId`/`RunStatus` name a concrete run identifier/state; `data` is filler
+/// but `dataType`/`dataKey` name a concrete field. The suffix must sit on a
+/// camelCase boundary at the end of the name, mirroring the SCREAMING_SNAKE_CASE
+/// `_ID`/`_KEY` exemption in `DESCRIPTIVE_SUFFIXES`.
+const DESCRIPTIVE_CAMEL_SUFFIXES: &[&str] = &["Id", "Status", "Type", "Key", "Json", "At"];
+
+/// True when `name` ends with one of `DESCRIPTIVE_CAMEL_SUFFIXES` on a camelCase
+/// boundary (the character preceding the suffix is lowercase or a digit). This
+/// keeps generic verbs flagged (`runTask`, `dataSource`) while exempting
+/// domain nouns (`runId`, `runFriendlyId`, `RunStatus`, `dataType`).
+fn ends_with_descriptive_camel_suffix(name: &str) -> bool {
+    DESCRIPTIVE_CAMEL_SUFFIXES.iter().any(|suffix| {
+        name.strip_suffix(suffix).is_some_and(|head| {
+            head.bytes()
+                .next_back()
+                .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        })
+    })
+}
+
 /// PascalCase `Data*` compound names exempted from the `data` banned-prefix
 /// check: UI primitives (shadcn/TanStack/MUI/Radix) and fp-ts/Effect
 /// data-first/data-last vocabulary (`dual()` pattern, `DataTag` discriminants).
@@ -80,6 +102,11 @@ fn matched_banned_prefix(name: &str) -> Option<&'static str> {
             // `runWith*` is the idiomatic AsyncLocalStorage wrapper pattern —
             // the `run` comes from `AsyncLocalStorage.run()`, not a generic verb.
             if prefix == "run" && name[plen..].starts_with("With") {
+                continue;
+            }
+            // A domain-identifying suffix (`runId`, `RunStatus`, `dataType`)
+            // makes the compound a specific noun, not a generic action.
+            if ends_with_descriptive_camel_suffix(name) {
                 continue;
             }
             return Some(prefix);
@@ -748,10 +775,36 @@ mod tests {
     }
 
     #[test]
+    fn no_fp_domain_noun_with_descriptive_camel_suffix_issue_1383() {
+        // Regression for #1383 — `run`/`data` as domain nouns combined with an
+        // identifying suffix (`Id`, `Status`, `Type`, `Key`) name a specific
+        // concept, not a generic action (trigger.dev's `runId`/`RunStatus`).
+        let src = r#"
+            const runId = task.runId;
+            const runFriendlyId = run.id;
+            type RunStatus = "WAITING" | "EXECUTING" | "COMPLETED";
+            const dataKey = "x";
+            const dataType = "json";
+            const dataJson = "{}";
+            const runAt = new Date();
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
     fn still_flags_run_task_generic_verb() {
         // `runTask` uses `run` as a generic verb — must still flag.
         let src = r#"function runTask() {}"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_generic_verbs_without_descriptive_suffix_issue_1383() {
+        // The suffix exemption is narrow: compounds whose tail is not a
+        // domain-identifying suffix stay flagged. `dataSource`/`runJob` carry
+        // no more meaning than the bare prefix.
+        let src = r#"const dataSource = 1; function runJob() {} const processOrder = 2;"#;
+        assert_eq!(run(src).len(), 3);
     }
 
     #[test]
