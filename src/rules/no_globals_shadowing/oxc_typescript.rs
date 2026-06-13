@@ -3,6 +3,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
 use oxc_ast::ast::{TSType, TSTypeName};
+use std::path::Path;
 use std::sync::Arc;
 
 const SHADOWED_GLOBALS: &[&str] = &[
@@ -17,6 +18,13 @@ const SHADOWED_GLOBALS: &[&str] = &[
 ];
 
 pub struct Check;
+
+/// True when `path` is a TypeScript declaration file (`*.d.ts`).
+fn is_declaration_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.ends_with(".d.ts"))
+}
 
 /// True when a binding named `document` is annotated with a `*Document` type
 /// (e.g. `TextDocument`, `lsp.TextDocument`). In Node.js Language Server
@@ -53,6 +61,31 @@ fn is_lsp_text_document<'a>(
     false
 }
 
+/// True when the symbol's declaration is a TypeScript ambient declaration:
+/// `declare const`/`declare let`/`declare var`, `declare function`, or a
+/// declaration nested inside `declare global { … }` / an ambient
+/// `declare module`/`declare namespace`. Ambient declarations introduce no
+/// runtime binding — they describe the type of an existing global rather than
+/// shadowing it — so they must not be flagged.
+fn is_ambient_declaration<'a>(
+    symbol_id: oxc_semantic::SymbolId,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let scoping = semantic.scoping();
+    let decl_node_id = scoping.symbol_declaration(symbol_id);
+    let nodes = semantic.nodes();
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id)) {
+        match kind {
+            AstKind::VariableDeclaration(decl) if decl.declare => return true,
+            AstKind::Function(func) if func.declare => return true,
+            AstKind::TSModuleDeclaration(module) if module.declare => return true,
+            AstKind::TSGlobalDeclaration(_) => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// True when `ty` is a type reference whose rightmost name ends with `Document`
 /// (`TextDocument`, `Document`, `lsp.TextDocument`, …).
 fn type_ends_with_document(ty: &TSType) -> bool {
@@ -71,11 +104,19 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        // Every declaration in a `.d.ts` file is ambient — it produces no
+        // runtime binding and cannot shadow a global, so skip the file entirely.
+        if is_declaration_file(ctx.path) {
+            return Vec::new();
+        }
         let scoping = semantic.scoping();
         let mut diagnostics = Vec::new();
         for symbol_id in scoping.symbol_ids() {
             let name = scoping.symbol_name(symbol_id);
             if !SHADOWED_GLOBALS.contains(&name) {
+                continue;
+            }
+            if is_ambient_declaration(symbol_id, semantic) {
                 continue;
             }
             if name == "document" && is_lsp_text_document(symbol_id, semantic) {
@@ -187,5 +228,50 @@ mod tests {
             run_on("function f(document: string) { return document; }").len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_declare_const_console() {
+        // Ambient declaration: widens the type of the global `console`, no
+        // runtime binding. See issue #1847.
+        assert!(run_on("declare const console: any;").is_empty());
+    }
+
+    #[test]
+    fn allows_declare_var_window() {
+        assert!(run_on("declare var window: any;").is_empty());
+    }
+
+    #[test]
+    fn allows_declare_let_process() {
+        assert!(run_on("declare let process: any;").is_empty());
+    }
+
+    #[test]
+    fn allows_declare_function_set_timeout() {
+        assert!(
+            run_on("declare function setTimeout(handler: Function, timeout?: number): number;")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_declare_global_console() {
+        assert!(run_on("declare global { const console: any; }").is_empty());
+    }
+
+    #[test]
+    fn allows_declaration_file() {
+        // Every declaration in a `.d.ts` file is ambient.
+        let diags =
+            crate::rules::test_helpers::run_rule(&Check, "const console: any;", "globals.d.ts");
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn flags_non_declare_const_console() {
+        // A genuine runtime binding must still fire — ambient exemption must
+        // not leak to ordinary declarations.
+        assert_eq!(run_on("const console = {};").len(), 1);
     }
 }
