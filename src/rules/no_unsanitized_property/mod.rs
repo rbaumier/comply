@@ -1,6 +1,9 @@
 //! no-unsanitized-property — flag unsafe assignments to `innerHTML`,
 //! `outerHTML`, or `srcdoc` where the right-hand side is not a static
 //! string literal. Any non-literal value is a potential XSS vector.
+//!
+//! Skipped in test files: XSS has no attack surface in test code (e.g. jsdom
+//! SSR/hydration setup assigning `innerHTML` to simulate server-rendered HTML).
 
 mod oxc_typescript;
 #[cfg(test)]
@@ -22,7 +25,7 @@ pub const META: RuleMeta = RuleMeta {
     ),
     categories: &["security"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: true,
 };
 

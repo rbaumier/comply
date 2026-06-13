@@ -139,4 +139,26 @@ mod tests {
         let src = "el.textContent = userInput;";
         assert!(run_on(src).is_empty());
     }
+
+    /// XSS has no attack surface in test code (jsdom SSR/hydration setup), so
+    /// the rule is skipped in test files via `skip_in_test_dir`. Regression for
+    /// emotion-js hydration tests that assign `innerHTML` to simulate
+    /// server-rendered markup (issue #1963).
+    #[test]
+    fn skips_inner_html_in_test_file() {
+        let src = "safeQuerySelector('body').innerHTML = `<style data-emotion=\"css ${hash}\">.css-${hash}{${css}}</style>`;";
+        let diagnostics = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            src,
+            "packages/cache/__tests__/hydration.js",
+        );
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn flags_inner_html_in_production_file() {
+        let src = "safeQuerySelector('body').innerHTML = `<style data-emotion=\"css ${hash}\">.css-${hash}{${css}}</style>`;";
+        let diagnostics = crate::rules::test_helpers::run_rule_gated(&Check, src, "src/app.ts");
+        assert_eq!(diagnostics.len(), 1);
+    }
 }
