@@ -37,7 +37,14 @@ impl OxcCheck for Check {
                 continue;
             }
             let ident = oxc_str::Ident::from(name);
-            if scoping.find_binding(parent_scope, ident).is_some() {
+            if let Some(outer_symbol) = scoping.find_binding(parent_scope, ident) {
+                // A type-only import (`import type ...` or `import { type X }`) is
+                // erased at compile time and creates no runtime binding, so a value
+                // binding of the same name shadows nothing observable.
+                let outer_decl = scoping.symbol_declaration(outer_symbol);
+                if is_type_only_import_binding(nodes, outer_decl) {
+                    continue;
+                }
                 let span = scoping.symbol_span(symbol_id);
                 let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
                 diagnostics.push(Diagnostic {
@@ -70,6 +77,21 @@ fn is_type_only_binding_context(kind: AstKind<'_>) -> bool {
             | AstKind::TSMappedType(_)
             | AstKind::TSInferType(_)
     )
+}
+
+/// True when `decl_node` declares a binding from a type-only import — either a
+/// whole `import type ...` declaration (default, namespace, or named) or an
+/// individual `import { type X }` specifier. These exist only in the type
+/// namespace and are erased at runtime, so a value binding of the same name
+/// does not shadow them.
+fn is_type_only_import_binding(nodes: &oxc_semantic::AstNodes<'_>, decl_node: oxc_semantic::NodeId) -> bool {
+    std::iter::once(nodes.kind(decl_node))
+        .chain(nodes.ancestor_kinds(decl_node))
+        .any(|kind| match kind {
+            AstKind::ImportDeclaration(import) => import.import_kind.is_type(),
+            AstKind::ImportSpecifier(spec) => spec.import_kind.is_type(),
+            _ => false,
+        })
 }
 
 #[cfg(test)]
@@ -129,5 +151,62 @@ mod tests {
         // Real function params still flag as shadows.
         let d = run_on("const x = 1; function f(x: number) { return x; }");
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_param_shadowing_type_only_default_import() {
+        // `import type yargs` is erased at runtime; a value param named `yargs`
+        // shadows nothing observable.
+        let d = run_on(
+            "import type yargs from 'yargs';\n\
+             export function builder(yargs: yargs.Argv) { return yargs; }",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_param_shadowing_type_only_namespace_import() {
+        let d = run_on(
+            "import type * as yargs from 'yargs';\n\
+             export function builder(yargs: yargs.Argv) { return yargs; }",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_param_shadowing_type_only_named_import() {
+        let d = run_on(
+            "import { type Argv } from 'yargs';\n\
+             export function builder(Argv: number) { return Argv; }",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_param_shadowing_inline_type_named_import() {
+        let d = run_on(
+            "import type { Argv } from 'yargs';\n\
+             export function builder(Argv: number) { return Argv; }",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_param_shadowing_value_import() {
+        // A real value import is a runtime binding, so shadowing it still fires.
+        let d = run_on(
+            "import yargs from 'yargs';\n\
+             export function builder(yargs: number) { return yargs; }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_param_shadowing_named_value_import() {
+        let d = run_on(
+            "import { Argv } from 'yargs';\n\
+             export function builder(Argv: number) { return Argv; }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
     }
 }
