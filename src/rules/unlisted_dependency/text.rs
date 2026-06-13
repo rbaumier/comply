@@ -65,13 +65,25 @@ impl TextCheck for Check {
             if workspace_names.contains(spec) {
                 continue;
             }
+            // DefinitelyTyped case: a type-only import of `X` is satisfied by
+            // the `@types/X` package, whose runtime counterpart `X` may not
+            // exist as a dependency (the value never reaches runtime). A value
+            // import of `X` is NOT covered — `info.type_only` is false then.
+            let types_pkg = info.type_only.then(|| types_package_name(spec));
+            if let Some(types_pkg) = types_pkg.as_deref() {
+                if pkg.has_dep_or_engine(types_pkg) {
+                    continue;
+                }
+            }
             // Monorepo case: the dependency may be declared in the importing
             // package's own package.json rather than the project-root one
-            // (each importer walks up to its nearest manifest).
+            // (each importer walks up to its nearest manifest). The same
+            // nearest-manifest walk also resolves the `@types/X` provider.
             if info.importers.iter().any(|imp| {
-                ctx.project
-                    .nearest_package_json(imp)
-                    .is_some_and(|p| p.has_dep_or_engine(spec))
+                ctx.project.nearest_package_json(imp).is_some_and(|p| {
+                    p.has_dep_or_engine(spec)
+                        || types_pkg.as_deref().is_some_and(|t| p.has_dep_or_engine(t))
+                })
             }) {
                 continue;
             }
@@ -97,6 +109,15 @@ impl TextCheck for Check {
         }
         diagnostics
     }
+}
+
+/// DefinitelyTyped name for a runtime package: `foo` → `@types/foo`,
+/// `@scope/bar` → `@types/scope__bar` (scope marker folded to `__`).
+fn types_package_name(spec: &str) -> String {
+    if let Some(scoped) = spec.strip_prefix('@') {
+        return format!("@types/{}", scoped.replacen('/', "__", 1));
+    }
+    format!("@types/{spec}")
 }
 
 /// True if `spec` matches any tsconfig alias prefix (exact or `prefix/...`).
@@ -219,6 +240,78 @@ mod tests {
             None,
         );
         assert!(diags.is_empty(), "vitest is in devDependencies: {diags:?}");
+    }
+
+    #[test]
+    fn allows_type_only_import_satisfied_by_types_package() {
+        // Regression for #2059 — `import type { Root } from 'hast'` where only
+        // `@types/hast` is declared (DefinitelyTyped). The runtime package
+        // `hast` need not be a dependency; the types come from `@types/hast`.
+        let files: Vec<(&str, &str)> = vec![
+            ("a.ts", "import type { Root } from 'hast';"),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(
+            &files,
+            Some(r#"{ "devDependencies": { "@types/hast": "*" } }"#),
+            None,
+        );
+        assert!(
+            diags.is_empty(),
+            "type-only import of `hast` is satisfied by `@types/hast`: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_type_only_import_satisfied_by_scoped_types_package() {
+        // Scoped mapping: `@foo/bar` resolves types from `@types/foo__bar`.
+        let files: Vec<(&str, &str)> = vec![
+            ("a.ts", "import type { T } from '@foo/bar';"),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(
+            &files,
+            Some(r#"{ "devDependencies": { "@types/foo__bar": "*" } }"#),
+            None,
+        );
+        assert!(
+            diags.is_empty(),
+            "type-only import of `@foo/bar` is satisfied by `@types/foo__bar`: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_value_import_when_only_types_package_declared() {
+        // A runtime (value) import of `X` is NOT satisfied by `@types/X` alone —
+        // the value must exist at runtime. Only `import type` is exempted.
+        let files: Vec<(&str, &str)> = vec![
+            ("a.ts", "import { thing } from 'hast';"),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(
+            &files,
+            Some(r#"{ "devDependencies": { "@types/hast": "*" } }"#),
+            None,
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "value import of `hast` is not covered by `@types/hast`: {diags:?}"
+        );
+        assert!(diags[0].message.contains("hast"));
+    }
+
+    #[test]
+    fn flags_type_only_import_with_no_runtime_or_types_package() {
+        // True positive: a type-only import where neither `X` nor `@types/X`
+        // is declared still fires.
+        let files: Vec<(&str, &str)> = vec![
+            ("a.ts", "import type { Root } from 'hast';"),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, Some(r#"{ "devDependencies": {} }"#), None);
+        assert_eq!(diags.len(), 1, "`hast` is unlisted everywhere: {diags:?}");
+        assert!(diags[0].message.contains("hast"));
     }
 
     #[test]
