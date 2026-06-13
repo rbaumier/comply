@@ -3,7 +3,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BindingPattern, Expression, ImportDeclarationSpecifier};
+use oxc_ast::ast::{
+    BindingPattern, Expression, ImportDeclarationSpecifier, JSXAttributeName,
+};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -131,13 +133,21 @@ impl OxcCheck for Check {
                         break;
                     }
                 }
+                // JSX event-handler props: `onClick`, `onChange`, … . The
+                // attribute name is a `JSXIdentifier` inside a `JSXAttribute`,
+                // not an `IdentifierName`, so it needs its own arm.
+                AstKind::JSXAttribute(attr) => {
+                    if let JSXAttributeName::Identifier(ident) = &attr.name
+                        && is_event_handler_name(ident.name.as_str())
+                    {
+                        found_client_api = true;
+                        break;
+                    }
+                }
                 AstKind::IdentifierName(id) => {
                     let name = id.name.as_str();
-                    // JSX event handlers: onClick, onMouseMove, etc.
-                    if name.starts_with("on")
-                        && name.len() > 2
-                        && name.as_bytes()[2].is_ascii_uppercase()
-                    {
+                    // Member-access event handlers: `el.onclick = ...`, etc.
+                    if is_event_handler_name(name) {
                         found_client_api = true;
                         break;
                     }
@@ -229,11 +239,17 @@ fn is_hook_name(name: &str) -> bool {
     name.starts_with("use") && name.len() > 3 && name.as_bytes()[3].is_ascii_uppercase()
 }
 
+/// True for DOM event-handler names: `on` followed by an uppercase letter
+/// (`onClick`, `onChange`, `onSubmit`, …). These are browser-only APIs.
+fn is_event_handler_name(name: &str) -> bool {
+    name.starts_with("on") && name.len() > 2 && name.as_bytes()[2].is_ascii_uppercase()
+}
+
 fn is_client_api_name(name: &str) -> bool {
     if is_hook_name(name) {
         return true;
     }
-    if name.starts_with("on") && name.len() > 2 && name.as_bytes()[2].is_ascii_uppercase() {
+    if is_event_handler_name(name) {
         return true;
     }
     if CLIENT_FACTORY_APIS.contains(&name) {
@@ -459,5 +475,37 @@ import { chunk } from 'lodash';
 export default chunk;
 "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression test for #1810 — a `"use client"` component whose only
+    // client-side behavior is an explicit JSX event-handler prop (`onClick`).
+    #[test]
+    fn no_fp_for_jsx_on_click_handler_oxc() {
+        let src = r#""use client";
+
+export default function Error({ reset }: { reset: () => void }) {
+  return (
+    <div className="...">
+      <h2>Oh no!</h2>
+      <p>There was an issue with our storefront.</p>
+      <button className="..." onClick={() => reset()}>
+        Try Again
+      </button>
+    </div>
+  );
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_jsx_on_change_handler_oxc() {
+        let src = r#""use client";
+
+export function Input() {
+  return <input onChange={(e) => console.log(e)} />;
+}
+"#;
+        assert!(run(src).is_empty());
     }
 }
