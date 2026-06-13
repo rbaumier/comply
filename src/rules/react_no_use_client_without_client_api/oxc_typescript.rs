@@ -29,6 +29,8 @@ const CLIENT_FACTORY_APIS: &[&str] = &["createContext", "createSvgIcon"];
 const CLIENT_ONLY_PACKAGE_PREFIXES: &[&str] = &[
     "@base-ui/react",
     "@radix-ui/",
+    "motion/react",
+    "framer-motion",
 ];
 
 pub struct Check;
@@ -244,6 +246,33 @@ export const Root = AlertDialog.Root;
         let src = r#""use client";
 import * as Tooltip from "@radix-ui/react-tooltip";
 export const Provider = Tooltip.Provider;
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Regression tests for #2040 — motion/react (framer-motion v2) animation
+    // components are browser-only and legitimately need `"use client"`.
+    #[test]
+    fn no_fp_for_motion_react_wrapper_oxc() {
+        let src = r#"'use client'
+
+import { motion } from 'motion/react'
+import type { ReactNode } from 'react'
+
+export const FadeIn = ({ children }: { children: ReactNode }) => (
+  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+    {children}
+  </motion.div>
+)
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_framer_motion_wrapper_oxc() {
+        let src = r#""use client";
+import { AnimatePresence } from "framer-motion";
+export const Wrapper = AnimatePresence;
 "#;
         assert!(run(src).is_empty());
     }
