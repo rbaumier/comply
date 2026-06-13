@@ -15,6 +15,21 @@ const INFRA_PATHS: &[&str] = &[
     "/healthz", "/health", "/readyz", "/ready", "/livez", "/live", "/metrics",
 ];
 
+/// OAuth 2.0 (RFC 6749) and OpenID Connect Core 1.0 protocol endpoints. Clients,
+/// SDKs, and registered redirect URIs expect these exact paths, so a version
+/// prefix like `/v1/authorize` would break the protocol; they must not be flagged.
+const OAUTH_OIDC_PATHS: &[&str] = &[
+    "/authorize",
+    "/callback",
+    "/token",
+    "/userinfo",
+    "/me",
+    "/introspect",
+    "/revoke",
+    "/.well-known/openid-configuration",
+    "/.well-known/oauth-authorization-server",
+];
+
 /// Test, fixture, and mock infrastructure files are exempt: their route-shaped
 /// calls (MSW handlers, fixtures) are deliberate test scaffolding, not server
 /// routes. Delegates to the shared path classifier so the exemption stays in
@@ -28,6 +43,10 @@ fn is_infra_path(path: &str) -> bool {
         .iter()
         .any(|p| path == *p || path.starts_with(&format!("{p}/")))
         || path.starts_with("/dev/")
+}
+
+fn is_oauth_oidc_path(path: &str) -> bool {
+    OAUTH_OIDC_PATHS.contains(&path)
 }
 
 fn has_version_prefix(path: &str) -> bool {
@@ -144,7 +163,7 @@ impl OxcCheck for Check {
         if name != "route" && !call.arguments[1..].iter().any(is_handler_arg) {
             return;
         }
-        if has_version_prefix(route_path) || is_infra_path(route_path) {
+        if has_version_prefix(route_path) || is_infra_path(route_path) || is_oauth_oidc_path(route_path) {
             return;
         }
 
@@ -326,5 +345,29 @@ mod tests {
     fn flags_route_with_arrow_handler() {
         // A genuine server route with an inline handler is still flagged.
         assert_eq!(run("app.get('/users', (req, res) => res.json([]));").len(), 1);
+    }
+
+    #[test]
+    fn allows_oauth_oidc_protocol_routes() {
+        // Issue #1777 — OAuth 2.0 (RFC 6749) / OIDC endpoint paths are mandated
+        // by the spec; clients and registered redirect URIs expect them verbatim,
+        // so they cannot carry a version prefix.
+        assert!(run("routes.get('/authorize', async (c) => c.redirect(url));").is_empty());
+        assert!(run("routes.get('/callback', async (c) => ctx.success(c, {}));").is_empty());
+        assert!(run("routes.post('/token', async (c) => {});").is_empty());
+        assert!(run("routes.get('/userinfo', handler);").is_empty());
+        assert!(run("routes.get('/me', handler);").is_empty());
+        assert!(run("routes.post('/introspect', handler);").is_empty());
+        assert!(run("routes.post('/revoke', handler);").is_empty());
+        assert!(run("app.get('/.well-known/openid-configuration', handler);").is_empty());
+        assert!(run("app.get('/.well-known/oauth-authorization-server', handler);").is_empty());
+    }
+
+    #[test]
+    fn flags_unversioned_route_resembling_oauth_path() {
+        // Conservative: only the exact protocol paths are exempt. A nested or
+        // differently-named route still requires a version prefix.
+        assert_eq!(run("app.get('/token/refresh', handler);").len(), 1);
+        assert_eq!(run("app.get('/authorized', handler);").len(), 1);
     }
 }
