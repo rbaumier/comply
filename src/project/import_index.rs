@@ -218,6 +218,12 @@ pub struct ImportIndex {
     /// a module as live; precomputing the set avoids an O(N) `get_imports_to`
     /// scan per file.
     namespace_imported: std::collections::HashSet<PathBuf>,
+    /// `(re-exporting file, exported name)` → resolved origin file of a
+    /// `export { name } from './m'`. Only relative specifiers that resolve to an
+    /// indexed file are recorded. Lets rules tell a re-export *chain* (one
+    /// barrel re-exporting through another) from independent barrels that both
+    /// re-export the same name.
+    reexport_targets: HashMap<(PathBuf, String), PathBuf>,
 }
 
 impl ImportIndex {
@@ -368,6 +374,27 @@ impl ImportIndex {
         // `export { X } from './impl'`, usages on barrel flow to impl.
         propagate_reexports(&exports, &imports, &mut symbol_usages);
 
+        // Resolve each `export { name } from './m'` to its origin file. Reuses
+        // the same specifier resolver as imports so tsconfig aliases and
+        // extension probing stay consistent. Only relative specifiers that
+        // land on an indexed file are recorded.
+        let mut reexport_targets: HashMap<(PathBuf, String), PathBuf> = HashMap::new();
+        for (path, exps) in &exports {
+            for exp in exps {
+                if !matches!(exp.kind, ExportKind::ReExport) {
+                    continue;
+                }
+                let Some(spec) = &exp.reexport_source else {
+                    continue;
+                };
+                if let Some(origin) =
+                    resolve_specifier(path, spec, &known_paths, &path_resolver)
+                {
+                    reexport_targets.insert((path.clone(), exp.name.clone()), origin);
+                }
+            }
+        }
+
         // Fifth pass: collect bare specifiers (npm packages).
         let bare_specifiers = collect_bare_specifiers(&imports);
 
@@ -408,6 +435,7 @@ impl ImportIndex {
             importers,
             min_indexed,
             namespace_imported,
+            reexport_targets,
         }
     }
 
@@ -530,6 +558,16 @@ impl ImportIndex {
     #[must_use]
     pub fn bare_specifiers(&self) -> &HashMap<String, BareSpecifierInfo> {
         &self.bare_specifiers
+    }
+
+    /// Resolved origin file of `export { name } from './m'` declared in `path`.
+    /// `None` when the file declares no such re-export of `name`, or its
+    /// specifier is bare / doesn't resolve to an indexed file.
+    #[must_use]
+    pub fn reexport_target(&self, path: &Path, name: &str) -> Option<&Path> {
+        self.reexport_targets
+            .get(&(path.to_path_buf(), name.to_string()))
+            .map(PathBuf::as_path)
     }
 
     /// Files reachable from `roots` via import edges (BFS). Unreachable files

@@ -12,6 +12,11 @@
 //!     different names; treating that as ambiguous would be noise.
 //!   - `"*"` star re-exports — they don't carry a specific name to compare.
 //!   - Symbols that appear in only one barrel within a package — no duplication.
+//!   - Re-export chains — a barrel re-exporting the name from another barrel in
+//!     the same group (e.g. `src/index.ts` re-exporting through `src/core/x.ts`)
+//!     is aggregating a single canonical path, not adding an ambiguous one. A
+//!     group is flagged only when two or more barrels re-export the name from an
+//!     origin outside the group.
 //!
 //! Runs once per project, anchored on the lexicographically smallest indexed
 //! path so that a single pass emits all diagnostics deterministically. Barrel
@@ -84,6 +89,23 @@ impl TextCheck for Check {
             barrels.sort();
             barrels.dedup();
             if barrels.len() < 2 {
+                continue;
+            }
+            // A barrel that re-exports the name from another barrel in this same
+            // group is the aggregating end of a re-export chain (the standard
+            // SDK shape: a top-level `src/index.ts` re-exporting through the
+            // source module that actually proxies the implementation). It does
+            // not add an independent import path — only barrels whose origin
+            // lies outside the group do. Flag only when two or more such
+            // independent barrels remain.
+            let group: std::collections::HashSet<&Path> = barrels.iter().copied().collect();
+            let independent = barrels.iter().filter(|barrel| {
+                match index.reexport_target(barrel, name) {
+                    Some(origin) => !group.contains(origin),
+                    None => true,
+                }
+            });
+            if independent.count() < 2 {
                 continue;
             }
             // Anchor the diagnostic on the first occurrence (sorted by path)
@@ -171,14 +193,18 @@ mod tests {
         (dir, diags)
     }
 
-    /// Pick the source file the project's anchor rule will land on so the
-    /// once-per-project guard fires inside `run_on_project`. Non-source
-    /// manifests (e.g. `package.json`) aren't indexed, so they're excluded.
+    /// Pick the file the project's anchor rule will land on so the
+    /// once-per-project guard fires inside `run_on_project`. The anchor is the
+    /// smallest indexed path that declares exports (`min_indexed`), so JSON
+    /// manifests (`package.json`) — indexed but exportless — are excluded.
     fn anchor_rel<'a>(files: &'a [(&'a str, &'a str)]) -> &'a str {
         files
             .iter()
             .map(|(rel, _)| *rel)
-            .filter(|rel| Language::from_path(Path::new(rel)).is_some())
+            .filter(|rel| {
+                Language::from_path(Path::new(rel))
+                    .is_some_and(Language::is_typescript_family)
+            })
             .min()
             .expect("at least one source file")
     }
@@ -265,6 +291,65 @@ mod tests {
         let (_dir, diags) = run_on_project(&files, target);
         assert_eq!(diags.len(), 1, "same-package duplicate must flag, got: {:?}", diags);
         assert!(diags[0].message.contains("compute"));
+    }
+
+    /// #1382: the standard SDK shape where a top-level barrel re-exports a
+    /// symbol *through* the source module that proxies the implementation is a
+    /// single canonical chain (`src/index.ts` → `src/core/uploads.ts` →
+    /// `src/internal/uploads.ts`), not two independent barrels. Must not flag.
+    #[test]
+    fn allows_top_level_barrel_reexporting_through_source_module() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"sdk"}"#),
+            ("src/internal/uploads.ts", "export type Uploadable = Blob;"),
+            (
+                "src/core/uploads.ts",
+                "export { type Uploadable } from '../internal/uploads';",
+            ),
+            (
+                "src/index.ts",
+                "export { type Uploadable } from './core/uploads';",
+            ),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert!(
+            diags.is_empty(),
+            "barrel re-exporting through a source module is a single chain, got: {:?}",
+            diags
+        );
+    }
+
+    /// A genuine parallel duplicate alongside a re-export chain still flags: the
+    /// independent barrel re-exporting straight from the implementation creates
+    /// a second import path that the chain does not collapse.
+    #[test]
+    fn flags_independent_barrel_alongside_chain() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"sdk"}"#),
+            ("src/internal/uploads.ts", "export function toFile() {}"),
+            (
+                "src/core/uploads.ts",
+                "export { toFile } from '../internal/uploads';",
+            ),
+            (
+                "src/index.ts",
+                "export { toFile } from './core/uploads';",
+            ),
+            (
+                "src/extra.ts",
+                "export { toFile } from './internal/uploads';",
+            ),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert_eq!(
+            diags.len(),
+            1,
+            "core/uploads and extra both re-export straight from internal — flag, got: {:?}",
+            diags
+        );
+        assert!(diags[0].message.contains("toFile"));
     }
 
     /// #1082: barrel paths in the message are relative to the project root —
