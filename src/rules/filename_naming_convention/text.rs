@@ -35,6 +35,28 @@ fn is_composable_name(stem: &str) -> bool {
     stem.starts_with("use") && stem.len() > 3 && stem.as_bytes()[3].is_ascii_uppercase()
 }
 
+/// Returns `true` when `stem` is exactly a BCP 47 / CLDR locale tag of the form
+/// `<language>_<COUNTRY>`: 2-3 lowercase ASCII letters (ISO 639 language), a
+/// single underscore, then 2-3 uppercase ASCII letters (ISO 3166 region). The
+/// underscore separator is mandated by intl conventions, so locale files such
+/// as `ar_EG.ts`, `zh_CN.ts`, or `en_US.ts` cannot adopt kebab-case.
+fn is_locale_tag(stem: &str) -> bool {
+    let Some((language, country)) = stem.split_once('_') else {
+        return false;
+    };
+    let is_iso_segment = |segment: &str, want_upper: bool| {
+        (2..=3).contains(&segment.len())
+            && segment.bytes().all(|b| {
+                if want_upper {
+                    b.is_ascii_uppercase()
+                } else {
+                    b.is_ascii_lowercase()
+                }
+            })
+    };
+    is_iso_segment(language, false) && is_iso_segment(country, true)
+}
+
 fn is_pascal_case(stem: &str) -> bool {
     if stem.is_empty() {
         return false;
@@ -91,6 +113,9 @@ impl TextCheck for Check {
             return Vec::new();
         }
         if is_composable_name(stem) {
+            return Vec::new();
+        }
+        if is_locale_tag(stem) {
             return Vec::new();
         }
         if is_ts_or_jsx_file(ctx.path) && (is_pascal_case(stem) || is_camel_case(stem)) {
@@ -259,5 +284,54 @@ mod tests {
     #[test]
     fn flags_snake_case_cts_issue_1399() {
         assert_eq!(run("src/user_profile.cts").len(), 1);
+    }
+
+    // Regression for #1994: BCP 47 / CLDR locale filenames `<lang>_<COUNTRY>`
+    // require the underscore separator and must not be flagged.
+    #[test]
+    fn allows_locale_tag_ar_eg_issue_1994() {
+        assert!(run("src/locales/ar_EG.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_locale_tag_zh_cn_issue_1994() {
+        assert!(run("src/locales/zh_CN.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_locale_tag_en_us_issue_1994() {
+        assert!(run("src/locales/en_US.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_three_letter_language_locale_tag_issue_1994() {
+        assert!(run("src/locales/fil_PH.ts").is_empty());
+    }
+
+    // Guard: ordinary snake_case files are not locale tags and still fire.
+    #[test]
+    fn flags_snake_case_non_locale_issue_1994() {
+        assert_eq!(run("src/my_helper.ts").len(), 1);
+    }
+
+    // Guard: wrong case patterns are not exempted by the locale rule.
+    #[test]
+    fn flags_camel_concat_not_locale_issue_1994() {
+        // `arEG` has no underscore separator; camelCase allowance handles it,
+        // so the behavior is unchanged (no diagnostic) — but NOT via locale.
+        assert!(!is_locale_tag("arEG"));
+    }
+
+    #[test]
+    fn flags_screaming_snake_not_locale_issue_1994() {
+        assert_eq!(run("src/API_KEYS.ts").len(), 1);
+        assert!(!is_locale_tag("API_KEYS"));
+    }
+
+    #[test]
+    fn flags_wrong_case_locale_shape_issue_1994() {
+        // `Ar_eg` inverts the required case pattern, so it is not a locale tag.
+        assert!(!is_locale_tag("Ar_eg"));
+        assert_eq!(run("src/Ar_eg.ts").len(), 1);
     }
 }
