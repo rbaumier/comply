@@ -55,6 +55,13 @@ impl OxcCheck for Check {
             if is_inside_declare_module(semantic, node) {
                 continue;
             }
+            // Interfaces describing only callable/constructable shapes (`(...): T`
+            // or `new (...): T`) are the idiomatic TypeScript form for those — the
+            // `type` rewrite is valid but conventionally avoided (cf. the stdlib's
+            // `ArrayConstructor`, `ObjectConstructor`).
+            if is_callable_or_constructable_only(iface) {
+                continue;
+            }
             let (line, column) = byte_offset_to_line_col(ctx.source, iface.span.start as usize);
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
@@ -74,6 +81,20 @@ impl OxcCheck for Check {
         }
         diagnostics
     }
+}
+
+/// `true` when the interface has at least one member and every member is a call
+/// signature (`(...): T`) or construct signature (`new (...): T`).
+fn is_callable_or_constructable_only(iface: &oxc_ast::ast::TSInterfaceDeclaration) -> bool {
+    let members = &iface.body.body;
+    !members.is_empty()
+        && members.iter().all(|member| {
+            matches!(
+                member,
+                oxc_ast::ast::TSSignature::TSCallSignatureDeclaration(_)
+                    | oxc_ast::ast::TSSignature::TSConstructSignatureDeclaration(_)
+            )
+        })
 }
 
 fn is_inside_declare_module<'a>(
@@ -168,6 +189,37 @@ mod tests {
             }
         "#;
         assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn allows_construct_signature_only_interface() {
+        // https://github.com/rbaumier/comply/issues/1926
+        let code = r#"
+            export interface PluginConstructor<
+              T extends DragDropManager<any, any> = DragDropManager<any, any>,
+              U extends Plugin<T> = Plugin<T>,
+              V extends PluginOptions = InferPluginOptions<U>,
+            > {
+              new (manager: T, options?: V): U;
+            }
+        "#;
+        assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn allows_call_signature_only_interface() {
+        assert!(run_on("interface Comparator { (a: number, b: number): number; }").is_empty());
+    }
+
+    #[test]
+    fn flags_interface_mixing_property_and_construct_signature() {
+        let code = "interface Factory { kind: string; new (): Factory; }";
+        assert_eq!(run_on(code).len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_interface() {
+        assert_eq!(run_on("interface Empty {}").len(), 1);
     }
 
     #[test]
