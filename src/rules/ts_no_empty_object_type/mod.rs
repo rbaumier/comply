@@ -1,4 +1,8 @@
 //! ts-no-empty-object-type — flag `{}` used as a type.
+//!
+//! Exempts the type-system idioms where `{}` is deliberate: a generic
+//! constraint/default (`T extends {}`) and an intersection identity
+//! (`T & {}`) whose other operand is a non-empty type.
 
 mod oxc_typescript;
 #[cfg(test)]
