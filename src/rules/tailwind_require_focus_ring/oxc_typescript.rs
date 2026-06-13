@@ -43,6 +43,12 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // `focus:ring-*` classes are Tailwind-specific — meaningless in
+        // projects that style with CSS-in-JS (MUI, ant-design).
+        if !ctx.project.uses_tailwind() {
+            return;
+        }
+
         let AstKind::JSXOpeningElement(opening) = node.kind() else {
             return;
         };
@@ -139,7 +145,9 @@ mod tests {
     use super::*;
 
     fn run(s: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, s, "t.tsx")
+        let project = crate::project::ProjectCtx::empty_with_tailwind();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, s, "t.tsx", &project, file)
     }
 
     #[test]
@@ -261,7 +269,32 @@ mod tests {
     #[test]
     fn skips_shadcn_ui_components() {
         let src = r#"export const A = <button className="px-4" />;"#;
-        let d = crate::rules::test_helpers::run_rule(&Check, src, "src/components/ui/sidebar.tsx");
+        let project = crate::project::ProjectCtx::empty_with_tailwind();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        let d = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            src,
+            "src/components/ui/sidebar.tsx",
+            &project,
+            file,
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn skips_project_without_tailwind() {
+        // Issue #1995: in a project with no Tailwind (CSS-in-JS, MUI,
+        // ant-design) the `focus:ring-*` class is meaningless, so the rule
+        // must stay silent even on a bare interactive element.
+        let project = crate::project::ProjectCtx::empty();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        let d = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            r#"export const A = () => <button className="px-4" />;"#,
+            "t.tsx",
+            &project,
+            file,
+        );
         assert!(d.is_empty());
     }
 }
