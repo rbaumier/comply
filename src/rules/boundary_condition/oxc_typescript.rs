@@ -82,6 +82,19 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `match[0]` after a null guard, where `match` is a `RegExp.prototype.exec`
+        // or `String.prototype.match` result. A non-null exec/match result is a
+        // `RegExpExecArray`/`RegExpMatchArray` whose index 0 (the full match) is
+        // always present — never an empty array — so the first-element read is
+        // in-bounds once the `if (!match) return` / `=== null` guard has passed.
+        if is_first
+            && let Expression::Identifier(obj_ident) = &member.object
+            && resolves_to_regex_match(node, obj_ident.name.as_str(), semantic)
+            && has_preceding_nullish_exit_guard(node, obj_ident.name.as_str(), semantic)
+        {
+            return;
+        }
+
         // Cypress idiom: `$el[0]` inside a `.then(($el) => ...)` callback unwraps the
         // underlying DOM node from the jQuery wrapper. Cypress invokes the callback
         // only when the queried element exists (it fails the test otherwise), so the
@@ -500,6 +513,121 @@ fn is_static_nonempty_array(arr: &ArrayExpression) -> bool {
         .any(|el| matches!(el, ArrayExpressionElement::SpreadElement(_)))
 }
 
+/// Returns true when `name` resolves to a same-scope `const`/`let` whose
+/// initializer is a `RegExp.prototype.exec` or `String.prototype.match` call
+/// (`re.exec(s)` / `s.match(re)`). The closest binding wins. A non-null result
+/// of either is a match array whose index 0 (the full match) always exists.
+fn resolves_to_regex_match(
+    node: &oxc_semantic::AstNode,
+    name: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        let stmts: &[Statement] = match ancestor.kind() {
+            AstKind::Program(prog) => &prog.body,
+            AstKind::FunctionBody(body) => &body.statements,
+            AstKind::BlockStatement(block) => &block.body,
+            _ => continue,
+        };
+        for stmt in stmts {
+            let Statement::VariableDeclaration(decl) = stmt else {
+                continue;
+            };
+            for declarator in &decl.declarations {
+                let BindingPattern::BindingIdentifier(id) = &declarator.id else {
+                    continue;
+                };
+                if id.name.as_str() != name {
+                    continue;
+                }
+                // Closest binding wins: the first declarator matching `name`
+                // decides, even if its initializer is not an exec/match call.
+                return matches!(&declarator.init, Some(init) if is_regex_exec_or_match_call(init));
+            }
+        }
+    }
+    false
+}
+
+/// Returns true when `expr` is `<recv>.exec(...)` or `<recv>.match(...)` — the
+/// two calls that yield a `RegExpExecArray`/`RegExpMatchArray | null`.
+fn is_regex_exec_or_match_call(expr: &Expression) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    matches!(member.property.name.as_str(), "exec" | "match")
+}
+
+/// Returns true when a preceding sibling statement in the same block exits early
+/// on `name` being nullish/falsy: `if (!name) return/throw`, `if (name === null)
+/// return/throw`, or `if (name == null) return/throw`. Does not cross function
+/// boundaries.
+fn has_preceding_nullish_exit_guard(
+    node: &oxc_semantic::AstNode,
+    name: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let mut current_id = node.id();
+    let node_span_start = node.kind().span().start;
+    loop {
+        let parent_id = nodes.parent_id(current_id);
+        if parent_id == current_id {
+            return false;
+        }
+        let parent = nodes.get_node(parent_id);
+        let stmts: &[Statement] = match parent.kind() {
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return false,
+            AstKind::BlockStatement(block) => &block.body,
+            AstKind::FunctionBody(body) => &body.statements,
+            AstKind::Program(prog) => &prog.body,
+            _ => {
+                current_id = parent_id;
+                continue;
+            }
+        };
+        let our_idx = stmts
+            .iter()
+            .position(|s| s.span().start <= node_span_start && node_span_start < s.span().end);
+        let Some(our_idx) = our_idx else { return false };
+        return stmts[..our_idx].iter().any(|stmt| {
+            matches!(stmt, Statement::IfStatement(if_stmt)
+                if condition_is_nullish_check(&if_stmt.test, name)
+                    && body_has_early_exit(&if_stmt.consequent))
+        });
+    }
+}
+
+/// Returns true when `expr` is a guard condition that is satisfied exactly when
+/// `name` is nullish/falsy: `!name`, `name === null`, or `name == null`.
+fn condition_is_nullish_check(expr: &Expression, name: &str) -> bool {
+    match expr {
+        Expression::UnaryExpression(unary) => {
+            matches!(unary.operator, UnaryOperator::LogicalNot)
+                && matches!(&unary.argument, Expression::Identifier(id) if id.name.as_str() == name)
+        }
+        Expression::BinaryExpression(bin) => {
+            matches!(
+                bin.operator,
+                BinaryOperator::StrictEquality | BinaryOperator::Equality
+            ) && binary_compares_identifier_to_null(&bin.left, &bin.right, name)
+        }
+        _ => false,
+    }
+}
+
+/// Returns true when one side of a binary comparison is the identifier `name`
+/// and the other is the `null` literal (order-insensitive).
+fn binary_compares_identifier_to_null(left: &Expression, right: &Expression, name: &str) -> bool {
+    let is_name = |e: &Expression| matches!(e, Expression::Identifier(id) if id.name.as_str() == name);
+    let is_null = |e: &Expression| matches!(e, Expression::NullLiteral(_));
+    (is_name(left) && is_null(right)) || (is_null(left) && is_name(right))
+}
+
 /// Returns true when the index access lives inside a function whose parameter
 /// list binds `name`, and that function is the argument of a `.then(...)` member
 /// call — i.e. `something.then((name) => ... name[0] ...)`. This is the Cypress
@@ -738,6 +866,54 @@ mod tests {
     fn still_flags_index0_inside_block_for_other_array_issue_1178() {
         // The guard is for `a`; `b[0]` inside the block is unrelated and stays flagged.
         let src = "function f(a, b) { if (a[0]) { return b[0].name; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_regex_exec_index0_after_null_guard_issue_1822() {
+        // Canonical regex idiom: a non-null `exec` result is a `RegExpExecArray`
+        // whose `[0]` (full match) always exists.
+        let src = "function f(text) { const match = /`([^`]+)`(?!`)$/.exec(text); if (!match) { return null; } return { text: match[0], replaceWith: match[1] }; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_regex_match_index0_after_null_guard_issue_1822() {
+        let src = "function f(s) { const m = s.match(/(\\d+)/); if (!m) return; return m[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_regex_exec_index0_after_strict_null_guard_issue_1822() {
+        let src = "function f(s) { const m = re.exec(s); if (m === null) { throw new Error('no match'); } return m[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_regex_exec_index0_after_loose_null_guard_issue_1822() {
+        let src = "function f(s) { const m = re.exec(s); if (m == null) return; return m[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_regex_exec_index0_without_guard_issue_1822() {
+        // No null guard: `m` may be null, so the read is not vouched safe here.
+        let src = "function f(s) { const m = re.exec(s); return m[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_plain_array_index0_after_null_guard_issue_1822() {
+        // A plain array survives `if (!arr)` while still being empty, so `arr[0]`
+        // can be `undefined` — the regex-origin requirement keeps this flagged.
+        let src = "function f() { const arr = getArr(); if (!arr) return; return arr[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_regex_exec_last_index_after_null_guard_issue_1822() {
+        // Only `[0]` (the full match) is guaranteed; `[length - 1]` is not.
+        let src = "function f(s) { const m = re.exec(s); if (!m) return; return m[m.length - 1]; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
