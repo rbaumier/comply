@@ -92,10 +92,53 @@ pub fn is_in_framework_entry_dir(path: &Path, project: &ProjectCtx) -> bool {
         .any(|dir| path_str.contains(dir))
 }
 
+/// True when `file_name` is a SvelteKit route file: a `+`-prefixed basename
+/// from the framework's file-system routing set (`+page`, `+layout`,
+/// `+server`, `+error` with `.svelte`/`.ts`/`.js` and an optional `.server`
+/// segment). These are discovered by the router at build time, never imported.
+pub fn is_sveltekit_route_file(file_name: &str) -> bool {
+    let Some(rest) = file_name.strip_prefix('+') else {
+        return false;
+    };
+    let parts: Vec<&str> = rest.split('.').collect();
+    matches!(
+        parts.as_slice(),
+        ["page" | "layout" | "error", "svelte"]
+            | ["page" | "layout", "js" | "ts"]
+            | ["page" | "layout", "server", "js" | "ts"]
+            | ["server", "js" | "ts"]
+    )
+}
+
+/// True when `path` is a SvelteKit route file (`+page.svelte`,
+/// `+page.server.ts`, `+server.ts`, …) located under a `routes/` directory in
+/// a project where SvelteKit is detected. SvelteKit's file-system router
+/// consumes these by path, so nothing imports them — they are implicit entry
+/// points. The `routes/` ancestor and detection gate keep the exemption from
+/// covering an unrelated `+`-named file.
+fn is_sveltekit_route_entry(path: &Path, project: &ProjectCtx) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if !is_sveltekit_route_file(name) {
+        return false;
+    }
+    if !path
+        .components()
+        .any(|c| c.as_os_str() == std::ffi::OsStr::new("routes"))
+    {
+        return false;
+    }
+    project.has_framework("svelte")
+        || project.frameworks_for_path(path).iter().any(|f| f.name == "svelte")
+}
+
 /// True when `path` matches an entry point declared by any detected
 /// framework. This covers file-based routers, generated route trees, and
 /// framework-owned files whose exports/import reachability is implicit.
 pub fn is_framework_entry_point(path: &Path, project: &ProjectCtx) -> bool {
+    if is_sveltekit_route_entry(path, project) {
+        return true;
+    }
+
     let path_str = path.to_string_lossy().replace('\\', "/");
     if project
         .framework_entry_dirs()

@@ -513,6 +513,57 @@ mod tests {
         );
     }
 
+    // Regression for #1415: SvelteKit route files use a `+` prefix
+    // (`+page.svelte`, `+page.server.ts`, `+server.ts`, …) under a `routes/`
+    // directory. The framework's file-system router consumes them by path —
+    // nothing imports them — so they must not be flagged as unused.
+    #[test]
+    fn sveltekit_route_files_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"name":"app","dependencies":{"@sveltejs/kit":"2.0.0"}}"#,
+            ),
+            ("src/index.ts", "export const app = 1;\n"),
+            ("src/routes/+page.svelte", "<h1>Home</h1>\n"),
+            (
+                "src/routes/+page.server.ts",
+                "export const load = () => ({});\n",
+            ),
+            (
+                "src/routes/read/+server.js",
+                "export function GET() { return new Response('ok'); }\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "SvelteKit `+`-prefixed route files are framework-routed entry points: {diags:?}"
+        );
+    }
+
+    // Regression for #1415: the SvelteKit exemption is precise — an ordinary
+    // never-imported `.ts` file outside the `routes/` convention is still a
+    // true positive even when the project is a SvelteKit app.
+    #[test]
+    fn orphan_file_in_sveltekit_app_still_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"name":"app","dependencies":{"@sveltejs/kit":"2.0.0"}}"#,
+            ),
+            ("src/index.ts", "export const app = 1;\n"),
+            ("src/routes/+page.svelte", "<h1>Home</h1>\n"),
+            ("src/lib/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "diagnostic should target the orphaned non-route file: {diags:?}"
+        );
+    }
+
     // Regression for #1402: Next.js page files under a `pages/` directory are
     // consumed by the framework's file-system router — nothing imports them
     // statically. They must not be flagged, including special files like

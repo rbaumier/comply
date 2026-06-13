@@ -22,19 +22,7 @@ pub const META: RuleMeta = RuleMeta {
     skip_in_relaxed_dir: false,
 };
 
-fn is_sveltekit_route_file(file_name: &str) -> bool {
-    let Some(rest) = file_name.strip_prefix('+') else {
-        return false;
-    };
-    let parts: Vec<&str> = rest.split('.').collect();
-    match parts.as_slice() {
-        ["page" | "layout" | "error", "svelte"] => true,
-        ["page" | "layout", "js" | "ts"] => true,
-        ["page" | "layout", "server", "js" | "ts"] => true,
-        ["server", "js" | "ts"] => true,
-        _ => false,
-    }
-}
+use crate::rules::path_utils::is_sveltekit_route_file;
 
 /// Returns `true` for TanStack Router pathless layout routes: a file whose
 /// name starts with `_` living under any `routes/` ancestor directory.
