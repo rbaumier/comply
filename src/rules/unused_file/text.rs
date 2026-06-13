@@ -620,6 +620,51 @@ mod tests {
         );
     }
 
+    // Regression for #1989: Cypress spec files (**/*.cy.{ts,js,tsx,jsx}) are
+    // discovered via specPattern and executed by the runner, and the
+    // cypress/support/e2e.* and commands.* files are auto-imported before each
+    // suite. None are reachable through the import graph, so none must be flagged.
+    #[test]
+    fn cypress_spec_and_support_files_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"name":"app","devDependencies":{"cypress":"13.0.0"}}"#,
+            ),
+            ("src/index.ts", "export const app = 1;\n"),
+            ("cypress/e2e/Select.cy.ts", "describe('Select', () => {});\n"),
+            ("cypress/support/e2e.js", "import './commands';\n"),
+            ("cypress/support/commands.js", "Cypress.Commands.add('login', () => {});\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "Cypress spec and support files are test-runner entry points: {diags:?}"
+        );
+    }
+
+    // Regression for #1989: the Cypress exemption is precise — a genuinely
+    // orphaned normal source file is still a true positive even when the
+    // project uses Cypress.
+    #[test]
+    fn orphan_file_in_cypress_project_still_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"name":"app","devDependencies":{"cypress":"13.0.0"}}"#,
+            ),
+            ("src/index.ts", "export const app = 1;\n"),
+            ("cypress/e2e/Select.cy.ts", "describe('Select', () => {});\n"),
+            ("src/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "diagnostic should target the orphaned non-Cypress file: {diags:?}"
+        );
+    }
+
     // Regression for #1402: the framework-routing exemption must not blanket
     // the whole project — a genuinely orphaned non-route file (imported by
     // nothing, outside any framework routing directory) is still a true
