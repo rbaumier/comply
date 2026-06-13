@@ -20,7 +20,10 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["unicorn"],
 
     skip_in_test_dir: false,
-    skip_in_relaxed_dir: false,
+    // Fixture/sample directories (`__fixtures__/`, `fixtures/`, `samples/`, …)
+    // hold intentional code examples that demonstrate patterns — including
+    // anonymous default exports — so the rule does not apply there.
+    skip_in_relaxed_dir: true,
 };
 
 pub fn register() -> RuleDef {

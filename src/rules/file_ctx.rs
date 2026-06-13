@@ -65,6 +65,12 @@ pub struct PathSegments {
     /// A cargo-fuzz `fuzz_targets/` directory segment — where `panic!` is the
     /// deliberate crash-signaling mechanism.
     pub in_fuzz_targets: bool,
+    /// A test-runner setup/teardown hook file resolved by path, not by name:
+    /// Vitest `globalSetup`/`setup` files and Playwright
+    /// `globalSetup`/`globalTeardown` files. The framework imports them by the
+    /// configured file path and invokes their default export, so the default
+    /// export is anonymous by convention (the file name carries the intent).
+    pub is_framework_hook_file: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -311,11 +317,45 @@ fn has_storybook_segment(normalized: &str) -> bool {
 /// stricter conventions are intentionally relaxed and intentional duplication
 /// is documentation, not a smell.
 const RELAXED_SEGMENTS: &[&str] = &[
-    "examples", "example", "demo", "demos", "benches", "fixtures", "samples", "docs",
+    "examples",
+    "example",
+    "demo",
+    "demos",
+    "benches",
+    "fixtures",
+    "__fixtures__",
+    "samples",
+    "docs",
 ];
 
 fn has_relaxed_segment(normalized: &str) -> bool {
     normalized.split('/').any(|seg| RELAXED_SEGMENTS.contains(&seg))
+}
+
+/// Conventional file stems for test-runner setup/teardown hooks that the
+/// framework resolves by path and invokes via the file's default export
+/// (Vitest `globalSetup`/`setup`, Playwright `globalSetup`/`globalTeardown`).
+/// Matched against the lowercased file stem so a longer identifier such as
+/// `setupRouter.ts` does not match. The framework names the entry point by
+/// file path, so the default export is anonymous by convention.
+const FRAMEWORK_HOOK_STEMS: &[&str] = &[
+    "setup",
+    "global-setup",
+    "globalsetup",
+    "teardown",
+    "global-teardown",
+    "globalteardown",
+];
+
+/// True when `path` is a test-runner setup/teardown hook file by name (see
+/// [`FRAMEWORK_HOOK_STEMS`]). The stem must equal a hook name exactly, so
+/// `setupRouter.ts` (a regular module) is not matched.
+fn is_framework_hook_file(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let stem = name.split('.').next().unwrap_or("").to_ascii_lowercase();
+    FRAMEWORK_HOOK_STEMS.contains(&stem.as_str())
 }
 
 /// Test-root directory names that pair with an `internal/` child to form the
@@ -382,6 +422,7 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
         is_relaxed_dir: has_relaxed_segment(&lower),
         in_aux_dir: crate::rules::path_utils::is_aux_dir_path(path),
         in_fuzz_targets: crate::rules::path_utils::is_fuzz_targets_path(path),
+        is_framework_hook_file: is_framework_hook_file(path),
     }
 }
 
@@ -616,6 +657,31 @@ mod tests {
     }
 
     #[test]
+    fn framework_hook_files_set_flag_issue1154() {
+        // Vitest globalSetup / setup and Playwright globalSetup / globalTeardown
+        // hook files resolved by path — anonymous default export by convention.
+        for name in [
+            "setup.ts",
+            "setup.mts",
+            "global-setup.ts",
+            "globalSetup.ts",
+            "teardown.ts",
+            "global-teardown.ts",
+            "globalTeardown.ts",
+        ] {
+            assert!(
+                scan_path(&PathBuf::from(format!("test/utils/{name}"))).is_framework_hook_file,
+                "{name} should set is_framework_hook_file"
+            );
+        }
+        // The stem must equal a hook name exactly — a longer identifier that
+        // merely starts with `setup`/`teardown` is a regular module.
+        assert!(!scan_path(&PathBuf::from("src/setupRouter.ts")).is_framework_hook_file);
+        assert!(!scan_path(&PathBuf::from("src/teardownManager.ts")).is_framework_hook_file);
+        assert!(!scan_path(&PathBuf::from("src/index.ts")).is_framework_hook_file);
+    }
+
+    #[test]
     fn hyphenated_plural_tests_dirs_are_test_dirs() {
         // `*-tests/` segments such as integration-tests/ or type-tests/ (issue #979).
         assert!(
@@ -661,6 +727,9 @@ mod tests {
         assert!(scan_path(&PathBuf::from("examples/foo.ts")).is_relaxed_dir);
         assert!(scan_path(&PathBuf::from("benches/foo.rs")).is_relaxed_dir);
         assert!(scan_path(&PathBuf::from("fixtures/foo.ts")).is_relaxed_dir);
+        // `__fixtures__/` test-fixture convention (issue #1154).
+        assert!(scan_path(&PathBuf::from("src/__fixtures__/foo.ts")).is_relaxed_dir);
+        assert!(scan_path(&PathBuf::from("a/b/__fixtures__/x.ts")).is_relaxed_dir);
         assert!(scan_path(&PathBuf::from("samples/foo.ts")).is_relaxed_dir);
         assert!(scan_path(&PathBuf::from("a/b/samples/x.ts")).is_relaxed_dir);
         assert!(scan_path(&PathBuf::from("docs/y.ts")).is_relaxed_dir);
