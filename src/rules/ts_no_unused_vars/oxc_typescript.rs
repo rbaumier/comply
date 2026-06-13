@@ -20,6 +20,36 @@ fn is_snapshot_file(path: &std::path::Path) -> bool {
     normalized.split('/').any(|seg| seg == "snapshots" || seg == "__snapshots__")
 }
 
+/// True when `decl_node` is `import React from 'react'`. Under the classic JSX
+/// transform (`jsx: "react"`), each JSX element compiles to a
+/// `React.createElement(...)` call, so the `React` binding is consumed by the
+/// JSX in the file even though it never appears as an explicit source
+/// reference. oxc's semantic analysis only sees source references, so it
+/// reports this pragma import as unused.
+fn is_react_pragma_import(
+    decl_node: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let AstKind::ImportDefaultSpecifier(spec) = nodes.kind(decl_node) else {
+        return false;
+    };
+    if spec.local.name.as_str() != "React" {
+        return false;
+    }
+    nodes.ancestor_kinds(decl_node).any(
+        |k| matches!(k, AstKind::ImportDeclaration(import) if import.source.value == "react"),
+    )
+}
+
+/// True when the program contains any JSX element or fragment.
+fn file_contains_jsx(semantic: &oxc_semantic::Semantic) -> bool {
+    semantic
+        .nodes()
+        .iter()
+        .any(|node| matches!(node.kind(), AstKind::JSXElement(_) | AstKind::JSXFragment(_)))
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[]
@@ -36,6 +66,9 @@ impl OxcCheck for Check {
         let scoping = semantic.scoping();
         let nodes = semantic.nodes();
         let mut diagnostics = Vec::new();
+        // Memoized once a React pragma import is encountered; scanning every
+        // node for JSX is only worth paying for when there's a React import.
+        let mut has_jsx: Option<bool> = None;
 
         for symbol_id in scoping.symbol_ids() {
             let name = scoping.symbol_name(symbol_id);
@@ -47,6 +80,12 @@ impl OxcCheck for Check {
             }
 
             let decl_node = scoping.symbol_declaration(symbol_id);
+
+            if is_react_pragma_import(decl_node, semantic)
+                && *has_jsx.get_or_insert_with(|| file_contains_jsx(semantic))
+            {
+                continue;
+            }
             let exported = nodes.ancestor_kinds(decl_node).any(|k| {
                 matches!(
                     k,
@@ -260,6 +299,62 @@ export { customElement };
         assert!(
             diags.is_empty(),
             "FP on overload signature parameter names: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_react_default_import_with_jsx() {
+        // Classic JSX transform (`jsx: "react"`): every JSX element compiles to
+        // `React.createElement(...)`, so the `React` default import is used by
+        // the JSX even though it never appears as an explicit reference.
+        // (Closes #1864)
+        let src = r#"
+import React from 'react';
+
+export const CustomizedDot = {
+    render: () => (
+        <svg x={1} y={2} width={20} height={20}>
+            <path d="M0 0" />
+        </svg>
+    ),
+};
+"#;
+        let diags = run(src);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`React`")),
+            "FP on `React` default import in a .tsx file containing JSX: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_react_default_import_without_jsx() {
+        // No JSX in the file → the classic transform consumes nothing, so an
+        // unused `React` default import is genuinely dead code.
+        let src = "import React from 'react';\nexport {};";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "expected `React` to be flagged: {diags:?}");
+        assert!(diags[0].message.contains("`React`"));
+    }
+
+    #[test]
+    fn still_flags_unused_non_react_default_import_with_jsx() {
+        // The carve-out is scoped to the `React` pragma binding from `react`.
+        // An unrelated unused default import is still dead code, even when the
+        // file contains JSX.
+        let src = r#"
+import React from 'react';
+import unusedDefault from './other';
+
+export const El = () => <div />;
+"#;
+        let diags = run(src);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`React`")),
+            "FP on `React` default import: {diags:?}"
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("`unusedDefault`")),
+            "expected unused non-React default import to be flagged: {diags:?}"
         );
     }
 
