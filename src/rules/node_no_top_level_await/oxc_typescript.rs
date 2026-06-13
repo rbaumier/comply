@@ -1,8 +1,11 @@
 //! node-no-top-level-await OXC backend.
 //!
-//! Flags top-level `await` in published library modules. Exempt are test files,
-//! `__mocks__/` manual-mock files (Jest/Vitest test infrastructure that uses
-//! top-level `await` for `vi.importActual()`), scripts, and entrypoints.
+//! Flags top-level `await` in published CommonJS modules, where it is invalid.
+//! Exempt are files in an ES-module context (a `.mjs`/`.mts` extension, or a
+//! nearest `package.json` declaring `"type": "module"`), where top-level await
+//! is a valid Stage-4 feature, plus test files, `__mocks__/` manual-mock files
+//! (Jest/Vitest test infrastructure that uses top-level `await` for
+//! `vi.importActual()`), scripts, and entrypoints.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -53,7 +56,8 @@ impl OxcCheck for Check {
             return;
         };
 
-        if is_test_file(ctx.path)
+        if crate::rules::module_system::is_es_module_context_cached(ctx)
+            || is_test_file(ctx.path)
             || crate::rules::path_utils::is_auto_mock_dir_path(ctx.path)
             || is_script_file(ctx.path, ctx.source)
             || is_entrypoint(ctx.source)
@@ -137,5 +141,66 @@ const { create: actualCreate, createStore: actualCreateStore } =
   await vi.importActual<typeof zustand>('zustand');
 "#;
         assert!(run_at(src, "apps/react-vite/__mocks__/zustand.ts").is_empty());
+    }
+
+    /// Run the rule against `importer_rel` inside a temp tree whose root
+    /// `package.json` is `pkg_json`, exercising the on-disk
+    /// `nearest_package_json` ESM detection.
+    fn run_in_package(importer_rel: &str, source: &str, pkg_json: &str) -> Vec<Diagnostic> {
+        use crate::config::Config;
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), pkg_json).unwrap();
+        let importer = dir.path().join(importer_rel);
+        std::fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        std::fs::write(&importer, source).unwrap();
+        let canon = std::fs::canonicalize(&importer).unwrap();
+        let source_file = SourceFile {
+            path: canon.clone(),
+            language: Language::from_path(&canon).unwrap(),
+        };
+        let project = ProjectCtx::load(&[&source_file], &Config::default());
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    // Regression for #1776: top-level `await` is valid in an ES module, so a
+    // file under a `package.json` that declares `"type": "module"` (sst's
+    // `sdk/js/` package) must not be flagged.
+    #[test]
+    fn allows_top_level_await_in_type_module_package() {
+        let src = r#"
+import { Issuer } from "openid-client";
+import { OauthAdapter, OauthBasicConfig } from "./oauth.js";
+
+const issuer = await Issuer.discover(
+  "https://appleid.apple.com/.well-known/openid-configuration",
+);
+
+export const AppleAdapter = (config: OauthBasicConfig) => {
+  return OauthAdapter({ issuer });
+};
+"#;
+        let pkg = r#"{ "type": "module", "exports": { ".": "./dist/index.js" } }"#;
+        assert!(
+            run_in_package("src/auth/adapter/apple.ts", src, pkg).is_empty(),
+            "top-level await in a \"type\":\"module\" package is valid ESM"
+        );
+    }
+
+    // A CommonJS package (no `"type": "module"`) still forbids top-level await.
+    #[test]
+    fn flags_top_level_await_in_commonjs_package() {
+        let src = "const data = await fetch('/api');";
+        let pkg = r#"{ "main": "./dist/index.js" }"#;
+        let diags = run_in_package("src/load.ts", src, pkg);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Top-level"));
     }
 }
