@@ -92,6 +92,7 @@ fn package_root(specifier: &str) -> &str {
 fn is_test_file(path: &Path) -> bool {
     let path_str = path.to_string_lossy();
     let is_marked = path_str.contains("__tests__")
+        || path_str.contains("__testUtils__")
         || path_str.contains(".test.")
         || path_str.contains(".spec.")
         || path_str.contains(".stories.")
@@ -296,6 +297,18 @@ import { endOfWeek } from "..";
         let src = r#"import { describe, it, expect } from "vitest";"#;
         let d = run_with_pkg_at_path(pkg, "src/startOfWeek/spec.ts", src);
         assert!(d.is_empty(), "co-located spec.ts should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_test_utils_dir() {
+        // Issue #2048: graphql-js `src/__testUtils__/expectJSON.ts` is shared
+        // test infrastructure that imports `chai` (a devDependency). The
+        // `__testUtils__/` convention sits alongside `__tests__/` and never ships
+        // in the published package, so importing a devDependency is correct.
+        let pkg = r#"{"devDependencies":{"chai":"^4"}}"#;
+        let src = r#"import { expect } from "chai";"#;
+        let d = run_with_pkg_at_path(pkg, "src/__testUtils__/expectJSON.ts", src);
+        assert!(d.is_empty(), "__testUtils__ file should not flag devDeps: {d:?}");
     }
 
     #[test]
