@@ -19,13 +19,9 @@ crate::ast_check! { on ["call_expression"] prefilter = ["Sync"] => |node, source
         _ => return,
     };
 
-    // Must end with "Sync" and have at least one char before it.
-    if method_name.len() <= 4 || !method_name.ends_with("Sync") {
-        return;
-    }
-
-    // Skip React hooks and event callbacks: `use[A-Z]…Sync` / `on[A-Z]…Sync`.
-    if super::oxc_typescript::is_react_sync_name(method_name) {
+    // Only flag genuine Node.js core synchronous I/O methods, not arbitrary
+    // identifiers ending in `Sync` (e.g. `flushSync`, `batchSync`).
+    if !super::is_node_sync_io_method(method_name) {
         return;
     }
 
@@ -102,6 +98,13 @@ mod tests {
     }
 
     #[test]
+    fn flags_other_node_sync_io_methods() {
+        assert_eq!(run_on("if (fs.existsSync('f')) {}").len(), 1);
+        assert_eq!(run_on("const s = fs.statSync('f');").len(), 1);
+        assert_eq!(run_on("const out = spawnSync('ls');").len(), 1);
+    }
+
+    #[test]
     fn allows_async_method() {
         assert!(run_on("fs.readFile('f.txt', cb);").is_empty());
     }
@@ -123,12 +126,6 @@ mod tests {
     fn allows_other_react_hook_sync_variants() {
         assert!(run_on("const x = useStateSync();").is_empty());
         assert!(run_on("const x = useSearchParamsSync();").is_empty());
-    }
-
-    #[test]
-    fn still_flags_lowercase_use_prefix() {
-        // `users` is not a hook — must still be flagged if it ends in Sync.
-        assert_eq!(run_on("const x = usersSync();").len(), 1);
     }
 
     #[test]
@@ -157,8 +154,20 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_lowercase_on_prefix() {
-        // `once` is not a React callback — must still be flagged if it ends in Sync.
-        assert_eq!(run_on("const x = onceSync();").len(), 1);
+    fn allows_framework_flush_sync() {
+        // Issue #1767 — Svelte's/React's `flushSync` is a DOM-batching helper,
+        // not Node sync I/O, and must not be flagged.
+        assert!(run_on("flushSync();").is_empty());
+        assert!(run_on("ReactDOM.flushSync(() => setState(x));").is_empty());
+    }
+
+    #[test]
+    fn allows_arbitrary_sync_suffixed_identifiers() {
+        // Issue #1767 — application-level helpers ending in `Sync` are not Node
+        // I/O methods.
+        assert!(run_on("const x = batchSync();").is_empty());
+        assert!(run_on("const x = renderSync();").is_empty());
+        assert!(run_on("const x = usersSync();").is_empty());
+        assert!(run_on("const x = onceSync();").is_empty());
     }
 }
