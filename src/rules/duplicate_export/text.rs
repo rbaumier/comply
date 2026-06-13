@@ -2,10 +2,15 @@
 //! `ReExport` and flag symbol names that show up in two or more distinct barrel
 //! files of that package.
 //!
-//! Re-exports are grouped by the nearest `package.json` directory so that two
-//! independent packages re-exporting the same symbol name (e.g. a shared `LogLevel`
-//! enum across separate workspace packages) are never compared — only barrels
-//! inside the same package create an ambiguous import path.
+//! Re-exports are grouped by the smallest published package surface enclosing
+//! each barrel (the nearest `ng-package.json` directory, else the nearest
+//! `package.json` directory) so that two independent packages re-exporting the
+//! same symbol name are never compared — only barrels inside the same package
+//! create an ambiguous import path. This covers both separate workspace packages
+//! (a shared `LogLevel` enum across distinct `package.json` roots) and ng-packagr
+//! secondary entry points (`@scope/lib`, `@scope/lib/common`) that publish
+//! parallel public APIs from nested `ng-package.json` directories under one
+//! `package.json`.
 //!
 //! Skips:
 //!   - `"default"` re-exports — barrels routinely re-export a default under
@@ -67,7 +72,7 @@ impl TextCheck for Check {
                 if export.name == "default" || export.name == "*" {
                     continue;
                 }
-                let package_dir = ctx.project.nearest_package_json_dir(path);
+                let package_dir = ctx.project.package_boundary_dir(path);
                 reexports
                     .entry((package_dir, export.name.clone()))
                     .or_default()
@@ -290,6 +295,55 @@ mod tests {
         assert!(
             diags.is_empty(),
             "same symbol re-exported by distinct packages must not be flagged, got: {:?}",
+            diags
+        );
+    }
+
+    /// #1836: ng-packagr secondary entry points (Ionic). One `@ionic/angular`
+    /// `package.json` publishes parallel public packages — `@ionic/angular`,
+    /// `@ionic/angular/common`, `@ionic/angular/standalone` — each declared by a
+    /// nested `ng-package.json`. They intentionally re-export the same Angular
+    /// component names (`IonModal`, ...) as distinct public APIs. The nearest
+    /// `package.json` is identical for all three, so grouping must use the nearest
+    /// `ng-package.json` directory as the package boundary; the symbols are not
+    /// duplicates across separate entry points.
+    #[test]
+    fn allows_same_symbol_across_ng_package_entry_points() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "packages/angular/package.json",
+                r#"{"name":"@ionic/angular"}"#,
+            ),
+            (
+                "packages/angular/ng-package.json",
+                r#"{"lib":{"entryFile":"src/index.ts"}}"#,
+            ),
+            (
+                "packages/angular/src/overlays/modal.ts",
+                "export class IonModal {}",
+            ),
+            (
+                "packages/angular/src/index.ts",
+                "export { IonModal } from './overlays/modal';",
+            ),
+            (
+                "packages/angular/common/ng-package.json",
+                r#"{"lib":{"entryFile":"src/index.ts"}}"#,
+            ),
+            (
+                "packages/angular/common/src/overlays/modal.ts",
+                "export class IonModal {}",
+            ),
+            (
+                "packages/angular/common/src/index.ts",
+                "export { IonModal } from './overlays/modal';",
+            ),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert!(
+            diags.is_empty(),
+            "same symbol re-exported by distinct ng-package entry points must not be flagged, got: {:?}",
             diags
         );
     }

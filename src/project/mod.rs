@@ -1291,6 +1291,20 @@ impl ProjectCtx {
         walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "ng-package.json")
     }
 
+    /// Directory of the smallest published package surface enclosing `path`.
+    ///
+    /// An ng-packagr library publishes secondary entry points (`@scope/lib`,
+    /// `@scope/lib/common`, `@scope/lib/standalone`) as nested `ng-package.json`
+    /// directories that share the library's single `package.json`. Each is an
+    /// independent public package even though they live under one manifest, so
+    /// the nearest `ng-package.json` directory (deepest, most specific) is the
+    /// true boundary. Falls back to the nearest `package.json` directory when no
+    /// `ng-package.json` lies between `path` and that manifest.
+    pub fn package_boundary_dir(&self, path: &Path) -> Option<PathBuf> {
+        self.nearest_ng_package_dir(path)
+            .or_else(|| self.nearest_package_json_dir(path))
+    }
+
     /// `lib.entryFile` of the `ng-package.json` in `manifest_dir`, parsed once
     /// and memoized by directory. `None` for a missing/malformed file or one
     /// without a `lib.entryFile` string.
@@ -2153,6 +2167,47 @@ mod tests {
         let ctx = ProjectCtx::empty();
         assert!(ctx.is_ng_package_entry_file(&entry));
         assert!(!ctx.is_ng_package_entry_file(&other));
+    }
+
+    #[test]
+    fn package_boundary_dir_prefers_nearest_ng_package_over_package_json() {
+        let dir = TempDir::new().unwrap();
+        let lib = dir.path().join("packages/angular");
+        std::fs::create_dir_all(lib.join("common/src")).unwrap();
+        std::fs::create_dir_all(lib.join("src")).unwrap();
+        std::fs::write(lib.join("package.json"), r#"{"name":"@ionic/angular"}"#).unwrap();
+        std::fs::write(lib.join("ng-package.json"), r#"{"lib":{"entryFile":"src/index.ts"}}"#)
+            .unwrap();
+        std::fs::write(
+            lib.join("common/ng-package.json"),
+            r#"{"lib":{"entryFile":"src/index.ts"}}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx::empty();
+        // A secondary entry point resolves to its own ng-package directory, not
+        // the shared package.json directory.
+        assert_eq!(
+            ctx.package_boundary_dir(&lib.join("common/src/index.ts")),
+            Some(lib.join("common"))
+        );
+        // The primary entry point resolves to the library root.
+        assert_eq!(
+            ctx.package_boundary_dir(&lib.join("src/index.ts")),
+            Some(lib.clone())
+        );
+    }
+
+    #[test]
+    fn package_boundary_dir_falls_back_to_package_json() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"plain"}"#).unwrap();
+        let ctx = ProjectCtx::empty();
+        assert_eq!(
+            ctx.package_boundary_dir(&dir.path().join("src/index.ts")),
+            Some(dir.path().to_path_buf())
+        );
     }
 
     #[test]
