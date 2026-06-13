@@ -834,6 +834,14 @@ pub struct ProjectCtx {
     // resolves the framework owning each file. Memoized per manifest dir — the
     // answer is identical for every file under the same package.json.
     path_frameworks_cache: Mutex<HashMap<PathBuf, Vec<&'static FrameworkDef>>>,
+
+    // `lib.entryFile` declared in each `ng-package.json`, keyed by that file's
+    // directory. ng-packagr Angular libraries declare their public-API entry
+    // here, not in `package.json` `main`/`exports` (those are emitted to the
+    // build output). Parsed lazily on first miss and memoized — the answer is
+    // identical for every file under the same `ng-package.json`. `None` caches a
+    // missing/malformed file or an absent `lib.entryFile` so it is not re-read.
+    ng_package_entry_cache: Mutex<HashMap<PathBuf, Option<String>>>,
 }
 
 impl ProjectCtx {
@@ -1196,6 +1204,47 @@ impl ProjectCtx {
         pkg.entry_files
             .iter()
             .any(|entry| manifest_dir.join(entry) == path)
+    }
+
+    /// True when `path` is the public-API entry file an ng-packagr Angular
+    /// library declares — the `lib.entryFile` of the nearest `ng-package.json`.
+    /// ng-packagr libraries publish their entry through the build output's
+    /// `package.json` (`main`/`exports`), not the source `package.json`, so the
+    /// source entry and everything it re-exports look unimported. Rules about
+    /// "this symbol has no importer" (e.g. `dead-export`) treat this file as a
+    /// package entry point. `path` must be absolute; the comparison joins the
+    /// manifest-relative `entryFile` onto the `ng-package.json`'s directory.
+    pub fn is_ng_package_entry_file(&self, path: &Path) -> bool {
+        let Some(manifest_dir) = self.nearest_ng_package_dir(path) else {
+            return false;
+        };
+        let Some(entry_file) = self.ng_package_entry_file(&manifest_dir) else {
+            return false;
+        };
+        manifest_dir.join(entry_file) == path
+    }
+
+    /// Walk up from `path` to the directory of the nearest `ng-package.json`.
+    /// Shares the manifest-dir cache with the other `nearest_*` walks.
+    fn nearest_ng_package_dir(&self, path: &Path) -> Option<PathBuf> {
+        let start_dir = path.parent()?;
+        walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "ng-package.json")
+    }
+
+    /// `lib.entryFile` of the `ng-package.json` in `manifest_dir`, parsed once
+    /// and memoized by directory. `None` for a missing/malformed file or one
+    /// without a `lib.entryFile` string.
+    fn ng_package_entry_file(&self, manifest_dir: &Path) -> Option<String> {
+        if let Some(hit) = self.ng_package_entry_cache.lock().ok()?.get(manifest_dir) {
+            return hit.clone();
+        }
+        let raw = std::fs::read_to_string(manifest_dir.join("ng-package.json")).ok();
+        let entry = raw.as_deref().and_then(parse_ng_package_entry_file);
+        if let Ok(mut map) = self.ng_package_entry_cache.lock() {
+            map.entry(manifest_dir.to_path_buf())
+                .or_insert_with(|| entry.clone());
+        }
+        entry
     }
 
     /// True when `path` is a build-input source file: it sits under the nearest
@@ -1876,6 +1925,22 @@ fn load_manifest_at<T>(
     parsed
 }
 
+/// Extract `lib.entryFile` from an `ng-package.json`'s raw text, normalized to
+/// forward slashes with any leading `./` stripped so it joins cleanly onto the
+/// manifest directory. Parsed via [`parse_jsonc`] because ng-packagr configs are
+/// JSONC (comments and trailing commas appear, especially in secondary entry
+/// points). Returns `None` when the text is unparseable or declares no string
+/// `lib.entryFile`.
+fn parse_ng_package_entry_file(raw: &str) -> Option<String> {
+    let json = parse_jsonc(raw)?;
+    let entry = json.get("lib")?.get("entryFile")?.as_str()?;
+    let rel = entry.strip_prefix("./").unwrap_or(entry);
+    if rel.is_empty() {
+        return None;
+    }
+    Some(rel.replace('\\', "/"))
+}
+
 fn detect_framework(pkg: &PackageJson) -> Framework {
     let has = |name: &str| pkg.all_deps().any(|k| k == name);
     if has("nuxt") {
@@ -2008,6 +2073,50 @@ mod tests {
         std::fs::write(dir.path().join("package.json"), r#"{"name":"app"}"#).unwrap();
         let ctx = ProjectCtx::empty();
         assert!(!ctx.react_supports_v18(&dir.path().join("t.tsx")));
+    }
+
+    #[test]
+    fn is_ng_package_entry_file_matches_lib_entry_file() {
+        let dir = TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("packages/angular-server");
+        std::fs::create_dir_all(pkg_dir.join("src")).unwrap();
+        std::fs::write(
+            pkg_dir.join("ng-package.json"),
+            r#"{ "lib": { "entryFile": "src/public_api.ts" } }"#,
+        )
+        .unwrap();
+        let entry = pkg_dir.join("src/public_api.ts");
+        std::fs::write(&entry, "export {};").unwrap();
+        let other = pkg_dir.join("src/ionic-server-module.ts");
+        std::fs::write(&other, "export class X {}").unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.is_ng_package_entry_file(&entry));
+        assert!(!ctx.is_ng_package_entry_file(&other));
+    }
+
+    #[test]
+    fn is_ng_package_entry_file_false_without_ng_package_json() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        let entry = dir.path().join("src/public_api.ts");
+        std::fs::write(&entry, "export {};").unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(!ctx.is_ng_package_entry_file(&entry));
+    }
+
+    #[test]
+    fn parse_ng_package_entry_file_reads_jsonc_with_trailing_comma() {
+        assert_eq!(
+            parse_ng_package_entry_file("{\n  \"lib\": {\n    \"entryFile\": \"src/index.ts\"\n  },\n}\n"),
+            Some("src/index.ts".to_string())
+        );
+        assert_eq!(
+            parse_ng_package_entry_file(r#"{ "lib": { "entryFile": "./src/public_api.ts" } }"#),
+            Some("src/public_api.ts".to_string())
+        );
+        assert_eq!(parse_ng_package_entry_file(r#"{ "lib": {} }"#), None);
+        assert_eq!(parse_ng_package_entry_file("not json"), None);
     }
 
     #[test]
