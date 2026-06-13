@@ -549,6 +549,30 @@ export default {
         );
     }
 
+    // Regression #1975: Vite virtual modules — both the `virtual:` prefix
+    // convention and custom namespace separators (`vitest-custom-virtual:math`)
+    // are plugin-provided, never npm packages (a `:` is invalid in an npm
+    // name), so they must not be flagged.
+    #[test]
+    fn allows_virtual_module_specifiers_issue_1975() {
+        for spec in &[
+            "virtual:vitest-custom-virtual-file-1",
+            "vitest-custom-virtual:math",
+        ] {
+            let dir = TempDir::new().unwrap();
+            fs::write(dir.path().join("package.json"), r#"{"name":"app","dependencies":{}}"#)
+                .unwrap();
+            let file = dir.path().join("virtual-files.ts");
+            let source = format!("import x from '{spec}';");
+            fs::write(&file, &source).unwrap();
+            let diags = run_oxc_in_project(&file, &source);
+            assert!(
+                diags.is_empty(),
+                "virtual module `{spec}` must not be flagged, got {diags:?}"
+            );
+        }
+    }
+
     // A genuinely undeclared external package must still fire — the virtual
     // exemption is scoped to the `@theme-original/` namespace only.
     #[test]
