@@ -27,9 +27,12 @@ fn detect_self_comparison(op: BinaryOperator, left: &Expression, right: &Express
     }
 
     match op {
-        BinaryOperator::StrictInequality | BinaryOperator::Inequality => {
-            Some("comparison `x !== x` is always false (unless NaN)")
-        }
+        // `x !== x` / `x != x` is the canonical NaN-detection idiom: `NaN` is the
+        // only value not equal to itself, so an inequality of identical operands is
+        // a deliberate test, not a dead branch. ESLint's `no-self-compare`
+        // documents this same exception. Equality self-comparison stays flagged —
+        // `x === x` is genuinely always true.
+        BinaryOperator::StrictInequality | BinaryOperator::Inequality => None,
         BinaryOperator::StrictEquality | BinaryOperator::Equality => {
             Some("comparison `x === x` is always true (unless NaN)")
         }
@@ -129,5 +132,53 @@ impl OxcCheck for Check {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    // Regression for #1894: `x !== x` is the canonical NaN-detection idiom, not
+    // a dead branch. `NaN` is the only value not equal to itself.
+    #[test]
+    fn allows_strict_inequality_nan_idiom() {
+        let src = r#"export const isNaN = (obj: any): boolean => obj !== obj;"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_loose_inequality_nan_idiom() {
+        assert!(run(r#"const isNaN = (x: any) => x != x;"#).is_empty());
+    }
+
+    #[test]
+    fn flags_strict_equality_self_compare() {
+        assert_eq!(run(r#"const b = x === x;"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_loose_equality_self_compare() {
+        assert_eq!(run(r#"const b = x == x;"#).len(), 1);
     }
 }
