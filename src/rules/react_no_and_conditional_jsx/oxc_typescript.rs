@@ -77,15 +77,23 @@ fn has_boolean_prefix(name: &str) -> bool {
     BOOLEAN_PREFIXES.iter().any(|p| lower.starts_with(p))
 }
 
-// True when the operand is a boolean-prefixed predicate: a call (isError())
-// or a bare identifier reference (withTimeBubble), both `boolean | undefined`
-// by naming convention and therefore safe in `&&`.
+// True when the operand can only evaluate to a boolean, so `expr && <X />`
+// cannot leak a literal `0`/`''`. Covers boolean-prefixed predicates (calls
+// like isError(), bare identifiers like withTimeBubble) plus syntactic forms
+// that are always boolean: comparison/relational binary expressions, logical
+// NOT (also covering `!!x`), and `typeof`.
 fn is_boolean_predicate(expr: &Expression) -> bool {
     match expr.without_parentheses() {
         Expression::CallExpression(call) => {
             matches!(&call.callee, Expression::Identifier(id) if has_boolean_prefix(id.name.as_str()))
         }
         Expression::Identifier(id) => has_boolean_prefix(id.name.as_str()),
+        Expression::BinaryExpression(binary) => {
+            binary.operator.is_equality() || binary.operator.is_compare()
+        }
+        Expression::UnaryExpression(unary) => {
+            unary.operator.is_not() || unary.operator.is_typeof()
+        }
         _ => false,
     }
 }
@@ -166,5 +174,33 @@ mod tests {
             run_on("const x = <div>{items.length && <div />}</div>;").len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_comparison_expression() {
+        assert!(run_on("const x = <div>{dev === null && <Dots />}</div>;").is_empty());
+        assert!(run_on("const x = <div>{a !== b && <Box />}</div>;").is_empty());
+    }
+
+    #[test]
+    fn allows_relational_expression() {
+        assert!(run_on("const x = <div>{width > 0 && <View />}</div>;").is_empty());
+        assert!(run_on("const x = <div>{n <= 10 && <View />}</div>;").is_empty());
+    }
+
+    #[test]
+    fn allows_logical_not() {
+        assert!(run_on("const x = <div>{!active && <Box2 />}</div>;").is_empty());
+    }
+
+    #[test]
+    fn allows_double_negation() {
+        assert!(run_on("const x = <div>{!!value && <Box />}</div>;").is_empty());
+    }
+
+    #[test]
+    fn allows_typeof_expression() {
+        assert!(run_on("const x = <div>{typeof x === 'string' && <Box />}</div>;").is_empty());
+        assert!(run_on("const x = <div>{typeof x && <Box />}</div>;").is_empty());
     }
 }
