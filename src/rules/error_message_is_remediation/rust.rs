@@ -2,8 +2,13 @@
 //!
 //! Flags vague error messages in `panic!("...")`, `anyhow!("...")`,
 //! `bail!("...")`, and `Err("...")` / `Err(format!("..."))`.
+//!
+//! Test code is exempt: files under a test directory, and `panic!` inside
+//! inline `#[test]` functions or `#[cfg(test)]` modules, are test-failure
+//! signals rather than user-facing errors.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::rust_helpers::is_in_test_context;
 
 const VERBS: &[&str] = &[
     "is", "are", "was", "were", "be", "been", "has", "have", "had", "do", "does", "did", "will",
@@ -29,6 +34,11 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     if mac_name != "panic" && mac_name != "bail" && mac_name != "anyhow" {
         return;
     }
+
+    // Panics inside inline `#[test]` functions / `#[cfg(test)]` modules signal
+    // a test failure, not a user-facing error — they need not read as
+    // remediation.
+    if is_in_test_context(node, source) { return; }
 
     let Ok(full_text) = node.utf8_text(source) else { return };
 
@@ -116,5 +126,25 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(run_on_with_file_ctx(r#"fn f() { panic!("oops"); }"#, &file).len(), 1);
+    }
+
+    #[test]
+    fn ignores_panic_in_inline_test_fn() {
+        let source = r#"#[test]
+fn test_make_field_nullable() {
+    panic!("Expected Struct type for list items");
+}"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_panic_in_cfg_test_module() {
+        let source = r#"#[cfg(test)]
+mod tests {
+    fn helper() {
+        panic!("Expected Struct type for list items");
+    }
+}"#;
+        assert!(run_on(source).is_empty());
     }
 }
