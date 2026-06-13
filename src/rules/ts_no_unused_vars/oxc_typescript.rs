@@ -59,9 +59,15 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // A mapped type's key (`k` in `{[k in K]: T}`) is declared on the
+            // `TSMappedType` node itself, so it is the declaration node — not an
+            // ancestor of it. It is a type-level loop variable with no runtime
+            // binding, so it belongs alongside the other type-construct decls.
             let decl_is_type_construct = matches!(
                 nodes.kind(decl_node),
-                AstKind::TSTypeAliasDeclaration(_) | AstKind::TSInterfaceDeclaration(_)
+                AstKind::TSTypeAliasDeclaration(_)
+                    | AstKind::TSInterfaceDeclaration(_)
+                    | AstKind::TSMappedType(_)
             );
             let in_type_decl = nodes.ancestor_kinds(decl_node).any(|k| {
                 matches!(
@@ -71,6 +77,7 @@ impl OxcCheck for Check {
                         | AstKind::TSModuleDeclaration(_)
                         | AstKind::TSGlobalDeclaration(_)
                         | AstKind::TSFunctionType(_)
+                        | AstKind::TSMappedType(_)
                 ) || matches!(k, AstKind::Function(f) if f.declare)
             });
             if decl_is_type_construct || in_type_decl {
@@ -222,6 +229,28 @@ export { Index as component };
         // (outside any snapshot directory) must still fire.
         let src = "import { twMerge } from 'tailwind-merge';\nexport {};";
         assert_eq!(run_at(src, "src/index.tsx").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_mapped_type_key_in_type_predicate() {
+        // `k` in `{[k in K]: unknown}` is a mapped-type key parameter — a
+        // type-level loop variable that never has a runtime binding. Inside a
+        // type predicate its ancestor chain passes through TSMappedType, not the
+        // other type wrappers. (Closes #1888)
+        let src = r#"
+function hasProperty<T extends object, K extends PropertyKey>(
+    obj: T,
+    prop: K,
+): obj is T & {[k in K]: unknown} {
+    return prop in obj
+}
+export { hasProperty };
+"#;
+        let diags = run(src);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`k`")),
+            "FP on mapped-type key parameter `k`"
+        );
     }
 
 }
