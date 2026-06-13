@@ -24,11 +24,12 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const ASYNC_LOOKING_METHODS: &[&str] = &[
-    "send", "save", "load", "fetch", "query", "emit", "publish", "write", "insert", "update",
-    "close", "connect", "dispatch", "sync", "flush", "commit", "rollback", "run", "exec",
-    "execute", "process", "handle",
-];
+use super::shared::ASYNC_LOOKING_METHODS;
+
+// NOTE: the production oxc backend also flags a bare-identifier callee that
+// resolves to a locally-declared `async function`/async arrow (a type-grounded
+// signal). This tree-sitter backend has no semantic scope resolution, so that
+// signal cannot be mirrored here; the two backends diverge on that case only.
 
 /// Does the call end with `.then(...)` / `.catch(...)` / `.finally(...)`?
 fn has_promise_handler(call: tree_sitter::Node, source: &[u8]) -> bool {
