@@ -4,6 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -30,49 +31,45 @@ impl OxcCheck for Check {
     }
 }
 
+/// Per-parameter type descriptor used when comparing two overloads.
+///
+/// `score` is a coarse specificity scalar (lower = more specific). `names`,
+/// when present, is the set of named types in the parameter's type annotation
+/// (a single `TSTypeReference` or a union of them). It is `None` whenever the
+/// annotation is absent or not a clean union of named types (keyword, literal,
+/// generic, function type, …), in which case the comparison falls back to the
+/// scalar `score`.
+struct ParamType {
+    score: u32,
+    names: Option<BTreeSet<String>>,
+}
+
 /// Signature info for comparison.
 struct SigInfo {
     name: String,
     required_params: usize,
-    param_specificities: Vec<u32>,
+    params: Vec<ParamType>,
     span: oxc_span::Span,
     has_body: bool,
 }
 
 fn extract_sig_info(stmt: &Statement, source: &str) -> Option<SigInfo> {
-    match stmt {
-        Statement::FunctionDeclaration(f) => {
-            let name = f.id.as_ref()?.name.to_string();
-            let required = count_required_params(&f.params);
-            let specificities = param_specificities(&f.params, source);
-            let has_body = f.body.is_some();
-            Some(SigInfo {
-                name,
-                required_params: required,
-                param_specificities: specificities,
-                span: f.span,
-                has_body,
-            })
-        }
-        Statement::ExportNamedDeclaration(exp) => {
-            if let Some(Declaration::FunctionDeclaration(f)) = &exp.declaration {
-                let name = f.id.as_ref()?.name.to_string();
-                let required = count_required_params(&f.params);
-                let specificities = param_specificities(&f.params, source);
-                let has_body = f.body.is_some();
-                Some(SigInfo {
-                    name,
-                    required_params: required,
-                    param_specificities: specificities,
-                    span: f.span,
-                    has_body,
-                })
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
+    let f = match stmt {
+        Statement::FunctionDeclaration(f) => f,
+        Statement::ExportNamedDeclaration(exp) => match &exp.declaration {
+            Some(Declaration::FunctionDeclaration(f)) => f,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let name = f.id.as_ref()?.name.to_string();
+    Some(SigInfo {
+        name,
+        required_params: count_required_params(&f.params),
+        params: param_types(&f.params, source),
+        span: f.span,
+        has_body: f.body.is_some(),
+    })
 }
 
 fn count_required_params(params: &FormalParameters) -> usize {
@@ -86,18 +83,57 @@ fn count_required_params(params: &FormalParameters) -> usize {
         .count()
 }
 
-fn param_specificities(params: &FormalParameters, source: &str) -> Vec<u32> {
+fn param_types(params: &FormalParameters, source: &str) -> Vec<ParamType> {
     params
         .items
         .iter()
-        .map(|p| {
-            if let Some(ref ann) = p.type_annotation {
-                type_specificity_score(&ann.type_annotation, source)
-            } else {
-                50
-            }
+        .map(|p| match p.type_annotation {
+            Some(ref ann) => ParamType {
+                score: type_specificity_score(&ann.type_annotation, source),
+                names: union_type_names(&ann.type_annotation),
+            },
+            None => ParamType { score: 50, names: None },
         })
         .collect()
+}
+
+/// Collect the set of named types in a parameter annotation that is a single
+/// named type or a union of named types. Returns `None` when the annotation
+/// contains anything else (keyword, literal, generic with arguments, function
+/// type, …), so the caller falls back to the scalar specificity score rather
+/// than assuming a (possibly wrong) overlap relationship.
+fn union_type_names(ty: &TSType) -> Option<BTreeSet<String>> {
+    let mut names = BTreeSet::new();
+    if collect_named_types(ty, &mut names) && !names.is_empty() {
+        Some(names)
+    } else {
+        None
+    }
+}
+
+/// Push every named type in `ty` into `names`, recursing through unions.
+/// Returns `false` (poisoning the whole annotation) on the first member that is
+/// not a bare named reference, since a single unparseable member makes the
+/// type-name set an unreliable basis for the overlap check.
+fn collect_named_types(ty: &TSType, names: &mut BTreeSet<String>) -> bool {
+    match ty {
+        TSType::TSTypeReference(type_ref) => {
+            // Generics (`Foo<T>`) carry arguments whose overlap we cannot judge
+            // syntactically; treat the annotation as not a clean named union.
+            if type_ref.type_arguments.is_some() {
+                return false;
+            }
+            match &type_ref.type_name {
+                TSTypeName::IdentifierReference(id) => {
+                    names.insert(id.name.to_string());
+                    true
+                }
+                _ => false,
+            }
+        }
+        TSType::TSUnionType(union) => union.types.iter().all(|t| collect_named_types(t, names)),
+        _ => false,
+    }
 }
 
 fn type_specificity_score(ty: &TSType, _source: &str) -> u32 {
@@ -214,16 +250,134 @@ fn check_statements(
     }
 }
 
+/// How parameter `a` relates to the corresponding parameter `b` of a later
+/// overload, in terms of specific-to-general ordering.
+#[derive(PartialEq, Eq)]
+enum ParamRel {
+    /// `a` is strictly more general than `b` (e.g. `Foo | Bar` vs `Foo`).
+    AMoreGeneral,
+    /// `a` is strictly more specific than `b` (already correctly ordered).
+    AMoreSpecific,
+    /// No specific-to-general relationship: equal, or disjoint named unions.
+    Incomparable,
+}
+
 fn earlier_param_types_more_general(a: &SigInfo, b: &SigInfo) -> bool {
-    let ta = &a.param_specificities;
-    let tb = &b.param_specificities;
+    let ta = &a.params;
+    let tb = &b.params;
     if ta.len() != tb.len() || ta.is_empty() {
         return false;
     }
     let mut a_more_general = false;
-    for (sa, sb) in ta.iter().zip(tb.iter()) {
-        if sa < sb { return false; }
-        if sa > sb { a_more_general = true; }
+    for (pa, pb) in ta.iter().zip(tb.iter()) {
+        match compare_param(pa, pb) {
+            ParamRel::AMoreSpecific => return false,
+            ParamRel::AMoreGeneral => a_more_general = true,
+            ParamRel::Incomparable => {}
+        }
     }
     a_more_general
+}
+
+fn compare_param(a: &ParamType, b: &ParamType) -> ParamRel {
+    // When both parameters are clean unions of named types, the only genuine
+    // specific-to-general relationship is subset/superset. Disjoint sets (no
+    // shared type name) are unambiguous to TypeScript regardless of order, so
+    // they are Incomparable and must not be flagged.
+    if let (Some(na), Some(nb)) = (&a.names, &b.names) {
+        return compare_named_sets(na, nb);
+    }
+    // Fall back to the coarse specificity score when annotations are absent or
+    // too complex to reduce to a clean named-type set.
+    if a.score > b.score {
+        ParamRel::AMoreGeneral
+    } else if a.score < b.score {
+        ParamRel::AMoreSpecific
+    } else {
+        ParamRel::Incomparable
+    }
+}
+
+fn compare_named_sets(a: &BTreeSet<String>, b: &BTreeSet<String>) -> ParamRel {
+    if a == b || a.is_disjoint(b) {
+        ParamRel::Incomparable
+    } else if a.is_superset(b) {
+        ParamRel::AMoreGeneral
+    } else if a.is_subset(b) {
+        ParamRel::AMoreSpecific
+    } else {
+        // Overlapping but neither contains the other (e.g. {A,B} vs {A,C}):
+        // no subtype relationship in either direction.
+        ParamRel::Incomparable
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, s, "t.ts")
+    }
+
+    #[test]
+    fn disjoint_unions_do_not_flag() {
+        // Issue #1117: type-predicate overloads over disjoint parameter unions.
+        // The three unions share no type name, so no specific-to-general
+        // ordering exists and TypeScript resolves them unambiguously.
+        let src = "\
+export function isUnexpected(
+  response: DeleteAnalyzeResult204Response | DeleteAnalyzeResultDefaultResponse,
+): response is DeleteAnalyzeResultDefaultResponse;
+export function isUnexpected(
+  response:
+    | AnalyzeDocumentFromStream202Response
+    | AnalyzeDocumentFromStreamLogicalResponse
+    | AnalyzeDocumentFromStreamDefaultResponse,
+): response is AnalyzeDocumentFromStreamDefaultResponse;
+export function isUnexpected(
+  response: GetAnalyzeResultPdf200Response | GetAnalyzeResultPdfDefaultResponse,
+): response is GetAnalyzeResultPdfDefaultResponse;
+export function isUnexpected(response: unknown): boolean {
+  return false;
+}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn guard_overlapping_general_before_specific_still_flags() {
+        // `Foo | Bar` (general) declared before `Foo` (specific) over an
+        // overlapping union → genuine specific-to-general violation, must fire.
+        let src = "\
+function f(x: Foo | Bar): void;
+function f(x: Foo): void;
+function f(x: unknown): void {}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn overlapping_specific_before_general_is_allowed() {
+        // Correct ordering: the narrower `Foo` comes first, then `Foo | Bar`.
+        let src = "\
+function f(x: Foo): void;
+function f(x: Foo | Bar): void;
+function f(x: unknown): void {}";
+        assert!(run(src).is_empty());
+    }
 }
