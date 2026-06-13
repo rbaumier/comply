@@ -35,8 +35,24 @@ impl OxcCheck for Check {
         let canon = index.canonical(ctx.path);
         let mut exports_cache: HashMap<PathBuf, Option<HashSet<String>>> = HashMap::new();
 
+        // Names of every local workspace member (pnpm/yarn/npm monorepo). A
+        // cross-package import addresses a sibling by its scoped package name
+        // (`@myorg/other`); resolving that name to the member's public exports
+        // crosses the package boundary (build artifacts, `exports`/conditions,
+        // re-export indirection) and is not reliably indexed. Absence of a
+        // resolvable export set is not absence of the export — skip these.
+        let workspace_names: HashSet<&str> = ctx
+            .project
+            .workspace_package_names()
+            .iter()
+            .map(String::as_str)
+            .collect();
+
         for imp in index.get_imports(&canon) {
             if imp.kind != ImportKind::Named {
+                continue;
+            }
+            if workspace_names.contains(root_package_name(&imp.specifier)) {
                 continue;
             }
             let Some(src) = &imp.source_path else {
@@ -92,6 +108,22 @@ impl OxcCheck for Check {
 
         diagnostics
     }
+}
+
+/// Root package name of a bare specifier: `@scope/pkg/deep` → `@scope/pkg`,
+/// `lodash/fp` → `lodash`. Only used to match against workspace member names,
+/// which are always bare scoped/unscoped package names.
+fn root_package_name(specifier: &str) -> &str {
+    if specifier.starts_with('@') {
+        // `@scope/pkg/...` — keep the first two slash-separated segments.
+        let end = specifier
+            .match_indices('/')
+            .nth(1)
+            .map(|(idx, _)| idx)
+            .unwrap_or(specifier.len());
+        return &specifier[..end];
+    }
+    specifier.split('/').next().unwrap_or(specifier)
 }
 
 fn is_declaration_file(path: &std::path::Path) -> bool {
@@ -265,6 +297,105 @@ mod tests {
         ];
         let (_dir, diags) = run_on_project(&files, "test-d/and.ts");
         assert!(diags.is_empty(), "import from .d.ts must not be flagged: {diags:?}");
+    }
+
+    // Build an installed pnpm workspace: node_modules/@effect/sql-mssql is a
+    // symlink to packages/sql-mssql, mirroring how oxc_resolver resolves a
+    // sibling workspace package by walking node_modules. Returns the diags for
+    // the given target source.
+    fn run_workspace(target_src: &str) -> (TempDir, Vec<Diagnostic>) {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"root","workspaces":["packages/*"]}"#,
+        )
+        .unwrap();
+        let member = dir.path().join("packages/sql-mssql");
+        fs::create_dir_all(member.join("src")).unwrap();
+        fs::create_dir_all(member.join("test")).unwrap();
+        fs::write(
+            member.join("package.json"),
+            r#"{"name":"@effect/sql-mssql","main":"./src/index.ts"}"#,
+        )
+        .unwrap();
+        // Barrel re-exports each submodule under a namespace, the shape the
+        // effect monorepo uses. The cross-package export set is not reliably
+        // indexed across the package boundary.
+        fs::write(
+            member.join("src/index.ts"),
+            "export * as MssqlClient from './MssqlClient.js';\nexport * as MssqlMigrator from './MssqlMigrator.js';\n",
+        )
+        .unwrap();
+        fs::write(member.join("src/MssqlClient.ts"), "export const make = 1;\n").unwrap();
+        fs::write(member.join("src/MssqlMigrator.ts"), "export const run = 1;\n").unwrap();
+        let target = member.join("test/Client.test.ts");
+        fs::write(&target, target_src).unwrap();
+
+        let nm = dir.path().join("node_modules/@effect");
+        fs::create_dir_all(&nm).unwrap();
+        std::os::unix::fs::symlink(&member, nm.join("sql-mssql")).unwrap();
+
+        // Root-level source so common_ancestor is the monorepo root, letting
+        // detect_project_root find the root package.json with `workspaces`.
+        fs::write(dir.path().join("root.ts"), "export const root = 1;\n").unwrap();
+        let mut source_files: Vec<SourceFile> = Vec::new();
+        for rel in [
+            "root.ts",
+            "packages/sql-mssql/src/index.ts",
+            "packages/sql-mssql/src/MssqlClient.ts",
+            "packages/sql-mssql/src/MssqlMigrator.ts",
+            "packages/sql-mssql/test/Client.test.ts",
+        ] {
+            let p = dir.path().join(rel);
+            if let Some(lang) = Language::from_path(&p) {
+                source_files.push(SourceFile { path: p, language: lang });
+            }
+        }
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = fs::canonicalize(&target).unwrap();
+        let allocator = Allocator::default();
+        let parse_ret = OxcParser::new(&allocator, target_src, SourceType::tsx()).parse();
+        let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+        let ctx = CheckCtx::for_test_with_project(&canon, target_src, &project);
+        let diags = Check.run_on_semantic(&semantic, &ctx);
+        (dir, diags)
+    }
+
+    #[test]
+    fn root_package_name_extracts_scope_and_subpaths() {
+        assert_eq!(root_package_name("@effect/sql-mssql"), "@effect/sql-mssql");
+        assert_eq!(root_package_name("@effect/sql-mssql/Migrator"), "@effect/sql-mssql");
+        assert_eq!(root_package_name("lodash"), "lodash");
+        assert_eq!(root_package_name("lodash/fp"), "lodash");
+    }
+
+    #[test]
+    fn no_fp_on_cross_workspace_named_import_issue_1423() {
+        // Regression for #1423 — a named import from a sibling pnpm workspace
+        // package (`@effect/sql-mssql`) whose public exports cannot be enumerated
+        // across the package boundary must not be flagged as "not exported".
+        let (_dir, diags) = run_workspace(
+            "import { MssqlClient } from '@effect/sql-mssql';\nconst x = MssqlClient;\n",
+        );
+        assert!(
+            diags.is_empty(),
+            "cross-workspace named import must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_cross_workspace_subpath_named_import_issue_1423() {
+        // Subpath import of a workspace package (`@effect/sql-mssql/Migrator`)
+        // resolves to the same workspace member — still must not be flagged.
+        let (_dir, diags) = run_workspace(
+            "import { Procedure } from '@effect/sql-mssql/Migrator';\nconst x = Procedure;\n",
+        );
+        assert!(
+            diags.is_empty(),
+            "cross-workspace subpath named import must not be flagged: {diags:?}"
+        );
     }
 
     #[test]
