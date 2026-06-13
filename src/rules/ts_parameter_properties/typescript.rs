@@ -59,6 +59,11 @@ crate::ast_check! { on ["required_parameter"] => |node, source, ctx, diagnostics
     if decorated_class_for_constructor(grandparent) {
         return;
     }
+    // Skip parameters carrying a decorator (e.g. @Inject, @Optional)
+    // — framework dependency injection relies on parameter properties.
+    if has_decorator_child(node) {
+        return;
+    }
     // Check for accessibility modifier or readonly
     let mut cursor = node.walk();
     let mut has_modifier = false;
@@ -142,6 +147,12 @@ mod tests {
     #[test]
     fn allows_parameter_property_in_exported_decorated_class() {
         let src = "@Controller()\nexport class Foo { constructor(private readonly service: Service) {} }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_decorated_parameter_property() {
+        let src = "class Foo { constructor(@Inject('TOKEN') private readonly service: Service) {} }";
         assert!(run_on(src).is_empty());
     }
 }

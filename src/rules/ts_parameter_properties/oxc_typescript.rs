@@ -52,6 +52,12 @@ impl OxcCheck for Check {
                     continue;
                 }
 
+                // Skip parameters carrying a decorator (e.g. @Inject, @Optional)
+                // — framework dependency injection relies on parameter properties.
+                if !param.decorators.is_empty() {
+                    continue;
+                }
+
                 let param_name = &ctx.source
                     [param.pattern.span().start as usize..param.pattern.span().end as usize];
                 // Extract just the name (strip type annotation).
@@ -72,5 +78,35 @@ impl OxcCheck for Check {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::diagnostic::Diagnostic;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_by_id("ts-parameter-properties", src, "t.ts")
+    }
+
+    #[test]
+    fn flags_plain_parameter_property() {
+        let diags = run("class Foo { constructor(private readonly bar: Bar) {} }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("bar"));
+    }
+
+    #[test]
+    fn allows_parameter_property_in_decorated_class() {
+        let src =
+            "@Injectable()\nexport class CatsService {\n  constructor(private readonly repo: CatsRepository) {}\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_decorated_parameter_property() {
+        let src =
+            "class HeroController {\n  constructor(@Inject('HERO_PACKAGE') private readonly client: ClientGrpc) {}\n}";
+        assert!(run(src).is_empty());
     }
 }
