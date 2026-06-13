@@ -156,10 +156,16 @@ fn is_in_component_function(
         _ => return false,
     }
     match ancestors.next() {
-        Some(AstKind::Function(f)) => f
-            .id
-            .as_ref()
-            .is_some_and(|id| id.name.as_str().starts_with(char::is_uppercase)),
+        // A body-less function is an overload signature or an ambient
+        // declaration (e.g. `declare function`, a function inside a
+        // `declare namespace`). It has no body in which props could be read,
+        // so it cannot be a React component for this rule's purposes.
+        Some(AstKind::Function(f)) => {
+            f.body.is_some()
+                && f.id
+                    .as_ref()
+                    .is_some_and(|id| id.name.as_str().starts_with(char::is_uppercase))
+        }
         Some(AstKind::ArrowFunctionExpression(_)) => match ancestors.next() {
             Some(AstKind::VariableDeclarator(decl)) => match &decl.id {
                 BindingPattern::BindingIdentifier(ident) => {
@@ -363,5 +369,29 @@ function List({ title }: Props) {
         let d = run_on(src);
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("`subtitle`"));
+    }
+
+    /// Regression for #2032: a body-less `declare`d PascalCase function inside a
+    /// `declare namespace` is an ambient type declaration, not a React
+    /// component. Its parameter's interface fields must not be flagged.
+    #[test]
+    fn allows_declare_namespace_pascalcase_function() {
+        let src = r#"
+export declare namespace ErrorLink {
+  export namespace ErrorLinkDocumentationTypes {
+    export function ErrorHandler(
+      options: ErrorHandlerOptions
+    ): Observable<ApolloLink.Result> | void;
+  }
+
+  export interface ErrorHandlerOptions {
+    error: ErrorLike;
+    result?: ApolloLink.Result;
+    operation: ApolloLink.Operation;
+    forward: ApolloLink.ForwardFunction;
+  }
+}
+"#;
+        assert!(run_on(src).is_empty());
     }
 }
