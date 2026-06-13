@@ -2993,6 +2993,60 @@ mod tests {
         (dir, index, paths)
     }
 
+    /// Index a project reached through a symlinked directory, mirroring macOS
+    /// where `/tmp` is a symlink to `/private/tmp`. Both the indexed file keys
+    /// and the resolved import targets are canonicalized, so a relative import
+    /// to a real on-disk file resolves regardless of the symlinked spelling —
+    /// and the per-file `canonical(raw)` lookup the rules use lands on the same
+    /// key. A genuinely missing target still stays unresolved.
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_project_resolves_relative_imports_issue_2029() {
+        let real = TempDir::new().unwrap();
+        fs::create_dir_all(real.path().join("sub/deep")).unwrap();
+        fs::write(real.path().join("errors.js"), "export const e = 1;").unwrap();
+        fs::write(
+            real.path().join("sub/deep/a.ts"),
+            "import { e } from '../../errors.js';\nimport { z } from '../../missing.js';",
+        )
+        .unwrap();
+
+        let link_parent = TempDir::new().unwrap();
+        let link = link_parent.path().join("via_link");
+        std::os::unix::fs::symlink(real.path(), &link).unwrap();
+
+        let importer = SourceFile {
+            path: link.join("sub/deep/a.ts"),
+            language: Language::Tsx,
+        };
+        let target = SourceFile {
+            path: link.join("errors.js"),
+            language: Language::JavaScript,
+        };
+        let refs = vec![&importer, &target];
+        let index = ImportIndex::build(&refs);
+
+        let canon_target = std::fs::canonicalize(&target.path).unwrap();
+
+        // The rule canonicalizes the raw (symlinked) importer path first; that
+        // lookup must hit the index and surface the imports.
+        let imports = index.get_imports(&index.canonical(&importer.path));
+        assert_eq!(imports.len(), 2);
+
+        let resolved = imports.iter().find(|i| i.local_name == "e").unwrap();
+        assert_eq!(
+            resolved.source_path.as_ref(),
+            Some(&canon_target),
+            "existing import through a symlinked dir must resolve"
+        );
+
+        let missing = imports.iter().find(|i| i.local_name == "z").unwrap();
+        assert!(
+            missing.source_path.is_none(),
+            "genuinely missing import must stay unresolved"
+        );
+    }
+
     #[test]
     fn indexes_named_exports() {
         let (_dir, index, paths) = build_index(&[(
