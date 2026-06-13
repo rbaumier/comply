@@ -25,6 +25,11 @@
 //!     `description`/`aliases`/`deprecated`) is loaded dynamically by yargs via
 //!     `commandDir()` / `.command(require(...))`. Those named exports have no
 //!     static importer, so the signature exports are treated as live.
+//!   - Database migration modules — a module exporting BOTH `up` AND `down`
+//!     (the canonical migration signature shared by Kysely, TypeORM, Prisma,
+//!     Sequelize, Knex, node-pg-migrate, …) is discovered and run by the ORM's
+//!     migration runner via directory convention, never through a static
+//!     import. Those two exports are treated as live entry points.
 //!
 //! False-positive guards:
 //!   - If any file imports the current module via a namespace import
@@ -97,6 +102,19 @@ const YARGS_COMMAND_EXPORTS: &[&str] = &[
 /// a `handler` (or a `command`) is not blanket-exempted.
 fn is_yargs_command_module<'a>(export_names: &HashSet<&'a str>) -> bool {
     export_names.contains("command") && export_names.contains("handler")
+}
+
+/// Named exports that make up a database migration module. ORM migration
+/// runners (Kysely, TypeORM, Prisma, Sequelize, Knex, node-pg-migrate, …)
+/// discover these by directory convention and call them at runtime, so they
+/// never have a static importer.
+const MIGRATION_EXPORTS: &[&str] = &["up", "down"];
+
+/// True when the module's export set has the canonical migration signature:
+/// both `up` and `down` are present. The co-occurrence is required so a module
+/// merely exporting an `up` (or a `down`) is not blanket-exempted.
+fn is_migration_module<'a>(export_names: &HashSet<&'a str>) -> bool {
+    export_names.contains("up") && export_names.contains("down")
 }
 
 /// True if the source carries a `@generated` marker in its leading comments.
@@ -187,6 +205,12 @@ impl TextCheck for Check {
         let export_names: HashSet<&str> = exports.iter().map(|e| e.name.as_str()).collect();
         let is_yargs_command = is_yargs_command_module(&export_names);
 
+        // Database migration modules export `up`/`down`, which the ORM migration
+        // runner discovers by directory convention and calls at runtime — no
+        // static importer references them. When the file has the migration shape,
+        // those two exports are entry points, not dead.
+        let is_migration = is_migration_module(&export_names);
+
         // The two source scans below each tree-sitter-parse the whole file, so
         // they are computed lazily: only an export that already survived the
         // cheap index checks (almost none, in a healthy project) pays for them.
@@ -214,6 +238,9 @@ impl TextCheck for Check {
                 continue;
             }
             if is_yargs_command && YARGS_COMMAND_EXPORTS.contains(&export.name.as_str()) {
+                continue;
+            }
+            if is_migration && MIGRATION_EXPORTS.contains(&export.name.as_str()) {
                 continue;
             }
             if !index.get_usages(&canon, &export.name).is_empty() {
@@ -1147,6 +1174,53 @@ mod tests {
             "lone handler export (no command) must still be flagged, got: {diags:?}"
         );
         assert!(diags[0].message.contains("handler"));
+    }
+
+    #[test]
+    fn no_fp_for_migration_module() {
+        // Regression for #1421 — immich's Kysely migration modules export the
+        // canonical `up`/`down` signature. The migration runner discovers them
+        // by directory convention and calls them at runtime, so there is no
+        // static importer; dead-export must not flag them.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "server/src/schema/migrations/1746768490606-AddUserPincode.ts",
+                "import { Kysely, sql } from 'kysely';\n\
+                 export async function up(db: Kysely<any>): Promise<void> {\n\
+                   await sql`ALTER TABLE \"users\" ADD \"pinCode\" character varying;`.execute(db);\n\
+                 }\n\
+                 export async function down(db: Kysely<any>): Promise<void> {\n\
+                   await sql`ALTER TABLE \"users\" DROP COLUMN \"pinCode\";`.execute(db);\n\
+                 }\n",
+            ),
+            ("server/src/index.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(
+            &files,
+            "server/src/schema/migrations/1746768490606-AddUserPincode.ts",
+        );
+        assert!(
+            diags.is_empty(),
+            "migration module up/down exports must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_lone_up_export() {
+        // Sibling guard for #1421 — a module that exports only `up` (no
+        // co-occurring `down`) does not have the migration shape and must still
+        // be flagged when no importer references it.
+        let files: Vec<(&str, &str)> = vec![
+            ("up.ts", "export const up = () => {};"),
+            ("other.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "up.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "lone up export (no down) must still be flagged, got: {diags:?}"
+        );
+        assert!(diags[0].message.contains("up"));
     }
 
     #[test]
