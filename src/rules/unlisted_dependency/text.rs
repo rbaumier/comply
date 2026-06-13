@@ -3,6 +3,11 @@
 //! of `package.json` (dependencies, devDependencies, peerDependencies,
 //! optionalDependencies, engines).
 //!
+//! A specifier is considered declared when it appears in the project-root
+//! package.json, in any workspace member's name, or in the nearest
+//! package.json to one of its importers (the monorepo case, where a member
+//! package declares the dependency in its own manifest).
+//!
 //! Skips:
 //!   - tsconfig path aliases (e.g. `@/utils`, `~/lib`) — they resolve to
 //!     local source via `compilerOptions.paths`, not to an npm package.
@@ -58,6 +63,16 @@ impl TextCheck for Check {
                 continue;
             }
             if workspace_names.contains(spec) {
+                continue;
+            }
+            // Monorepo case: the dependency may be declared in the importing
+            // package's own package.json rather than the project-root one
+            // (each importer walks up to its nearest manifest).
+            if info.importers.iter().any(|imp| {
+                ctx.project
+                    .nearest_package_json(imp)
+                    .is_some_and(|p| p.has_dep_or_engine(spec))
+            }) {
                 continue;
             }
             // Anchor the diagnostic on the first importer when available;
@@ -221,6 +236,134 @@ mod tests {
             diags.is_empty(),
             "tsconfig alias `@/*` should suppress the diagnostic: {diags:?}"
         );
+    }
+
+    #[test]
+    fn allows_dep_declared_in_importer_package_json() {
+        // Regression for #1400 — pnpm monorepo where `@pnpm/network.auth-header`
+        // is declared in the importing package's package.json (a member), not in
+        // the project-root package.json. The rule must consult the nearest
+        // package.json to the importer, not only the root.
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"root","dependencies":{}}"#,
+        )
+        .unwrap();
+        let member = dir.path().join("registry-access").join("commands");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(
+            member.join("package.json"),
+            r#"{"name":"@pnpm/registry-access.commands","dependencies":{"@pnpm/network.auth-header":"workspace:*"}}"#,
+        )
+        .unwrap();
+
+        let importer = member.join("src").join("unpublish.ts");
+        fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        fs::write(
+            &importer,
+            "import { getCredentialsByURI } from '@pnpm/network.auth-header';",
+        )
+        .unwrap();
+        let root_file = dir.path().join("a.ts");
+        fs::write(&root_file, "export const x = 1;").unwrap();
+
+        let source_files = [
+            SourceFile {
+                path: importer.clone(),
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: root_file,
+                language: Language::TypeScript,
+            },
+        ];
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        let target_path: PathBuf = project
+            .import_index()
+            .indexed_paths()
+            .min()
+            .expect("at least one indexed file")
+            .to_path_buf();
+        let source = fs::read_to_string(&target_path).unwrap();
+        let file_ctx = FileCtx::build(&target_path, &source, Language::TypeScript, &project);
+        let ctx = CheckCtx {
+            path: &target_path,
+            path_arc: std::sync::Arc::from(target_path.as_path()),
+            source: &source,
+            config: &config,
+            project: &project,
+            file: &file_ctx,
+            lang: crate::files::Language::TypeScript,
+        };
+        let diags = Check.check(&ctx);
+        assert!(
+            diags.is_empty(),
+            "`@pnpm/network.auth-header` is declared in the importer's package.json: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_dep_missing_from_importer_package_json() {
+        // True-positive guard: a genuinely unlisted import in a member package
+        // (absent from both the member and the root package.json) still fires.
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"root","dependencies":{}}"#,
+        )
+        .unwrap();
+        let member = dir.path().join("registry-access").join("commands");
+        fs::create_dir_all(&member).unwrap();
+        fs::write(
+            member.join("package.json"),
+            r#"{"name":"@pnpm/registry-access.commands","dependencies":{"@pnpm/network.auth-header":"workspace:*"}}"#,
+        )
+        .unwrap();
+
+        let importer = member.join("src").join("unpublish.ts");
+        fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        fs::write(&importer, "import axios from 'axios';").unwrap();
+        let root_file = dir.path().join("a.ts");
+        fs::write(&root_file, "export const x = 1;").unwrap();
+
+        let source_files = [
+            SourceFile {
+                path: importer.clone(),
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: root_file,
+                language: Language::TypeScript,
+            },
+        ];
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        let target_path: PathBuf = project
+            .import_index()
+            .indexed_paths()
+            .min()
+            .expect("at least one indexed file")
+            .to_path_buf();
+        let source = fs::read_to_string(&target_path).unwrap();
+        let file_ctx = FileCtx::build(&target_path, &source, Language::TypeScript, &project);
+        let ctx = CheckCtx {
+            path: &target_path,
+            path_arc: std::sync::Arc::from(target_path.as_path()),
+            source: &source,
+            config: &config,
+            project: &project,
+            file: &file_ctx,
+            lang: crate::files::Language::TypeScript,
+        };
+        let diags = Check.check(&ctx);
+        assert_eq!(diags.len(), 1, "axios is unlisted everywhere: {diags:?}");
+        assert!(diags[0].message.contains("axios"));
     }
 
     #[test]
