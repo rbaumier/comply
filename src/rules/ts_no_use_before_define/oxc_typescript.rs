@@ -27,6 +27,12 @@
 //! `const`/`let` is already initialized. Static field initializers and static
 //! blocks run at class-definition time (during module evaluation) and stay
 //! flagged.
+//!
+//! Ambient `declare` declarations (`declare const`/`declare let`/`declare var`/
+//! `declare function`/`declare class`, or any binding inside a `declare global`
+//! / ambient module block) are type-only: they create no runtime binding and
+//! have no initialization order, so they are not subject to use-before-define
+//! ordering and are skipped entirely.
 
 use oxc_ast::AstKind;
 use oxc_ast::ast::Expression;
@@ -60,7 +66,14 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            if flags.contains(SymbolFlags::Ambient) {
+                continue;
+            }
+
             let decl_node_id = scoping.symbol_declaration(symbol_id);
+            if is_ambient_block_declaration(nodes, decl_node_id) {
+                continue;
+            }
             if is_tanstack_route_factory(nodes, decl_node_id) {
                 continue;
             }
@@ -123,6 +136,24 @@ fn is_tanstack_route_factory<'a>(
         }
     }
     false
+}
+
+/// True when the declaration sits inside a `declare global { ... }` block or a
+/// `declare`-prefixed ambient module/namespace. Bindings there are type-only
+/// ambient declarations with no runtime initialization order, so they are not
+/// use-before-define hazards. The `SymbolFlags::Ambient` check on the symbol
+/// already covers `declare`-prefixed declarations; this catches plain
+/// declarations nested inside an ambient block, which do not carry the modifier
+/// themselves.
+fn is_ambient_block_declaration<'a>(
+    nodes: &'a oxc_semantic::AstNodes<'a>,
+    decl_node_id: NodeId,
+) -> bool {
+    nodes.ancestor_kinds(decl_node_id).any(|kind| match kind {
+        AstKind::TSGlobalDeclaration(_) => true,
+        AstKind::TSModuleDeclaration(module) => module.declare,
+        _ => false,
+    })
 }
 
 fn initializer_is_tanstack_route(expr: &Expression) -> bool {
@@ -641,6 +672,58 @@ mod tests {
              const getOperationSpec = { path: \"/x\" };",
         );
         assert_eq!(d.len(), 1, "static block must still be flagged");
+    }
+
+    // Regression for #1418: `declare const globalThis: any` is an ambient
+    // type-widening declaration with no runtime binding — uses of `globalThis`
+    // that appear before it must not be flagged.
+    #[test]
+    fn no_fp_use_before_ambient_declare_const_issue_1418() {
+        let source = "export const qDev = globalThis.qDev !== false;\n\
+                      export const qTest = globalThis.qTest === true;\n\
+                      declare const globalThis: any;";
+        assert!(
+            run_on(source).is_empty(),
+            "use before `declare const` should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_use_before_ambient_declare_function() {
+        let source = "const r = ambientFn();\n\
+                      declare function ambientFn(): number;";
+        assert!(
+            run_on(source).is_empty(),
+            "use before `declare function` should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_use_before_binding_in_declare_global_block() {
+        let source = "const r = MY_FLAG;\n\
+                      declare global {\n\
+                      const MY_FLAG: boolean;\n\
+                      }";
+        assert!(
+            run_on(source).is_empty(),
+            "use before a binding inside `declare global` should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn still_flags_real_const_used_before_define_with_ambient_present() {
+        // A genuine non-ambient `const` used before its line still fires, even
+        // when an unrelated ambient declaration exists in the same module.
+        let d = run_on(
+            "declare const globalThis: any;\n\
+             console.log(real);\n\
+             const real = 1;",
+        );
+        assert_eq!(d.len(), 1, "real use-before-define must still fire: {d:?}");
+        assert!(d[0].message.contains("`real`"));
     }
 
     #[test]
