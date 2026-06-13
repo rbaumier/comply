@@ -3,8 +3,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BindingPattern, Expression, FormalParameters, TSType};
-use std::collections::HashMap;
+use oxc_ast::ast::{AssignmentTarget, BindingPattern, Expression, FormalParameters, TSType};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
 struct FunctionInfo {
@@ -27,11 +27,20 @@ impl OxcCheck for Check {
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
-        let mut functions: HashMap<String, FunctionInfo> = HashMap::new();
+        let mut functions: FxHashMap<String, FunctionInfo> = FxHashMap::default();
+        // Names reassigned via `name = ...` anywhere. Their arity at a call site
+        // cannot be derived from the initial declarator, so they are not tracked.
+        let mut reassigned: FxHashSet<String> = FxHashSet::default();
 
-        // Pass 1: collect function declarations and arrow/function expression assignments.
+        // Pass 1: collect function declarations and arrow/function expression
+        // assignments, and record identifiers used as assignment targets.
         for node in semantic.nodes().iter() {
             match node.kind() {
+                AstKind::AssignmentExpression(assign) => {
+                    if let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left {
+                        reassigned.insert(target.name.as_str().to_string());
+                    }
+                }
                 AstKind::Function(func) => {
                     if let Some(id) = &func.id {
                         let name = id.name.as_str().to_string();
@@ -83,6 +92,9 @@ impl OxcCheck for Check {
                 continue;
             };
             let name = callee.name.as_str();
+            if reassigned.contains(name) {
+                continue;
+            }
             let Some(info) = functions.get(name) else {
                 continue;
             };
@@ -172,6 +184,31 @@ mod tests {
         let src = r#"
             const fn: (a: number) => void = () => {}
             fn(1, 2)
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_reassigned_variable() {
+        // `setData` is declared as a 0-param stub but reassigned to a 1-param
+        // setter, so its arity at the call site is unknown — calls must not be
+        // flagged (#1931).
+        let src = r#"
+            let setData: any = () => {}
+            const App = () => {
+                const [query, setQuery] = useState('123')
+                if (setData !== setQuery) { setData = setQuery }
+            }
+            act(() => setData(''))
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_never_reassigned_let_arrow() {
+        let src = r#"
+            let f = () => {}
+            f(1)
         "#;
         assert_eq!(run(src).len(), 1);
     }
