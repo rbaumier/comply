@@ -27,6 +27,12 @@
 //!     `./dom` → `dom.ts`) may re-export shared symbols across them for
 //!     backward compatibility. Every declared entry-point barrel collapses to a
 //!     single canonical public surface, so overlap among them is not ambiguity.
+//!   - Namespace-wrapped barrels — a barrel that is consumed only through
+//!     `export * as X from './that-barrel'` has every one of its names qualified
+//!     under the `X.` namespace at the public surface (`X.Bar`), so its short
+//!     names never reach importers flat. Two such barrels that happen to share a
+//!     short name (`Bar`) under different wrappers (`X.Bar`, `Y.Bar`) are not an
+//!     ambiguous flat import path and are excluded from the count.
 //!
 //! Runs once per project, anchored on the lexicographically smallest indexed
 //! path so that a single pass emits all diagnostics deterministically. Barrel
@@ -35,7 +41,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::import_index::ExportKind;
 use crate::rules::backend::{CheckCtx, TextCheck};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 const RULE_ID: &str = "duplicate-export";
@@ -80,6 +86,13 @@ impl TextCheck for Check {
             }
         }
 
+        // Barrels reached only through `export * as X from './barrel'` expose
+        // their names qualified under the `X.` namespace, never flat — so a short
+        // name shared by two such barrels is `X.Bar` vs `Y.Bar`, not an ambiguous
+        // flat path. Collect them once so the count below can drop them.
+        let indexed: HashSet<&Path> = index.indexed_paths().collect();
+        let namespace_wrapped = collect_namespace_wrapped_barrels(&indexed);
+
         // Indexed barrel paths are canonical; canonicalize the project root once
         // so message paths strip cleanly to project-relative form.
         let root = ctx
@@ -116,6 +129,14 @@ impl TextCheck for Check {
                     Some(origin) => !group.contains(origin),
                     None => true,
                 })
+                .collect();
+            // A barrel consumed only through `export * as X from './barrel'`
+            // qualifies its names under `X.` — its short names never surface
+            // flat, so it adds no ambiguous flat path. Drop those before
+            // counting.
+            let independent: Vec<&Path> = independent
+                .into_iter()
+                .filter(|barrel| !namespace_wrapped.contains(*barrel))
                 .collect();
             // A package may publish several barrels as distinct `exports`
             // subpath entry points (e.g. `.` → `index.ts`, `./dom` → `dom.ts`)
@@ -167,6 +188,117 @@ fn display_path(path: &Path, root: Option<&Path>) -> String {
         .unwrap_or(path)
         .display()
         .to_string()
+}
+
+/// Canonical paths of barrels that are the target of an
+/// `export * as X from './barrel'` namespace re-export somewhere in the indexed
+/// set. The index drops the `export * as X` form entirely (it binds a namespace,
+/// not a flat name), so the wrapper is recovered by scanning each indexed file's
+/// source for the statement and resolving its specifier against `indexed`.
+fn collect_namespace_wrapped_barrels(indexed: &HashSet<&Path>) -> HashSet<PathBuf> {
+    let mut wrapped = HashSet::new();
+    for &file in indexed {
+        let Ok(source) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        for spec in namespace_reexport_specifiers(&source) {
+            if let Some(target) = resolve_relative_specifier(file, &spec, indexed) {
+                wrapped.insert(target);
+            }
+        }
+    }
+    wrapped
+}
+
+/// Specifiers of every `export * as <Ident> from '<spec>'` statement in
+/// `source`. Only the namespace form (with `as`) is matched — bare
+/// `export * from '<spec>'` binds no namespace and is ignored.
+fn namespace_reexport_specifiers(source: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in source.lines() {
+        let line = line.trim_start();
+        let Some(rest) = line.strip_prefix("export") else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix('*') else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        // Require the `as <ns>` namespace binding; a bare `export * from` has no
+        // namespace qualifier and re-exports names flat.
+        let Some(rest) = rest.strip_prefix("as") else {
+            continue;
+        };
+        // `as` must be its own token (`as ns`), not a prefix of an identifier.
+        if !rest.starts_with(char::is_whitespace) {
+            continue;
+        }
+        if let Some(spec) = specifier_after_from(rest) {
+            out.push(spec);
+        }
+    }
+    out
+}
+
+/// Extract the quoted module specifier from the `from '<spec>'` clause within
+/// `tail` (the text following `export * as <ns>`). Returns `None` when no `from`
+/// clause or string literal is present.
+fn specifier_after_from(tail: &str) -> Option<String> {
+    let from_idx = tail.find(" from ").or_else(|| tail.find("\tfrom\t"))?;
+    let after = tail[from_idx + " from ".len()..].trim_start();
+    let quote = after.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+    let body = &after[quote.len_utf8()..];
+    let end = body.find(quote)?;
+    Some(body[..end].to_string())
+}
+
+/// Resolve a relative `specifier` declared in `importer` to a path present in
+/// `indexed`, probing the same extension and `index` fallbacks the import index
+/// uses. Indexed paths are canonical, so candidates are normalized lexically
+/// before lookup. Returns `None` for bare specifiers or specifiers that resolve
+/// outside the indexed set.
+fn resolve_relative_specifier(
+    importer: &Path,
+    specifier: &str,
+    indexed: &HashSet<&Path>,
+) -> Option<PathBuf> {
+    if !specifier.starts_with('.') {
+        return None;
+    }
+    let base = importer.parent()?.join(specifier);
+    const EXTS: [&str; 7] = ["ts", "tsx", "js", "jsx", "mts", "mjs", "cts"];
+    let base_str = base.to_str()?;
+    for ext in EXTS {
+        let candidate = lexical_normalize(Path::new(&format!("{base_str}.{ext}")));
+        if let Some(&hit) = indexed.get(candidate.as_path()) {
+            return Some(hit.to_path_buf());
+        }
+    }
+    for ext in EXTS {
+        let candidate = lexical_normalize(&base.join(format!("index.{ext}")));
+        if let Some(&hit) = indexed.get(candidate.as_path()) {
+            return Some(hit.to_path_buf());
+        }
+    }
+    None
+}
+
+/// Resolve `.`/`..` components lexically — no filesystem access. Indexed paths
+/// are canonical, so a candidate must be normalized to match them.
+fn lexical_normalize(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -477,6 +609,87 @@ mod tests {
             diags
         );
         assert!(diags[0].message.contains("delay"));
+    }
+
+    /// #1782: two namespace files re-export the same short names (`Bar`,
+    /// `Content`, `Label`) from their respective implementation modules, and each
+    /// is consumed only through `export * as X from './namespace'`. At the public
+    /// surface the names are qualified (`BarList.Bar` vs `BarSegment.Bar`), so the
+    /// short-name overlap is not an ambiguous flat import path and must not flag.
+    #[test]
+    fn allows_same_short_name_in_separate_namespace_objects() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"@chakra-ui/charts"}"#),
+            (
+                "src/bar-list/bar-list.ts",
+                "export function BarListBar() {}\n\
+                 export function BarListContent() {}\n\
+                 export function BarListLabel() {}",
+            ),
+            (
+                "src/bar-list/namespace.ts",
+                "export { BarListBar as Bar, BarListContent as Content, BarListLabel as Label } from \"./bar-list\";",
+            ),
+            (
+                "src/bar-list/index.ts",
+                "export { BarListBar, BarListContent, BarListLabel } from \"./bar-list\";\n\
+                 export * as BarList from \"./namespace\";",
+            ),
+            (
+                "src/bar-segment/bar-segment.tsx",
+                "export function BarSegmentBar() {}\n\
+                 export function BarSegmentContent() {}\n\
+                 export function BarSegmentLabel() {}",
+            ),
+            (
+                "src/bar-segment/namespace.tsx",
+                "export { BarSegmentBar as Bar, BarSegmentContent as Content, BarSegmentLabel as Label } from \"./bar-segment\";",
+            ),
+            (
+                "src/bar-segment/index.ts",
+                "export { BarSegmentBar, BarSegmentContent, BarSegmentLabel } from \"./bar-segment\";\n\
+                 export * as BarSegment from \"./namespace\";",
+            ),
+            (
+                "src/index.ts",
+                "export * from \"./bar-list\";\nexport * from \"./bar-segment\";",
+            ),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert!(
+            diags.is_empty(),
+            "short names inside separate namespace-wrapped barrels are qualified at the public surface, got: {:?}",
+            diags
+        );
+    }
+
+    /// A namespace wrapper exempts only the barrel it wraps. A third barrel that
+    /// re-exports the same short name flat (no `export * as` wrapper) alongside a
+    /// namespace-wrapped one still creates a genuine flat path — keep flagging
+    /// when two flat barrels remain.
+    #[test]
+    fn flags_flat_duplicate_alongside_namespace_wrapped_barrel() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"pkg"}"#),
+            ("src/impl.ts", "export function Bar() {}"),
+            (
+                "src/ns/namespace.ts",
+                "export { Bar } from \"../impl\";",
+            ),
+            ("src/ns/index.ts", "export * as Ns from \"./namespace\";"),
+            ("src/flat-a.ts", "export { Bar } from \"./impl\";"),
+            ("src/flat-b.ts", "export { Bar } from \"./impl\";"),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert_eq!(
+            diags.len(),
+            1,
+            "two flat barrels re-exporting `Bar` remain ambiguous, got: {:?}",
+            diags
+        );
+        assert!(diags[0].message.contains("Bar"));
     }
 
     /// #1082: barrel paths in the message are relative to the project root —
