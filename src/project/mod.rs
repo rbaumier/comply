@@ -96,6 +96,12 @@ pub struct PackageJson {
     /// manifest-dir-relative, forward-slash, no leading `./`, so a consumer can
     /// join them onto the manifest directory and compare against a file path.
     pub entry_files: BTreeSet<String>,
+    /// True when every published entry (`main`/`module`/`exports`/`browser`/
+    /// `react-native`) lives outside a top-level `src/` directory and at least
+    /// one such entry exists. Marks `src/` as build *input* whose contents are
+    /// compiled away into the shipped artifact, so a devDependency imported from
+    /// `src/` is bundled at build time, not a runtime dependency.
+    pub entries_outside_src: bool,
 }
 
 impl PackageJson {
@@ -158,6 +164,7 @@ impl PackageJson {
                 })
                 .unwrap_or_default(),
             entry_files: collect_entry_files(&json),
+            entries_outside_src: entries_outside_src(&json),
         })
     }
 
@@ -344,6 +351,39 @@ fn collect_entry_files(json: &Value) -> BTreeSet<String> {
         collect_substitute_targets(native, &mut out);
     }
     out
+}
+
+/// True when every published entry path of `json` lives outside a top-level
+/// `src/` directory, and at least one such entry exists. This is the signal that
+/// `src/` is build *input* compiled away into the published artifact (e.g.
+/// monaco-editor whose `main` is `./min/...` and `module` is `./esm/...`): the
+/// shipped bundle inlines its build-time dependencies, so `src/` files importing
+/// a devDependency carry no runtime dependency. Considers `main`, `module`, every
+/// `exports` target (every subpath, not just `.`), and the `browser`/
+/// `react-native` substitutes. Returns false when a published entry IS under
+/// `src/` — that package ships its source, so `src/` is runtime code.
+fn entries_outside_src(json: &Value) -> bool {
+    let mut targets = BTreeSet::new();
+    if let Some(main) = json.get("main").and_then(Value::as_str)
+        && let Some(rel) = normalize_main_path(main)
+    {
+        targets.insert(rel);
+    }
+    if let Some(module) = json.get("module").and_then(Value::as_str)
+        && let Some(rel) = normalize_main_path(module)
+    {
+        targets.insert(rel);
+    }
+    if let Some(exports) = json.get("exports") {
+        collect_export_targets(exports, &mut targets);
+    }
+    if let Some(browser) = json.get("browser") {
+        collect_substitute_targets(browser, &mut targets);
+    }
+    if let Some(native) = json.get("react-native") {
+        collect_substitute_targets(native, &mut targets);
+    }
+    !targets.is_empty() && targets.iter().all(|rel| !rel.starts_with("src/"))
 }
 
 fn parse_dep_map(json: &Value, section: &str) -> BTreeMap<String, String> {
@@ -1146,6 +1186,24 @@ impl ProjectCtx {
         pkg.entry_files
             .iter()
             .any(|entry| manifest_dir.join(entry) == path)
+    }
+
+    /// True when `path` is a build-input source file: it sits under the nearest
+    /// manifest's top-level `src/` directory, and that package publishes its
+    /// entries (`main`/`module`/`exports`/…) from outside `src/`. The published
+    /// artifact is compiled output elsewhere (`dist/`, `esm/`, `min/`, …) that
+    /// inlines build-time dependencies, so the `src/` tree is never shipped as-is.
+    /// Rules treating `src/` as runtime production code (e.g. the devDependency
+    /// check in `no-extraneous-import`) must not fire here: a devDependency
+    /// imported from build input is bundled at build time, not a runtime import.
+    pub fn is_bundled_build_input(&self, path: &Path) -> bool {
+        let Some(manifest_dir) = self.nearest_package_json_dir(path) else {
+            return false;
+        };
+        let Some(pkg) = self.nearest_package_json(path) else {
+            return false;
+        };
+        pkg.entries_outside_src && path.starts_with(manifest_dir.join("src"))
     }
 
     /// True when the React version range the project depends on still admits
@@ -2105,6 +2163,58 @@ mod tests {
         assert!(ctx.is_package_entry_file(&dir.path().join("index.mjs")));
         assert!(ctx.is_package_entry_file(&dir.path().join("index.cjs")));
         assert!(!ctx.is_package_entry_file(&dir.path().join("other.js")));
+    }
+
+    #[test]
+    fn is_bundled_build_input_true_for_src_with_entries_outside_src() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"monaco-editor","main":"./min/x.js","module":"./esm/x.js"}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src/features")).unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.is_bundled_build_input(&dir.path().join("src/features/register.js")));
+    }
+
+    #[test]
+    fn is_bundled_build_input_false_when_entry_under_src() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"ships-src","main":"./src/index.js"}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(!ctx.is_bundled_build_input(&dir.path().join("src/util.js")));
+    }
+
+    #[test]
+    fn is_bundled_build_input_false_outside_src() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"monaco-editor","main":"./min/x.js"}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(!ctx.is_bundled_build_input(&dir.path().join("lib/feature.js")));
+    }
+
+    #[test]
+    fn is_bundled_build_input_false_for_non_library() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"some-app"}"#).unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(!ctx.is_bundled_build_input(&dir.path().join("src/feature.js")));
     }
 
     #[test]
