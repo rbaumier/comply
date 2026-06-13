@@ -99,6 +99,16 @@ mod tests {
         assert!(run("app/src/app.vue").is_empty());
     }
 
+    // Regression for #1820: `index.vue` is the Vue Router / Nuxt file-system
+    // routing convention for a directory's entry component — the same
+    // index-as-entry convention as `index.ts`. Its `index` stem is lowercase,
+    // so the kebab-case allowance must keep it from being flagged.
+    #[test]
+    fn allows_index_route_file_issue_1820() {
+        assert!(run("demos/preview/index.vue").is_empty());
+        assert!(run("demos/src/Marks/Underline/Vue/index.vue").is_empty());
+    }
+
     #[test]
     fn flags_snake_case() {
         assert_eq!(run("src/components/user_profile.vue").len(), 1);
