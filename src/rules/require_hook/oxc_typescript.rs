@@ -181,12 +181,49 @@ fn is_pure_path_call(call: &CallExpression) -> bool {
     })
 }
 
+/// Is `expr` the `import.meta.url` member read?
+fn is_import_meta_url(expr: &Expression) -> bool {
+    let Expression::StaticMemberExpression(mem) = expr else {
+        return false;
+    };
+    mem.property.name.as_str() == "url" && matches!(&mem.object, Expression::MetaProperty(_))
+}
+
+/// A `new URL(stringLiteral, import.meta.url)` call: the standard ESM idiom for
+/// resolving a module-relative path. Both arguments are constants — a pure string
+/// initializer and the module's own immutable URL — so it computes the same value
+/// every load with no observable side effect.
+fn is_url_resolution(expr: &Expression) -> bool {
+    let Expression::NewExpression(new_expr) = expr else {
+        return false;
+    };
+    let Expression::Identifier(callee) = &new_expr.callee else {
+        return false;
+    };
+    if callee.name.as_str() != "URL" {
+        return false;
+    }
+    if new_expr.arguments.len() != 2 {
+        return false;
+    }
+    let Some(first) = new_expr.arguments[0].as_expression() else {
+        return false;
+    };
+    let Some(second) = new_expr.arguments[1].as_expression() else {
+        return false;
+    };
+    is_pure_initializer(first) && is_import_meta_url(second)
+}
+
 /// Is this initializer pure enough to allow at module scope?
 fn is_pure_initializer(expr: &Expression) -> bool {
     if is_hoisted_test_api(expr) {
         return true;
     }
     if is_commonjs_import(expr) {
+        return true;
+    }
+    if is_url_resolution(expr) {
         return true;
     }
     match expr {
@@ -730,6 +767,56 @@ describe("x", () => { it("works", () => {}); });
             d.len(),
             1,
             "path.join with an impure (call) argument must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_const_new_url_import_meta_url() {
+        let src = r#"
+import { test, expect } from '../../playwright.extend'
+
+const DELAY_EXAMPLE = new URL('./delay.mocks.ts', import.meta.url)
+
+test('uses explicit server response delay', async ({ loadExample }) => {
+  await loadExample(DELAY_EXAMPLE)
+})
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "delay.test.ts");
+        assert!(
+            d.is_empty(),
+            "module-scope const built by new URL(literal, import.meta.url) must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_const_array_with_new_url_import_meta_url() {
+        let src = r#"
+const exampleOptions = [
+  new URL('./start.mocks.ts', import.meta.url),
+  { skipActivation: true },
+]
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "start.test.ts");
+        assert!(
+            d.is_empty(),
+            "an array element built by new URL(literal, import.meta.url) must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_const_new_url_with_dynamic_base() {
+        let src = r#"
+const target = new URL('./file.ts', getBase())
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "new URL with a non-import.meta.url base must still be flagged: {d:?}"
         );
     }
 
