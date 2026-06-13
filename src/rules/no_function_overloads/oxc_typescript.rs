@@ -89,6 +89,9 @@ impl OxcCheck for Check {
                     if preserves_call_context_return(&sigs) {
                         continue;
                     }
+                    if preserves_rest_vs_fixed_return(&sigs) {
+                        continue;
+                    }
                     for sig in sigs {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, sig.span_start as usize);
@@ -121,8 +124,11 @@ struct OverloadSig {
     generics_in_return: Vec<String>,
     /// True when this signature returns a `x is T` type predicate.
     returns_predicate: bool,
-    /// Number of declared parameters in this signature.
+    /// Number of declared parameters in this signature, counting a trailing rest
+    /// parameter as one.
     param_count: usize,
+    /// True when this signature's first parameter is a rest (`...args`) parameter.
+    first_param_is_rest: bool,
     /// Source text of this signature's return-type annotation, if any.
     return_type: Option<String>,
 }
@@ -157,6 +163,18 @@ fn preserves_type_predicate_narrowing(sigs: &[OverloadSig]) -> bool {
     sigs.iter().all(|sig| sig.returns_predicate)
 }
 
+/// True when the overloads carry at least two distinct return-type annotations.
+/// A group that does not vary its return type collapses cleanly into a single
+/// signature, so distinct returns are the precondition for every "the return
+/// type is load-bearing per variant" exemption below.
+fn has_distinct_return_types(sigs: &[OverloadSig]) -> bool {
+    let mut return_types = sigs.iter().filter_map(|s| s.return_type.as_deref());
+    let Some(first_return) = return_types.next() else {
+        return false;
+    };
+    return_types.any(|r| r != first_return)
+}
+
 /// True when the overloads select distinct return types by parameter presence —
 /// the call context (e.g. a TC39 `@decorator` vs a plain call) is determined by
 /// whether an extra parameter is supplied. Such overloads carry at least two
@@ -165,17 +183,28 @@ fn preserves_type_predicate_narrowing(sigs: &[OverloadSig]) -> bool {
 /// the return to a union (e.g. `T | void`) and break callers that rely on the
 /// per-context return type.
 fn preserves_call_context_return(sigs: &[OverloadSig]) -> bool {
-    let mut return_types = sigs.iter().filter_map(|s| s.return_type.as_deref());
-    let Some(first_return) = return_types.next() else {
-        return false;
-    };
-    let distinct_return_types = return_types.any(|r| r != first_return);
-    if !distinct_return_types {
+    if !has_distinct_return_types(sigs) {
         return false;
     }
     let mut arities = sigs.iter().map(|s| s.param_count);
     let first_arity = arities.next().expect("group has at least two signatures");
     arities.any(|a| a != first_arity)
+}
+
+/// True when the overloads discriminate on a structurally incompatible first
+/// parameter — at least one signature leads with a rest (`...args: T[]`)
+/// parameter and at least one leads with a fixed parameter — AND carry distinct
+/// return types. The rest-vs-fixed shapes cannot be merged into one parameter
+/// without a `T[] | Fixed` union that erases the per-variant return type (e.g.
+/// mobx-react `inject`'s rest-strings HOC vs its function-arg HOC), so collapsing
+/// the overloads would break inference at call sites.
+fn preserves_rest_vs_fixed_return(sigs: &[OverloadSig]) -> bool {
+    if !has_distinct_return_types(sigs) {
+        return false;
+    }
+    let any_rest_first = sigs.iter().any(|s| s.first_param_is_rest);
+    let any_fixed_first = sigs.iter().any(|s| !s.first_param_is_rest && s.param_count > 0);
+    any_rest_first && any_fixed_first
 }
 
 /// Extract overload signature info if `stmt` is a function declaration without a body.
@@ -200,12 +229,18 @@ fn sig_from_function(source: &str, f: &Function) -> Option<OverloadSig> {
     }
     let name = f.id.as_ref()?.name.to_string();
     let generics_in_return = generics_in_return_type(source, f).unwrap_or_default();
+    let has_rest = f.params.rest.is_some();
+    let param_count = f.params.items.len() + usize::from(has_rest);
+    // The rest parameter, when present, always trails the fixed parameters, so a
+    // rest in first position means there are no fixed parameters before it.
+    let first_param_is_rest = has_rest && f.params.items.is_empty();
     Some(OverloadSig {
         name,
         span_start: f.span.start,
         generics_in_return,
         returns_predicate: returns_type_predicate(f),
-        param_count: f.params.items.len(),
+        param_count,
+        first_param_is_rest,
         return_type: return_type_text(source, f),
     })
 }
@@ -348,6 +383,44 @@ export function observer<T extends IReactComponent>(component: T, context?: Clas
 }
 "#;
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_rest_vs_fixed_first_param_with_distinct_return_types() {
+        // Regression for #1875: mobx-react `inject` has a rest-strings form
+        // (`...stores: Array<string>` → a conditional-type HOC) and a function-arg
+        // form (`fn: IStoresToProps<...>` → `IWrappedComponent<P>` HOC). The first
+        // params are structurally incompatible (rest vs fixed) and the return types
+        // are distinct generics; a `string | IStoresToProps` union param would
+        // collapse the two return shapes into one less-precise type, breaking
+        // per-variant inference at call sites.
+        let source = r#"
+export function inject(
+    ...stores: Array<string>
+): <T extends IReactComponent<any>>(
+    target: T
+) => T & (T extends IReactComponent<infer P> ? IWrappedComponent<P> : never);
+export function inject<S extends IValueMap = {}, P extends IValueMap = {}, I extends IValueMap = {}, C extends IValueMap = {}>(
+    fn: IStoresToProps<S, P, I, C>
+): <T extends IReactComponent>(target: T) => T & IWrappedComponent<P>;
+export function inject(...storeNames: Array<any>) {
+    return {} as any;
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_rest_vs_fixed_first_param_with_same_return_type() {
+        // Same rest-vs-fixed first-param discriminant but an identical return type
+        // collapses to one `string[] | Fn` union signature — no per-variant return
+        // inference to preserve, so it still fires.
+        let source = "
+function foo(...names: Array<string>): void;
+function foo(fn: () => void): void;
+function foo(...args: Array<any>): void {}
+";
+        assert_eq!(run_on(source).len(), 2);
     }
 
     #[test]
