@@ -193,6 +193,13 @@ fn has_side_effects(expr: &Expression) -> bool {
         | Expression::JSXElement(_)
         | Expression::JSXFragment(_) => true,
 
+        // An uninvoked arrow/function expression used as a bare statement is a
+        // TypeScript type-test container: its body exists only to give the
+        // compiler a scope to check assignments, generic constraints and
+        // `@ts-expect-error` directives. The statement IS the assertion ("this
+        // compiles"), never accidental dead code, so it is not flagged.
+        Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => true,
+
         // Unary: only delete/void are side-effectful
         Expression::UnaryExpression(unary) => {
             use oxc_ast::ast::UnaryOperator;
@@ -515,6 +522,41 @@ mod tests {
     fn still_flags_bare_identifier_in_tsx() {
         // JSX exemption must not mask a genuine unused expression in a .tsx file.
         let d = run_on_tsx("let x = 1; x;");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression #1858: an uninvoked arrow/function expression used as a bare
+    // statement is a TypeScript type-test container — its body exists only to
+    // let the compiler check assignments and `@ts-expect-error` directives. It
+    // must not be flagged as an unused expression.
+    #[test]
+    fn allows_uninvoked_arrow_type_test_block_issue_1858() {
+        let src = r#"() => {
+  const [, setStore] = createStore<{
+    a?: undefined | { b: null | { c: number } };
+  }>({});
+  setStore("a", "b", "c", "d", "e", "f", "g", "h");
+};"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_uninvoked_function_expression_type_test_block_issue_1858() {
+        let src = r#"(function () {
+  const [, setStore] = createStore<{ readonly a: number }>({});
+  // @ts-expect-error
+  setStore("a", 1);
+});"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn still_flags_genuinely_dead_expression_issue_1858() {
+        // The exemption is scoped to bare function literals; genuine dead
+        // expressions must keep flagging.
+        assert_eq!(run_on("a === b;").len(), 1);
+        assert_eq!(run_on("1 + 1;").len(), 1);
+        let d = run_on("let x = 1; x;");
         assert_eq!(d.len(), 1);
     }
 
