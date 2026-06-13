@@ -82,15 +82,21 @@ fn is_unary_numeric(expr: &oxc_ast::ast::Expression) -> bool {
     false
 }
 
+/// Treats an array as a magic-constant literal only when every element is a
+/// numeric or boolean literal. Arrays containing string literals are named
+/// configuration lists (Vite `optimizeDeps`, allowed-origin lists, feature-flag
+/// keys) that follow camelCase by ecosystem convention, so they are exempt.
 fn is_array_of_literals(expr: &oxc_ast::ast::Expression) -> bool {
     let oxc_ast::ast::Expression::ArrayExpression(arr) = expr else {
         return false;
     };
+    if arr.elements.is_empty() {
+        return false;
+    }
     arr.elements.iter().all(|el| {
         matches!(
             el,
             oxc_ast::ast::ArrayExpressionElement::NumericLiteral(_)
-                | oxc_ast::ast::ArrayExpressionElement::StringLiteral(_)
                 | oxc_ast::ast::ArrayExpressionElement::BooleanLiteral(_)
         )
     })

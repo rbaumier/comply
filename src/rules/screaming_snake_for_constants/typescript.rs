@@ -65,4 +65,23 @@ mod tests {
     fn allows_new_expression() {
         assert!(run("const instance = new Map();").is_empty());
     }
+
+    #[test]
+    fn allows_exported_array_of_strings_config() {
+        assert!(
+            run("export const optimizeViteDeps = ['preact/compat/jsx-runtime', '@storybook/react-dom-shim'];")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_array_of_strings_config() {
+        assert!(run("const allowedOrigins = ['https://a.com', 'https://b.com'];").is_empty());
+    }
+
+    #[test]
+    fn flags_numeric_array() {
+        let diags = run("const retryDelays = [100, 200, 400];");
+        assert_eq!(diags.len(), 1);
+    }
 }
