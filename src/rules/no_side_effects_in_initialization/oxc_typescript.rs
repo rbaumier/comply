@@ -23,6 +23,13 @@
 //!   `ReactDOM.createRoot(...).render(...)`, `hydrateRoot(...)`, or legacy
 //!   `ReactDOM.render(...)` (mounting the app at module level is the entry
 //!   file's purpose, and entry points are never imported by other modules);
+//! - Solid.js application entry points by content shape: a module that imports
+//!   the `render` binding from `"solid-js/web"` and calls it at the top level
+//!   (`render(() => <App />, root)`). `render` is Solid.js's app bootstrap, so
+//!   mounting the app at module level is the entry file's purpose and the
+//!   top-level call is an intentional side effect. The `solid-js/web` import is
+//!   required so an ordinary module that happens to call a local `render()` is
+//!   still flagged;
 //! - Gulp task-registration files by content shape: a module that imports
 //!   `gulp` and registers tasks at the top level (`task(...)`, `gulp.task(...)`,
 //!   `series(...)`, `parallel(...)`, …). The registrations are the file's whole
@@ -274,6 +281,46 @@ fn is_react_entry_shape(program: &Program) -> bool {
         let Statement::ExpressionStatement(es) = stmt else { return false };
         let Expression::CallExpression(call) = &es.expression else { return false };
         is_react_bootstrap_call(call)
+    })
+}
+
+/// True when the program imports the `render` binding from `"solid-js/web"` at
+/// the top level (`import { render } from "solid-js/web"`). The imported symbol
+/// name must be `render`; an alias (`import { render as r }`) still counts.
+fn has_solid_render_import(program: &Program) -> bool {
+    program.body.iter().any(|stmt| {
+        let Statement::ImportDeclaration(import) = stmt else { return false };
+        if import.source.value.as_str() != "solid-js/web" {
+            return false;
+        }
+        let Some(specifiers) = &import.specifiers else { return false };
+        specifiers.iter().any(|spec| {
+            matches!(
+                spec,
+                ImportDeclarationSpecifier::ImportSpecifier(named)
+                    if named.imported.name() == "render"
+            )
+        })
+    })
+}
+
+/// True when the program is a Solid.js application entry point: it imports the
+/// `render` binding from `"solid-js/web"` and calls it at the top level
+/// (`render(() => <App />, root)`). `render` is Solid.js's app bootstrap
+/// (analogous to React's `createRoot().render()` / Vue's `createApp().mount()`):
+/// mounting the app at module level is the entry file's whole purpose, and entry
+/// points are never imported by other modules, so the top-level call is an
+/// intentional side effect, not tree-shakeable library code. The `solid-js/web`
+/// import is required so an ordinary module that happens to call a local
+/// `render()` is still flagged.
+fn is_solid_entry_shape(program: &Program) -> bool {
+    if !has_solid_render_import(program) {
+        return false;
+    }
+    program.body.iter().any(|stmt| {
+        let Statement::ExpressionStatement(es) = stmt else { return false };
+        let Expression::CallExpression(call) = &es.expression else { return false };
+        matches!(&call.callee, Expression::Identifier(id) if id.name == "render")
     })
 }
 
@@ -742,6 +789,7 @@ impl OxcCheck for Check {
             || shape_is_vitest_setup(program)
             || is_server_entry_shape(program)
             || is_react_entry_shape(program)
+            || is_solid_entry_shape(program)
             || is_gulp_task_file(program)
             || is_storybook_addon_file(program)
         {
@@ -1185,6 +1233,42 @@ mod tests {
             diags.len(),
             2,
             "unrelated .render() must not exempt the module, got {diags:?}"
+        );
+    }
+
+    // --- (g) Solid.js application entry points (Closes #1935) --------------
+
+    // Regression for #1935: a Solid.js entry point mounts the app at module
+    // level with `render(() => <App />, root)` imported from `solid-js/web`.
+    // That is the entry file's whole purpose and it is never imported, so it
+    // must not be flagged.
+    #[test]
+    fn allows_solid_render_entry_point() {
+        let src = "\
+            import { render } from 'solid-js/web';\n\
+            import App from './App';\n\
+            const root = document.getElementById('root');\n\
+            render(() => <App />, root!);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "examples/solid/simple/src/index.tsx");
+        assert!(
+            diags.is_empty(),
+            "Solid.js render() entry point is exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_local_render_call_without_solid_import() {
+        // A bare top-level `render(...)` with no `solid-js/web` import is an
+        // ordinary local call; its module-level side effect still blocks
+        // tree-shaking.
+        let src = "\
+            import { render } from './template';\n\
+            render(data);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "local render() without solid-js/web import must still be flagged, got {diags:?}"
         );
     }
 
