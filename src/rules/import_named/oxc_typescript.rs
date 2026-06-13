@@ -6,6 +6,12 @@
 //!
 //! Imports from `.d.ts` declaration files are not verified: declaration files
 //! are excluded from the scan set, so the index has no export data for them.
+//!
+//! For imports that resolve to a runtime source file, the export set is widened
+//! with the type-only names declared in the file's companion `.d.ts` (the
+//! same-stem sibling and the nearest package's `"types"`/`"typings"` target).
+//! TypeScript resolves named type imports against those declarations, so a name
+//! present only there must not be reported as missing.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::import_index::{ExportKind, ImportKind};
@@ -83,7 +89,20 @@ impl OxcCheck for Check {
                 if exports.iter().any(|e| e.kind == ExportKind::StarReExport) {
                     return None;
                 }
-                Some(exports.iter().map(|e| e.name.clone()).collect())
+                let mut names: HashSet<String> =
+                    exports.iter().map(|e| e.name.clone()).collect();
+                // A package's type-only named exports (`export type Foo`) live in
+                // a companion `.d.ts` declaration, not the runtime JS the
+                // specifier resolves to. Fold those names in so a valid
+                // type-only import isn't reported as missing.
+                match companion_declaration_exports(src) {
+                    CompanionExports::Names(decl_names) => names.extend(decl_names),
+                    // The companion declaration has an unenumerable `export *` —
+                    // skip rather than risk a false positive.
+                    CompanionExports::Unenumerable => return None,
+                    CompanionExports::None => {}
+                }
+                Some(names)
             });
 
             let Some(export_names) = entry.as_ref() else {
@@ -146,6 +165,104 @@ fn is_generated_file(path: &std::path::Path) -> bool {
         end -= 1;
     }
     content[..end].contains("@generated")
+}
+
+/// Outcome of looking for the type-only export names a non-declaration source
+/// file's companion `.d.ts` contributes.
+enum CompanionExports {
+    /// No companion declaration file was found.
+    None,
+    /// A companion exists but re-exports via `export *`, so its full export set
+    /// cannot be enumerated from a single-file parse. Callers should skip
+    /// verification to avoid false positives.
+    Unenumerable,
+    /// The companion's named exports.
+    Names(HashSet<String>),
+}
+
+/// Names exported by the declaration file(s) accompanying a runtime source file.
+/// TypeScript resolves a named import against these declarations even though the
+/// specifier resolves to the runtime JS. Two companion locations are checked:
+///
+/// - the sibling `.d.ts` of the same stem (`fastify.js` → `fastify.d.ts`),
+///   covering local `.js` imports backed by a declaration file;
+/// - the declaration pointed to by the package's `"types"`/`"typings"` field,
+///   covering bare imports of an npm package whose types live in a `.d.ts`.
+fn companion_declaration_exports(src: &std::path::Path) -> CompanionExports {
+    let mut names: HashSet<String> = HashSet::new();
+    let mut found = false;
+
+    for decl in companion_declaration_paths(src) {
+        match crate::project::import_index::declaration_file_exports(&decl) {
+            Some(decl_names) => {
+                found = true;
+                names.extend(decl_names);
+            }
+            None => return CompanionExports::Unenumerable,
+        }
+    }
+
+    if found {
+        CompanionExports::Names(names)
+    } else {
+        CompanionExports::None
+    }
+}
+
+/// Existing companion declaration files for a runtime source file: the
+/// same-stem sibling and the nearest package's `"types"`/`"typings"` target.
+fn companion_declaration_paths(src: &std::path::Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    if let Some(sibling) = sibling_declaration_path(src)
+        && sibling.is_file()
+    {
+        paths.push(sibling);
+    }
+
+    if let Some(types) = package_types_declaration_path(src)
+        && types.is_file()
+        && !paths.contains(&types)
+    {
+        paths.push(types);
+    }
+
+    paths
+}
+
+/// Sibling declaration path for a runtime file: `foo.js` → `foo.d.ts`,
+/// `foo.mjs` → `foo.d.mts`, `foo.cjs` → `foo.d.cts`. Returns `None` for files
+/// without a recognised runtime extension.
+fn sibling_declaration_path(src: &std::path::Path) -> Option<PathBuf> {
+    let ext = src.extension().and_then(|e| e.to_str())?;
+    let decl_ext = match ext {
+        "js" | "jsx" | "ts" | "tsx" => "d.ts",
+        "mjs" | "mts" => "d.mts",
+        "cjs" | "cts" => "d.cts",
+        _ => return None,
+    };
+    Some(src.with_extension(decl_ext))
+}
+
+/// Declaration file pointed to by the `"types"` or `"typings"` field of the
+/// nearest `package.json` at or above `src`. Stops at the first `package.json`
+/// found walking up.
+fn package_types_declaration_path(src: &std::path::Path) -> Option<PathBuf> {
+    let mut dir = src.parent();
+    while let Some(d) = dir {
+        let manifest = d.join("package.json");
+        if manifest.is_file() {
+            let raw = std::fs::read_to_string(&manifest).ok()?;
+            let json: serde_json::Value = serde_json::from_str(&raw).ok()?;
+            let types = json
+                .get("types")
+                .or_else(|| json.get("typings"))
+                .and_then(serde_json::Value::as_str)?;
+            return Some(d.join(types));
+        }
+        dir = d.parent();
+    }
+    None
 }
 
 #[cfg(test)]
@@ -452,5 +569,153 @@ mod tests {
         ];
         let (_dir, diags) = run_on_project(&files, "test-d/schema.ts");
         assert!(diags.is_empty(), "import from .d.ts re-export must not be flagged: {diags:?}");
+    }
+
+    #[test]
+    fn no_fp_on_named_type_import_from_sibling_dts_issue_1648() {
+        // fastify pattern: types live in the companion `fastify.d.ts`, the
+        // runtime `fastify.js` exports only values. A named type import from
+        // the `.js` must resolve against the sibling declaration.
+        let files: Vec<(&str, &str)> = vec![
+            ("fastify.js", "export const fastify = 1;\nexport const errorCodes = 2;\n"),
+            (
+                "fastify.d.ts",
+                "export type FastifyInstance = { x: number };\n\
+                 export interface FastifyReply { y: number }\n",
+            ),
+            (
+                "test/using.ts",
+                "import { fastify, FastifyInstance, FastifyReply } from '../fastify.js';\n\
+                 const a = fastify;\n\
+                 const b: FastifyInstance = { x: 1 };\n\
+                 const c: FastifyReply = { y: 2 };\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "test/using.ts");
+        assert!(
+            diags.is_empty(),
+            "named type import backed by a sibling .d.ts must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_missing_name_with_sibling_dts() {
+        // True positive preserved: a name present in neither the runtime JS nor
+        // the companion .d.ts is still reported.
+        let files: Vec<(&str, &str)> = vec![
+            ("fastify.js", "export const fastify = 1;\n"),
+            ("fastify.d.ts", "export type FastifyInstance = { x: number };\n"),
+            (
+                "test/using.ts",
+                "import { fastify, Nonexistent } from '../fastify.js';\n\
+                 const a = fastify;\n\
+                 type B = Nonexistent;\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "test/using.ts");
+        assert_eq!(diags.len(), 1, "absent name must still be flagged: {diags:?}");
+        assert!(diags[0].message.contains("Nonexistent"));
+    }
+
+    // Build an installed npm package: node_modules/preact resolves a bare
+    // `preact` specifier to its runtime `main` JS, while its type-only exports
+    // live in the `.d.ts` pointed to by the `"types"` field of the package's
+    // own package.json. Returns the diags for the given target source.
+    fn run_with_package(
+        package_json: &str,
+        package_files: &[(&str, &str)],
+        target_src: &str,
+    ) -> (TempDir, Vec<Diagnostic>) {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","dependencies":{"preact":"10.0.0"}}"#,
+        )
+        .unwrap();
+
+        let pkg = dir.path().join("node_modules/preact");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(pkg.join("package.json"), package_json).unwrap();
+        for (rel, content) in package_files {
+            let p = pkg.join(rel);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&p, content).unwrap();
+        }
+
+        let target = dir.path().join("src/router.tsx");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, target_src).unwrap();
+
+        // The package's runtime JS must be indexed so its export set is known;
+        // include the package files and the consumer in the input set.
+        let mut rels: Vec<PathBuf> = vec![target.clone()];
+        for (rel, _) in package_files {
+            rels.push(pkg.join(rel));
+        }
+        let mut source_files: Vec<SourceFile> = Vec::new();
+        for p in &rels {
+            if let Some(lang) = Language::from_path(p) {
+                source_files.push(SourceFile { path: p.clone(), language: lang });
+            }
+        }
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        let canon = fs::canonicalize(&target).unwrap();
+        let allocator = Allocator::default();
+        let parse_ret = OxcParser::new(&allocator, target_src, SourceType::tsx()).parse();
+        let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+        let ctx = CheckCtx::for_test_with_project(&canon, target_src, &project);
+        let diags = Check.run_on_semantic(&semantic, &ctx);
+        (dir, diags)
+    }
+
+    #[test]
+    fn no_fp_on_named_type_import_from_package_types_dts_issue_1922() {
+        // preact pattern: type-only named exports (`ComponentChild`, …) live in
+        // the `.d.ts` pointed to by the package's `"types"` field; the runtime
+        // `main` JS exports only values. A named import of those types from the
+        // bare package specifier must not be flagged.
+        let pkg = r#"{"name":"preact","main":"dist/preact.js","types":"src/index.d.ts"}"#;
+        let package_files: Vec<(&str, &str)> = vec![
+            (
+                "dist/preact.js",
+                "export const render = 1;\nexport const createContext = 2;\n",
+            ),
+            (
+                "src/index.d.ts",
+                "export type ComponentChild = string | number | null;\n\
+                 export type FunctionalComponent<P> = (props: P) => ComponentChild;\n\
+                 export type ComponentFactory<P> = FunctionalComponent<P>;\n",
+            ),
+        ];
+        let target = "import { ComponentChild, FunctionalComponent, ComponentFactory, createContext } from 'preact';\n\
+                      const a: ComponentChild = null;\n\
+                      const b = createContext;\n";
+        let (_dir, diags) = run_with_package(pkg, &package_files, target);
+        assert!(
+            diags.is_empty(),
+            "type-only named imports backed by the package \"types\" .d.ts must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_missing_name_with_package_types_dts() {
+        // True positive preserved: a name exported by neither the runtime JS nor
+        // the package's `"types"` declaration is still reported.
+        let pkg = r#"{"name":"preact","main":"dist/preact.js","types":"src/index.d.ts"}"#;
+        let package_files: Vec<(&str, &str)> = vec![
+            ("dist/preact.js", "export const render = 1;\n"),
+            ("src/index.d.ts", "export type ComponentChild = string | null;\n"),
+        ];
+        let target = "import { render, Nope } from 'preact';\n\
+                      const a = render;\n\
+                      type B = Nope;\n";
+        let (_dir, diags) = run_with_package(pkg, &package_files, target);
+        assert_eq!(diags.len(), 1, "absent name must still be flagged: {diags:?}");
+        assert!(diags[0].message.contains("Nope"));
     }
 }
