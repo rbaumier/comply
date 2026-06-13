@@ -12,6 +12,11 @@
 //!   top-level `listen(...)` / `*.listen(...)` call (Fastify/Express/Node HTTP
 //!   servers start the server this way, so the surrounding route/hook/
 //!   middleware registrations are mandatory side effects, not library code);
+//! - React application entry points by content shape: any module with a
+//!   top-level React DOM bootstrap call — `createRoot(...).render(...)`,
+//!   `ReactDOM.createRoot(...).render(...)`, `hydrateRoot(...)`, or legacy
+//!   `ReactDOM.render(...)` (mounting the app at module level is the entry
+//!   file's purpose, and entry points are never imported by other modules);
 //! - framework entry points reported by `is_framework_entry_point`;
 //! - TanStack Start entry files (`app/{client,router,server}.{ts,tsx}` or
 //!   `src/app/…`) when the `tanstack-router` framework is detected;
@@ -164,6 +169,66 @@ fn is_server_entry_shape(program: &Program) -> bool {
     })
 }
 
+/// True when `call`'s callee is `name` (bare identifier) or a `.name` member
+/// access (`ReactDOM.createRoot`, `client.hydrateRoot`, …).
+fn callee_is_ident_or_member(
+    call: &oxc_ast::ast::CallExpression,
+    name: &str,
+) -> bool {
+    match &call.callee {
+        Expression::Identifier(id) => id.name == name,
+        Expression::StaticMemberExpression(m) => m.property.name == name,
+        _ => false,
+    }
+}
+
+/// True when `call` is a React DOM bootstrap call statement:
+/// - `createRoot(...).render(...)` / `ReactDOM.createRoot(...).render(...)`;
+/// - `hydrateRoot(...)` / `ReactDOM.hydrateRoot(...)`;
+/// - legacy `ReactDOM.render(...)` (member call on a `ReactDOM` object).
+///
+/// A bare `something.render(...)` is intentionally NOT matched — only the
+/// chained `createRoot().render()` form and the `ReactDOM.render()` form count,
+/// so unrelated `.render()` methods don't slip through.
+fn is_react_bootstrap_call(call: &oxc_ast::ast::CallExpression) -> bool {
+    if callee_is_ident_or_member(call, "hydrateRoot") {
+        return true;
+    }
+    // `createRoot(...).render(...)`: outer callee is a `.render` member whose
+    // object is itself a `createRoot(...)` call.
+    if let Expression::StaticMemberExpression(m) = &call.callee {
+        if m.property.name == "render"
+            && let Expression::CallExpression(inner) = &m.object
+            && callee_is_ident_or_member(inner, "createRoot")
+        {
+            return true;
+        }
+        // Legacy `ReactDOM.render(...)`: `.render` on a `ReactDOM`/`ReactDom`
+        // identifier object.
+        if m.property.name == "render"
+            && let Expression::Identifier(obj) = &m.object
+            && matches!(obj.name.as_str(), "ReactDOM" | "ReactDom")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when the program has a top-level React DOM bootstrap call statement.
+/// Such a module is a React application entry point (`main.tsx`, `index.tsx`,
+/// `entry.client.tsx`, …): mounting the app at module level is the file's whole
+/// purpose, and entry points are never imported by other modules, so the
+/// surrounding top-level setup is an intentional side effect, not tree-shakeable
+/// library code.
+fn is_react_entry_shape(program: &Program) -> bool {
+    program.body.iter().any(|stmt| {
+        let Statement::ExpressionStatement(es) = stmt else { return false };
+        let Expression::CallExpression(call) = &es.expression else { return false };
+        is_react_bootstrap_call(call)
+    })
+}
+
 /// Collect local identifier names that are bound to `startTransition`
 /// imported from `"react"`. Handles `import { startTransition } from "react"`
 /// and `import { startTransition as ST } from "react"`.
@@ -264,6 +329,7 @@ impl OxcCheck for Check {
         if is_test_setup_path(ctx.path)
             || shape_is_vitest_setup(program)
             || is_server_entry_shape(program)
+            || is_react_entry_shape(program)
         {
             return Vec::new();
         }
@@ -626,6 +692,81 @@ mod tests {
             diags.len(),
             3,
             "library module without listen() must still be flagged, got {diags:?}"
+        );
+    }
+
+    // --- (f) React application entry points (Closes #1429) -----------------
+
+    // Regression for #1429: the canonical React 18 entry point mounts the app
+    // at module level with `ReactDOM.createRoot(...).render(...)`. That is the
+    // entry file's whole purpose and it is never imported, so it must not be
+    // flagged.
+    #[test]
+    fn allows_react_create_root_entry_point() {
+        let src = "\
+            import * as React from 'react';\n\
+            import * as ReactDOM from 'react-dom/client';\n\
+            import App from './App.tsx';\n\
+            ReactDOM.createRoot(document.getElementById('root')!).render(\n\
+              <React.StrictMode>\n\
+                <App />\n\
+              </React.StrictMode>,\n\
+            );\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/main.tsx");
+        assert!(
+            diags.is_empty(),
+            "ReactDOM.createRoot().render() entry point is exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_bare_create_root_render_entry_point() {
+        let src = "\
+            import { createRoot } from 'react-dom/client';\n\
+            createRoot(document.getElementById('root')!).render(<App />);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/index.tsx");
+        assert!(
+            diags.is_empty(),
+            "createRoot().render() entry point is exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_hydrate_root_entry_point() {
+        let src = "\
+            import { hydrateRoot } from 'react-dom/client';\n\
+            hydrateRoot(document, <App />);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "entry.client.tsx");
+        assert!(
+            diags.is_empty(),
+            "hydrateRoot() entry point is exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_legacy_react_dom_render_entry_point() {
+        let src = "\
+            import ReactDOM from 'react-dom';\n\
+            ReactDOM.render(<App />, document.getElementById('root'));\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/index.tsx");
+        assert!(
+            diags.is_empty(),
+            "legacy ReactDOM.render() entry point is exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_unrelated_render_method_call() {
+        // A bare `.render()` on some object is NOT a React bootstrap; an
+        // ordinary module's top-level side effect still blocks tree-shaking.
+        let src = "\
+            template.render(data);\n\
+            doSideEffect();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget.ts");
+        assert_eq!(
+            diags.len(),
+            2,
+            "unrelated .render() must not exempt the module, got {diags:?}"
         );
     }
 
