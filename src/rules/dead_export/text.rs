@@ -42,6 +42,13 @@
 //!     filename convention at build time, so it never has a static importer.
 //!     The whole file is treated as a framework entry point. The leading
 //!     underscore is required: an ordinary `meta.ts` stays subject to the rule.
+//!   - Serverless `handler` exports under a `functions/` directory — a file in
+//!     the per-function layout AWS Lambda / SST / Cloudflare Workers / Vercel
+//!     Edge use exports `handler`, which the cloud runtime invokes through the
+//!     deploy config's `handler: "functions/my-fn/index.handler"` string, never
+//!     through a static TS import. The exemption is gated on BOTH the
+//!     `functions/` directory and the `handler` name, so a lone `handler`
+//!     export elsewhere stays subject to the rule.
 //!
 //! False-positive guards:
 //!   - If any file imports the current module via a namespace import
@@ -110,6 +117,21 @@ fn is_nextra_meta_file(path: &Path) -> bool {
         path.file_name().and_then(|n| n.to_str()),
         Some("_meta.tsx" | "_meta.ts" | "_meta.js" | "_meta.jsx")
     )
+}
+
+/// Export name a serverless platform invokes by configuration string rather
+/// than a static import (`handler: "functions/my-fn/index.handler"`).
+const SERVERLESS_HANDLER_EXPORT: &str = "handler";
+
+/// True when `path` lives under a `functions/` directory — the per-function
+/// layout serverless platforms (AWS Lambda, SST, Cloudflare Workers, Vercel
+/// Edge) use, where each function gets its own directory and the deploy config
+/// references the entry file's `handler` export by path. Segment (not substring)
+/// match keeps `src/functionsRegistry/` from qualifying.
+fn is_in_serverless_functions_dir(path: &Path) -> bool {
+    path.components().any(|c| {
+        matches!(c, std::path::Component::Normal(s) if s.to_str() == Some("functions"))
+    })
 }
 
 /// A framework convention whose named exports are discovered dynamically by a
@@ -350,6 +372,14 @@ impl TextCheck for Check {
         // a module merely exporting one signature name is not blanket-exempted.
         let export_names: HashSet<&str> = exports.iter().map(|e| e.name.as_str()).collect();
 
+        // Serverless function handler: a `handler` export in a file under a
+        // `functions/` directory is invoked by the cloud runtime through the
+        // deploy config's `handler: "functions/my-fn/index.handler"` string, not
+        // by a static TS import, so it has no importer yet is live. Gated on the
+        // `functions/` directory so an ordinary lone `handler` export elsewhere
+        // is still flagged. Hoisted out of the loop — one path-segment scan.
+        let in_serverless_functions_dir = is_in_serverless_functions_dir(&canon);
+
         // The two source scans below each tree-sitter-parse the whole file, so
         // they are computed lazily: only an export that already survived the
         // cheap index checks (almost none, in a healthy project) pays for them.
@@ -392,6 +422,9 @@ impl TextCheck for Check {
                 continue;
             }
             if is_co_occurrence_exempt(&export.name, &export_names) {
+                continue;
+            }
+            if in_serverless_functions_dir && export.name == SERVERLESS_HANDLER_EXPORT {
                 continue;
             }
             if !index.get_usages(&canon, &export.name).is_empty() {
@@ -1454,6 +1487,97 @@ mod tests {
             diags.is_empty(),
             "Nextra _meta.tsx default export must not be flagged, got: {diags:?}"
         );
+    }
+
+    #[test]
+    fn no_fp_for_serverless_lambda_handler_in_functions_dir() {
+        // Regression for #1771 — sst's Lambda@Edge handler exports a `handler`
+        // symbol invoked by the AWS runtime through the deploy config's
+        // `handler: "functions/oac-edge-signer/index.handler"` string, never by
+        // a static TS import. The file lives in the per-function `functions/`
+        // layout, so dead-export must treat the `handler` export as live.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "platform/functions/oac-edge-signer/index.ts",
+                "import { CloudFrontRequestHandler } from \"aws-lambda\";\n\
+                 import crypto from \"node:crypto\";\n\
+                 export const handler: CloudFrontRequestHandler = async (event) => {\n\
+                   const request = event.Records[0].cf.request;\n\
+                   return request;\n\
+                 };\n",
+            ),
+            ("platform/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) =
+            run_on_project(&files, "platform/functions/oac-edge-signer/index.ts");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("handler")),
+            "serverless handler under functions/ must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_for_serverless_handler_without_aws_lambda_import() {
+        // Regression for #1771 — sst's `ssr-warmer` and `nodejs-runtime`
+        // function files export `handler` without importing `aws-lambda`. The
+        // `functions/` per-function layout is the signal, so dead-export must
+        // not flag the `handler` export regardless of the import set.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "platform/functions/ssr-warmer/index.ts",
+                "export const handler = async (event: { time: string }) => {\n\
+                   return event;\n\
+                 };\n",
+            ),
+            ("platform/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "platform/functions/ssr-warmer/index.ts");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("handler")),
+            "serverless handler under functions/ must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_non_handler_export_in_functions_dir() {
+        // Sibling guard for #1771 — the exemption is scoped to the `handler`
+        // name. A genuinely dead non-`handler` export under `functions/` with no
+        // importer must still be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "platform/functions/ssr-warmer/index.ts",
+                "export const handler = async () => {};\n\
+                 export const __DEAD = \"x\";\n",
+            ),
+            ("platform/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "platform/functions/ssr-warmer/index.ts");
+        assert!(
+            diags.iter().any(|d| d.message.contains("__DEAD")),
+            "non-handler dead export under functions/ must still be flagged, got: {diags:?}"
+        );
+        assert!(
+            diags.iter().all(|d| !d.message.contains("handler")),
+            "handler export must remain exempt, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_handler_export_outside_functions_dir() {
+        // Sibling guard for #1771 — the exemption is gated on the `functions/`
+        // directory. A lone `handler` export NOT under `functions/` is an
+        // ordinary export and must still be flagged when unimported.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/lib/handler.ts", "export const handler = () => {};"),
+            ("src/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/lib/handler.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "handler export outside functions/ must still be flagged, got: {diags:?}"
+        );
+        assert!(diags[0].message.contains("handler"));
     }
 
     #[test]
