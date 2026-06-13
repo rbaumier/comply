@@ -42,23 +42,12 @@ impl OxcCheck for Check {
                 continue;
             };
 
-            if arr.elements.len() < 2 {
-                let span = var_decl.id.span();
-                let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
-                diagnostics.push(Diagnostic {
-                    path: Arc::clone(&ctx.path_arc),
-                    line,
-                    column,
-                    rule_id: "no-redundant-state".into(),
-                    message: "State setter is never destructured — this state \
-                              never changes. Use a constant instead."
-                        .into(),
-                    severity: Severity::Warning,
-                    span: None,
-                });
-                continue;
-            }
-
+            // A single-element destructure `const [x] = useState(...)` deliberately
+            // omits the setter: it is the canonical stable lazy-init idiom (a value
+            // computed once and kept referentially stable across renders, like a
+            // `useRef` with a factory). Rewriting it to a plain `const` would
+            // recreate the value every render, so it is not redundant state. Only a
+            // destructured-but-unused setter is genuinely redundant.
             if let Some(Some(setter_pat)) = arr.elements.get(1) {
                 let BindingPattern::BindingIdentifier(ident) = setter_pat else {
                     continue;

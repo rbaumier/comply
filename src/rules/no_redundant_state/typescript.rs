@@ -40,23 +40,12 @@ impl crate::rules::backend::AstCheck for Check {
                     continue;
                 };
 
-                if arr.elements.len() < 2 {
-                    let span = var_decl.id.span();
-                    let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
-                    diagnostics.push(Diagnostic {
-                        path: std::sync::Arc::clone(&ctx.path_arc),
-                        line,
-                        column,
-                        rule_id: "no-redundant-state".into(),
-                        message: "State setter is never destructured — this state \
-                                  never changes. Use a constant instead."
-                            .into(),
-                        severity: Severity::Warning,
-                        span: None,
-                    });
-                    continue;
-                }
-
+                // A single-element destructure `const [x] = useState(...)` deliberately
+                // omits the setter: it is the canonical stable lazy-init idiom (a value
+                // computed once and kept referentially stable across renders, like a
+                // `useRef` with a factory). Rewriting it to a plain `const` would
+                // recreate the value every render, so it is not redundant state. Only a
+                // destructured-but-unused setter is genuinely redundant.
                 if let Some(Some(setter_pat)) = arr.elements.get(1) {
                     let BindingPattern::BindingIdentifier(ident) = setter_pat else {
                         continue;
@@ -156,10 +145,22 @@ mod tests {
     }
 
     #[test]
-    fn flags_no_setter_destructured() {
-        let d = run_on("const [count] = useState(0);");
-        assert_eq!(d.len(), 1);
-        assert!(d[0].message.contains("never destructured"));
+    fn allows_single_element_destructure() {
+        // `const [x] = useState(...)` is the canonical stable lazy-init idiom,
+        // not redundant state — the setter is intentionally omitted.
+        assert!(run_on("const [count] = useState(0);").is_empty());
+    }
+
+    #[test]
+    fn allows_single_element_destructure_with_factory() {
+        // Regression for #1923: stable object initialization via a factory.
+        let src = "const [atom] = useState<Atom<T>>(() => {\n\
+                   if (typeof valueOrFn === 'function') {\n\
+                   return createAtom(valueOrFn as (prev?: NoInfer<T>) => T)\n\
+                   }\n\
+                   return createAtom(valueOrFn)\n\
+                   });\nreturn atom;";
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
@@ -183,8 +184,9 @@ mod tests {
 
     #[test]
     fn flags_react_dot_use_state() {
-        let d = run_on("const [x] = React.useState(0);");
+        let d = run_on("const [x, setX] = React.useState(0);\nconsole.log(x);");
         assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("setX"));
     }
 
     #[test]
