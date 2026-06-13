@@ -14,13 +14,38 @@ fn is_test_file(path: &std::path::Path) -> bool {
     s.contains(".test.") || s.contains(".spec.") || s.contains("__tests__")
 }
 
-const TEST_MARKERS: &[&str] = &["test(", "it(", "describe(", "expect(", "assert(", "assert."];
+/// Runtime test markers: standard runner/assertion calls (Jest, Mocha, Vitest,
+/// Node `assert`).
+const RUNTIME_TEST_MARKERS: &[&str] =
+    &["test(", "it(", "describe(", "expect(", "assert(", "assert."];
+
+/// Compile-time type-assertion markers. Type-testing spec files (tsd,
+/// `@mui/types`) verify TypeScript inference with these instead of runtime
+/// `expect()`; they are real assertions, so a file using only them is not empty.
+/// Both the call form (`expectError(...)`) and the generic form
+/// (`expectType<T>(value)`) are recognized.
+const TYPE_TEST_MARKERS: &[&str] = &[
+    "expectType<",
+    "expectError(",
+    "expectError<",
+    "expectAssignable<",
+    "expectNotAssignable<",
+    "expectDeprecated(",
+    "expectDeprecated<",
+];
+
+/// The `@ts-expect-error` directive asserts that the following line fails to
+/// type-check — a compile-time test on its own.
+const TS_EXPECT_ERROR_DIRECTIVE: &str = "@ts-expect-error";
 
 fn has_test_content(source: &str) -> bool {
-    for marker in TEST_MARKERS {
+    for marker in RUNTIME_TEST_MARKERS.iter().chain(TYPE_TEST_MARKERS) {
         if source.contains(marker) {
             return true;
         }
+    }
+    if source.contains(TS_EXPECT_ERROR_DIRECTIVE) {
+        return true;
     }
     drives_imported_runner(source)
 }
@@ -217,5 +242,33 @@ mod tests {
             run("utils.test.ts", "import { helper } from './helper';").len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_type_assertion_spec_with_expect_type() {
+        let source = "import * as React from 'react';\n\
+                      import { expectType } from '@mui/types';\n\
+                      \n\
+                      const elem: HTMLDivElement | null = null;\n\
+                      expectType<HTMLDivElement | null, typeof elem>(elem);\n\
+                      expectType<HTMLDivElement | null, typeof elem>(elem);\n";
+        assert!(run("packages/mui-material/test/typescript/styles.spec.tsx", source).is_empty());
+    }
+
+    #[test]
+    fn allows_ts_expect_error_only_spec() {
+        let source = "import { Button } from './Button';\n\
+                      \n\
+                      // @ts-expect-error color must be a known palette key\n\
+                      <Button color=\"not-a-color\" />;\n";
+        assert!(run("components.spec.tsx", source).is_empty());
+    }
+
+    #[test]
+    fn flags_empty_spec_with_imports_and_comments_only() {
+        let source = "import * as React from 'react';\n\
+                      import { Button } from './Button';\n\
+                      // setup only, no assertions\n";
+        assert_eq!(run("components.spec.tsx", source).len(), 1);
     }
 }
