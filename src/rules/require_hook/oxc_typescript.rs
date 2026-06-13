@@ -79,6 +79,7 @@ fn is_hoisted_test_api(expr: &Expression) -> bool {
             | ("vi", "hoisted")
             | ("vi", "stubEnv")
             | ("vi", "stubGlobal")
+            | ("vi", "defineHelper")
             | ("jest", "mock")
             | ("jest", "unmock")
             | ("jest", "doMock")
@@ -440,6 +441,45 @@ describe("x", () => { it("works", () => {}); });
         assert!(
             d.is_empty(),
             "module-scope const built by spreading a pure source must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_vi_define_helper_at_top_level() {
+        let src = r#"
+import { test, vi } from 'vitest'
+import { page } from 'vitest/browser'
+
+const renderContext = vi.defineHelper(async (context) => {
+  document.body.innerHTML = content
+  await page.getByRole('list').mark('renderHelper')
+})
+
+test('repeated test', { repeats: 2 }, async ({ task }) => {
+  await renderContext(task.context)
+})
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "retry.test.ts");
+        assert!(
+            d.is_empty(),
+            "module-scope vi.defineHelper() declaration must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_const_arbitrary_method_call_at_top_level() {
+        let src = r#"
+import { test, vi } from 'vitest'
+
+const data = service.fetchSync()
+
+test('x', () => {});
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a non-hoisted member-call initializer must still be flagged: {d:?}"
         );
     }
 
