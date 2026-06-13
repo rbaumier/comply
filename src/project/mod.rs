@@ -475,6 +475,12 @@ pub struct ProjectCtx {
     tailwind_theme: OnceLock<Option<TailwindTheme>>,
     drizzle_config: OnceLock<Option<DrizzleConfig>>,
 
+    // "Does this project use Tailwind?" Probed once: a `tailwind.config.*`
+    // file at the project/workspace root or a `tailwindcss` / `@tailwindcss/*`
+    // dependency. Tailwind-utility rules use it to skip projects that style
+    // with CSS-in-JS, where classes like `focus:ring-*` are meaningless.
+    uses_tailwind: OnceLock<bool>,
+
     // In diff modes the import index covers the full project but only a
     // subset of files is actually linted. Cross-file rules that emit
     // once-per-project use `anchor_path()` to pick a deterministic file
@@ -565,6 +571,16 @@ impl ProjectCtx {
     /// still walk disk; only the eager root-level fields are absent.
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    /// Empty instance with `uses_tailwind()` forced to `true`. Lets Tailwind
+    /// rule unit tests exercise their class-matching logic without staging a
+    /// `tailwind.config` on disk.
+    #[cfg(test)]
+    pub fn empty_with_tailwind() -> Self {
+        let ctx = Self::default();
+        ctx.uses_tailwind.set(true).unwrap();
+        ctx
     }
 
     /// Record that the engine read `path` and found no `comply-ignore`
@@ -707,6 +723,35 @@ impl ProjectCtx {
                 "_routes.json",
             ];
             MARKERS.iter().any(|name| root.join(name).metadata().is_ok())
+        })
+    }
+
+    /// True when the project uses Tailwind CSS — either a `tailwind.config.*`
+    /// file (`.ts`, `.js`, `.cjs`, `.mjs`) sits at the project root or any
+    /// workspace root, or `tailwindcss` / a `@tailwindcss/*` package is
+    /// declared in the root manifest's dependencies. Used by Tailwind-utility
+    /// rules to skip projects that style with CSS-in-JS (MUI, ant-design),
+    /// where classes like `focus:ring-*` are meaningless. Cached for the run.
+    pub fn uses_tailwind(&self) -> bool {
+        *self.uses_tailwind.get_or_init(|| {
+            const CONFIG_NAMES: &[&str] = &[
+                "tailwind.config.ts",
+                "tailwind.config.js",
+                "tailwind.config.cjs",
+                "tailwind.config.mjs",
+            ];
+            let has_config = self
+                .project_root
+                .iter()
+                .chain(self.workspace_roots.iter())
+                .any(|root| CONFIG_NAMES.iter().any(|name| root.join(name).metadata().is_ok()));
+            if has_config {
+                return true;
+            }
+            self.package_json.as_ref().is_some_and(|pkg| {
+                pkg.all_deps()
+                    .any(|dep| dep == "tailwindcss" || dep.starts_with("@tailwindcss/"))
+            })
         })
     }
 
@@ -1694,5 +1739,57 @@ mod tests {
         let ts = Tsconfig::load(dir.path()).unwrap();
         assert!(ts.paths.contains_key("~/*"));
         assert_eq!(ts.jsx.as_deref(), Some("preserve"));
+    }
+
+    fn load_ctx_in(dir: &TempDir) -> ProjectCtx {
+        use crate::files::{Language, SourceFile};
+        let file_path = dir.path().join("app.tsx");
+        std::fs::write(&file_path, "export const x = 1;").unwrap();
+        let source_file = SourceFile {
+            path: file_path,
+            language: Language::Tsx,
+        };
+        ProjectCtx::load(&[&source_file], &Config::default())
+    }
+
+    #[test]
+    fn uses_tailwind_true_with_config_file() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"x"}"#).unwrap();
+        std::fs::write(dir.path().join("tailwind.config.ts"), "export default {};").unwrap();
+        assert!(load_ctx_in(&dir).uses_tailwind());
+    }
+
+    #[test]
+    fn uses_tailwind_true_with_dependency() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"x","devDependencies":{"tailwindcss":"^4"}}"#,
+        )
+        .unwrap();
+        assert!(load_ctx_in(&dir).uses_tailwind());
+    }
+
+    #[test]
+    fn uses_tailwind_true_with_scoped_plugin() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"x","dependencies":{"@tailwindcss/vite":"^4"}}"#,
+        )
+        .unwrap();
+        assert!(load_ctx_in(&dir).uses_tailwind());
+    }
+
+    #[test]
+    fn uses_tailwind_false_without_config_or_dependency() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"x","dependencies":{"antd":"^5"}}"#,
+        )
+        .unwrap();
+        assert!(!load_ctx_in(&dir).uses_tailwind());
     }
 }

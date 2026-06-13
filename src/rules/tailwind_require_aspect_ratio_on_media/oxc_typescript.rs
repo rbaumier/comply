@@ -20,6 +20,12 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // The remediation hinges on a Tailwind `aspect-*` class — meaningless
+        // in projects that style with CSS-in-JS (MUI, ant-design).
+        if !ctx.project.uses_tailwind() {
+            return;
+        }
+
         let AstKind::JSXOpeningElement(opening) = node.kind() else {
             return;
         };
@@ -78,5 +84,64 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        let project = crate::project::ProjectCtx::empty_with_tailwind();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, s, "t.tsx", &project, file)
+    }
+
+    #[test]
+    fn flags_img_without_aspect_or_dims() {
+        assert_eq!(run(r#"const x = <img src="/a.png" />;"#).len(), 1);
+    }
+
+    #[test]
+    fn allows_img_with_aspect_class() {
+        assert!(run(r#"const x = <img src="/a.png" className="aspect-video" />;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_img_with_width_and_height() {
+        assert!(run(r#"const x = <img src="/a.png" width={200} height={100} />;"#).is_empty());
+    }
+
+    #[test]
+    fn skips_project_without_tailwind() {
+        // Issue #1995: in a project with no Tailwind (CSS-in-JS, MUI,
+        // ant-design) the `aspect-*` class is meaningless, so the rule must
+        // stay silent even on an `<img>` with no aspect ratio.
+        let project = crate::project::ProjectCtx::empty();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        let d = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            r#"const x = <img src="/a.png" />;"#,
+            "t.tsx",
+            &project,
+            file,
+        );
+        assert!(d.is_empty());
     }
 }
