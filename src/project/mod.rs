@@ -322,6 +322,23 @@ fn parse_dep_map(json: &Value, section: &str) -> BTreeMap<String, String> {
         .unwrap_or_default()
 }
 
+/// Smallest major version a semver range string can match, or `None` when the
+/// range names no major version. Each version token contributes the integer
+/// before its first `.` (range operators `^ ~ >= <= > < =` and whitespace are
+/// ignored); the minimum across all tokens is returned. There is no semver
+/// crate in this workspace, so this stays a lexical heuristic over the tokens.
+/// `>=18.0.0` → 18, `^18 || ^19` → 18, `18.x` → 18, `>=19.0.0` → 19.
+fn min_major_version(range: &str) -> Option<u32> {
+    range
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '.')
+        .filter_map(|token| {
+            let major = token.trim_start_matches(|c: char| !c.is_ascii_digit());
+            let major = major.split('.').next()?;
+            major.parse::<u32>().ok()
+        })
+        .min()
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Tsconfig {
     pub paths: BTreeMap<String, Vec<String>>,
@@ -1080,6 +1097,26 @@ impl ProjectCtx {
             .any(|entry| manifest_dir.join(entry) == path)
     }
 
+    /// True when the React version range the project depends on still admits
+    /// React 18 (so `forwardRef` remains required — React 18 has no ref-as-prop
+    /// API). Reads the `react` range from peerDependencies, then dependencies,
+    /// then devDependencies of the nearest package.json. Returns false when no
+    /// React range is declared (rule keeps firing) or when the range requires
+    /// React 19+.
+    pub fn react_supports_v18(&self, path: &Path) -> bool {
+        let Some(pkg) = self.nearest_package_json(path) else {
+            return false;
+        };
+        let range = pkg
+            .peer_dependencies
+            .get("react")
+            .or_else(|| pkg.dependencies.get("react"))
+            .or_else(|| pkg.dev_dependencies.get("react"));
+        range
+            .and_then(|r| min_major_version(r))
+            .is_some_and(|m| m <= 18)
+    }
+
     /// True when the project ships React Compiler — declared as a dependency
     /// or referenced from a bundler / babel config between `path`'s directory
     /// and the project root. Memoized by directory: the answer is identical for
@@ -1738,6 +1775,50 @@ pub(crate) fn default_static_project_ctx() -> &'static ProjectCtx {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn min_major_version_reads_lowest_token() {
+        assert_eq!(min_major_version(">=18.0.0"), Some(18));
+        assert_eq!(min_major_version("^18 || ^19"), Some(18));
+        assert_eq!(min_major_version("18.x"), Some(18));
+        assert_eq!(min_major_version("^18.2.0"), Some(18));
+        assert_eq!(min_major_version("~18.3"), Some(18));
+        assert_eq!(min_major_version(">=19.0.0"), Some(19));
+        assert_eq!(min_major_version("^19"), Some(19));
+        assert_eq!(min_major_version("workspace:*"), None);
+    }
+
+    #[test]
+    fn react_supports_v18_reads_react_range() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"lib","peerDependencies":{"react":">=18.0.0"}}"#,
+        )
+        .unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.react_supports_v18(&dir.path().join("t.tsx")));
+    }
+
+    #[test]
+    fn react_supports_v18_false_for_react19_only() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","dependencies":{"react":"^19.0.0"}}"#,
+        )
+        .unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(!ctx.react_supports_v18(&dir.path().join("t.tsx")));
+    }
+
+    #[test]
+    fn react_supports_v18_false_when_no_react_declared() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"app"}"#).unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(!ctx.react_supports_v18(&dir.path().join("t.tsx")));
+    }
 
     #[test]
     fn package_json_parses_dep_sections() {
