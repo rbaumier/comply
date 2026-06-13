@@ -76,6 +76,13 @@ fn check_logical(
             return;
         }
     }
+    // `param || (a && b)` is a boolean OR combining two conditions, not a
+    // fallback default for `param`. When the right side of `||` is itself a
+    // boolean computation, no replacement value is being assigned — skip.
+    // `??` is always nullish defaulting regardless of the right side's shape.
+    if op == LogicalOperator::Or && is_boolean_computation(crate::oxc_helpers::peel_parens(&expr.right)) {
+        return;
+    }
     let op_text = op.as_str();
     let (line, column) = byte_offset_to_line_col(ctx.source, expr.span.start as usize);
     diagnostics.push(Diagnostic {
@@ -91,6 +98,31 @@ fn check_logical(
         severity: super::META.severity,
         span: None,
     });
+}
+
+/// True when `expr` produces a boolean by computation rather than being a
+/// fallback value. Used to distinguish `param || (a && b)` (boolean OR) from
+/// `param || defaultValue` (silent default).
+fn is_boolean_computation(expr: &Expression) -> bool {
+    use oxc_ast::ast::{BinaryOperator, UnaryOperator};
+    match expr {
+        Expression::LogicalExpression(_) | Expression::BooleanLiteral(_) => true,
+        Expression::UnaryExpression(unary) => unary.operator == UnaryOperator::LogicalNot,
+        Expression::BinaryExpression(bin) => matches!(
+            bin.operator,
+            BinaryOperator::Equality
+                | BinaryOperator::StrictEquality
+                | BinaryOperator::Inequality
+                | BinaryOperator::StrictInequality
+                | BinaryOperator::LessThan
+                | BinaryOperator::LessEqualThan
+                | BinaryOperator::GreaterThan
+                | BinaryOperator::GreaterEqualThan
+                | BinaryOperator::In
+                | BinaryOperator::Instanceof
+        ),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -187,6 +219,40 @@ mod tests {
         // `value: number | null` (no `?`): still flagged.
         assert_eq!(
             run_on("function f(value: number | null) { const v = value ?? 0; return v; }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_boolean_or_with_logical_rhs() {
+        // Regression #1762: `activeBar || (activeLegend && activeLegend !== name)`
+        // is a boolean OR combining two conditions, not a fallback default.
+        assert!(run_on(
+            "const renderShape = (props: any, activeBar: any, activeLegend: string) => { const o = activeBar || (activeLegend && activeLegend !== name) ? 0.3 : 1; return o; };"
+        ).is_empty());
+    }
+
+    #[test]
+    fn allows_boolean_or_with_comparison_rhs() {
+        // `param || (a === b)`: comparison produces a boolean, not a default value.
+        assert!(run_on(
+            "function f(active: boolean, x: number, y: number) { const v = active || (x === y); return v; }"
+        ).is_empty());
+    }
+
+    #[test]
+    fn allows_boolean_or_with_negation_rhs() {
+        // `param || !other`: logical-not produces a boolean, not a default value.
+        assert!(run_on(
+            "function f(active: boolean, hidden: boolean) { const v = active || !hidden; return v; }"
+        ).is_empty());
+    }
+
+    #[test]
+    fn still_flags_logical_or_with_value_rhs() {
+        // `param || []`: the right side is a fallback value, still flagged.
+        assert_eq!(
+            run_on("function f(items: number[]) { const v = items || []; return v; }").len(),
             1
         );
     }
