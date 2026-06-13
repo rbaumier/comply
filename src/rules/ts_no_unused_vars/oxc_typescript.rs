@@ -10,6 +10,16 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct Check;
 
+/// True when `path` is a code-splitter / test snapshot file. Snapshot files are
+/// machine-generated transformer output committed verbatim so the test can
+/// compare against them. After code-splitting, each output chunk keeps only the
+/// imports its own code needs, leaving the rest "unused" by design — flagging
+/// them would report on artifacts no human edits.
+fn is_snapshot_file(path: &std::path::Path) -> bool {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    normalized.split('/').any(|seg| seg == "snapshots" || seg == "__snapshots__")
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[]
@@ -20,6 +30,9 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        if is_snapshot_file(ctx.path) {
+            return Vec::new();
+        }
         let scoping = semantic.scoping();
         let nodes = semantic.nodes();
         let mut diagnostics = Vec::new();
@@ -104,6 +117,10 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, s, "t.tsx")
     }
 
+    fn run_at(s: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, s, path)
+    }
+
     #[test]
     fn no_fp_on_var_in_declare_global() {
         // `declare global` augments the global scope; its bindings are used by
@@ -178,6 +195,33 @@ export {};
             !diags.iter().any(|d| d.message.contains("`Foo`")),
             "FP on interface name `Foo`"
         );
+    }
+
+    #[test]
+    fn no_fp_on_code_splitter_snapshot() {
+        // Code-splitter snapshots are machine-generated transformer output: each
+        // emitted chunk keeps only the imports its own code needs, so the rest
+        // are "unused" by design. (Closes #1416)
+        let src = r#"
+import { Await, Link } from '@tanstack/react-router';
+import { twMerge } from 'tailwind-merge';
+import { Route } from "random-number.tsx";
+function Index() {}
+export { Index as component };
+"#;
+        let path = "packages/router-plugin/tests/code-splitter/snapshots/random-number@component.tsx";
+        assert!(
+            run_at(src, path).is_empty(),
+            "FP on unused imports in a code-splitter snapshot file"
+        );
+    }
+
+    #[test]
+    fn still_flags_unused_import_in_ordinary_source() {
+        // True-positive guard: an unused import in a hand-written source file
+        // (outside any snapshot directory) must still fire.
+        let src = "import { twMerge } from 'tailwind-merge';\nexport {};";
+        assert_eq!(run_at(src, "src/index.tsx").len(), 1);
     }
 
 }
