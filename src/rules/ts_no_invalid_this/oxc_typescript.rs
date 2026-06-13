@@ -117,6 +117,53 @@ fn is_mocha_callback(
     callee_is_mocha_global(&call.callee)
 }
 
+/// True when `expr` is a Cypress command chain rooted in the `cy` global
+/// (`cy`, `cy.get(...)`, `cy.get(...).as(...).contains(...)`, …). The chain is a
+/// left-spine of member accesses and calls that bottoms out at the `cy`
+/// identifier.
+fn is_cypress_chain(expr: &Expression) -> bool {
+    let mut current = expr;
+    loop {
+        match current {
+            Expression::Identifier(ident) => return ident.name == "cy",
+            Expression::CallExpression(call) => current = &call.callee,
+            Expression::StaticMemberExpression(member) => current = &member.object,
+            Expression::ComputedMemberExpression(member) => current = &member.object,
+            _ => return false,
+        }
+    }
+}
+
+/// True when `func_id` is a `function` expression passed as an argument to a
+/// `.then(...)`/`.should(...)` member call on a Cypress chain
+/// (`cy.get(...).then(function () { this.alias })`). Cypress binds the shared
+/// test context to `this` in such callbacks — aliases registered via
+/// `.as('name')` are read as `this.name` — so `this` inside the body is valid.
+fn is_cypress_callback(
+    func_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let parent_id = nodes.parent_id(func_id);
+    let call = match nodes.kind(parent_id) {
+        AstKind::CallExpression(call) => call,
+        _ => {
+            let gp_id = nodes.parent_id(parent_id);
+            let AstKind::CallExpression(call) = nodes.kind(gp_id) else {
+                return false;
+            };
+            call
+        }
+    };
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    if !matches!(member.property.name.as_str(), "then" | "should") {
+        return false;
+    }
+    is_cypress_chain(&member.object)
+}
+
 /// True when `name` follows the constructor-function convention (starts with an
 /// uppercase ASCII letter, e.g. `Suspense`, `Component`). Such functions are
 /// conventionally invoked with `new`, so `this` is the new instance.
@@ -200,6 +247,13 @@ fn is_valid_this_context(
                 // is invoked with a Test/Suite context bound to `this`
                 // (`this.timeout()`, `this.retries()`), so `this` is valid.
                 if is_mocha_callback(ancestor.id(), semantic) {
+                    return true;
+                }
+                // Cypress callback: a `function` passed to `.then()`/`.should()`
+                // on a `cy` chain is invoked with the shared test context bound
+                // to `this` (`this.alias` from a prior `.as('alias')`), so
+                // `this` is valid.
+                if is_cypress_callback(ancestor.id(), semantic) {
                     return true;
                 }
                 // Constructor function: a PascalCase `function`, or one
@@ -426,6 +480,31 @@ mod tests {
         // Negative: an ordinary lowercase free function never used as a
         // constructor or bound method still has a stray `this`.
         let diags = run_on("function foo() {\n  return this.bar;\n}\nfoo();");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_cypress_then_callback() {
+        // Regression for #1842: Cypress binds the shared test context to `this`
+        // inside a `function` callback passed to `.then()` in a `cy` chain.
+        // Aliases registered via `.as('name')` are read as `this.name`.
+        let src = "cy.get('div')\n  .contains('animate')\n  .as('spring')\n  .then(function () {\n    const bounds = this.miniDefault[0].getBoundingClientRect();\n  });";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_cypress_should_callback() {
+        // Regression for #1842: `.should(function() {...})` is the other Cypress
+        // chain method that binds the test context to `this`.
+        let src = "cy.get('@spring').should(function () {\n  expect(this.value).to.equal(1);\n});";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_promise_then_callback() {
+        // Negative: a `function` callback passed to a plain Promise `.then()`
+        // (no `cy` chain root) gets no bound `this` — must still fire.
+        let diags = run_on("fetch('/x').then(function () {\n  return this.value;\n});");
         assert_eq!(diags.len(), 1);
     }
 }
