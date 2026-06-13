@@ -3,9 +3,32 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::{Declaration, Statement, TSModuleDeclaration, TSModuleDeclarationBody};
 use std::sync::Arc;
 
 pub struct Check;
+
+/// True when the namespace has a block body in which every statement is a
+/// type-only declaration (a `type` alias or an `interface`, bare or exported).
+///
+/// Such a namespace introduces no runtime value — it is a type-grouping idiom
+/// (e.g. `Schedule.Props`), not a legacy module-system construct, and cannot be
+/// replaced by ES `export` / `import` without changing the consumer API.
+/// Any value declaration, nested namespace, or other statement disqualifies it.
+/// An empty body is type-only: TypeScript elides it at runtime.
+fn is_type_only_namespace(decl: &TSModuleDeclaration<'_>) -> bool {
+    let Some(TSModuleDeclarationBody::TSModuleBlock(block)) = &decl.body else {
+        return false;
+    };
+    block.body.iter().all(|stmt| match stmt {
+        Statement::TSTypeAliasDeclaration(_) | Statement::TSInterfaceDeclaration(_) => true,
+        Statement::ExportNamedDeclaration(export) => matches!(
+            export.declaration,
+            Some(Declaration::TSTypeAliasDeclaration(_) | Declaration::TSInterfaceDeclaration(_))
+        ),
+        _ => false,
+    })
+}
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
@@ -34,6 +57,14 @@ impl OxcCheck for Check {
         // augmenting Node.js built-in globals (e.g. `NodeJS.ProcessEnv`).
         // No ES module syntax can extend these ambient globals.
         if decl.id.name().as_str() == "NodeJS" {
+            return;
+        }
+
+        // Allow type-only namespaces (a body of only `type` / `interface`
+        // declarations). They introduce no runtime value and group types under
+        // a co-named member API (e.g. `Schedule.Props`) that ES module syntax
+        // cannot reproduce.
+        if is_type_only_namespace(decl) {
             return;
         }
 
@@ -93,5 +124,32 @@ mod tests {
     #[test]
     fn flags_legacy_namespace() {
         assert_eq!(run("namespace Foo { export const x = 1; }").len(), 1);
+    }
+
+    #[test]
+    fn allows_type_only_exported_namespace() {
+        let diags = run(
+            "export namespace Schedule {\n  export type Props = ScheduleProps;\n  export type StylesNames = ScheduleStylesNames;\n  export type Factory = ScheduleFactory;\n}",
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_bare_type_only_namespace() {
+        let diags = run("namespace N {\n  type A = B;\n  interface C { x: number }\n}");
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn flags_mixed_type_and_value_namespace() {
+        assert_eq!(
+            run("namespace Mixed { export type A = B; export const c = 1; }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_nested_namespace() {
+        assert_eq!(run("namespace Outer { export namespace Inner {} }").len(), 1);
     }
 }
