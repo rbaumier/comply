@@ -9,6 +9,10 @@ use oxc_span::GetSpan;
 use std::sync::Arc;
 
 /// Identifier bases that demand an explicit unit. Lowercase compared.
+///
+/// `size` is excluded as a count-like name: a pool/batch/page `size` is a
+/// dimensionless capacity, not a physical measurement, so unit suffixes
+/// like `sizeMs`/`sizeBytes` are nonsensical.
 const AMBIGUOUS_BASES: &[&str] = &[
     "delay",
     "timeout",
@@ -17,8 +21,6 @@ const AMBIGUOUS_BASES: &[&str] = &[
     "elapsed",
     "age",
     "wait",
-    "size",
-    "length",
     "distance",
     "offset",
     "width",
@@ -198,5 +200,18 @@ mod tests {
     #[test]
     fn allows_size_in_kilobytes() {
         assert!(run_on("const sizeInKilobytes: number = 1024;").is_empty());
+    }
+
+    #[test]
+    fn allows_bare_size_pool_capacity() {
+        // `size` is a dimensionless count/capacity (pool/batch/page size),
+        // not a physical measurement — sizeMs/sizeBytes make no sense.
+        assert!(run_on("function createPool(size: number) {}").is_empty());
+    }
+
+    #[test]
+    fn still_flags_bare_timeout() {
+        // A genuinely unit-ambiguous temporal name must still be flagged.
+        assert_eq!(run_on("function f(timeout: number) {}").len(), 1);
     }
 }
