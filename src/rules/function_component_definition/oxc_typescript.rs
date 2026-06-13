@@ -23,6 +23,20 @@ fn starts_with_uppercase(name: &str) -> bool {
         .is_some_and(|c| c.is_ascii_uppercase())
 }
 
+/// True when the program imports from `solid-js` or any `solid-js/*` subpath
+/// (`solid-js/web`, `solid-js/store`, …). Solid renders JSX but is not React:
+/// its components are plain arrow functions by convention, so the React-only
+/// "use a function declaration" guidance does not apply to a Solid file.
+fn imports_solid_js(semantic: &oxc_semantic::Semantic) -> bool {
+    semantic.nodes().iter().any(|node| {
+        let AstKind::ImportDeclaration(import) = node.kind() else {
+            return false;
+        };
+        let source = import.source.value.as_str();
+        source == "solid-js" || source.starts_with("solid-js/")
+    })
+}
+
 /// Check if any node under `start` contains JSX by iterating all nodes
 /// whose byte range falls within the start node's span.
 fn contains_jsx(start: &oxc_semantic::AstNode, semantic: &oxc_semantic::Semantic) -> bool {
@@ -76,6 +90,12 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Solid.js files use JSX but are not React; arrow-function components
+        // are idiomatic there, so the rule does not apply (issue #1924).
+        if imports_solid_js(semantic) {
+            return;
+        }
+
         let span = match &decl.init {
             Some(expr) => oxc_span::GetSpan::span(expr),
             None => return,
@@ -93,5 +113,63 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
+    }
+
+    #[test]
+    fn flags_react_arrow_component() {
+        let src = "export const Display = (props) => <div>{props.x}</div>;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression test for #1924: a Solid.js arrow-function component that
+    // imports from `solid-js/web` must not be flagged — Solid is not React.
+    #[test]
+    fn allows_solid_arrow_component() {
+        let src = r#"import { createStore, useSelector } from '@tanstack/solid-store'
+import { render } from 'solid-js/web'
+
+export const Display = (props) => {
+  const count = useSelector(store, (state) => state[props.animals])
+  return <div>{props.animals}: {count()}</div>
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_solid_arrow_component_bare_import() {
+        let src = r#"import { createSignal } from 'solid-js'
+
+export const Counter = () => {
+  const [count] = createSignal(0)
+  return <div>{count()}</div>
+}
+"#;
+        assert!(run(src).is_empty());
     }
 }
