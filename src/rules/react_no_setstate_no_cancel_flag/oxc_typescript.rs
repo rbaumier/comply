@@ -1,12 +1,7 @@
-//! Heuristic detection: scan each `useEffect(` block; if the body contains
-//! both `await ` and a `setX(` call but no cancellation marker
-//! (`cancelled`, `cancelled = true`, `AbortController`, `signal`), flag it.
-
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::backend::{CheckCtx, OxcCheck};
 use std::sync::Arc;
 
-#[derive(Debug)]
 pub struct Check;
 
 const CANCEL_MARKERS: &[&str] = &[
@@ -19,8 +14,6 @@ const CANCEL_MARKERS: &[&str] = &[
     "mounted",
 ];
 
-/// Find the matching `)` for the `(` at index `start`, returning the byte
-/// index of the matching paren (or None if unbalanced before EOF).
 fn find_matching_paren(bytes: &[u8], start: usize) -> Option<usize> {
     debug_assert_eq!(bytes[start], b'(');
     let mut depth: i32 = 0;
@@ -42,7 +35,6 @@ fn find_matching_paren(bytes: &[u8], start: usize) -> Option<usize> {
 }
 
 fn body_uses_set_state(body: &str) -> bool {
-    // Cheap: any identifier matching `set[A-Z]` followed by `(`.
     let bytes = body.as_bytes();
     let mut i = 0;
     while i + 4 <= bytes.len() {
@@ -50,7 +42,6 @@ fn body_uses_set_state(body: &str) -> bool {
             && bytes[i + 3].is_ascii_uppercase()
             && (i == 0 || (!bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_'))
         {
-            // Find next non-ident char and check it's `(`.
             let mut j = i + 3;
             while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
                 j += 1;
@@ -66,12 +57,16 @@ fn body_uses_set_state(body: &str) -> bool {
     false
 }
 
-impl TextCheck for Check {
+impl OxcCheck for Check {
     fn prefilter(&self) -> Option<&'static [&'static str]> {
         Some(&["useEffect"])
     }
 
-    fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+    fn run_on_semantic<'a>(
+        &self,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        ctx: &CheckCtx,
+    ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         let bytes = ctx.source.as_bytes();
         let mut search_from = 0;
@@ -86,7 +81,6 @@ impl TextCheck for Check {
                 && body_uses_set_state(body)
                 && !CANCEL_MARKERS.iter().any(|m| body.contains(m))
             {
-                // Compute (line, col) for `useEffect`.
                 let prefix = &ctx.source[..abs];
                 let line = prefix.bytes().filter(|b| *b == b'\n').count() + 1;
                 let col = prefix.rfind('\n').map_or(abs, |nl| abs - nl - 1) + 1;
@@ -113,10 +107,9 @@ impl TextCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     fn run(source: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new("c.tsx"), source))
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
     }
 
     #[test]

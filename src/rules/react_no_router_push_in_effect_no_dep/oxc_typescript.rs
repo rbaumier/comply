@@ -1,12 +1,7 @@
-//! For each `useEffect(...)` call, parse the body. If it contains
-//! `router.push(` (or `.replace(`/`.back(`/`.forward(`) AND the deps
-//! array is empty `[]`, flag.
-
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::backend::{CheckCtx, OxcCheck};
 use std::sync::Arc;
 
-#[derive(Debug)]
 pub struct Check;
 
 const ROUTER_METHODS: &[&str] = &["router.push(", "router.replace(", ".push(", ".replace("];
@@ -31,8 +26,6 @@ fn find_matching_paren(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
-/// Find the deps array inside a `useEffect(...)` body — the LAST
-/// `[...]` block in the call arguments.
 fn last_array_literal(body: &str) -> Option<&str> {
     let bytes = body.as_bytes();
     let mut last: Option<&str> = None;
@@ -65,16 +58,18 @@ fn last_array_literal(body: &str) -> Option<&str> {
 }
 
 fn body_uses_router_navigation(body: &str) -> bool {
-    // Require at least one of the router method patterns AND a `router`
-    // identifier somewhere — to avoid catching unrelated `.push(` on arrays.
     if !body.contains("router") {
         return false;
     }
     ROUTER_METHODS.iter().any(|p| body.contains(p))
 }
 
-impl TextCheck for Check {
-    fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+impl OxcCheck for Check {
+    fn run_on_semantic<'a>(
+        &self,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        ctx: &CheckCtx,
+    ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         let bytes = ctx.source.as_bytes();
         let mut search_from = 0;
@@ -89,7 +84,6 @@ impl TextCheck for Check {
                 search_from = close + 1;
                 continue;
             };
-            // Empty deps: trim whitespace.
             if !deps.trim().is_empty() {
                 search_from = close + 1;
                 continue;
@@ -121,10 +115,9 @@ impl TextCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     fn run(source: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new("c.tsx"), source))
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
     }
 
     #[test]

@@ -1,19 +1,12 @@
-//! Heuristic detection:
-//! 1. Find names introduced by `const NAME = useEffectEvent(...)`.
-//! 2. For each `useEffect(...)` call, look at the second argument (a
-//!    `[ ... ]` array literal). If any of those names appear inside, flag.
-
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::backend::{CheckCtx, OxcCheck};
 use std::sync::Arc;
 
-#[derive(Debug)]
 pub struct Check;
 
 fn collect_event_names(source: &str) -> Vec<String> {
     let mut names = Vec::new();
     for line in source.lines() {
-        // Match `const NAME = useEffectEvent(`
         let trimmed = line.trim_start();
         for kw in ["const ", "let ", "var "] {
             if !trimmed.starts_with(kw) {
@@ -24,17 +17,16 @@ fn collect_event_names(source: &str) -> Vec<String> {
                 continue;
             };
             let name = after[..eq_idx].trim().trim_end_matches(':');
-            // Strip type annotations: `name: T`.
             let name = name.split(':').next().unwrap_or("").trim();
             let rhs = after[eq_idx + 1..].trim_start();
             if rhs.starts_with("useEffectEvent(")
                 && !name.is_empty()
-                    && name
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
-                {
-                    names.push(name.to_string());
-                }
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+            {
+                names.push(name.to_string());
+            }
         }
     }
     names
@@ -59,12 +51,16 @@ fn find_matching_bracket(bytes: &[u8], start: usize, open: u8, close: u8) -> Opt
     None
 }
 
-impl TextCheck for Check {
+impl OxcCheck for Check {
     fn prefilter(&self) -> Option<&'static [&'static str]> {
         Some(&["useEffectEvent"])
     }
 
-    fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+    fn run_on_semantic<'a>(
+        &self,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        ctx: &CheckCtx,
+    ) -> Vec<Diagnostic> {
         let names = collect_event_names(ctx.source);
         if names.is_empty() {
             return Vec::new();
@@ -79,17 +75,17 @@ impl TextCheck for Check {
                 break;
             };
             let body = &ctx.source[paren + 1..close];
-            // Find the deps array — the LAST `[...]` block in the call.
             let mut deps: Option<&str> = None;
             let body_bytes = body.as_bytes();
             let mut i = 0;
             while i < body_bytes.len() {
-                if body_bytes[i] == b'['
-                    && let Some(end) = find_matching_bracket(body_bytes, i, b'[', b']') {
+                if body_bytes[i] == b'[' {
+                    if let Some(end) = find_matching_bracket(body_bytes, i, b'[', b']') {
                         deps = Some(&body[i + 1..end]);
                         i = end + 1;
                         continue;
                     }
+                }
                 i += 1;
             }
             let Some(deps) = deps else {
@@ -125,10 +121,9 @@ impl TextCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     fn run(source: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new("c.tsx"), source))
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
     }
 
     #[test]

@@ -1,12 +1,7 @@
-//! Flag log calls (`console.log`/`console.error`/`logger.info` etc.) whose
-//! argument list mentions `password`, `secret`, or `token` as a bare
-//! identifier or property access.
-
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::backend::{CheckCtx, OxcCheck};
 use std::sync::Arc;
 
-#[derive(Debug)]
 pub struct Check;
 
 const SENSITIVE_TOKENS: &[&str] = &["password", "secret", "token", "apiKey", "api_key"];
@@ -29,8 +24,6 @@ const LOG_PREFIXES: &[&str] = &[
     "log.debug(",
 ];
 
-/// Find the byte offset of a log-call opener on `line`. Returns
-/// `(call_start, args_start)` where `args_start` points one past the `(`.
 fn find_log_call(line: &str) -> Option<(usize, usize)> {
     for prefix in LOG_PREFIXES {
         if let Some(pos) = line.find(prefix) {
@@ -40,8 +33,6 @@ fn find_log_call(line: &str) -> Option<(usize, usize)> {
     None
 }
 
-/// Slice from `args_start` until the matching `)`. Naive paren counter; if
-/// we don't find balance on this line, we use the rest of the line.
 fn args_slice(line: &str, args_start: usize) -> &str {
     let bytes = line.as_bytes();
     let mut depth = 1i32;
@@ -60,18 +51,12 @@ fn args_slice(line: &str, args_start: usize) -> &str {
     &line[args_start..]
 }
 
-/// Drop the content of all string literals in `args` (quoted strings and template
-/// literal static parts), keeping only: bare identifiers, object keys, and
-/// template interpolation expressions. A human-readable message that merely
-/// mentions "password" as a word then no longer matches — the scan fires on
-/// expressions named as credentials, not on prose inside string literals.
 fn strip_static_text(args: &str) -> String {
     let mut out = String::with_capacity(args.len());
     let mut chars = args.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
             '`' => {
-                // Inside a template literal: emit only interpolation contents.
                 while let Some(&c2) = chars.peek() {
                     if c2 == '`' {
                         chars.next();
@@ -99,17 +84,16 @@ fn strip_static_text(args: &str) -> String {
                             out.push(' ');
                         }
                     } else {
-                        chars.next(); // static template char — drop it.
+                        chars.next();
                     }
                 }
             }
             '\'' | '"' => {
-                // Regular quoted string: drop its entire content.
                 let quote = c;
                 while let Some(&c2) = chars.peek() {
                     chars.next();
                     if c2 == '\\' {
-                        chars.next(); // skip escaped char
+                        chars.next();
                     } else if c2 == quote {
                         break;
                     }
@@ -121,8 +105,6 @@ fn strip_static_text(args: &str) -> String {
     out
 }
 
-/// Word-boundary check: `password` should match `password` and `.password`
-/// and `[password]`, but NOT `passwordless` or `passwordHash`.
 fn mentions_sensitive(args: &str) -> bool {
     let lower = args.to_ascii_lowercase();
     let bytes = lower.as_bytes();
@@ -158,18 +140,21 @@ fn is_ci_setup_script(path: &std::path::Path) -> bool {
         || lower.ends_with("_setup")
 }
 
-impl TextCheck for Check {
+impl OxcCheck for Check {
     fn prefilter(&self) -> Option<&'static [&'static str]> {
         Some(&["password", "secret", "token", "apiKey", "api_key"])
     }
 
-    fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+    fn run_on_semantic<'a>(
+        &self,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        ctx: &CheckCtx,
+    ) -> Vec<Diagnostic> {
         if is_ci_setup_script(ctx.path) {
             return Vec::new();
         }
         let mut diagnostics = Vec::new();
         for (idx, raw_line) in ctx.source.lines().enumerate() {
-            // Strip line comments.
             let line = match raw_line.find("//") {
                 Some(p) => &raw_line[..p],
                 None => raw_line,
@@ -200,10 +185,8 @@ impl TextCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
-
-    fn run(source: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new("auth.ts"), source))
+        fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
     }
 
     #[test]
@@ -230,16 +213,12 @@ mod tests {
         assert!(run(src).is_empty());
     }
 
-    // Regression for #263: the word "password" sits in the static text of a
-    // template literal whose only interpolation is a non-secret identifier.
     #[test]
     fn allows_sensitive_word_in_static_template_text() {
         let src = r#"console.log(`   → password set, sign in with ${adminUser.email}\n`);"#;
         assert!(run(src).is_empty(), "{:?}", run(src));
     }
 
-    // Regression for #431: "password" used as a noun in a plain string literal
-    // (no credential value interpolated) must not fire.
     #[test]
     fn allows_password_as_noun_in_plain_string_literal() {
         let src = r#"console.log("Communicate this password through a private channel, then ask");"#;
@@ -261,7 +240,7 @@ mod tests {
     #[test]
     fn allows_ci_setup_script() {
         let src = "console.log(`export HOOK0_SECRET=\"${token}\"`);";
-        let diags = Check.check(&CheckCtx::for_test(Path::new("ci-setup.mjs"), src));
+        let diags = crate::rules::test_helpers::run_oxc_ts_with_path(src, &Check, "ci-setup.mjs");
         assert!(diags.is_empty());
     }
 }

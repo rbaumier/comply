@@ -1,12 +1,7 @@
-//! File-scope heuristic: source contains all of `useState`, `useTransition`,
-//! and a `<form` element with an `action={` attribute. Emit one diagnostic
-//! at the first `useTransition` site.
-
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::backend::{CheckCtx, OxcCheck};
 use std::sync::Arc;
 
-#[derive(Debug)]
 pub struct Check;
 
 fn file_has_form_action_expr(source: &str) -> bool {
@@ -30,8 +25,12 @@ fn file_has_form_action_expr(source: &str) -> bool {
     false
 }
 
-impl TextCheck for Check {
-    fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+impl OxcCheck for Check {
+    fn run_on_semantic<'a>(
+        &self,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        ctx: &CheckCtx,
+    ) -> Vec<Diagnostic> {
         let src = ctx.source;
         if !ctx.source_contains("useState")
             || !ctx.source_contains("useTransition")
@@ -39,7 +38,6 @@ impl TextCheck for Check {
         {
             return Vec::new();
         }
-        // Already migrated? skip.
         if ctx.source_contains("useActionState") {
             return Vec::new();
         }
@@ -67,10 +65,9 @@ impl TextCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     fn run(source: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new("c.tsx"), source))
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
     }
 
     #[test]

@@ -1,7 +1,9 @@
 //! zod-no-parse-in-render — `.parse()` inside a React component body
 //! re-runs every render and throws on bad data, blowing up the tree.
 
+#[cfg(test)]
 mod typescript;
+mod oxc_typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -24,6 +26,6 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
-        backends: vec![(Language::Tsx, Backend::Text(Box::new(typescript::Check)))],
+        backends: vec![(Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check)))],
     }
 }

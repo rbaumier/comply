@@ -1,12 +1,7 @@
-//! Heuristic: file contains `action={` inside what looks like a JSX `<form`
-//! tag, AND the file does NOT mention `useFormStatus`, `useActionState`,
-//! or `useTransition`.
-
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::backend::{CheckCtx, OxcCheck};
 use std::sync::Arc;
 
-#[derive(Debug)]
 pub struct Check;
 
 fn has_pending_hook(source: &str) -> bool {
@@ -15,19 +10,20 @@ fn has_pending_hook(source: &str) -> bool {
         || crate::oxc_helpers::source_contains(source, "useTransition")
 }
 
-impl TextCheck for Check {
-    fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+impl OxcCheck for Check {
+    fn run_on_semantic<'a>(
+        &self,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        ctx: &CheckCtx,
+    ) -> Vec<Diagnostic> {
         if has_pending_hook(ctx.source) {
             return Vec::new();
         }
         let mut diagnostics = Vec::new();
-        // We'll only emit one diagnostic at the first matching `<form` with
-        // an `action={` somewhere inside the open tag.
         let bytes = ctx.source.as_bytes();
         let mut i = 0;
         while i + 5 < bytes.len() {
             if &bytes[i..i + 5] == b"<form" && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric()) {
-                // Find end of tag (`>`), bounded to a few hundred chars.
                 let scan_end = (i + 500).min(bytes.len());
                 let mut tag_end = i;
                 let mut found = false;
@@ -70,10 +66,9 @@ impl TextCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     fn run(source: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new("c.tsx"), source))
+        crate::rules::test_helpers::run_oxc_tsx(source, &Check)
     }
 
     #[test]

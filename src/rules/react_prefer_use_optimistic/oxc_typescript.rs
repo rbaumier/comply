@@ -1,11 +1,7 @@
-//! Heuristic detection: find `try {` whose paired `catch (...) { ... }`
-//! body contains a `setX(` call. That's the manual rollback pattern.
-
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::backend::{CheckCtx, OxcCheck};
 use std::sync::Arc;
 
-#[derive(Debug)]
 pub struct Check;
 
 fn find_matching_brace(bytes: &[u8], start: usize) -> Option<usize> {
@@ -28,13 +24,8 @@ fn find_matching_brace(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
-/// DOM/host timer APIs whose `set*` shape collides with React state setters but
-/// which never manage optimistic state (`setTimeout(reject, ms)` in a `finally`).
 const NON_STATE_SETTERS: &[&str] = &["setTimeout", "setInterval", "setImmediate"];
 
-/// True when the file shows a React signal. `useOptimistic` only applies to
-/// React state, so without one there is nothing to roll back — a backend
-/// `try/finally` utility (or the word "catch" in a comment there) is irrelevant.
 fn looks_like_react(source: &str) -> bool {
     crate::oxc_helpers::source_contains(source, "useState")
         || crate::oxc_helpers::source_contains(source, "useReducer")
@@ -43,10 +34,6 @@ fn looks_like_react(source: &str) -> bool {
         || crate::oxc_helpers::source_contains(source, "from 'react'")
 }
 
-/// Returns `true` if the setter name suggests it tracks error/status/loading
-/// state rather than real optimistic UI (e.g. `setRootError`, `setSubmitStatus`,
-/// `setIsPending`). These are set *after* a failed request, not before — the
-/// inverse of an optimistic update.
 fn is_error_or_status_setter(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     const SUFFIXES: &[&str] = &["error", "status", "loading", "pending", "failure"];
@@ -55,10 +42,6 @@ fn is_error_or_status_setter(name: &str) -> bool {
         || lower.contains("status")
 }
 
-/// Returns `true` if the catch body contains a setter call that looks like a
-/// real rollback (i.e. not an error/status setter). The optimistic-rollback
-/// pattern reverts a value the success path would have kept — error setters
-/// don't fit that shape.
 fn body_calls_rollback_setter(body: &str) -> bool {
     let bytes = body.as_bytes();
     let mut i = 0;
@@ -85,15 +68,15 @@ fn body_calls_rollback_setter(body: &str) -> bool {
     false
 }
 
-impl TextCheck for Check {
-    fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        // Skip files already using useOptimistic.
+impl OxcCheck for Check {
+    fn run_on_semantic<'a>(
+        &self,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        ctx: &CheckCtx,
+    ) -> Vec<Diagnostic> {
         if ctx.source_contains("useOptimistic") {
             return Vec::new();
         }
-        // The pattern is React-specific; without a React state signal there is
-        // no optimistic state to roll back (backend `try/finally` utilities,
-        // and stray "catch" mentions in their comments, must not fire).
         if !looks_like_react(ctx.source) {
             return Vec::new();
         }
@@ -102,7 +85,6 @@ impl TextCheck for Check {
         let mut search_from = 0;
         while let Some(rel) = ctx.source[search_from..].find("catch") {
             let abs = search_from + rel;
-            // Word boundary before/after.
             let prev = if abs == 0 { None } else { Some(bytes[abs - 1]) };
             let next = bytes.get(abs + "catch".len()).copied();
             let prev_ok = prev.is_none_or(|b| !b.is_ascii_alphanumeric() && b != b'_');
@@ -111,12 +93,10 @@ impl TextCheck for Check {
                 search_from = abs + 1;
                 continue;
             }
-            // Find the next `{` after the `catch` keyword.
             let mut j = abs + "catch".len();
             while j < bytes.len() && bytes[j] != b'{' && bytes[j] != b';' && bytes[j] != b'\n' {
                 j += 1;
             }
-            // Some catches are `catch\n{`. Allow newlines.
             while j < bytes.len() && bytes[j] != b'{' {
                 if bytes[j] != b' '
                     && bytes[j] != b'\t'
@@ -148,10 +128,9 @@ impl TextCheck for Check {
                     line,
                     column: col,
                     rule_id: super::META.id.into(),
-                    message:
-                        "Rolling back state in a `catch` is the manual optimistic-update pattern \
+                    message: "Rolling back state in a `catch` is the manual optimistic-update pattern \
                               — `useOptimistic` handles rollback for you and is race-safe."
-                            .into(),
+                        .into(),
                     severity: Severity::Warning,
                     span: None,
                 });
@@ -165,10 +144,9 @@ impl TextCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     fn run(source: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new("c.tsx"), source))
+        crate::rules::test_helpers::run_oxc_ts(source, &Check)
     }
 
     #[test]
@@ -197,9 +175,6 @@ mod tests {
 
     #[test]
     fn allows_root_error_setter_in_auth_form_catch() {
-        // Regression for #99: sign-in onSubmit clears root error then sets it
-        // on failure. There's no optimistic value to roll back — the success
-        // path navigates away.
         let src = "async function onSubmit(value) { \
                        setRootError(null); \
                        try { await signIn.email(value); } \
@@ -216,14 +191,10 @@ mod tests {
 
     #[test]
     fn flags_mixed_setter_when_real_rollback_present() {
-        // Real rollback setter alongside an error setter still warrants the
-        // suggestion — the rollback is what `useOptimistic` would replace.
         let src = "const [items, setItems] = useState([]);\ntry { await save(); } catch (e) { setRootError('x'); setItems(prev); }";
         assert_eq!(run(src).len(), 1);
     }
 
-    // Regression for #600 — a backend `try/finally` timer utility with the word
-    // "catch" in a comment and a `setTimeout` call must not fire.
     #[test]
     fn no_fp_backend_try_finally_timer_utility() {
         let src = "\
@@ -239,7 +210,6 @@ mod tests {
         assert!(run(src).is_empty(), "backend timer utility should not flag");
     }
 
-    // Even in a React file, a `setTimeout` in a catch is not a state rollback.
     #[test]
     fn no_fp_settimeout_in_catch_in_react_file() {
         let src = "const [x, setX] = useState(0);\ntry { await save(); } catch (e) { setTimeout(retry, 1000); }";

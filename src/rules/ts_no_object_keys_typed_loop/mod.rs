@@ -2,7 +2,8 @@
 //! type-unsound: TypeScript types `Object.keys` as `string[]`, not
 //! `(keyof Obj)[]`, so `obj[k]` ends up `any`.
 
-mod typescript;
+#[cfg(test)] mod typescript;
+mod oxc_typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -29,13 +30,13 @@ pub fn register() -> RuleDef {
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::Text(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::JavaScript,
-                Backend::Text(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
-            (Language::Tsx, Backend::Text(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
         ],
     }
 }

@@ -2,7 +2,9 @@
 //! `*-actions.ts` (the convention for server-action collections) that
 //! export `async` functions must declare `'use server'` at the top.
 
+#[cfg(test)]
 mod typescript;
+mod oxc_typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -31,13 +33,13 @@ pub fn register() -> RuleDef {
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::Text(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::JavaScript,
-                Backend::Text(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
-            (Language::Tsx, Backend::Text(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
         ],
     }
 }
