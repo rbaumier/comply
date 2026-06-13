@@ -1,5 +1,6 @@
 //! no-implicit-deps
 
+mod module_federation;
 mod oxc_typescript;
 #[cfg(test)]
 mod typescript;
