@@ -573,6 +573,28 @@ export default {
         }
     }
 
+    // Regression #1933: Astro virtual modules (`astro:content`,
+    // `astro:transitions/client`) carry the `astro:` scheme, recognized as a
+    // plugin-provided virtual namespace by the generic colon-scheme rule
+    // (#1975) — a `:` is invalid in an npm name. They must not be flagged even
+    // though `astro` is not declared as a dependency.
+    #[test]
+    fn allows_astro_virtual_module_protocol_issue_1933() {
+        for spec in &["astro:content", "astro:transitions/client"] {
+            let dir = TempDir::new().unwrap();
+            fs::write(dir.path().join("package.json"), r#"{"name":"app","dependencies":{}}"#)
+                .unwrap();
+            let file = dir.path().join("content.config.ts");
+            let source = format!("import x from '{spec}';");
+            fs::write(&file, &source).unwrap();
+            let diags = run_oxc_in_project(&file, &source);
+            assert!(
+                diags.is_empty(),
+                "astro virtual module `{spec}` must not be flagged, got {diags:?}"
+            );
+        }
+    }
+
     // A genuinely undeclared external package must still fire — the virtual
     // exemption is scoped to the `@theme-original/` namespace only.
     #[test]
