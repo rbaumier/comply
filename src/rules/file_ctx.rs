@@ -319,6 +319,8 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
             || lower.starts_with("__tests__/")
             || lower.contains("/fixtures/")
             || lower.contains("/__mocks__/")
+            || lower.contains("/mocks/")
+            || lower.starts_with("mocks/")
             || lower.contains("/e2e/")
             || lower.starts_with("e2e/")
             || lower.contains(".test.")
@@ -471,6 +473,10 @@ mod tests {
         assert!(scan_path(&PathBuf::from("src/test-d/types.ts")).in_test_dir);
         // dtslint type-testing convention (issue #1006).
         assert!(scan_path(&PathBuf::from("dtslint/Array.ts")).in_test_dir);
+        // MSW + Jest mock infrastructure directories (issue #1883).
+        assert!(scan_path(&PathBuf::from("src/mocks/db.ts")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("mocks/handlers.ts")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("src/__mocks__/server.ts")).in_test_dir);
         assert!(
             scan_path(&PathBuf::from(
                 "very-well-written-projects/typescript/fp-ts/dtslint/Array.ts"
