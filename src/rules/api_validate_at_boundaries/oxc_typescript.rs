@@ -28,6 +28,21 @@ const ROUTE_VERBS: &[&str] = &[
     "get", "post", "put", "patch", "delete", "head", "options", "all", "use",
 ];
 
+/// Built-in / standard-library receivers whose `.parse(...)` is not a
+/// schema validator: `JSON.parse` (deserialize JSON), `path.parse`
+/// (split a filesystem path, from `node:path`), `URL.parse` (parse a
+/// URL string). These are never API-boundary validation calls.
+const BUILTIN_PARSE_RECEIVERS: &[&str] = &["JSON", "path", "URL"];
+
+/// True when the `.parse(...)` receiver is a built-in non-schema object
+/// (e.g. `JSON.parse(...)`, `path.parse(...)`, `URL.parse(...)`).
+fn is_builtin_parse_receiver(object: &Expression) -> bool {
+    let Expression::Identifier(ident) = object else {
+        return false;
+    };
+    BUILTIN_PARSE_RECEIVERS.contains(&ident.name.as_str())
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -54,6 +69,11 @@ impl OxcCheck for Check {
         };
         let method = member.property.name.as_str();
         if method != "parse" && method != "safeParse" {
+            return;
+        }
+
+        // Built-in `.parse(...)` (JSON/path/URL) is not schema validation.
+        if is_builtin_parse_receiver(&member.object) {
             return;
         }
 
@@ -249,4 +269,59 @@ fn is_inline_route_callback(
 
     let method = member.property.name.as_str();
     ROUTE_VERBS.contains(&method)
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    #[test]
+    fn flags_schema_parse_in_internal_function() {
+        let d = run("function computeTotal(input: unknown) { return Schema.parse(input); }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("computeTotal"));
+    }
+
+    #[test]
+    fn allows_json_parse_in_internal_function() {
+        // Issue #1738 example 1: `JSON.parse` is a built-in deserializer,
+        // not a schema validator.
+        let src = "async function formatFiles(cwd: string): Promise<void> { \
+            const prettierPackageJson = JSON.parse(await readFile(prettierPath, 'utf-8')) as { bin: string }; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_path_parse_in_internal_function() {
+        // Issue #1738 example 2: `path.parse` from `node:path` splits a
+        // filesystem path; it is not a schema validator.
+        let src = "function readOptions(cwd: string, yarn: boolean): PackageManagerOptions { \
+            const root = path.parse(cwd).root; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_url_parse_in_internal_function() {
+        assert!(run("function f(s: string) { return URL.parse(s); }").is_empty());
+    }
 }

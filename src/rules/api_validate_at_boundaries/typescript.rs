@@ -19,8 +19,21 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
+/// Built-in / standard-library receivers whose `.parse(...)` is not a
+/// schema validator: `JSON.parse` (deserialize JSON), `path.parse`
+/// (split a filesystem path, from `node:path`), `URL.parse` (parse a
+/// URL string). These are never API-boundary validation calls.
+const BUILTIN_PARSE_RECEIVERS: &[&str] = &["JSON", "path", "URL"];
+
 fn is_parse_call(callee: tree_sitter::Node, source: &[u8]) -> Option<&'static str> {
     if callee.kind() != "member_expression" {
+        return None;
+    }
+    if let Some(object) = callee.child_by_field_name("object")
+        && object.kind() == "identifier"
+        && let Ok(recv) = std::str::from_utf8(&source[object.byte_range()])
+        && BUILTIN_PARSE_RECEIVERS.contains(&recv)
+    {
         return None;
     }
     let prop = callee.child_by_field_name("property")?;
@@ -274,6 +287,29 @@ mod tests {
         // Inline arrow handler passed to `.get(...)` is treated as a
         // boundary even when its name (or lack thereof) gives no signal.
         assert!(run("app.get('/u', (req, res) => { Schema.parse(req.body); });").is_empty());
+    }
+
+    #[test]
+    fn allows_json_parse_in_internal_function() {
+        // Issue #1738 example 1: `JSON.parse` is a built-in deserializer,
+        // not a schema validator.
+        let src = "async function formatFiles(cwd: string): Promise<void> { \
+            const prettierPackageJson = JSON.parse(await readFile(prettierPath, 'utf-8')) as { bin: string }; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_path_parse_in_internal_function() {
+        // Issue #1738 example 2: `path.parse` from `node:path` splits a
+        // filesystem path; it is not a schema validator.
+        let src = "function readOptions(cwd: string, yarn: boolean): PackageManagerOptions { \
+            const root = path.parse(cwd).root; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_url_parse_in_internal_function() {
+        assert!(run("function f(s: string) { return URL.parse(s); }").is_empty());
     }
 
     #[test]
