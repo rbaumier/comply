@@ -62,6 +62,14 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // A bare expression directly under a `@ts-expect-error` directive IS
+            // the assertion: the directive demands the next line produce a type
+            // error, so removing the expression would make the directive itself
+            // an unused-directive error. The expression is intentional.
+            if preceded_by_ts_expect_error(stmt.span.start, semantic, ctx.source) {
+                continue;
+            }
+
             let (line, column) =
                 byte_offset_to_line_col(ctx.source, stmt.span.start as usize);
             diagnostics.push(Diagnostic {
@@ -123,6 +131,31 @@ fn is_in_reactive_callback(
         }
     }
     false
+}
+
+/// True when the statement starting at `stmt_start` is immediately preceded by
+/// a `@ts-expect-error` directive comment — only whitespace separates the
+/// comment's end from the statement. Scoped strictly to `@ts-expect-error`
+/// (not `@ts-ignore`): only `@ts-expect-error` requires the following line to
+/// produce a type error, which is what makes a bare expression intentional.
+fn preceded_by_ts_expect_error(
+    stmt_start: u32,
+    semantic: &oxc_semantic::Semantic,
+    source: &str,
+) -> bool {
+    semantic.comments().iter().any(|comment| {
+        let end = comment.span.end as usize;
+        let start = stmt_start as usize;
+        if end > start {
+            return false;
+        }
+        let gap = &source[end..start];
+        if !gap.chars().all(char::is_whitespace) {
+            return false;
+        }
+        let text = &source[comment.span.start as usize..end];
+        text.contains("@ts-expect-error")
+    })
 }
 
 fn has_side_effects(expr: &Expression) -> bool {
@@ -378,5 +411,45 @@ mod tests {
         // dead expression inside the same callback must still fire.
         let d = run_on("createEffect(() => { 1 + 1; });");
         assert_eq!(d.len(), 1);
+    }
+
+    // Regression #1932: a bare expression directly under a `@ts-expect-error`
+    // directive IS the type-test assertion — removing it would make the
+    // directive an unused-directive error, so it must not be flagged.
+    #[test]
+    fn allows_expression_after_ts_expect_error_issue_1932() {
+        let src = "// @ts-expect-error readonly stores do not expose actions\nderived.actions;";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_expression_after_ts_expect_error_block_comment() {
+        let src = "/* @ts-expect-error */\nderived.actions;";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn still_flags_expression_without_ts_expect_error() {
+        // No preceding directive — a bare member read is still unused.
+        let d = run_on("derived.actions;");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_expression_with_ts_ignore() {
+        // `@ts-ignore` does NOT require the next line to error, so the bare
+        // expression is not intentional and must still flag.
+        let src = "// @ts-ignore\nderived.actions;";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1, "{:?}", d);
+    }
+
+    #[test]
+    fn still_flags_expression_when_ts_expect_error_is_not_immediately_before() {
+        // The directive applies to the first expression; a second, unrelated
+        // bare expression below it is still unused.
+        let src = "// @ts-expect-error\nderived.actions;\nother.value;";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1, "{:?}", d);
     }
 }
