@@ -28,6 +28,17 @@ fn is_intrinsic(name: &str) -> bool {
     first.is_ascii_lowercase()
 }
 
+/// A JSX member-expression tag whose final segment is a lowercase intrinsic HTML
+/// element (e.g. `Primitive.div`, `styled.button`) is the valid Radix-UI /
+/// styled-components namespace pattern — the component is accessed through a
+/// namespace, not a PascalCase chain.
+fn is_namespaced_intrinsic(tag: &str) -> bool {
+    match tag.rsplit_once('.') {
+        Some((_, last)) => is_intrinsic(last),
+        None => false,
+    }
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -66,7 +77,7 @@ impl OxcCheck for Check {
             _ => return,
         };
 
-        if is_intrinsic(&tag) {
+        if is_intrinsic(&tag) || is_namespaced_intrinsic(&tag) {
             return;
         }
 
@@ -86,5 +97,65 @@ impl OxcCheck for Check {
                 span: None,
             });
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
+    }
+
+    // Issue #1986: `Namespace.htmlElement` member-expression components (Radix-UI /
+    // styled-components) whose final segment is a lowercase intrinsic HTML element
+    // are valid and must not be flagged.
+    #[test]
+    fn allows_namespaced_intrinsic_div() {
+        assert!(run("const x = <Primitive.div />;").is_empty());
+    }
+
+    #[test]
+    fn allows_namespaced_intrinsic_button() {
+        assert!(run("const x = <Primitive.button />;").is_empty());
+    }
+
+    #[test]
+    fn allows_namespaced_intrinsic_span() {
+        assert!(run("const x = <Primitive.span />;").is_empty());
+    }
+
+    #[test]
+    fn allows_namespaced_pascal() {
+        // `Foo.Bar` (PascalCase final segment) was already valid — must not regress.
+        assert!(run("const x = <Foo.Bar />;").is_empty());
+    }
+
+    #[test]
+    fn flags_non_pascal_case_component() {
+        // A genuinely bad component name (not a member expression) still fires.
+        assert_eq!(run("const x = <MY_COMPONENT />;").len(), 1);
+    }
+
+    #[test]
+    fn allows_plain_intrinsic() {
+        assert!(run("const x = <div>hello</div>;").is_empty());
     }
 }
