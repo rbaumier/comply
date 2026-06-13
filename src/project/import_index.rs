@@ -561,6 +561,13 @@ impl ImportIndex {
             .map(|(p, v)| (p.as_path(), v.as_slice()))
     }
 
+    /// Iterate every imported symbol across all indexed files. Lets rules
+    /// inspect import specifiers the index could not resolve to a concrete
+    /// file (`source_path == None`), e.g. build-tool path aliases.
+    pub fn iter_imports(&self) -> impl Iterator<Item = &ImportedSymbol> {
+        self.imports.values().flat_map(|v| v.iter())
+    }
+
     /// Bare specifiers (npm package names) collected from all imports.
     #[must_use]
     pub fn bare_specifiers(&self) -> &HashMap<String, BareSpecifierInfo> {
