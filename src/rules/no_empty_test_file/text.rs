@@ -14,6 +14,48 @@ fn is_test_file(path: &std::path::Path) -> bool {
     s.contains(".test.") || s.contains(".spec.") || s.contains("__tests__")
 }
 
+/// `true` when the filename declares the file a test spec (`*.test.*` /
+/// `*.spec.*`). Such a file claims to hold test cases, so an empty one is still
+/// flagged. Files that merely live under `__tests__/` without this naming are
+/// candidates for the fixture/setup exemption below.
+fn is_named_test_spec(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    s.contains(".test.") || s.contains(".spec.")
+}
+
+/// Lifecycle hooks of the major runners. A file built only from these is a
+/// setup file (e.g. a Vitest `setupFiles` entry that resets state before each
+/// test) rather than an empty spec.
+const LIFECYCLE_HOOK_MARKERS: &[&str] =
+    &["beforeEach(", "afterEach(", "beforeAll(", "afterAll("];
+
+/// `true` when the file is shared test infrastructure rather than a spec:
+/// either a setup file (only lifecycle hooks, no assertions) or a fixture/helper
+/// module (exports values, no test cases). Files explicitly named `*.test.*` /
+/// `*.spec.*` are never treated as infrastructure — they claim to be specs.
+fn is_test_infrastructure(path: &std::path::Path, source: &str) -> bool {
+    if is_named_test_spec(path) {
+        return false;
+    }
+    has_lifecycle_hook(source) || exports_value(source)
+}
+
+fn has_lifecycle_hook(source: &str) -> bool {
+    LIFECYCLE_HOOK_MARKERS
+        .iter()
+        .any(|marker| source.contains(marker))
+}
+
+/// `true` when the file exports a value (`export const`, `export function`,
+/// `export default`, `export class`, `export { ... }`), marking it a module
+/// imported by spec files as a fixture rather than a test itself.
+fn exports_value(source: &str) -> bool {
+    source.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("export ") || trimmed.starts_with("export{")
+    })
+}
+
 /// Runtime test markers: standard runner/assertion calls (Jest, Mocha, Vitest,
 /// Node `assert`).
 const RUNTIME_TEST_MARKERS: &[&str] =
@@ -151,6 +193,9 @@ impl TextCheck for Check {
         if has_test_content(ctx.source) {
             return Vec::new();
         }
+        if is_test_infrastructure(ctx.path, ctx.source) {
+            return Vec::new();
+        }
         vec![Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
             line: 1,
@@ -189,7 +234,39 @@ mod tests {
     #[test]
     fn flags_tests_dir() {
         assert_eq!(
-            run("__tests__/utils.ts", "export const helper = true;").len(),
+            run("__tests__/utils.ts", "import { foo } from './foo';").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_vitest_setup_file() {
+        let source = "import { beforeEach } from 'vitest';\n\
+                      import { setActivePinia } from '../src';\n\
+                      \n\
+                      beforeEach(() => {\n\
+                      \tsetActivePinia(undefined);\n\
+                      });\n";
+        assert!(run("packages/pinia/__tests__/vitest-setup.ts", source).is_empty());
+    }
+
+    #[test]
+    fn allows_fixture_store_module() {
+        let source = "import { defineStore } from '../../../src';\n\
+                      import { useUserStore } from './user';\n\
+                      \n\
+                      export const useCartStore = defineStore('cart', {\n\
+                      \tstate: () => ({ id: 2, rawItems: [] as string[] }),\n\
+                      });\n";
+        assert!(run("packages/pinia/__tests__/pinia/stores/cart.ts", source).is_empty());
+    }
+
+    #[test]
+    fn flags_empty_spec_named_file_even_with_export() {
+        // A file explicitly named `.spec.` claims to be a test: an `export`
+        // does not turn it into exempt fixture infrastructure.
+        assert_eq!(
+            run("__tests__/cart.spec.ts", "export const fixture = 1;").len(),
             1
         );
     }
