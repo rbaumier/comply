@@ -243,6 +243,7 @@ fn top_level_is_allowed(stmt: &Statement, node_test_mode: bool) -> bool {
         | Statement::TSTypeAliasDeclaration(_)
         | Statement::TSEnumDeclaration(_)
         | Statement::TSModuleDeclaration(_)
+        | Statement::TSGlobalDeclaration(_)
         | Statement::EmptyStatement(_) => true,
 
         Statement::VariableDeclaration(decl) => declaration_is_pure(decl, node_test_mode),
@@ -686,6 +687,46 @@ describe("x", () => { it("works", () => {}); });
         assert!(
             d.is_empty(),
             "a template literal with no interpolation must remain allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_declare_global_interface_augmentation() {
+        let src = r#"
+import { test, expect } from "../../../../playwright.extend"
+
+declare global {
+  interface Window {
+    request(): Promise<void>
+  }
+}
+
+test("works", () => { expect(1).toBe(1); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert!(
+            d.is_empty(),
+            "declare global type augmentation must be allowed at top level: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_declare_global_namespace_augmentation() {
+        let src = r#"
+declare global {
+  namespace PlaywrightTest {
+    interface Matchers<R> {
+      toRoughlyEqual(expected: number, deviation: number): R
+    }
+  }
+}
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert!(
+            d.is_empty(),
+            "declare global namespace augmentation must be allowed at top level: {d:?}"
         );
     }
 }
