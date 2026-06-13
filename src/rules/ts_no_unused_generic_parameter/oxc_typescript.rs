@@ -77,18 +77,20 @@ impl OxcCheck for Check {
         let mut diagnostics = Vec::new();
 
         for node in semantic.nodes().iter() {
-            let (type_params, params, return_type, ret_fn_span) = match node.kind() {
+            let (type_params, params, return_type, ret_fn_span, body_span) = match node.kind() {
                 AstKind::Function(f) => (
                     f.type_parameters.as_deref(),
                     f.params.span,
                     f.return_type.as_ref().map(|r| r.span),
                     f.body.as_ref().and_then(|b| returned_function_span(b, false)),
+                    f.body.as_ref().map(|b| b.span),
                 ),
                 AstKind::ArrowFunctionExpression(f) => (
                     f.type_parameters.as_deref(),
                     f.params.span,
                     f.return_type.as_ref().map(|r| r.span),
                     returned_function_span(&f.body, f.expression),
+                    Some(f.body.span),
                 ),
                 _ => continue,
             };
@@ -131,7 +133,21 @@ impl OxcCheck for Check {
                     source_contains_ident(ctx.source, s as u32, e as u32, name)
                 });
 
-                if !used_in_params && !used_in_return && !used_in_other_tp && !used_in_returned_fn {
+                // Used anywhere in the function body span — as a type argument in
+                // a call, a type assertion, a callback (useMemo/useCallback), or
+                // the parameter types of a returned object literal's methods. The
+                // body span excludes the type-parameter list, so the param's own
+                // declaration/constraint cannot be miscounted as a use.
+                let used_in_body = body_span.is_some_and(|b| {
+                    source_contains_ident(ctx.source, b.start, b.end, name)
+                });
+
+                if !used_in_params
+                    && !used_in_return
+                    && !used_in_other_tp
+                    && !used_in_returned_fn
+                    && !used_in_body
+                {
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, tp.span.start as usize);
                     diagnostics.push(Diagnostic {
@@ -209,5 +225,35 @@ mod tests {
     #[test]
     fn still_flags_truly_unused_generic_issue_1038() {
         assert_eq!(run("function f<U>(x: number): number { return x; }").len(), 1);
+    }
+
+    #[test]
+    fn allows_generic_as_type_argument_in_body_call_issue_1981() {
+        let src = "function f<Input>(): unknown {\n  return createPointScale<Exclude<Input, null>>({});\n}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_generic_in_type_assertion_in_body_issue_1981() {
+        let src = "function f<Input>(scale: unknown): unknown {\n  return scale as unknown as ScaleTime<Input>;\n}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_generic_inside_callback_in_body_issue_1981() {
+        let src = "function f<RawDatum>(data: unknown[]): unknown {\n  return useMemo(() => computeForces<RawDatum>({ data }), [data]);\n}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_generic_in_returned_object_literal_method_param_issue_1981() {
+        let src = "function f<Datum>(): unknown {\n  return { render: (label: ComputedLabel<Datum>) => label };\n}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_generic_unused_in_params_return_and_body_issue_1981() {
+        let src = "function f<Unused>(x: number): number {\n  return x + 1;\n}";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
