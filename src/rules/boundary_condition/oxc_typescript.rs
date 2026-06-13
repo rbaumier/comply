@@ -61,8 +61,10 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Skip if inside an `if` whose condition mentions `.length`
-        if has_length_guard_ancestor(node, semantic, source) {
+        // Skip if inside an `if` whose condition guards this array — either a
+        // `.length` check or, for a first-element read, a truthy `arr[0]` /
+        // `arr?.[0]` check on the same array.
+        if has_length_guard_ancestor(node, semantic, obj_text, is_first, source) {
             return;
         }
 
@@ -227,9 +229,18 @@ fn has_nullish_or_logical_fallback(
     false
 }
 
+/// Returns true when an ancestor `if` condition proves this access is in-bounds.
+/// Recognized guards:
+///   1. any `.length` check in the condition (covers both first and last reads);
+///   2. for a first-element read (`is_first`), a truthy `arr[0]` / `arr?.[0]`
+///      check on the same array (`obj_text`) — the truthiness equivalent of
+///      `if (arr.length)`. This also exempts the guard condition's own `[0]`
+///      access, which sits inside its enclosing `if.test`.
 fn has_length_guard_ancestor(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
+    obj_text: &str,
+    is_first: bool,
     source: &str,
 ) -> bool {
     let nodes = semantic.nodes();
@@ -245,9 +256,66 @@ fn has_length_guard_ancestor(
             if cond_text.contains(".length") {
                 return true;
             }
+            if is_first && condition_guards_index0(&if_stmt.test, obj_text, source) {
+                return true;
+            }
         }
         current_id = parent_id;
     }
+}
+
+/// Returns true when `expr` (an `if` condition) contains a zero-index access
+/// `obj_text[0]` / `obj_text?.[0]`, where `obj_text` is matched after stripping
+/// optional-chaining `?.` to `.` on both sides. Recurses through the operators
+/// that preserve a truthiness guard: `&&`, `||`, `!`, and parentheses.
+fn condition_guards_index0(expr: &Expression, obj_text: &str, source: &str) -> bool {
+    match expr {
+        Expression::ComputedMemberExpression(member) => {
+            if is_zero_index(&member.expression, source)
+                && normalize_optional_chaining(expr_text(&member.object, source))
+                    == normalize_optional_chaining(obj_text)
+            {
+                return true;
+            }
+            condition_guards_index0(&member.object, obj_text, source)
+        }
+        Expression::StaticMemberExpression(member) => {
+            condition_guards_index0(&member.object, obj_text, source)
+        }
+        Expression::ChainExpression(chain) => match &chain.expression {
+            ChainElement::ComputedMemberExpression(member) => {
+                if is_zero_index(&member.expression, source)
+                    && normalize_optional_chaining(expr_text(&member.object, source))
+                        == normalize_optional_chaining(obj_text)
+                {
+                    return true;
+                }
+                condition_guards_index0(&member.object, obj_text, source)
+            }
+            ChainElement::StaticMemberExpression(member) => {
+                condition_guards_index0(&member.object, obj_text, source)
+            }
+            _ => false,
+        },
+        Expression::LogicalExpression(logical) => {
+            condition_guards_index0(&logical.left, obj_text, source)
+                || condition_guards_index0(&logical.right, obj_text, source)
+        }
+        Expression::UnaryExpression(unary) => {
+            condition_guards_index0(&unary.argument, obj_text, source)
+        }
+        Expression::ParenthesizedExpression(paren) => {
+            condition_guards_index0(&paren.expression, obj_text, source)
+        }
+        _ => false,
+    }
+}
+
+/// Strips optional-chaining tokens so `data?.choices` and `data.choices` compare
+/// equal. The condition writes the access with `?.`, the flagged in-block read
+/// without it; both denote the same array.
+fn normalize_optional_chaining(text: &str) -> String {
+    text.replace("?.", ".")
 }
 
 /// Returns true if `stmt` or a top-level statement within it is an early exit
@@ -648,6 +716,28 @@ mod tests {
     #[test]
     fn still_flags_index0_of_reassigned_let_issue_1967() {
         let src = "let colors = ['a', 'b']; const x = colors[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_truthy_index0_guard_issue_1178() {
+        // `if (data?.choices?.[0])` proves the element exists, so neither the
+        // guard condition's own access nor same-array `[0]` reads in the block flag.
+        let src = "function f(data) { if (data?.choices?.[0]) { console.log(data.choices[0].message); return data.choices[0].message; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_truthy_index0_guard_plain_array_issue_1178() {
+        // Non-optional `if (arr[0])` is the truthiness equivalent of `if (arr.length)`.
+        let src = "function f(arr) { if (arr[0]) { return arr[0].name; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_index0_inside_block_for_other_array_issue_1178() {
+        // The guard is for `a`; `b[0]` inside the block is unrelated and stays flagged.
+        let src = "function f(a, b) { if (a[0]) { return b[0].name; } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
