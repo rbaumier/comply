@@ -30,6 +30,18 @@ impl OxcCheck for Check {
             return;
         };
 
+        // Declaration-level type-only imports (`import type { X } from "pkg"`)
+        // are erased at compile time and perform no runtime module resolution,
+        // so they can never be a missing *runtime* dependency — the rule's
+        // entire concern. Their types are frequently provided transitively
+        // through a declared package's bundled declarations (e.g. `eslint`
+        // ships `estree` types), which `package.json` never lists. Exempt them.
+        // A mixed import (`import { type X, y }`) keeps a value binding (`y`)
+        // and stays `import_kind == Value`, so it remains checked.
+        if import.import_kind.is_type() {
+            return;
+        }
+
         // Stay silent if there's no `package.json` anywhere above this file.
         let Some(pkg) = ctx.project.nearest_package_json(ctx.path) else {
             return;
@@ -798,6 +810,56 @@ export default {
             diags.len(),
             1,
             "undeclared third-party package must still fire, got {diags:?}"
+        );
+    }
+
+    // Regression #2068: a declaration-level type-only import
+    // (`import type { Node } from "estree"`) is erased at compile time and
+    // performs no runtime module resolution, so it can never be a missing
+    // runtime dependency — even when `estree` is absent from package.json (its
+    // types are provided transitively via a declared package's bundled
+    // declarations). It must not be flagged.
+    #[test]
+    fn allows_type_only_import_issue_2068() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"babel-eslint-plugin-development","peerDependencies":{"eslint":"^9"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src").join("utils");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("get-reference-origin.ts");
+        let source = "import type { Node, Expression, Identifier } from 'estree';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "type-only import of an unlisted package must not be flagged, got {diags:?}"
+        );
+    }
+
+    // A genuine RUNTIME (value) import of the same unlisted package must still
+    // fire — the type-only exemption is scoped to declaration-level
+    // `import type` only, not to value imports.
+    #[test]
+    fn flags_value_import_of_unlisted_dep_issue_2068() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"babel-eslint-plugin-development","peerDependencies":{"eslint":"^9"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src").join("utils");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("get-reference-origin.ts");
+        let source = "import { foo } from 'estree';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "value import of an unlisted package must still fire, got {diags:?}"
         );
     }
 
