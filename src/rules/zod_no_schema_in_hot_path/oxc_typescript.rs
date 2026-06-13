@@ -48,6 +48,9 @@ impl OxcCheck for Check {
                 | AstKind::ForInStatement(_)
                 | AstKind::WhileStatement(_)
                 | AstKind::DoWhileStatement(_) => {
+                    if call_references_loop_binding(call, parent.kind(), ctx.source) {
+                        return;
+                    }
                     let span = call.span();
                     let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
                     diagnostics.push(Diagnostic {
@@ -149,13 +152,126 @@ fn function_name_from_oxc<'a>(
     None
 }
 
+/// Known framework request/response types whose presence in a parameter type
+/// annotation reliably identifies an HTTP handler.
+fn is_framework_handler_type(type_text: &str) -> bool {
+    const FRAMEWORK_TYPES: &[&str] = &[
+        "NextApiRequest",
+        "NextApiResponse",
+        "NextRequest",
+        "NextResponse",
+        "Request",
+        "Response",
+    ];
+    FRAMEWORK_TYPES.iter().any(|t| type_text.contains(t))
+}
+
+fn is_request_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == "req" || lower == "request"
+}
+
+fn is_response_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == "res" || lower == "response"
+}
+
+/// Recognise an HTTP request handler by its parameters. A lone `ctx`/`req`/`res`
+/// is not enough — `ctx` in particular is a ubiquitous name for domain context
+/// objects. A function is a handler only when it takes both a request-shaped and
+/// a response-shaped parameter, or a parameter annotated with a known framework
+/// request/response type.
 fn looks_like_handler_params(params: &oxc_ast::ast::FormalParameters<'_>, source: &str) -> bool {
-    let text = &source[params.span.start as usize..params.span.end as usize];
-    text.contains("req")
-        || text.contains("request")
-        || text.contains("ctx")
-        || text.contains("res")
-        || text.contains("response")
+    let mut has_request = false;
+    let mut has_response = false;
+    for param in &params.items {
+        let pattern_span = param.pattern.span();
+        let name = &source[pattern_span.start as usize..pattern_span.end as usize];
+        if is_request_name(name) {
+            has_request = true;
+        }
+        if is_response_name(name) {
+            has_response = true;
+        }
+        if let Some(ann) = &param.type_annotation {
+            let type_text = &source[ann.span.start as usize..ann.span.end as usize];
+            if is_framework_handler_type(type_text) {
+                return true;
+            }
+        }
+    }
+    has_request && has_response
+}
+
+/// Collect binding names introduced by a loop's own header — the index in a
+/// `for (let i = …; …)` or the key in a `for (const k in …)`. These are the
+/// bindings a dynamic schema inside the loop legitimately varies over.
+fn loop_binding_names(loop_kind: AstKind<'_>, source: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let decl = match loop_kind {
+        AstKind::ForStatement(stmt) => match &stmt.init {
+            Some(oxc_ast::ast::ForStatementInit::VariableDeclaration(decl)) => Some(decl),
+            _ => None,
+        },
+        AstKind::ForInStatement(stmt) => match &stmt.left {
+            oxc_ast::ast::ForStatementLeft::VariableDeclaration(decl) => Some(decl),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(decl) = decl {
+        for declarator in &decl.declarations {
+            let span = declarator.id.span();
+            names.push(source[span.start as usize..span.end as usize].to_string());
+        }
+    }
+    names
+}
+
+/// Whole-word match: true if `word` appears in `text` not surrounded by other
+/// identifier characters.
+fn text_references_word(text: &str, word: &str) -> bool {
+    if word.is_empty() {
+        return false;
+    }
+    let bytes = text.as_bytes();
+    let mut start = 0;
+    while let Some(pos) = text[start..].find(word) {
+        let abs = start + pos;
+        let before_ok = abs == 0 || !is_ident_byte(bytes[abs - 1]);
+        let after = abs + word.len();
+        let after_ok = after >= bytes.len() || !is_ident_byte(bytes[after]);
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs + word.len();
+    }
+    false
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
+}
+
+/// True when a `z.*` call inside a loop references the loop's own binding in its
+/// arguments — a dynamic schema that cannot be hoisted out of the loop. Constant
+/// schemas (no loop-var reference, or zero-arg calls) are not exempt.
+fn call_references_loop_binding(
+    call: &oxc_ast::ast::CallExpression<'_>,
+    loop_kind: AstKind<'_>,
+    source: &str,
+) -> bool {
+    let bindings = loop_binding_names(loop_kind, source);
+    if bindings.is_empty() {
+        return false;
+    }
+    let (Some(first), Some(last)) = (call.arguments.first(), call.arguments.last()) else {
+        return false;
+    };
+    let args_text = &source[first.span().start as usize..last.span().end as usize];
+    bindings
+        .iter()
+        .any(|name| text_references_word(args_text, name))
 }
 
 /// True if the function's return type or generic constraints reference a Zod type,
@@ -297,5 +413,39 @@ mod tests {
     fn still_flags_uppercase_component_without_zod_signature() {
         let src = "function TeamList() { const S = z.object({ a: z.string() }); return null; }";
         assert!(!run(src).is_empty());
+    }
+
+    // Regression #2070, Pattern 1: a lone `ctx` domain-context parameter must not
+    // mark a converter as an HTTP handler.
+    #[test]
+    fn allows_converter_with_lone_ctx_param() {
+        let src =
+            "function convertBaseSchema(schema: JSONSchema, ctx: ConversionContext) { return z.never(); }";
+        assert!(run(src).is_empty());
+    }
+
+    // Regression #2070, Pattern 1 guard: a real handler with both a framework
+    // request and response type still fires.
+    #[test]
+    fn still_flags_real_handler_with_framework_types() {
+        let src =
+            "function handler(req: NextApiRequest, res: NextApiResponse) { z.object({}); }";
+        assert!(!run(src).is_empty());
+    }
+
+    // Regression #2070, Pattern 2: a `z.*` call inside a loop that references the
+    // loop's own binding builds a dynamic schema and must not be flagged.
+    #[test]
+    fn allows_loop_bound_dynamic_schema() {
+        let src = "function f(schemasToIntersect: any[]) { let result = schemasToIntersect[0]; for (let i = 2; i < schemasToIntersect.length; i++) { result = z.intersection(result, schemasToIntersect[i]); } return result; }";
+        assert!(run(src).is_empty());
+    }
+
+    // Regression #2070, Pattern 2 guard: a constant schema rebuilt in a loop with
+    // no reference to the loop binding still fires.
+    #[test]
+    fn still_flags_constant_schema_in_loop() {
+        let src = "for (let i = 0; i < 10; i++) { const S = z.string(); }";
+        assert_eq!(run(src).len(), 1);
     }
 }
