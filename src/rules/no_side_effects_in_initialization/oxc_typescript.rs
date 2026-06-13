@@ -116,7 +116,7 @@ pub struct Check;
 
 fn is_test_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
-    [".test.", ".test-d.", ".spec.", "__tests__", "_test.", ".e2e.", ".cy."]
+    [".test.", ".test-d.", ".spec.", "_spec.", "__tests__", "_test.", ".e2e.", ".cy."]
         .iter()
         .any(|m| s.contains(m))
         || s.contains("/dtslint/")
@@ -1140,6 +1140,34 @@ mod tests {
             assert!(diags.is_empty(), "{path} should be exempt, got {diags:?}");
         }
         // The `.cy.` infix is what grants the exemption: the same top-level
+        // call in a genuine production module still flags.
+        let prod = crate::rules::test_helpers::run_rule(&Check, "describe('x', () => {});", "src/index.ts");
+        assert_eq!(prod.len(), 1, "production src/index.ts must still flag");
+    }
+
+    #[test]
+    fn skips_jasmine_underscore_spec_file() {
+        // Issue #1737: Jasmine/Angular test files use the `_spec.ts` underscore
+        // naming convention (e.g. `recorder_spec.ts`). The top-level `describe(...)`
+        // is the test-runner API, loaded by the runner, never imported as a module.
+        let src = "\
+            import { normalize } from '@angular-devkit/core';\n\
+            import { SimpleFileEntry } from './entry';\n\
+            import { UpdateRecorderBase } from './recorder';\n\
+            describe('UpdateRecorderBase', () => {\n\
+                it('works for simple files', () => {\n\
+                    const buffer = Buffer.from('Hello World');\n\
+                });\n\
+            });\n";
+        for path in [
+            "packages/angular_devkit/schematics/src/tree/recorder_spec.ts",
+            "src/memoize_spec.tsx",
+            "src/legacy_spec.js",
+        ] {
+            let diags = crate::rules::test_helpers::run_rule(&Check, src, path);
+            assert!(diags.is_empty(), "{path} should be exempt, got {diags:?}");
+        }
+        // The `_spec.` infix is what grants the exemption: the same top-level
         // call in a genuine production module still flags.
         let prod = crate::rules::test_helpers::run_rule(&Check, "describe('x', () => {});", "src/index.ts");
         assert_eq!(prod.len(), 1, "production src/index.ts must still flag");
