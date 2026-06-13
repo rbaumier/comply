@@ -26,6 +26,16 @@ fn is_relative_path(spec: &str) -> bool {
     spec.starts_with("./") || spec.starts_with("../")
 }
 
+/// Whether the import targets React Router v7's auto-generated route-types
+/// directory. React Router v7 emits per-route type modules under a `+types/`
+/// directory at build time (`react-router typegen`); these files are absent in a
+/// clean checkout, so an import like `./+types/home` cannot resolve on disk yet
+/// is not a broken path. The `+` prefix is the framework's convention marker for
+/// generated directories.
+fn is_react_router_types_specifier(spec: &str) -> bool {
+    spec.split('/').any(|segment| segment == "+types")
+}
+
 /// Resolve a path lexically — collapse `.`/`..` segments by string surgery
 /// without touching the filesystem, since the target may not exist (the import
 /// could point above the scanned tree). `..` pops the last normal segment;
@@ -144,6 +154,10 @@ impl OxcCheck for Check {
         }
 
         if crate::rules::path_utils::is_generated_file_specifier(&import_spec) {
+            return;
+        }
+
+        if is_react_router_types_specifier(&import_spec) {
             return;
         }
 
@@ -374,6 +388,31 @@ mod tests {
         let source = "import styles from './index.module.css';";
         let diags = run_in_dir("cli/template/extras/src/app/page/base.tsx", source, &[]);
         assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn no_fp_for_react_router_v7_types_dir_issue_1778() {
+        // sst reproducer: React Router v7 route modules import their generated
+        // types from `./+types/<route>`. The `+types/` directory is produced by
+        // `react-router typegen` at build time and is absent in a clean checkout,
+        // so these imports must not be flagged.
+        let root = "import type { Route } from './+types/root';";
+        let diags = run_in_dir("app/root.tsx", root, &[]);
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+
+        let home = "import type { Route } from './+types/home';";
+        let diags = run_in_dir("app/routes/home.tsx", home, &[]);
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_missing_import_without_types_segment() {
+        // The exemption is keyed on the `+types/` directory marker; a normal
+        // missing relative import without it stays a real error.
+        let source = "import type { Route } from './types/root';";
+        let diags = run_in_dir("app/root.tsx", source, &[]);
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("types/root"));
     }
 
     #[test]
