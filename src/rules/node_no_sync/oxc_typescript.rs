@@ -8,20 +8,6 @@ use std::sync::Arc;
 
 pub struct Check;
 
-/// Returns true when the identifier is a React hook or event-callback in the
-/// "state synchronisation" sense — not a Node.js sync-I/O name.
-///
-/// Patterns exempted:
-/// - `use[A-Z].*Sync` — React hooks (`useListSearchSync`, `useStateSync`)
-/// - `on[A-Z].*Sync`  — React event callbacks (`onSearchSync`, `onChangeSync`)
-pub(super) fn is_react_sync_name(name: &str) -> bool {
-    name.ends_with("Sync")
-        && ((name.starts_with("use")
-            && name.as_bytes().get(3).is_some_and(|b| b.is_ascii_uppercase()))
-            || (name.starts_with("on")
-                && name.as_bytes().get(2).is_some_and(|b| b.is_ascii_uppercase())))
-}
-
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -60,13 +46,9 @@ impl OxcCheck for Check {
             _ => return,
         };
 
-        // Must end with "Sync" and have at least one char before it.
-        if method_name.len() <= 4 || !method_name.ends_with("Sync") {
-            return;
-        }
-
-        // Skip React hooks and event callbacks: `use[A-Z]…Sync` / `on[A-Z]…Sync`.
-        if is_react_sync_name(method_name) {
+        // Only flag genuine Node.js core synchronous I/O methods, not arbitrary
+        // identifiers ending in `Sync` (e.g. `flushSync`, `batchSync`).
+        if !super::is_node_sync_io_method(method_name) {
             return;
         }
 
