@@ -28,6 +28,19 @@ fn is_static_string(expr: &Expression) -> bool {
     }
 }
 
+/// True when `expr` resolves to a DOM `document` receiver: a bare `document`
+/// identifier, or a member access whose final property is `document` or
+/// `contentDocument` (e.g. `window.document`, `iframe.contentDocument`).
+fn is_document_like_receiver(expr: &Expression) -> bool {
+    match expr {
+        Expression::Identifier(ident) => ident.name == "document",
+        Expression::StaticMemberExpression(member) => {
+            matches!(member.property.name.as_str(), "document" | "contentDocument")
+        }
+        _ => false,
+    }
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -63,6 +76,14 @@ impl OxcCheck for Check {
             return;
         };
 
+        // `write`/`writeln` collide with Node.js `Writable` streams, so only
+        // flag them on a `document`-like receiver. The DOM-specific methods
+        // (`insertAdjacentHTML`, `setHTMLUnsafe`, `createContextualFragment`)
+        // have no such collision and fire on any receiver.
+        if matches!(method, "write" | "writeln") && !is_document_like_receiver(&member.object) {
+            return;
+        }
+
         let Some(arg) = call.arguments.get(idx) else {
             return;
         };
@@ -86,5 +107,75 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn flags_document_write_concat() {
+        assert_eq!(run_on("document.write('<p>' + name + '</p>');").len(), 1);
+    }
+
+    #[test]
+    fn flags_document_writeln_variable() {
+        assert_eq!(run_on("document.writeln(x);").len(), 1);
+    }
+
+    #[test]
+    fn flags_window_document_write() {
+        assert_eq!(run_on("window.document.write(x);").len(), 1);
+    }
+
+    #[test]
+    fn flags_contentdocument_write() {
+        assert_eq!(run_on("iframe.contentDocument.write(x);").len(), 1);
+    }
+
+    #[test]
+    fn flags_insert_adjacent_html_any_receiver() {
+        assert_eq!(run_on("el.insertAdjacentHTML('beforeend', html);").len(), 1);
+    }
+
+    #[test]
+    fn allows_stream_write() {
+        assert!(run_on("stream.write(output);").is_empty());
+    }
+
+    #[test]
+    fn allows_nested_stdout_write() {
+        assert!(run_on("proc.stdout.write(x);").is_empty());
+    }
+
+    #[test]
+    fn allows_this_member_write() {
+        assert!(run_on("this._writeTo.write(y);").is_empty());
+    }
+
+    #[test]
+    fn allows_document_write_literal() {
+        assert!(run_on("document.write('<p>static</p>');").is_empty());
     }
 }
