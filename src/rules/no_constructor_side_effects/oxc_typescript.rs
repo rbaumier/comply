@@ -62,6 +62,16 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Throws-based validation guard: `try { new URL(url); break; } catch { ... }`.
+        // The construction sits directly in the `try` block precisely because it
+        // throws on invalid input and the `catch` handles the failure. The
+        // unassigned `new` is the validation, not a discarded side effect. Only
+        // the `try` body is exempt — a `new X()` in the `catch`/`finally` block
+        // still flags.
+        if is_in_try_block(parent, semantic) {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, new_expr.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -175,6 +185,25 @@ fn is_expect_to_throw(
         member.kind(),
         AstKind::StaticMemberExpression(m) if m.property.name.as_str().starts_with("toThrow")
     )
+}
+
+/// True when `expr_stmt` (the `ExpressionStatement` wrapping the `new`) sits
+/// directly in the `try` block of a `TryStatement`: the parent chain is
+/// `ExpressionStatement → BlockStatement → TryStatement`, and the
+/// `BlockStatement` is the try body (`block`), not the `catch`/`finally` block.
+fn is_in_try_block(
+    expr_stmt: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let block = nodes.parent_node(expr_stmt.id());
+    let AstKind::BlockStatement(block_stmt) = block.kind() else {
+        return false;
+    };
+    let AstKind::TryStatement(try_stmt) = nodes.parent_node(block.id()).kind() else {
+        return false;
+    };
+    try_stmt.block.span == block_stmt.span
 }
 
 /// Name of a simple `BindingIdentifier` parameter; `None` for destructuring or
@@ -325,6 +354,49 @@ mod tests {
               }
             }
         "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_new_as_validation_guard_in_try_block() {
+        // Regression for #1140 — `new URL(url)` inside a try/catch is the
+        // canonical throws-based validation idiom in production code.
+        let src = r#"
+            function f(url) {
+              while (url !== "") {
+                try {
+                  new URL(url);
+                  break;
+                } catch {
+                  log.error("Invalid URL.");
+                }
+              }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_new_in_catch_block() {
+        // Only the try body is exempt; a `new X()` in the catch handler is a
+        // genuine discarded side effect.
+        let src = r#"
+            function f() {
+              try {
+                doThing();
+              } catch {
+                new Logger('global');
+              }
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_side_effecting_new_outside_try() {
+        // A genuinely side-effecting `new X()` in production code outside any
+        // try block still flags.
+        let src = "function f() { new Logger('global'); }";
         assert_eq!(run(src).len(), 1);
     }
 
