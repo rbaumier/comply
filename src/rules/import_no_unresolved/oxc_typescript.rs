@@ -23,6 +23,14 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
+        // Scaffold template files (create-t3-app's `cli/template/`, etc.) are
+        // assembled into the generated project at scaffold time; their cross-file
+        // relative imports resolve only after that assembly. In the unassembled
+        // tree those siblings are absent, so the imports are not real errors.
+        if crate::rules::path_utils::is_scaffold_template_path(ctx.path) {
+            return Vec::new();
+        }
+
         let canon = index.canonical(ctx.path);
         let mut seen: HashSet<(String, usize)> = HashSet::new();
         let mut diagnostics = Vec::new();
@@ -299,5 +307,57 @@ mod out_dir_tests {
         );
         assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
         assert!(diags[0].message.contains("lib/util.js"));
+    }
+}
+
+#[cfg(test)]
+mod scaffold_template_tests {
+    use super::Check;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn run_in_dir(importer_rel: &str, source: &str) -> Vec<crate::diagnostic::Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
+        let importer = dir.path().join(importer_rel);
+        fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        fs::write(&importer, source).unwrap();
+        let canon = fs::canonicalize(&importer).unwrap();
+        let source_file = SourceFile {
+            path: canon.clone(),
+            language: Language::from_path(&canon).unwrap(),
+        };
+        let project = ProjectCtx::load(&[&source_file], &Config::default());
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    #[test]
+    fn no_fp_for_scaffold_template_file_issue_1753() {
+        // create-t3-app reproducer: a config template under `cli/template/`
+        // imports `./src/env.js`, a sibling that only exists after the CLI
+        // assembles the generated project. Until then the path is missing, so
+        // the import must not be flagged.
+        let source = "import './src/env.js';";
+        let diags = run_in_dir("cli/template/extras/config/next-config-appdir.js", source);
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_missing_import_outside_template_dir() {
+        // The same missing import in normal (non-template) source is a real
+        // error and must still fire — the exemption stays narrow.
+        let source = "import './src/env.js';";
+        let diags = run_in_dir("config/next-config-appdir.js", source);
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("src/env.js"));
     }
 }

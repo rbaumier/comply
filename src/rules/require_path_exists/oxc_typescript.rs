@@ -135,6 +135,14 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Scaffold template files (create-t3-app's `cli/template/`, etc.) are
+        // assembled into the generated project at scaffold time; their cross-file
+        // relative imports resolve only after that assembly. In the unassembled
+        // tree those siblings are absent, so the imports are not real errors.
+        if crate::rules::path_utils::is_scaffold_template_path(ctx.path) {
+            return;
+        }
+
         if crate::rules::path_utils::is_generated_file_specifier(&import_spec) {
             return;
         }
@@ -355,5 +363,26 @@ mod tests {
         let source = "import { x } from '../sibling/exists';";
         let diags = run_in_dir("sub/app.ts", source, &["sibling/exists.ts"]);
         assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn no_fp_for_scaffold_template_file_issue_1753() {
+        // create-t3-app reproducer: a scaffold template under `cli/template/`
+        // imports a CSS Module that lives in a different template subdirectory.
+        // The CLI assembles them into siblings in the generated project; before
+        // assembly the path is missing, so the import must not be flagged.
+        let source = "import styles from './index.module.css';";
+        let diags = run_in_dir("cli/template/extras/src/app/page/base.tsx", source, &[]);
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_missing_import_outside_template_dir() {
+        // The same missing import in normal (non-template) source is a real
+        // error and must still fire — the exemption stays narrow.
+        let source = "import styles from './index.module.css';";
+        let diags = run_in_dir("src/app/page/base.tsx", source, &[]);
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("index.module.css"));
     }
 }
