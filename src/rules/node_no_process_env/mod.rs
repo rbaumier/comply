@@ -21,7 +21,7 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["node"],
 
     skip_in_test_dir: false,
-    skip_in_relaxed_dir: false,
+    skip_in_relaxed_dir: true,
 };
 
 pub fn register() -> RuleDef {

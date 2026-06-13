@@ -76,6 +76,10 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
+    fn run_gated(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_gated(&Check, source, path)
+    }
+
     #[test]
     fn flags_process_env() {
         let d = run_on("const port = process.env.PORT;");
@@ -133,6 +137,30 @@ function readSentryEnv() {
 const scattered = process.env['SCATTERED'];
 "#;
         let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("process.env"));
+    }
+
+    // Regression: #1156 — AutoRest-generated ARM SDK sample files under
+    // `samples/` use the documented `process.env["X"] || "default"` credential
+    // pattern. Samples are self-contained examples with no shared config module,
+    // so `skip_in_relaxed_dir` (samples/ is a relaxed segment) exempts them.
+    #[test]
+    fn skips_process_env_in_samples_dir() {
+        let src = r#"
+async function networkInterfaceIPConfigurationGet(): Promise<void> {
+  const subscriptionId = process.env["NETWORK_SUBSCRIPTION_ID"] || "subid";
+  const resourceGroupName = process.env["NETWORK_RESOURCE_GROUP"] || "testrg";
+}
+"#;
+        let path =
+            "sdk/network/arm-network-profile-2020-09-01-hybrid/samples/v2/typescript/src/networkInterfaceIPConfigurationsGetSample.ts";
+        assert!(run_gated(src, path).is_empty());
+    }
+
+    #[test]
+    fn still_flags_process_env_in_regular_src_dir() {
+        let d = run_gated("const port = process.env.PORT;", "src/server/config.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("process.env"));
     }
