@@ -140,11 +140,11 @@ fn is_entry_point(
 
     // CLIs and smoke/build tools are run directly, never imported. They live in
     // a top-level `scripts/`, `bin/`, `examples/`, `example-apps/`, `tools/`,
-    // or `benchmarks/` directory.
+    // `benchmark/`, or `benchmarks/` directory.
     if in_top_level_dir(
         path,
         canon_root,
-        &["scripts", "bin", "examples", "example-apps", "tools", "benchmarks"],
+        &["scripts", "bin", "examples", "example-apps", "tools", "benchmark", "benchmarks"],
     ) {
         return true;
     }
@@ -427,6 +427,40 @@ mod tests {
         assert!(
             diags.is_empty(),
             "examples/ files are entry points and must not be flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #2066: files under a top-level `benchmark/` directory
+    // (singular) are benchmark entry points run directly, like `benchmarks/`.
+    #[test]
+    fn benchmark_dir_files_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.ts", "export const root = 1;\n"),
+            (
+                "benchmark/babel-traverse/enter-visitor-context-change/bench.mjs",
+                "import Benchmark from 'benchmark';\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "top-level benchmark/ files are entry points and must not be flagged: {diags:?}"
+        );
+    }
+
+    // The `benchmark/` exemption is top-level only: an unimported `benchmark`
+    // directory nested under `src/` is regular source and must still be flagged.
+    #[test]
+    fn nested_benchmark_dir_file_is_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.ts", "export const root = 1;\n"),
+            ("src/benchmark/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "nested src/benchmark/ orphan must still be flagged: {diags:?}"
         );
     }
 
