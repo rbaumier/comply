@@ -1,7 +1,7 @@
 //! no-mutation OXC backend — flag mutations on `const` bindings.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_local_object_builder_binding};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     AssignmentTarget, Expression, IdentifierReference, PropertyKey, UnaryOperator,
@@ -67,7 +67,8 @@ impl OxcCheck for Check {
                     return;
                 }
                 if let Some(id) = root_identifier_of_target(&assign.left)
-                    && is_created_dom_element(id, semantic)
+                    && (is_created_dom_element(id, semantic)
+                        || is_local_object_builder_binding(id, semantic))
                 {
                     return;
                 }
@@ -601,6 +602,54 @@ mod tests {
         let src = r#"
             const target = { a: 1 };
             Object.assign(target, { b: 2 });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_property_assignment_on_local_object_spread_builder() {
+        // Regression for rbaumier/comply#1930 — dnd-kit boundingRectangle:
+        // `value` is a fresh local copy via object spread, built up via
+        // conditional property assignments before being returned. No external
+        // state is mutated — the object analogue of the array accumulator.
+        let src = r#"
+            export function boundingRectangle(transform, shape, boundingRect) {
+                const value = { ...transform };
+                if (cond) {
+                    value.y = boundingRect.top - shape.boundingRectangle.top;
+                } else if (cond2) {
+                    value.y = boundingRect.bottom;
+                }
+                if (cond3) {
+                    value.x = boundingRect.left;
+                }
+                return value;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_property_assignment_on_local_object_literal_builder() {
+        let src = r#"
+            function build() {
+                const value = { a: 1 };
+                value.b = 2;
+                return value;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_property_assignment_on_const_from_external_call() {
+        // A `const` initialized from a function call (not an object literal /
+        // spread) references external state — mutating it is still flagged.
+        let src = r#"
+            function mutate() {
+                const value = getConfig();
+                value.x = 1;
+            }
         "#;
         assert_eq!(run(src).len(), 1);
     }
