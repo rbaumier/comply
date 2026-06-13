@@ -222,4 +222,25 @@ mod tests {
         );
         assert!(d.is_empty(), "{d:?}");
     }
+
+    #[test]
+    fn treats_blob_and_file_as_universal_issue_1882() {
+        // Regression for issue #1882: Blob and File are WHATWG web-platform
+        // APIs (lib.dom.d.ts binary-data / file-upload types) available across
+        // all modern runtimes, never version-gated even when engines.node is low.
+        let d = setup_at_path(
+            ">=12",
+            "type ItemData = Record<string, Blob | string>; const g = (item: DataTransferItem): File | null => null; const b = new Blob([]); const f = new File([], 'n');",
+            "src/utils/dataTransfer/Clipboard.ts",
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    #[test]
+    fn still_flags_genuinely_unsupported_builtin() {
+        // A Node builtin that is NOT in the WHATWG exemption list must still flag.
+        let d = setup_at_path(">=12", "structuredClone({});", "src/clone.ts");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("structuredClone"));
+    }
 }

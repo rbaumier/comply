@@ -40,12 +40,12 @@ pub fn register() -> RuleDef {
 
 /// Minimum Node major version at which each global API became available.
 ///
-/// The Fetch API request/response value types (`Request`, `Response`, `Headers`,
-/// `FormData`) are intentionally NOT version-gated: they are WHATWG web-platform
-/// standards available across all modern runtimes (browsers, Deno, Bun,
-/// Cloudflare Workers, Node 18+) and the core abstraction of multi-runtime
-/// frameworks, so gating them by `engines.node` produces false positives.
-/// `fetch` itself (the I/O function) stays gated.
+/// The WHATWG web-platform value types (`Request`, `Response`, `Headers`,
+/// `FormData`, `Blob`, `File`) are intentionally NOT version-gated: they are
+/// `lib.dom.d.ts` standards available across all modern runtimes (browsers,
+/// Deno, Bun, Cloudflare Workers, Node 18+) and the core abstraction of
+/// multi-runtime frameworks, so gating them by `engines.node` produces false
+/// positives. `fetch` itself (the I/O function) stays gated.
 const GLOBAL_APIS: &[(&str, u32)] = &[
     ("AbortController", 15),
     ("AbortSignal", 15),
@@ -54,9 +54,7 @@ const GLOBAL_APIS: &[(&str, u32)] = &[
     ("btoa", 16),
     ("structuredClone", 17),
     ("fetch", 18),
-    ("Blob", 18),
     ("CustomEvent", 19),
-    ("File", 20),
     ("navigator", 21),
     ("WebSocket", 22),
 ];
