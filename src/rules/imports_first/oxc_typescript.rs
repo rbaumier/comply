@@ -6,7 +6,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{AssignmentTarget, Declaration, Expression, Statement};
+use oxc_ast::ast::{Argument, AssignmentTarget, Declaration, Expression, Statement};
 use std::sync::Arc;
 
 pub struct Check;
@@ -87,6 +87,36 @@ fn is_process_env_assignment(stmt: &Statement) -> bool {
             if matches!(&env.object, Expression::Identifier(obj) if obj.name.as_str() == "process")
                 && env.property.name.as_str() == "env"
     )
+}
+
+/// A `require("pkg")` call expression: the callee is the bare `require`
+/// identifier and the first argument is a string-literal module specifier.
+fn is_require_call(expr: &Expression) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    let Expression::Identifier(callee) = &call.callee else {
+        return false;
+    };
+    callee.name.as_str() == "require"
+        && matches!(call.arguments.first(), Some(Argument::StringLiteral(_)))
+}
+
+/// A `const`/`let`/`var x = require("pkg")` declaration (every declarator
+/// initialized with a `require(...)` call). In a file mixing CommonJS and ES
+/// module syntax this is a module-loading statement equivalent to an `import`,
+/// not imperative code, so it must not flip `saw_non_import` when it precedes an
+/// ES `import`. A declaration with any non-`require` initializer (e.g.
+/// `const x = compute()`) is genuine logic and stays flagged.
+fn is_require_declaration(stmt: &Statement) -> bool {
+    let Statement::VariableDeclaration(decl) = stmt else {
+        return false;
+    };
+    !decl.declarations.is_empty()
+        && decl
+            .declarations
+            .iter()
+            .all(|declarator| declarator.init.as_ref().is_some_and(is_require_call))
 }
 
 /// TypeScript type-namespace-only declarations: `type X = ...`,
@@ -177,6 +207,11 @@ impl OxcCheck for Check {
                 // and have no import side effects — they must not break the
                 // imports block.
                 _ if is_type_only_declaration(stmt) => {}
+                // `const x = require("pkg")` (CommonJS) is a module-loading
+                // declaration, not imperative code. In a mixed CJS/ESM file it
+                // legitimately precedes ES imports, so it must not break the
+                // imports block.
+                _ if is_require_declaration(stmt) => {}
                 _ => {
                     saw_non_import = true;
                 }
@@ -413,5 +448,50 @@ import { setup } from './setup'
 import { run } from './run'
 "#;
         assert_eq!(run_on_path(src, "src/main.ts").len(), 1);
+    }
+
+    // Regression test for https://github.com/rbaumier/comply/issues/1746
+    // A `const x = require('pkg')` (CommonJS) before ES imports in a mixed
+    // CJS/ESM file is a module-loading declaration, not imperative code — it must
+    // not flag the following imports.
+    #[test]
+    fn allows_require_declaration_before_imports() {
+        let src = r#"const postcss = require('postcss')
+import { ProcessOptions, LazyResult } from 'postcss'
+import trimPlugin from './stylePlugins/trim'
+import scopedPlugin from './stylePlugins/scoped'
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Multiple `require()` declarations before imports are likewise module loads.
+    #[test]
+    fn allows_multiple_require_declarations_before_imports() {
+        let src = r#"const path = require('path')
+const serialize = require('serialize-javascript')
+import { isJS, isCSS } from '../util'
+import TemplateStream from './template-stream'
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // A genuine non-`require` initializer before an import is real logic and must
+    // still flag — the require exemption must not weaken the rule.
+    #[test]
+    fn still_flags_non_require_declaration_before_imports() {
+        let src = r#"const x = compute()
+import { a } from 'a'
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // A declaration mixing a `require()` and a non-`require` initializer is not a
+    // pure module load, so it must still flag the following import.
+    #[test]
+    fn still_flags_mixed_require_and_call_declaration_before_imports() {
+        let src = r#"const fs = require('fs'), y = compute()
+import { a } from 'a'
+"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
