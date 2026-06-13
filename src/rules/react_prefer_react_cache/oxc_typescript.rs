@@ -20,9 +20,42 @@ fn starts_with_uppercase(name: &str) -> bool {
     name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
+/// Next.js framework-consumed exports that cannot be wrapped in
+/// `React.cache()`: the framework calls them directly with fixed arguments.
+/// Pages Router lifecycle (`getServerSideProps`/`getStaticProps`/
+/// `getStaticPaths`/`getInitialProps`) and App Router generation APIs
+/// (`generateStaticParams`/`generateMetadata`) are not user-callable data
+/// fetchers, so deduplication via `cache()` does not apply.
+fn is_framework_lifecycle_export(name: &str) -> bool {
+    matches!(
+        name,
+        "getServerSideProps"
+            | "getStaticProps"
+            | "getStaticPaths"
+            | "getInitialProps"
+            | "generateStaticParams"
+            | "generateMetadata"
+    )
+}
+
 fn body_has_await_or_fetch(source: &str, span: oxc_span::Span) -> bool {
     let text = &source[span.start as usize..span.end as usize];
     text.contains("await ") || text.contains("fetch(")
+}
+
+/// True for a Next.js Pages Router API route file (`pages/api/...`). The
+/// route's `handler` export is invoked by the framework with `(req, res)`,
+/// not a deduplication-eligible fetcher.
+fn is_pages_api_route(path: &std::path::Path) -> bool {
+    let lower = path.to_string_lossy().to_lowercase();
+    lower.contains("/pages/api/") || lower.starts_with("pages/api/")
+}
+
+/// True for export names the Next.js framework consumes directly and that
+/// must not be wrapped in `React.cache()`: lifecycle/generation exports
+/// everywhere, plus `handler` inside a `pages/api/` route.
+fn is_exempt_export(name: &str, path: &std::path::Path) -> bool {
+    is_framework_lifecycle_export(name) || (name == "handler" && is_pages_api_route(path))
 }
 
 fn is_cache_wrapper(expr: &Expression) -> bool {
@@ -94,6 +127,13 @@ impl OxcCheck for Check {
         if ctx.file.directives.use_client {
             return;
         }
+        // A `'use server'` file is a Server Action module: its exports are
+        // mutation invocation endpoints, not deduplication-eligible pure
+        // fetchers. Wrapping them in `React.cache()` is semantically wrong
+        // (caching a sign-in action would break auth), so exempt the file.
+        if ctx.file.directives.use_server {
+            return;
+        }
         // The project must use Next.js (the only mainstream framework
         // with RSC + React.cache support today). Plain React / TanStack
         // Start / Vite SPA setups don't have the cache mechanism.
@@ -107,8 +147,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        let is_rsc_candidate = ctx.file.directives.use_server
-            || ctx.file.path_segments.in_app_router
+        let is_rsc_candidate = ctx.file.path_segments.in_app_router
             || ctx.file.path_segments.in_pages_router;
         if !is_rsc_candidate {
             return;
@@ -132,6 +171,9 @@ impl OxcCheck for Check {
                         let Some(id) = &func.id else { return };
                         let name = id.name.as_str();
                         if starts_with_uppercase(name) {
+                            return;
+                        }
+                        if is_exempt_export(name, ctx.path) {
                             return;
                         }
                         if !body_has_await_or_fetch(ctx.source, func.span()) {
@@ -165,6 +207,9 @@ impl OxcCheck for Check {
                             if starts_with_uppercase(name) {
                                 continue;
                             }
+                            if is_exempt_export(name, ctx.path) {
+                                continue;
+                            }
                             if !body_has_await_or_fetch(ctx.source, init.span()) {
                                 continue;
                             }
@@ -184,6 +229,9 @@ impl OxcCheck for Check {
                     let Some(id) = &func.id else { return };
                     let name = id.name.as_str();
                     if starts_with_uppercase(name) {
+                        return;
+                    }
+                    if is_exempt_export(name, ctx.path) {
                         return;
                     }
                     if !body_has_await_or_fetch(ctx.source, func.span()) {
@@ -217,13 +265,20 @@ mod tests {
     /// file. Creates a temp dir with `package.json` and the file at
     /// `app/search/page.tsx` so all RSC-candidate signals fire correctly.
     fn run_next_app_router(source: &str) -> Vec<Diagnostic> {
+        run_next_at(source, "app/search/page.tsx")
+    }
+
+    /// Like `run_next_app_router` but lets the test place the file at an
+    /// arbitrary path relative to the project root (e.g. `pages/index.tsx`,
+    /// `pages/api/users.ts`, `app/login/actions.ts`).
+    fn run_next_at(source: &str, rel_path: &str) -> Vec<Diagnostic> {
         let dir = TempDir::new().unwrap();
         fs::write(
             dir.path().join("package.json"),
             r#"{"dependencies":{"next":"^15","react":"^19"}}"#,
         )
         .unwrap();
-        let file_path = dir.path().join("app/search/page.tsx");
+        let file_path = dir.path().join(rel_path);
         fs::create_dir_all(file_path.parent().unwrap()).unwrap();
         fs::write(&file_path, source).unwrap();
         let source_file = SourceFile {
@@ -340,5 +395,98 @@ export const getUser = cache(async (id: string) => {
 });
 "#;
         assert!(run_next_app_router(src).is_empty());
+    }
+
+    // Regression for #1784: a `'use server'` Server Action module is a set of
+    // mutation endpoints, not deduplication-eligible fetchers. `signIn`
+    // awaits but must not be flagged.
+    #[test]
+    fn no_fp_use_server_action_module() {
+        let src = r#"'use server'
+
+import { redirect } from 'next/navigation'
+import { createClient } from '@/lib/supabase/server'
+
+export async function signIn(formData: FormData) {
+    const supabase = await createClient()
+    const data = {
+        email: formData.get('email') as string,
+        password: formData.get('password') as string,
+    }
+    const { error } = await supabase.auth.signInWithPassword(data)
+    if (error) redirect('/error')
+    redirect('/')
+}
+"#;
+        assert!(run_next_at(src, "app/login/actions.ts").is_empty());
+    }
+
+    // Regression for #1784: Pages Router `getServerSideProps` is consumed by
+    // the framework and cannot be wrapped in `React.cache()`.
+    #[test]
+    fn no_fp_pages_router_get_server_side_props() {
+        let src = r#"export const getServerSideProps = async (ctx: GetServerSidePropsContext) => {
+    const supabase = createServerClient(ctx)
+    const { data } = await supabase.from('rooms').select()
+    return { props: { rooms: data } }
+}
+"#;
+        assert!(run_next_at(src, "pages/index.tsx").is_empty());
+    }
+
+    // Regression for #1784: other Pages Router / App Router framework-consumed
+    // exports are also exempt.
+    #[test]
+    fn no_fp_framework_lifecycle_exports() {
+        let src = r#"export async function getStaticProps() {
+    const data = await fetch('/api/data')
+    return { props: {} }
+}
+
+export async function getStaticPaths() {
+    const data = await fetch('/api/paths')
+    return { paths: [], fallback: false }
+}
+
+export async function generateStaticParams() {
+    const data = await fetch('/api/params')
+    return []
+}
+
+export async function generateMetadata() {
+    const data = await fetch('/api/meta')
+    return {}
+}
+"#;
+        assert!(run_next_at(src, "app/blog/page.tsx").is_empty());
+    }
+
+    // Regression for #1784: a `pages/api/` route handler is framework-invoked
+    // with `(req, res)`, not a cacheable fetcher.
+    #[test]
+    fn no_fp_pages_api_handler() {
+        let src = r#"export default async function handler(req, res) {
+    const data = await fetch('/api/upstream')
+    res.json(await data.json())
+}
+"#;
+        assert!(run_next_at(src, "pages/api/users.ts").is_empty());
+    }
+
+    // A genuine RSC data fetcher must still be flagged — the exemptions are
+    // name/directive/path scoped, not a blanket disable.
+    #[test]
+    fn still_flags_genuine_fetcher_alongside_exempt_export() {
+        let src = r#"export async function getStaticProps() {
+    const data = await fetch('/api/data')
+    return { props: {} }
+}
+
+export async function fetchSuggestions(query: string) {
+    const res = await fetch(`/api/search?q=${query}`)
+    return res.json()
+}
+"#;
+        assert_eq!(run_next_at(src, "app/search/page.tsx").len(), 1);
     }
 }
