@@ -35,6 +35,16 @@ fn is_absence_sentinel(expr: &Expression) -> bool {
     }
 }
 
+/// A timing attack only leaks a secret when both operands are runtime values
+/// compared byte-by-byte. When one side is a string literal, its bytes are
+/// already in the source — there is nothing to learn from timing the compare.
+/// This is also where the `token` identifier of date/time format code lands:
+/// `token === "yy"`, `token === "lastWeek"` are dispatch checks against format
+/// codes, not secret comparisons.
+fn is_string_literal(expr: &Expression) -> bool {
+    matches!(expr, Expression::StringLiteral(_))
+}
+
 fn name_is_secret(expr: &Expression) -> bool {
     match expr {
         Expression::Identifier(id) => {
@@ -74,6 +84,9 @@ impl OxcCheck for Check {
             return;
         }
         if is_absence_sentinel(&bin.left) || is_absence_sentinel(&bin.right) {
+            return;
+        }
+        if is_string_literal(&bin.left) || is_string_literal(&bin.right) {
             return;
         }
         if !name_is_secret(&bin.left) && !name_is_secret(&bin.right) {
@@ -152,5 +165,27 @@ mod tests {
     #[test]
     fn allows_secret_vs_empty_string() {
         assert!(run(r#"if (password === "") {}"#).is_empty());
+    }
+
+    // Regression for #1914: `token` is a date-format token compared against a
+    // hardcoded format code, not an auth secret. A literal operand cannot leak
+    // a secret via timing, so these must not be flagged.
+    #[test]
+    fn allows_format_token_vs_literal() {
+        let src = r#"const isTwoDigitYear = token === "yy";"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_format_token_branch_vs_literal() {
+        let src = r#"if (token === "lastWeek") { a(); } else if (token === "nextWeek") { b(); }"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // The genuine case stays flagged: two runtime values compared byte-by-byte.
+    #[test]
+    fn flags_token_vs_runtime_value() {
+        let src = r#"if (token === userInput) {}"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
