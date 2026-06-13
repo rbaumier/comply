@@ -46,6 +46,14 @@ impl OxcCheck for Check {
                 continue;
             };
 
+            // An explicit type annotation on the binding (`const fn: T = () => …`)
+            // cannot be carried by a function declaration — there is no
+            // `function fn: T(...)` syntax — so converting would drop the type.
+            // Leave the arrow form alone.
+            if declarator.type_annotation.is_some() {
+                continue;
+            }
+
             // An arrow complex enough to exceed the cyclomatic-complexity
             // threshold is already a complexity concern; nudging it to a
             // declaration is noise, and the conversion would additionally
@@ -211,5 +219,22 @@ mod tests {
     fn no_fp_react_component_in_jsx() {
         let diags = crate::rules::test_helpers::run_rule(&Check, "const Button = () => 42;", "t.jsx");
         assert!(diags.is_empty(), "PascalCase arrow in .jsx should not flag, got {diags:#?}");
+    }
+
+    // Typed arrow exemption (issue #1911): a `const fn: T = () => {}` cannot be
+    // rewritten as a function declaration without losing the type annotation.
+
+    #[test]
+    fn no_fp_typed_arrow_issue_1911() {
+        let src = "const ordinalNumber: LocalizeFn<number> = (dirtyNumber, _options) => {\n  const number = Number(dirtyNumber);\n  return number + \".\";\n};";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
+        assert!(diags.is_empty(), "typed top-level arrow should not flag, got {diags:#?}");
+    }
+
+    #[test]
+    fn still_flags_untyped_arrow() {
+        let diags =
+            crate::rules::test_helpers::run_rule(&Check, "const ordinalNumber = (n: number) => n + 1;", "t.ts");
+        assert_eq!(diags.len(), 1, "untyped top-level arrow should still flag");
     }
 }
