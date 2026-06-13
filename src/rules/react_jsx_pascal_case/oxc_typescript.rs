@@ -7,8 +7,23 @@ use oxc_ast::ast::JSXElementName;
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
+/// `unstable_`/`experimental_` is an established React convention for
+/// experimental public APIs (e.g. `React.unstable_Activity`,
+/// `<Checkbox.unstable_BubbleInput />`). The component name after the prefix is
+/// still PascalCase, so strip a single leading experimental prefix before the
+/// check rather than rejecting the segment for containing `_`.
+fn strip_experimental_prefix(segment: &str) -> &str {
+    for prefix in ["unstable_", "experimental_"] {
+        if let Some(rest) = segment.strip_prefix(prefix) {
+            return rest;
+        }
+    }
+    segment
+}
+
 fn is_pascal_case(name: &str) -> bool {
-    for segment in name.split('.') {
+    for raw_segment in name.split('.') {
+        let segment = strip_experimental_prefix(raw_segment);
         if segment.is_empty() {
             return false;
         }
@@ -157,5 +172,37 @@ mod tests {
     #[test]
     fn allows_plain_intrinsic() {
         assert!(run("const x = <div>hello</div>;").is_empty());
+    }
+
+    // Issue #1987: `unstable_`/`experimental_` is an established React convention
+    // for experimental public APIs (e.g. `<Checkbox.unstable_BubbleInput />`). The
+    // underlying component name stays PascalCase, so these must not be flagged.
+    #[test]
+    fn allows_unstable_member_bubble_input() {
+        assert!(run("const x = <Checkbox.unstable_BubbleInput />;").is_empty());
+    }
+
+    #[test]
+    fn allows_unstable_member_provider() {
+        assert!(run("const x = <Checkbox.unstable_Provider />;").is_empty());
+    }
+
+    #[test]
+    fn allows_unstable_member_trigger() {
+        assert!(run("const x = <Checkbox.unstable_Trigger />;").is_empty());
+    }
+
+    #[test]
+    fn is_pascal_case_accepts_experimental_prefixes() {
+        // Direct coverage of the prefix-stripping in `is_pascal_case`, independent
+        // of the dispatch guards: the experimental prefix is stripped, then the
+        // remainder is checked for PascalCase.
+        assert!(is_pascal_case("Checkbox.unstable_BubbleInput"));
+        assert!(is_pascal_case("Checkbox.experimental_Trigger"));
+        // A non-experimental underscore in an uppercase segment still fails.
+        assert!(!is_pascal_case("Foo.Bad_Name"));
+        // The prefix must be a literal `unstable_`/`experimental_`; an uppercase
+        // look-alike is not the convention and still fails.
+        assert!(!is_pascal_case("Unstable_Thing"));
     }
 }
