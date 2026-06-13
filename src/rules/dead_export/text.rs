@@ -201,6 +201,41 @@ fn has_unresolved_site_alias_importer(
     })
 }
 
+/// Names exported by `exporting_file` that an ng-packagr public-API entry barrel
+/// re-exports — i.e. the file's contribution to an Angular library's published
+/// surface. ng-packagr libraries publish through the build output's
+/// `package.json`, so the entry barrel's `export { X } from './m'` is the only
+/// consumer of `m`'s `X` and no source file imports it; such a symbol is live.
+///
+/// Walks each indexed file that is an ng-package entry file and, for every
+/// re-export whose origin resolves to `exporting_file`, records the origin name
+/// (the `local` side of `export { local as exported } from …`, else the
+/// exported name). Returns the empty set when the project ships no ng-packagr
+/// entry, so a non-Angular project pays only the entry-file probe.
+fn collect_ng_package_reexported_names(
+    index: &crate::project::import_index::ImportIndex,
+    project: &crate::project::ProjectCtx,
+    exporting_file: &Path,
+) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for barrel in index.indexed_paths() {
+        if !project.is_ng_package_entry_file(barrel) {
+            continue;
+        }
+        for exp in index.get_exports(barrel) {
+            if !matches!(exp.kind, ExportKind::ReExport) {
+                continue;
+            }
+            if index.reexport_target(barrel, &exp.name) != Some(exporting_file) {
+                continue;
+            }
+            let origin_name = exp.local_name.clone().unwrap_or_else(|| exp.name.clone());
+            out.insert(origin_name);
+        }
+    }
+    out
+}
+
 /// Strip a single trailing TS/JS extension from a forward-slashed path.
 fn strip_ts_extension(path: &str) -> &str {
     for ext in [".tsx", ".ts", ".jsx", ".js", ".mts", ".cts", ".mjs", ".cjs"] {
@@ -275,6 +310,12 @@ impl TextCheck for Check {
         if is_framework_specific_entry_point(&canon, ctx.project) {
             return Vec::new();
         }
+        // ng-packagr public-API entry file (`lib.entryFile` of an
+        // `ng-package.json`) — the package entry point for an Angular library;
+        // never imported by another source file, so never flagged.
+        if ctx.project.is_ng_package_entry_file(&canon) {
+            return Vec::new();
+        }
         // Framework entry DIR match — bail out only when no user entrypoints are
         // configured (backward-compat). When entrypoints are set the user wants
         // backend-dir files checked; only the specific file/suffix matches above protect them.
@@ -327,6 +368,14 @@ impl TextCheck for Check {
         // every export of it is live — the whole module is reachable.
         let mut site_alias_importer: Option<bool> = None;
 
+        // Names of this file's symbols re-exported by an ng-packagr public-API
+        // entry barrel (`lib.entryFile` of an `ng-package.json`). Such a symbol
+        // is part of the Angular library's published surface, consumed
+        // externally — the entry barrel re-exports it but no source file
+        // imports it. Computed lazily: only an export that survived every cheap
+        // check pays for the per-barrel scan.
+        let mut ng_reexported: Option<HashSet<String>> = None;
+
         let mut diagnostics = Vec::new();
         for export in exports {
             if matches!(export.kind, ExportKind::StarReExport) {
@@ -354,6 +403,11 @@ impl TextCheck for Check {
             let site_alias_importer = *site_alias_importer
                 .get_or_insert_with(|| has_unresolved_site_alias_importer(index, &canon));
             if site_alias_importer {
+                continue;
+            }
+            let ng_reexported = ng_reexported
+                .get_or_insert_with(|| collect_ng_package_reexported_names(index, ctx.project, &canon));
+            if ng_reexported.contains(export.name.as_str()) {
                 continue;
             }
             diagnostics.push(Diagnostic {
@@ -1481,5 +1535,161 @@ mod tests {
             "dead component with no matching @site/ importer must still be flagged, got: {diags:?}"
         );
         assert!(diags[0].message.contains("default"));
+    }
+
+    /// Run dead-export after also writing non-source sidecar files (e.g.
+    /// `ng-package.json`) that must NOT be added to the import index.
+    fn run_on_project_with_extra(
+        extra_files: &[(&str, &str)],
+        files: &[(&str, &str)],
+        target_rel: &str,
+    ) -> (TempDir, Vec<Diagnostic>) {
+        let dir = TempDir::new().unwrap();
+        for (rel, content) in extra_files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&p, content).unwrap();
+        }
+        let mut source_files: Vec<SourceFile> = Vec::new();
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&p, content).unwrap();
+            let lang = Language::from_path(&p).unwrap();
+            source_files.push(SourceFile {
+                path: p,
+                language: lang,
+            });
+        }
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let project = ProjectCtx::load(&refs, &Config::default());
+
+        let target_path: PathBuf = dir.path().join(target_rel);
+        let source = fs::read_to_string(&target_path).unwrap();
+        let file_ctx = FileCtx::build(&target_path, &source, Language::TypeScript, &project);
+        let ctx = CheckCtx {
+            path: &target_path,
+            path_arc: std::sync::Arc::from(target_path.as_path()),
+            source: &source,
+            config: &Config::default(),
+            project: &project,
+            file: &file_ctx,
+            lang: crate::files::Language::TypeScript,
+        };
+        let diags = Check.check(&ctx);
+        (dir, diags)
+    }
+
+    #[test]
+    fn no_fp_for_ng_packagr_entry_file() {
+        // Regression for #1840 — an ng-packagr Angular library declares its
+        // public-API entry in `ng-package.json` (`lib.entryFile`), not in
+        // `package.json` `main`/`exports` (ng-packagr emits those to the build
+        // output). The entry barrel `public_api.ts` re-exports the module, but
+        // no source file imports it, so both the entry file's re-export and the
+        // re-exported `IonicServerModule` look dead. Neither must be flagged.
+        let extra = vec![(
+            "packages/angular-server/ng-package.json",
+            "{ \"lib\": { \"entryFile\": \"src/public_api.ts\" } }",
+        )];
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "packages/angular-server/src/public_api.ts",
+                "export { IonicServerModule } from './ionic-server-module';",
+            ),
+            (
+                "packages/angular-server/src/ionic-server-module.ts",
+                "export class IonicServerModule {}",
+            ),
+        ];
+        let (_dir, entry_diags) = run_on_project_with_extra(
+            &extra,
+            &files,
+            "packages/angular-server/src/public_api.ts",
+        );
+        assert!(
+            entry_diags.is_empty(),
+            "ng-packagr entry file must not be flagged, got: {entry_diags:?}"
+        );
+
+        let (_dir2, module_diags) = run_on_project_with_extra(
+            &extra,
+            &files,
+            "packages/angular-server/src/ionic-server-module.ts",
+        );
+        assert!(
+            module_diags.is_empty(),
+            "symbol re-exported by the ng-packagr entry barrel must not be flagged, got: {module_diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_dead_export_in_ng_packagr_library() {
+        // Sibling guard for #1840 — a symbol that is NOT re-exported by the
+        // ng-packagr public-API entry barrel and has no importer is genuinely
+        // dead and must still be flagged. Presence of an `ng-package.json` must
+        // not blanket-exempt the whole package.
+        let extra = vec![(
+            "packages/angular-server/ng-package.json",
+            "{ \"lib\": { \"entryFile\": \"src/public_api.ts\" } }",
+        )];
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "packages/angular-server/src/public_api.ts",
+                "export { IonicServerModule } from './ionic-server-module';",
+            ),
+            (
+                "packages/angular-server/src/ionic-server-module.ts",
+                "export class IonicServerModule {}",
+            ),
+            (
+                "packages/angular-server/src/internal-helper.ts",
+                "export function unusedHelper() {}",
+            ),
+        ];
+        let (_dir, diags) = run_on_project_with_extra(
+            &extra,
+            &files,
+            "packages/angular-server/src/internal-helper.ts",
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("unusedHelper")),
+            "private symbol not on the public API must still be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn handles_ng_packagr_secondary_entry_point() {
+        // ng-packagr secondary entry points live in nested `ng-package.json`
+        // files (and their JSONC often carries a trailing comma). The nearest
+        // `ng-package.json` to a file in `standalone/` is the nested one, so its
+        // `lib.entryFile` is the entry for that subtree.
+        let extra = vec![(
+            "packages/angular/standalone/ng-package.json",
+            "{\n  \"lib\": {\n    \"entryFile\": \"src/index.ts\"\n  },\n}\n",
+        )];
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "packages/angular/standalone/src/index.ts",
+                "export { StandaloneThing } from './standalone-thing';",
+            ),
+            (
+                "packages/angular/standalone/src/standalone-thing.ts",
+                "export class StandaloneThing {}",
+            ),
+        ];
+        let (_dir, diags) = run_on_project_with_extra(
+            &extra,
+            &files,
+            "packages/angular/standalone/src/standalone-thing.ts",
+        );
+        assert!(
+            diags.is_empty(),
+            "secondary ng-packagr entry barrel must seed reachability, got: {diags:?}"
+        );
     }
 }
