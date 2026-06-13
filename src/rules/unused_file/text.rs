@@ -137,6 +137,10 @@ fn is_entry_point(
         return true;
     }
 
+    if is_standalone_sample_script(path, stem) {
+        return true;
+    }
+
     let Some(canon_root) = canon_root else {
         return false;
     };
@@ -185,6 +189,23 @@ fn is_entry_point(
     }
 
     false
+}
+
+/// True for a standalone sample script: a `*Sample.{ts,js,...}` file living
+/// under a `samples/` or `samples-dev/` directory. The Azure ARM SDK (and
+/// other SDK generators) emit one such file per API operation; each is a
+/// self-contained executable that defines `main()` and calls
+/// `main().catch(...)` at the top level, run directly via `ts-node`. Nothing
+/// imports them, so they are their own entry points, not dead code. The
+/// `Sample` stem suffix is paired with the directory check so an ordinary
+/// source module that merely happens to end in `Sample` stays a true positive.
+fn is_standalone_sample_script(path: &Path, stem: &str) -> bool {
+    if !stem.ends_with("Sample") {
+        return false;
+    }
+    path.components().any(|c| {
+        matches!(c.as_os_str().to_str(), Some("samples") | Some("samples-dev"))
+    })
 }
 
 /// True when `path` lives anywhere inside one of `dirs` taken as a top-level
@@ -908,6 +929,69 @@ mod tests {
         assert!(
             diags[0].path.to_str().unwrap().contains("jest.foo"),
             "a jest.* variant without a sibling base jest.config.* is still flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #1164: Azure ARM SDK `*Sample.ts` standalone scripts under
+    // a `samples/` directory define `main()` and call `main().catch(...)` at the
+    // top level — they are run directly via `ts-node`, imported by nothing, and
+    // are therefore their own entry points, not dead code.
+    #[test]
+    fn azure_sample_scripts_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/index.ts", "export const app = 1;\n"),
+            (
+                "samples/v36/typescript/src/vpnLinkConnectionsResetConnectionSample.ts",
+                "import { DefaultAzureCredential } from '@azure/identity';\n\
+                 async function main(): Promise<void> {\n\
+                 \x20\x20void new DefaultAzureCredential();\n\
+                 }\n\
+                 main().catch(console.error);\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "`*Sample.ts` scripts under samples/ are standalone entry points: {diags:?}"
+        );
+    }
+
+    // Regression for #1164: the sample exemption is precise — a genuinely
+    // orphaned source file that is neither a sample script nor under a
+    // `samples/` directory is still a true positive.
+    #[test]
+    fn orphan_file_beside_samples_still_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/index.ts", "export const app = 1;\n"),
+            (
+                "samples/v1/typescript/src/createSample.ts",
+                "async function main(): Promise<void> {}\nmain().catch(console.error);\n",
+            ),
+            ("src/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "only the genuine orphan must be flagged; the sample script is an entry point: {diags:?}"
+        );
+    }
+
+    // Regression for #1164: the `Sample` suffix is gated on the `samples/`
+    // directory — an ordinary source module that merely ends in `Sample` but
+    // lives outside any samples/ directory is not a standalone script and stays
+    // a true positive when orphaned.
+    #[test]
+    fn sample_suffixed_source_outside_samples_dir_is_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/index.ts", "export const app = 1;\n"),
+            ("src/lib/dataSample.ts", "export const dataSample = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("dataSample"),
+            "a *Sample file outside any samples/ dir is not a standalone script: {diags:?}"
         );
     }
 }
