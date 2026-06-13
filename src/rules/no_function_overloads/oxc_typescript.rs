@@ -437,6 +437,30 @@ function foo(x: number | string): string | number { return x as any; }
     }
 
     #[test]
+    fn allows_arity_discriminated_overloads_with_distinct_concrete_return_types() {
+        // Regression for #1876: mobx `when` returns a `Promise<void> & { cancel() }`
+        // in its 2-param async form and an `IReactionDisposer` in its 3-param
+        // callback form. The return types are concrete (no generics) and selected
+        // by argument count; a union return would force every caller to narrow, so
+        // the overloads are load-bearing and must not collapse.
+        let source = r#"
+export function when(
+    predicate: () => boolean,
+    opts?: IWhenOptions
+): Promise<void> & { cancel(): void };
+export function when(
+    predicate: () => boolean,
+    effect: Lambda,
+    opts?: IWhenOptions
+): IReactionDisposer;
+export function when(predicate: any, arg1?: any, arg2?: any): any {
+    return arg1;
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
     fn flags_distinct_arity_with_same_return_type() {
         // Differing arity but identical return type collapses to one optional
         // param — no per-overload return inference to preserve, so it fires.
