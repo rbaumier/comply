@@ -581,6 +581,48 @@ pub fn peel_parens<'a>(
     current
 }
 
+/// True when `object` (the receiver of a `<object>.postMessage(...)` call) is a
+/// window-like reference that accepts a cross-origin `targetOrigin` argument.
+///
+/// Only `Window.postMessage(message, targetOrigin)` and the cross-window forms
+/// (`iframe.contentWindow`, `window.open(...)` result, `parent`/`top`/`opener`)
+/// take a `targetOrigin`; `BroadcastChannel`, `Worker`, `MessagePort`, and the
+/// worker `DedicatedWorkerGlobalScope` expose a one-argument `postMessage` with
+/// no such parameter. The target-origin rules must therefore only inspect a
+/// window-like receiver, otherwise they flag those same-origin-by-design APIs.
+///
+/// Recognised as window-like:
+///  - identifiers `window`, `self`, `globalThis`, `parent`, `top`, `opener`;
+///  - any member access ending in `.contentWindow` (`iframe.contentWindow`),
+///    or in `.parent`/`.top`/`.opener`/`.self`/`.window` (window navigators);
+///  - a `window.open(...)`/`open(...)` call result.
+///
+/// Any other receiver (a `BroadcastChannel`/`Worker`/`MessagePort` instance,
+/// `this.channel`, an arbitrary local binding, `new BroadcastChannel(...)`) is
+/// not window-like and is left unflagged.
+#[must_use]
+pub fn is_window_like_post_message_target(object: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+
+    const WINDOW_IDENTS: &[&str] = &["window", "self", "globalThis", "parent", "top", "opener"];
+    const WINDOW_PROPERTIES: &[&str] =
+        &["contentWindow", "parent", "top", "opener", "self", "window"];
+
+    match peel_parens(object) {
+        Expression::Identifier(id) => WINDOW_IDENTS.contains(&id.name.as_str()),
+        Expression::ThisExpression(_) => false,
+        Expression::StaticMemberExpression(member) => {
+            WINDOW_PROPERTIES.contains(&member.property.name.as_str())
+        }
+        Expression::CallExpression(call) => match peel_parens(&call.callee) {
+            Expression::Identifier(id) => id.name.as_str() == "open",
+            Expression::StaticMemberExpression(member) => member.property.name.as_str() == "open",
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 /// True when `as_expr` is the **outer** half of an `x as unknown as T` chain —
 /// its inner expression (after peeling parentheses) is itself a `TSAsExpression`
 /// whose target is the `unknown` keyword. This is the canonical
