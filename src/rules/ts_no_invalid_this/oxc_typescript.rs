@@ -5,6 +5,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{AssignmentTarget, Expression};
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -116,6 +117,62 @@ fn is_mocha_callback(
     callee_is_mocha_global(&call.callee)
 }
 
+/// True when `name` follows the constructor-function convention (starts with an
+/// uppercase ASCII letter, e.g. `Suspense`, `Component`). Such functions are
+/// conventionally invoked with `new`, so `this` is the new instance.
+fn is_constructor_name(name: &str) -> bool {
+    name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+}
+
+/// True when the reference at `ref_node_id` is used in a way that binds the
+/// function's `this` at call time:
+/// - `new F(...)` — constructor invocation,
+/// - `F.call(this, ...)` / `F.apply(...)` / `F.bind(...)` — explicit binding,
+/// - `x.member = F` — assigned as a method value (receives the receiver as `this`).
+fn reference_binds_this(
+    ref_node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    match nodes.kind(nodes.parent_id(ref_node_id)) {
+        AstKind::NewExpression(_) => true,
+        AstKind::StaticMemberExpression(member) => {
+            matches!(member.property.name.as_str(), "call" | "apply" | "bind")
+        }
+        AstKind::AssignmentExpression(assign) => {
+            matches!(
+                assign.left,
+                AssignmentTarget::StaticMemberExpression(_)
+                    | AssignmentTarget::ComputedMemberExpression(_)
+            ) && assign.right.span() == nodes.kind(ref_node_id).span()
+        }
+        _ => false,
+    }
+}
+
+/// True when the standalone `function` at `func` is a constructor function whose
+/// `this` is bound at call time — either by the PascalCase naming convention, or
+/// because its name is referenced as `new`/`.call`/`.apply`/`.bind`/method-value
+/// somewhere in the module.
+fn is_constructor_function(
+    func: &oxc_ast::ast::Function,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(id) = &func.id else {
+        return false;
+    };
+    if is_constructor_name(&id.name) {
+        return true;
+    }
+    let Some(symbol_id) = id.symbol_id.get() else {
+        return false;
+    };
+    semantic
+        .scoping()
+        .get_resolved_references(symbol_id)
+        .any(|reference| reference_binds_this(reference.node_id(), semantic))
+}
+
 fn is_valid_this_context(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -132,7 +189,7 @@ fn is_valid_this_context(
         match ancestor.kind() {
             AstKind::Class(_) => return true,
             AstKind::ArrowFunctionExpression(_) => continue,
-            AstKind::Function(_) => {
+            AstKind::Function(func) => {
                 // Prototype-patching idiom: a function assigned to a member
                 // of a `*.prototype` object is a method — `this` is the
                 // instance at call time, so it's valid.
@@ -143,6 +200,12 @@ fn is_valid_this_context(
                 // is invoked with a Test/Suite context bound to `this`
                 // (`this.timeout()`, `this.retries()`), so `this` is valid.
                 if is_mocha_callback(ancestor.id(), semantic) {
+                    return true;
+                }
+                // Constructor function: a PascalCase `function`, or one
+                // referenced via `new`/`.call(this)`/`.apply`/`.bind` or
+                // assigned as a method value, gets the instance as `this`.
+                if is_constructor_function(func, semantic) {
                     return true;
                 }
                 // Mark that we've entered a function scope; need to
@@ -323,6 +386,46 @@ mod tests {
         // A `function` passed to a non-Mocha call gets no context — `this` is
         // still unbound and must fire.
         let diags = run_on("arr.forEach(function () { return this.x; });");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_pascal_case_constructor_function() {
+        // Regression for #1916: a PascalCase `function` is a constructor function
+        // by convention — called with `new`, `this` is the new instance.
+        let src = "export function Suspense() {\n  this._pendingSuspensionCount = 0;\n  this._suspenders = null;\n  this._detachOnNextRender = null;\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_constructor_function_calling_super_via_call() {
+        // Regression for #1916: prototype-based inheritance — the PascalCase
+        // constructor uses `.call(this, ...)` and assigns `this.*`.
+        let src = "export function Component(props, context) {\n  CevicheComponent.call(this, props, context);\n  const render = this.render;\n  this.render = function () {};\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_function_assigned_as_method() {
+        // Regression for #1916: a lowercase `function` referenced as a method
+        // value (`this.x = fn`) receives the instance as `this` at call time.
+        let src = "function shouldUpdate(nextProps) {\n  const ref = this.props.ref;\n  return shallowDiffers(this.props, nextProps);\n}\nfunction Memoed(props) {\n  this.shouldComponentUpdate = shouldUpdate;\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_function_invoked_with_call_this() {
+        // Regression for #1916: a lowercase `function` invoked elsewhere via
+        // `.call(this)` is explicitly bound, so `this` in its body is valid.
+        let src = "function init() {\n  return this.x;\n}\nfunction Widget() {\n  init.call(this);\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_lowercase_free_function() {
+        // Negative: an ordinary lowercase free function never used as a
+        // constructor or bound method still has a stray `this`.
+        let diags = run_on("function foo() {\n  return this.bar;\n}\nfoo();");
         assert_eq!(diags.len(), 1);
     }
 }
