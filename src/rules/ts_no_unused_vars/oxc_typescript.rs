@@ -78,7 +78,7 @@ impl OxcCheck for Check {
                         | AstKind::TSGlobalDeclaration(_)
                         | AstKind::TSFunctionType(_)
                         | AstKind::TSMappedType(_)
-                ) || matches!(k, AstKind::Function(f) if f.declare)
+                ) || matches!(k, AstKind::Function(f) if f.body.is_none())
             });
             if decl_is_type_construct || in_type_decl {
                 continue;
@@ -229,6 +229,38 @@ export { Index as component };
         // (outside any snapshot directory) must still fire.
         let src = "import { twMerge } from 'tailwind-merge';\nexport {};";
         assert_eq!(run_at(src, "src/index.tsx").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_overload_signature_params() {
+        // Overload signatures are function declarations with no body: their
+        // parameter names are documentary only, never referenced at runtime.
+        // Only the implementation signature's body can reference params.
+        // (Closes #1853)
+        let src = r#"
+function customElement<T extends object>(
+    tag: string,
+    ComponentType: ComponentType<T>,
+): CustomElementConstructor;
+function customElement<T extends object>(
+    tag: string,
+    props: PropsDefinitionInput<T>,
+    ComponentType: ComponentType<T>,
+): CustomElementConstructor;
+function customElement<T extends object>(
+    tag: string,
+    props: PropsDefinitionInput<T> | ComponentType<T>,
+    ComponentType?: ComponentType<T>,
+): CustomElementConstructor {
+    return tag.length + props + ComponentType as unknown as CustomElementConstructor;
+}
+export { customElement };
+"#;
+        let diags = run(src);
+        assert!(
+            diags.is_empty(),
+            "FP on overload signature parameter names: {diags:?}"
+        );
     }
 
     #[test]
