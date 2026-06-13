@@ -3,6 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::sql_helpers::{is_sql_ddl, is_sql_string};
 use std::sync::Arc;
 
 pub struct Check;
@@ -31,6 +32,13 @@ impl OxcCheck for Check {
             }
             _ => return,
         };
+        // Only treat embedded literals as money-column smells when the whole
+        // literal is actually SQL. A Parquet/Avro/Protobuf schema or prose that
+        // happens to pair a money word with `double`/`float` is not SQL and must
+        // not fire (issue #1118).
+        if !is_sql_string(&text) && !is_sql_ddl(&text) {
+            return;
+        }
         for line in text.lines() {
             if let Some(ft) = super::float_type_for_money_line(line) {
                 let (line_num, column) = byte_offset_to_line_col(ctx.source, offset);
@@ -86,5 +94,31 @@ mod tests {
     fn does_not_flag_non_money_float() {
         let src = r#"const sql = "CREATE TABLE x (latitude FLOAT)";"#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_parquet_schema_issue_1118() {
+        // A Parquet schema embedded in a TS fixture: `AMT_INCOME_TOTAL: double`
+        // has a money word ("total") + a float type ("double"), but the string
+        // is not SQL — no SELECT/FROM/WHERE, no CREATE TABLE/TYPE.
+        let src = r#"const schema = `
+ID: int64
+CODE_GENDER: string
+AMT_INCOME_TOTAL: double
+NAME_INCOME_TYPE: string
+`;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_ddl_money_float() {
+        let src = r#"const sql = "CREATE TABLE accounts (balance DOUBLE PRECISION)";"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_dml_money_float() {
+        let src = r#"const sql = "SELECT amount FROM ledger WHERE amount::FLOAT > 0";"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
