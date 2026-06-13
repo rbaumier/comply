@@ -113,6 +113,14 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A file that feature-detects this global with a `typeof` check
+        // (`typeof window !== "undefined"`) is deliberately environment-aware
+        // code where the bare alias is the intended object, not a portability
+        // oversight — e.g. a browser-only library guarding `window.matchMedia`.
+        if crate::oxc_helpers::file_typeof_guards(ctx.source, semantic).guards(name) {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, member.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
