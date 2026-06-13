@@ -106,6 +106,9 @@ fn is_async_looking_member_call(call: &CallExpression) -> bool {
     if is_xml_http_request_send(member) {
         return false;
     }
+    if is_redux_store_dispatch(member) {
+        return false;
+    }
     if is_diagnostics_channel_publish(member) {
         return false;
     }
@@ -177,6 +180,18 @@ fn is_xml_http_request_send(member: &StaticMemberExpression) -> bool {
     };
     let name = id.name.as_str().to_lowercase();
     name.contains("xhr") || name.contains("xmlhttp")
+}
+
+/// Redux's `Store.dispatch(action)` returns the dispatched `Action` synchronously
+/// for a plain action object — there is no Promise to await or catch.
+/// Matches when the `.dispatch(...)` receiver is a bare identifier whose name
+/// (case-insensitive) reads as a Redux store, e.g. `store`, `reduxStore`,
+/// `appStore`.
+fn is_redux_store_dispatch(member: &StaticMemberExpression) -> bool {
+    if member.property.name.as_str() != "dispatch" {
+        return false;
+    }
+    matches!(&member.object, Expression::Identifier(id) if id.name.as_str().to_lowercase().contains("store"))
 }
 
 /// `ReadableStreamDefaultController.close()` / `WritableStreamDefaultController.close()` etc.
@@ -458,6 +473,39 @@ channel.asyncEnd.publish(context);
     #[test]
     fn still_flags_method_on_non_cast_receiver() {
         let d = run_on("emitter.dispatch(action);");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression tests for issue #1859: Redux's `store.dispatch(action)` returns
+    // the dispatched Action synchronously for a plain action object — there is no
+    // Promise to await — so a `.dispatch(...)` on a store-named receiver must not
+    // be flagged.
+
+    #[test]
+    fn allows_redux_store_dispatch() {
+        let src = "\
+const store = createRechartsStore();
+store.dispatch(
+  setMouseOverAxisIndex({
+    activeCoordinate: { x: 3, y: 4 },
+    activeDataKey: 'uv',
+    activeIndex: '1',
+  }),
+);
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_named_store_dispatch() {
+        assert!(run_on("reduxStore.dispatch(addTodo());").is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_store_dispatch() {
+        // Control: `.dispatch(...)` on a non-store receiver (e.g. a message broker)
+        // stays flagged.
+        let d = run_on("emitter.dispatch(event);");
         assert_eq!(d.len(), 1);
     }
 
