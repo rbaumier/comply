@@ -13,8 +13,8 @@
 //!
 //! A file is considered a test file (and therefore allowed to consume
 //! `devDependencies`) when its path contains any of `__tests__/`,
-//! `__testUtils__/`, `.test.`, `.spec.`, `.stories.`, `/test/`, or `/tests/`,
-//! when its name (minus extension) is exactly `test` or `spec`
+//! `__testUtils__/`, `__mocks__/`, `.test.`, `.spec.`, `.stories.`, `/test/`,
+//! or `/tests/`, when its name (minus extension) is exactly `test` or `spec`
 //! (e.g. `endOfWeek/test.ts`), or when its name starts with a test-runner
 //! tooling prefix (`vitest-`/`jest-`, e.g. `vitest-custom-reporter.ts`).
 

@@ -33,6 +33,7 @@ impl OxcCheck for Check {
         // path predicate, which reads `ctx.path` directly.
         if ctx.file.path_segments.in_test_dir
             || crate::rules::path_utils::is_extraneous_test_file(ctx.path)
+            || crate::rules::path_utils::is_auto_mock_dir_path(ctx.path)
         {
             return;
         }
@@ -299,6 +300,40 @@ import { endOfWeek } from "..";
         let src = r#"import { expect } from "chai";"#;
         let d = run_with_pkg_at_path(pkg, "src/__testUtils__/expectJSON.ts", src);
         assert!(d.is_empty(), "__testUtils__ file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_auto_mock_dir() {
+        // Issue #1755: bulletproof-react's `apps/react-vite/__mocks__/zustand.ts`
+        // is a Vitest/Jest manual mock auto-loaded by the test runner. It imports
+        // the package it mocks plus test-only devDependencies (vitest,
+        // @testing-library/react). `__mocks__/` files never ship in the published
+        // package, so importing a devDependency is correct.
+        let pkg = r#"{
+            "dependencies": {"zustand": "^4"},
+            "devDependencies": {
+                "vitest": "^1",
+                "@testing-library/react": "^14"
+            }
+        }"#;
+        let src = r#"
+import { act } from '@testing-library/react';
+import { afterEach, vi } from 'vitest';
+import * as zustand from 'zustand';
+"#;
+        let d = run_with_pkg_at_path(pkg, "apps/react-vite/__mocks__/zustand.ts", src);
+        assert!(d.is_empty(), "__mocks__ file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_outside_mocks_dir() {
+        // Guard against over-relaxing: a path where "__mocks__" is a substring of
+        // another segment (not its own directory) must still flag.
+        let pkg = r#"{"devDependencies":{"vitest":"^1"}}"#;
+        let src = r#"import { describe } from "vitest";"#;
+        let d = run_with_pkg_at_path(pkg, "src/my__mocks__data/index.ts", src);
+        assert_eq!(d.len(), 1, "non-mock dir should still flag: {d:?}");
+        assert!(d[0].message.contains("vitest"));
     }
 
     #[test]
