@@ -4,8 +4,15 @@
 //! Why: Zod v4 exposes top-level format functions (`z.email()`, `z.url()`,
 //! `z.uuid()`, `z.int()`, `z.iso.datetime()`) that are shorter, faster,
 //! and tree-shakeable compared to the `.string().method()` chain.
+//!
+//! These helpers exist only in zod v4, so the suggestion fires only when the
+//! nearest `package.json` proves zod resolves to v4+ (any dep section, falling
+//! back to the manifest's own `version` when it is the zod package itself).
+//! Files under a `/v3/` path segment — zod's v3-compat sources where the
+//! chained API is correct — are never flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::project::PackageJson;
 use crate::rules::backend::{AstCheck, CheckCtx};
 
 const KINDS: &[&str] = &["call_expression"];
@@ -37,6 +44,16 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Top-level format helpers (`z.email()` etc.) only exist in zod v4.
+        // Skip zod's own v3-compat sources, where the chained API is correct.
+        if path_has_v3_segment(ctx.path) {
+            return;
+        }
+        // Only fire when the nearest package.json proves zod resolves to v4+.
+        if !zod_is_v4_or_later(ctx) {
+            return;
+        }
+
         let source_bytes = ctx.source.as_bytes();
         let Some(function) = node.child_by_field_name("function") else {
             return;
@@ -109,6 +126,66 @@ fn is_z_method_call(node: tree_sitter::Node, method: &str, source: &[u8]) -> boo
         .is_ok_and(|t| t == format!("z.{method}"))
 }
 
+/// True when the file path contains a `/v3/` segment — zod ships its v3-compat
+/// API under `packages/zod/src/v3/`, where the chained `.email()` form is the
+/// correct one and must not be flagged.
+fn path_has_v3_segment(path: &std::path::Path) -> bool {
+    path.components()
+        .any(|c| c.as_os_str().to_str() == Some("v3"))
+}
+
+/// True when the nearest `package.json` proves zod resolves to v4 or later.
+///
+/// Looks across every dependency section, and — because the zod package itself
+/// does not list `zod` as a dependency — falls back to the manifest's own
+/// top-level `version` when it is the zod package (`name == "zod"`). When the
+/// version cannot be proven >= 4 (no manifest, undeclared, or a range whose
+/// smallest major is < 4 such as `^3 || ^4`), this returns `false`.
+fn zod_is_v4_or_later(ctx: &CheckCtx) -> bool {
+    let Some(pkg) = ctx.project.nearest_package_json(ctx.path) else {
+        return false;
+    };
+    zod_version_range(&pkg)
+        .and_then(range_min_major)
+        .is_some_and(|major| major >= 4)
+}
+
+/// The declared zod version range from the nearest manifest: a dependency entry
+/// in any section, or the manifest's own `version` when it is the zod package.
+fn zod_version_range(pkg: &PackageJson) -> Option<&str> {
+    pkg.dependencies
+        .get("zod")
+        .or_else(|| pkg.dev_dependencies.get("zod"))
+        .or_else(|| pkg.peer_dependencies.get("zod"))
+        .or_else(|| pkg.optional_dependencies.get("zod"))
+        .map(String::as_str)
+        .or_else(|| {
+            (pkg.name.as_deref() == Some("zod")).then(|| pkg.version.as_deref())?
+        })
+}
+
+/// Smallest major version a range can resolve to. Splits on `||`, takes the
+/// first numeric run of each alternative as its major, and returns the minimum
+/// across alternatives. Returns `None` when no alternative contains a number,
+/// so undeterminable ranges (e.g. `latest`, `*`, a workspace/git spec) do not
+/// fire. `^3 || ^4` yields `Some(3)`, keeping v3-compatible projects silent.
+fn range_min_major(range: &str) -> Option<u32> {
+    range
+        .split("||")
+        .filter_map(first_numeric_run)
+        .min()
+}
+
+/// First contiguous run of ASCII digits in `s`, parsed as a `u32`. Skips any
+/// leading non-digit prefix (`^`, `~`, `>=`, `v`, whitespace).
+fn first_numeric_run(s: &str) -> Option<u32> {
+    let start = s.find(|c: char| c.is_ascii_digit())?;
+    let end = s[start..]
+        .find(|c: char| !c.is_ascii_digit())
+        .map_or(s.len(), |offset| start + offset);
+    s[start..end].parse().ok()
+}
+
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
     fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
@@ -127,34 +204,140 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use std::fs;
+    use tempfile::TempDir;
 
-    fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    /// Run the rule against `source` written to `rel_path` inside a temp project
+    /// whose `package.json` is `pkg_json` (or no manifest when `None`).
+    fn run_in_project(pkg_json: Option<&str>, rel_path: &str, source: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        if let Some(pkg) = pkg_json {
+            fs::write(dir.path().join("package.json"), pkg).unwrap();
+        }
+        let src_path = dir.path().join(rel_path);
+        fs::create_dir_all(src_path.parent().unwrap()).unwrap();
+        fs::write(&src_path, source).unwrap();
+        let src_path = fs::canonicalize(&src_path).unwrap();
+
+        let source_file = SourceFile {
+            path: src_path.clone(),
+            language: Language::TypeScript,
+        };
+        let refs: Vec<&SourceFile> = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &src_path,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    const V4_PKG: &str = r#"{"name":"app","version":"1.0.0","dependencies":{"zod":"^4.0.0"}}"#;
+
+    #[test]
+    fn flags_string_email_on_v4() {
+        let d = run_in_project(Some(V4_PKG), "app.ts", "const s = z.string().email();");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("z.email()"));
     }
 
     #[test]
-    fn flags_string_email() {
-        assert_eq!(run_on("const s = z.string().email();").len(), 1);
+    fn flags_string_url_on_v4() {
+        assert_eq!(
+            run_in_project(Some(V4_PKG), "app.ts", "const s = z.string().url();").len(),
+            1
+        );
     }
 
     #[test]
-    fn flags_string_url() {
-        assert_eq!(run_on("const s = z.string().url();").len(), 1);
+    fn flags_number_int_on_v4() {
+        assert_eq!(
+            run_in_project(Some(V4_PKG), "app.ts", "const s = z.number().int();").len(),
+            1
+        );
     }
 
     #[test]
-    fn flags_number_int() {
-        assert_eq!(run_on("const s = z.number().int();").len(), 1);
+    fn allows_top_level_format_on_v4() {
+        assert!(run_in_project(Some(V4_PKG), "app.ts", "const s = z.email();").is_empty());
+        assert!(run_in_project(Some(V4_PKG), "app.ts", "const s = z.int();").is_empty());
     }
 
     #[test]
-    fn allows_top_level_format() {
-        assert!(run_on("const s = z.email();").is_empty());
-        assert!(run_on("const s = z.int();").is_empty());
+    fn allows_plain_string_schema_on_v4() {
+        assert!(run_in_project(Some(V4_PKG), "app.ts", "const s = z.string();").is_empty());
     }
 
     #[test]
-    fn allows_plain_string_schema() {
-        assert!(run_on("const s = z.string();").is_empty());
+    fn silent_on_v3_project() {
+        let pkg = r#"{"name":"app","version":"1.0.0","dependencies":{"zod":"^3"}}"#;
+        assert!(run_in_project(Some(pkg), "app.ts", "const s = z.string().email();").is_empty());
+    }
+
+    #[test]
+    fn silent_on_v3_or_v4_range() {
+        let pkg = r#"{"name":"app","version":"1.0.0","dependencies":{"zod":"^3 || ^4"}}"#;
+        assert!(run_in_project(Some(pkg), "app.ts", "const s = z.string().email();").is_empty());
+    }
+
+    #[test]
+    fn silent_without_package_json() {
+        assert!(run_in_project(None, "app.ts", "const s = z.string().email();").is_empty());
+    }
+
+    #[test]
+    fn silent_when_zod_undeclared() {
+        let pkg = r#"{"name":"app","version":"1.0.0","dependencies":{"react":"^18"}}"#;
+        assert!(run_in_project(Some(pkg), "app.ts", "const s = z.string().email();").is_empty());
+    }
+
+    #[test]
+    fn silent_on_undeterminable_version() {
+        let pkg = r#"{"name":"app","version":"1.0.0","dependencies":{"zod":"latest"}}"#;
+        assert!(run_in_project(Some(pkg), "app.ts", "const s = z.string().email();").is_empty());
+    }
+
+    #[test]
+    fn fires_via_dev_dependencies() {
+        let pkg = r#"{"name":"app","version":"1.0.0","devDependencies":{"zod":"4.1.0"}}"#;
+        assert_eq!(
+            run_in_project(Some(pkg), "app.ts", "const s = z.string().email();").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn fires_via_own_version_when_zod_package() {
+        let pkg = r#"{"name":"zod","version":"4.0.5"}"#;
+        assert_eq!(
+            run_in_project(Some(pkg), "src/index.ts", "const s = z.string().email();").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn silent_on_v3_path_segment_inside_v4_package() {
+        let pkg = r#"{"name":"zod","version":"4.0.5"}"#;
+        assert!(
+            run_in_project(Some(pkg), "src/v3/types.ts", "const s = z.string().email();")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn range_min_major_takes_smallest_alternative() {
+        assert_eq!(range_min_major("^3 || ^4"), Some(3));
+        assert_eq!(range_min_major("^4 || ^3"), Some(3));
+        assert_eq!(range_min_major(">=4.0.0"), Some(4));
+        assert_eq!(range_min_major("4.1.0"), Some(4));
+        assert_eq!(range_min_major("latest"), None);
+        assert_eq!(range_min_major("*"), None);
     }
 }
