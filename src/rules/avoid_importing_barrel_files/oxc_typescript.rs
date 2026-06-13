@@ -9,8 +9,11 @@
 //! alone.
 //!
 //! When the cross-file import index is populated, the target is classified by
-//! its exports. Without that index (no project context) the rule falls back to
-//! the filename shape, treating any `index`-suffixed specifier as a barrel.
+//! its exports. A pure re-export `index` is still left alone when it is the
+//! only source file in its directory: that is the module organized across its
+//! own subtree, not a hub over sibling modules. Without the index (no project
+//! context) the rule falls back to the filename shape, treating any
+//! `index`-suffixed specifier as a barrel.
 //!
 //! Skipped when the importing file lives under a `routes/` directory: that's
 //! the TanStack Router file-system convention where `index.tsx` is the leaf
@@ -105,6 +108,13 @@ impl OxcCheck for Check {
                 return;
             };
             if !target_is_genuine_barrel(index.get_exports(target)) {
+                return;
+            }
+            // A pure re-export `index` that is the only source file in its
+            // directory is the module itself organized across its own subtree,
+            // not a hub over sibling modules — importing it pulls in exactly
+            // that subtree.
+            if index.is_sole_file_in_dir(target) {
                 return;
             }
         }
@@ -292,6 +302,64 @@ mod cross_file_tests {
             &Check,
             source,
             &paths[1],
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        );
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn allows_js_specifier_index_that_is_sole_implementation() {
+        // Regression for #1174: payloadcms lays out a module as a directory
+        // whose only source file is `index.ts` holding the implementation, and
+        // imports it via the emitted `.js` extension (`./seed/index.js`). The
+        // `.js` specifier resolves to the `.ts` source; it carries real
+        // implementation, not re-exports, so it is not a barrel.
+        let (_dir, project, paths) = setup_project(&[
+            (
+                "test/plugin-redirects/seed/index.ts",
+                "export const seed = async (): Promise<void> => {};\n",
+            ),
+            (
+                "test/plugin-redirects/config.ts",
+                "import { seed } from './seed/index.js';\nseed;",
+            ),
+        ]);
+        let source = "import { seed } from './seed/index.js';\nseed;";
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &paths[1],
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        );
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn allows_sole_index_that_reexports_its_own_subtree() {
+        // Regression for #1174: a directory whose only source file is `index.ts`
+        // is the module itself, not a re-export hub — even when that `index.ts`
+        // organizes its implementation across its OWN subdirectories via
+        // re-exports. Importing it pulls in exactly that subtree, which is the
+        // module. The content check alone would misclassify this pure-re-export
+        // index as a barrel; the sole-file-in-directory shape rescues it.
+        let (_dir, project, paths) = setup_project(&[
+            ("src/Button/internal/impl.ts", "export const Button = 1;"),
+            (
+                "src/Button/index.ts",
+                "export { Button } from './internal/impl.js';",
+            ),
+            (
+                "src/app.ts",
+                "import { Button } from './Button/index.js';\nButton;",
+            ),
+        ]);
+        let source = "import { Button } from './Button/index.js';\nButton;";
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &paths[2],
             &project,
             crate::rules::file_ctx::default_static_file_ctx(),
         );
