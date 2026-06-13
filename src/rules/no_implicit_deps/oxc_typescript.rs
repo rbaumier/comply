@@ -57,6 +57,15 @@ impl OxcCheck for Check {
         if matches_alias(spec, &alias_prefixes) {
             return;
         }
+        // tsconfig `baseUrl` lets non-relative specifiers resolve to local
+        // source (e.g. `src/types/Foo` → `<baseUrl>/src/types/Foo.ts`). Those
+        // are project files, not npm packages.
+        if ctx
+            .project
+            .resolves_via_tsconfig_base_url(ctx.path, spec)
+        {
+            return;
+        }
         let root = root_package_name(spec);
         if pkg.has_dep_or_engine(root) {
             return;
@@ -229,6 +238,57 @@ mod tests {
         assert!(
             diags.is_empty(),
             "Node.js subpath import must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Regression #1422: tsconfig `baseUrl` lets non-relative specifiers resolve
+    // to local source (`import ... from 'src/types/InfraConfig'` →
+    // `<root>/src/types/InfraConfig.ts`). These are project files, not packages.
+    #[test]
+    fn allows_base_url_local_import_issue_1422() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"backend"}"#).unwrap();
+        fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"baseUrl":"./"}}"#,
+        )
+        .unwrap();
+        let types = dir.path().join("src").join("types");
+        fs::create_dir_all(&types).unwrap();
+        fs::write(types.join("InfraConfig.ts"), "export enum InfraConfigEnum {}\n").unwrap();
+        let dto = dir.path().join("src").join("infra-config").join("dto");
+        fs::create_dir_all(&dto).unwrap();
+        let file = dto.join("onboarding.dto.ts");
+        let source = "import { InfraConfigEnum } from 'src/types/InfraConfig';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "baseUrl-resolved local import must not be flagged, got {diags:?}"
+        );
+    }
+
+    // A genuine undeclared package import must still fire even when `baseUrl` is
+    // configured — the baseUrl candidate does not exist on disk.
+    #[test]
+    fn flags_unlisted_dep_with_base_url_issue_1422() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"backend"}"#).unwrap();
+        fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"baseUrl":"./"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("app.ts");
+        let source = "import { Client } from 'not-installed-pkg';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "undeclared package must still fire under baseUrl, got {diags:?}"
         );
     }
 
