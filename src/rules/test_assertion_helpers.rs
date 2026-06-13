@@ -6,6 +6,24 @@ use oxc_ast::ast::Expression;
 use oxc_semantic::NodeId;
 use std::collections::HashSet;
 
+/// True when a `throw` statement lies within `body_span`. A `throw` is a valid
+/// assertion mechanism: timing/property/fuzzing tests fail by throwing on a
+/// violated condition (`if (after - before > 10) throw new Error(...)`), which
+/// the test runner reports as a failure — functionally equivalent to an
+/// `expect(...)` call. A test whose body throws is therefore not assertion-less.
+pub(crate) fn body_contains_throw(
+    semantic: &oxc_semantic::Semantic<'_>,
+    body_span: oxc_span::Span,
+) -> bool {
+    semantic.nodes().iter().any(|n| {
+        if let AstKind::ThrowStatement(throw) = n.kind() {
+            throw.span.start >= body_span.start && throw.span.end <= body_span.end
+        } else {
+            false
+        }
+    })
+}
+
 /// True when the test callback (2nd argument of an `it`/`test` call) invokes an
 /// identifier bound to a formal parameter of an *enclosing* function. Such a
 /// test is a factory whose real body — and its assertions — is supplied by the
