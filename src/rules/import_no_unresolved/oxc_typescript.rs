@@ -3,6 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 
 pub struct Check;
@@ -43,6 +44,13 @@ impl OxcCheck for Check {
             if is_build_output_specifier(&imp.specifier) {
                 continue;
             }
+            // CSS, CSS Modules, SVG, and other static assets are imported via
+            // build-tool support (Webpack, Vite, Next.js) and never enter the
+            // TS/JS index. When such a non-source file exists on disk next to
+            // the importer, the import is resolved — don't flag it.
+            if is_existing_asset_import(ctx.path, &imp.specifier) {
+                continue;
+            }
             if !seen.insert((imp.specifier.clone(), imp.line)) {
                 continue;
             }
@@ -81,6 +89,28 @@ fn is_generated_specifier(spec: &str) -> bool {
 /// there is expected, not a defect.
 fn is_build_output_specifier(spec: &str) -> bool {
     spec.split('/').any(|seg| matches!(seg, "dist" | "build" | "out"))
+}
+
+/// Source extensions resolved through the TS/JS import index. A specifier
+/// carrying one of these is a real source import — if it stayed unresolved,
+/// the target is genuinely missing and must be flagged.
+const SOURCE_EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mts", "mjs", "cts", "cjs", "vue"];
+
+/// True for a relative specifier that names a non-source file (a `.css`,
+/// `.svg`, `.png`, … asset) present on disk next to the importer. These never
+/// enter the TS/JS index, so `source_path` is always `None`, yet the import is
+/// resolved at build time.
+pub(super) fn is_existing_asset_import(importer: &Path, specifier: &str) -> bool {
+    let Some(ext) = Path::new(specifier).extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    if SOURCE_EXTS.contains(&ext) {
+        return false;
+    }
+    let Some(base_dir) = importer.parent() else {
+        return false;
+    };
+    base_dir.join(specifier).is_file()
 }
 
 #[cfg(test)]

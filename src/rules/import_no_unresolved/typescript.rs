@@ -25,6 +25,13 @@ crate::ast_check! { on ["program"] => |node, _source, ctx, diagnostics|
         if imp.source_path.is_some() {
             continue;
         }
+        // CSS, CSS Modules, SVG, and other static assets are imported via
+        // build-tool support and never enter the TS/JS index. When such a
+        // non-source file exists on disk next to the importer, the import is
+        // resolved — don't flag it.
+        if super::oxc_typescript::is_existing_asset_import(ctx.path, &imp.specifier) {
+            continue;
+        }
         if !seen.insert((imp.specifier.clone(), imp.line)) {
             continue;
         }
@@ -154,6 +161,39 @@ mod tests {
         let source = "import { Route } from './cabinets_.$cabinetId';";
         let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &paths[1], &project, crate::rules::file_ctx::default_static_file_ctx());
         assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn no_fp_for_existing_css_and_css_module_imports_issue_1384() {
+        // vercel/turborepo reproducer: Next.js apps import a global stylesheet
+        // as a side effect and a CSS module as a default. Both files exist on
+        // disk next to the importer but never enter the TS/JS index, so the
+        // rule must not flag them.
+        let (_dir, project, paths) = setup_project(&[
+            ("app/globals.css", "body { margin: 0; }"),
+            ("app/page.module.css", ".title { color: red; }"),
+            (
+                "app/layout.tsx",
+                "import \"./globals.css\";\nimport styles from \"./page.module.css\";",
+            ),
+        ]);
+        let source = "import \"./globals.css\";\nimport styles from \"./page.module.css\";";
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &paths[2], &project, crate::rules::file_ctx::default_static_file_ctx());
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn flags_missing_css_import_issue_1384() {
+        // A CSS import whose file does NOT exist on disk is still a real
+        // unresolved import and must be flagged.
+        let (_dir, project, paths) = setup_project(&[(
+            "app/layout.tsx",
+            "import \"./missing.css\";",
+        )]);
+        let source = "import \"./missing.css\";";
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &paths[0], &project, crate::rules::file_ctx::default_static_file_ctx());
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("missing.css"));
     }
 
     #[test]
