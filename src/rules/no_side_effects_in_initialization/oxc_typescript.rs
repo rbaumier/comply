@@ -67,6 +67,10 @@
 //!   as a library, so the repeated top-level calls are its intentional payload.
 //!   A single top-level call, heterogeneous callees, or no filesystem import are
 //!   all still flagged;
+//! - static browser assets under a `public/`, `static/`, or `assets/`
+//!   directory: vanilla `<script>`-loaded scripts served verbatim by the web
+//!   server, never bundled, so the tree-shaking concern does not apply (a
+//!   bundler never processes these files);
 //! - framework entry points reported by `is_framework_entry_point`;
 //! - TanStack Start entry files (`app/{client,router,server}.{ts,tsx}` or
 //!   `src/app/…`) when the `tanstack-router` framework is detected;
@@ -98,7 +102,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{CheckCtx, OxcCheck};
-use crate::rules::path_utils::{is_config_file, is_framework_entry_point};
+use crate::rules::path_utils::{
+    is_browser_asset_dir_path, is_config_file, is_framework_entry_point,
+};
 use oxc_ast::ast::{
     Argument, AssignmentTarget, BindingPattern, ExportDefaultDeclarationKind, Expression,
     ImportDeclarationSpecifier, Program, Statement,
@@ -1020,6 +1026,7 @@ impl OxcCheck for Check {
         if is_framework_entry_point(ctx.path, ctx.project)
             || is_tanstack_start_entry(ctx.path, ctx.project)
             || is_config_file(ctx.path)
+            || is_browser_asset_dir_path(ctx.path)
         {
             return Vec::new();
         }
@@ -1304,6 +1311,43 @@ mod tests {
             diags.len(),
             1,
             "client.tsx outside app/ must still be flagged, got {diags:?}"
+        );
+    }
+
+    // --- static browser assets (public/static/assets) --------------------
+
+    // Regression for #1752: a vanilla `<script>`-loaded browser script in
+    // `public/` is served verbatim and never bundled, so its top-level
+    // imperative body is intentional, not a tree-shaking hazard.
+    #[test]
+    fn allows_browser_script_in_public_dir() {
+        let src = "\
+            Array.from(document.getElementsByTagName(\"pre\")).forEach((element) => {\n\
+                element.setAttribute(\"tabindex\", \"0\");\n\
+            });\n";
+        for path in [
+            "www/public/makeScrollableCodeFocusable.js",
+            "static/analytics.js",
+            "src/assets/widget.js",
+        ] {
+            let diags = crate::rules::test_helpers::run_rule(&Check, src, path);
+            assert!(
+                diags.is_empty(),
+                "{path} is a static browser asset and should be exempt, got {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_module_with_public_substring_segment() {
+        // `publicApi/` is not the `public/` asset directory — segment, not
+        // substring, matching keeps an ordinary library module flagged.
+        let diags =
+            crate::rules::test_helpers::run_rule(&Check, "registerWidget();", "src/publicApi/index.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "src/publicApi/ is not a static-asset dir and must still flag, got {diags:?}"
         );
     }
 
