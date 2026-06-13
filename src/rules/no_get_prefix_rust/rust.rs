@@ -6,6 +6,11 @@ crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, 
 
     if !name.starts_with("get_") { return; }
 
+    // Stripping `get_` from e.g. `get_ref`/`get_mut` would yield a Rust
+    // reserved keyword, which is not a legal method name. The suggested rename
+    // is impossible, so these accessors are forced to keep the prefix.
+    if is_rust_keyword(&name[4..]) { return; }
+
     if !has_self_param(node, source) { return; }
 
     let ret = match node.child_by_field_name("return_type") {
@@ -49,6 +54,65 @@ fn sibling_method_named(func: tree_sitter::Node, bare_name: &str, source: &[u8])
         }
     }
     false
+}
+
+/// Canonical set of Rust reserved keywords (strict + reserved-for-future),
+/// excluding contextual keywords that are valid identifiers (`union`, `dyn`,
+/// `'static`). A method cannot be named with any of these, so an accessor whose
+/// bare name would collide with one is exempt from the rename.
+fn is_rust_keyword(name: &str) -> bool {
+    matches!(
+        name,
+        "as" | "break"
+            | "const"
+            | "continue"
+            | "crate"
+            | "else"
+            | "enum"
+            | "extern"
+            | "false"
+            | "fn"
+            | "for"
+            | "if"
+            | "impl"
+            | "in"
+            | "let"
+            | "loop"
+            | "match"
+            | "mod"
+            | "move"
+            | "mut"
+            | "pub"
+            | "ref"
+            | "return"
+            | "self"
+            | "Self"
+            | "static"
+            | "struct"
+            | "super"
+            | "trait"
+            | "true"
+            | "type"
+            | "unsafe"
+            | "use"
+            | "where"
+            | "while"
+            | "async"
+            | "await"
+            | "abstract"
+            | "become"
+            | "box"
+            | "do"
+            | "final"
+            | "macro"
+            | "override"
+            | "priv"
+            | "try"
+            | "typeof"
+            | "unsized"
+            | "virtual"
+            | "yield"
+    )
 }
 
 fn has_self_param(node: tree_sitter::Node, source: &[u8]) -> bool {
@@ -143,5 +207,24 @@ mod tests {
     fn allows_non_get_prefix() {
         let src = "impl Foo {\n    fn name(&self) -> &str { &self.name }\n}";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_keyword_suffix_get_ref_get_mut_issue_1407() {
+        // Stripping `get_` yields `ref`/`mut`, which are Rust keywords — the
+        // suggested rename is not a legal method name.
+        let src = "impl Throttle {\n\
+            pub fn get_ref(&self) -> &T { &self.inner }\n\
+            pub fn get_mut(&mut self) -> &mut T { &mut self.inner }\n\
+        }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_get_prefix_suggests_bare_name() {
+        let src = "impl Foo {\n    fn get_name(&self) -> &str { &self.name }\n}";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("rename to `name`"), "{:?}", diags);
     }
 }
