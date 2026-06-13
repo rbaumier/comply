@@ -512,4 +512,49 @@ mod tests {
             "nested app main.ts and its module tree must not be flagged: {diags:?}"
         );
     }
+
+    // Regression for #1402: Next.js page files under a `pages/` directory are
+    // consumed by the framework's file-system router — nothing imports them
+    // statically. They must not be flagged, including special files like
+    // `_app.js`. The Next.js app is nested under a library's `app/` directory
+    // (like formik), so `next` lives in the nested package.json, not the root.
+    #[test]
+    fn nextjs_pages_dir_files_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"formik","main":"dist/index.js"}"#),
+            ("src/index.ts", "export const formik = 1;\n"),
+            ("app/package.json", r#"{"name":"formik-app","dependencies":{"next":"14.0.0"}}"#),
+            ("app/pages/index.tsx", "export default function Home() { return null; }\n"),
+            ("app/pages/_app.js", "export default function App({ Component }) { return null; }\n"),
+            ("app/pages/sign-in.js", "export default function SignIn() { return null; }\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "Next.js pages/ files are framework-routed entry points: {diags:?}"
+        );
+    }
+
+    // Regression for #1402: the framework-routing exemption must not blanket
+    // the whole project — a genuinely orphaned non-route file (imported by
+    // nothing, outside any framework routing directory) is still a true
+    // positive even when the project contains a Next.js app.
+    #[test]
+    fn orphan_file_outside_nextjs_routes_still_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"name":"site","dependencies":{"next":"14.0.0"}}"#,
+            ),
+            ("src/index.ts", "export const site = 1;\n"),
+            ("pages/index.tsx", "export default function Home() { return null; }\n"),
+            ("src/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "diagnostic should target the orphaned non-route file: {diags:?}"
+        );
+    }
 }
