@@ -1,7 +1,9 @@
 //! no-property-mutation OXC backend — flag property mutations.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::{byte_offset_to_line_col, is_local_object_builder_binding};
+use crate::oxc_helpers::{
+    byte_offset_to_line_col, is_local_object_builder_binding, is_react_display_name_assignment,
+};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
 use oxc_span::GetSpan;
@@ -196,6 +198,10 @@ impl OxcCheck for Check {
         }
         match node.kind() {
             AstKind::AssignmentExpression(assign) => {
+                // Component.displayName = "Component" (React naming convention)
+                if is_react_display_name_assignment(assign) {
+                    return;
+                }
                 match &assign.left {
                     AssignmentTarget::StaticMemberExpression(m) => {
                         let obj_text = &ctx.source
@@ -579,6 +585,39 @@ mod tests {
             function reset(el: HTMLElement): void {
                 el.style = someObj;
             }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // React displayName naming convention — issue #1779
+
+    #[test]
+    fn allows_display_name_assignment_on_forward_ref_component() {
+        // Regression for rbaumier/comply#1779 — setting `displayName` on a
+        // forwardRef-wrapped component is the standard React naming convention.
+        let src = r#"
+            const RadioGroup = React.forwardRef((props, ref) => {
+                return <RadioGroupPrimitives.Root ref={ref} {...props} />;
+            });
+            RadioGroup.displayName = "RadioGroup";
+        "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_string_display_name_assignment() {
+        // Only string-literal `displayName` writes are exempt; assigning a
+        // computed value is still a property mutation.
+        let src = r#"
+            RadioGroup.displayName = getName();
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_other_string_property_assignment() {
+        let src = r#"
+            RadioGroup.label = "RadioGroup";
         "#;
         assert_eq!(run(src).len(), 1);
     }

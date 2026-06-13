@@ -464,6 +464,23 @@ pub fn is_local_object_builder_binding(
     false
 }
 
+/// True when `assign` sets a `displayName` property to a string literal
+/// (`Component.displayName = "Component"`). React reads `displayName` off the
+/// component function object to name anonymous `forwardRef`/`memo` results in
+/// DevTools, error messages, and stack traces — a metadata API with no
+/// immutable alternative, not a state-mutation smell. Restricted to a string\
+/// literal RHS so other `displayName` writes stay flagged.
+#[must_use]
+pub fn is_react_display_name_assignment(assign: &oxc_ast::ast::AssignmentExpression) -> bool {
+    use oxc_ast::ast::{AssignmentTarget, Expression};
+
+    let AssignmentTarget::StaticMemberExpression(member) = &assign.left else {
+        return false;
+    };
+    member.property.name.as_str() == "displayName"
+        && matches!(&assign.right, Expression::StringLiteral(_))
+}
+
 /// True when `name` matches a generic type parameter declared on any enclosing
 /// function, method, class, interface, or type alias of `node`.
 #[must_use]
