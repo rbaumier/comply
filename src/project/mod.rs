@@ -329,6 +329,7 @@ pub struct Tsconfig {
     pub module: Option<String>,
     pub module_resolution: Option<String>,
     pub strict: bool,
+    pub exact_optional_property_types: bool,
     pub jsx: Option<String>,
 }
 
@@ -371,6 +372,10 @@ impl Tsconfig {
                 .map(String::from),
             strict: co
                 .and_then(|x| x.get("strict"))
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false),
+            exact_optional_property_types: co
+                .and_then(|x| x.get("exactOptionalPropertyTypes"))
                 .and_then(|b| b.as_bool())
                 .unwrap_or(false),
             jsx: co
@@ -476,6 +481,10 @@ fn parse_tsconfig_value(json: &Value) -> Tsconfig {
             .and_then(|x| x.get("strict"))
             .and_then(|b| b.as_bool())
             .unwrap_or(false),
+        exact_optional_property_types: co
+            .and_then(|x| x.get("exactOptionalPropertyTypes"))
+            .and_then(|b| b.as_bool())
+            .unwrap_or(false),
         jsx: co
             .and_then(|x| x.get("jsx"))
             .and_then(|s| s.as_str())
@@ -485,9 +494,10 @@ fn parse_tsconfig_value(json: &Value) -> Tsconfig {
 
 /// Overlay `child` onto `parent`. Scalars (`base_url`, `module`,
 /// `module_resolution`, `jsx`) are taken from the child when present; `paths`
-/// are merged key-by-key so parent-only aliases survive. `strict` defaults to
-/// false in `parse_tsconfig_value`, which means a child that omits the flag
-/// inherits the parent's value here.
+/// are merged key-by-key so parent-only aliases survive. Boolean flags
+/// (`strict`, `exact_optional_property_types`) default to false in
+/// `parse_tsconfig_value`, so a child that omits the flag inherits the parent's
+/// value here via the `||`.
 fn merge_tsconfig(parent: Tsconfig, child: Tsconfig) -> Tsconfig {
     let mut paths = parent.paths;
     for (k, v) in child.paths {
@@ -499,6 +509,8 @@ fn merge_tsconfig(parent: Tsconfig, child: Tsconfig) -> Tsconfig {
         module: child.module.or(parent.module),
         module_resolution: child.module_resolution.or(parent.module_resolution),
         strict: child.strict || parent.strict,
+        exact_optional_property_types: child.exact_optional_property_types
+            || parent.exact_optional_property_types,
         jsx: child.jsx.or(parent.jsx),
     }
 }
@@ -1171,6 +1183,18 @@ impl ProjectCtx {
             map.entry(manifest_dir).or_insert_with(|| Arc::clone(&arc));
         }
         Some(arc)
+    }
+
+    /// True when the tsconfig governing `path` enables
+    /// `compilerOptions.exactOptionalPropertyTypes` (directly or inherited
+    /// through its `extends` chain). Under that option `prop?: T` and
+    /// `prop?: T | undefined` have distinct semantics — the latter additionally
+    /// permits an explicit `undefined` assignment — so `| undefined` is *not*
+    /// redundant with `?`. Defaults to false when no tsconfig is found.
+    pub fn uses_exact_optional_property_types(&self, path: &Path) -> bool {
+        self.nearest_tsconfig(path)
+            .map(|tsc| tsc.exact_optional_property_types)
+            .unwrap_or(false)
     }
 
     /// Walk up from `path` to the nearest `tsconfig.json` and return the
@@ -1953,6 +1977,63 @@ mod tests {
         assert!(ts.paths.contains_key("@base/*"));
         assert!(ts.paths.contains_key("@app/*"));
         assert!(ts.strict);
+    }
+
+    #[test]
+    fn exact_optional_property_types_parsed_directly() {
+        let ts = Tsconfig::parse(r#"{"compilerOptions":{"exactOptionalPropertyTypes":true}}"#)
+            .unwrap();
+        assert!(ts.exact_optional_property_types);
+    }
+
+    #[test]
+    fn exact_optional_property_types_defaults_false() {
+        let ts = Tsconfig::parse(r#"{"compilerOptions":{"strict":true}}"#).unwrap();
+        assert!(!ts.exact_optional_property_types);
+    }
+
+    #[test]
+    fn exact_optional_property_types_inherited_through_extends() {
+        // Regression #2075 (zod case): the flag lives in the extended base
+        // config; a child that extends it and omits the flag must still inherit
+        // `true`, so `?: T | undefined` is not wrongly flagged as redundant.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.base.json"),
+            r#"{"compilerOptions":{"exactOptionalPropertyTypes":true}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"extends":"./tsconfig.base.json","compilerOptions":{"strict":true}}"#,
+        )
+        .unwrap();
+        let ts = Tsconfig::load(dir.path()).unwrap();
+        assert!(ts.exact_optional_property_types);
+    }
+
+    #[test]
+    fn uses_exact_optional_property_types_predicate() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"exactOptionalPropertyTypes":true}}"#,
+        )
+        .unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.uses_exact_optional_property_types(&dir.path().join("src.ts")));
+    }
+
+    #[test]
+    fn uses_exact_optional_property_types_false_without_flag() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"strict":true}}"#,
+        )
+        .unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(!ctx.uses_exact_optional_property_types(&dir.path().join("src.ts")));
     }
 
     #[test]
