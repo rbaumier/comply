@@ -95,6 +95,13 @@ pub struct ExportedSymbol {
     /// under the same name (value namespace vs. type namespace), so callers
     /// must group by `(name, is_type_only)` rather than `name` alone.
     pub is_type_only: bool,
+    /// Source binding for `export { local as exported }` (and the re-export
+    /// form `export { local as exported } from './m'`): the `local` side, when
+    /// it differs from `name`. `None` for declaration exports and plain
+    /// `export { x }`. Lets callers tell that the `default` export is an alias
+    /// of a named binding (`export { Foo as default }`) rather than an
+    /// unrelated default that merely coexists with a named `Foo`.
+    pub local_name: Option<String>,
 }
 
 /// Kind of an imported symbol.
@@ -1043,6 +1050,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
             reexport_source: None,
             params: Vec::new(),
             is_type_only: false,
+            local_name: None,
         });
     }
 
@@ -1298,6 +1306,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 reexport_source: Some(src.clone()),
                 params: Vec::new(),
                 is_type_only: false,
+                local_name: None,
             });
             return;
         }
@@ -1308,6 +1317,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             reexport_source: Some(src.clone()),
             params: Vec::new(),
             is_type_only: false,
+            local_name: None,
         });
         return;
     }
@@ -1334,9 +1344,11 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 .named_children(&mut spec.walk())
                 .filter(|c| c.kind() == "identifier")
                 .collect();
-            let name = match ids.as_slice() {
-                [single] => text_of(*single, source),
-                [_, aliased, ..] => text_of(*aliased, source),
+            let (name, local_name) = match ids.as_slice() {
+                [single] => (text_of(*single, source), None),
+                [local, aliased, ..] => {
+                    (text_of(*aliased, source), Some(text_of(*local, source)))
+                }
                 [] => continue,
             };
             out.push(ExportedSymbol {
@@ -1346,6 +1358,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 reexport_source: source_str.clone(),
                 params: Vec::new(),
                 is_type_only: false,
+                local_name,
             });
         }
         return;
@@ -1363,6 +1376,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             reexport_source: None,
             params: Vec::new(),
             is_type_only: false,
+            local_name: None,
         });
         return;
     }
@@ -1384,6 +1398,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                         reexport_source: None,
                         params,
                         is_type_only: false,
+                        local_name: None,
                     });
                 }
             }
@@ -1399,6 +1414,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                         reexport_source: None,
                         params: Vec::new(),
                         is_type_only: false,
+                        local_name: None,
                     });
                 }
             }
@@ -1429,6 +1445,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                             reexport_source: None,
                             params: Vec::new(),
                             is_type_only: false,
+                            local_name: None,
                         });
                     }
                 }
@@ -1445,6 +1462,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                         reexport_source: None,
                         params: Vec::new(),
                         is_type_only: true,
+                        local_name: None,
                     });
                 }
             }
@@ -1460,6 +1478,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                         reexport_source: None,
                         params: Vec::new(),
                         is_type_only: false,
+                        local_name: None,
                     });
                 }
             }
@@ -1648,6 +1667,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
                     reexport_source: None,
                     params: Vec::new(),
                     is_type_only: false,
+                    local_name: None,
                 });
             }
             AstKind::NewExpression(new_expr) => {
@@ -1765,10 +1785,18 @@ fn oxc_extract_export_named(
             // tree-sitter positional logic: `{ a }` => one identifier (a);
             // `{ b as c }` => two identifiers, exported name = c. A string-literal
             // alias is not an identifier in tree-sitter, so it falls back to local.
-            let name = match spec.exported.identifier_name() {
-                Some(id) => id.as_str().to_string(),
-                None => match spec.local.identifier_name() {
-                    Some(id) => id.as_str().to_string(),
+            let local = spec.local.identifier_name().map(|id| id.as_str().to_string());
+            // `export { x }` (no alias) has matching local/exported names; only
+            // record `local_name` for `export { local as exported }`, matching
+            // tree-sitter which exposes a single identifier in the unaliased case.
+            let (name, local_name) = match spec.exported.identifier_name() {
+                Some(exported) => {
+                    let exported = exported.as_str().to_string();
+                    let local_name = local.filter(|l| *l != exported);
+                    (exported, local_name)
+                }
+                None => match local {
+                    Some(id) => (id, None),
                     None => continue,
                 },
             };
@@ -1779,6 +1807,7 @@ fn oxc_extract_export_named(
                 reexport_source: reexport_source.clone(),
                 params: Vec::new(),
                 is_type_only: false,
+                local_name,
             });
         }
         return;
@@ -1803,6 +1832,7 @@ fn oxc_extract_export_named(
                     reexport_source: None,
                     params: oxc_extract_params(func),
                     is_type_only: false,
+                    local_name: None,
                 });
             }
         }
@@ -1815,6 +1845,7 @@ fn oxc_extract_export_named(
                     reexport_source: None,
                     params: Vec::new(),
                     is_type_only: false,
+                    local_name: None,
                 });
             }
         }
@@ -1830,6 +1861,7 @@ fn oxc_extract_export_named(
                         reexport_source: None,
                         params: Vec::new(),
                         is_type_only: false,
+                        local_name: None,
                     });
                 }
             }
@@ -1842,6 +1874,7 @@ fn oxc_extract_export_named(
                 reexport_source: None,
                 params: Vec::new(),
                 is_type_only: true,
+                local_name: None,
             });
         }
         Declaration::TSInterfaceDeclaration(decl) => {
@@ -1852,6 +1885,7 @@ fn oxc_extract_export_named(
                 reexport_source: None,
                 params: Vec::new(),
                 is_type_only: true,
+                local_name: None,
             });
         }
         Declaration::TSEnumDeclaration(decl) => {
@@ -1862,6 +1896,7 @@ fn oxc_extract_export_named(
                 reexport_source: None,
                 params: Vec::new(),
                 is_type_only: false,
+                local_name: None,
             });
         }
         _ => {}
@@ -1888,6 +1923,7 @@ fn oxc_extract_export_all(
         reexport_source: Some(export.source.value.as_str().to_string()),
         params: Vec::new(),
         is_type_only: false,
+        local_name: None,
     });
 }
 
@@ -2469,6 +2505,7 @@ fn extract_rust_item(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
         reexport_source: None,
         params: Vec::new(),
         is_type_only: false,
+        local_name: None,
     });
 }
 
@@ -2540,6 +2577,7 @@ fn extract_rust_use(
                 reexport_source: Some(specifier),
                 params: Vec::new(),
                 is_type_only: false,
+                local_name: None,
             });
         }
     }
