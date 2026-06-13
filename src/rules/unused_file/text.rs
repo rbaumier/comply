@@ -60,6 +60,7 @@ impl TextCheck for Check {
         }
 
         let reachable = index.reachable_from(&entry_points);
+        let jest_base_config_dirs = jest_base_config_dirs(index);
 
         let mut diagnostics = Vec::new();
         for path in index.indexed_paths() {
@@ -74,6 +75,7 @@ impl TextCheck for Check {
                 || is_test_file(path)
                 || is_in_ui_library(path)
                 || is_in_fixture_dir(path)
+                || is_jest_config_variant(path, &jest_base_config_dirs)
             {
                 continue;
             }
@@ -224,6 +226,34 @@ fn is_in_fixture_dir(path: &Path) -> bool {
         || path_str.contains("__fixtures__")
         || path_str.contains("/fixtures/")
         || path_str.contains("/test-fixtures/")
+}
+
+/// Directories that hold a base Jest config (`jest.config.js`, `jest.config.ts`,
+/// `jest.config.mjs`, …). A `jest.<name>.<ext>` variant sitting beside one of
+/// these is a Jest alternate config (see [`is_jest_config_variant`]).
+fn jest_base_config_dirs(index: &ImportIndex) -> rustc_hash::FxHashSet<&Path> {
+    index
+        .indexed_paths()
+        .filter(|p| p.file_stem().and_then(|s| s.to_str()) == Some("jest.config"))
+        .filter_map(|p| p.parent())
+        .collect()
+}
+
+/// True for a Jest alternate config file: a `jest.<name>.<ext>` file (e.g.
+/// `jest.dist.js`, `jest.prod.js`) sitting in a directory that also holds a
+/// base `jest.config.*`. Such files are loaded directly via the Jest CLI
+/// `-c <path>` flag, never `import`ed, so the import graph cannot reach them.
+/// The sibling-base gate keeps a stray unrelated `jest.foo.js` (no base config
+/// present) a true positive. Names that are themselves `jest.config.*` are
+/// already exempt via [`is_config_file`].
+fn is_jest_config_variant(path: &Path, base_config_dirs: &rustc_hash::FxHashSet<&Path>) -> bool {
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    // `jest.<name>` with a non-empty `<name>` after the `jest.` prefix.
+    if !stem.starts_with("jest.") || stem.len() <= "jest.".len() {
+        return false;
+    }
+    path.parent()
+        .is_some_and(|parent| base_config_dirs.contains(parent))
 }
 
 #[cfg(test)]
@@ -827,6 +857,57 @@ mod tests {
         assert!(
             diags.is_empty(),
             "file reached through `export *` barrel must not be flagged unused: {diags:?}"
+        );
+    }
+
+    // Regression for #1952: Jest alternate config files (`jest.dist.js`,
+    // `jest.prod.js`) are loaded directly via the Jest CLI `-c <path>` flag in
+    // package.json scripts, never `import`ed, so the import graph cannot reach
+    // them. When a base `jest.config.*` sits beside them they are recognised as
+    // Jest config variants and must not be flagged. A genuine orphan stays
+    // flagged.
+    #[test]
+    fn jest_alternate_config_files_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"name":"app","scripts":{"test:dist":"jest -c jest.dist.js"}}"#,
+            ),
+            ("src/index.ts", "export const app = 1;\n"),
+            ("jest.config.js", "module.exports = {};\n"),
+            (
+                "jest.dist.js",
+                "const base = require('./jest.config.js');\nmodule.exports = Object.assign({}, base);\n",
+            ),
+            (
+                "jest.prod.js",
+                "const base = require('./jest.config.js');\nmodule.exports = Object.assign({}, base);\n",
+            ),
+            ("orphan.js", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected exactly one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "only the genuine orphan must be flagged; Jest config variants are entry points: {diags:?}"
+        );
+    }
+
+    // Regression for #1952: the Jest-variant exemption is gated on a sibling
+    // base `jest.config.*` existing. Without one, a stray `jest.foo.js` is not
+    // a recognised config variant and stays a true positive.
+    #[test]
+    fn jest_variant_without_base_config_is_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"app"}"#),
+            ("src/index.ts", "export const app = 1;\n"),
+            ("jest.foo.js", "module.exports = {};\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("jest.foo"),
+            "a jest.* variant without a sibling base jest.config.* is still flagged: {diags:?}"
         );
     }
 }
