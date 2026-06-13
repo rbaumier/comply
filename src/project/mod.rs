@@ -90,6 +90,12 @@ pub struct PackageJson {
     /// run by a script — so consumers can tell "uses X as its runner" apart
     /// from "ships an integration/plugin for X".
     pub script_test_runners: BTreeSet<String>,
+    /// Command heads (binary names) invoked by any `scripts` entry — the first
+    /// token of every `&&`/`|`/`;`-separated segment, with any path or `.bin`
+    /// prefix stripped (e.g. `changeset` from `"release": "changeset publish"`).
+    /// Lets a consumer recognize a CLI-runner package whose binary a script
+    /// runs even though no source file ES-imports the package.
+    pub script_command_heads: BTreeSet<String>,
     /// Relative paths this package declares as its own entry point: the `main`
     /// value, the `exports` `.` target(s), and the `browser`/`react-native`
     /// substitute targets (the browser/native build bundlers swap in). Stored
@@ -171,6 +177,16 @@ impl PackageJson {
                         .collect()
                 })
                 .unwrap_or_default(),
+            script_command_heads: json
+                .get("scripts")
+                .and_then(|node| node.as_object())
+                .map(|obj| {
+                    obj.values()
+                        .filter_map(|v| v.as_str())
+                        .flat_map(extract_script_command_heads)
+                        .collect()
+                })
+                .unwrap_or_default(),
             entry_files: collect_entry_files(&json),
             entries_outside_src: entries_outside_src(&json),
             export_entry_stems: collect_export_entry_stems(&json),
@@ -229,6 +245,19 @@ impl PackageJson {
         self.script_test_runners.contains(name)
     }
 
+    /// True if dependency `name` is a CLI-runner package whose provided binary
+    /// is invoked by a `scripts` command. CLI-runner packages (`@scope/cli`,
+    /// `*-cli`, `*-bin`) ship a binary that scripts run (`changeset publish`,
+    /// `manypkg check`) and are never ES-imported, so the import index sees no
+    /// usage. There is no node_modules access to read the package's own `bin`
+    /// field, so candidate binary names are derived from the package name and
+    /// matched against the command heads seen in `scripts`.
+    pub fn scripts_invoke_dep_binary(&self, name: &str) -> bool {
+        cli_runner_binary_candidates(name)
+            .iter()
+            .any(|candidate| self.script_command_heads.contains(candidate))
+    }
+
     /// True if `name` is this package's own `name` field — a Node.js
     /// self-reference. A package never lists itself as a dependency, yet it may
     /// import from itself by its published name (`import x from "preact"` or a
@@ -268,6 +297,58 @@ fn extract_script_test_runners(cmd: &str) -> Vec<String> {
         .filter(|name| RUNNERS.contains(name))
         .map(str::to_string)
         .collect()
+}
+
+/// Command heads (binary names) invoked by a package.json script command.
+///
+/// Splits the command on shell separators (`&&`, `||`, `;`, `|`, subshell
+/// parens) into segments, takes the first whitespace-delimited token of each
+/// segment, and strips any path / `.bin` prefix to its basename — so `changeset
+/// publish`, `pnpm -r build && manypkg check`, and `node_modules/.bin/eslint`
+/// yield `changeset`, `{pnpm, manypkg}`, and `eslint`. Flag-leading segments
+/// (a token starting with `-`) and empty segments name no binary and are
+/// dropped.
+fn extract_script_command_heads(cmd: &str) -> Vec<String> {
+    cmd.split(|c: char| matches!(c, '&' | '|' | ';' | '(' | ')'))
+        .filter_map(|segment| segment.split_whitespace().next())
+        .filter(|head| !head.starts_with('-'))
+        .map(|head| head.rsplit('/').next().unwrap_or(head))
+        .filter(|head| !head.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Candidate binary names a CLI-runner package `name` might provide. Empty for
+/// a package that is not CLI-runner-shaped, so a plain library dependency can
+/// never be exempted by a coincidental script command head.
+///
+/// A package's `bin` field is the authoritative binary name but lives in
+/// node_modules, which is not read here. CLI-runner packages follow naming
+/// conventions: a scoped `@scope/cli` ships a binary named after the scope
+/// (`@manypkg/cli` → `manypkg`) — sometimes the scope with a plural `s` dropped
+/// (`@changesets/cli` → `changeset`); an unscoped `foo-cli` / `foo-bin` ships
+/// `foo` (or the full `foo-cli`). Only these shapes yield candidates.
+fn cli_runner_binary_candidates(name: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    if let Some(scope) = name.strip_prefix('@') {
+        if let Some((scope, sub)) = scope.split_once('/')
+            && sub == "cli"
+            && !scope.is_empty()
+        {
+            candidates.push(scope.to_string());
+            if let Some(singular) = scope.strip_suffix('s') {
+                candidates.push(singular.to_string());
+            }
+        }
+        return candidates;
+    }
+    if let Some(base) = name.strip_suffix("-cli").or_else(|| name.strip_suffix("-bin")) {
+        candidates.push(name.to_string());
+        if !base.is_empty() {
+            candidates.push(base.to_string());
+        }
+    }
+    candidates
 }
 
 /// Normalize a `main` value (a relative file path) to the shape consumers
@@ -2115,6 +2196,57 @@ mod tests {
         assert_eq!(min_major_version(">=19.0.0"), Some(19));
         assert_eq!(min_major_version("^19"), Some(19));
         assert_eq!(min_major_version("workspace:*"), None);
+    }
+
+    #[test]
+    fn script_command_heads_pick_segment_binaries() {
+        assert_eq!(
+            extract_script_command_heads("changeset publish"),
+            vec!["changeset"]
+        );
+        assert_eq!(
+            extract_script_command_heads("pnpm -r build && manypkg check"),
+            vec!["pnpm", "manypkg"]
+        );
+        assert_eq!(
+            extract_script_command_heads("node_modules/.bin/eslint ."),
+            vec!["eslint"]
+        );
+        // A leading flag names no binary; the empty trailing segment is dropped.
+        assert!(extract_script_command_heads("--silent").is_empty());
+    }
+
+    #[test]
+    fn cli_runner_candidates_derive_from_package_name() {
+        assert_eq!(cli_runner_binary_candidates("@manypkg/cli"), vec!["manypkg"]);
+        assert_eq!(
+            cli_runner_binary_candidates("@changesets/cli"),
+            vec!["changesets", "changeset"]
+        );
+        assert_eq!(
+            cli_runner_binary_candidates("knip-cli"),
+            vec!["knip-cli", "knip"]
+        );
+        // A plain library yields no candidates, so a coincidental script command
+        // head can never exempt it.
+        assert!(cli_runner_binary_candidates("lodash").is_empty());
+        assert!(cli_runner_binary_candidates("@scope/utils").is_empty());
+    }
+
+    #[test]
+    fn scripts_invoke_dep_binary_matches_runner_packages() {
+        let pkg = PackageJson::parse(
+            r#"{
+                "name": "root",
+                "scripts": { "release": "changeset publish", "check": "manypkg check" },
+                "dependencies": { "@changesets/cli": "^2.0.0", "@manypkg/cli": "^0.21.0" }
+            }"#,
+        )
+        .unwrap();
+        assert!(pkg.scripts_invoke_dep_binary("@changesets/cli"));
+        assert!(pkg.scripts_invoke_dep_binary("@manypkg/cli"));
+        // A library dep whose binary no script runs is not exempted.
+        assert!(!pkg.scripts_invoke_dep_binary("lodash"));
     }
 
     #[test]
