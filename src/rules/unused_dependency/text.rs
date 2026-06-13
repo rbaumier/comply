@@ -289,6 +289,66 @@ mod tests {
     }
 
     #[test]
+    fn allows_dep_imported_only_in_storybook_config_dir() {
+        // Issue #1769: `@storybook/manager-api` and `@storybook/theming` are
+        // imported only from `.storybook/`. Driving the real directory walker
+        // (not the explicit-file harness) proves those imports are discovered
+        // and the packages are not flagged unused.
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("package.json"),
+            r#"{
+                "name": "demo",
+                "dependencies": {
+                    "@storybook/manager-api": "^8.6.12",
+                    "@storybook/theming": "^8.6.12"
+                }
+            }"#,
+        )
+        .unwrap();
+        fs::create_dir(root.join(".storybook")).unwrap();
+        fs::write(
+            root.join(".storybook/manager.ts"),
+            "import { addons } from \"@storybook/manager-api\";\naddons.setConfig({ panelPosition: \"bottom\" });",
+        )
+        .unwrap();
+        fs::write(
+            root.join(".storybook/preview.ts"),
+            "import { themes } from \"@storybook/theming\";\nexport const x = themes;",
+        )
+        .unwrap();
+        fs::write(root.join("a.ts"), "export const x = 1;").unwrap();
+
+        let source_files =
+            crate::files::discover(&crate::cli::ScanMode::All(root.to_path_buf())).unwrap();
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        // Run the check on the rule's own anchor (the lexicographically smallest
+        // indexed path) so the per-project diagnostics actually fire.
+        let anchor = project.anchor_path().expect("anchor path");
+        let source = fs::read_to_string(&anchor).unwrap();
+        let file_ctx = FileCtx::build(&anchor, &source, Language::TypeScript, &project);
+        let ctx = CheckCtx {
+            path: &anchor,
+            path_arc: Arc::from(anchor.as_path()),
+            source: &source,
+            config: &config,
+            project: &project,
+            file: &file_ctx,
+            lang: Language::TypeScript,
+        };
+        let diags = Check.check(&ctx);
+
+        assert!(
+            diags.is_empty(),
+            "packages imported in .storybook/ must not be flagged unused, got: {diags:?}"
+        );
+    }
+
+    #[test]
     fn skips_eslint_flat_config_plugin() {
         // Issue #2076 pattern 2: an ESLint flat config imports a plugin that no
         // app source file imports. The import inside `eslint.config.js` is the
