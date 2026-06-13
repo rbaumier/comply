@@ -21,6 +21,10 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        if crate::rules::path_utils::is_codemod_fixture_file(ctx.path) {
+            return Vec::new();
+        }
+
         let scoping = semantic.scoping();
         let defined: HashSet<String> = scoping.symbol_names().map(|s| s.to_string()).collect();
 
@@ -58,5 +62,59 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, path)
+    }
+
+    #[test]
+    fn flags_undefined_component_in_normal_file() {
+        let src = "function App() { return <MyComponent />; }";
+        let d = run_on(src, "src/App.tsx");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("MyComponent"));
+    }
+
+    #[test]
+    fn skips_jscodeshift_codemod_fixture_file() {
+        let src = r#"
+<div>
+  <MenuItem
+    onClick={() => { analytics('Clicked Menu > Progress'); }}
+    primaryText="My Progress"
+    rightIcon={<ProgressIcon />}
+  />
+</div>
+"#;
+        assert!(
+            run_on(src, "packages/mui-codemod/src/v1.0.0/menu-item-primary-text.test/actual.js")
+                .is_empty()
+        );
+        assert!(
+            run_on(src, "packages/mui-codemod/src/v1.0.0/menu-item-primary-text.test/expected.js")
+                .is_empty()
+        );
     }
 }

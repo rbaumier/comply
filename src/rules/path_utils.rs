@@ -50,6 +50,22 @@ pub fn is_config_file(path: &Path) -> bool {
     false
 }
 
+/// True when `path` lives inside a jscodeshift codemod fixture directory: an
+/// ancestor directory whose name ends in `.test` (e.g.
+/// `menu-item-primary-text.test/actual.js`). These directories hold the
+/// pre-/post-transformation snippets a codemod operates on; their JSX
+/// references components without importing them on purpose, so identifier-
+/// resolution rules must not lint them.
+pub fn is_codemod_fixture_file(path: &Path) -> bool {
+    path.parent().is_some_and(|parent| {
+        parent.components().any(|c| {
+            c.as_os_str()
+                .to_str()
+                .is_some_and(|seg| seg.ends_with(".test"))
+        })
+    })
+}
+
 /// True when `path` matches a framework entry point via FILES, SUFFIXES, or
 /// ROOT_FILES only — does NOT check dirs. Used by `dead-export` to bail out
 /// for framework-specific files even when the user has configured additional
