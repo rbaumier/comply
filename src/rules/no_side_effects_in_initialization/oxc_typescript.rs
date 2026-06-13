@@ -6,8 +6,11 @@
 //! - test-runner setup files matched by convention path/name (`*.setup.*`,
 //!   `setup.*`, `setup-*`, `*-setup`, `globalSetup`, `setupTests.*`, anything
 //!   under `test-helpers/`, or any Cypress support file under `cypress/support/`),
-//!   or by content shape where every top-level call is a Vitest hook with a
-//!   `"vitest"` import present;
+//!   or by content shape where every top-level call is a standard test-runner
+//!   lifecycle hook (`beforeAll`/`beforeEach`/`afterEach`/`afterAll`/
+//!   `expect.extend`) whose name is not a local value binding — covering both
+//!   Jest setup files (hooks injected as globals, no import) and Vitest setup
+//!   files (hooks imported from `"vitest"`);
 //! - CLI entry points: files whose name is `bin.{ts,mts,js,mjs}` (the Node.js
 //!   `package.json` `"bin"` convention) or any file starting with a `#!`
 //!   shebang. Such files are executed directly (`tsx ./bin.ts`, `node ./bin.js`),
@@ -136,10 +139,13 @@ fn is_cli_entry(path: &std::path::Path, source: &str) -> bool {
     matches!(name, "bin.ts" | "bin.mts" | "bin.js" | "bin.mjs")
 }
 
-const VITEST_HOOK_IDENTS: &[&str] =
+const TEST_RUNNER_HOOK_IDENTS: &[&str] =
     &["beforeAll", "beforeEach", "afterEach", "afterAll"];
 
-fn call_callee_text<'a>(call: &'a oxc_ast::ast::CallExpression) -> Option<&'a str> {
+/// Root identifier of a hook call's callee: the bare name for `beforeEach(...)`,
+/// or the object name for the `expect.extend(...)` member call. `None` for any
+/// other callee shape.
+fn hook_callee_root<'a>(call: &'a oxc_ast::ast::CallExpression) -> Option<&'a str> {
     match &call.callee {
         Expression::Identifier(id) => Some(id.name.as_str()),
         Expression::StaticMemberExpression(m) => {
@@ -147,7 +153,7 @@ fn call_callee_text<'a>(call: &'a oxc_ast::ast::CallExpression) -> Option<&'a st
                 return None;
             };
             if obj.name == "expect" && m.property.name == "extend" {
-                Some("expect.extend")
+                Some("expect")
             } else {
                 None
             }
@@ -156,40 +162,75 @@ fn call_callee_text<'a>(call: &'a oxc_ast::ast::CallExpression) -> Option<&'a st
     }
 }
 
-fn is_vitest_hook_call(call: &oxc_ast::ast::CallExpression) -> bool {
-    match call_callee_text(call) {
-        Some(name) => {
-            name == "expect.extend" || VITEST_HOOK_IDENTS.contains(&name)
-        }
-        None => false,
-    }
-}
-
-/// True when at least one `ImportDeclaration` in the program imports from
-/// `"vitest"` or a `"vitest/"` sub-path.
-fn has_vitest_import(program: &Program) -> bool {
-    program.body.iter().any(|stmt| {
-        let Statement::ImportDeclaration(import) = stmt else { return false };
-        let src = import.source.value.as_str();
-        src == "vitest" || src.starts_with("vitest/")
-    })
-}
-
-/// True when the program has at least one top-level call/`new` expression
-/// statement AND every such statement is a Vitest hook call, AND the file
-/// imports from `"vitest"` (or a sub-path). An empty program (no top-level
-/// expression statements) returns `false` — there's nothing to exempt.
-fn shape_is_vitest_setup(program: &Program) -> bool {
-    if !has_vitest_import(program) {
+/// True when `call` invokes a standard test-runner lifecycle hook
+/// (`beforeAll`/`beforeEach`/`afterEach`/`afterAll`/`expect.extend`) whose root
+/// identifier is NOT bound by a top-level value declaration in `locals`. An
+/// injected runner global (Jest) or a hook imported from the runner package
+/// (Vitest) is not a value binding, so it qualifies; a user `function beforeAll`
+/// or `const beforeAll = …` is in `locals` and is rejected, keeping ordinary
+/// modules that shadow a hook name flagged.
+fn is_test_runner_hook_call(
+    call: &oxc_ast::ast::CallExpression,
+    locals: &HashSet<String>,
+) -> bool {
+    let Some(root) = hook_callee_root(call) else {
         return false;
+    };
+    let is_hook = match &call.callee {
+        Expression::StaticMemberExpression(_) => root == "expect",
+        _ => TEST_RUNNER_HOOK_IDENTS.contains(&root),
+    };
+    is_hook && !locals.contains(root)
+}
+
+/// Names bound by top-level *value* declarations: `function`/`class`
+/// declarations and `var`/`let`/`const` binding identifiers. Imports are
+/// excluded — a hook imported from a runner package (`import { beforeAll } from
+/// "vitest"`) is the runner's binding, not a user definition, so it must not
+/// disqualify the setup-file shape.
+fn module_top_level_value_bindings(program: &Program) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for stmt in &program.body {
+        match stmt {
+            Statement::FunctionDeclaration(func) => {
+                if let Some(id) = &func.id {
+                    out.insert(id.name.to_string());
+                }
+            }
+            Statement::ClassDeclaration(class) => {
+                if let Some(id) = &class.id {
+                    out.insert(id.name.to_string());
+                }
+            }
+            Statement::VariableDeclaration(decl) => {
+                for declarator in &decl.declarations {
+                    if let BindingPattern::BindingIdentifier(id) = &declarator.id {
+                        out.insert(id.name.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
     }
+    out
+}
+
+/// True when the program is a test-runner setup file by content shape: it has at
+/// least one top-level lifecycle-hook call statement and every top-level
+/// call/`new` statement is such a hook (see `is_test_runner_hook_call`). Covers
+/// both Jest setup files (hooks injected as globals, no import) and Vitest setup
+/// files (hooks imported from `"vitest"`); a locally-defined hook name keeps the
+/// module flagged. An empty program (no top-level call/`new` statements) returns
+/// `false` — there is nothing to exempt.
+fn shape_is_test_setup(program: &Program) -> bool {
+    let locals = module_top_level_value_bindings(program);
     let mut seen_any = false;
     for stmt in &program.body {
         let Statement::ExpressionStatement(es) = stmt else { continue };
         match &es.expression {
             Expression::CallExpression(call) => {
                 seen_any = true;
-                if !is_vitest_hook_call(call) {
+                if !is_test_runner_hook_call(call, &locals) {
                     return false;
                 }
             }
@@ -786,7 +827,7 @@ impl OxcCheck for Check {
 
         if is_test_setup_path(ctx.path)
             || is_cli_entry(ctx.path, ctx.source)
-            || shape_is_vitest_setup(program)
+            || shape_is_test_setup(program)
             || is_server_entry_shape(program)
             || is_react_entry_shape(program)
             || is_solid_entry_shape(program)
@@ -970,7 +1011,8 @@ mod tests {
 
     #[test]
     fn flags_top_level_beforeAll_without_vitest_import() {
-        // `beforeAll` defined locally — no vitest import — shape check must NOT exempt.
+        // `beforeAll` defined locally — it is a top-level value binding, so the
+        // shape check treats it as a user function, not an injected hook.
         let src = "\
             function beforeAll(fn: () => void) { fn(); }\n\
             beforeAll(() => someSideEffect());\n";
@@ -992,6 +1034,28 @@ mod tests {
             diags.len(),
             2,
             "non-hook call breaks the setup-file shape, both stmts flagged"
+        );
+    }
+
+    // Regression for #1903: a Jest setup file uses the global `beforeEach` /
+    // `afterEach` hooks (injected by Jest, no import) at the top level. The
+    // content shape is a pure setup file, so it must be exempt even without a
+    // `"vitest"` import and even on a path the convention check misses
+    // (`test-utils/setupTestFramework.ts`).
+    #[test]
+    fn allows_jest_setup_file_with_global_hooks_no_import() {
+        let src = "\
+            import { resetWarnOnce } from '../src/utils/warnOnce';\n\
+            beforeEach(() => { console.error = jest.fn(); resetWarnOnce(); });\n\
+            afterEach(() => { console.error = consoleError; });\n";
+        let diags = crate::rules::test_helpers::run_rule(
+            &Check,
+            src,
+            "packages/styled-components/test-utils/setupTestFramework.ts",
+        );
+        assert!(
+            diags.is_empty(),
+            "Jest setup file using global hooks (no vitest import) should be exempt, got {diags:?}"
         );
     }
 
