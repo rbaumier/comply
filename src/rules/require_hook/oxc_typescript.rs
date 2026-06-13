@@ -34,6 +34,7 @@ fn is_allowed_test_callee(name: &str) -> bool {
             | "fit"
             | "xit"
             | "xtest"
+            | "bench"
             | "beforeEach"
             | "afterEach"
             | "beforeAll"
@@ -54,6 +55,28 @@ fn root_callee_name<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
         Expression::CallExpression(call) => root_callee_name(&call.callee),
         _ => None,
     }
+}
+
+/// Is `expr` a call to an allowed test/suite/hook API?
+///
+/// Accepts the call when either the root identifier is an allowed callee
+/// (`test(...)`, `describe.skip(...)`, `test.each([...])(...)`) or, for a
+/// member-expression callee, the property is an allowed callee — the
+/// namespaced test runners expose registration through a property
+/// (`Deno.test(...)`, `Deno.bench(...)`).
+fn callee_is_allowed_test_call(expr: &Expression) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    if let Some(name) = root_callee_name(expr)
+        && is_allowed_test_callee(name)
+    {
+        return true;
+    }
+    if let Expression::StaticMemberExpression(mem) = &call.callee {
+        return is_allowed_test_callee(mem.property.name.as_str());
+    }
+    false
 }
 
 /// Calls that *must* live at module scope because the test runner hoists
@@ -265,10 +288,7 @@ fn top_level_is_allowed(stmt: &Statement, node_test_mode: bool) -> bool {
             if is_hoisted_test_api(expr) {
                 return true;
             }
-            let Some(name) = root_callee_name(expr) else {
-                return false;
-            };
-            is_allowed_test_callee(name)
+            callee_is_allowed_test_call(expr)
         }
 
         _ => false,
@@ -687,6 +707,56 @@ describe("x", () => { it("works", () => {}); });
         assert!(
             d.is_empty(),
             "a template literal with no interpolation must remain allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_deno_test_at_top_level() {
+        let src = r#"
+import { assertEquals } from '@std/assert';
+import axios from 'axios';
+
+Deno.test('errors: rejects with AxiosError for 500', async () => {
+  assertEquals(1, 1);
+});
+
+Deno.test('errors: rejects with AxiosError for 404', async () => {
+  assertEquals(2, 2);
+});
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "error.smoke.test.ts");
+        assert!(
+            d.is_empty(),
+            "Deno.test(...) at top level must be allowed like a bare test(...): {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_deno_bench_at_top_level() {
+        let src = r#"
+Deno.bench('perf', () => {});
+
+Deno.test('x', () => {});
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "perf.bench.test.ts");
+        assert!(
+            d.is_empty(),
+            "Deno.bench(...) at top level must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_member_call_with_non_test_property_at_top_level() {
+        let src = r#"
+foo.bar();
+
+Deno.test('x', () => {});
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a member call whose property is not a test callee (foo.bar()) must still be flagged: {d:?}"
         );
     }
 
