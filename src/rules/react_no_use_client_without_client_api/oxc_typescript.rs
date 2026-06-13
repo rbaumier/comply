@@ -144,6 +144,15 @@ impl OxcCheck for Check {
                         break;
                     }
                 }
+                // JSX spread props (`<input {...registration} />`) can carry
+                // event handlers and refs (e.g. React Hook Form's
+                // `UseFormRegisterReturn` spreads `onChange`/`onBlur`/`ref`),
+                // none of which are visible as named attributes. Spreading onto
+                // a JSX element implies potential client-only behavior.
+                AstKind::JSXSpreadAttribute(_) => {
+                    found_client_api = true;
+                    break;
+                }
                 AstKind::IdentifierName(id) => {
                     let name = id.name.as_str();
                     // Member-access event handlers: `el.onclick = ...`, etc.
@@ -505,6 +514,32 @@ export default function Error({ reset }: { reset: () => void }) {
 export function Input() {
   return <input onChange={(e) => console.log(e)} />;
 }
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Regression test for #1764 — a `"use client"` component whose only
+    // client-side behavior is a JSX spread of an event-handler object
+    // (React Hook Form's `UseFormRegisterReturn` spreads `onChange`/`onBlur`/`ref`).
+    #[test]
+    fn no_fp_for_jsx_spread_event_handler_props_oxc() {
+        let src = r#"'use client';
+
+import { UseFormRegisterReturn } from 'react-hook-form';
+
+type SelectFieldProps = {
+  defaultValue?: string;
+  registration: Partial<UseFormRegisterReturn>;
+};
+
+export const Select = (props: SelectFieldProps) => {
+  const { defaultValue, registration } = props;
+  return (
+    <select defaultValue={defaultValue} {...registration}>
+      <option value="a">A</option>
+    </select>
+  );
+};
 "#;
         assert!(run(src).is_empty());
     }
