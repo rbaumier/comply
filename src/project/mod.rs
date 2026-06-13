@@ -429,6 +429,77 @@ fn merge_tsconfig(parent: Tsconfig, child: Tsconfig) -> Tsconfig {
     }
 }
 
+/// Parsed `Cargo.toml` manifest, classified for the Rust lint rules. Built
+/// once per manifest directory by [`ProjectCtx::nearest_cargo_manifest`] and
+/// shared via `Arc`. Stores the manifest *directory* so `is_binary_only` can
+/// stat `src/lib.rs` next to it.
+#[derive(Debug, Clone)]
+pub struct CargoManifest {
+    /// Directory containing the `Cargo.toml`.
+    manifest_dir: PathBuf,
+    /// `[lib]` table is present.
+    has_lib_table: bool,
+    /// An async runtime (`tokio`, `async-std`, `futures`) is declared in any
+    /// dependency section.
+    async_runtime: bool,
+    /// `[package].categories` lists `"no-std"`.
+    no_std_category: bool,
+}
+
+impl CargoManifest {
+    /// Async runtimes whose presence in any dependency section marks the crate
+    /// as async.
+    const ASYNC_RUNTIMES: &'static [&'static str] =
+        &["tokio", "async-std", "async_std", "futures"];
+
+    /// Parse a `Cargo.toml`'s raw text. `manifest_dir` is the directory holding
+    /// the manifest (kept for the `src/lib.rs` filesystem check). Returns `None`
+    /// when the text is not valid TOML.
+    pub fn parse(raw: &str, manifest_dir: PathBuf) -> Option<Self> {
+        let value = raw.parse::<toml::Value>().ok()?;
+
+        let has_lib_table = value.get("lib").is_some();
+
+        let async_runtime = ["dependencies", "dev-dependencies", "build-dependencies"]
+            .iter()
+            .filter_map(|section| value.get(section).and_then(toml::Value::as_table))
+            .any(|table| Self::ASYNC_RUNTIMES.iter().any(|rt| table.contains_key(*rt)));
+
+        let no_std_category = value
+            .get("package")
+            .and_then(|package| package.get("categories"))
+            .and_then(toml::Value::as_array)
+            .is_some_and(|categories| {
+                categories
+                    .iter()
+                    .any(|category| category.as_str() == Some("no-std"))
+            });
+
+        Some(CargoManifest {
+            manifest_dir,
+            has_lib_table,
+            async_runtime,
+            no_std_category,
+        })
+    }
+
+    /// True when the crate builds no library target: no `[lib]` table and no
+    /// `src/lib.rs` next to the manifest.
+    pub fn is_binary_only(&self) -> bool {
+        !self.has_lib_table && !self.manifest_dir.join("src/lib.rs").is_file()
+    }
+
+    /// True when the crate depends on an async runtime.
+    pub fn has_async_runtime(&self) -> bool {
+        self.async_runtime
+    }
+
+    /// True when `[package].categories` lists `"no-std"`.
+    pub fn is_no_std(&self) -> bool {
+        self.no_std_category
+    }
+}
+
 /// Parsed Tailwind theme. Populated statically from `@theme` CSS blocks (v4)
 /// or object-literal `theme.extend.colors` in `tailwind.config.{ts,js}` (v3).
 /// Stub today — future chantier.
@@ -462,6 +533,7 @@ pub struct ProjectCtx {
     // first insert all readers take the lock briefly just to clone an Arc).
     package_json_cache: Mutex<HashMap<PathBuf, Arc<PackageJson>>>,
     tsconfig_cache: Mutex<HashMap<PathBuf, Arc<Tsconfig>>>,
+    cargo_manifest_cache: Mutex<HashMap<PathBuf, Arc<CargoManifest>>>,
 
     // Memoizes the upward `walk_up_finding` stat-walk that locates a marker
     // file (`package.json`, `tsconfig.json`). The resolved manifest directory
@@ -1016,6 +1088,41 @@ impl ProjectCtx {
     pub fn nearest_tsconfig_dir(&self, path: &Path) -> Option<PathBuf> {
         let start_dir = path.parent()?;
         walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "tsconfig.json")
+    }
+
+    /// Walk up from `path` to the nearest `Cargo.toml`, returning the parsed
+    /// manifest cached by manifest directory. The central accessor that the
+    /// Rust lint rules query for crate shape (binary-only, async runtime,
+    /// no-std) instead of each re-walking and re-parsing the manifest. Returns
+    /// `None` when no `Cargo.toml` is found or it cannot be read or parsed —
+    /// callers pick their own missing-manifest default.
+    ///
+    /// Cannot reuse the generic [`nearest`] helper because [`CargoManifest::parse`]
+    /// needs the manifest directory (for the `src/lib.rs` stat), which that
+    /// helper's `Fn(&str) -> Option<T>` parse signature cannot supply.
+    pub fn nearest_cargo_manifest(&self, path: &Path) -> Option<Arc<CargoManifest>> {
+        let start_dir = path.parent()?;
+        let manifest_dir =
+            walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "Cargo.toml")?;
+
+        if let Some(hit) = self.cargo_manifest_cache.lock().ok()?.get(&manifest_dir) {
+            return Some(Arc::clone(hit));
+        }
+
+        let candidate = manifest_dir.join("Cargo.toml");
+        let raw = std::fs::read_to_string(&candidate).ok()?;
+        let manifest = match CargoManifest::parse(&raw, manifest_dir.clone()) {
+            Some(manifest) => manifest,
+            None => {
+                eprintln!("comply: ignoring malformed {}", candidate.display());
+                return None;
+            }
+        };
+        let arc = Arc::new(manifest);
+        if let Ok(mut map) = self.cargo_manifest_cache.lock() {
+            map.entry(manifest_dir).or_insert_with(|| Arc::clone(&arc));
+        }
+        Some(arc)
     }
 
     /// True if a non-relative `spec` resolves to a local source file via the
@@ -1791,5 +1898,44 @@ mod tests {
         )
         .unwrap();
         assert!(!load_ctx_in(&dir).uses_tailwind());
+    }
+
+    #[test]
+    fn nearest_cargo_manifest_walks_up_caches_and_classifies() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            r#"
+[package]
+name = "mytool"
+version = "0.1.0"
+edition = "2021"
+categories = ["no-std"]
+
+[[bin]]
+name = "mytool"
+path = "src/main.rs"
+
+[dependencies]
+tokio = "1"
+"#,
+        )
+        .unwrap();
+        let nested = dir.path().join("src").join("deep");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let ctx = ProjectCtx::empty();
+        let first = ctx.nearest_cargo_manifest(&nested.join("t.rs")).unwrap();
+        let second = ctx.nearest_cargo_manifest(&nested.join("other.rs")).unwrap();
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "sibling files should share the same cached Arc"
+        );
+        assert!(
+            first.is_binary_only(),
+            "no [lib] table and no src/lib.rs on disk => binary-only"
+        );
+        assert!(first.has_async_runtime(), "tokio is declared");
+        assert!(first.is_no_std(), "categories lists no-std");
     }
 }

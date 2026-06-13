@@ -23,7 +23,6 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use std::path::Path;
 
 const KINDS: &[&str] = &["use_declaration", "macro_invocation"];
 
@@ -57,7 +56,12 @@ impl AstCheck for Check {
         // `tracing`'s advantage (span context across `async` boundaries) does
         // not apply in purely synchronous code, where `log` is the established
         // standard with a smaller footprint.
-        if !crate_has_async_runtime(ctx.path) {
+        // Missing/unparseable Cargo.toml defaults to flagging (`None` -> `true`).
+        if !ctx
+            .project
+            .nearest_cargo_manifest(ctx.path)
+            .is_none_or(|m| m.has_async_runtime())
+        {
             return;
         }
         let pos = node.start_position();
@@ -95,48 +99,6 @@ fn is_log_use(node: tree_sitter::Node, source: &[u8]) -> bool {
     // Any of: `log::…`, `log ;` (alias), or `log;` (shouldn't really
     // happen for the log crate but keep the check tight).
     path.starts_with("log::") || path.starts_with("log ") || path.starts_with("log;")
-}
-
-/// Returns `true` when the nearest `Cargo.toml` ancestor of `path` lists
-/// `tokio`, `async-std`, or `futures` as a dependency (in `[dependencies]`,
-/// `[dev-dependencies]`, or `[build-dependencies]`).  Returns `true` (safe
-/// default — keep flagging) when no `Cargo.toml` is found or it cannot be
-/// parsed.
-fn crate_has_async_runtime(path: &Path) -> bool {
-    let Some(cargo_toml_path) = nearest_cargo_toml(path) else {
-        return true;
-    };
-    let Ok(content) = std::fs::read_to_string(&cargo_toml_path) else {
-        return true;
-    };
-    let Ok(value) = content.parse::<toml::Value>() else {
-        return true;
-    };
-
-    const ASYNC_RUNTIMES: &[&str] = &["tokio", "async-std", "async_std", "futures"];
-
-    for section in &["dependencies", "dev-dependencies", "build-dependencies"] {
-        if let Some(table) = value.get(section).and_then(toml::Value::as_table) {
-            for rt in ASYNC_RUNTIMES {
-                if table.contains_key(*rt) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
-fn nearest_cargo_toml(path: &Path) -> Option<std::path::PathBuf> {
-    let mut dir = path.parent();
-    while let Some(d) = dir {
-        let candidate = d.join("Cargo.toml");
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        dir = d.parent();
-    }
-    None
 }
 
 fn is_log_macro_call(node: tree_sitter::Node, source: &[u8]) -> bool {

@@ -52,7 +52,11 @@ impl AstCheck for Check {
         if is_binary_file(ctx.path) {
             return;
         }
-        if is_binary_only_crate(ctx.path) {
+        if ctx
+            .project
+            .nearest_cargo_manifest(ctx.path)
+            .is_some_and(|m| m.is_binary_only())
+        {
             return;
         }
         diagnostics.push(Diagnostic::at_node(
@@ -82,42 +86,6 @@ fn is_binary_file(path: &Path) -> bool {
         return true;
     }
     path.components().any(|c| c.as_os_str() == "bin")
-}
-
-/// True when the nearest `Cargo.toml` ancestor of `path` describes a crate
-/// that builds no library target: the manifest declares no `[lib]` table
-/// and no `src/lib.rs` exists next to it. Returns `false` (keep flagging —
-/// safe default) when no `Cargo.toml` is found or it cannot be read or
-/// parsed.
-fn is_binary_only_crate(path: &Path) -> bool {
-    let Some(cargo_toml_path) = nearest_cargo_toml(path) else {
-        return false;
-    };
-    let Ok(content) = std::fs::read_to_string(&cargo_toml_path) else {
-        return false;
-    };
-    let Ok(value) = content.parse::<toml::Value>() else {
-        return false;
-    };
-    if value.get("lib").is_some() {
-        return false;
-    }
-    let Some(manifest_dir) = cargo_toml_path.parent() else {
-        return false;
-    };
-    !manifest_dir.join("src/lib.rs").is_file()
-}
-
-fn nearest_cargo_toml(path: &Path) -> Option<std::path::PathBuf> {
-    let mut dir = path.parent();
-    while let Some(d) = dir {
-        let candidate = d.join("Cargo.toml");
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        dir = d.parent();
-    }
-    None
 }
 
 #[cfg(test)]
