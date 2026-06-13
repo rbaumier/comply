@@ -51,6 +51,11 @@
 //!     `BaseSchema.extend(...)`, `z.infer<typeof BaseSchema>`, composition
 //!     into another exported value) are kept. The base name is consumed
 //!     in-file; its derived form is what callers import.
+//!   - Files referenced through a Docusaurus `@site/` alias import are kept.
+//!     Docusaurus maps `@site/` to the site root via webpack, so
+//!     `import X from "@site/src/components/foo"` never resolves in the index
+//!     and the imported component looks dead. When an unresolved `@site/`
+//!     specifier's path suffix matches a file, every export of it is live.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::parsing::ts_language_for;
@@ -132,6 +137,55 @@ const MIGRATION_EXPORTS: &[&str] = &["up", "down"];
 /// merely exporting an `up` (or a `down`) is not blanket-exempted.
 fn is_migration_module<'a>(export_names: &HashSet<&'a str>) -> bool {
     export_names.contains("up") && export_names.contains("down")
+}
+
+/// True when the project contains a Docusaurus `@site/`-aliased import whose
+/// path plausibly references `exporting_file`. Docusaurus maps the `@site/`
+/// alias to the site root via its webpack config, so `import X from
+/// "@site/src/components/foo"` never resolves in the import index (it is not a
+/// `compilerOptions.paths` entry) and the imported component looks dead.
+///
+/// The alias suffix (the part after `@site/`) is matched against the exporting
+/// file's path: the file is considered live when its path, with any TS/JS
+/// extension stripped, ends with the suffix — directly or through an `index`
+/// segment (`@site/src/components/foo` ↔ `…/src/components/foo/index.tsx`).
+/// Anchoring on the `@site/` prefix and a path-suffix match keeps the
+/// exemption tight: a genuinely dead export with no such importer still fires.
+fn has_unresolved_site_alias_importer(
+    index: &crate::project::import_index::ImportIndex,
+    exporting_file: &Path,
+) -> bool {
+    const SITE_ALIAS: &str = "@site/";
+
+    let file_norm = exporting_file.to_string_lossy().replace('\\', "/");
+    let file_stem = strip_ts_extension(&file_norm);
+
+    index.iter_imports().any(|imp| {
+        if imp.source_path.is_some() {
+            return false;
+        }
+        let Some(suffix) = imp.specifier.strip_prefix(SITE_ALIAS) else {
+            return false;
+        };
+        let suffix = suffix.trim_end_matches('/');
+        if suffix.is_empty() {
+            return false;
+        }
+        file_stem == suffix
+            || file_stem.ends_with(&format!("/{suffix}"))
+            || file_stem == format!("{suffix}/index")
+            || file_stem.ends_with(&format!("/{suffix}/index"))
+    })
+}
+
+/// Strip a single trailing TS/JS extension from a forward-slashed path.
+fn strip_ts_extension(path: &str) -> &str {
+    for ext in [".tsx", ".ts", ".jsx", ".js", ".mts", ".cts", ".mjs", ".cjs"] {
+        if let Some(stem) = path.strip_suffix(ext) {
+            return stem;
+        }
+    }
+    path
 }
 
 /// True if the source carries a `@generated` marker in its leading comments.
@@ -249,6 +303,13 @@ impl TextCheck for Check {
         let mut structurally_consumed: Option<HashSet<String>> = None;
         let mut in_file_referenced: Option<HashSet<String>> = None;
 
+        // Docusaurus `@site/` alias importers. The alias maps to the site root
+        // via webpack and never resolves in the import index, so a component
+        // consumed exclusively through `@site/src/...` would look dead. When an
+        // unresolved `@site/`-aliased import plausibly references this file,
+        // every export of it is live — the whole module is reachable.
+        let mut site_alias_importer: Option<bool> = None;
+
         let mut diagnostics = Vec::new();
         for export in exports {
             if matches!(export.kind, ExportKind::StarReExport) {
@@ -274,6 +335,11 @@ impl TextCheck for Check {
             let in_file_referenced = in_file_referenced
                 .get_or_insert_with(|| collect_in_file_referenced_names(ctx.source, ctx.lang));
             if in_file_referenced.contains(export.name.as_str()) {
+                continue;
+            }
+            let site_alias_importer = *site_alias_importer
+                .get_or_insert_with(|| has_unresolved_site_alias_importer(index, &canon));
+            if site_alias_importer {
                 continue;
             }
             diagnostics.push(Diagnostic {
@@ -1303,5 +1369,55 @@ mod tests {
             diags.is_empty(),
             "without entrypoints, backend /api/ files must remain silenced (backward-compat), got: {diags:?}"
         );
+    }
+
+    #[test]
+    fn no_fp_for_docusaurus_site_alias_importer() {
+        // Regression for #2014 — Docusaurus maps the `@site/` alias to the site
+        // root via webpack, so `import HeroLerna from "@site/src/components/..."`
+        // never resolves in the import index. The imported component's `default`
+        // export looks dead even though the page consumes it; dead-export must
+        // not flag it.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "website/src/components/hero-lerna.tsx",
+                "export default function HeroLerna() { return null; }",
+            ),
+            (
+                "website/src/pages/index.tsx",
+                "import HeroLerna from \"@site/src/components/hero-lerna\";\n\
+                 export default function Home() { return HeroLerna; }",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "website/src/components/hero-lerna.tsx");
+        assert!(
+            diags.is_empty(),
+            "component imported via @site/ alias must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_export_with_no_site_alias_importer() {
+        // Sibling guard for #2014 — a genuinely dead component (no importer at
+        // all, including no matching `@site/` alias) must still be flagged. A
+        // non-matching `@site/` import elsewhere must not suppress it.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "website/src/components/orphan.tsx",
+                "export default function Orphan() { return null; }",
+            ),
+            (
+                "website/src/pages/index.tsx",
+                "import HeroLerna from \"@site/src/components/hero-lerna\";\n\
+                 export default function Home() { return HeroLerna; }",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "website/src/components/orphan.tsx");
+        assert_eq!(
+            diags.len(),
+            1,
+            "dead component with no matching @site/ importer must still be flagged, got: {diags:?}"
+        );
+        assert!(diags[0].message.contains("default"));
     }
 }
