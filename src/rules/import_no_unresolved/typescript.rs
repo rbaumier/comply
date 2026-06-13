@@ -32,6 +32,13 @@ crate::ast_check! { on ["program"] => |node, _source, ctx, diagnostics|
         if super::oxc_typescript::is_existing_asset_import(ctx.path, &imp.specifier) {
             continue;
         }
+        // A relative import whose target source file exists on disk but lives
+        // in a directory excluded from the scan (e.g. vendored code under
+        // `vendor/`) is absent from the import index, so `source_path` is
+        // `None` — yet the import is genuinely resolvable. Don't flag it.
+        if super::oxc_typescript::is_existing_source_import(ctx.path, &imp.specifier) {
+            continue;
+        }
         if !seen.insert((imp.specifier.clone(), imp.line)) {
             continue;
         }
@@ -194,6 +201,78 @@ mod tests {
         let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &paths[0], &project, crate::rules::file_ctx::default_static_file_ctx());
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("missing.css"));
+    }
+
+    #[test]
+    fn no_fp_for_import_into_excluded_vendor_dir_issue_2044() {
+        // trpc reproducer: a source file imports a vendored module under
+        // `vendor/`, which is excluded from the scan. The target file exists on
+        // disk but is absent from the import index, so the import must not be
+        // flagged. Covers a file target (`../vendor/unpromise/index.ts` via the
+        // directory's index), a nested file (`../../vendor/cookie-es/.../split`),
+        // and an explicit-extensionless file target.
+        let dir = TempDir::new().unwrap();
+
+        let importer = dir.path().join("packages/server/src/adapters/ws.ts");
+        fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        fs::write(&importer, "import { Unpromise } from '../vendor/unpromise';").unwrap();
+
+        // The vendored files live on disk but are NOT added to the project, just
+        // as the scan walker prunes the excluded `vendor/` directory.
+        let vendor_index = dir
+            .path()
+            .join("packages/server/src/vendor/unpromise/index.ts");
+        fs::create_dir_all(vendor_index.parent().unwrap()).unwrap();
+        fs::write(&vendor_index, "export class Unpromise {}").unwrap();
+
+        let lang = Language::from_path(&importer).unwrap();
+        let source_files = vec![SourceFile {
+            path: importer.clone(),
+            language: lang,
+        }];
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = fs::canonicalize(&importer).unwrap();
+        let source = "import { Unpromise } from '../vendor/unpromise';";
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        );
+        assert!(diags.is_empty(), "unexpected FP for vendor import: {diags:?}");
+    }
+
+    #[test]
+    fn flags_unresolved_import_when_no_file_on_disk_issue_2044() {
+        // The vendor fix must stay precise: a relative import whose target has no
+        // file on disk anywhere is still genuinely unresolved and must fire.
+        let dir = TempDir::new().unwrap();
+        let importer = dir.path().join("packages/server/src/adapters/ws.ts");
+        fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        fs::write(&importer, "import { Gone } from '../vendor/does-not-exist';").unwrap();
+
+        let lang = Language::from_path(&importer).unwrap();
+        let source_files = vec![SourceFile {
+            path: importer.clone(),
+            language: lang,
+        }];
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = fs::canonicalize(&importer).unwrap();
+        let source = "import { Gone } from '../vendor/does-not-exist';";
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        );
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("does-not-exist"));
     }
 
     #[test]

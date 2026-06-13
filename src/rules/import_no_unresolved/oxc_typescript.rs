@@ -54,6 +54,13 @@ impl OxcCheck for Check {
             if is_existing_asset_import(ctx.path, &imp.specifier) {
                 continue;
             }
+            // A relative import whose target source file exists on disk but lives
+            // in a directory excluded from the scan (e.g. vendored code under
+            // `vendor/`) is absent from the import index, so `source_path` is
+            // `None` — yet the import is genuinely resolvable. Don't flag it.
+            if is_existing_source_import(ctx.path, &imp.specifier) {
+                continue;
+            }
             if !seen.insert((imp.specifier.clone(), imp.line)) {
                 continue;
             }
@@ -125,6 +132,35 @@ pub(super) fn is_existing_asset_import(importer: &Path, specifier: &str) -> bool
         return false;
     };
     base_dir.join(specifier).is_file()
+}
+
+/// True for a relative specifier that resolves to a real source file on disk,
+/// even when that file is absent from the import index because it lives in a
+/// directory excluded from the scan (e.g. vendored code under `vendor/`).
+/// Mirrors the import index's resolution order — bare path, each source
+/// extension, then `index.<ext>` — but checks the filesystem directly instead
+/// of the in-memory `known` set. A specifier with no matching file on disk
+/// (e.g. `./does-not-exist`) returns `false` and is still flagged.
+pub(super) fn is_existing_source_import(importer: &Path, specifier: &str) -> bool {
+    let Some(base_dir) = importer.parent() else {
+        return false;
+    };
+    let raw = base_dir.join(specifier);
+
+    if Path::new(specifier)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| SOURCE_EXTS.contains(&ext))
+        && raw.is_file()
+    {
+        return true;
+    }
+    if SOURCE_EXTS.iter().any(|ext| raw.with_extension(ext).is_file()) {
+        return true;
+    }
+    SOURCE_EXTS
+        .iter()
+        .any(|ext| raw.join(format!("index.{ext}")).is_file())
 }
 
 #[cfg(test)]
