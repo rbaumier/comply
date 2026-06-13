@@ -36,15 +36,13 @@ impl OxcCheck for Check {
                 continue;
             }
             // Skip gitignored build-time generated files (e.g. TanStack
-            // Router's `routeTree.gen.ts`): often absent at lint time, always
-            // present at build/dev time.
-            if is_generated_specifier(&imp.specifier) {
-                continue;
-            }
-            if is_generated_dir_specifier(&imp.specifier) {
-                continue;
-            }
-            if is_build_output_specifier(&imp.specifier) {
+            // Router's `routeTree.gen.ts`) and imports into build-output /
+            // codegen directories (dist/build/out, generated/__generated__/
+            // .prisma/prisma/gen, node_modules): often absent at lint time,
+            // always present at build/dev time.
+            if crate::rules::path_utils::is_generated_file_specifier(&imp.specifier)
+                || crate::rules::path_utils::is_build_output_specifier(&imp.specifier)
+            {
                 continue;
             }
             // CSS, CSS Modules, SVG, and other static assets are imported via
@@ -81,35 +79,6 @@ impl OxcCheck for Check {
 
         diagnostics
     }
-}
-
-/// True for specifiers pointing at a build-time generated file whose final
-/// segment ends in `.gen` (e.g. `./routeTree.gen`) or carries a `.gen.`
-/// extension stem (e.g. `./routeTree.gen.ts`). Such files are gitignored and
-/// often absent at lint time, yet always present at build/dev time.
-fn is_generated_specifier(spec: &str) -> bool {
-    let last = spec.rsplit('/').next().unwrap_or(spec);
-    last.ends_with(".gen") || last.contains(".gen.")
-}
-
-/// True for specifiers that traverse into a conventional build-output
-/// directory (`dist`, `build`, `out`). Integration tests deliberately import
-/// the compiled artifact (e.g. `../../dist/cjs/index.js`); these directories
-/// are gitignored and absent in a clean checkout, so an unresolved import
-/// there is expected, not a defect.
-fn is_build_output_specifier(spec: &str) -> bool {
-    spec.split('/').any(|seg| matches!(seg, "dist" | "build" | "out"))
-}
-
-/// True for specifiers that traverse into a directory holding code-generated
-/// output (`generated`/`__generated__` from Prisma, GraphQL/Relay codegen, the
-/// `.prisma` client cache) or into `node_modules`. These artifacts are produced
-/// by a build step (`prisma generate`, `graphql-codegen`, `npm install`), are
-/// gitignored, and are absent in a clean checkout — so an unresolved import
-/// there is expected, not a defect.
-fn is_generated_dir_specifier(spec: &str) -> bool {
-    spec.split('/')
-        .any(|seg| matches!(seg, "generated" | "__generated__" | ".prisma" | "node_modules"))
 }
 
 /// Source extensions resolved through the TS/JS import index. A specifier
@@ -165,15 +134,15 @@ pub(super) fn is_existing_source_import(importer: &Path, specifier: &str) -> boo
 
 #[cfg(test)]
 mod oxc_tests {
-    use super::{is_build_output_specifier, is_generated_dir_specifier, is_generated_specifier};
+    use crate::rules::path_utils::{is_build_output_specifier, is_generated_file_specifier};
 
     #[test]
     fn detects_generated_specifiers_issue_487() {
-        assert!(is_generated_specifier("./routeTree.gen"));
-        assert!(is_generated_specifier("./routeTree.gen.ts"));
-        assert!(is_generated_specifier("../app/routeTree.gen"));
-        assert!(!is_generated_specifier("./routeTree"));
-        assert!(!is_generated_specifier("./generated"));
+        assert!(is_generated_file_specifier("./routeTree.gen"));
+        assert!(is_generated_file_specifier("./routeTree.gen.ts"));
+        assert!(is_generated_file_specifier("../app/routeTree.gen"));
+        assert!(!is_generated_file_specifier("./routeTree"));
+        assert!(!is_generated_file_specifier("./generated"));
     }
 
     #[test]
@@ -192,15 +161,16 @@ mod oxc_tests {
 
     #[test]
     fn detects_generated_dir_specifiers_issue_1420() {
-        // reproducers from the issue (Prisma / GraphQL codegen output)
-        assert!(is_generated_dir_specifier("./generated/prisma/client"));
-        assert!(is_generated_dir_specifier("./generated/client"));
-        assert!(is_generated_dir_specifier("./node_modules/@prisma/client"));
-        assert!(is_generated_dir_specifier("../src/__generated__/graphql"));
-        assert!(is_generated_dir_specifier("./.prisma/client"));
+        // reproducers from the issue (Prisma / GraphQL codegen output); the
+        // generated-dir set is now part of `is_build_output_specifier`.
+        assert!(is_build_output_specifier("./generated/prisma/client"));
+        assert!(is_build_output_specifier("./generated/client"));
+        assert!(is_build_output_specifier("./node_modules/@prisma/client"));
+        assert!(is_build_output_specifier("../src/__generated__/graphql"));
+        assert!(is_build_output_specifier("./.prisma/client"));
         // still flagged — a genuinely broken relative import has no codegen segment
-        assert!(!is_generated_dir_specifier("./does-not-exist"));
-        assert!(!is_generated_dir_specifier("../utils/helper"));
-        assert!(!is_generated_dir_specifier("./generated-things")); // substring, not a segment
+        assert!(!is_build_output_specifier("./does-not-exist"));
+        assert!(!is_build_output_specifier("../utils/helper"));
+        assert!(!is_build_output_specifier("./generated-things")); // substring, not a segment
     }
 }

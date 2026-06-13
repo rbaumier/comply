@@ -23,14 +23,6 @@ const KINDS: &[&str] = &["macro_invocation"];
 
 const BANNED_MACROS: &[&str] = &["panic", "todo", "unimplemented", "unreachable"];
 
-/// True if `path` is under cargo-fuzz's `fuzz_targets/` directory — any
-/// path segment equals `"fuzz_targets"`. In a libfuzzer-sys target,
-/// `panic!` is the deliberate crash-signaling mechanism (the fuzzer
-/// catches it and reports a found bug), functionally an assertion.
-fn is_under_fuzz_targets_dir(path: &std::path::Path) -> bool {
-    path.components().any(|c| c.as_os_str() == "fuzz_targets")
-}
-
 #[derive(Debug)]
 pub struct Check;
 
@@ -56,9 +48,13 @@ impl AstCheck for Check {
         if !BANNED_MACROS.contains(&macro_name) {
             return;
         }
+        // Dual-read: the unit-test harness injects an empty default FileCtx, so
+        // `in_fuzz_targets` is false in tests — fall back to the pure path
+        // predicate, which reads `ctx.path` directly.
         if is_in_test_context(node, source_bytes)
             || is_under_tests_dir(ctx.path)
-            || is_under_fuzz_targets_dir(ctx.path)
+            || ctx.file.path_segments.in_fuzz_targets
+            || crate::rules::path_utils::is_fuzz_targets_path(ctx.path)
         {
             return;
         }

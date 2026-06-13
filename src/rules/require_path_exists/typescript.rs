@@ -23,18 +23,6 @@ fn is_relative_path(spec: &str) -> bool {
     spec.starts_with("./") || spec.starts_with("../")
 }
 
-/// True for specifiers pointing at a build-time generated file. Such files are
-/// produced by a build step, gitignored and often absent at lint time, yet
-/// always present at build/dev time. Recognised conventions:
-/// - a `.gen` final segment (e.g. `./routeTree.gen`) or `.gen.` extension stem
-///   (e.g. `./routeTree.gen.ts`);
-/// - a `.prebuilt.` extension stem (e.g. `./idle.prebuilt.js`), the suffix used
-///   for inlined/minified build outputs that live beside their `.ts` source.
-fn is_generated_specifier(spec: &str) -> bool {
-    let last = spec.rsplit('/').next().unwrap_or(spec);
-    last.ends_with(".gen") || last.contains(".gen.") || last.contains(".prebuilt.")
-}
-
 fn resolve_and_check(base_dir: &Path, import_spec: &str) -> bool {
     let resolved = base_dir.join(import_spec);
 
@@ -96,7 +84,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         return;
     }
 
-    if is_generated_specifier(&import_spec) {
+    if crate::rules::path_utils::is_generated_file_specifier(&import_spec) {
         return;
     }
 
@@ -139,20 +127,22 @@ mod tests {
     #[test]
     fn detects_generated_specifiers_issue_487() {
         // Gitignored build artifacts (e.g. TanStack Router) are exempt.
-        assert!(is_generated_specifier("./routeTree.gen"));
-        assert!(is_generated_specifier("./routeTree.gen.ts"));
-        assert!(is_generated_specifier("../app/routeTree.gen"));
-        assert!(!is_generated_specifier("./routeTree"));
-        assert!(!is_generated_specifier("./generated"));
+        use crate::rules::path_utils::is_generated_file_specifier;
+        assert!(is_generated_file_specifier("./routeTree.gen"));
+        assert!(is_generated_file_specifier("./routeTree.gen.ts"));
+        assert!(is_generated_file_specifier("../app/routeTree.gen"));
+        assert!(!is_generated_file_specifier("./routeTree"));
+        assert!(!is_generated_file_specifier("./generated"));
     }
 
     #[test]
     fn detects_prebuilt_suffix_issue_2065() {
         // `.prebuilt.js` build outputs (astro) live beside their `.ts` source
         // and are absent in a clean checkout.
-        assert!(is_generated_specifier("../../runtime/client/idle.prebuilt.js"));
-        assert!(is_generated_specifier("./visible.prebuilt.js"));
-        assert!(!is_generated_specifier("./idle.js"));
-        assert!(!is_generated_specifier("./prebuilt"));
+        use crate::rules::path_utils::is_generated_file_specifier;
+        assert!(is_generated_file_specifier("../../runtime/client/idle.prebuilt.js"));
+        assert!(is_generated_file_specifier("./visible.prebuilt.js"));
+        assert!(!is_generated_file_specifier("./idle.js"));
+        assert!(!is_generated_file_specifier("./prebuilt"));
     }
 }

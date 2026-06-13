@@ -5,7 +5,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use std::path::Path;
 use std::sync::Arc;
 
 pub struct Check;
@@ -29,7 +28,12 @@ impl OxcCheck for Check {
         let Some(pkg) = ctx.project.nearest_package_json(ctx.path) else {
             return;
         };
-        if is_test_file(ctx.path) {
+        // Dual-read: the unit-test harness injects an empty default FileCtx, so
+        // the path-segment fields are false in tests — fall back to the pure
+        // path predicate, which reads `ctx.path` directly.
+        if ctx.file.path_segments.in_test_dir
+            || crate::rules::path_utils::is_extraneous_test_file(ctx.path)
+        {
             return;
         }
         // Story files (a `*.stories.*` name, or any file inside a `stories/` or
@@ -42,13 +46,14 @@ impl OxcCheck for Check {
         if crate::rules::path_utils::is_config_file(ctx.path) {
             return;
         }
-        if is_build_script(ctx.path) {
-            return;
-        }
-        if is_sample_file(ctx.path) {
-            return;
-        }
-        if is_scaffold_template_file(ctx.path) {
+        // Build/codegen scripts (`scripts/`, `config/`), demonstration code
+        // (`samples/`, `examples/`, …), and generator scaffold templates
+        // (`templates/`, `scaffold/`, …) run at dev time and never ship in the
+        // published package, so importing a devDependency from them is correct.
+        if ctx.file.path_segments.in_aux_dir
+            || crate::rules::path_utils::is_build_script_path(ctx.path)
+            || crate::rules::path_utils::is_sample_dir_path(ctx.path)
+        {
             return;
         }
 
@@ -97,70 +102,6 @@ fn package_root(specifier: &str) -> &str {
             None => specifier,
         }
     }
-}
-
-fn is_test_file(path: &Path) -> bool {
-    let path_str = path.to_string_lossy();
-    let is_marked = path_str.contains("__tests__")
-        || path_str.contains("__testUtils__")
-        || path_str.contains(".test.")
-        || path_str.contains(".spec.")
-        || path_str.contains(".setup.")
-        || path_str.contains("/test/")
-        || path_str.contains("/tests/")
-        || path_str.contains("/e2e/");
-    is_marked || has_test_file_stem(path)
-}
-
-/// Co-located test files whose entire name (minus extension) is `test` or
-/// `spec` — e.g. `src/endOfWeek/test.ts`. These never ship in the published
-/// package and legitimately import test-only devDependencies.
-fn has_test_file_stem(path: &Path) -> bool {
-    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-        return false;
-    };
-    matches!(
-        path.extension().and_then(|e| e.to_str()),
-        Some("ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs")
-    ) && (stem == "test" || stem == "spec")
-}
-
-/// Build/codegen scripts under a `scripts/` or `config/` directory run at
-/// dev/CI time and are not part of the shipped bundle, so importing a
-/// devDependency from them is the correct classification — promoting the tool
-/// to `dependencies` would wrongly bloat the production dependency closure.
-fn is_build_script(path: &Path) -> bool {
-    let s = path.to_string_lossy().replace('\\', "/");
-    ["scripts", "config"]
-        .iter()
-        .any(|dir| s.contains(&format!("/{dir}/")) || s.starts_with(&format!("{dir}/")))
-}
-
-/// Demonstration code under `samples/`, `samples-dev/`, `examples/`, or
-/// `example-apps/` is compiled and run at dev time to show library usage; it is
-/// never bundled into the shipped package. Such files intentionally import peer
-/// libraries (e.g. auth providers) declared as devDependencies, so importing a
-/// devDependency from them is the correct classification.
-fn is_sample_file(path: &Path) -> bool {
-    let s = path.to_string_lossy().replace('\\', "/");
-    ["samples", "samples-dev", "examples", "example-apps"]
-        .iter()
-        .any(|dir| s.contains(&format!("/{dir}/")) || s.starts_with(&format!("{dir}/")))
-}
-
-/// Source files under a `template/`, `templates/`, `scaffold/`, or
-/// `boilerplate/` directory are scaffold output shipped by a generator CLI: the
-/// CLI reads them from disk and writes them into the project it generates. Their
-/// imports describe the *generated* project's dependency graph, not the
-/// generator's own runtime closure, so the framework packages they reference are
-/// devDependencies of the host CLI (used to type-check the templates) rather than
-/// runtime dependencies. These files never execute as part of the CLI, so
-/// importing a devDependency from them is the correct classification.
-fn is_scaffold_template_file(path: &Path) -> bool {
-    let s = path.to_string_lossy().replace('\\', "/");
-    ["template", "templates", "scaffold", "boilerplate"]
-        .iter()
-        .any(|dir| s.contains(&format!("/{dir}/")) || s.starts_with(&format!("{dir}/")))
 }
 
 fn is_bare_specifier(spec: &str) -> bool {
