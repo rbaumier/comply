@@ -103,6 +103,27 @@ fn is_commonjs_import(expr: &Expression) -> bool {
     matches!(&call.arguments[0], Argument::StringLiteral(_))
 }
 
+/// A `path.join(...)` / `path.resolve(...)` call whose every argument is a pure
+/// initializer. These resolve module-relative paths with no side effects.
+fn is_pure_path_call(call: &CallExpression) -> bool {
+    let Expression::StaticMemberExpression(mem) = &call.callee else {
+        return false;
+    };
+    let Expression::Identifier(obj) = &mem.object else {
+        return false;
+    };
+    if obj.name.as_str() != "path" {
+        return false;
+    }
+    if !matches!(mem.property.name.as_str(), "join" | "resolve") {
+        return false;
+    }
+    call.arguments.iter().all(|arg| match arg.as_expression() {
+        Some(inner) => is_pure_initializer(inner),
+        None => false,
+    })
+}
+
 /// Is this initializer pure enough to allow at module scope?
 fn is_pure_initializer(expr: &Expression) -> bool {
     if is_hoisted_test_api(expr) {
@@ -121,6 +142,12 @@ fn is_pure_initializer(expr: &Expression) -> bool {
         | Expression::ArrowFunctionExpression(_)
         | Expression::FunctionExpression(_)
         | Expression::ClassExpression(_) => true,
+        // `import.meta` is an immutable, side-effect-free read; this makes
+        // `import.meta.dirname` / `import.meta.url` pure via the member arm below.
+        Expression::MetaProperty(_) => true,
+        // `path.join(...)` / `path.resolve(...)` over pure arguments is a
+        // deterministic, side-effect-free module-relative path computation.
+        Expression::CallExpression(call) => is_pure_path_call(call),
         // A template literal is a pure read when every interpolation is a plain
         // identifier reference to an already-bound value (e.g.
         // `http://localhost:${PORT}/`). Calls or member access can throw or have
@@ -562,6 +589,89 @@ describe("x", () => { it("works", () => {}); });
             d.len(),
             1,
             "a template literal interpolating a member access must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_const_path_join_import_meta_dirname() {
+        let src = r#"
+import path from 'node:path'
+
+const pnpmBin = path.join(import.meta.dirname, '../../../pnpm/bin/pnpm.mjs')
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "cacheDelete.cmd.test.ts");
+        assert!(
+            d.is_empty(),
+            "module-scope const built by path.join(import.meta.dirname, literal) must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_const_path_resolve_dirname() {
+        let src = r#"
+import path from 'node:path'
+
+const fixture = path.resolve(__dirname, './bar')
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert!(
+            d.is_empty(),
+            "module-scope const built by path.resolve(__dirname, literal) must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_const_path_join_with_identifier_args() {
+        let src = r#"
+import path from 'node:path'
+import { a, b } from './fixtures'
+
+const fixture = path.join(import.meta.dirname, a, b)
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert!(
+            d.is_empty(),
+            "path.join with pure identifier args must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_const_arbitrary_call_initializer() {
+        let src = r#"
+import { readFileSync } from 'node:fs'
+
+const data = readFileSync('p')
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "an arbitrary call initializer must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_const_path_join_with_impure_arg() {
+        let src = r#"
+import path from 'node:path'
+
+const fixture = path.join(compute(), 'x')
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "path.join with an impure (call) argument must still be flagged: {d:?}"
         );
     }
 
