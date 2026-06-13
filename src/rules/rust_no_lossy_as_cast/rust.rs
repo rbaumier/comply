@@ -64,6 +64,9 @@ impl AstCheck for Check {
         let Some(target_type) = numeric_type(target) else {
             return;
         };
+        if source_is_char(node, source_bytes) && char_fits(target_type) {
+            return;
+        }
         if let Some(source_type) = source_numeric_type(node, source_bytes)
             && !is_dangerous_cast(source_type, target_type)
         {
@@ -113,6 +116,30 @@ fn is_dangerous_cast(source: NumericType, target: NumericType) -> bool {
         return target.bits < source.bits;
     }
     true
+}
+
+/// A `char` is a Unicode scalar value in `0..=0x10FFFF` (21 bits), so a cast
+/// to any signed/unsigned integer of at least 21 bits is lossless. Floats are
+/// excluded — the rule never claims a float target is safe here.
+fn char_fits(target: NumericType) -> bool {
+    target.kind != NumericKind::Float && target.bits >= 21
+}
+
+/// True when the cast operand is a `char`: a `char_literal` (`'A' as i32`) or
+/// an identifier whose local binding is annotated `char` (`c as i32`).
+fn source_is_char(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(value) = node.child_by_field_name("value") else {
+        return false;
+    };
+    match value.kind() {
+        "char_literal" => true,
+        "identifier" => value
+            .utf8_text(source)
+            .ok()
+            .and_then(|name| find_identifier_type(node, name, source))
+            .is_some_and(|type_text| type_text == "char"),
+        _ => false,
+    }
 }
 
 fn source_numeric_type(node: tree_sitter::Node, source: &[u8]) -> Option<NumericType> {
@@ -244,5 +271,37 @@ mod tests {
     #[test]
     fn flags_unknown_source_type_conservatively() {
         assert_eq!(run_on("fn f(x: MyInt) -> u32 { x as u32 }").len(), 1);
+    }
+
+    #[test]
+    fn allows_char_param_to_i32() {
+        // Issue #1430: `char` is a Unicode scalar (0..=0x10FFFF), always fits i32.
+        assert!(run_on("fn f(c: char) -> i32 { c as i32 - 64 }").is_empty());
+    }
+
+    #[test]
+    fn allows_char_param_to_u32() {
+        assert!(run_on("fn f(c: char) -> u32 { c as u32 }").is_empty());
+    }
+
+    #[test]
+    fn allows_char_literal_to_i32() {
+        assert!(run_on("fn f() -> i32 { 'A' as i32 }").is_empty());
+    }
+
+    #[test]
+    fn flags_char_to_u8() {
+        // `char as u8` truncates (only the low byte survives).
+        assert_eq!(run_on("fn f(c: char) -> u8 { c as u8 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_char_to_u16() {
+        assert_eq!(run_on("fn f(c: char) -> u16 { c as u16 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_char_literal_to_i8() {
+        assert_eq!(run_on("fn f() -> i8 { 'A' as i8 }").len(), 1);
     }
 }
