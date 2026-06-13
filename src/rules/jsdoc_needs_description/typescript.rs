@@ -69,6 +69,7 @@ fn is_type_only_tag(tag: &str) -> bool {
             | "returns"
             | "return"
             | "template"
+            | "typeparam"
             | "typedef"
             | "callback"
             | "property"
@@ -128,6 +129,18 @@ function foo(x: number): number { return x; }
         let source = r#"
 /** @type {import('@sveltejs/kit').Config} */
 const config = {};
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_typeparam_only_block() {
+        let source = r#"
+/**
+ * @typeparam ComponentProps  Props included when withComponent is called
+ * @typeparam SpecificComponentProps  Props NOT included when withComponent is called
+ */
+export interface StyledComponent<ComponentProps, SpecificComponentProps> {}
 "#;
         assert!(run_on(source).is_empty());
     }
