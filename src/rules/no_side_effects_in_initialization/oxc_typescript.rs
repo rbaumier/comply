@@ -97,7 +97,25 @@
 //!   `Object.assign(styled, secondary)`, React's `React.useState = useState`)
 //!   initializes that export, not external state, so it is no tree-shaking
 //!   hazard. `Object.assign` onto an imported singleton, a global (`window`,
-//!   `globalThis`), or any non-exported binding is still flagged.
+//!   `globalThis`), or any non-exported binding is still flagged;
+//! - mixin-builder calls: a top-level `f(Exported)` call whose callee is a bare
+//!   identifier and at least one argument is a bare identifier the module
+//!   exports (`initMixin(Vue)` in a module ending `export default Vue`).
+//!   Pre-class-syntax frameworks (Vue 2) assemble a constructor at module scope
+//!   by passing it through a chain of such builders that each attach methods to
+//!   its prototype — the whole point of importing the module is to obtain the
+//!   fully assembled export, so the call is intentional initialization. A bare
+//!   `init()` or `register(plugin)` whose argument is not an exported binding is
+//!   still flagged;
+//! - prototype-patcher `forEach`: a top-level
+//!   `localArray.forEach(item => def(Exported, item, …))` whose receiver is a
+//!   module-local `const` array and whose callback only patches a single
+//!   exported binding — a builder call passing the exported object as its first
+//!   argument (`def(arrayMethods, …)`) or a member assignment onto the exported
+//!   object (`Exported[k] = v`). Local staging declarations in the body are
+//!   ignored. This is the pre-class-syntax pattern for intercepting prototype
+//!   methods on an exported object. A `forEach` touching any non-exported
+//!   target, or whose receiver is not a module-local const, is still flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -106,8 +124,8 @@ use crate::rules::path_utils::{
     is_browser_asset_dir_path, is_config_file, is_framework_entry_point,
 };
 use oxc_ast::ast::{
-    Argument, AssignmentTarget, BindingPattern, ExportDefaultDeclarationKind, Expression,
-    ImportDeclarationSpecifier, Program, Statement,
+    Argument, AssignmentTarget, BindingPattern, Declaration, ExportDefaultDeclarationKind,
+    Expression, ImportDeclarationSpecifier, Program, Statement,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -809,6 +827,203 @@ fn is_export_object_assign(
     }
 }
 
+/// Name of the identifier reached by peeling TypeScript casts (`as`,
+/// `satisfies`, non-null `!`) off an expression. `None` once a non-cast,
+/// non-identifier node is reached. Lets `export default Vue as unknown as T`
+/// resolve to the `Vue` binding.
+fn identifier_through_casts<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
+    match expr {
+        Expression::Identifier(id) => Some(id.name.as_str()),
+        Expression::TSAsExpression(cast) => identifier_through_casts(&cast.expression),
+        Expression::TSSatisfiesExpression(cast) => identifier_through_casts(&cast.expression),
+        Expression::TSNonNullExpression(cast) => identifier_through_casts(&cast.expression),
+        Expression::ParenthesizedExpression(p) => identifier_through_casts(&p.expression),
+        _ => None,
+    }
+}
+
+/// Collect every local binding name this module exports — both re-exported
+/// bindings (`export default Vue`, `export { styled }`) and inline-declared
+/// exports (`export const arrayMethods = …`, `export function f() {}`,
+/// `export class C {}`). A name in this set is part of the module's own public
+/// contract, so a top-level call that builds or patches it is module
+/// initialization observed by consumers only after assembly — not external
+/// state. Distinct from `module_exported_local_bindings`, which intentionally
+/// covers only re-exported bindings for the `Object.assign` exemption.
+fn module_exported_bindings(program: &Program) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for stmt in &program.body {
+        match stmt {
+            Statement::ExportDefaultDeclaration(export) => {
+                // `export default Vue` and `export default Vue as unknown as T`
+                // both name the same exported binding.
+                let id = match &export.declaration {
+                    ExportDefaultDeclarationKind::Identifier(id) => Some(id.name.as_str()),
+                    ExportDefaultDeclarationKind::FunctionDeclaration(func) => {
+                        func.id.as_ref().map(|id| id.name.as_str())
+                    }
+                    ExportDefaultDeclarationKind::ClassDeclaration(class) => {
+                        class.id.as_ref().map(|id| id.name.as_str())
+                    }
+                    ExportDefaultDeclarationKind::TSAsExpression(cast) => {
+                        identifier_through_casts(&cast.expression)
+                    }
+                    ExportDefaultDeclarationKind::TSSatisfiesExpression(cast) => {
+                        identifier_through_casts(&cast.expression)
+                    }
+                    ExportDefaultDeclarationKind::TSNonNullExpression(cast) => {
+                        identifier_through_casts(&cast.expression)
+                    }
+                    _ => None,
+                };
+                if let Some(name) = id {
+                    out.insert(name.to_string());
+                }
+            }
+            Statement::ExportNamedDeclaration(export) => {
+                for spec in &export.specifiers {
+                    if let Some(local) = spec.local.identifier_name() {
+                        out.insert(local.to_string());
+                    }
+                }
+                match &export.declaration {
+                    Some(Declaration::FunctionDeclaration(func)) => {
+                        if let Some(id) = &func.id {
+                            out.insert(id.name.to_string());
+                        }
+                    }
+                    Some(Declaration::ClassDeclaration(class)) => {
+                        if let Some(id) = &class.id {
+                            out.insert(id.name.to_string());
+                        }
+                    }
+                    Some(Declaration::VariableDeclaration(decl)) => {
+                        for declarator in &decl.declarations {
+                            if let BindingPattern::BindingIdentifier(id) = &declarator.id {
+                                out.insert(id.name.to_string());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// True when `call` is a mixin-builder call that hands an exported binding to a
+/// builder function: `f(Exported)` where `f` is a bare identifier and at least
+/// one argument is a bare identifier the module exports (`initMixin(Vue)` where
+/// the module ends with `export default Vue`). Pre-class-syntax frameworks
+/// assemble a constructor at module scope by passing it through a chain of such
+/// builders, each attaching methods to its prototype — equivalent to a series of
+/// `class extends` mixins. The whole purpose of importing the module is to obtain
+/// the fully assembled export, so the call is intentional initialization, not a
+/// tree-shaking hazard. The exported-argument requirement keeps the exemption
+/// narrow: a bare `init()` or `register(plugin)` whose argument is not an
+/// exported binding is still flagged.
+fn is_exported_builder_call(
+    call: &oxc_ast::ast::CallExpression,
+    exported: &HashSet<String>,
+) -> bool {
+    if !matches!(call.callee, Expression::Identifier(_)) {
+        return false;
+    }
+    call.arguments.iter().any(|arg| {
+        matches!(arg.as_expression(), Some(Expression::Identifier(id)) if exported.contains(id.name.as_str()))
+    })
+}
+
+/// Root identifier of a callback statement that patches an exported object:
+/// - `fn(Exported, …)` — a builder call whose first argument is an exported
+///   binding (`def(arrayMethods, method, mutator)`); or
+/// - `Exported[k] = v` / `Exported.k = v` — a member assignment whose target
+///   roots at an exported binding.
+///
+/// Returns the exported root name if the statement patches an exported object,
+/// `None` otherwise.
+fn patched_export_root<'a>(stmt: &'a Statement<'a>) -> Option<&'a str> {
+    let Statement::ExpressionStatement(es) = stmt else {
+        return None;
+    };
+    match &es.expression {
+        Expression::CallExpression(call) => {
+            if !matches!(call.callee, Expression::Identifier(_)) {
+                return None;
+            }
+            match call.arguments.first().and_then(Argument::as_expression) {
+                Some(Expression::Identifier(id)) => Some(id.name.as_str()),
+                _ => None,
+            }
+        }
+        Expression::AssignmentExpression(assign) => assignment_target_root(&assign.left),
+        _ => None,
+    }
+}
+
+/// True when `call` is a prototype-patcher `forEach` that patches an exported
+/// object: `localArray.forEach(item => def(Exported, item, …))`. The receiver is
+/// a module-local `const` array, the single callback argument is a
+/// function/arrow, and every effectful statement in its body patches the *same*
+/// exported binding (see `patched_export_root`). Local `const`/`let`/`var`
+/// declarations inside the body (e.g. `const original = arrayProto[method]`) are
+/// ignored — they only stage values for the patch. This is the pre-class-syntax
+/// pattern for intercepting prototype methods on an exported object: importing
+/// the module exists to obtain the patched export, so the iteration is intended
+/// initialization, not a tree-shaking hazard. A `forEach` whose body touches any
+/// non-exported target, or whose receiver is not a module-local const, is still
+/// flagged.
+fn is_export_patching_foreach(
+    call: &oxc_ast::ast::CallExpression,
+    locals: &HashSet<String>,
+    exported: &HashSet<String>,
+) -> bool {
+    let Expression::StaticMemberExpression(m) = &call.callee else {
+        return false;
+    };
+    if m.property.name != "forEach" {
+        return false;
+    }
+    let Expression::Identifier(receiver) = &m.object else {
+        return false;
+    };
+    if !locals.contains(receiver.name.as_str()) {
+        return false;
+    }
+    if call.arguments.len() != 1 {
+        return false;
+    }
+    let body = match &call.arguments[0] {
+        Argument::ArrowFunctionExpression(arrow) => &arrow.body,
+        Argument::FunctionExpression(func) => match &func.body {
+            Some(body) => body,
+            None => return false,
+        },
+        _ => return false,
+    };
+    let mut patched: Option<&str> = None;
+    for stmt in &body.statements {
+        // Local staging declarations inside the callback are inert.
+        if matches!(stmt, Statement::VariableDeclaration(_)) {
+            continue;
+        }
+        let Some(root) = patched_export_root(stmt) else {
+            return false;
+        };
+        if !exported.contains(root) {
+            return false;
+        }
+        match patched {
+            None => patched = Some(root),
+            Some(name) if name == root => {}
+            Some(_) => return false,
+        }
+    }
+    patched.is_some()
+}
+
 /// Root identifier name of a member-access assignment target (`obj.k`,
 /// `obj[k]`, `a.b.c`). Returns `None` for a bare identifier target (a plain
 /// reassignment, which is not a local-state mutation).
@@ -1035,6 +1250,7 @@ impl OxcCheck for Check {
         let module_locals = module_const_bindings(program);
         let new_locals = module_const_new_bindings(program);
         let exported_locals = module_exported_local_bindings(program);
+        let exported_bindings = module_exported_bindings(program);
 
         let mut diagnostics = Vec::new();
         for stmt in &program.body {
@@ -1047,7 +1263,9 @@ impl OxcCheck for Check {
                 && (is_start_transition_call(call, &start_transition_names)
                     || is_data_init_foreach(call, &module_locals)
                     || is_local_const_config_call(call, &new_locals)
-                    || is_export_object_assign(call, &exported_locals))
+                    || is_export_object_assign(call, &exported_locals)
+                    || is_exported_builder_call(call, &exported_bindings)
+                    || is_export_patching_foreach(call, &module_locals, &exported_bindings))
             {
                 continue;
             }
@@ -2255,6 +2473,152 @@ mod tests {
             diags.len(),
             2,
             "heterogeneous top-level calls must still be flagged, got {diags:?}"
+        );
+    }
+
+    // --- (m) Vue 2 mixin-builder & prototype-patcher (Closes #1748) --------
+
+    // Regression for #1748: Vue 2 assembles its constructor at module scope by
+    // passing the local `Vue` function through a chain of mixin builders that
+    // attach methods to its prototype, then exports it. The whole purpose of
+    // importing the module is to obtain the fully assembled export, so the
+    // builder calls are intentional initialization, not tree-shakeable code.
+    #[test]
+    fn allows_vue_mixin_builder_calls() {
+        let src = "\
+            import { initMixin } from './init';\n\
+            import { stateMixin } from './state';\n\
+            import { renderMixin } from './render';\n\
+            import { eventsMixin } from './events';\n\
+            import { lifecycleMixin } from './lifecycle';\n\
+            import type { GlobalAPI } from 'types/global-api';\n\
+            function Vue(options) {\n\
+              this._init(options);\n\
+            }\n\
+            initMixin(Vue);\n\
+            stateMixin(Vue);\n\
+            eventsMixin(Vue);\n\
+            lifecycleMixin(Vue);\n\
+            renderMixin(Vue);\n\
+            export default Vue as unknown as GlobalAPI;\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/core/instance/index.ts");
+        assert!(
+            diags.is_empty(),
+            "Vue 2 mixin-builder calls on an exported binding should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_mixin_builder_call_on_named_exported_const() {
+        // The exported binding may be a named export rather than the default.
+        let src = "\
+            import { initMixin } from './init';\n\
+            const Widget = function (opts) { this.opts = opts; };\n\
+            initMixin(Widget);\n\
+            export { Widget };\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget/index.ts");
+        assert!(
+            diags.is_empty(),
+            "mixin builder on a named-exported binding should be exempt, got {diags:?}"
+        );
+    }
+
+    // Regression for #1748: Vue 2 intercepts the mutating Array prototype methods
+    // by iterating `methodsToPatch` (a local const) and calling `def(arrayMethods,
+    // …)` — `arrayMethods` is exported. Importing the module exists to obtain the
+    // patched export, so the iteration is intended initialization.
+    #[test]
+    fn allows_prototype_patcher_foreach_on_exported_object() {
+        let src = "\
+            import { def } from '../util/index';\n\
+            const arrayProto = Array.prototype;\n\
+            export const arrayMethods = Object.create(arrayProto);\n\
+            const methodsToPatch = ['push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse'];\n\
+            methodsToPatch.forEach(function (method) {\n\
+              const original = arrayProto[method];\n\
+              def(arrayMethods, method, function mutator(...args) {\n\
+                return original.apply(this, args);\n\
+              });\n\
+            });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/core/observer/array.ts");
+        assert!(
+            diags.is_empty(),
+            "prototype-patcher forEach on an exported object should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_prototype_patcher_foreach_with_member_assignment() {
+        // The patch can also be a member assignment onto the exported object.
+        let src = "\
+            export const handlers = {};\n\
+            const events = ['click', 'hover'];\n\
+            events.forEach((evt) => { handlers[evt] = makeHandler; });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/dom/handlers.ts");
+        assert!(
+            diags.is_empty(),
+            "forEach assigning onto an exported object should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_builder_call_on_non_exported_binding() {
+        // `init(plugin)` whose argument is an imported (non-exported) binding is
+        // an ordinary top-level side effect that still blocks tree-shaking.
+        let src = "\
+            import { plugin } from './plugin';\n\
+            register(plugin);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/bootstrap.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "builder call whose argument is not an exported binding must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_bare_builder_call_without_argument() {
+        // A bare top-level call with no arguments cannot be a mixin builder.
+        let diags = crate::rules::test_helpers::run_rule(&Check, "initGlobals();", "src/index.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "an argument-less top-level call must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_foreach_patching_non_exported_object() {
+        // The patched object is module-local but NOT exported, and the body calls
+        // a free function — a genuine side effect that escapes nothing observable
+        // to consumers, so it stays flagged.
+        let src = "\
+            import { def } from './util';\n\
+            const internal = {};\n\
+            const keys = ['a', 'b'];\n\
+            keys.forEach((k) => { def(internal, k, value); });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/internal.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "forEach patching a non-exported object must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_foreach_patching_imported_object() {
+        // The patched object is imported (escapes the module) — the mutation is a
+        // genuine external side effect even though the receiver array is local.
+        let src = "\
+            import { def } from './util';\n\
+            import { registry } from './registry';\n\
+            const keys = ['a', 'b'];\n\
+            keys.forEach((k) => { def(registry, k, value); });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/patch.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "forEach patching an imported object must still be flagged, got {diags:?}"
         );
     }
 
