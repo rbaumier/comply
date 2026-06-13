@@ -176,6 +176,23 @@ fn is_in_import_declaration<'a>(
     false
 }
 
+/// True when the identifier is the *name* of a TypeScript generic type
+/// parameter declaration (`function f<Value>()`, `class C<Data>`,
+/// `type T<Item> = …`). Names like `<Value>`/`<Result>` are the idiomatic,
+/// self-documenting equivalent of `<T>` — a type-level placeholder, not a
+/// value carrying domain meaning, so they are out of this rule's scope.
+fn is_type_parameter_name<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let parent_id = nodes.parent_id(node.id());
+    if parent_id == node.id() {
+        return false;
+    }
+    matches!(nodes.kind(parent_id), AstKind::TSTypeParameter(_))
+}
+
 /// Look at the surrounding FormalParameter / VariableDeclarator's type
 /// annotation and decide whether it carries enough domain information to
 /// justify a generic name. We accept three shapes:
@@ -408,6 +425,13 @@ impl OxcCheck for Check {
         // be renamed by the author — third-party exports are out of their
         // control. Same for default / namespace imports.
         if is_in_import_declaration(node, semantic) {
+            return;
+        }
+
+        // TypeScript generic type parameter names (`function f<Value>()`,
+        // `type T<Item> = …`) are type-level placeholders equivalent to `<T>`,
+        // not value identifiers carrying domain meaning.
+        if is_type_parameter_name(node, semantic) {
             return;
         }
 
@@ -833,6 +857,32 @@ mod tests {
         // `value`/`item` stay allowed as function parameters (PARAM_ALLOWED_WORDS).
         assert!(run("[1].map((value) => value);").is_empty());
         assert!(run("[1].map((item) => item);").is_empty());
+    }
+
+    #[test]
+    fn no_fp_generic_type_parameter_names_issue_1386() {
+        // Regression for #1386 — `<Value>`/`<Result>`/`<Data>`/`<Item>` are
+        // idiomatic, self-documenting names for TypeScript generic type
+        // parameters (the readable equivalent of `<T>`), not value identifiers.
+        let src = r#"
+            type Getter = <Value>(atom: Atom<Value>) => Value;
+            type Setter = <Value, Args extends unknown[], Result>(
+                atom: WritableAtom<Value, Args, Result>,
+                ...args: Args
+            ) => Result;
+            type Read<Value, SetSelf = never> = (get: Getter, setSelf: SetSelf) => Value;
+            function identity<Item>(item: Item): Item { return item; }
+            class Container<Data> { has(d: Data): boolean { return true; } }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_value_result_as_value_identifiers() {
+        // Negative: `Value`/`Result` declared as variables (not type
+        // parameters) carry no meaning and must still flag.
+        let src = r#"const Value = 1; const Result = 2;"#;
+        assert_eq!(run(src).len(), 2);
     }
 
     #[test]
