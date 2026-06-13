@@ -146,12 +146,34 @@ fn is_pure_initializer(expr: &Expression) -> bool {
     }
 }
 
+/// Initializer that builds a shared, read-only test fixture by calling a
+/// domain function (`buildSchema(...)`, `getTracingChannel(...)`) or a
+/// constructor (`new TypeInfo(...)`). Unwraps the same value-preserving
+/// wrappers as `is_pure_initializer` so `buildSchema(...) as Schema` counts.
+fn is_fixture_builder(expr: &Expression) -> bool {
+    match expr {
+        Expression::CallExpression(_) | Expression::NewExpression(_) => true,
+        Expression::ParenthesizedExpression(p) => is_fixture_builder(&p.expression),
+        Expression::TSAsExpression(e) => is_fixture_builder(&e.expression),
+        Expression::TSTypeAssertion(e) => is_fixture_builder(&e.expression),
+        Expression::TSSatisfiesExpression(e) => is_fixture_builder(&e.expression),
+        Expression::TSNonNullExpression(e) => is_fixture_builder(&e.expression),
+        _ => false,
+    }
+}
+
 /// Every declarator in a declaration must have a pure initializer (or none).
-fn declaration_is_pure(decl: &VariableDeclaration) -> bool {
+///
+/// In `node:test` files a module-scope `const` may also be initialized by a
+/// fixture-builder call. `node:test` has no `beforeAll` equivalent at module
+/// scope, so building a shared read-only fixture (a parsed schema, a tracing
+/// channel) once at import time is the idiomatic pattern there.
+fn declaration_is_pure(decl: &VariableDeclaration, node_test_mode: bool) -> bool {
+    let allow_fixture_builder = node_test_mode && decl.kind == VariableDeclarationKind::Const;
     decl.declarations.iter().all(|d| {
-        d.init
-            .as_ref()
-            .is_none_or(|init| is_pure_initializer(init))
+        d.init.as_ref().is_none_or(|init| {
+            is_pure_initializer(init) || (allow_fixture_builder && is_fixture_builder(init))
+        })
     })
 }
 
@@ -180,7 +202,7 @@ fn top_level_is_allowed(stmt: &Statement, node_test_mode: bool) -> bool {
         | Statement::TSModuleDeclaration(_)
         | Statement::EmptyStatement(_) => true,
 
-        Statement::VariableDeclaration(decl) => declaration_is_pure(decl),
+        Statement::VariableDeclaration(decl) => declaration_is_pure(decl, node_test_mode),
 
         Statement::ExpressionStatement(expr_stmt) => {
             let expr = &expr_stmt.expression;
@@ -259,6 +281,98 @@ describe("x", () => {});
 "#;
         let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
         assert_eq!(d.len(), 1, "top-level await without node:test must be flagged: {d:?}");
+    }
+
+    #[test]
+    fn allows_const_fixture_builder_call_in_node_test_mode() {
+        let src = r#"
+import { describe, it } from "node:test";
+import { buildSchema } from "../buildASTSchema.ts";
+
+const testSchema = buildSchema(`
+  interface Pet { name: String }
+  type Dog implements Pet { name: String }
+`);
+
+describe("TypeInfo", () => {
+  it("queries type info", () => {});
+});
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "TypeInfo-test.ts");
+        assert!(
+            d.is_empty(),
+            "module-scope const built by a fixture-builder call must be allowed in node:test mode: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_const_tracing_channel_in_node_test_mode() {
+        let src = r#"
+import { describe, it } from "node:test";
+
+const schema = buildSchema(`type Query { field: String }`);
+const validateChannel = getTracingChannel('graphql:validate');
+
+describe("diagnostics", () => {
+  it("works", () => {});
+});
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "diagnostics-test.ts");
+        assert!(
+            d.is_empty(),
+            "module-scope const tracing-channel fixtures must be allowed in node:test mode: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_const_fixture_builder_call_without_node_test_import() {
+        let src = r#"
+import { buildSchema } from "../buildASTSchema";
+
+const schema = buildSchema(`type Query { field: String }`);
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "const call initializer outside node:test mode must still be flagged (jest/vitest have beforeAll): {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_let_fixture_builder_call_in_node_test_mode() {
+        let src = r#"
+import { describe, it } from "node:test";
+
+let counter = startCounter();
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a mutable `let` call initializer must still be flagged even in node:test mode: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_bare_setup_call_in_node_test_mode() {
+        let src = r#"
+import { describe, it } from "node:test";
+
+setup();
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a bare side-effect call statement must still be flagged in node:test mode: {d:?}"
+        );
     }
 }
 
