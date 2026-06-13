@@ -86,10 +86,11 @@ const DATA_PASCAL_CASE_ALLOWED_COMPOUNDS: &[&str] = &[
 
 /// Standard DOM / Web API type names whose camelCase form is the conventional
 /// identifier for a value of that type. `dataTransfer: DataTransfer` mirrors
-/// `DragEvent.dataTransfer`; the name specifically refers to the web platform
-/// object, so it is not a generic `data*` compound. Stored in their camelCase
-/// form (first letter lowered) for a direct full-name match.
-const DOM_API_NAME_ALLOWLIST: &[&str] = &["dataTransfer"];
+/// `DragEvent.dataTransfer`; `dataUrl`/`dataURL` name an RFC 2397 `data:` scheme
+/// URL, mirroring `FileReader.readAsDataURL`. Each name specifically refers to
+/// the web platform value, so it is not a generic `data*` compound. Matched by
+/// exact, case-sensitive full name.
+const DOM_API_NAME_ALLOWLIST: &[&str] = &["dataTransfer", "dataUrl", "dataURL"];
 
 /// True when `name` exactly mirrors a standard DOM/Web API type name in
 /// camelCase (e.g. `dataTransfer` for `DataTransfer`).
@@ -968,6 +969,27 @@ mod tests {
         // Negative: the DOM allowlist is exact-name only. `dataPayload`/
         // `dataResponse` are generic `data*` compounds and must still flag.
         let src = r#"const dataPayload = 1; const dataResponse = 2;"#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn no_fp_data_url_web_standard_concept_issue_1162() {
+        // Regression for #1162 — a "data URL" (RFC 2397 `data:` scheme) is a
+        // specific web-standard concept, mirroring `FileReader.readAsDataURL`.
+        // Both casings (`dataUrl`, `dataURL`) name the platform value, not a
+        // generic `data*` compound.
+        let src = r#"
+            const dataUrl = reader.result as string;
+            const dataURL = canvas.toDataURL();
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_bare_data_and_generic_data_value_issue_1162() {
+        // Negative: the allowlist is exact-name only — bare `data` and the
+        // generic `dataValue` compound carry no domain meaning and still flag.
+        let src = r#"const data = 1; const dataValue = 2;"#;
         assert_eq!(run(src).len(), 2);
     }
 
