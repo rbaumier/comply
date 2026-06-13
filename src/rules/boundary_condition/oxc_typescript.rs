@@ -248,10 +248,22 @@ fn body_has_early_exit(stmt: &Statement) -> bool {
     }
 }
 
+/// Matchers that, applied to `expect(<arr>.length)`, assert a concrete length —
+/// making subsequent indexed access on `<arr>` safe.
+const LENGTH_MATCHERS: [&str; 5] = [
+    "toBe",
+    "toEqual",
+    "toStrictEqual",
+    "toBeGreaterThan",
+    "toBeGreaterThanOrEqual",
+];
+
 /// Scans `stmts` for the statement containing `node_span_start`, then checks
-/// all preceding siblings for one of two guard patterns:
+/// all preceding siblings for one of these guard patterns:
 ///   1. `if (...length...) { return/throw/process.exit }` (early-exit guard)
 ///   2. `expect(<obj_text>).toHaveLength(N)` (Vitest/Jest assertion guard)
+///   3. `expect(<obj_text>.length).<matcher>(N)` (equivalent length assertion,
+///      where `<matcher>` is one of [`LENGTH_MATCHERS`])
 fn scan_preceding_stmts(
     stmts: &[Statement],
     node_span_start: u32,
@@ -263,7 +275,8 @@ fn scan_preceding_stmts(
         .position(|s| s.span().start <= node_span_start && node_span_start < s.span().end);
     let Some(our_idx) = our_idx else { return false };
 
-    let needle = format!("expect({obj_text}).toHaveLength(");
+    let have_length_needle = format!("expect({obj_text}).toHaveLength(");
+    let length_expect_prefix = format!("expect({obj_text}.length).");
     for stmt in &stmts[..our_idx] {
         if let Statement::IfStatement(if_stmt) = stmt {
             let cond_start = if_stmt.test.span().start as usize;
@@ -278,11 +291,27 @@ fn scan_preceding_stmts(
         }
         let stmt_span = stmt.span();
         let stmt_text = &source[stmt_span.start as usize..stmt_span.end as usize];
-        if stmt_text.contains(needle.as_str()) {
+        if stmt_text.contains(have_length_needle.as_str()) {
             return true;
+        }
+        if let Some(after_prefix) = find_after(stmt_text, &length_expect_prefix) {
+            if LENGTH_MATCHERS
+                .iter()
+                .any(|matcher| after_prefix.starts_with(&format!("{matcher}(")))
+            {
+                return true;
+            }
         }
     }
     false
+}
+
+/// Returns the substring of `haystack` immediately following the first
+/// occurrence of `needle`, or `None` if `needle` is absent.
+fn find_after<'a>(haystack: &'a str, needle: &str) -> Option<&'a str> {
+    haystack
+        .find(needle)
+        .map(|idx| &haystack[idx + needle.len()..])
 }
 
 /// Returns true when a preceding sibling statement in the same block guards
@@ -372,6 +401,31 @@ mod tests {
     fn no_fp_expect_have_length_vitest() {
         let src = "expect(rows).toHaveLength(1); const first = rows[0];";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_expect_length_to_be_issue_1985() {
+        let src = "expect(releases.length).toBe(1); expect(releases[0]).toEqual({});";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_expect_length_to_be_multiple_accesses_issue_1985() {
+        let src =
+            "expect(releases.length).toBe(4); releases[0].name; releases[1].name;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_without_length_assertion_issue_1985() {
+        let src = "const first = releases[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn unrelated_expect_does_not_suppress_issue_1985() {
+        let src = "expect(other).toBe(1); const first = releases[0];";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
