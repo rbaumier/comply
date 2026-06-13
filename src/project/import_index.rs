@@ -778,6 +778,13 @@ fn extract_package_name(specifier: &str) -> String {
 }
 
 fn is_builtin_module(name: &str) -> bool {
+    // Cloudflare Workers runtime modules live under the `cloudflare:` protocol
+    // namespace (e.g. `cloudflare:workers`, `cloudflare:sockets`). They are
+    // runtime-provided built-ins, never npm packages, so the submodule name is
+    // not enumerated.
+    if name.starts_with("cloudflare:") {
+        return true;
+    }
     // Node.js built-in modules — bare imports that aren't npm packages.
     let name = name.strip_prefix("node:").unwrap_or(name);
     matches!(
