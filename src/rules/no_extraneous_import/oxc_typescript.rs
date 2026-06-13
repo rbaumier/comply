@@ -32,6 +32,13 @@ impl OxcCheck for Check {
         if is_test_file(ctx.path) {
             return;
         }
+        // Story files (a `*.stories.*` name, or any file inside a `stories/` or
+        // `storybook/` directory) are dev-only tooling, like test files: they
+        // never ship in the published package and legitimately import packages a
+        // workspace declares in devDependencies (issue #1982).
+        if ctx.file.path_segments.in_storybook {
+            return;
+        }
         if crate::rules::path_utils::is_config_file(ctx.path) {
             return;
         }
@@ -98,7 +105,6 @@ fn is_test_file(path: &Path) -> bool {
         || path_str.contains("__testUtils__")
         || path_str.contains(".test.")
         || path_str.contains(".spec.")
-        || path_str.contains(".stories.")
         || path_str.contains(".setup.")
         || path_str.contains("/test/")
         || path_str.contains("/tests/")
@@ -207,7 +213,8 @@ mod tests {
         let allocator = Allocator::default();
         let parse_ret = OxcParser::new(&allocator, source, source_type).parse();
         let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
-        let ctx = CheckCtx::for_test_with_project(&canon, source, &project);
+        let file_ctx = crate::rules::file_ctx::FileCtx::build(&canon, source, lang, &project);
+        let ctx = CheckCtx::for_test_full(&canon, source, &project, &file_ctx);
 
         let mut diagnostics = Vec::new();
         let kinds = Check.interested_kinds();
@@ -417,6 +424,50 @@ import { initTRPC } from "@trpc/server";
         let d = run_with_pkg_at_path(pkg, "src/mysamples/index.ts", src);
         assert_eq!(d.len(), 1, "non-sample dir should still flag: {d:?}");
         assert!(d[0].message.contains("@azure/identity"));
+    }
+
+    #[test]
+    fn allows_dev_dep_in_storybook_stories_dir() {
+        // Issue #1982: a pnpm-workspace `storybook/` package lists its runtime
+        // deps (react, styled-components, …) in devDependencies because it is
+        // never published. Story files under `storybook/stories/` import those
+        // packages — they are dev-only tooling, like test files, and must not
+        // flag. The file is not named `.stories.`; it lives inside `stories/`.
+        let pkg = r#"{
+            "devDependencies": {
+                "react": "^19",
+                "styled-components": "^6",
+                "@react-spring/web": "^9"
+            }
+        }"#;
+        let src = r#"
+import React from "react";
+import styled from "styled-components";
+import { animated } from "@react-spring/web";
+"#;
+        let d = run_with_pkg_at_path(pkg, "storybook/stories/internal/KeyLogger.tsx", src);
+        assert!(d.is_empty(), "storybook story file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_dot_stories_file() {
+        // A `*.stories.*` file is the canonical story convention and must be
+        // exempt for the same reason as files inside `stories/`.
+        let pkg = r#"{"devDependencies":{"react":"^19"}}"#;
+        let src = r#"import { useState } from "react";"#;
+        let d = run_with_pkg_at_path(pkg, "src/components/Button.stories.tsx", src);
+        assert!(d.is_empty(), "*.stories.* file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_outside_storybook_dirs() {
+        // Guard against over-relaxing: a path where "stories" is a substring of
+        // another segment (not its own directory) must still flag.
+        let pkg = r#"{"devDependencies":{"react":"^19"}}"#;
+        let src = r#"import { useState } from "react";"#;
+        let d = run_with_pkg_at_path(pkg, "src/mystories/index.ts", src);
+        assert_eq!(d.len(), 1, "non-storybook dir should still flag: {d:?}");
+        assert!(d[0].message.contains("react"));
     }
 
     #[test]

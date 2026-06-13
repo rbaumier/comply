@@ -259,6 +259,16 @@ fn has_vendored_segment(normalized: &str) -> bool {
     normalized.split('/').any(|seg| VENDORED_SEGMENTS.contains(&seg))
 }
 
+/// Storybook directory names — matched as exact path segments (between `/`
+/// delimiters) so that e.g. `mystories.ts` or `storybook-static/` is NOT
+/// considered a story-content directory. Catches helper/story files that live
+/// inside a `stories/` or `storybook/` directory without a `.stories.` name.
+const STORYBOOK_SEGMENTS: &[&str] = &["stories", "storybook"];
+
+fn has_storybook_segment(normalized: &str) -> bool {
+    normalized.split('/').any(|seg| STORYBOOK_SEGMENTS.contains(&seg))
+}
+
 fn scan_path(path: &Path) -> PathSegments {
     let lower = path.to_string_lossy().replace('\\', "/");
     PathSegments {
@@ -294,7 +304,7 @@ fn scan_path(path: &Path) -> PathSegments {
             || lower == "test.js"
             || lower == "test.jsx",
         in_node_modules: lower.contains("/node_modules/"),
-        in_storybook: lower.contains(".stories."),
+        in_storybook: lower.contains(".stories.") || has_storybook_segment(&lower),
         is_vendored: has_vendored_segment(&lower),
         is_relaxed_dir: lower.starts_with("examples/")
             || lower.starts_with("benches/")
@@ -475,6 +485,27 @@ mod tests {
     fn normal_files_not_vendored() {
         assert!(!scan_path(&PathBuf::from("src/app.ts")).is_vendored);
         assert!(!scan_path(&PathBuf::from("lib/utils.js")).is_vendored);
+    }
+
+    #[test]
+    fn storybook_filename_and_dirs() {
+        // `.stories.` filename convention.
+        assert!(scan_path(&PathBuf::from("src/Button.stories.tsx")).in_storybook);
+        // Helper/story files inside a `stories/` directory without a
+        // `.stories.` name (issue #1982).
+        assert!(
+            scan_path(&PathBuf::from("storybook/stories/internal/KeyLogger.tsx")).in_storybook
+        );
+        assert!(scan_path(&PathBuf::from("src/stories/Header.tsx")).in_storybook);
+        // A top-level `storybook/` package directory.
+        assert!(scan_path(&PathBuf::from("storybook/preview.tsx")).in_storybook);
+    }
+
+    #[test]
+    fn storybook_does_not_match_substrings() {
+        assert!(!scan_path(&PathBuf::from("src/mystories.ts")).in_storybook);
+        assert!(!scan_path(&PathBuf::from("src/storybook-static/index.js")).in_storybook);
+        assert!(!scan_path(&PathBuf::from("src/index.ts")).in_storybook);
     }
 
     #[test]
