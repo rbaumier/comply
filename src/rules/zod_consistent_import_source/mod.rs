@@ -1,4 +1,5 @@
-//! zod-consistent-import-source — flag imports from non-standard zod subpaths.
+//! zod-consistent-import-source — flag imports from non-standard zod subpaths,
+//! while allowing the official versioned entry points (`zod/v3`, `zod/v4`, …).
 
 mod oxc_typescript;
 #[cfg(test)]
@@ -12,8 +13,9 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "zod-consistent-import-source",
-    description: "Imports from non-standard zod subpaths (e.g., `zod/v4`, `zod/mini`) cause \
-                  inconsistent schemas and mixed API surfaces across the codebase.",
+    description: "Imports from non-standard zod subpaths (e.g., `zod/src/...`, `zod/dist/...`) \
+                  circumvent the public API and cause inconsistent schemas across the codebase. \
+                  Official versioned entry points (`zod/v3`, `zod/v4`, `zod/v4-mini`) are allowed.",
     remediation: "Use consistent import source for zod",
     severity: Severity::Warning,
     doc_url: None,
