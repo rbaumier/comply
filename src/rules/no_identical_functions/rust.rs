@@ -67,6 +67,9 @@ fn collect_functions(
         "impl_item" | "mod_item" => {
             // Trait impl methods (`impl Trait for Type`) are forced by the
             // trait contract and cannot share a helper — skip them entirely.
+            // Same trait-ness test as `rust_helpers::is_in_trait_impl`, but
+            // applied top-down on the impl_item (we prune the whole subtree)
+            // rather than walking up from each method.
             if node.kind() == "impl_item" && node.child_by_field_name("trait").is_some() {
                 return;
             }

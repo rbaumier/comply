@@ -16,6 +16,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::{is_in_trait_impl, is_pub};
 
 #[derive(Debug)]
 pub struct Check;
@@ -47,10 +48,10 @@ impl AstCheck for Check {
         if count < max_elements {
             return;
         }
-        if is_trait_impl_method(node) {
+        if is_in_trait_impl(node) {
             return;
         }
-        if !is_public(node, source_bytes) && tuple_is_positional(ret_type, node, source_bytes) {
+        if !is_pub(node, source_bytes) && tuple_is_positional(ret_type, node, source_bytes) {
             return;
         }
         let name = node
@@ -72,29 +73,6 @@ impl AstCheck for Check {
             span: None,
         });
     }
-}
-
-fn is_trait_impl_method(node: tree_sitter::Node) -> bool {
-    let mut current = node.parent();
-    while let Some(ancestor) = current {
-        if ancestor.kind() == "impl_item" {
-            return ancestor.child_by_field_name("trait").is_some();
-        }
-        current = ancestor.parent();
-    }
-    false
-}
-
-fn is_public(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if child.kind() == "visibility_modifier"
-            && let Ok(text) = child.utf8_text(source)
-        {
-            return text.trim() == "pub";
-        }
-    }
-    false
 }
 
 /// A tuple is positional when naming its fields would add nothing:
