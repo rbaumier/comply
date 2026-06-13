@@ -133,9 +133,11 @@ pub fn is_sample_dir_path(path: &Path) -> bool {
 
 /// True for a test file that never ships in the published package: one under a
 /// `__tests__/`, `__testUtils__/`, `test/`, `tests/`, or `e2e/` directory, one
-/// carrying a `.test.`/`.spec.`/`.setup.`/`.tp.` infix, or one whose whole stem
-/// is `test`/`spec` (a co-located `endOfWeek/test.ts`). Consumed by
-/// `no-extraneous-import` to allow test-only devDependency imports.
+/// carrying a `.test.`/`.spec.`/`.setup.`/`.tp.` infix, one whose whole stem is
+/// `test`/`spec` (a co-located `endOfWeek/test.ts`), or one whose name starts
+/// with a test-runner tooling prefix (`vitest-`/`jest-`, e.g.
+/// `vitest-custom-reporter.ts`). Consumed by `no-extraneous-import` to allow
+/// test-only devDependency imports.
 pub fn is_extraneous_test_file(path: &Path) -> bool {
     let path_str = path.to_string_lossy();
     let is_marked = path_str.contains("__tests__")
@@ -146,7 +148,27 @@ pub fn is_extraneous_test_file(path: &Path) -> bool {
         || path_str.contains("/test/")
         || path_str.contains("/tests/")
         || path_str.contains("/e2e/");
-    is_marked || has_test_file_stem(path) || has_type_probe_infix(path)
+    is_marked
+        || has_test_file_stem(path)
+        || has_type_probe_infix(path)
+        || has_test_framework_tooling_prefix(path)
+}
+
+/// True when the file name starts with a known test-framework tooling prefix
+/// (`vitest-`/`jest-`, e.g. `vitest-custom-reporter.ts`, `jest-setup.ts`).
+/// Such files are test-runner infrastructure (custom reporters, environments,
+/// setup) consumed only by the test runner and never shipped in the published
+/// package, so importing a devDependency from them is correct.
+fn has_test_framework_tooling_prefix(path: &Path) -> bool {
+    const TEST_FRAMEWORK_PREFIXES: &[&str] = &["vitest-", "jest-"];
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| {
+            let name = name.to_ascii_lowercase();
+            TEST_FRAMEWORK_PREFIXES
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+        })
 }
 
 /// Co-located test files whose entire name (minus extension) is `test` or
@@ -430,7 +452,13 @@ mod aux_path_tests {
         assert!(is_extraneous_test_file(&PathBuf::from("src/startOfWeek/spec.ts")));
         // Issue #1915: date-fns `.tp.` type-probe convention.
         assert!(is_extraneous_test_file(&PathBuf::from("src/addBusinessDays/test.tp.ts")));
+        // Issue #1891: root-level test-runner tooling named with a framework prefix.
+        assert!(is_extraneous_test_file(&PathBuf::from("vitest-custom-reporter.ts")));
+        assert!(is_extraneous_test_file(&PathBuf::from("jest-setup.ts")));
         assert!(!is_extraneous_test_file(&PathBuf::from("src/app/login.ts")));
+        // Guard: the prefix must be a real `vitest-`/`jest-` name boundary, not a
+        // substring of an unrelated production file name.
+        assert!(!is_extraneous_test_file(&PathBuf::from("src/jester.ts")));
     }
 
     #[test]
