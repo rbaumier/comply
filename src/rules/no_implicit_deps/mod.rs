@@ -87,7 +87,6 @@ pub(super) fn is_node_builtin(specifier: &str) -> bool {
 }
 
 const VIRTUAL_PREFIXES: &[&str] = &[
-    "virtual:",
     "@theme/",
     "@theme-original/",
     "@docusaurus/",
@@ -95,8 +94,32 @@ const VIRTUAL_PREFIXES: &[&str] = &[
     "~react-pages",
 ];
 
-pub(super) fn is_virtual_module(spec: &str) -> bool {
-    VIRTUAL_PREFIXES.iter().any(|p| spec.starts_with(p))
+/// Schemes that, despite carrying a `:`, are not virtual modules: `node:`
+/// builtins and URL specifiers. These are classified by `is_node_builtin` /
+/// `is_bare_specifier` before this predicate is reached, but excluding them
+/// here keeps the predicate self-contained for callers that hand it a raw
+/// specifier root.
+const NON_VIRTUAL_SCHEMES: &[&str] = &["node", "http", "https"];
+
+/// True if `spec` is a build-time virtual module rather than an npm package.
+///
+/// Two forms are recognized:
+///   - a known framework virtual-namespace prefix (Docusaurus theme aliases,
+///     Vite Pages), or
+///   - a root package segment containing a `:`. npm package names cannot
+///     contain `:`, so a colon marks a plugin-provided virtual namespace —
+///     Vite's `virtual:` convention (`virtual:vitest-custom-virtual-file-1`)
+///     or a custom separator (`vitest-custom-virtual:math`). `node:` builtins
+///     and `http`/`https` URLs are excluded.
+pub(crate) fn is_virtual_module(spec: &str) -> bool {
+    if VIRTUAL_PREFIXES.iter().any(|p| spec.starts_with(p)) {
+        return true;
+    }
+    let root = spec.split('/').next().unwrap_or(spec);
+    match root.split_once(':') {
+        Some((scheme, _)) => !NON_VIRTUAL_SCHEMES.contains(&scheme),
+        None => false,
+    }
 }
 
 /// True if `spec` is a Node.js subpath import (a `#`-prefixed internal alias

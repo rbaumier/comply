@@ -23,6 +23,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::no_implicit_deps::is_virtual_module;
 
 const RULE_ID: &str = "unlisted-dependency";
 
@@ -60,6 +61,12 @@ impl TextCheck for Check {
         let mut diagnostics = Vec::new();
         for (spec, info) in index.bare_specifiers() {
             if matches_alias(spec, &alias_prefixes) {
+                continue;
+            }
+            // Virtual modules: Vite's `virtual:` convention and custom
+            // namespace separators (`vitest-custom-virtual:math`) are plugin-
+            // provided, never npm packages — a `:` is invalid in an npm name.
+            if is_virtual_module(spec) {
                 continue;
             }
             if pkg.has_dep_or_engine(spec) {
@@ -245,6 +252,27 @@ mod tests {
         assert!(
             diags.is_empty(),
             "`cloudflare:workers` is a runtime built-in, not an npm package: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_virtual_module_specifiers() {
+        // Regression for #1975 — Vite virtual modules: the `virtual:` prefix
+        // convention and custom namespace separators (`vitest-custom-virtual:math`)
+        // are plugin-provided, never npm packages (a `:` is invalid in an npm
+        // name), so they must not be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "a.ts",
+                "import virtualFile1 from 'virtual:vitest-custom-virtual-file-1';\n\
+                 import * as virtualMath from 'vitest-custom-virtual:math';",
+            ),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, Some(r#"{ "dependencies": {} }"#), None);
+        assert!(
+            diags.is_empty(),
+            "virtual module specifiers must not be flagged: {diags:?}"
         );
     }
 

@@ -346,6 +346,7 @@ mod tests {
     fn ignores_virtual_module_prefixes() {
         for spec in &[
             "virtual:my-plugin",
+            "vitest-custom-virtual:math",
             "@theme/Layout",
             "@docusaurus/preset-classic",
             "@internal/shared",
