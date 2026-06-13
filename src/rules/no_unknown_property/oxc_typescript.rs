@@ -1,8 +1,8 @@
 //! OXC backend for no-unknown-property.
 //!
-//! Files importing from Vue, Solid, Preact, or Qwik (or carrying a matching
-//! `@jsxImportSource` pragma) are exempt: those frameworks use native HTML
-//! attribute names (`class`, `for`, …) in JSX, so React's camelCase prop
+//! Files importing from Vue, Solid, Preact, Qwik, or Stencil (or carrying a
+//! matching `@jsxImportSource` pragma) are exempt: those frameworks use native
+//! HTML attribute names (`class`, `for`, …) in JSX, so React's camelCase prop
 //! conventions do not apply.
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -75,13 +75,14 @@ fn react_equivalent(name: &str) -> Option<String> {
 
 /// True when the file is JSX for a framework that uses native HTML attribute
 /// names (`class`, `for`, …) rather than React's camelCase — Vue, Solid,
-/// Preact, or Qwik — detected via its imports or `@jsxImportSource` pragma.
-/// `no-unknown-property` encodes React's prop conventions and must not fire
-/// on these.
+/// Preact, Qwik, or Stencil — detected via its imports or `@jsxImportSource`
+/// pragma. `no-unknown-property` encodes React's prop conventions and must not
+/// fire on these.
 fn is_non_react_jsx_file(ctx: &CheckCtx) -> bool {
     ctx.source_contains("solid-js")
         || ctx.source_contains("@vue/")
         || ctx.source_contains("@builder.io/qwik")
+        || ctx.source_contains("@stencil/core")
         || ctx.source_contains("preact/")
         || ctx.source_contains("'vue'")
         || ctx.source_contains("\"vue\"")
@@ -234,5 +235,23 @@ mod tests {
     fn flags_for_in_react_jsx() {
         let src = "const a = <label for=\"x\" />;";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_class_in_stencil_jsx() {
+        let src = "import { Component, Host, h } from '@stencil/core';\n\
+                   @Component({ tag: 'ion-picker-column-option', shadow: true })\n\
+                   export class PickerColumnOption {\n\
+                       render() {\n\
+                           return (\n\
+                               <Host class={createColorClasses(color, { [mode]: true })}>\n\
+                                   <div class={'picker-column-option-button'} role=\"button\">\n\
+                                       <slot></slot>\n\
+                                   </div>\n\
+                               </Host>\n\
+                           );\n\
+                       }\n\
+                   }";
+        assert!(run(src).is_empty());
     }
 }
