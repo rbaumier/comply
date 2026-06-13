@@ -140,6 +140,16 @@ pub fn is_sample_dir_path(path: &Path) -> bool {
     has_path_segment(path, &["samples", "samples-dev", "examples", "example-apps"])
 }
 
+/// True for files under a static-asset directory (`public/`, `static/`,
+/// `assets/`). These are the conventional locations for files served verbatim
+/// by the web server — vanilla `<script>`-loaded browser scripts, not ES
+/// modules. A bundler never processes them, so module-only concerns such as
+/// tree-shaking do not apply. Segment match keeps `src/publicApi/` and
+/// `src/assetsLoader/` from matching.
+pub fn is_browser_asset_dir_path(path: &Path) -> bool {
+    has_path_segment(path, &["public", "static", "assets"])
+}
+
 /// True for a test file that never ships in the published package: one under a
 /// `__tests__/`, `__testUtils__/`, `test/`, `tests/`, or `e2e/` directory, one
 /// carrying a `.test.`/`.spec.`/`.setup.`/`.tp.` infix, one whose whole stem is
