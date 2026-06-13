@@ -29,6 +29,8 @@ const KNOWN_TAGS: &[&str] = &[
     "default",
     "defaultvalue",
     "deprecated",
+    // `@desc` is the documented JSDoc alias for `@description`.
+    "desc",
     "description",
     "emits",
     "enum",
@@ -120,7 +122,6 @@ fn suggest(name: &str) -> Option<&'static str> {
     match lower.as_str() {
         "return" => Some("returns"),
         "arg" | "argument" | "parameter" => Some("param"),
-        "desc" => Some("description"),
         "exemple" => Some("example"),
         "thrown" | "throw" => Some("throws"),
         "yield" => Some("yields"),
@@ -247,6 +248,13 @@ mod tests {
         // TypeScript 5.5 JSDoc tags for type-only imports and function overloads.
         assert!(run("/** @import { AST } from 'svelte/compiler' */\n").is_empty());
         let src = "/**\n * @template Output\n * @overload\n * @param {() => Output} fn\n */\n";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_desc_alias_issue_1425() {
+        // `@desc` is the documented JSDoc alias for `@description`.
+        let src = "/**\n * @desc The gutter between columns.\n * @type {number}\n */\n";
         assert!(run(src).is_empty(), "{:?}", run(src));
     }
 
