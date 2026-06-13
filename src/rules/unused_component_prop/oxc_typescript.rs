@@ -7,7 +7,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use oxc_ast::AstKind;
-use oxc_ast::ast::{BindingPattern, PropertyKey, TSSignature, TSType, TSTypeName};
+use oxc_ast::ast::{
+    BindingPattern, Expression, FunctionBody, PropertyKey, Statement, TSSignature, TSType,
+    TSTypeName, UnaryOperator,
+};
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -71,7 +74,15 @@ impl OxcCheck for Check {
                 _ => continue,
             };
 
-            if !is_in_component_function(nodes, node.id()) {
+            let Some(body) = component_body(nodes, node.id()) else {
+                continue;
+            };
+
+            // A server-side stub — a component whose entire body is a single
+            // `return` of a primitive literal (`""`/`null`/`undefined`/`false`)
+            // — declares props only for API/type compatibility and ignores them
+            // on purpose. Skip prop-usage analysis for such components.
+            if is_stub_body(body) {
                 continue;
             }
 
@@ -139,21 +150,24 @@ impl Clone for PropInfo {
     }
 }
 
-/// A parameter is a component's props parameter only when it is the *direct*
-/// parameter of the component function (depth 1). The first function-like
-/// ancestor encountered must therefore be the component itself — a parameter
-/// nested inside a callback within the component body (e.g. `getOptionLabel={(o:
-/// Model) => ...}`) belongs to the callback, not the component.
-fn is_in_component_function(
-    nodes: &oxc_semantic::AstNodes,
+/// Resolve the body of the React component that *directly* owns `node_id`, the
+/// props parameter. A parameter is a component's props parameter only when it is
+/// the direct parameter of the component function (depth 1): the first
+/// function-like ancestor must be the component itself — a parameter nested
+/// inside a callback within the component body (e.g. `getOptionLabel={(o: Model)
+/// => ...}`) belongs to the callback, not the component.
+///
+/// Returns `None` when the parameter does not belong to a React component.
+fn component_body<'a>(
+    nodes: &'a oxc_semantic::AstNodes<'a>,
     node_id: oxc_semantic::NodeId,
-) -> bool {
+) -> Option<&'a FunctionBody<'a>> {
     let mut ancestors = nodes.ancestor_kinds(node_id);
+    // The `FormalParameters` wrapper that sits between the parameter and its
+    // enclosing function is the parameter's immediate parent.
     match ancestors.next() {
-        // The `FormalParameters` wrapper that sits between the parameter and its
-        // enclosing function is the parameter's immediate parent.
         Some(AstKind::FormalParameters(_)) => {}
-        _ => return false,
+        _ => return None,
     }
     match ancestors.next() {
         // A body-less function is an overload signature or an ambient
@@ -161,20 +175,60 @@ fn is_in_component_function(
         // `declare namespace`). It has no body in which props could be read,
         // so it cannot be a React component for this rule's purposes.
         Some(AstKind::Function(f)) => {
-            f.body.is_some()
-                && f.id
-                    .as_ref()
-                    .is_some_and(|id| id.name.as_str().starts_with(char::is_uppercase))
+            let is_component = f
+                .id
+                .as_ref()
+                .is_some_and(|id| id.name.as_str().starts_with(char::is_uppercase));
+            if is_component { f.body.as_deref() } else { None }
         }
-        Some(AstKind::ArrowFunctionExpression(_)) => match ancestors.next() {
+        Some(AstKind::ArrowFunctionExpression(arrow)) => match ancestors.next() {
             Some(AstKind::VariableDeclarator(decl)) => match &decl.id {
-                BindingPattern::BindingIdentifier(ident) => {
-                    ident.name.as_str().starts_with(char::is_uppercase)
+                BindingPattern::BindingIdentifier(ident)
+                    if ident.name.as_str().starts_with(char::is_uppercase) =>
+                {
+                    Some(&arrow.body)
                 }
-                _ => false,
+                _ => None,
             },
-            _ => false,
+            _ => None,
         },
+        _ => None,
+    }
+}
+
+/// A server-side stub: a component body whose only statement returns a primitive
+/// literal `""`/`null`/`undefined`/`false`. Such components declare props purely
+/// for API/type compatibility with their client counterpart and ignore them on
+/// purpose, so prop-usage analysis would only ever produce false positives.
+fn is_stub_body(body: &FunctionBody) -> bool {
+    if !body.directives.is_empty() {
+        return false;
+    }
+    let [stmt] = body.statements.as_slice() else {
+        return false;
+    };
+    match stmt {
+        // Block body (`{ return ""; }`) or block-bodied arrow.
+        Statement::ReturnStatement(ret) => {
+            ret.argument.as_ref().is_some_and(is_stub_literal)
+        }
+        // Concise arrow (`(props) => ""`): the expression body is stored as a
+        // single `ExpressionStatement`.
+        Statement::ExpressionStatement(expr) => is_stub_literal(&expr.expression),
+        _ => false,
+    }
+}
+
+/// `""` (empty string), `null`, `undefined` (the identifier or `void <expr>`),
+/// or `false`. Deliberately narrow: non-empty strings, numbers and `true` are
+/// not stub markers.
+fn is_stub_literal(expr: &Expression) -> bool {
+    match expr {
+        Expression::StringLiteral(s) => s.value.is_empty(),
+        Expression::NullLiteral(_) => true,
+        Expression::BooleanLiteral(b) => !b.value,
+        Expression::Identifier(id) => id.name.as_str() == "undefined",
+        Expression::UnaryExpression(u) => u.operator == UnaryOperator::Void,
         _ => false,
     }
 }
@@ -369,6 +423,75 @@ function List({ title }: Props) {
         let d = run_on(src);
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("`subtitle`"));
+    }
+
+    /// Regression for #1984: a server-side stub component whose entire body is a
+    /// single `return ""` declares props only for API/type compatibility with
+    /// its client counterpart and ignores them by design. No prop is flagged.
+    #[test]
+    fn allows_server_stub_returning_empty_string() {
+        let src = r#"
+export function Portal(props: { mount?: Node; useShadow?: boolean; children: JSX.Element }) {
+  return "";
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// A concise arrow stub `(props) => null` is equally a server-side stub.
+    #[test]
+    fn allows_concise_arrow_stub_returning_null() {
+        let src = r#"
+const Stub = (props: { mount?: Node; useShadow?: boolean }) => null;
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// `undefined` and `false` are part of the stub literal set too.
+    #[test]
+    fn allows_stub_returning_undefined_or_false() {
+        let undefined_src = r#"
+export function A(props: { x: number; y: string }) {
+  return undefined;
+}
+"#;
+        assert!(run_on(undefined_src).is_empty());
+
+        let false_src = r#"
+const B = (props: { x: number; y: string }) => false;
+"#;
+        assert!(run_on(false_src).is_empty());
+    }
+
+    /// Guard: a component with a non-trivial body that merely ignores one prop
+    /// must still fire. `bar` is unused even though `foo` is read.
+    #[test]
+    fn flags_unused_prop_in_non_trivial_body_that_ignores_a_prop() {
+        let src = r#"
+interface Props { foo: string; bar: number; }
+function Widget({ foo }: Props) {
+  console.log(foo);
+  return foo.length;
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`bar`"));
+    }
+
+    /// Guard: a non-empty string return is not a stub marker — props must still
+    /// be analysed.
+    #[test]
+    fn flags_unused_prop_when_returning_non_empty_string() {
+        let src = r#"
+interface Props { foo: string; bar: number; }
+function Banner({ foo }: Props) {
+  return "static";
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`bar`"));
     }
 
     /// Regression for #2032: a body-less `declare`d PascalCase function inside a
