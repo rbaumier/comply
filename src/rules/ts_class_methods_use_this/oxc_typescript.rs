@@ -34,6 +34,18 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // Skip getters keyed by a well-known protocol symbol (e.g.
+            // `get [Symbol.toStringTag]()`, `get [Symbol.iterator]()`). These
+            // must live on the prototype to satisfy the protocol contract
+            // (`Object.prototype.toString`, the iteration protocol, …); making
+            // them `static` puts the behavior on the constructor instead and
+            // breaks the semantics, so absence of `this` is not a smell.
+            if method_def.kind == oxc_ast::ast::MethodDefinitionKind::Get
+                && is_symbol_member_key(&method_def.key)
+            {
+                continue;
+            }
+
             // Skip abstract methods (no body)
             if method_def.value.body.is_none() {
                 continue;
@@ -85,6 +97,15 @@ impl OxcCheck for Check {
 
         diagnostics
     }
+}
+
+/// Whether a computed property key is a member access on the global `Symbol`,
+/// e.g. `[Symbol.toStringTag]` or `[Symbol.iterator]`.
+fn is_symbol_member_key(key: &oxc_ast::ast::PropertyKey) -> bool {
+    let oxc_ast::ast::PropertyKey::StaticMemberExpression(member) = key else {
+        return false;
+    };
+    matches!(&member.object, oxc_ast::ast::Expression::Identifier(id) if id.name == "Symbol")
 }
 
 /// Check if any descendant of the method body references `this`, stopping at
@@ -243,5 +264,30 @@ mod tests {
     fn allows_override_method_in_extends_class() {
         let src = "class Foo extends Bar { override baz() { return 1; } }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_well_known_symbol_getter_without_this() {
+        // Issue #2049: `get [Symbol.toStringTag]()` must stay a prototype getter
+        // so `Object.prototype.toString.call(instance)` works; making it static
+        // changes the semantics, so absence of `this` is not a smell.
+        let src = "class FakeGraphQLObjectType {\n\
+                   get [Symbol.toStringTag]() { return 'GraphQLObjectType'; }\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_symbol_iterator_getter_without_this() {
+        let src = "class Foo { get [Symbol.iterator]() { return function* () {}; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_plain_getter_without_this() {
+        // The exemption is scoped to protocol-symbol getters; an ordinary getter
+        // that never uses `this` is still a smell.
+        let diags = run_on("class Foo { get bar() { return 1; } }");
+        assert_eq!(diags.len(), 1);
     }
 }
