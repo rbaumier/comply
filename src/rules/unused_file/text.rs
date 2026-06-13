@@ -808,4 +808,25 @@ mod tests {
             "only the genuine orphan must be flagged; browser substitutes are entry points: {diags:?}"
         );
     }
+
+    // Regression for #1881: a utility module reached only through an
+    // `export * from './misc/getTreeDiff'` barrel must be considered
+    // reachable. The barrel is imported from an entry-rooted file, so its
+    // star-re-exported sources are live via `reexport_edges`.
+    #[test]
+    fn file_reachable_via_star_reexport_barrel_is_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/index.ts", "import { getTreeDiff } from './utils';\ngetTreeDiff();\n"),
+            ("src/utils/index.ts", "export * from './misc/getTreeDiff';\n"),
+            (
+                "src/utils/misc/getTreeDiff.ts",
+                "export function getTreeDiff(): void {}\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "file reached through `export *` barrel must not be flagged unused: {diags:?}"
+        );
+    }
 }
