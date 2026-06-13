@@ -6,7 +6,11 @@
 //! about the return value. Skipped via
 //! `rust_helpers::is_in_test_context`.
 //!
-//! Two non-error idioms are also exempted:
+//! Three non-error idioms are also exempted:
+//! - `let _ = expr?`: the `?` operator already propagates any `Err`/`None` to
+//!   the caller, so the error is handled — only the unwrapped success value is
+//!   discarded (e.g. `let _ = parser.expect(kw)?` checks a token exists then
+//!   drops it).
 //! - `let _ = Arc::from_raw(p)` / `Box::from_raw(p)` (and bare `from_raw`):
 //!   reconstructing an owning pointer from a raw pointer and dropping it to
 //!   run its `Drop` impl. The reconstruction is infallible — `let _ =` invokes
@@ -35,11 +39,17 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
     // Must have a value (right-hand side).
     let Some(value) = node.child_by_field_name("value") else { return };
 
+    // `let _ = expr?`: the `?` already propagates the error to the caller, so
+    // only the unwrapped success value is discarded — not an ignored error.
+    if value.kind() == "try_expression" {
+        return;
+    }
+
     // The value should be a call expression or method call (likely fallible).
     let is_call = matches!(
         value.kind(),
         "call_expression" | "macro_invocation" | "await_expression"
-            | "try_expression" | "field_expression"
+            | "field_expression"
     );
     if !is_call {
         return;
@@ -214,6 +224,24 @@ mod tests {
         assert!(run_on(arc).is_empty());
         assert!(run_on(boxed).is_empty());
         assert!(run_on(bare).is_empty());
+    }
+
+    #[test]
+    fn allows_let_underscore_try_expression() {
+        // Regression for #1410: `?` propagates the error, so `let _ =` only
+        // discards the unwrapped success value — the error is handled.
+        let method = "fn f() -> Result<()> { let _ = parser.expect(T![NAMESPACE])?; Ok(()) }";
+        let call = "fn f() -> Result<()> { let _ = fallible()?; Ok(()) }";
+        assert!(run_on(method).is_empty());
+        assert!(run_on(call).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_call_without_question_mark() {
+        // The boundary of #1410: without `?`, the Result is genuinely
+        // swallowed and must still fire.
+        let src = "fn f() { let _ = fallible(); }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
