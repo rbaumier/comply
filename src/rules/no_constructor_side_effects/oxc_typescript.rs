@@ -327,4 +327,23 @@ mod tests {
         "#;
         assert_eq!(run(src).len(), 1);
     }
+
+    #[test]
+    fn skipped_in_test_files() {
+        // Regression for #1999 — vuejs/core vue-compat specs. In a test file,
+        // `new X()` without assignment is the construction side effect under
+        // test (lifecycle hooks, DOM mounting); the rule is skipped there via
+        // `skip_in_test_dir`.
+        let src = r#"
+            test('other private APIs', () => {
+              new Vue({ created() { expect(this.$createElement).toBeTruthy() } });
+            });
+        "#;
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            src,
+            "packages/vue-compat/__tests__/instance.spec.ts",
+        );
+        assert!(diags.is_empty());
+    }
 }
