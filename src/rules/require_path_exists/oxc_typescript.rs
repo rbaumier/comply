@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 const EXTENSIONS: &[&str] = &[
@@ -24,6 +24,38 @@ const EXTENSIONS: &[&str] = &[
 
 fn is_relative_path(spec: &str) -> bool {
     spec.starts_with("./") || spec.starts_with("../")
+}
+
+/// Resolve a path lexically — collapse `.`/`..` segments by string surgery
+/// without touching the filesystem, since the target may not exist (the import
+/// could point above the scanned tree). `..` pops the last normal segment;
+/// a `..` with nothing left to pop is preserved so escaping the base stays
+/// observable to the caller.
+fn normalize_lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Whether the import resolves to a location comply can verify on disk: the
+/// lexically-normalized resolved path must stay within `project_root`. An
+/// import that escapes the root (e.g. `../../../../../shared.config.ts` reaching
+/// above the checked-out tree in a monorepo/template layout) points outside the
+/// scanned files, so its existence is unverifiable and must not be flagged.
+/// When `project_root` is unknown, nothing is verifiable.
+fn resolved_within_project(base_dir: &Path, import_spec: &str, project_root: &Path) -> bool {
+    let resolved = normalize_lexical(&base_dir.join(import_spec));
+    resolved.starts_with(normalize_lexical(project_root))
 }
 
 fn resolve_and_check(base_dir: &Path, import_spec: &str) -> bool {
@@ -109,6 +141,16 @@ impl OxcCheck for Check {
 
         let Some(base_dir) = ctx.path.parent() else { return };
 
+        // Only paths that stay within the project root are verifiable. An import
+        // resolving above the root (or any path when the root is unknown) targets
+        // files outside the scanned tree, so we cannot assert it is missing.
+        let Some(project_root) = ctx.project.project_root.as_deref() else {
+            return;
+        };
+        if !resolved_within_project(base_dir, &import_spec, project_root) {
+            return;
+        }
+
         if !resolve_and_check(base_dir, &import_spec) {
             let span = match node.kind() {
                 AstKind::ImportDeclaration(d) => d.span,
@@ -149,11 +191,16 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
     use std::fs;
     use tempfile::TempDir;
 
     fn run_in_dir(importer_rel: &str, source: &str, on_disk: &[&str]) -> Vec<Diagnostic> {
         let dir = TempDir::new().unwrap();
+        // A package.json anchors `project_root` at the TempDir root so the
+        // escape check has a reference point (mirrors import-no-unresolved).
+        fs::write(dir.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
         for rel in on_disk {
             let p = dir.path().join(rel);
             fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -163,11 +210,16 @@ mod tests {
         fs::create_dir_all(importer.parent().unwrap()).unwrap();
         fs::write(&importer, source).unwrap();
         let canon = fs::canonicalize(&importer).unwrap();
+        let source_file = SourceFile {
+            path: canon.clone(),
+            language: Language::from_path(&canon).unwrap(),
+        };
+        let project = crate::project::ProjectCtx::load(&[&source_file], &Config::default());
         crate::rules::test_helpers::run_rule_with_ctx(
             &Check,
             source,
             &canon,
-            crate::project::default_static_project_ctx(),
+            &project,
             crate::rules::file_ctx::default_static_file_ctx(),
         )
     }
@@ -196,5 +248,35 @@ mod tests {
         let diags = run_in_dir("app.ts", source, &[]);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("does-not-exist"));
+    }
+
+    #[test]
+    fn no_fp_for_import_escaping_project_root_issue_1130() {
+        // A monorepo/template import whose relative path resolves ABOVE the
+        // project root (e.g. `sdk/.../arm-maps/vitest.esm.config.ts` importing
+        // `../../../vitest.esm.shared.config.ts`, valid only at the Rush root)
+        // targets a file outside the scanned tree. comply cannot verify it, so
+        // it must not be flagged.
+        let source = "import shared from '../../../../escapes.ts';";
+        let diags = run_in_dir("sdk/pkg/config.ts", source, &[]);
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn flags_missing_parent_relative_import_within_root() {
+        // A `../` import that stays UNDER the project root but points at a file
+        // that does not exist is a genuine error and must still fire.
+        let source = "import { x } from '../sibling/missing';";
+        let diags = run_in_dir("sub/app.ts", source, &[]);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("missing"));
+    }
+
+    #[test]
+    fn allows_existing_parent_relative_import_within_root() {
+        // A `../` import resolving to an existing file under the root is valid.
+        let source = "import { x } from '../sibling/exists';";
+        let diags = run_in_dir("sub/app.ts", source, &["sibling/exists.ts"]);
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
     }
 }
