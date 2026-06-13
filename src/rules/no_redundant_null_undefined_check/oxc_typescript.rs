@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use oxc_ast::ast::{BinaryOperator, Expression, LogicalOperator, TSType, TSTypeAnnotation};
+use oxc_ast::ast::{BinaryOperator, Expression, LogicalOperator};
 use oxc_span::GetSpan;
 
 use crate::diagnostic::Diagnostic;
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, type_annotation_is_type_predicate};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 
 pub struct Check;
@@ -51,10 +51,6 @@ fn nullish_comparison<'a>(
     None
 }
 
-fn returns_type_predicate(annotation: Option<&TSTypeAnnotation>) -> bool {
-    annotation.is_some_and(|ann| matches!(ann.type_annotation, TSType::TSTypePredicate(_)))
-}
-
 /// `true` when the nearest enclosing function or arrow of `node_id` has a
 /// type-predicate (`x is T`) return-type annotation.
 fn enclosing_function_returns_predicate(
@@ -63,9 +59,11 @@ fn enclosing_function_returns_predicate(
 ) -> bool {
     for kind in nodes.ancestor_kinds(node_id).skip(1) {
         match kind {
-            AstKind::Function(func) => return returns_type_predicate(func.return_type.as_deref()),
+            AstKind::Function(func) => {
+                return type_annotation_is_type_predicate(func.return_type.as_deref());
+            }
             AstKind::ArrowFunctionExpression(arrow) => {
-                return returns_type_predicate(arrow.return_type.as_deref());
+                return type_annotation_is_type_predicate(arrow.return_type.as_deref());
             }
             _ => {}
         }
@@ -97,7 +95,7 @@ fn is_type_predicate_return(
             }
             match nodes.parent_node(body.id()).kind() {
                 AstKind::ArrowFunctionExpression(arrow) if arrow.expression => {
-                    returns_type_predicate(arrow.return_type.as_deref())
+                    type_annotation_is_type_predicate(arrow.return_type.as_deref())
                 }
                 _ => false,
             }

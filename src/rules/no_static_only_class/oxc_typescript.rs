@@ -1,7 +1,7 @@
 //! OxcCheck backend for no-static-only-class.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{ClassShape, byte_offset_to_line_col};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::ClassElement;
 use std::sync::Arc;
@@ -22,8 +22,12 @@ impl OxcCheck for Check {
     ) {
         let AstKind::Class(class) = node.kind() else { return };
 
-        // Skip classes that extend a superclass
-        if class.super_class.is_some() {
+        let shape = ClassShape::of(class);
+
+        // Skip classes that extend a superclass. This rule intentionally checks
+        // only `extends` (not `implements`): an interface contract does not stop
+        // a static-only class from being replaced by a plain object.
+        if shape.has_super_class {
             return;
         }
 
@@ -32,7 +36,7 @@ impl OxcCheck for Check {
         // identity and is read by a framework's DI/IoC container, so the
         // class form is load-bearing and cannot be replaced by a plain
         // object or functions.
-        if !class.decorators.is_empty() {
+        if shape.is_decorated {
             return;
         }
 
