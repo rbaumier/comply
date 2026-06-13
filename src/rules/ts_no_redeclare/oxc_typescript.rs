@@ -9,7 +9,11 @@
 //! value namespace (`const`/function/import binding) and the type namespace
 //! (`type`/`interface`) simultaneously — skipped when declarations are a mix
 //! of value and type-only nodes (e.g. `import Database from 'better-sqlite3'`
-//! + `export interface Database`).
+//! + `export interface Database`). A type-only import specifier
+//! (`import type { X }` or `import { type X }`) binds `X` in the type
+//! namespace only, so it counts as a type declaration for this merge (a
+//! function `X` coexisting with `import type { X }` is the standard
+//! component-named-after-its-props-type pattern).
 //!
 //! Generic type parameters live in the type namespace, so a type parameter
 //! sharing a name with a value declaration (`<t>(t: t)`) is legal —
@@ -75,6 +79,21 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // Type-only import specifier: `import type { X }` (statement-level)
+            // or `import { type X }` (specifier-level) binds `X` in the type
+            // namespace only, with no runtime presence — so it merges with a
+            // value declaration of the same name exactly like a type alias does.
+            let is_type_only_import = |id| -> bool {
+                let AstKind::ImportSpecifier(spec) = nodes.kind(id) else {
+                    return false;
+                };
+                spec.import_kind.is_type()
+                    || matches!(
+                        nodes.kind(nodes.parent_id(id)),
+                        AstKind::ImportDeclaration(import) if import.import_kind.is_type()
+                    )
+            };
+
             // Branded type pattern: `export const Foo = ...; export type Foo = ...;`
             // TypeScript merges value-namespace (const/function/import binding)
             // and type-namespace (type alias/interface) declarations — exempt only
@@ -84,8 +103,8 @@ impl OxcCheck for Check {
                 match nodes.kind(id) {
                     AstKind::Function(_)
                     | AstKind::ImportDefaultSpecifier(_)
-                    | AstKind::ImportSpecifier(_)
                     | AstKind::ImportNamespaceSpecifier(_) => true,
+                    AstKind::ImportSpecifier(_) => !is_type_only_import(id),
                     AstKind::VariableDeclarator(_) => {
                         let parent_id = nodes.parent_id(id);
                         matches!(nodes.kind(parent_id), AstKind::VariableDeclaration(d) if d.kind == VariableDeclarationKind::Const)
@@ -97,7 +116,7 @@ impl OxcCheck for Check {
                 matches!(
                     nodes.kind(id),
                     AstKind::TSTypeAliasDeclaration(_) | AstKind::TSInterfaceDeclaration(_)
-                )
+                ) || is_type_only_import(id)
             };
             if decl_ids.iter().all(|&id| is_value_decl(id) || is_type_decl(id))
                 && decl_ids.iter().any(|&id| is_value_decl(id))
@@ -340,6 +359,42 @@ export function make<F extends FilterMap, const C extends SortColumns>(
         // import + const of the same name are both value-namespace
         // declarations — a genuine redeclaration, still flagged.
         let d = run("import Foo from 'a'\nconst Foo = 1;");
+        assert_eq!(d.len(), 1, "expected 1 diagnostic, got: {d:?}");
+        assert!(d[0].message.contains("`Foo`"));
+    }
+
+    #[test]
+    fn allows_type_only_import_plus_function() {
+        // Regression for #1804: vercel/commerce's filter/item.tsx declares
+        // React components named after their props types, which arrive via
+        // `import type`. A type-only import binds the name in the type
+        // namespace, so it merges with a value-namespace function.
+        let src = r#"import type { SortFilterItem } from "lib/constants";
+import type { PathFilterItem } from ".";
+
+function PathFilterItem({ item }: { item: PathFilterItem }) {
+  return null;
+}
+
+function SortFilterItem({ item }: { item: SortFilterItem }) {
+  return null;
+}"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "item.tsx");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_inline_type_import_specifier_plus_function() {
+        // Specifier-level `import { type X }` also binds in the type namespace.
+        let d = run("import { type Foo } from 'x';\nfunction Foo() { return null; }");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn flags_value_import_plus_function() {
+        // A plain (value) named import + a function of the same name are both
+        // value-namespace declarations — a genuine redeclaration, still flagged.
+        let d = run("import { Foo } from 'x';\nfunction Foo() { return null; }");
         assert_eq!(d.len(), 1, "expected 1 diagnostic, got: {d:?}");
         assert!(d[0].message.contains("`Foo`"));
     }
