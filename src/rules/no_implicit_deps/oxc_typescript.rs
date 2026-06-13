@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use super::{
     is_bare_specifier, is_node_builtin, is_subpath_import, is_virtual_module, matches_alias,
-    root_package_name,
+    module_federation, root_package_name,
 };
 
 pub struct Check;
@@ -103,6 +103,16 @@ impl OxcCheck for Check {
                 }
                 pkg_dir = ancestor_dir;
             }
+        }
+
+        // Module Federation: `remotes` declared in a bundler config (rsbuild /
+        // rspack / webpack / vite) turn their keys into runtime-resolved module
+        // namespaces (`import X from "remote/Exposed"`). The scan is bounded by
+        // the project root so it never escapes the repo.
+        if module_federation::remote_names(ctx.path, ctx.project.project_root.as_deref())
+            .contains(root)
+        {
+            return;
         }
 
         let (line, column) =
@@ -383,6 +393,75 @@ mod tests {
             diags.len(),
             1,
             "dep absent from all ancestor manifests must fire, got {diags:?}"
+        );
+    }
+
+    // Regression #2011: a Module Federation remote (`remote`) declared in the
+    // bundler config (rsbuild) becomes a runtime-resolved module namespace, so
+    // `import Remote from "remote/remote-app"` must not be flagged even though
+    // `remote` is not in package.json.
+    #[test]
+    fn allows_module_federation_remote_import_issue_2011() {
+        let dir = TempDir::new().unwrap();
+        let app = dir.path().join("host");
+        let src = app.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(app.join("package.json"), r#"{"name":"host"}"#).unwrap();
+        fs::write(
+            app.join("rsbuild.config.ts"),
+            r#"import { pluginModuleFederation } from "@module-federation/rsbuild-plugin";
+export default {
+  plugins: [
+    pluginModuleFederation({
+      name: "host",
+      remotes: {
+        remote: "remote@http://localhost:3001/mf-manifest.json",
+      },
+      exposes: {},
+    }),
+  ],
+};
+"#,
+        )
+        .unwrap();
+        let file = src.join("App.tsx");
+        let source = "import Remote from 'remote/remote-app';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "Module Federation remote import must not be flagged, got {diags:?}"
+        );
+    }
+
+    // A genuinely undeclared package must still fire even when a Module
+    // Federation config declares unrelated remotes — the exemption is scoped to
+    // the configured remote names only.
+    #[test]
+    fn flags_unlisted_dep_alongside_module_federation_remote_issue_2011() {
+        let dir = TempDir::new().unwrap();
+        let app = dir.path().join("host");
+        let src = app.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(app.join("package.json"), r#"{"name":"host"}"#).unwrap();
+        fs::write(
+            app.join("rsbuild.config.ts"),
+            r#"export default {
+  plugins: [
+    pluginModuleFederation({ name: "host", remotes: { remote: "remote@http://x/mf.json" } }),
+  ],
+};
+"#,
+        )
+        .unwrap();
+        let file = src.join("App.tsx");
+        let source = "import x from 'lodash';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "undeclared real package must still fire alongside MF remotes, got {diags:?}"
         );
     }
 
