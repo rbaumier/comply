@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Argument, Expression};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -62,6 +62,36 @@ fn extract_route_path<'a>(expr: &'a Expression<'a>, source: &'a str) -> Option<&
     }
 }
 
+/// Receiver names that denote an HTTP client instance rather than a framework
+/// router/app. `axios.get(url, config)` and `client.get(url)` request a URL;
+/// they do not register a server route.
+const HTTP_CLIENT_RECEIVERS: &[&str] = &[
+    "axios", "http", "https", "client", "fetch", "request", "req", "instance",
+];
+
+/// True when `arg` is a request handler: a function, or a reference to one
+/// (`handler`, `controller.list`). A server route registration passes a handler
+/// after the path (`app.get("/users", handler)`); a client HTTP call
+/// (`client.get("/users")`) passes only the path.
+fn is_handler_arg(arg: &Argument) -> bool {
+    matches!(
+        arg,
+        Argument::ArrowFunctionExpression(_)
+            | Argument::FunctionExpression(_)
+            | Argument::Identifier(_)
+            | Argument::StaticMemberExpression(_)
+            | Argument::ComputedMemberExpression(_)
+    )
+}
+
+/// True when the call's receiver is a known HTTP-client name.
+fn receiver_is_http_client(member: &oxc_ast::ast::StaticMemberExpression) -> bool {
+    let Expression::Identifier(obj) = &member.object else {
+        return false;
+    };
+    HTTP_CLIENT_RECEIVERS.contains(&obj.name.as_str())
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -91,6 +121,9 @@ impl OxcCheck for Check {
         if !ROUTE_METHODS.contains(&name) {
             return;
         }
+        if receiver_is_http_client(member) {
+            return;
+        }
 
         let Some(first_arg) = call.arguments.first() else {
             return;
@@ -101,6 +134,16 @@ impl OxcCheck for Check {
         let Some(route_path) = extract_route_path(first_expr, ctx.source) else {
             return;
         };
+
+        // Distinguish a server route registration from a client HTTP call.
+        // Verb methods (`get`, `post`, …) are overloaded: a framework router
+        // registers `app.get("/users", handler)` (handler after the path) while
+        // an HTTP client requests `client.get("/users")` (path only). The
+        // router-specific `route` method has no client counterpart, so it stays
+        // a route regardless of its arguments.
+        if name != "route" && !call.arguments[1..].iter().any(is_handler_arg) {
+            return;
+        }
         if has_version_prefix(route_path) || is_infra_path(route_path) {
             return;
         }
@@ -267,5 +310,21 @@ mod tests {
     #[test]
     fn allows_dev_endpoints() {
         assert!(run("app.get('/dev/last-reset-url', handler);").is_empty());
+    }
+
+    #[test]
+    fn ignores_client_http_call_without_handler() {
+        // Issue #1743 — `client.get("/path")` is a client-side HTTP request
+        // (mande/axios/fetch wrapper), not a server route registration. With no
+        // handler argument after the path it must not be flagged.
+        assert!(run("jokes.get<Joke>('/jokes/random');").is_empty());
+        assert!(run("api.post('/users', { name });").is_empty());
+        assert!(run("axios.get('/jokes/random', config);").is_empty());
+    }
+
+    #[test]
+    fn flags_route_with_arrow_handler() {
+        // A genuine server route with an inline handler is still flagged.
+        assert_eq!(run("app.get('/users', (req, res) => res.json([]));").len(), 1);
     }
 }

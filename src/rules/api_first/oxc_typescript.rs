@@ -31,6 +31,36 @@ fn first_arg_is_route_path(arg: &Argument) -> bool {
     }
 }
 
+/// Receiver names that denote an HTTP client instance rather than a framework
+/// router/app. `axios.get(url, config)` and `client.get(url)` request a URL;
+/// they do not register a server route.
+const HTTP_CLIENT_RECEIVERS: &[&str] = &[
+    "axios", "http", "https", "client", "fetch", "request", "req", "instance",
+];
+
+/// True when `arg` is a request handler: a function, or a reference to one
+/// (`handler`, `controller.list`). A server route registration passes a handler
+/// after the path (`app.get("/users", handler)`); a client HTTP call
+/// (`client.get("/users")`) passes only the path.
+fn is_handler_arg(arg: &Argument) -> bool {
+    matches!(
+        arg,
+        Argument::ArrowFunctionExpression(_)
+            | Argument::FunctionExpression(_)
+            | Argument::Identifier(_)
+            | Argument::StaticMemberExpression(_)
+            | Argument::ComputedMemberExpression(_)
+    )
+}
+
+/// True when the call's receiver is a known HTTP-client name.
+fn receiver_is_http_client(member: &oxc_ast::ast::StaticMemberExpression) -> bool {
+    let Expression::Identifier(obj) = &member.object else {
+        return false;
+    };
+    HTTP_CLIENT_RECEIVERS.contains(&obj.name.as_str())
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[]
@@ -66,10 +96,19 @@ impl OxcCheck for Check {
             if !ROUTE_METHODS.contains(&method) {
                 continue;
             }
+            if receiver_is_http_client(member) {
+                continue;
+            }
             let Some(first_arg) = call.arguments.first() else {
                 continue;
             };
             if !first_arg_is_route_path(first_arg) {
+                continue;
+            }
+            // A server route registration passes a handler after the path; a
+            // client HTTP call (`client.get("/users")`, `axios.get(url, config)`)
+            // does not. Requiring a handler excludes client wrappers.
+            if !call.arguments[1..].iter().any(is_handler_arg) {
                 continue;
             }
             let start = call.span.start;
@@ -162,6 +201,29 @@ function readHeader(res: Response): string | null {
 }
 "#;
         assert!(run_on(src, "src/api/util/headers.ts").is_empty());
+    }
+
+    #[test]
+    fn ignores_client_http_call_without_handler() {
+        // Issue #1743 — `jokes.get("/jokes/random")` is a client-side HTTP call
+        // (mande wraps fetch), not a server route handler. With no handler
+        // argument after the path it must not be flagged as a route.
+        let src = r#"
+import { createClient } from 'mande'
+const jokes = createClient('https://v2.jokeapi.dev')
+export function getRandomJoke() {
+  return jokes.get<Joke>('/jokes/random')
+}
+"#;
+        assert!(run_on(src, "packages/playground/src/api/jokes.ts").is_empty());
+    }
+
+    #[test]
+    fn ignores_axios_call_with_config_object() {
+        // `axios.get(url, config)` — the trailing argument is an options object,
+        // not a handler, so it is a client call, not a route registration.
+        let src = r#"export function load() { return axios.get('/users', { params }); }"#;
+        assert!(run_on(src, "src/api/users.ts").is_empty());
     }
 
     #[test]
