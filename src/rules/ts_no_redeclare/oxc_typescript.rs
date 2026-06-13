@@ -31,6 +31,16 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// True for Angular compiler-compliance golden fixtures: a `GOLDEN_PARTIAL.js`
+/// file whose body concatenates several independently-generated compiler
+/// outputs, each introduced by a `* PARTIAL FILE:` comment delimiter. Every
+/// section re-declares its own `MyApp`, `Component`, etc. by design, so the
+/// cross-section "redeclaration" is an artifact of concatenation, not a bug.
+fn is_concatenated_golden_partial(ctx: &CheckCtx) -> bool {
+    ctx.path.file_name().and_then(|n| n.to_str()) == Some("GOLDEN_PARTIAL.js")
+        && ctx.source_contains("PARTIAL FILE:")
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[]
@@ -41,6 +51,10 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        if is_concatenated_golden_partial(ctx) {
+            return Vec::new();
+        }
+
         let scoping = semantic.scoping();
         let nodes = semantic.nodes();
         let mut diagnostics = Vec::new();
@@ -331,5 +345,30 @@ export function make<F extends FilterMap, const C extends SortColumns>(
         // also intentional TypeScript.
         let d = run("function fn() {}\nnamespace fn {\n  export const x = 1;\n}");
         assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_concatenated_golden_partial_fixture() {
+        // Regression for #1398: Angular's GOLDEN_PARTIAL.js compliance fixtures
+        // concatenate independently-generated compiler outputs, each delimited
+        // by a `* PARTIAL FILE:` comment. Re-declarations across sections are
+        // an artifact of concatenation, not a real redeclaration.
+        let src = "/*\n * PARTIAL FILE: switch_without_default.js\n */\nimport { Component } from '@angular/core';\nexport class MyApp {}\n/*\n * PARTIAL FILE: switch_with_default.js\n */\nimport { Component } from '@angular/core';\nexport class MyApp {}";
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "GOLDEN_PARTIAL.js");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn flags_redeclaration_in_normal_file_named_golden_partial() {
+        // The exemption is gated on the `PARTIAL FILE:` concatenation marker:
+        // a genuine redeclaration in a file merely named GOLDEN_PARTIAL.js but
+        // without the delimiter is still a real bug and must fire.
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "export const x = 1;\nexport const x = 2;",
+            "GOLDEN_PARTIAL.js",
+        );
+        assert_eq!(d.len(), 1, "expected 1 diagnostic, got: {d:?}");
+        assert!(d[0].message.contains("`x`"));
     }
 }
