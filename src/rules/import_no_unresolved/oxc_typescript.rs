@@ -74,6 +74,14 @@ impl OxcCheck for Check {
             if is_existing_source_import(ctx.path, &imp.specifier) {
                 continue;
             }
+            // Angular schematics/builders generate a `schema.ts` TypeScript
+            // interface from a sibling `schema.json` at build time (via
+            // `json-schema-to-typescript`). The `.ts` is gitignored and absent
+            // in a clean checkout, but the `.json` source of truth sits next to
+            // the importer at the same base path — treat that as resolved.
+            if has_generated_json_sibling(ctx.path, &imp.specifier) {
+                continue;
+            }
             if !seen.insert((imp.specifier.clone(), imp.line)) {
                 continue;
             }
@@ -145,6 +153,23 @@ pub(super) fn is_existing_source_import(importer: &Path, specifier: &str) -> boo
     SOURCE_EXTS
         .iter()
         .any(|ext| raw.join(format!("index.{ext}")).is_file())
+}
+
+/// True for an extensionless relative specifier (e.g. `./schema`,
+/// `../workspace/schema`) whose target has a sibling `.json` file at the same
+/// base path on disk (e.g. `schema.json`). This is the Angular schematics/
+/// builders codegen convention: the `.ts` types are generated from the
+/// `schema.json` source of truth at build time and are absent in a clean
+/// checkout. A specifier that already carries an extension, or one with no
+/// matching `.json` on disk, returns `false` and is still flagged.
+pub(super) fn has_generated_json_sibling(importer: &Path, specifier: &str) -> bool {
+    if Path::new(specifier).extension().is_some() {
+        return false;
+    }
+    let Some(base_dir) = importer.parent() else {
+        return false;
+    };
+    base_dir.join(specifier).with_extension("json").is_file()
 }
 
 /// Resolve a path lexically — collapse `.`/`..` segments without touching the
@@ -359,6 +384,105 @@ mod scaffold_template_tests {
         let diags = run_in_dir("config/next-config-appdir.js", source);
         assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
         assert!(diags[0].message.contains("src/env.js"));
+    }
+}
+
+#[cfg(test)]
+mod angular_schema_json_tests {
+    use super::Check;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Build a temp tree with the importer plus optional sibling `.json` files,
+    /// run the rule on the importer, and return its diagnostics. The generated
+    /// `.ts` types are never written — they don't exist in a clean checkout.
+    fn run_with_siblings(
+        importer_rel: &str,
+        source: &str,
+        sibling_jsons: &[&str],
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
+        let importer = dir.path().join(importer_rel);
+        fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        fs::write(&importer, source).unwrap();
+        for json_rel in sibling_jsons {
+            let json = dir.path().join(json_rel);
+            fs::create_dir_all(json.parent().unwrap()).unwrap();
+            fs::write(&json, r#"{"$schema":"http://json-schema.org/schema"}"#).unwrap();
+        }
+        let canon = fs::canonicalize(&importer).unwrap();
+        let source_file = SourceFile {
+            path: canon.clone(),
+            language: Language::from_path(&canon).unwrap(),
+        };
+        let project = ProjectCtx::load(&[&source_file], &Config::default());
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    #[test]
+    fn no_fp_for_angular_schematic_schema_import_issue_1740() {
+        // angular/angular-cli reproducer: an ng-add schematic imports
+        // `./schema`, whose `schema.ts` is generated from the sibling
+        // `schema.json` at build time and absent in a clean checkout.
+        let source = "import { externalSchematic } from '@angular-devkit/schematics';\n\
+                      import { Schema as SSROptions } from './schema';\n";
+        let diags = run_with_siblings(
+            "packages/angular/ssr/schematics/ng-add/index.ts",
+            source,
+            &["packages/angular/ssr/schematics/ng-add/schema.json"],
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn no_fp_for_nested_schema_import_issue_1740() {
+        // The same pattern via a nested relative path (`../workspace/schema`),
+        // resolving to a `schema.json` in a sibling directory.
+        let source = "import { Schema } from '../workspace/schema';\n";
+        let diags = run_with_siblings(
+            "packages/schematics/angular/application/index.ts",
+            source,
+            &["packages/schematics/angular/workspace/schema.json"],
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_missing_import_without_json_sibling_issue_1740() {
+        // No `schema.json` next to the importer: a genuinely broken `./schema`
+        // import must still fire — the exemption stays narrow.
+        let source = "import { Schema } from './schema';\n";
+        let diags = run_with_siblings(
+            "packages/angular/ssr/schematics/ng-add/index.ts",
+            source,
+            &[],
+        );
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("./schema"));
+    }
+
+    #[test]
+    fn still_flags_explicit_ts_specifier_with_json_sibling_issue_1740() {
+        // An explicit extension (`./schema.ts`) names a concrete source file; a
+        // sibling `schema.json` does not excuse its absence — still flagged.
+        let source = "import { Schema } from './schema.ts';\n";
+        let diags = run_with_siblings(
+            "packages/angular/ssr/schematics/ng-add/index.ts",
+            source,
+            &["packages/angular/ssr/schematics/ng-add/schema.json"],
+        );
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("schema.ts"));
     }
 }
 
