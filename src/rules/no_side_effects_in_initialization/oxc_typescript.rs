@@ -17,6 +17,13 @@
 //!   never imported as a library, so their top-level CLI bootstrap
 //!   (`yargs(hideBin(process.argv)).parse()`, `process.stdin.pipe(...)`, …) is
 //!   intentional and not tree-shakeable;
+//! - benchmark/profiling harness scripts: files whose stem starts with
+//!   `profile-` or `bench-` (`profile-pipeline.ts`, `bench-insert.mjs`), or
+//!   those under a `bench/`, `benchmarks/`, or `profiling/` directory. These are
+//!   run directly (`bun src/native/profile-pipeline.ts`), never imported, so
+//!   their body of top-level `bench(...)` / `console.log(...)` calls is the
+//!   harness's intended payload. A `profile-*`/`bench-*` *prefix* is required, so
+//!   an ordinary `profileService.ts` library module is still flagged;
 //! - server application entry points by content shape: any module with a
 //!   top-level `listen(...)` / `*.listen(...)` call (Fastify/Express/Node HTTP
 //!   servers start the server this way, so the surrounding route/hook/
@@ -146,6 +153,32 @@ fn is_cli_entry(path: &std::path::Path, source: &str) -> bool {
     }
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     matches!(name, "bin.ts" | "bin.mts" | "bin.js" | "bin.mjs")
+}
+
+/// Benchmark and profiling harness scripts are standalone executables run
+/// directly (`bun src/native/profile-pipeline.ts`), never imported as a
+/// library, so their body of top-level `bench(...)` / `console.log(...)` calls
+/// is the harness's intended payload, not a tree-shaking hazard. Two
+/// unambiguous signals mark such a file:
+/// - a `profile-*` / `bench-*` filename stem (`profile-pipeline.ts`,
+///   `bench-insert.mjs`); the stem must *start* with the prefix, so an ordinary
+///   `profileService.ts` library module is still flagged;
+/// - a `bench/`, `benchmarks/`, or `profiling/` parent directory segment.
+fn is_benchmark_or_profile_script(path: &std::path::Path) -> bool {
+    let stem = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .split('.')
+        .next()
+        .unwrap_or("");
+    if stem.starts_with("profile-") || stem.starts_with("bench-") {
+        return true;
+    }
+    path.components().any(|c| {
+        matches!(c, std::path::Component::Normal(s)
+            if matches!(s.to_str(), Some("bench" | "benchmarks" | "profiling")))
+    })
 }
 
 const TEST_RUNNER_HOOK_IDENTS: &[&str] =
@@ -899,6 +932,7 @@ impl OxcCheck for Check {
 
         if is_test_setup_path(ctx.path)
             || is_cli_entry(ctx.path, ctx.source)
+            || is_benchmark_or_profile_script(ctx.path)
             || shape_is_test_setup(program)
             || is_server_entry_shape(program)
             || is_react_entry_shape(program)
@@ -1472,6 +1506,68 @@ mod tests {
             diags.len(),
             1,
             "binary.ts is an ordinary module and must still be flagged, got {diags:?}"
+        );
+    }
+
+    // --- (g2) Benchmark / profiling harness scripts (Closes #1913) --------
+
+    // Regression for #1913: a `profile-*.ts` harness lives in `src/` but is run
+    // directly (`bun src/native/profile-pipeline.ts`). Its entire body is
+    // top-level `console.log`/`bench(...)` calls — the harness's payload — and
+    // it is never imported as a module, so the calls are intentional.
+    #[test]
+    fn allows_profile_prefixed_harness_script() {
+        let src = "\
+            import './bunProfileGlobals';\n\
+            import { bench } from './profileHarness';\n\
+            console.log('\\n=== transformDecl single-pair ===');\n\
+            bench('passthrough', 200_000, () => transformDecl('transform', 'scale(2)'));\n\
+            bench('numeric', 200_000, () => transformDecl('padding-top', '8px'));\n";
+        let diags =
+            crate::rules::test_helpers::run_rule(&Check, src, "packages/styled-components/src/native/profile-pipeline.ts");
+        assert!(
+            diags.is_empty(),
+            "profile-*.ts harness script should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_bench_prefixed_harness_script() {
+        let src = "\
+            import { bench } from './harness';\n\
+            bench('insert', 1000, () => insert());\n";
+        let diags =
+            crate::rules::test_helpers::run_rule(&Check, src, "src/bench-insert.ts");
+        assert!(
+            diags.is_empty(),
+            "bench-*.ts harness script should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_harness_under_benchmarks_directory() {
+        let src = "\
+            import { run } from './runner';\n\
+            run();\n";
+        let diags =
+            crate::rules::test_helpers::run_rule(&Check, src, "benchmarks/parse.ts");
+        assert!(
+            diags.is_empty(),
+            "script under benchmarks/ should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_library_module_with_profile_substring_in_name() {
+        // `profileService.ts` is an ordinary library module — it merely contains
+        // "profile", it is not a `profile-*` harness — so its accidental
+        // top-level side effect still blocks tree-shaking.
+        let diags =
+            crate::rules::test_helpers::run_rule(&Check, "loadProfiles();", "src/profileService.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "profileService.ts is a library module and must still be flagged, got {diags:?}"
         );
     }
 
