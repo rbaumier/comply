@@ -6,6 +6,11 @@
 //!     may legitimately export fixtures used only internally.
 //!   - Entry points (`main.*`, `index.*` at the project root) — they are the
 //!     consumer, not the consumed, and aren't imported by convention.
+//!   - CLI-tool packages (the nearest `package.json` declares a `bin`) — the
+//!     package's `src/**` implements one or more published binaries. Sibling
+//!     packages consume it by invoking the binary, not by ES-importing its
+//!     modules, and the tool's command framework wires up internal modules
+//!     dynamically, so their exports have no static importer.
 //!   - Star re-exports (`export * from './m'`) — the re-export doesn't carry
 //!     a specific name to link against; it's a barrel, not a dead symbol.
 //!   - Reusable UI library directories (`components/ui/`, `lib/ui/`) — these
@@ -284,7 +289,9 @@ impl TextCheck for Check {
             return Vec::new();
         }
         if ctx.project.nearest_package_json(ctx.path).is_some_and(|pkg| {
-            pkg.is_library || is_script_entry_point(ctx.path, ctx.project.project_root.as_deref(), &pkg.script_entry_files)
+            pkg.is_library
+                || pkg.has_bin
+                || is_script_entry_point(ctx.path, ctx.project.project_root.as_deref(), &pkg.script_entry_files)
         }) {
             return Vec::new();
         }
@@ -1740,6 +1747,84 @@ mod tests {
         assert!(
             diags.iter().any(|d| d.message.contains("getTreeDiff")),
             "symbol nobody imports through the barrel is still dead, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_for_bin_package_internal_export() {
+        // Regression for #1141 — azure-sdk-for-js's `@azure/dev-tool` is a
+        // CLI-tool workspace package (declares `bin`, no `main`/`exports`/
+        // `module`). Its `src/**` is the tool's implementation; sibling packages
+        // consume it by invoking the `dev-tool` binary, never by ES-importing its
+        // util modules. Internal helpers like `isMigrationSuspended` are wired up
+        // by the command framework and referenced only inside function bodies, so
+        // they have no static importer and look dead. A package that publishes a
+        // `bin` entry is consumed as a binary — dead-export must not flag its
+        // source exports.
+        let extra = vec![(
+            "common/tools/dev-tool/package.json",
+            r#"{ "name": "@azure/dev-tool", "bin": { "dev-tool": "launch.ts" } }"#,
+        )];
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "common/tools/dev-tool/src/util/migrations.ts",
+                "export async function isMigrationSuspended(): Promise<boolean> {\n  return false;\n}\n\
+                 export async function run(): Promise<void> {\n  if (await isMigrationSuspended()) return;\n}\n",
+            ),
+            ("sdk/storage/storage-blob/src/index.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project_with_extra(
+            &extra,
+            &files,
+            "common/tools/dev-tool/src/util/migrations.ts",
+        );
+        assert!(
+            diags.is_empty(),
+            "bin-package internal exports must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_dead_export_in_non_bin_package() {
+        // Sibling guard for #1141 — a regular package (no `bin`, no
+        // `main`/`exports`/`module`) with a genuinely unused export must still be
+        // flagged. The `bin` exemption must not blanket-silence ordinary packages.
+        let extra = vec![(
+            "packages/lib/package.json",
+            r#"{ "name": "@scope/lib" }"#,
+        )];
+        let files: Vec<(&str, &str)> = vec![
+            ("packages/lib/src/dead.ts", "export function unused() {}"),
+            ("packages/lib/src/index.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project_with_extra(
+            &extra,
+            &files,
+            "packages/lib/src/dead.ts",
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("unused")),
+            "genuinely dead export in a non-bin package must still be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_for_vitest_workspace_default_export() {
+        // Regression for #1141 — `vitest.workspace.ts` exports `default` as the
+        // Vitest workspace configuration. Vitest loads this file by convention
+        // (filename), never through a TS `import`, so the `default` export has no
+        // static importer and looks dead. dead-export must not flag it.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "vitest.workspace.ts",
+                "export default ['packages/*'];\n",
+            ),
+            ("src/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "vitest.workspace.ts");
+        assert!(
+            diags.is_empty(),
+            "vitest.workspace.ts default export must not be flagged, got: {diags:?}"
         );
     }
 }
