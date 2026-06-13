@@ -14,7 +14,29 @@ fn is_response_type(name: &str) -> bool {
     RESPONSE_SUFFIXES.iter().any(|s| name.ends_with(s))
 }
 
+/// Field names dictated by external wire protocols (OAuth 2.0 / OpenID Connect
+/// error responses, Firebase Cloud Messaging payloads). They are snake_case
+/// because the protocol mandates it, not because they leak a DB column, and
+/// they cannot be renamed without breaking interop.
+const STANDARD_PROTOCOL_FIELDS: &[&str] = &[
+    "trace_id",
+    "correlation_id",
+    "request_id",
+    "session_id",
+    "session_state",
+    "android_channel_id",
+    "google_message_id",
+    "message_id",
+];
+
+fn is_standard_protocol_field(name: &str) -> bool {
+    STANDARD_PROTOCOL_FIELDS.contains(&name)
+}
+
 fn is_internal_field(name: &str) -> bool {
+    if is_standard_protocol_field(name) {
+        return false;
+    }
     if name == "pk" || name == "rowid" || name == "oid" {
         return true;
     }
