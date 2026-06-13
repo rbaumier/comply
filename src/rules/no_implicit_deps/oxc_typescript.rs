@@ -105,6 +105,16 @@ impl OxcCheck for Check {
             }
         }
 
+        // Sibling manifests: a file in a directory with no `package.json` of its
+        // own (a monorepo `integration/` test tree) imports packages declared in
+        // sibling `packages/*/package.json` manifests, hoisted at runtime. When
+        // the repo root declares no `workspaces` field the workspace walk above
+        // never sees those siblings, so consult the union of every dep declared
+        // anywhere under the project root before flagging.
+        if ctx.project.dep_declared_in_tree(ctx.path, root) {
+            return;
+        }
+
         // Module Federation: `remotes` declared in a bundler config (rsbuild /
         // rspack / webpack / vite) turn their keys into runtime-resolved module
         // namespaces (`import X from "remote/Exposed"`). The scan is bounded by
@@ -393,6 +403,80 @@ mod tests {
             diags.len(),
             1,
             "dep absent from all ancestor manifests must fire, got {diags:?}"
+        );
+    }
+
+    // Regression #2025: a file in a monorepo integration-test directory that has
+    // NO `package.json` of its own, importing a package declared only in a
+    // sibling `packages/*/package.json`, must not be flagged. The root manifest
+    // declares no `workspaces` field, so the sibling is found only via the
+    // tree-wide dep scan.
+    #[test]
+    fn allows_sibling_package_dep_from_manifestless_dir_issue_2025() {
+        let dir = TempDir::new().unwrap();
+        // Root manifest: has some deps but NOT @nestjs/common, and no workspaces.
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"nest","devDependencies":{"@nestjs/apollo":"^12.0.0"}}"#,
+        )
+        .unwrap();
+        // Sibling package that DOES declare @nestjs/common.
+        let common = dir.path().join("packages").join("common");
+        fs::create_dir_all(&common).unwrap();
+        fs::write(
+            common.join("package.json"),
+            r#"{"name":"@nestjs/common","peerDependencies":{"@nestjs/common":"^11.0.0"}}"#,
+        )
+        .unwrap();
+        // Integration test tree with no package.json anywhere between it and root.
+        let app = dir
+            .path()
+            .join("integration")
+            .join("inspector")
+            .join("src");
+        fs::create_dir_all(&app).unwrap();
+        let file = app.join("app.module.ts");
+        let source = "import { Module, Scope } from '@nestjs/common';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "sibling-package dep from a manifestless integration dir must not be flagged, got {diags:?}"
+        );
+    }
+
+    // A package declared in NO manifest anywhere in the tree must still fire from
+    // a manifestless integration directory — the tree scan only suppresses deps
+    // that genuinely exist somewhere.
+    #[test]
+    fn flags_undeclared_dep_from_manifestless_dir_issue_2025() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"nest","devDependencies":{"@nestjs/apollo":"^12.0.0"}}"#,
+        )
+        .unwrap();
+        let common = dir.path().join("packages").join("common");
+        fs::create_dir_all(&common).unwrap();
+        fs::write(
+            common.join("package.json"),
+            r#"{"name":"@nestjs/common"}"#,
+        )
+        .unwrap();
+        let app = dir
+            .path()
+            .join("integration")
+            .join("inspector")
+            .join("src");
+        fs::create_dir_all(&app).unwrap();
+        let file = app.join("app.module.ts");
+        let source = "import x from 'totally-undeclared-pkg';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "package declared in no manifest must still fire, got {diags:?}"
         );
     }
 
