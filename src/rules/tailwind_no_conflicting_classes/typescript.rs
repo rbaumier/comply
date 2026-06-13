@@ -105,7 +105,9 @@ fn css_value_type(value: &str) -> Option<&'static str> {
 fn text_category(class: &str) -> Option<&'static str> {
     let suffix = &class[5..]; // strip "text-"
     match suffix {
-        "xs" | "sm" | "base" | "lg" | "xl" => return Some("text-size"),
+        // `md` is a common non-standard size alias (the "missing" step
+        // between `sm` and `lg`); it is never a color name.
+        "xs" | "sm" | "md" | "base" | "lg" | "xl" => return Some("text-size"),
         "wrap" | "nowrap" | "balance" | "pretty" => return Some("text-wrap"),
         "left" | "center" | "right" | "justify" | "start" | "end" => return Some("text-align"),
         "ellipsis" | "clip" => return Some("text-overflow"),
