@@ -219,6 +219,16 @@ impl PackageJson {
     pub fn scripts_invoke_test_runner(&self, name: &str) -> bool {
         self.script_test_runners.contains(name)
     }
+
+    /// True if `name` is this package's own `name` field — a Node.js
+    /// self-reference. A package never lists itself as a dependency, yet it may
+    /// import from itself by its published name (`import x from "preact"` or a
+    /// subpath `import x from "preact/hooks"`), which the toolchain resolves to
+    /// the package's own source. `name` is the bare-specifier package head, so a
+    /// subpath like `preact/hooks` arrives reduced to `preact`.
+    pub fn is_self_name(&self, name: &str) -> bool {
+        self.name.as_deref() == Some(name)
+    }
 }
 
 /// Extract source-file paths from a package.json script command value.

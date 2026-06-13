@@ -83,6 +83,13 @@ impl OxcCheck for Check {
         if pkg.has_dep_or_engine(root) {
             return;
         }
+        // Node.js self-reference: a package may import from itself by its own
+        // published `name` (`import x from "preact"` or a subpath
+        // `"preact/hooks"`), resolved by the toolchain to its own source. A
+        // package never lists itself as a dependency, so this is not implicit.
+        if pkg.is_self_name(root) {
+            return;
+        }
         // Workspace package names: skip if this is a cross-workspace import.
         if ctx
             .project
@@ -110,7 +117,7 @@ impl OxcCheck for Check {
                 if let Some(ancestor_pkg) =
                     ctx.project.nearest_package_json(&ancestor_dir.join("_"))
                 {
-                    if ancestor_pkg.has_dep_or_engine(root) {
+                    if ancestor_pkg.has_dep_or_engine(root) || ancestor_pkg.is_self_name(root) {
                         return;
                     }
                 }
@@ -696,6 +703,102 @@ export default {
                 "astro virtual module `{spec}` must not be flagged, got {diags:?}"
             );
         }
+    }
+
+    // Regression #1921: a package importing from itself by its own published
+    // `name` (`import { createElement } from 'preact'`) or a subpath of it
+    // (`import { teardown } from 'preact/test-utils'`) is a Node.js
+    // self-reference resolved to the package's own source. A package never lists
+    // itself as a dependency, so these must not be flagged.
+    #[test]
+    fn allows_self_name_import_issue_1921() {
+        for spec in &["preact", "preact/test-utils", "preact/hooks"] {
+            let dir = TempDir::new().unwrap();
+            fs::write(
+                dir.path().join("package.json"),
+                r#"{"name":"preact","version":"10.0.0"}"#,
+            )
+            .unwrap();
+            let test = dir.path().join("test").join("_util");
+            fs::create_dir_all(&test).unwrap();
+            let file = test.join("helpers.jsx");
+            let source = format!("import {{ x }} from '{spec}';");
+            fs::write(&file, &source).unwrap();
+            let diags = run_oxc_in_project(&file, &source);
+            assert!(
+                diags.is_empty(),
+                "self-name import `{spec}` must not be flagged, got {diags:?}"
+            );
+        }
+    }
+
+    // A scoped package importing from itself by its scoped `name`
+    // (`import x from '@scope/pkg/sub'`) is likewise a self-reference.
+    #[test]
+    fn allows_scoped_self_name_import_issue_1921() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"@scope/pkg","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("t.ts");
+        let source = "import x from '@scope/pkg/sub';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "scoped self-name import must not be flagged, got {diags:?}"
+        );
+    }
+
+    // The root manifest's `name` satisfies a self-reference from a sub-directory
+    // whose nearest manifest is the root itself — the ancestor walk consults the
+    // root manifest's name, not only its deps.
+    #[test]
+    fn allows_self_name_from_nested_dir_issue_1921() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"preact","version":"10.0.0"}"#,
+        )
+        .unwrap();
+        let test = dir.path().join("compat").join("test").join("browser");
+        fs::create_dir_all(&test).unwrap();
+        let file = test.join("render.test.jsx");
+        let source = "import { render } from 'preact';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "self-name import from a nested dir must not be flagged, got {diags:?}"
+        );
+    }
+
+    // A genuinely undeclared third-party package must still fire even when the
+    // package has its own `name` — the self-reference exemption matches only the
+    // package's own name, not arbitrary imports.
+    #[test]
+    fn flags_unlisted_dep_alongside_self_name_issue_1921() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"preact","version":"10.0.0"}"#,
+        )
+        .unwrap();
+        let test = dir.path().join("test");
+        fs::create_dir_all(&test).unwrap();
+        let file = test.join("t.ts");
+        let source = "import x from 'some-undeclared-pkg';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "undeclared third-party package must still fire, got {diags:?}"
+        );
     }
 
     // A genuinely undeclared external package must still fire — the virtual
