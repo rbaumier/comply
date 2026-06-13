@@ -74,8 +74,14 @@ fn find_concat<'a>(node: tree_sitter::Node<'a>, source: &[u8]) -> Option<tree_si
     None
 }
 
-/// True if `node` is `s += …` (compound assignment with `+=`) where the
-/// right-hand side is not a numeric literal (avoids flagging `i += 1`).
+/// True if `node` is `s += …` (compound assignment with `+=`) whose
+/// right-hand side is plausibly a `String`/`&str`.
+///
+/// Without type information the AST cannot prove the operand is a `String`,
+/// so the check only fires on right-hand sides that produce a string in
+/// practice (string literal, `format!`, `.to_string()`/`.to_owned()`). This
+/// avoids flagging numeric accumulation such as `total += other` or
+/// `pos += chunk.len()`, where `+=` is integer/float arithmetic.
 fn is_compound_concat_assign(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "compound_assignment_expr" {
         return false;
@@ -89,7 +95,54 @@ fn is_compound_concat_assign(node: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(rhs) = node.child_by_field_name("right") else {
         return false;
     };
-    !matches!(rhs.kind(), "integer_literal" | "float_literal")
+    is_string_valued(rhs, source)
+}
+
+/// True if `node` is an expression that yields a string in practice: a string
+/// literal, a `format!` invocation, a `.to_string()`/`.to_owned()` call, a
+/// reference (`&…`) to one of those, or a `+` of two such operands.
+fn is_string_valued(node: tree_sitter::Node, source: &[u8]) -> bool {
+    match node.kind() {
+        "string_literal" | "raw_string_literal" => true,
+        "macro_invocation" => node
+            .child_by_field_name("macro")
+            .and_then(|m| m.utf8_text(source).ok())
+            .is_some_and(|name| name == "format"),
+        "call_expression" => is_string_producing_method_call(node, source),
+        // `&"x"`, `&format!(…)` — a reference to a string-valued expression.
+        "reference_expression" => node
+            .child_by_field_name("value")
+            .is_some_and(|inner| is_string_valued(inner, source)),
+        // `a + b` is string concatenation when either operand is string-valued.
+        "binary_expression" => {
+            let plus = node
+                .child_by_field_name("operator")
+                .and_then(|op| op.utf8_text(source).ok())
+                == Some("+");
+            plus && [
+                node.child_by_field_name("left"),
+                node.child_by_field_name("right"),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|operand| is_string_valued(operand, source))
+        }
+        _ => false,
+    }
+}
+
+/// True if `node` is a method call whose method name produces an owned string
+/// (`.to_string()` / `.to_owned()`).
+fn is_string_producing_method_call(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(func) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "field_expression" {
+        return false;
+    }
+    func.child_by_field_name("field")
+        .and_then(|field| field.utf8_text(source).ok())
+        .is_some_and(|method| matches!(method, "to_string" | "to_owned"))
 }
 
 /// True if `node` is `s = s + …` for the same identifier `s`.
@@ -163,6 +216,36 @@ mod tests {
     fn flags_plus_eq_in_loop() {
         let src = r#"fn f() { let mut s = String::new(); loop { s += "x"; break; } }"#;
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_plus_eq_format_in_loop() {
+        let src = r#"fn f() { let mut s = String::new(); for x in v { s += &format!("{}", x); } }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_plus_eq_to_string_in_loop() {
+        let src = r#"fn f() { let mut s = String::new(); for x in v { s += &x.to_string(); } }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_numeric_deref_accumulation() {
+        let src = r#"fn f(other: &Acc) { for (i, g) in subset.iter().zip(group_idxs) { unsafe { *self.groups.get_unchecked_mut(*g as usize) += *other.groups.get_unchecked(*i as usize); } } }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_numeric_field_accumulation() {
+        let src = r#"fn f() { for idx in (1..n).rev() { let rank = curr.rank; next_dir.rank += rank; } }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_numeric_len_accumulation() {
+        let src = r#"fn f() { let mut offset = 0; for c in s.chars() { offset += c.len_utf8(); } }"#;
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
