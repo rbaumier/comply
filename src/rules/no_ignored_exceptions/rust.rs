@@ -6,7 +6,7 @@
 //! about the return value. Skipped via
 //! `rust_helpers::is_in_test_context`.
 //!
-//! Three non-error idioms are also exempted:
+//! Four non-error idioms are also exempted:
 //! - `let _ = expr?`: the `?` operator already propagates any `Err`/`None` to
 //!   the caller, so the error is handled — only the unwrapped success value is
 //!   discarded (e.g. `let _ = parser.expect(kw)?` checks a token exists then
@@ -18,6 +18,9 @@
 //! - compile-fail test fixtures under a `tests/.../fail/` directory: `let _ =`
 //!   suppresses "unused result" warnings so they don't pollute the expected
 //!   compiler error output of `trybuild`/`tests-build` cases.
+//! - `let _ = expr.send(..)`: the best-effort channel fire-and-forget idiom on
+//!   a `oneshot`/`mpsc` sender. An `Err` from `send` only signals the receiver
+//!   already dropped (shutdown/cleanup path), which is intentionally ignored.
 //!
 //! NOTE: This rule uses a heuristic (call-like pattern matching) rather than
 //! type awareness. It may flag `let _ = infallible_fn()` where the function
@@ -72,6 +75,12 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    // Skip the best-effort channel fire-and-forget idiom `let _ = expr.send(..)`:
+    // an `Err` only signals the receiver dropped on a shutdown/cleanup path.
+    if is_channel_send(value, source) {
+        return;
+    }
+
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -116,6 +125,26 @@ fn is_from_raw_reconstruction(value: Node, source: &[u8]) -> bool {
     };
     let name = callee.rsplit("::").next().unwrap_or(callee);
     name == "from_raw"
+}
+
+/// True if `value` is a method call `expr.send(..)` — the best-effort channel
+/// fire-and-forget idiom (`oneshot`/`mpsc` sender). An `Err` from `send` only
+/// signals the receiver dropped, which `let _ =` intentionally ignores on a
+/// shutdown/cleanup path.
+fn is_channel_send(value: Node, source: &[u8]) -> bool {
+    if value.kind() != "call_expression" {
+        return false;
+    }
+    let Some(function) = value.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    let Some(field) = function.child_by_field_name("field") else {
+        return false;
+    };
+    matches!(field.utf8_text(source), Ok("send"))
 }
 
 #[cfg(test)]
@@ -241,6 +270,25 @@ mod tests {
         // The boundary of #1410: without `?`, the Result is genuinely
         // swallowed and must still fire.
         let src = "fn f() { let _ = fallible(); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_channel_send() {
+        // Regression for #2007: `let _ = sender.send(..)` on a oneshot/mpsc
+        // sender is the best-effort fire-and-forget idiom — an `Err` only
+        // means the receiver dropped on a shutdown/cleanup path.
+        let resp = "fn f() { let _ = resp.send(Ok(candidates)); }";
+        let tx = "fn f() { let _ = tx.send(Err(e)); }";
+        assert!(run_on(resp).is_empty());
+        assert!(run_on(tx).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_non_send_method() {
+        // The send exemption is scoped to `send`: any other discarded method
+        // call result is still genuinely swallowed.
+        let src = "fn f() { let _ = foo.bar(); }";
         assert_eq!(run_on(src).len(), 1);
     }
 
