@@ -4,11 +4,63 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::jsdoc_helpers::scan_blocks;
+use oxc_ast::CommentKind;
 use oxc_ast::ast::{AssignmentTarget, Expression};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
+
+/// True when the standalone `function` at `func_start` is preceded by a leading
+/// `/** … */` JSDoc block that gives it an explicit type contract governing
+/// `this` — either a `@type {…}` annotation (the function's whole signature,
+/// possibly an aliased function type like `@type {Equals}`, or an inline
+/// `@type {(this: T, …) => …}`) or a `@this {T}` tag. Such a function is
+/// type-checked against a declared signature whose `this` binding is part of the
+/// contract, so a `this` in its body is intentional, not a stray reference.
+fn has_this_typed_jsdoc(
+    source: &str,
+    semantic: &oxc_semantic::Semantic,
+    func_start: usize,
+) -> bool {
+    for comment in semantic.comments() {
+        if comment.kind == CommentKind::Line {
+            continue;
+        }
+        let comment_end = comment.span.end as usize;
+        if comment_end > func_start {
+            continue;
+        }
+        // Only the JSDoc block immediately preceding the function counts:
+        // whitespace plus an optional `export` keyword may sit between them.
+        let Some(between) = source.get(comment_end..func_start) else {
+            continue;
+        };
+        let trimmed = between.trim();
+        if !trimmed.is_empty() && trimmed != "export" && trimmed != "export default" {
+            continue;
+        }
+        let comment_start = comment.span.start as usize;
+        let Some(raw) = source.get(comment_start..comment_end) else {
+            continue;
+        };
+        if !raw.starts_with("/**") {
+            continue;
+        }
+        let Some(block) = scan_blocks(raw).into_iter().next() else {
+            continue;
+        };
+        if block
+            .tags()
+            .iter()
+            .any(|tag| tag.name == "type" || tag.name == "this")
+        {
+            return true;
+        }
+    }
+    false
+}
 
 /// True when `expr` is a `*.prototype` member access (e.g. `Foo.prototype`),
 /// or an identifier bound to such an access (e.g. `var proto = Foo.prototype`).
@@ -223,6 +275,7 @@ fn is_constructor_function(
 fn is_valid_this_context(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
+    source: &str,
 ) -> bool {
     // Walk up from the ThisExpression. The first `this`-binding boundary
     // determines validity:
@@ -260,6 +313,13 @@ fn is_valid_this_context(
                 // referenced via `new`/`.call(this)`/`.apply`/`.bind` or
                 // assigned as a method value, gets the instance as `this`.
                 if is_constructor_function(func, semantic) {
+                    return true;
+                }
+                // JSDoc `@type {…}` / `@this {…}` annotation: the function has an
+                // explicit declared type contract whose `this` binding is part
+                // of the signature (e.g. `/** @type {(this: T, …) => …} */` or an
+                // aliased function type), so `this` in the body is intentional.
+                if has_this_typed_jsdoc(source, semantic, func.span.start as usize) {
                     return true;
                 }
                 // Mark that we've entered a function scope; need to
@@ -311,7 +371,7 @@ impl OxcCheck for Check {
                 continue;
             };
 
-            if is_valid_this_context(node, semantic) {
+            if is_valid_this_context(node, semantic, ctx.source) {
                 continue;
             }
 
@@ -498,6 +558,38 @@ mod tests {
         // chain method that binds the test context to `this`.
         let src = "cy.get('@spring').should(function () {\n  expect(this.value).to.equal(1);\n});";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_function_with_jsdoc_type_alias() {
+        // Regression for #1775: a `.js` function whose JSDoc `@type` assigns an
+        // aliased function type that declares `this` (`type Equals = (this:
+        // Value, …) => boolean`) is type-checked against that contract.
+        let src = "/** @type {Equals} */\nexport function equals(value) {\n  return value === this.v;\n}\n\n/** @type {Equals} */\nexport function safe_equals(value) {\n  return !safe_not_equal(value, this.v);\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_function_with_inline_jsdoc_this_type() {
+        // Regression for #1775: an inline `@type {(this: T, …) => …}` declares
+        // the `this` binding directly in the function signature.
+        let src = "/** @type {(this: Value, value: unknown) => boolean} */\nexport function equals(value) {\n  return value === this.v;\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_function_with_jsdoc_this_tag() {
+        // Regression for #1775: the `@this {T}` tag names the `this` context.
+        let src = "/** @this {Value} */\nexport function equals(value) {\n  return value === this.v;\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_function_with_unrelated_jsdoc() {
+        // Negative: a JSDoc block without `@type`/`@this` does not declare a
+        // `this` context, so a stray `this` must still fire.
+        let diags = run_on("/** Does a thing. @param value - input */\nexport function equals(value) {\n  return value === this.v;\n}");
+        assert_eq!(diags.len(), 1);
     }
 
     #[test]
