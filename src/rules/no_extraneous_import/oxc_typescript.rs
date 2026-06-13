@@ -277,6 +277,19 @@ import { endOfWeek } from "..";
     }
 
     #[test]
+    fn allows_dev_dep_in_type_probe_tp_file() {
+        // Issue #1915: date-fns `src/addBusinessDays/test.tp.ts` is a type-probe
+        // test file (`.tp` = type probe) that imports vitest for type assertions.
+        // These files exist solely to assert the public API type-checks; they are
+        // never shipped or run as runtime code, so importing a devDependency is
+        // correct — like any other test file.
+        let pkg = r#"{"devDependencies":{"vitest":"^1"}}"#;
+        let src = r#"import { describe, it, expectTypeOf } from "vitest";"#;
+        let d = run_with_pkg_at_path(pkg, "src/addBusinessDays/test.tp.ts", src);
+        assert!(d.is_empty(), "type-probe .tp.ts should not flag devDeps: {d:?}");
+    }
+
+    #[test]
     fn allows_dev_dep_in_test_utils_dir() {
         // Issue #2048: graphql-js `src/__testUtils__/expectJSON.ts` is shared
         // test infrastructure that imports `chai` (a devDependency). The

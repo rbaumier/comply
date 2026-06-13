@@ -298,6 +298,7 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
             || lower.contains("/test-d/")
             || lower.starts_with("test-d/")
             || crate::rules::path_utils::has_test_d_infix(path)
+            || crate::rules::path_utils::has_type_probe_infix(path)
             || lower.contains("/dtslint/")
             || lower.starts_with("dtslint/")
             || lower.contains("/__tests__/")
@@ -483,6 +484,17 @@ mod tests {
         assert!(scan_path(&PathBuf::from("schema.test-d.ts")).in_test_dir);
         // A plain co-located source file is still not a test dir.
         assert!(!scan_path(&PathBuf::from("src/Component.tsx")).in_test_dir);
+    }
+
+    #[test]
+    fn closes_type_probe_filename_infix_gap_issue1915() {
+        // Issue #1915: date-fns `.tp.` type-probe FILENAME infix (e.g.
+        // `addBusinessDays/test.tp.ts`) must classify as a test dir so every
+        // rule reading `ctx.file.path_segments.in_test_dir` treats it as a test.
+        assert!(scan_path(&PathBuf::from("src/addBusinessDays/test.tp.ts")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("src/addDays/foo.tp.tsx")).in_test_dir);
+        // A plain co-located source file is still not a test dir.
+        assert!(!scan_path(&PathBuf::from("src/addDays/index.ts")).in_test_dir);
     }
 
     #[test]
