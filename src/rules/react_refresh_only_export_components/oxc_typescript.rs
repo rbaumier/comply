@@ -42,6 +42,18 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
+        // Publishable library source: React Fast Refresh is an app-bundler
+        // concern. A file under a package that declares `main`/`module`/`exports`
+        // is compiled into a distributable bundle, never loaded by the HMR
+        // runtime, so co-locating utilities with components breaks nothing.
+        if ctx
+            .project
+            .nearest_package_json(ctx.path)
+            .is_some_and(|pkg| pkg.is_library)
+        {
+            return Vec::new();
+        }
+
         // Only check .tsx/.jsx files.
         let path_str = ctx.path.to_string_lossy();
         if !path_str.ends_with(".tsx") && !path_str.ends_with(".jsx") {
@@ -302,5 +314,69 @@ export const getStaticProps = async () => {};
         let d = crate::rules::test_helpers::run_rule_gated(&Check, source, "src/components/Foo.tsx");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("getStaticProps"));
+    }
+
+    // Regression tests for issue #1898 — publishable npm library source files.
+    // React Fast Refresh is an app-bundler concern; a file under a package whose
+    // package.json declares `main`/`module`/`exports` is bundled and never
+    // loaded by the HMR runtime, so co-locating utilities with components is not
+    // a false positive.
+
+    /// Run the check against `source` with a real `ProjectCtx` rooted at a
+    /// tempdir whose `package.json` is `pkg_json` — exercises the library-source
+    /// relaxation, which depends on `nearest_package_json`.
+    fn run_with_pkg(pkg_json: &str, source: &str) -> Vec<Diagnostic> {
+        use crate::config::Config;
+        use crate::files::{Language, SourceFile};
+        use oxc_allocator::Allocator;
+        use oxc_parser::Parser as OxcParser;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), pkg_json).unwrap();
+        let file_path = dir.path().join("src/FieldArray.tsx");
+        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        std::fs::write(&file_path, source).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: Language::Tsx,
+        };
+        let refs = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = std::fs::canonicalize(&file_path).unwrap();
+
+        let allocator = Allocator::default();
+        let source_type = crate::oxc_helpers::source_type_for_path(&canon);
+        let parse_ret = OxcParser::new(&allocator, source, source_type).parse();
+        let semantic =
+            oxc_semantic::SemanticBuilder::new().build(&parse_ret.program).semantic;
+        let ctx = CheckCtx::for_test_with_project(&canon, source, &project);
+        Check.run_on_semantic(&semantic, &ctx)
+    }
+
+    #[test]
+    fn no_fp_library_source_co_located_utilities() {
+        // packages/formik/src/FieldArray.tsx (issue #1898): utility helpers
+        // co-located with a component in a publishable package's source.
+        let source = r#"
+export const move = (array, from, to) => { return array; };
+export const swap = (array, a, b) => { return array; };
+export const FieldArray = connect(FieldArrayInner);
+"#;
+        let d = run_with_pkg(r#"{ "name": "formik", "main": "dist/formik.cjs.js" }"#, source);
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn flags_app_source_co_located_utilities() {
+        // Same code under a private app package (no main/module/exports) still
+        // breaks Fast Refresh — the exemption is scoped to publishable libraries.
+        let source = r#"
+export const move = (array, from, to) => { return array; };
+export const FieldArray = connect(FieldArrayInner);
+"#;
+        let d = run_with_pkg(r#"{ "name": "my-app", "private": true }"#, source);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("move"));
     }
 }
