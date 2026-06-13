@@ -46,7 +46,14 @@
 //!   module-scoped `const` and whose callback only populates another
 //!   module-scoped `const` lookup in place (`map.set`, `set.add`, `obj[k] = v`)
 //!   with pure values — a deterministic local data build, not an external
-//!   side effect.
+//!   side effect;
+//! - builder/fluent configuration: a top-level `obj.method(...)` call whose
+//!   receiver `obj` is a bare identifier bound by a same-scope
+//!   `const obj = new ...()` declaration. The mutation targets a freshly-built
+//!   module-local object that has not escaped, so it is no external side effect
+//!   and no tree-shaking hazard. A method call on anything else (an imported
+//!   singleton, a `const x = getThing()` whose init is a plain call) is still
+//!   flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -486,6 +493,50 @@ fn module_const_bindings(program: &Program) -> HashSet<String> {
     out
 }
 
+/// Collect the names of identifiers bound by top-level
+/// `const <name> = new ...()` declarations. These are freshly-constructed
+/// objects local to the module; configuring them in place is the builder/fluent
+/// pattern, not an external side effect.
+fn module_const_new_bindings(program: &Program) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for stmt in &program.body {
+        let Statement::VariableDeclaration(decl) = stmt else { continue };
+        if decl.kind != oxc_ast::ast::VariableDeclarationKind::Const {
+            continue;
+        }
+        for declarator in &decl.declarations {
+            let BindingPattern::BindingIdentifier(id) = &declarator.id else {
+                continue;
+            };
+            if matches!(declarator.init, Some(Expression::NewExpression(_))) {
+                out.insert(id.name.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// True when `call` configures a freshly-constructed module-local object:
+/// `obj.method(...)` where `obj` is a bare identifier bound by a top-level
+/// `const obj = new ...()`. This is the builder/fluent configuration pattern —
+/// all mutation targets an object created in the same file that has not escaped,
+/// so there is no external side effect and no tree-shaking hazard. The receiver
+/// must be a bare identifier (not a longer chain or a call result), so an
+/// imported singleton (`registry.register(...)`) or a `const x = getThing()`
+/// whose init is a plain call is still flagged.
+fn is_local_const_config_call(
+    call: &oxc_ast::ast::CallExpression,
+    new_locals: &HashSet<String>,
+) -> bool {
+    let Expression::StaticMemberExpression(m) = &call.callee else {
+        return false;
+    };
+    let Expression::Identifier(obj) = &m.object else {
+        return false;
+    };
+    new_locals.contains(obj.name.as_str())
+}
+
 /// Root identifier name of a member-access assignment target (`obj.k`,
 /// `obj[k]`, `a.b.c`). Returns `None` for a bare identifier target (a plain
 /// reassignment, which is not a local-state mutation).
@@ -706,6 +757,7 @@ impl OxcCheck for Check {
 
         let start_transition_names = react_start_transition_bindings(program);
         let module_locals = module_const_bindings(program);
+        let new_locals = module_const_new_bindings(program);
 
         let mut diagnostics = Vec::new();
         for stmt in &program.body {
@@ -716,7 +768,8 @@ impl OxcCheck for Check {
 
             if let Expression::CallExpression(call) = &expr_stmt.expression
                 && (is_start_transition_call(call, &start_transition_names)
-                    || is_data_init_foreach(call, &module_locals))
+                    || is_data_init_foreach(call, &module_locals)
+                    || is_local_const_config_call(call, &new_locals))
             {
                 continue;
             }
@@ -1428,6 +1481,79 @@ mod tests {
             diags.len(),
             1,
             "forEach over an imported array must still be flagged, got {diags:?}"
+        );
+    }
+
+    // --- (k) Builder/fluent config on a same-scope const built with `new`
+    //         (Closes #1964) ------------------------------------------------
+
+    // Regression for #1964: configuring a freshly-constructed module-local
+    // object (`const obj = new ...(); obj.method(...)`) mutates only that local
+    // object — no external side effect, no tree-shaking hazard.
+    #[test]
+    fn allows_config_call_on_const_built_with_new() {
+        let src = "\
+            const invisibleLayer = new THREE.Layers();\n\
+            invisibleLayer.set(4);\n\
+            const group = new THREE.Group();\n\
+            group.add(mesh);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/demos/Layers.tsx");
+        assert!(
+            diags.is_empty(),
+            "config calls on a same-scope const built with new are exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_multiple_fluent_config_calls_on_const_built_with_new() {
+        let src = "\
+            const dracoLoader = new DRACOLoader();\n\
+            dracoLoader.setDecoderPath('https://x');\n\
+            dracoLoader.preload();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/demos/Activity.tsx");
+        assert!(
+            diags.is_empty(),
+            "multiple fluent config calls on a const built with new are exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_method_call_on_imported_singleton() {
+        // `registry` is imported, not a same-scope const-with-new — the mutation
+        // escapes the module, so it stays a flagged side effect.
+        let src = "\
+            import { registry } from './registry';\n\
+            registry.register(plugin);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "method call on an imported singleton must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_config_call_on_const_built_with_plain_call() {
+        // The receiver's init is a plain call, not `new` — the object may be a
+        // shared/external instance, so the mutation stays flagged.
+        let src = "\
+            const x = getThing();\n\
+            x.mutate();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "config call on a const whose init is a plain call must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_bare_top_level_side_effect_call() {
+        let diags = crate::rules::test_helpers::run_rule(&Check, "initGlobalState();", "src/widget.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a bare top-level side-effect call must still be flagged, got {diags:?}"
         );
     }
 
