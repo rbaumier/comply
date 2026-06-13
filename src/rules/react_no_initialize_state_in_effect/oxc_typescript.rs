@@ -6,6 +6,19 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
+/// Global timer/scheduler functions that match the `set` + uppercase shape but
+/// are not React state setters.
+const TIMER_GLOBALS: &[&str] = &["setInterval", "setTimeout", "setImmediate"];
+
+/// True if `name` looks like a React state setter (`setFoo`) and is not one of
+/// the global timer functions.
+fn is_setter_name(name: &str) -> bool {
+    name.starts_with("set")
+        && name.len() > 3
+        && name.as_bytes()[3].is_ascii_uppercase()
+        && !TIMER_GLOBALS.contains(&name)
+}
+
 /// True if a call expression is a setter like `setFoo(...)`.
 fn is_setter_call(expr: &Expression) -> bool {
     let Expression::CallExpression(call) = expr else {
@@ -14,10 +27,7 @@ fn is_setter_call(expr: &Expression) -> bool {
     let Expression::Identifier(callee) = &call.callee else {
         return false;
     };
-    let name = callee.name.as_str();
-    name.starts_with("set")
-        && name.len() > 3
-        && name.as_bytes()[3].is_ascii_uppercase()
+    is_setter_name(callee.name.as_str())
 }
 
 /// Walk statements recursively (but not into nested functions) looking for
@@ -179,5 +189,50 @@ mod tests {
     #[test]
     fn does_not_panic_on_spread_callback() {
         assert!(run("useEffect(...args, [])").is_empty());
+    }
+
+    // Regression for #1954: `setInterval` matches `set` + uppercase but is a timer, not a setter.
+    #[test]
+    fn ignores_set_interval_timer() {
+        let src = r#"
+function App() {
+  const [okay, setOkay] = useState(true);
+  useEffect(() => {
+    const interval = setInterval(() => setOkay((okay) => !okay), 1000);
+    return () => clearInterval(interval);
+  }, []);
+  return <div />;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Regression for #1954: `setTimeout` matches `set` + uppercase but is a timer, not a setter.
+    #[test]
+    fn ignores_set_timeout_timer() {
+        let src = r#"
+function App() {
+  useEffect(() => {
+    setTimeout(() => setSecondScene(true), 500);
+  }, []);
+  return <div />;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    // A direct setter call in the effect body remains the genuine antipattern.
+    #[test]
+    fn flags_direct_setter_in_effect_body() {
+        let src = r#"
+function App() {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    setCount(1);
+  }, []);
+  return <div />;
+}
+"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
