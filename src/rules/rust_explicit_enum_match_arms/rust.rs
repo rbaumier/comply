@@ -23,6 +23,13 @@
 //! or `std::io::ErrorKind` — are exempt: the wildcard there is idiomatic
 //! or compiler-mandated, and all arms of a `match` share one type.
 //!
+//! A wildcard arm whose body is a single diverging or error expression —
+//! a `unreachable!`/`panic!`/`unimplemented!`/`todo!`/`bail!` macro
+//! invocation, or `return Err(...)` (optionally wrapped in a
+//! single-statement block) — is an explicit guard for the
+//! impossible/error case, not a catch-all standing in for unenumerated
+//! variants, so it is not flagged.
+//!
 //! We do not descend into nested `match`es here — the walker visits
 //! every `match_expression` independently, so each match is classified
 //! on its own arms.
@@ -87,8 +94,15 @@ impl AstCheck for Check {
         {
             return;
         }
-        // Emit on each wildcard arm found (usually just one).
+        // Emit on each wildcard arm found (usually just one). A wildcard
+        // arm whose body only diverges or returns an error
+        // (`unreachable!()`, `panic!()`, `bail!(...)`, `return Err(...)`,
+        // …) is a deliberate guard for the impossible/error case, not a
+        // lazy catch-all to be replaced with enumerated variants — skip it.
         for arm in wildcard_arms {
+            if wildcard_arm_is_diverging(arm, source_bytes) {
+                continue;
+            }
             let pos = arm.start_position();
             diagnostics.push(Diagnostic {
                 path: std::sync::Arc::clone(&ctx.path_arc),
@@ -214,6 +228,74 @@ fn references_stdlib_closed_enum(pattern: tree_sitter::Node, source: &[u8]) -> b
     }
     // `std::io::ErrorKind` is #[non_exhaustive]: a `_` arm is mandatory.
     head.contains("ErrorKind::")
+}
+
+/// True if the wildcard arm's body is a single diverging or error
+/// expression — a `unreachable!`/`panic!`/`unimplemented!`/`todo!`/`bail!`
+/// macro invocation, or a `return Err(...)`. Such an arm is an explicit
+/// guard for the impossible/error case, not a catch-all standing in for
+/// unenumerated variants, so the rule must not flag it.
+fn wildcard_arm_is_diverging(arm: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(value) = arm.child_by_field_name("value") else {
+        return false;
+    };
+    expr_is_diverging(value, source)
+}
+
+/// Classify a match-arm body expression as diverging/error. A `block`
+/// body with a single statement is unwrapped to its inner expression so
+/// `{ bail!("…"); }` is treated like `bail!("…")`.
+fn expr_is_diverging(expr: tree_sitter::Node, source: &[u8]) -> bool {
+    match expr.kind() {
+        "block" => {
+            // Only an unconditional single-statement body is a guard:
+            // `{ bail!("…"); }` or `{ return Err(e); }`. A block doing
+            // other work before diverging is a real catch-all.
+            let mut cursor = expr.walk();
+            let mut children = expr.named_children(&mut cursor);
+            let (Some(only), None) = (children.next(), children.next()) else {
+                return false;
+            };
+            let inner = if only.kind() == "expression_statement" {
+                match only.named_child(0) {
+                    Some(node) => node,
+                    None => return false,
+                }
+            } else {
+                only
+            };
+            expr_is_diverging(inner, source)
+        }
+        "macro_invocation" => {
+            let Some(name_node) = expr.child_by_field_name("macro") else {
+                return false;
+            };
+            matches!(
+                name_node.utf8_text(source),
+                Ok("unreachable" | "panic" | "unimplemented" | "todo" | "bail")
+            )
+        }
+        "return_expression" => return_yields_err(expr, source),
+        _ => false,
+    }
+}
+
+/// True if a `return_expression` returns an `Err(...)` value — the head
+/// of the returned call expression is the `Err` constructor.
+fn return_yields_err(ret: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(returned) = ret.named_child(0) else {
+        return false;
+    };
+    if returned.kind() != "call_expression" {
+        return false;
+    }
+    let Some(callee) = returned.child_by_field_name("function") else {
+        return false;
+    };
+    let Ok(text) = callee.utf8_text(source) else {
+        return false;
+    };
+    text.rsplit("::").next().unwrap_or(text).trim() == "Err"
 }
 
 #[cfg(test)]
@@ -373,6 +455,66 @@ mod tests {
         let src = "fn lex(c: char) -> i32 { match c { \
                    EOF_CHAR => 0, NUL => 1, '0'..='9' => 2, _ => 3 } }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_arm_with_unreachable_body() {
+        // Issue #1427: `_ => unreachable!()` documents that only specific
+        // variants are reachable here — a deliberate guard, not a lazy
+        // catch-all.
+        let src = "fn f(msg: AnyMessage) -> Bytes { let b = match msg { \
+                   AnyMessage::Bytes(b) => b, _ => unreachable!() }; b }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_arm_with_bail_body() {
+        // Issue #1427: protocol state machine where only certain variants
+        // are valid; `_ => bail!(...)` errors on anything else.
+        let src = "fn f(msg: ProposerAcceptorMessage) -> Result<(), E> { match msg { \
+                   ProposerAcceptorMessage::Greeting(ref g) => handle(g), \
+                   _ => bail!(\"unexpected message {msg:?} instead of greeting\"), } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_arm_with_bail_block_body() {
+        // Issue #1427: same guard wrapped in a block, as in the issue.
+        let src = "fn f(msg: Msg) -> Result<(), E> { match msg { \
+                   Msg::Greeting(ref g) => handle(g), \
+                   _ => { bail!(\"unexpected message {msg:?} instead of greeting\"); } } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_arm_with_return_err_body() {
+        // Issue #1427: `_ => return Err(...)` is an explicit error path.
+        let src = "fn f(x: Foo) -> Result<i32, E> { match x { \
+                   Foo::A => Ok(1), _ => return Err(E::Unexpected), } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_arm_with_panic_body() {
+        let src = "fn f(x: Foo) -> i32 { match x { Foo::A => 1, _ => panic!(\"nope\") } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_wildcard_arm_with_ordinary_body() {
+        // True positive: a lazy catch-all over an enum still fires even
+        // though the diverging-arm exemption exists.
+        let src = "fn f(x: Foo) -> i32 { match x { Foo::A => 1, Foo::B => 2, _ => 0 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_wildcard_arm_doing_work_before_diverging() {
+        // True positive: a block that runs other statements before
+        // bailing is a real catch-all, not a bare guard.
+        let src = "fn f(x: Foo) -> Result<i32, E> { match x { \
+                   Foo::A => Ok(1), _ => { log(\"hit\"); bail!(\"unexpected\"); } } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
