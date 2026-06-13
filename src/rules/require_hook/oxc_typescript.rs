@@ -134,7 +134,7 @@ fn is_pure_initializer(expr: &Expression) -> bool {
         }),
         Expression::ObjectExpression(obj) => obj.properties.iter().all(|prop| match prop {
             ObjectPropertyKind::ObjectProperty(p) => is_pure_initializer(&p.value),
-            ObjectPropertyKind::SpreadProperty(_) => false,
+            ObjectPropertyKind::SpreadProperty(s) => is_pure_initializer(&s.argument),
         }),
         Expression::UnaryExpression(u) => is_pure_initializer(&u.argument),
         // A binary expression (comparison, `in`, `instanceof`, arithmetic) is a
@@ -423,6 +423,38 @@ describe("x", () => { it("works", () => {}); });
             d.len(),
             1,
             "a binary expression with a call operand must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_const_object_spread_of_pure_source() {
+        let src = r#"
+const modifiedDefaultConfig: Config = {
+  ...defaultConfig,
+  changelog: ["@changesets/cli/changelog", null],
+};
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert!(
+            d.is_empty(),
+            "module-scope const built by spreading a pure source must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_const_object_spread_of_call() {
+        let src = r#"
+const x = { ...sideEffect() };
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "an object spread of a call expression must still be flagged: {d:?}"
         );
     }
 }
