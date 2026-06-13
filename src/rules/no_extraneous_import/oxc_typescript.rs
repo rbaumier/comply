@@ -56,6 +56,15 @@ impl OxcCheck for Check {
         {
             return;
         }
+        // Library build input: when the package publishes its entries from
+        // outside `src/` (e.g. monaco-editor's `main`/`module` point into
+        // `min/`/`esm/`), the `src/` tree is compiled away into the shipped
+        // bundle, which inlines its build-time dependencies. A devDependency
+        // imported from such a file is bundled at build time, not a runtime
+        // import, so it must not flag (issue #1910).
+        if ctx.project.is_bundled_build_input(ctx.path) {
+            return;
+        }
 
         let specifier = import.source.value.as_str();
         if !is_bare_specifier(specifier) {
@@ -409,6 +418,91 @@ import { animated } from "@react-spring/web";
         let d = run_with_pkg_at_path(pkg, "src/mystories/index.ts", src);
         assert_eq!(d.len(), 1, "non-storybook dir should still flag: {d:?}");
         assert!(d[0].message.contains("react"));
+    }
+
+    #[test]
+    fn allows_dev_dep_in_library_src_with_entries_outside_src() {
+        // Issue #1910: monaco-editor is a published library whose `main`/`module`
+        // point into compiled output (`min/`, `esm/`). Its `src/` files are build
+        // input that gets bundled — `monaco-editor-core` is a devDependency
+        // inlined at build time, not a runtime import, so it must not flag.
+        let pkg = r#"{
+            "name": "monaco-editor",
+            "main": "./min/vs/editor/editor.main.js",
+            "module": "./esm/vs/editor/editor.main.js",
+            "devDependencies": {"monaco-editor-core": "0.56.0-dev"}
+        }"#;
+        let src =
+            r#"import 'monaco-editor-core/esm/vs/editor/contrib/suggest/browser/suggestInlineCompletions';"#;
+        let d = run_with_pkg_at_path(pkg, "src/features/suggest/register.js", src);
+        assert!(d.is_empty(), "library build input should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_missing_pkg_in_library_src() {
+        // Guard: a package in NEITHER dependencies NOR devDependencies is a
+        // genuine missing import and must still flag, even in a build-input
+        // `src/` tree. (Here the rule only fires for devDependencies, so a
+        // missing package produces zero diagnostics from THIS rule — assert the
+        // declared-devDep case flags while exemption is scoped to deps that exist.)
+        let pkg = r#"{
+            "name": "monaco-editor",
+            "main": "./min/vs/editor/editor.main.js",
+            "devDependencies": {"monaco-editor-core": "0.56.0-dev"}
+        }"#;
+        // A genuinely undeclared package: no-extraneous-import does not own this
+        // case (no-implicit-deps does), so it stays silent. Confirm the build-input
+        // exemption never *adds* a diagnostic and never suppresses one it owns.
+        let src = r#"import 'totally-undeclared-pkg';"#;
+        let d = run_with_pkg_at_path(pkg, "src/features/x.js", src);
+        assert!(d.is_empty(), "undeclared pkg is not this rule's concern: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_in_library_that_ships_src() {
+        // Guard against over-relaxing: a library whose published entry points
+        // INTO `src/` ships its source as-is, so `src/` is runtime production
+        // code — a devDependency import there is a genuine break for consumers.
+        let pkg = r#"{
+            "name": "ships-src-lib",
+            "main": "./src/index.js",
+            "exports": {".": "./src/index.js"},
+            "devDependencies": {"lodash": "^4"}
+        }"#;
+        let src = r#"import { merge } from "lodash";"#;
+        let d = run_with_pkg_at_path(pkg, "src/util.js", src);
+        assert_eq!(d.len(), 1, "library shipping src/ should still flag: {d:?}");
+        assert!(d[0].message.contains("lodash"));
+    }
+
+    #[test]
+    fn still_flags_dev_dep_in_non_library_app_src() {
+        // Guard: a non-library (no `main`/`module`/`exports`) is an app whose
+        // `src/` is runtime code. The build-input exemption must not apply —
+        // existing behavior is preserved and the devDependency import flags.
+        let pkg = r#"{
+            "name": "some-app",
+            "devDependencies": {"vitest": "^1"}
+        }"#;
+        let src = r#"import { describe } from "vitest";"#;
+        let d = run_with_pkg_at_path(pkg, "src/app/feature.ts", src);
+        assert_eq!(d.len(), 1, "non-library app src should still flag: {d:?}");
+        assert!(d[0].message.contains("vitest"));
+    }
+
+    #[test]
+    fn still_flags_dev_dep_outside_src_in_build_input_library() {
+        // Guard: the exemption is scoped to `src/`. A devDependency imported from
+        // a non-`src/` runtime file of a build-input library must still flag.
+        let pkg = r#"{
+            "name": "monaco-editor",
+            "main": "./min/vs/editor/editor.main.js",
+            "devDependencies": {"vitest": "^1"}
+        }"#;
+        let src = r#"import { describe } from "vitest";"#;
+        let d = run_with_pkg_at_path(pkg, "lib/feature.ts", src);
+        assert_eq!(d.len(), 1, "non-src file should still flag: {d:?}");
+        assert!(d[0].message.contains("vitest"));
     }
 
     #[test]
