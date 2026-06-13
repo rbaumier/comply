@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BindingPattern, Expression, FormalParameters};
+use oxc_ast::ast::{BindingPattern, Expression, FormalParameters, TSType};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -43,11 +43,26 @@ impl OxcCheck for Check {
                     let BindingPattern::BindingIdentifier(id) = &decl.id else {
                         continue;
                     };
-                    let Some(init) = &decl.init else { continue };
-                    let params = match init {
-                        Expression::ArrowFunctionExpression(arrow) => &arrow.params,
-                        Expression::FunctionExpression(func) => &func.params,
-                        _ => continue,
+                    // An explicit type annotation governs the call arity, not the
+                    // implementation: TypeScript lets an implementation function
+                    // declare fewer parameters than its declared type. Counting the
+                    // impl's params (e.g. `() => {}`) would flag every call that
+                    // passes the type-required arguments.
+                    let params = if let Some(annotation) = &decl.type_annotation {
+                        // Inline function type → its params define the arity.
+                        // Anything else (a type-alias reference, etc.) is not
+                        // cheaply resolvable here, so skip arity checking.
+                        let TSType::TSFunctionType(fn_type) = &annotation.type_annotation else {
+                            continue;
+                        };
+                        &fn_type.params
+                    } else {
+                        let Some(init) = &decl.init else { continue };
+                        match init {
+                            Expression::ArrowFunctionExpression(arrow) => &arrow.params,
+                            Expression::FunctionExpression(func) => &func.params,
+                            _ => continue,
+                        }
                     };
                     let (count, has_rest) = count_params(params);
                     functions.insert(
@@ -94,5 +109,70 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    #[test]
+    fn flags_extra_argument_on_unannotated_function() {
+        let src = r#"
+            function foo(a, b) {}
+            foo(1, 2, 3);
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_extra_argument_on_unannotated_arrow() {
+        let src = r#"
+            const bar = (x) => x * 2;
+            bar(1, 2);
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_arity_when_typed_by_type_alias() {
+        // The declared type may require more params than the implementation
+        // declares; TS allows an impl with fewer params. Flagging based on the
+        // impl's param count is the false positive from #1927.
+        let src = r#"
+            type ExpectType = <T>(value: T) => void
+            const expectType: ExpectType = () => {}
+            expectType<number>(false)
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn uses_inline_function_type_arity() {
+        let src = r#"
+            const fn: (a: number) => void = () => {}
+            fn(1, 2)
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 }
