@@ -2,6 +2,7 @@
 //! discarded at statement level.
 
 mod oxc_typescript;
+mod shared;
 #[cfg(test)]
 mod typescript;
 
