@@ -58,6 +58,15 @@
 //!   Storybook manager bundle loads these entry files to run the registrations,
 //!   so the top-level calls are intentional side effects, not tree-shakeable
 //!   library code;
+//! - code-generation utility scripts by content shape: a module that imports a
+//!   Node filesystem module (`fs`, `node:fs`, `fs/promises`, …) and whose every
+//!   top-level expression statement is a bare-identifier call to the *same*
+//!   function, invoked at least twice (`run(arSA, 'ar-SA'); run(beBY, 'be-BY');
+//!   …`). Such a file iterates one processing function over a dataset to write
+//!   output files — it is executed directly (`tsx generate.ts`), never imported
+//!   as a library, so the repeated top-level calls are its intentional payload.
+//!   A single top-level call, heterogeneous callees, or no filesystem import are
+//!   all still flagged;
 //! - framework entry points reported by `is_framework_entry_point`;
 //! - TanStack Start entry files (`app/{client,router,server}.{ts,tsx}` or
 //!   `src/app/…`) when the `tanstack-router` framework is detected;
@@ -550,6 +559,65 @@ fn is_storybook_addon_file(program: &Program) -> bool {
     })
 }
 
+/// True when the program imports a Node filesystem module at the top level, in
+/// any form: an ESM `import` from `fs` / `node:fs` / `fs/promises` /
+/// `node:fs/promises`, or a `require("fs")` / `require("node:fs")` /
+/// `require("fs/promises")` call in a top-level declaration. Filesystem writes
+/// are the defining capability of a code-generation script.
+fn has_fs_import(program: &Program) -> bool {
+    fn is_fs_specifier(src: &str) -> bool {
+        matches!(src, "fs" | "node:fs" | "fs/promises" | "node:fs/promises")
+    }
+    program.body.iter().any(|stmt| match stmt {
+        Statement::ImportDeclaration(import) => is_fs_specifier(import.source.value.as_str()),
+        Statement::VariableDeclaration(decl) => decl.declarations.iter().any(|d| {
+            let Some(Expression::CallExpression(call)) = &d.init else { return false };
+            let Expression::Identifier(id) = &call.callee else { return false };
+            if id.name != "require" {
+                return false;
+            }
+            matches!(call.arguments.first(), Some(Argument::StringLiteral(s)) if is_fs_specifier(s.value.as_str()))
+        }),
+        _ => false,
+    })
+}
+
+/// True when the program is a code-generation utility script: it imports a Node
+/// filesystem module and every one of its top-level expression statements is a
+/// bare-identifier call to the *same* function, invoked at least twice (e.g.
+/// `run(arSA, 'ar-SA'); run(beBY, 'be-BY'); …`). Such a file iterates one
+/// processing function over a dataset to write output files — its whole purpose
+/// is the top-level work. It is executed directly (`tsx generate.ts`), never
+/// imported as a library module, so the repeated top-level calls are intentional,
+/// not a tree-shaking hazard.
+///
+/// The uniform same-callee shape plus the filesystem import keep the exemption
+/// narrow: a module with a single top-level call, or with heterogeneous
+/// top-level calls, or one that never touches the filesystem is still flagged.
+fn is_data_generation_script(program: &Program) -> bool {
+    if !has_fs_import(program) {
+        return false;
+    }
+    let mut callee: Option<&str> = None;
+    let mut count = 0usize;
+    for stmt in &program.body {
+        let Statement::ExpressionStatement(es) = stmt else { continue };
+        let Expression::CallExpression(call) = &es.expression else {
+            return false;
+        };
+        let Expression::Identifier(id) = &call.callee else {
+            return false;
+        };
+        match callee {
+            None => callee = Some(id.name.as_str()),
+            Some(name) if name == id.name.as_str() => {}
+            Some(_) => return false,
+        }
+        count += 1;
+    }
+    count >= 2
+}
+
 /// Collect local identifier names that are bound to `startTransition`
 /// imported from `"react"`. Handles `import { startTransition } from "react"`
 /// and `import { startTransition as ST } from "react"`.
@@ -944,6 +1012,7 @@ impl OxcCheck for Check {
             || is_solid_entry_shape(program)
             || is_gulp_task_file(program)
             || is_storybook_addon_file(program)
+            || is_data_generation_script(program)
         {
             return Vec::new();
         }
@@ -2038,6 +2107,82 @@ mod tests {
             diags.len(),
             1,
             "library module under src/ must still be flagged, got {diags:?}"
+        );
+    }
+
+    // --- code-generation utility scripts (#1813) --------------------------
+
+    // Regression for #1813: a `generate.ts` script under `src/utils/` iterates a
+    // single processing function over a dataset and writes output files. Every
+    // top-level call is the same callee; the file imports `fs`. Such scripts are
+    // run directly (`tsx generate.ts`), never imported, so the repeated top-level
+    // calls are intentional, not a tree-shaking hazard.
+    #[test]
+    fn allows_data_generation_script_with_uniform_calls() {
+        let src = "\
+            import * as path from 'node:path';\n\
+            import * as fs from 'fs';\n\
+            import { arSA } from '../ar-SA';\n\
+            import { beBY } from '../be-BY';\n\
+            import { bgBG } from '../bg-BG';\n\
+            function run(locale, localeId) { fs.writeFileSync(localeId, ''); }\n\
+            run(arSA, 'ar-SA');\n\
+            run(beBY, 'be-BY');\n\
+            run(bgBG, 'bg-BG');\n";
+        let diags = crate::rules::test_helpers::run_rule(
+            &Check,
+            src,
+            "packages/localizations/src/utils/generate.ts",
+        );
+        assert!(
+            diags.is_empty(),
+            "data-generation script with uniform top-level calls should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_uniform_calls_without_fs_import() {
+        // Without a filesystem import the file is not a code-generation script:
+        // repeated same-callee top-level calls are still flagged.
+        let src = "\
+            run(1);\n\
+            run(2);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/utils/generate.ts");
+        assert_eq!(
+            diags.len(),
+            2,
+            "uniform top-level calls without an fs import must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_single_top_level_call_with_fs_import() {
+        // A single top-level call is the canonical thing to flag — the
+        // data-generation shape requires the uniform-iteration pattern (>=2 calls).
+        let src = "\
+            import * as fs from 'fs';\n\
+            run(1);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/utils/generate.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a single top-level call must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_heterogeneous_calls_with_fs_import() {
+        // Heterogeneous top-level callees are not the uniform-iteration shape of a
+        // generation script; they remain flagged even with an fs import.
+        let src = "\
+            import * as fs from 'fs';\n\
+            doA();\n\
+            doB();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/utils/generate.ts");
+        assert_eq!(
+            diags.len(),
+            2,
+            "heterogeneous top-level calls must still be flagged, got {diags:?}"
         );
     }
 
