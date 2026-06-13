@@ -79,8 +79,10 @@ impl OxcCheck for Check {
         {
             return;
         }
-        // Walk ancestor package.json files. If any declares `workspaces` (a
-        // monorepo root) and lists the dep, this is a valid workspace import.
+        // Walk ancestor package.json files. A dep declared in any ancestor
+        // manifest up to the repo root satisfies the import: monorepos often
+        // hoist shared (dev)dependencies to a root `package.json` that has no
+        // `workspaces` field, yet the package is available at runtime.
         if let Some(mut pkg_dir) = ctx.project.nearest_package_json_dir(ctx.path) {
             for _ in 0..8 {
                 let Some(parent) = pkg_dir.parent() else { break };
@@ -95,9 +97,7 @@ impl OxcCheck for Check {
                 if let Some(ancestor_pkg) =
                     ctx.project.nearest_package_json(&ancestor_dir.join("_"))
                 {
-                    if !ancestor_pkg.workspaces.is_empty()
-                        && ancestor_pkg.has_dep_or_engine(root)
-                    {
+                    if ancestor_pkg.has_dep_or_engine(root) {
                         return;
                     }
                 }
@@ -332,6 +332,57 @@ mod tests {
         assert!(
             diags.is_empty(),
             "@theme-original/ swizzle import must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Regression #2042: a dep declared in a root `package.json` that has NO
+    // `workspaces` field must still satisfy an import from a sub-package whose
+    // nearest `package.json` neither lists the dep nor declares `workspaces`
+    // (monorepos hoisting shared devDependencies to a non-workspaces root).
+    #[test]
+    fn allows_root_dep_without_workspaces_field_issue_2042() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"nest","devDependencies":{"chai":"^4.0.0"}}"#,
+        )
+        .unwrap();
+        let pkg = dir.path().join("packages").join("microservices");
+        let test = pkg.join("test");
+        fs::create_dir_all(&test).unwrap();
+        fs::write(pkg.join("package.json"), r#"{"name":"@nestjs/microservices"}"#).unwrap();
+        let file = test.join("listeners.spec.ts");
+        let source = "import { expect } from 'chai';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "root dep without `workspaces` field must not be flagged, got {diags:?}"
+        );
+    }
+
+    // A dep declared in NO ancestor manifest must still fire even when an
+    // ancestor root exists without a `workspaces` field.
+    #[test]
+    fn flags_dep_missing_from_all_ancestors_issue_2042() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"nest","devDependencies":{"chai":"^4.0.0"}}"#,
+        )
+        .unwrap();
+        let pkg = dir.path().join("packages").join("microservices");
+        let test = pkg.join("test");
+        fs::create_dir_all(&test).unwrap();
+        fs::write(pkg.join("package.json"), r#"{"name":"@nestjs/microservices"}"#).unwrap();
+        let file = test.join("listeners.spec.ts");
+        let source = "import x from 'not-declared-anywhere';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "dep absent from all ancestor manifests must fire, got {diags:?}"
         );
     }
 
