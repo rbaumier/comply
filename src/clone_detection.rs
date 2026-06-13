@@ -294,6 +294,13 @@ fn merge_and_emit(
     //    variants of the same base language (e.g. `locale/ar-SA/…` vs
     //    `locale/ar-EG/…`) at the same relative sub-path.  Locale files for an
     //    overlapping language are expected to be structurally near-identical.
+    //
+    // D) Scaffold template variant: the two files live in the same directory
+    //    under a scaffold/`template/` context and both follow the `with-*` /
+    //    `without-*` feature-variant naming convention (e.g.
+    //    `cli/template/.../with-auth-db.ts` vs `.../with-better-auth.ts`).
+    //    Each variant is copied verbatim into a generated project, so their
+    //    overlap is load-bearing, not accidental copy-paste.
     let mut suppressed = std::collections::HashSet::<usize>::new();
     {
         let mut by_pair: FxHashMap<(usize, usize), Vec<usize>> = FxHashMap::default();
@@ -312,7 +319,9 @@ fn merge_and_emit(
                 && are_symmetric_name_pair(&files[*rfi].path, &files[*cfi].path);
             let locale_variants =
                 are_locale_variant_pair(&files[*rfi].path, &files[*cfi].path);
-            if small_gap || name_siblings || locale_variants {
+            let scaffold_variants =
+                are_scaffold_template_pair(&files[*rfi].path, &files[*cfi].path);
+            if small_gap || name_siblings || locale_variants || scaffold_variants {
                 suppressed.extend(idxs);
             }
         }
@@ -505,6 +514,51 @@ fn are_locale_variant_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
         (Some(base_a), Some(base_b)) => base_a == base_b,
         _ => false,
     }
+}
+
+// --- Scaffold-template-variant detection ---
+
+/// Path segment names that establish a scaffolding context, where a directory
+/// holds one source file per feature combination to be copied verbatim into a
+/// generated project. Matched as exact path segments (between `/` delimiters).
+const SCAFFOLD_CONTEXT_SEGMENTS: &[&str] = &["template", "templates", "scaffold"];
+
+/// True when a file stem follows the `with-*` / `without-*` feature-variant
+/// naming convention used by scaffold CLIs (e.g. `with-auth-db`,
+/// `without-tailwind`). The hyphen is required so a stem like `within` does not
+/// match.
+fn is_feature_variant_stem(stem: &str) -> bool {
+    stem.starts_with("with-") || stem.starts_with("without-")
+}
+
+/// Returns true when two paths are scaffold template variants: both live in the
+/// same directory under a scaffold/`template/` context segment and both stems
+/// follow the `with-*` / `without-*` feature-variant convention. Such files are
+/// standalone templates copied verbatim into a generated project for a given
+/// feature combination, so their large shared blocks are load-bearing rather
+/// than refactorable copy-paste.
+fn are_scaffold_template_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
+    if a.parent() != b.parent() {
+        return false;
+    }
+    let under_scaffold = |path: &std::path::Path| {
+        path.components().any(|c| match c {
+            std::path::Component::Normal(s) => s
+                .to_str()
+                .is_some_and(|seg| SCAFFOLD_CONTEXT_SEGMENTS.contains(&seg.to_ascii_lowercase().as_str())),
+            _ => false,
+        })
+    };
+    if !under_scaffold(a) {
+        return false;
+    }
+    let variant_stem = |path: &std::path::Path| {
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .is_some_and(|s| is_feature_variant_stem(&s))
+    };
+    variant_stem(a) && variant_stem(b)
 }
 
 // --- Tokenization ---
@@ -1277,6 +1331,131 @@ mod tests {
             1,
             "duplicated locale files for unrelated languages must still be flagged"
         );
+    }
+
+    /// Builds two scaffold template variant files at the same directory under a
+    /// `cli/template/` context with near-identical content and returns the
+    /// `SourceFile` pair.
+    fn write_scaffold_pair(
+        dir: &tempfile::TempDir,
+        sub: &str,
+        stem_a: &str,
+        stem_b: &str,
+        ext: &str,
+    ) -> (SourceFile, SourceFile) {
+        let block = large_ts_block(20);
+        let pa = dir.path().join(format!("{sub}/{stem_a}.{ext}"));
+        let pb = dir.path().join(format!("{sub}/{stem_b}.{ext}"));
+        std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
+        std::fs::write(&pa, &block).unwrap();
+        std::fs::write(&pb, &block).unwrap();
+        let lang = if ext == "tsx" {
+            Language::Tsx
+        } else {
+            Language::TypeScript
+        };
+        (
+            SourceFile { path: pa, language: lang },
+            SourceFile { path: pb, language: lang },
+        )
+    }
+
+    #[test]
+    fn no_false_positive_on_scaffold_template_variants() {
+        // Regression test for issue #1751.
+        // create-t3-app ships one file per feature combination under
+        // `cli/template/extras/`. The variants intentionally share large blocks
+        // because each is copied verbatim into the scaffolded project — the
+        // duplication is load-bearing and cannot be refactored away.
+        let dir = tempfile::tempdir().unwrap();
+        let (fa, fb) = write_scaffold_pair(
+            &dir,
+            "cli/template/extras/src/server/api/trpc-app",
+            "with-auth-db",
+            "with-better-auth",
+            "ts",
+        );
+        assert!(
+            lint_files(&[&fa, &fb]).is_empty(),
+            "scaffold template variant files (with-*) must not be flagged as clones"
+        );
+
+        let dir2 = tempfile::tempdir().unwrap();
+        let (fc, fd) = write_scaffold_pair(
+            &dir2,
+            "cli/template/extras/src/app/page",
+            "with-auth-trpc-tw",
+            "with-better-auth-trpc-tw",
+            "tsx",
+        );
+        assert!(
+            lint_files(&[&fc, &fd]).is_empty(),
+            "scaffold template variant .tsx files (with-*) must not be flagged as clones"
+        );
+    }
+
+    #[test]
+    fn scaffold_exemption_requires_both_context_and_naming() {
+        // Negative guard: `with-*` files outside a scaffold/template context are
+        // ordinary modules whose duplication is still a genuine smell.
+        let dir = tempfile::tempdir().unwrap();
+        let (fa, fb) = write_scaffold_pair(
+            &dir,
+            "src/server/api",
+            "with-auth-db",
+            "with-better-auth",
+            "ts",
+        );
+        assert_eq!(
+            lint_files(&[&fa, &fb]).len(),
+            1,
+            "with-* duplicates outside a scaffold/template directory must still be flagged"
+        );
+
+        // Negative guard: ordinary file names under `template/` are not scaffold
+        // feature variants, so their duplication is still flagged.
+        let dir2 = tempfile::tempdir().unwrap();
+        let (fc, fd) = write_scaffold_pair(
+            &dir2,
+            "cli/template/extras/src/server",
+            "auth-db",
+            "better-auth",
+            "ts",
+        );
+        assert_eq!(
+            lint_files(&[&fc, &fd]).len(),
+            1,
+            "non-variant-named duplicates under template/ must still be flagged"
+        );
+    }
+
+    #[test]
+    fn are_scaffold_template_pair_recognizes_examples() {
+        use std::path::Path;
+        assert!(are_scaffold_template_pair(
+            Path::new("cli/template/extras/src/server/api/trpc-app/with-auth-db.ts"),
+            Path::new("cli/template/extras/src/server/api/trpc-app/with-better-auth.ts"),
+        ));
+        // Different directory → not a pair.
+        assert!(!are_scaffold_template_pair(
+            Path::new("cli/template/extras/src/server/with-auth-db.ts"),
+            Path::new("cli/template/extras/src/app/with-better-auth.ts"),
+        ));
+        // Not under a scaffold context → not a pair.
+        assert!(!are_scaffold_template_pair(
+            Path::new("src/server/api/with-auth-db.ts"),
+            Path::new("src/server/api/with-better-auth.ts"),
+        ));
+        // Not feature-variant stems → not a pair.
+        assert!(!are_scaffold_template_pair(
+            Path::new("cli/template/extras/auth-db.ts"),
+            Path::new("cli/template/extras/better-auth.ts"),
+        ));
+        // `within` must not match the `with-` prefix.
+        assert!(!are_scaffold_template_pair(
+            Path::new("cli/template/extras/within.ts"),
+            Path::new("cli/template/extras/within-bounds.ts"),
+        ));
     }
 
     #[test]
