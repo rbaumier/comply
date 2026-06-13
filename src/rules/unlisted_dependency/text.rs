@@ -215,6 +215,22 @@ mod tests {
     }
 
     #[test]
+    fn allows_cloudflare_runtime_protocol_import() {
+        // Regression for #2061 — `cloudflare:` is a Cloudflare Workers runtime
+        // protocol namespace (like `node:`), not an npm package, so imports from
+        // it must never be flagged even when nothing is declared.
+        let files: Vec<(&str, &str)> = vec![
+            ("a.ts", "import { WorkerEntrypoint } from 'cloudflare:workers';"),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, Some(r#"{ "dependencies": {} }"#), None);
+        assert!(
+            diags.is_empty(),
+            "`cloudflare:workers` is a runtime built-in, not an npm package: {diags:?}"
+        );
+    }
+
+    #[test]
     fn allows_listed_dependency() {
         let files: Vec<(&str, &str)> = vec![
             ("a.ts", "import _ from 'lodash';"),
