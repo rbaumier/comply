@@ -44,6 +44,9 @@ impl OxcCheck for Check {
             if !is_let_or_var(nodes, scoping.symbol_declaration(symbol_id)) {
                 continue;
             }
+            if is_effectively_const_binding(scoping, symbol_id) {
+                continue;
+            }
             let var_name = scoping.symbol_name(symbol_id).to_string();
 
             for reference in scoping.get_resolved_references(symbol_id) {
@@ -122,6 +125,18 @@ fn is_new_set_expression(expr: &Expression) -> bool {
         return false;
     };
     ident.name.as_str() == "Set"
+}
+
+/// True if a `let`/`var` binding is never reassigned after its declarator, so
+/// it is constant in practice. A function reading such a binding is pure with
+/// respect to it. `Scoping::symbol_is_mutated` reports whether any resolved
+/// reference writes to the symbol; the initial declarator is not a reference,
+/// so an alias like `let isArray = Array.isArray` reports `false`.
+fn is_effectively_const_binding(
+    scoping: &oxc_semantic::Scoping,
+    symbol_id: oxc_semantic::SymbolId,
+) -> bool {
+    !scoping.symbol_is_mutated(symbol_id)
 }
 
 /// True if the symbol's declaration sits inside a `let` or `var`
@@ -262,5 +277,42 @@ export function increment() { counter += 1; }
         let d = run(src);
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("increment"));
+    }
+
+    // Regression for #1890 — immer-style `export let` aliases that are
+    // declared once and never reassigned are effectively constant; a function
+    // reading them is pure with respect to that binding.
+    #[test]
+    fn no_fp_on_never_reassigned_root_let() {
+        let src = r#"
+export let isArray = Array.isArray
+export let isObjectish = (target: any) => typeof target === "object"
+
+export function isDraftable(value: any): boolean {
+    if (!value) return false
+    return isObjectish(value) || isArray(value)
+}
+"#;
+        assert!(
+            run(src).is_empty(),
+            "never-reassigned root-scope let must not be flagged"
+        );
+    }
+
+    #[test]
+    fn flags_reassigned_root_let_read_by_function() {
+        // A counter that IS reassigned (`counter = ...`) and read inside a
+        // function is genuine mutable state and must still be flagged.
+        let src = r#"
+let counter = 0;
+export function bump() {
+    counter = counter + 1;
+    return counter;
+}
+"#;
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("bump"));
+        assert!(d[0].message.contains("counter"));
     }
 }
