@@ -36,12 +36,13 @@ fn canonicalize_cached(p: &Path) -> PathBuf {
 }
 
 /// True if `path` is a build/tooling config file. Matches `*.config.*`
-/// (e.g. `vite.config.ts`, `jest.config.js`) and dotfile-rc entries
-/// (e.g. `.eslintrc.js`, `.babelrc.ts`).
+/// (e.g. `vite.config.ts`, `jest.config.js`), the Vitest `*.workspace.*`
+/// convention (e.g. `vitest.workspace.ts`, loaded by filename and never
+/// imported), and dotfile-rc entries (e.g. `.eslintrc.js`, `.babelrc.ts`).
 pub fn is_config_file(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    if stem.ends_with(".config") {
+    if stem.ends_with(".config") || stem.ends_with(".workspace") {
         return true;
     }
     if name.starts_with('.') && stem.ends_with("rc") {

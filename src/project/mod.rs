@@ -80,6 +80,12 @@ pub struct PackageJson {
     /// True if the package declares `main`, `exports`, or `module` — indicators
     /// that it's an npm library whose exports are consumed externally.
     pub is_library: bool,
+    /// True if the package declares a `bin` field — it's a CLI-tool package whose
+    /// `src/**` implements one or more published binaries. Sibling packages
+    /// consume it by invoking the binary, never by ES-importing its modules, and
+    /// the tool's own command framework wires up internal modules dynamically, so
+    /// their exports have no static importer.
+    pub has_bin: bool,
     /// Relative paths of source files that appear as CLI entry points in the
     /// `scripts` field (e.g. `"seed:dev": "bun run src/db/seed/dev.ts"`).
     /// Stored with forward slashes and without a leading `./`.
@@ -148,6 +154,7 @@ impl PackageJson {
             is_library: json.get("main").is_some()
                 || json.get("exports").is_some()
                 || json.get("module").is_some(),
+            has_bin: json.get("bin").is_some(),
             workspaces: json
                 .get("workspaces")
                 .and_then(|node| node.as_array())
