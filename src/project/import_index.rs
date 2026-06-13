@@ -482,6 +482,21 @@ impl ImportIndex {
         self.imports.get(path).map_or(&[], Vec::as_slice)
     }
 
+    /// `true` when `target` is the only indexed source file living directly in
+    /// its parent directory (files in subdirectories are not counted). Such a
+    /// lone `index` is the module itself organized across its own subtree, not
+    /// a hub aggregating sibling modules.
+    #[must_use]
+    pub fn is_sole_file_in_dir(&self, target: &Path) -> bool {
+        let Some(dir) = target.parent() else {
+            return false;
+        };
+        !self
+            .exports
+            .keys()
+            .any(|p| p.as_path() != target && p.parent() == Some(dir))
+    }
+
     /// Every importer pulling `symbol` from `path`. Empty slice when the
     /// symbol is unused across the indexed file set.
     #[must_use]
