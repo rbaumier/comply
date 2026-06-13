@@ -345,4 +345,13 @@ mod tests {
         let src = "function f(c: boolean): Promise<number> | number { if (c) return 1; return Promise.resolve(2); }";
         assert!(!run(src).is_empty());
     }
+
+    #[test]
+    fn allows_callback_parameter_type_with_mixed_return() {
+        // The union `boolean | Promise<boolean>` is the return type of the
+        // callback parameter TYPE `() => ...`, not of the enclosing async
+        // function. Must not flag (issue #1149).
+        let src = "export async function checkWithTimeout(predicate: () => boolean | Promise<boolean>, delay = 1000): Promise<boolean> { return await predicate(); }";
+        assert!(run(src).is_empty());
+    }
 }
