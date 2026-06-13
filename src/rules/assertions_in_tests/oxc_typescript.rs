@@ -190,9 +190,15 @@ impl OxcCheck for Check {
                 AstKind::CallExpression(call) => {
                     let callee_is_expect = match &call.callee {
                         // `attest(…)` is the entry point of every
-                        // `@arktype/attest` assertion.
+                        // `@arktype/attest` assertion. React render calls
+                        // (`render`, `renderToString`, `renderHook`, …) throw
+                        // when the component/hook crashes, so they are implicit
+                        // "does not throw" assertions.
                         Expression::Identifier(id) => {
-                            id.name.starts_with("expect") || id.name.as_str() == "attest"
+                            id.name.starts_with("expect")
+                                || id.name.as_str() == "attest"
+                                || crate::rules::test_assertion_helpers::RENDER_ASSERTION_CALLS
+                                    .contains(&id.name.as_str())
                         }
                         Expression::StaticMemberExpression(member) => {
                             member.property.name.as_str() == "expect"
@@ -530,6 +536,39 @@ mod tests {
     #[test]
     fn still_flags_test_with_throw_only_in_string() {
         let src = r#"it("x", () => { log("this should throw eventually"); });"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #1870 — a React Testing Library smoke test whose body is
+    // only `render(<App/>)` is a "does not throw" assertion: render throws if
+    // the component crashes, so reaching the end means it rendered. Uses a
+    // `.tsx` path so the JSX argument parses.
+    #[test]
+    fn allows_test_with_render_only() {
+        let src = r#"it("should not throw error when register with non input ref", () => { render(<App />); });"#;
+        assert!(run_at(src, "/tmp/x.test.tsx").is_empty(), "{:?}", run_at(src, "/tmp/x.test.tsx"));
+    }
+
+    // Regression for #1870 — SSR smoke test built only on `renderToString`.
+    #[test]
+    fn allows_test_with_render_to_string_only() {
+        let src = r#"it("should render correctly with as with component", () => { renderToString(<Component />); });"#;
+        assert!(run_at(src, "/tmp/x.test.tsx").is_empty(), "{:?}", run_at(src, "/tmp/x.test.tsx"));
+    }
+
+    // Regression for #1870 — hook smoke test built only on `renderHook` + `act`
+    // (no JSX, so a plain `.test.ts` path is fine).
+    #[test]
+    fn allows_test_with_render_hook_only() {
+        let src = r#"it("should reset value", () => { const { result } = renderHook(() => useForm()); result.current.register("test"); act(() => result.current.reset({ test: "test" })); });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // True positive guard: a test with no assertion and no render call still
+    // fires — the render carve-out must not swallow genuinely empty tests.
+    #[test]
+    fn still_flags_test_without_render_or_assertion() {
+        let src = r#"it("x", () => { const x = 1; });"#;
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }

@@ -6,6 +6,39 @@ use oxc_ast::ast::Expression;
 use oxc_semantic::NodeId;
 use std::collections::HashSet;
 
+/// React render functions that throw when the component/hook crashes. A test
+/// whose body is only `render(<App/>)`, `renderToString(<C/>)`, or
+/// `renderHook(() => useForm())` is a "does not throw" smoke test: reaching the
+/// end means rendering succeeded, so the render call *is* the assertion. React
+/// Testing Library and `react-dom/server` document these as valid no-throw
+/// tests, so a body relying solely on them is not assertion-less.
+pub(crate) const RENDER_ASSERTION_CALLS: &[&str] =
+    &["render", "renderToString", "renderToStaticMarkup", "renderHook"];
+
+/// True when `text` contains a call to one of [`RENDER_ASSERTION_CALLS`]. The
+/// identifier is word-boundary-anchored on the left so `customRender(` /
+/// `prerenderToString(` do not match, and the call's `(` must immediately
+/// follow the name.
+pub(crate) fn has_render_assertion_call(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    for name in RENDER_ASSERTION_CALLS {
+        let mut from = 0usize;
+        while let Some(rel) = text[from..].find(name) {
+            let i = from + rel;
+            let prev_ok = i == 0
+                || !(bytes[i - 1].is_ascii_alphanumeric()
+                    || bytes[i - 1] == b'_'
+                    || bytes[i - 1] == b'$');
+            let after = i + name.len();
+            if prev_ok && bytes.get(after) == Some(&b'(') {
+                return true;
+            }
+            from = i + name.len();
+        }
+    }
+    false
+}
+
 /// True when a `throw` statement lies within `body_span`. A `throw` is a valid
 /// assertion mechanism: timing/property/fuzzing tests fail by throwing on a
 /// violated condition (`if (after - before > 10) throw new Error(...)`), which
