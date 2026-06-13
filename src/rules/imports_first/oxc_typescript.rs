@@ -6,7 +6,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Declaration, Expression, Statement};
+use oxc_ast::ast::{AssignmentTarget, Declaration, Expression, Statement};
 use std::sync::Arc;
 
 pub struct Check;
@@ -48,7 +48,7 @@ fn is_test_framework_config(stmt: &Statement) -> bool {
 
     // `jasmine.DEFAULT_TIMEOUT_INTERVAL = N`
     if let Expression::AssignmentExpression(assign) = &expr_stmt.expression
-        && let oxc_ast::ast::AssignmentTarget::StaticMemberExpression(member) = &assign.left
+        && let AssignmentTarget::StaticMemberExpression(member) = &assign.left
         && let Expression::Identifier(obj) = &member.object
     {
         return obj.name.as_str() == "jasmine"
@@ -56,6 +56,37 @@ fn is_test_framework_config(stmt: &Statement) -> bool {
     }
 
     false
+}
+
+/// A `process.env.X = value` (or `process.env["X"] = value`) assignment. In a
+/// test setup file these set feature-flag environment variables that imported
+/// modules read during their own initialization, so they must be placed before
+/// the imports — the same zero-import-side-effect class as the test-framework
+/// configuration calls. Only exempted in test files (see the call site), since
+/// mutating `process.env` mid-module is a genuine smell in ordinary source.
+fn is_process_env_assignment(stmt: &Statement) -> bool {
+    let Statement::ExpressionStatement(expr_stmt) = stmt else {
+        return false;
+    };
+    let Expression::AssignmentExpression(assign) = &expr_stmt.expression else {
+        return false;
+    };
+
+    // The assignment target is `process.env.<X>` (static) or
+    // `process.env[<expr>]` (computed); in both the member's object is the
+    // `process.env` member expression.
+    let target_object = match &assign.left {
+        AssignmentTarget::StaticMemberExpression(member) => &member.object,
+        AssignmentTarget::ComputedMemberExpression(member) => &member.object,
+        _ => return false,
+    };
+
+    matches!(
+        target_object,
+        Expression::StaticMemberExpression(env)
+            if matches!(&env.object, Expression::Identifier(obj) if obj.name.as_str() == "process")
+                && env.property.name.as_str() == "env"
+    )
 }
 
 /// TypeScript type-namespace-only declarations: `type X = ...`,
@@ -135,6 +166,12 @@ impl OxcCheck for Check {
                 // before imports are a widespread convention with no import side
                 // effects — they must not flip `saw_non_import`.
                 _ if is_test_framework_config(stmt) => {}
+                // `process.env.X = value` in a test file sets a feature-flag
+                // env var that imported modules read at initialization time, so
+                // it must precede the imports — exempt only inside test files,
+                // where it has no import side effects of its own.
+                _ if ctx.file.path_segments.in_test_dir
+                    && is_process_env_assignment(stmt) => {}
                 // TypeScript type-only declarations (`type`/`interface`,
                 // `declare` modules, `export type`) are erased at compile time
                 // and have no import side effects — they must not break the
@@ -172,6 +209,18 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
+    }
+
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        let path = std::path::Path::new(path);
+        let project = crate::project::default_static_project_ctx();
+        let file = crate::rules::file_ctx::FileCtx::build(
+            path,
+            source,
+            crate::files::Language::TypeScript,
+            project,
+        );
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, path, project, &file)
     }
 
     // Regression test for https://github.com/rbaumier/comply/issues/2047
@@ -324,5 +373,45 @@ import { a } from 'a';
 import { b } from 'b';
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    // Regression test for https://github.com/rbaumier/comply/issues/1745
+    // A `process.env.X = value` assignment in a test setup file must precede the
+    // imports so imported modules read the env var at initialization time — it
+    // must not flag the following imports.
+    #[test]
+    fn allows_process_env_assignment_before_imports_in_test_file() {
+        let src = r#"process.env.NEW_SLOT_SYNTAX = 'true'
+
+import './helpers/shim-done'
+import './helpers/to-have-warned'
+import './helpers/classlist'
+
+import { waitForUpdate } from './helpers/wait-for-update'
+import { triggerEvent } from './helpers/trigger-event'
+import { createTextVNode } from './helpers/vdom'
+"#;
+        assert!(run_on_path(src, "test/vitest.setup.ts").is_empty());
+    }
+
+    // The computed form `process.env['X'] = value` is the same env-setup pattern.
+    #[test]
+    fn allows_computed_process_env_assignment_before_imports_in_test_file() {
+        let src = r#"process.env['NODE_ENV'] = 'test'
+
+import { setup } from './setup'
+"#;
+        assert!(run_on_path(src, "test/setup.spec.ts").is_empty());
+    }
+
+    // The exemption is test-only: a `process.env.X = value` before imports in
+    // ordinary source is a genuine non-import statement and must still flag.
+    #[test]
+    fn still_flags_process_env_assignment_in_non_test_file() {
+        let src = r#"process.env.FORCE_COLOR = '1'
+
+import { run } from './run'
+"#;
+        assert_eq!(run_on_path(src, "src/main.ts").len(), 1);
     }
 }
