@@ -22,7 +22,82 @@ fn has_test_content(source: &str) -> bool {
             return true;
         }
     }
-    false
+    drives_imported_runner(source)
+}
+
+/// True when the file imports a symbol and then invokes it as a top-level
+/// statement, e.g. `import { testTokenization } from '...'; testTokenization(...)`.
+///
+/// This captures project-local custom test runners that wrap `it`/`test`
+/// internally, so the file carries real test logic without any standard marker.
+/// A genuinely empty test file (lone import, comment, or bare declaration) has
+/// no such top-level invocation and is still flagged.
+fn drives_imported_runner(source: &str) -> bool {
+    let imported = imported_bindings(source);
+    if imported.is_empty() {
+        return false;
+    }
+    source.lines().any(|line| {
+        let trimmed = line.trim_start();
+        imported.iter().any(|name| is_call_statement(trimmed, name))
+    })
+}
+
+/// `true` when `line` begins with `name(`, i.e. `name` is being called at the
+/// start of a statement rather than referenced as part of a larger identifier.
+fn is_call_statement(line: &str, name: &str) -> bool {
+    let Some(rest) = line.strip_prefix(name) else {
+        return false;
+    };
+    rest.starts_with('(')
+}
+
+/// Collects the binding names introduced by `import` statements: default,
+/// namespace (`* as ns`), and named bindings (honoring `as` aliases).
+fn imported_bindings(source: &str) -> Vec<String> {
+    let mut bindings = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        let Some(after_import) = trimmed.strip_prefix("import ") else {
+            continue;
+        };
+        // Side-effect import (`import './x'`) has no bindings.
+        let Some(clause) = after_import.split(" from ").next() else {
+            continue;
+        };
+        collect_clause_bindings(clause, &mut bindings);
+    }
+    bindings
+}
+
+fn collect_clause_bindings(clause: &str, bindings: &mut Vec<String>) {
+    if let Some(open) = clause.find('{') {
+        let head = &clause[..open];
+        for name in head.split(',') {
+            push_binding(name, bindings);
+        }
+        if let Some(close) = clause[open + 1..].find('}') {
+            let inner = &clause[open + 1..open + 1 + close];
+            for spec in inner.split(',') {
+                let alias = spec.split(" as ").last().unwrap_or(spec);
+                push_binding(alias, bindings);
+            }
+        }
+    } else {
+        for name in clause.split(',') {
+            push_binding(name, bindings);
+        }
+    }
+}
+
+/// Normalizes a raw import token (default name or `* as ns`) and records it if
+/// it is a plain identifier.
+fn push_binding(raw: &str, bindings: &mut Vec<String>) {
+    let token = raw.trim();
+    let name = token.rsplit(" as ").next().unwrap_or(token).trim();
+    if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+        bindings.push(name.to_string());
+    }
 }
 
 impl TextCheck for Check {
@@ -116,6 +191,31 @@ mod tests {
                 "import assert from 'assert';\nassert.equal(result, expected);"
             )
             .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_custom_imported_runner() {
+        let source = "import { testTokenization } from '../test/testRunner';\n\
+                      \n\
+                      testTokenization('m3', [\n\
+                      \t[{ line: '(**)', tokens: [{ startIndex: 0, type: 'comment.m3' }] }]\n\
+                      ]);\n";
+        assert!(run("src/languages/definitions/m3/m3.test.ts", source).is_empty());
+    }
+
+    #[test]
+    fn allows_aliased_imported_runner() {
+        let source = "import { testTokenization as runTokens } from './testRunner';\n\
+                      runTokens('lang', []);\n";
+        assert!(run("lang.test.ts", source).is_empty());
+    }
+
+    #[test]
+    fn flags_imported_but_uncalled_binding() {
+        assert_eq!(
+            run("utils.test.ts", "import { helper } from './helper';").len(),
+            1
         );
     }
 }
