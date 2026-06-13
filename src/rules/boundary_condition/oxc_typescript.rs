@@ -73,6 +73,15 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Skip if a preceding unconditional `arr.push(...)` guarantees non-empty.
+        // `push` always adds an element, so any subsequent `arr[0]` /
+        // `arr[arr.length - 1]` read on the same binding is in-bounds. The push
+        // may sit in an ancestor scope (e.g. module-level setup) that runs before
+        // a nested callback's access.
+        if has_preceding_push(node, semantic, obj_text, source) {
+            return;
+        }
+
         // `arr[0]` where `arr` is a same-scope `const` bound to a non-empty array
         // literal is provably in-bounds — the literal's element count is known.
         if is_first
@@ -454,6 +463,69 @@ fn has_preceding_guard(
         }
         current_id = parent_id;
     }
+}
+
+/// Returns true when an unconditional `<obj_text>.push(...)` statement precedes
+/// the access in its scope or in any enclosing scope. Walks ancestors
+/// outward: at each block/function/program scope, anchors on the statement that
+/// contains the access (or the path down to it) and scans its preceding siblings
+/// for a `push` on the same binding. Only direct sibling expression statements
+/// count, so a `push` nested inside an `if`/loop — which may not run — does not
+/// vouch the access safe. A push in an outer scope is honored because it always
+/// executes before any nested callback defined after it.
+fn has_preceding_push(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    obj_text: &str,
+    source: &str,
+) -> bool {
+    let nodes = semantic.nodes();
+    let node_span_start = node.kind().span().start;
+    for ancestor in nodes.ancestors(node.id()) {
+        let stmts: &[Statement] = match ancestor.kind() {
+            AstKind::Program(prog) => &prog.body,
+            AstKind::FunctionBody(body) => &body.statements,
+            AstKind::BlockStatement(block) => &block.body,
+            _ => continue,
+        };
+        if scan_preceding_pushes(stmts, node_span_start, obj_text, source) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Anchors on the statement in `stmts` containing `node_span_start`, then returns
+/// true if any preceding sibling is an unconditional `<obj_text>.push(...)`.
+fn scan_preceding_pushes(
+    stmts: &[Statement],
+    node_span_start: u32,
+    obj_text: &str,
+    source: &str,
+) -> bool {
+    let Some(our_idx) = stmts
+        .iter()
+        .position(|s| s.span().start <= node_span_start && node_span_start < s.span().end)
+    else {
+        return false;
+    };
+    stmts[..our_idx]
+        .iter()
+        .any(|stmt| stmt_is_push_on(stmt, obj_text, source))
+}
+
+/// Returns true when `stmt` is an expression statement `<obj_text>.push(...)`.
+fn stmt_is_push_on(stmt: &Statement, obj_text: &str, source: &str) -> bool {
+    let Statement::ExpressionStatement(expr_stmt) = stmt else {
+        return false;
+    };
+    let Expression::CallExpression(call) = &expr_stmt.expression else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    member.property.name.as_str() == "push" && expr_text(&member.object, source) == obj_text
 }
 
 /// Returns true when `name` resolves to a same-scope `const` whose initializer
@@ -914,6 +986,56 @@ mod tests {
     fn still_flags_regex_exec_last_index_after_null_guard_issue_1822() {
         // Only `[0]` (the full match) is guaranteed; `[length - 1]` is not.
         let src = "function f(s) { const m = re.exec(s); if (!m) return; return m[m.length - 1]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_index0_after_push_same_scope_issue_1857() {
+        // The second push accesses `data[0]`; the first push already ran, so it is
+        // in-bounds.
+        let src = "const data = []; data.push({ a: 1 }); data.push({ ...data[0], b: 2 });";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_index0_after_push_in_nested_callback_issue_1857() {
+        // Pushes at module scope run before the nested callback executes, so the
+        // `data[0]` reads inside the test body are in-bounds.
+        let src = "const data = []; data.push({ a: 1 }); data.push({ a: 2 }); test('x', () => { resolve(data[0]); expect(state).toStrictEqual(data[0]); });";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_last_index_after_push_issue_1857() {
+        // A single push guarantees the array is non-empty, so `length - 1` is valid.
+        let src = "const data = []; data.push(1); const last = data[data.length - 1];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_index0_without_preceding_push_issue_1857() {
+        let src = "const data = []; const x = data[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_when_push_is_on_other_array_issue_1857() {
+        // The push targets `other`, not `data`; `data` may still be empty.
+        let src = "const data = []; other.push(1); const x = data[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_when_push_is_conditional_issue_1857() {
+        // The push is inside an `if`, so it may not run — the array can be empty.
+        let src = "const data = []; if (cond) { data.push(1); } const x = data[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_when_push_follows_access_issue_1857() {
+        // The push comes after the access, so it does not vouch it safe.
+        let src = "const data = []; const x = data[0]; data.push(1);";
         assert_eq!(run_on(src).len(), 1);
     }
 
