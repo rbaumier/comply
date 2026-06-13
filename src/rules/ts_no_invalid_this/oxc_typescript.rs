@@ -4,9 +4,64 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::{AssignmentTarget, Expression};
 use std::sync::Arc;
 
 pub struct Check;
+
+/// True when `expr` is a `*.prototype` member access (e.g. `Foo.prototype`),
+/// or an identifier bound to such an access (e.g. `var proto = Foo.prototype`).
+/// These are the receivers of the prototype-patching idiom, where a function
+/// assigned to one of their members gains the instance as `this` at call time.
+fn is_prototype_object(
+    expr: &Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    match expr {
+        Expression::StaticMemberExpression(member) => member.property.name == "prototype",
+        Expression::Identifier(ident) => {
+            let Some(ref_id) = ident.reference_id.get() else {
+                return false;
+            };
+            let scoping = semantic.scoping();
+            let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+                return false;
+            };
+            let decl = scoping.symbol_declaration(sym_id);
+            let AstKind::VariableDeclarator(declarator) =
+                semantic.nodes().kind(decl)
+            else {
+                return false;
+            };
+            matches!(
+                &declarator.init,
+                Some(Expression::StaticMemberExpression(member))
+                    if member.property.name == "prototype"
+            )
+        }
+        _ => false,
+    }
+}
+
+/// True when `func_id` is a function expression assigned to a member of a
+/// prototype object (`proto[m] = function() {}` / `Foo.prototype.m = function() {}`).
+/// In that idiom `this` is bound to the instance at call time, so `this` inside
+/// the function body is valid.
+fn is_prototype_method_assignment(
+    func_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let AstKind::AssignmentExpression(assign) = nodes.kind(nodes.parent_id(func_id)) else {
+        return false;
+    };
+    let object = match &assign.left {
+        AssignmentTarget::StaticMemberExpression(member) => &member.object,
+        AssignmentTarget::ComputedMemberExpression(member) => &member.object,
+        _ => return false,
+    };
+    is_prototype_object(object, semantic)
+}
 
 fn is_valid_this_context(
     node: &oxc_semantic::AstNode,
@@ -25,6 +80,12 @@ fn is_valid_this_context(
             AstKind::Class(_) => return true,
             AstKind::ArrowFunctionExpression(_) => continue,
             AstKind::Function(_) => {
+                // Prototype-patching idiom: a function assigned to a member
+                // of a `*.prototype` object is a method — `this` is the
+                // instance at call time, so it's valid.
+                if is_prototype_method_assignment(ancestor.id(), semantic) {
+                    return true;
+                }
                 // Mark that we've entered a function scope; need to
                 // check if it's wrapped in a MethodDefinition.
                 hit_function = true;
@@ -145,6 +206,34 @@ mod tests {
     #[test]
     fn flags_this_in_function_valued_property() {
         let diags = run_on("const obj = { foo: function() { return this; } };");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_prototype_patch_via_alias() {
+        // Regression for #2031: `proto[method] = function() { this }` where
+        // `proto` is an alias of `SomeClass.prototype`.
+        let src = "var proto = SvelteDate.prototype;\nproto[method] = function (...args) {\n  return this.x.apply(this, args);\n};";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_prototype_patch_static() {
+        let src = "Foo.prototype.m = function () { return this.x; };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_prototype_patch_computed() {
+        let src = "Foo.prototype[k] = function () { return this.x; };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_non_prototype_member_assignment() {
+        // A function assigned to a plain (non-prototype) object member is still
+        // a standalone function — `this` is unbound and must fire.
+        let diags = run_on("obj.m = function () { return this.x; };");
         assert_eq!(diags.len(), 1);
     }
 }
