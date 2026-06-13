@@ -1,0 +1,18 @@
+[detection]
+dependencies = ["cypress"]
+
+[entry_points]
+# Support files (cypress/support/e2e.* and commands.*) are auto-imported before
+# each suite; everything in the support dir is loaded by Cypress, not by ES imports.
+dirs = ["/cypress/support/"]
+files = ["cypress.config.ts", "cypress.config.js"]
+# Spec files are discovered via specPattern (**/*.cy.{ts,js,tsx,jsx}) and executed
+# directly by the runner — never reachable through the import graph.
+file_suffixes = [".cy.ts", ".cy.js", ".cy.tsx", ".cy.jsx"]
+root_files = ["cypress.config"]
+
+[magic_exports]
+names = []
+
+[tooling_deps]
+names = ["cypress", "@cypress/vite-dev-server", "@cypress/webpack-dev-server", "cypress-axe"]

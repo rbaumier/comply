@@ -61,6 +61,7 @@ const RAW: &[(&str, &str)] = &[
     ("express", include_str!("express.toml")),
     ("jest", include_str!("jest.toml")),
     ("playwright", include_str!("playwright.toml")),
+    ("cypress", include_str!("cypress.toml")),
     ("elysia", include_str!("elysia.toml")),
     ("tanstack-router", include_str!("tanstack-router.toml")),
     ("shadcn", include_str!("shadcn.toml")),
