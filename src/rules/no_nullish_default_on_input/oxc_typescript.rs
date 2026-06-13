@@ -41,6 +41,12 @@ impl OxcCheck for Check {
 }
 
 fn collect_param_name(param: &FormalParameter, params: &mut HashSet<String>) {
+    // An optional parameter (`param?: T`) explicitly admits `undefined` as valid
+    // input, so defaulting it (`param ?? x`) is idiomatic rather than a smell.
+    // Only non-optional parameters whose nullability is domain-driven are tracked.
+    if param.optional {
+        return;
+    }
     if let BindingPattern::BindingIdentifier(id) = &param.pattern {
         params.insert(id.name.to_string());
     }
@@ -142,5 +148,46 @@ mod tests {
         assert!(run_on(
             "function deriveEntryYear(dateEntree: Date | null, createdAt: Date): number { return (dateEntree ?? createdAt).getUTCFullYear(); }"
         ).is_empty());
+    }
+
+    #[test]
+    fn allows_nullish_default_on_optional_object_param() {
+        // `options?: {...}` explicitly admits `undefined`; defaulting it is idiomatic.
+        assert!(run_on(
+            "function safeClean(worker: F, options?: { actionIfDirty: \"warn\" | \"throw\" }) { const { actionIfDirty } = options ?? {}; return actionIfDirty; }"
+        ).is_empty());
+    }
+
+    #[test]
+    fn allows_nullish_default_on_optional_string_param() {
+        // `sourcePath?: string` is optional; `?? path.join(...)` is correct.
+        assert!(run_on(
+            "function generateSamples(sourcePath?: string) { const finalSourcePath = sourcePath ?? path.join(base, DEV_SAMPLES_BASE); return finalSourcePath; }"
+        ).is_empty());
+    }
+
+    #[test]
+    fn allows_logical_or_default_on_optional_param() {
+        assert!(run_on(
+            "function f(count?: number) { const v = count || 0; return v; }"
+        ).is_empty());
+    }
+
+    #[test]
+    fn flags_nullish_default_on_non_optional_nullable_param() {
+        // `value: number | undefined` (no `?`): nullability is domain-driven, still a smell.
+        assert_eq!(
+            run_on("function f(value: number | undefined) { const v = value ?? 0; return v; }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_nullish_default_on_non_optional_null_param() {
+        // `value: number | null` (no `?`): still flagged.
+        assert_eq!(
+            run_on("function f(value: number | null) { const v = value ?? 0; return v; }").len(),
+            1
+        );
     }
 }
