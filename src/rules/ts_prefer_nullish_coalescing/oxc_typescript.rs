@@ -128,18 +128,33 @@ fn looks_boolean(expr: &Expression) -> bool {
     }
 }
 
-/// True if `expr` can produce a non-nullish falsy value — `NaN` from a
-/// `Number`/`parseInt`/`parseFloat` call, or `""` from a string method call.
-/// In these cases `||` is semantically correct and `??` would be wrong.
-fn lhs_may_produce_non_nullish_falsy(expr: &Expression) -> bool {
-    let Expression::CallExpression(call) = expr.without_parentheses() else {
+/// True if `expr` is the `process.env` member access.
+fn is_process_env(expr: &Expression) -> bool {
+    let Expression::StaticMemberExpression(member) = expr.without_parentheses() else {
         return false;
     };
-    match &call.callee {
-        Expression::Identifier(id) => NUMBER_FUNCTIONS.contains(&id.name.as_str()),
-        Expression::StaticMemberExpression(member) => {
-            STRING_METHODS.contains(&member.property.name.as_str())
-        }
+    if member.property.name.as_str() != "env" {
+        return false;
+    }
+    matches!(member.object.without_parentheses(), Expression::Identifier(id) if id.name.as_str() == "process")
+}
+
+/// True if `expr` can produce a non-nullish falsy value — `NaN` from a
+/// `Number`/`parseInt`/`parseFloat` call, `""` from a string method call, or an
+/// empty-string env var accessed via `process.env.X` / `process.env["X"]`.
+/// In these cases `||` is semantically correct and `??` would be wrong: an
+/// empty-string env (`PORT=`) should fall back rather than pass through.
+fn lhs_may_produce_non_nullish_falsy(expr: &Expression) -> bool {
+    match expr.without_parentheses() {
+        Expression::CallExpression(call) => match &call.callee {
+            Expression::Identifier(id) => NUMBER_FUNCTIONS.contains(&id.name.as_str()),
+            Expression::StaticMemberExpression(member) => {
+                STRING_METHODS.contains(&member.property.name.as_str())
+            }
+            _ => false,
+        },
+        Expression::StaticMemberExpression(member) => is_process_env(&member.object),
+        Expression::ComputedMemberExpression(member) => is_process_env(&member.object),
         _ => false,
     }
 }
@@ -417,5 +432,34 @@ mod tests {
     fn allows_join_empty_string_fallback() {
         let src = r#"const path = parts.join(".") || "root";"#;
         assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #1166: `process.env.X` is `string | undefined`; `||` is
+    // intentionally safer than `??` because an empty-string env (`PORT=`) should
+    // fall back, not pass through.
+    #[test]
+    fn allows_process_env_numeric_fallback() {
+        let src = r#"const PORT = process.env.PORT || 4000;"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_process_env_string_fallback() {
+        let src = r#"const LOG_LEVEL = process.env.LOG_LEVEL || "info";"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_process_env_computed_fallback() {
+        let src = r#"const LOG_LEVEL = process.env["LOG_LEVEL"] || "info";"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // A genuinely nullish-only LHS (a member access not rooted at `process.env`)
+    // still flags.
+    #[test]
+    fn still_flags_non_env_member_fallback() {
+        let src = r#"const x = config.maybe || "info";"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
