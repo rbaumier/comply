@@ -38,6 +38,13 @@ const TYPE_TEST_MARKERS: &[&str] = &[
 /// type-check — a compile-time test on its own.
 const TS_EXPECT_ERROR_DIRECTIVE: &str = "@ts-expect-error";
 
+/// Performance-test framework packages whose `.spec.ts` files are scenario
+/// classes (a `PerfTest<T>` subclass with an `async run()` entry point), not
+/// unit-test files. The framework discovers them by the `*.spec.ts` pattern, so
+/// importing from such a package marks the file as a real perf-test scenario
+/// rather than an empty test file.
+const PERF_TEST_FRAMEWORKS: &[&str] = &["@azure-tools/test-perf"];
+
 fn has_test_content(source: &str) -> bool {
     for marker in RUNTIME_TEST_MARKERS.iter().chain(TYPE_TEST_MARKERS) {
         if source.contains(marker) {
@@ -47,7 +54,18 @@ fn has_test_content(source: &str) -> bool {
     if source.contains(TS_EXPECT_ERROR_DIRECTIVE) {
         return true;
     }
+    if is_perf_test_scenario(source) {
+        return true;
+    }
     drives_imported_runner(source)
+}
+
+/// True when the file imports from a perf-test framework package, marking it as
+/// a scenario class rather than an empty unit-test file.
+fn is_perf_test_scenario(source: &str) -> bool {
+    PERF_TEST_FRAMEWORKS
+        .iter()
+        .any(|pkg| source.contains(pkg))
 }
 
 /// True when the file imports a symbol and then invokes it as a top-level
@@ -270,5 +288,22 @@ mod tests {
                       import { Button } from './Button';\n\
                       // setup only, no assertions\n";
         assert_eq!(run("components.spec.tsx", source).len(), 1);
+    }
+
+    #[test]
+    fn allows_azure_perf_test_scenario_spec() {
+        let source = "// Copyright (c) Microsoft Corporation.\n\
+                      import { AvroSerializerTest } from './avroSerializerTest.spec.js';\n\
+                      import type { PerfOptionDictionary } from '@azure-tools/test-perf';\n\
+                      \n\
+                      export class SerializeTest extends AvroSerializerTest<SerializePerfTestOptions> {\n\
+                      \toptions: PerfOptionDictionary<SerializePerfTestOptions> = {};\n\
+                      \tarray: number[];\n\
+                      \n\
+                      \tasync run(): Promise<void> {\n\
+                      \t\tawait this.serializer.serialize(data, AvroSerializerTest.schema);\n\
+                      \t}\n\
+                      }\n";
+        assert!(run("sdk/schemaregistry/perf-tests/src/serialize.spec.ts", source).is_empty());
     }
 }
