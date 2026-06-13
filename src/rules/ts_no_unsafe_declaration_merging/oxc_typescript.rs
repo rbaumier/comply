@@ -28,6 +28,13 @@ impl OxcCheck for Check {
                     }
                 }
                 AstKind::TSInterfaceDeclaration(decl) => {
+                    // `declare interface Foo extends Bar {}` is an ambient,
+                    // type-only augmentation with no runtime footprint, so it
+                    // cannot conflict with a class's method implementations
+                    // (the Stencil/Angular wrapper pattern). Skip it.
+                    if decl.declare {
+                        continue;
+                    }
                     interface_names.push((decl.id.name.as_str(), decl.id.span.start));
                 }
                 _ => {}
@@ -75,5 +82,40 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn run(source: &str) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_rule_by_id(
+            "ts-no-unsafe-declaration-merging",
+            source,
+            "t.ts",
+        )
+    }
+
+    #[test]
+    fn flags_class_and_interface_same_name() {
+        // One diagnostic for the interface, one for the class.
+        assert_eq!(run("interface Foo {} class Foo {}").len(), 2);
+    }
+
+    #[test]
+    fn allows_different_names() {
+        assert!(run("interface Foo {} class Bar {}").is_empty());
+    }
+
+    // Regression for #1835: `declare interface` ambient augmentations merged
+    // with a class (the Stencil/Angular wrapper pattern) are type-only and
+    // carry no runtime footprint, so they must not be flagged.
+    #[test]
+    fn allows_declare_interface_merged_with_class() {
+        let source = "\
+class IonInputOtp extends ValueAccessor {}
+export declare interface IonInputOtp extends Components.IonInputOtp {
+  ionInput: EventEmitter<CustomEvent<InputInputEventDetail>>;
+}";
+        assert!(run(source).is_empty());
     }
 }
