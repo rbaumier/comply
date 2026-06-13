@@ -5,8 +5,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::PropertyKey;
+use oxc_ast::ast::{ClassElement, PropertyKey};
 use oxc_span::GetSpan;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 /// React component base classes. A class is only checked for lifecycle/static
@@ -45,6 +46,38 @@ fn is_in_react_component<'a>(
         return REACT_BASES.contains(&base);
     }
     false
+}
+
+/// Plain member name of a class element, or `None` for computed / non-identifier
+/// keys and static blocks.
+fn class_element_name<'a>(element: &'a ClassElement<'a>) -> Option<&'a str> {
+    let key = match element {
+        ClassElement::MethodDefinition(method) => &method.key,
+        ClassElement::PropertyDefinition(prop) => &prop.key,
+        ClassElement::AccessorProperty(accessor) => &accessor.key,
+        ClassElement::StaticBlock(_) | ClassElement::TSIndexSignature(_) => return None,
+    };
+    match key {
+        PropertyKey::StaticIdentifier(ident) => Some(ident.name.as_str()),
+        _ => None,
+    }
+}
+
+/// Names of every member of the node's nearest enclosing class.
+///
+/// A correctly-spelled lifecycle name present here proves the author knows the
+/// spelling, so a same-class member that merely resembles it is not a typo.
+fn enclosing_class_member_names<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> FxHashSet<&'a str> {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        let AstKind::Class(class) = ancestor.kind() else {
+            continue;
+        };
+        return class.body.body.iter().filter_map(class_element_name).collect();
+    }
+    FxHashSet::default()
 }
 
 /// Correct React lifecycle methods and static properties.
@@ -107,13 +140,21 @@ fn edit_distance(a: &str, b: &str) -> usize {
     prev[n]
 }
 
-fn is_probable_typo(name: &str) -> Option<&'static str> {
+/// Returns the lifecycle/static name `name` most likely misspells, or `None`.
+///
+/// A correction already present in `sibling_members` is skipped: if the exact
+/// lifecycle name exists in the same class, `name` is a distinct intentional
+/// member, not a typo of it.
+fn is_probable_typo(name: &str, sibling_members: &FxHashSet<&str>) -> Option<&'static str> {
     for &known in KNOWN_NAMES {
         if name == known {
             return None;
         }
     }
     for &known in KNOWN_NAMES {
+        if sibling_members.contains(known) {
+            continue;
+        }
         let dist = edit_distance(name, known);
         if known.len() > 5 && dist > 0 && dist <= 2 {
             return Some(known);
@@ -163,7 +204,8 @@ impl OxcCheck for Check {
 
         let Some((name, span)) = name else { return };
 
-        if let Some(correction) = is_probable_typo(name) {
+        let sibling_members = enclosing_class_member_names(node, semantic);
+        if let Some(correction) = is_probable_typo(name, &sibling_members) {
             let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
@@ -258,5 +300,22 @@ mod tests {
     fn allows_correct_lifecycle_in_react_component() {
         let src = "class Comp extends React.Component {\n  componentDidMount() {}\n}";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_member_when_exact_lifecycle_exists_in_same_class() {
+        // formik FP: `renders` is edit-distance 1 from `render`, but `render`
+        // already exists in the same class — the author knows the spelling.
+        let src = "class Input extends React.Component {\n  renders = 0;\n  render() { return null; }\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_member_when_exact_lifecycle_absent_from_class() {
+        // No `render` method present, so `renders` is a genuine probable typo.
+        let src = "class Input extends React.Component {\n  renders = 0;\n}";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("render"));
     }
 }
