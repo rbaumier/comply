@@ -3,7 +3,10 @@
 //! - `ScanMode::All` → directory walk via `ignore` crate (standard_filters
 //!   excludes .git/, node_modules/, target/). Also honors `.gitignore`,
 //!   `.ignore`, and a comply-specific `.complyignore` (same gitignore
-//!   syntax — useful to skip files in comply without affecting git).
+//!   syntax — useful to skip files in comply without affecting git). Hidden
+//!   dot-directories are skipped, except a small allowlist of well-known
+//!   config dirs (`.storybook/`, `.vscode/`) whose real ES imports must
+//!   register in the cross-file import index.
 //! - Git modes → shell out to `git diff` / `git show` and validate exit
 //!   status (silent empty output used to mask real failures).
 //! - Each file is classified by extension into a Language; unknown
@@ -201,6 +204,27 @@ const EXCLUDED_DIRS: &[&str] = &[
     "third_party",
 ];
 
+/// Hidden (dot-prefixed) directories that hold real TypeScript/JavaScript with
+/// genuine ES `import` statements: `.storybook/main.ts` imports framework
+/// presets and addons, `.vscode/` holds editor task/extension scripts. The
+/// directory walk filters hidden files by default, so these imports never reach
+/// the cross-file import index — making the packages they import look unused.
+/// Walking these well-known config dirs registers their imports as real usage.
+const SCANNED_CONFIG_DOT_DIRS: &[&str] = &[".storybook", ".vscode"];
+
+/// True if any path segment is a hidden directory that is *not* a known config
+/// dir we deliberately scan. The directory walk disables the `ignore` crate's
+/// hidden filter so config dot-dirs can be reached, so this restores the
+/// "skip hidden" behaviour for every other dot-path.
+fn is_hidden_non_config(path: &Path) -> bool {
+    path.iter().filter_map(|seg| seg.to_str()).any(|seg| {
+        seg.starts_with('.')
+            && seg != "."
+            && seg != ".."
+            && !SCANNED_CONFIG_DOT_DIRS.contains(&seg)
+    })
+}
+
 fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
     let mut files = Vec::new();
     // Honor the project's own ESLint exclusions (flat-config `ignores`,
@@ -208,8 +232,14 @@ fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
     // `.eslintignore` / `.eslint-ignore` are gitignore-syntax, so the walker
     // handles them natively via add_custom_ignore_filename below.
     let eslint_ignore = crate::project::eslint_ignore::load(path);
+    // The root itself may be a hidden/absolute path; only entries *below* it are
+    // checked against the hidden filter, so strip the root prefix first.
+    let root = path.to_path_buf();
     let walker = WalkBuilder::new(path)
         .standard_filters(true)
+        // Disable the crate's blanket hidden filter so config dot-dirs are
+        // reachable; `filter_entry` below re-prunes every other hidden path.
+        .hidden(false)
         .add_custom_ignore_filename(".complyignore")
         .add_custom_ignore_filename(".eslintignore")
         .add_custom_ignore_filename(".eslint-ignore")
@@ -218,6 +248,14 @@ fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
             if is_dir
                 && let Some(name) = entry.file_name().to_str()
                 && EXCLUDED_DIRS.contains(&name)
+            {
+                return false;
+            }
+            // Re-prune hidden paths the crate's `hidden` filter would have
+            // dropped, except the config dot-dirs we deliberately scan. Only
+            // segments below the scan root count, so a hidden root stays in.
+            if let Ok(rel) = entry.path().strip_prefix(&root)
+                && is_hidden_non_config(rel)
             {
                 return false;
             }
@@ -471,6 +509,69 @@ mod tests {
 
         assert!(names.contains(&"kept.ts".to_string()));
         assert!(!names.contains(&"out.ts".to_string()));
+    }
+
+    #[test]
+    fn walk_directory_scans_known_config_dot_dirs() {
+        // Issue #1769: `.storybook/` and `.vscode/` hold real ES imports; their
+        // files must be discovered so those imports register as dependency use.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::create_dir(root.join(".storybook")).unwrap();
+        std::fs::write(
+            root.join(".storybook/manager.ts"),
+            "import { addons } from '@storybook/manager-api';\naddons.setConfig({});",
+        )
+        .unwrap();
+        std::fs::create_dir(root.join(".vscode")).unwrap();
+        std::fs::write(root.join(".vscode/tasks.ts"), "export const x = 1;").unwrap();
+
+        let names = walked_names(root);
+
+        assert!(
+            names.contains(&"manager.ts".to_string()),
+            ".storybook files must be walked, got: {names:?}"
+        );
+        assert!(
+            names.contains(&"tasks.ts".to_string()),
+            ".vscode files must be walked, got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn walk_directory_still_skips_other_hidden_dirs() {
+        // Only the config allowlist is scanned; stray hidden dirs stay skipped.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::write(root.join("kept.ts"), "x").unwrap();
+        std::fs::create_dir(root.join(".cache")).unwrap();
+        std::fs::write(root.join(".cache/gen.ts"), "x").unwrap();
+
+        let names = walked_names(root);
+
+        assert!(names.contains(&"kept.ts".to_string()));
+        assert!(
+            !names.contains(&"gen.ts".to_string()),
+            "unlisted hidden dirs must stay skipped, got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn walk_directory_skips_hidden_files_at_root() {
+        // A hidden dotfile (`.eslintrc.json`) is not in a config dot-dir and
+        // must remain unscanned even with the hidden filter disabled.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::write(root.join("kept.ts"), "x").unwrap();
+        std::fs::write(root.join(".hidden.ts"), "x").unwrap();
+
+        let names = walked_names(root);
+
+        assert!(names.contains(&"kept.ts".to_string()));
+        assert!(
+            !names.contains(&".hidden.ts".to_string()),
+            "hidden files outside config dirs must stay skipped, got: {names:?}"
+        );
     }
 
     #[test]
