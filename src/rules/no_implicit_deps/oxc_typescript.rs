@@ -315,4 +315,42 @@ mod tests {
             "tsconfig path alias (with trailing comma) must suppress, got {diags:?}"
         );
     }
+
+    // Regression #2045: Docusaurus component swizzling imports from the
+    // `@theme-original/*` virtual namespace (resolved by Docusaurus's webpack
+    // config, not an npm package) must not be flagged.
+    #[test]
+    fn allows_theme_original_swizzle_import_issue_2045() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"www"}"#).unwrap();
+        let theme = dir.path().join("src").join("theme").join("BlogPostItem");
+        fs::create_dir_all(&theme).unwrap();
+        let file = theme.join("index.tsx");
+        let source = "import OriginalBlogPostItem from '@theme-original/BlogPostItem';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "@theme-original/ swizzle import must not be flagged, got {diags:?}"
+        );
+    }
+
+    // A genuinely undeclared external package must still fire — the virtual
+    // exemption is scoped to the `@theme-original/` namespace only.
+    #[test]
+    fn flags_unlisted_dep_alongside_theme_original_issue_2045() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"www"}"#).unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("page.tsx");
+        let source = "import x from '@theme-not-original/Foo';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "undeclared external package must still fire, got {diags:?}"
+        );
+    }
 }
