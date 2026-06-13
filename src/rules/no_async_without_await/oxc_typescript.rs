@@ -63,6 +63,37 @@ fn is_call_argument(
         .any(|arg| arg.span() == span)
 }
 
+/// Check if the async function is a shorthand method of an object literal that
+/// is passed as an argument to a call expression, e.g.
+/// `$config({ async run() {} })`. The walk is `Function -> ObjectProperty ->
+/// ObjectExpression -> CallExpression(arguments)`. Like an arrow callback, the
+/// callee owns the contract: framework-config entry points such as SST/Pulumi's
+/// `run()` are typed `() => Promise<T>`, so `async` is mandatory even when the
+/// body declares resources via synchronous constructors and never awaits.
+fn is_object_method_in_call_arg(
+    func_node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    let property = nodes.parent_node(func_node.id());
+    let AstKind::ObjectProperty(prop) = property.kind() else { return false };
+    if !prop.method {
+        return false;
+    }
+
+    let object = nodes.parent_node(property.id());
+    let AstKind::ObjectExpression(_) = object.kind() else { return false };
+
+    let call = nodes.parent_node(object.id());
+    let AstKind::CallExpression(call_expr) = call.kind() else { return false };
+    let object_span = object.kind().span();
+    call_expr
+        .arguments
+        .iter()
+        .any(|arg| arg.span() == object_span)
+}
+
 /// Check if a method node or its class has decorators.
 fn has_decorators(
     func_node: &oxc_semantic::AstNode,
@@ -154,6 +185,15 @@ impl OxcCheck for Check {
             // does not own the call site, so flagging the missing `await` here
             // is noise. Standalone/named async functions stay flagged.
             if is_call_argument(node, semantic) {
+                continue;
+            }
+
+            // Async shorthand method of an object literal passed to a call,
+            // e.g. SST/Pulumi `$config({ async run() {} })`. The framework-config
+            // callback's `async` signature is mandated by the callee's type
+            // (`run: () => Promise<T>`) even when resources are declared via
+            // synchronous constructors and nothing is awaited.
+            if is_object_method_in_call_arg(node, semantic) {
                 continue;
             }
 
@@ -301,6 +341,44 @@ mod tests {
             reply.code(200).send({});
         });"#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_run_method_in_sst_config() {
+        // Regression for rbaumier/comply#1773 — SST's own project template.
+        // `async run()` is a shorthand method in the object literal passed to
+        // `$config(...)`; the framework types it `() => Promise<any>`, so async
+        // is mandatory even though the body never awaits.
+        let src = r#"export default $config({
+            app(input) {
+                return { name: "app", home: "aws" };
+            },
+            async run() {},
+        });"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_run_method_declaring_resources() {
+        // Second example from rbaumier/comply#1773 — resources are declared via
+        // synchronous constructor side effects, no await, but the framework
+        // still requires the method to be async.
+        let src = r#"export default $config({
+            app(input) { return { name: "aws-workflow-python", home: "aws" }; },
+            async run() {
+                const workflow = new sst.aws.Workflow("Workflow", {});
+                return { workflow: workflow.name };
+            },
+        });"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_async_object_method_not_in_call() {
+        // An object method outside any call argument is an ordinary async
+        // function without await — it stays flagged.
+        let src = "const obj = { async run() { return 42; } };";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
