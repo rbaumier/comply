@@ -97,6 +97,13 @@ pub(super) fn is_virtual_module(spec: &str) -> bool {
     VIRTUAL_PREFIXES.iter().any(|p| spec.starts_with(p))
 }
 
+/// True if `spec` is a Node.js subpath import (a `#`-prefixed internal alias
+/// declared in `package.json`'s `imports` field). Node.js reserves the `#`
+/// prefix exclusively for these aliases, so they are never npm package names.
+pub(super) fn is_subpath_import(spec: &str) -> bool {
+    spec.starts_with('#')
+}
+
 pub(super) fn is_bare_specifier(spec: &str) -> bool {
     !spec.starts_with('.')
         && !spec.starts_with('/')
