@@ -6,6 +6,15 @@
 //! about the return value. Skipped via
 //! `rust_helpers::is_in_test_context`.
 //!
+//! Two non-error idioms are also exempted:
+//! - `let _ = Arc::from_raw(p)` / `Box::from_raw(p)` (and bare `from_raw`):
+//!   reconstructing an owning pointer from a raw pointer and dropping it to
+//!   run its `Drop` impl. The reconstruction is infallible — `let _ =` invokes
+//!   the destructor, it does not ignore an error.
+//! - compile-fail test fixtures under a `tests/.../fail/` directory: `let _ =`
+//!   suppresses "unused result" warnings so they don't pollute the expected
+//!   compiler error output of `trybuild`/`tests-build` cases.
+//!
 //! NOTE: This rule uses a heuristic (call-like pattern matching) rather than
 //! type awareness. It may flag `let _ = infallible_fn()` where the function
 //! provably does not return Result/Option. Without --type-aware, there is no
@@ -13,6 +22,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::is_in_test_context;
+use tree_sitter::Node;
 
 crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
     // Check if the pattern is `_` (wildcard).
@@ -40,6 +50,18 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    // Skip compile-fail test fixtures (`tests/.../fail/`): `let _ =` there
+    // suppresses "unused result" warnings in the expected compiler output.
+    if is_compile_fail_fixture(ctx.path) {
+        return;
+    }
+
+    // Skip the intentional-drop idiom `let _ = Arc/Box::from_raw(p)`: the
+    // reconstruction is infallible and exists only to run the value's `Drop`.
+    if is_from_raw_reconstruction(value, source) {
+        return;
+    }
+
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -52,6 +74,39 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
     });
 }
 
+/// True for compile-fail fixtures: a `fail` directory component nested under a
+/// `tests` component (`tests/fail/`, `tests-build/tests/fail/`,
+/// `*_compile_tests/tests/fail/`). Both components must be present so ordinary
+/// `fail/` directories outside a test harness are still checked.
+fn is_compile_fail_fixture(path: &std::path::Path) -> bool {
+    let mut seen_tests = false;
+    for component in path.components() {
+        let segment = component.as_os_str();
+        if segment == "tests" {
+            seen_tests = true;
+        } else if segment == "fail" && seen_tests {
+            return true;
+        }
+    }
+    false
+}
+
+/// True if `value` is `Arc::from_raw(..)` / `Box::from_raw(..)` /
+/// `Rc::from_raw(..)` or a bare `from_raw(..)` call — the reconstruct-and-drop
+/// idiom used in `RawWakerVTable::drop` and similar destructors.
+fn is_from_raw_reconstruction(value: Node, source: &[u8]) -> bool {
+    if value.kind() != "call_expression" {
+        return false;
+    }
+    let Some(function) = value.child_by_field_name("function") else {
+        return false;
+    };
+    let Ok(callee) = function.utf8_text(source) else {
+        return false;
+    };
+    let name = callee.rsplit("::").next().unwrap_or(callee);
+    name == "from_raw"
+}
 
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
@@ -147,5 +202,40 @@ mod tests {
             }
         "#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_let_underscore_from_raw_intentional_drop() {
+        // Regression for #1408: reconstructing an owning pointer to run its
+        // Drop is infallible, not an ignored error.
+        let arc = "unsafe fn drop_waker(raw: *const ()) { let _ = Arc::from_raw(raw); }";
+        let boxed = "unsafe fn drop_box(raw: *const ()) { let _ = Box::from_raw(raw); }";
+        let bare = "unsafe fn drop_waker(raw: *const ()) { let _ = from_raw(raw); }";
+        assert!(run_on(arc).is_empty());
+        assert!(run_on(boxed).is_empty());
+        assert!(run_on(bare).is_empty());
+    }
+
+    #[test]
+    fn allows_let_underscore_in_compile_fail_fixture() {
+        // Regression for #1408: compile-fail fixtures use `let _ =` to keep
+        // "unused result" warnings out of the expected compiler output.
+        let src = "fn f() { let _ = tokio::try_join!(async {}); }";
+        let diagnostics = crate::rules::test_helpers::run_rule(
+            &Check,
+            src,
+            "tests-build/tests/fail/macros_try_join.rs",
+        );
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_in_ordinary_fail_dir() {
+        // The exemption requires a `tests` ancestor; a plain `fail/` dir
+        // outside a test harness is still a genuinely ignored result.
+        let src = "fn f() { let _ = do_something(); }";
+        let diagnostics =
+            crate::rules::test_helpers::run_rule(&Check, src, "src/fail/handler.rs");
+        assert_eq!(diagnostics.len(), 1);
     }
 }
