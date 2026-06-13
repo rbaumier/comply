@@ -299,6 +299,28 @@ mod tests {
     }
 
     #[test]
+    fn allows_bun_runtime_protocol_imports() {
+        // Regression for #1936 — Bun runtime built-ins (`bun:test`, `bun:sqlite`,
+        // `bun:ffi`, `bun:jsc`) carry the `bun:` scheme, recognized as a virtual
+        // namespace by the generic colon-scheme rule (#1975) — a `:` is invalid
+        // in an npm name. They must not be flagged even though `bun`/`bun:test`
+        // is not a declared dependency.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "a.ts",
+                "import { describe, test, expect } from 'bun:test';\n\
+                 import { Database } from 'bun:sqlite';",
+            ),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, Some(r#"{ "dependencies": {} }"#), None);
+        assert!(
+            diags.is_empty(),
+            "bun: runtime protocol imports must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
     fn allows_listed_dependency() {
         let files: Vec<(&str, &str)> = vec![
             ("a.ts", "import _ from 'lodash';"),
