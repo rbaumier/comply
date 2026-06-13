@@ -68,4 +68,43 @@ mod tests {
     fn allows_prototype_call() {
         assert!(run("Object.prototype.hasOwnProperty.call(obj, 'key')").is_empty());
     }
+
+    #[test]
+    fn skips_protobuf_generated_file_issue1144() {
+        // Issue #1144: Protobuf-compiled files cannot be hand-edited and emit
+        // `.hasOwnProperty()` deliberately, disabling `no-prototype-builtins`
+        // themselves. The generated-file detector must classify both the
+        // `generated/` directory and the Protobuf eslint-disable header. The
+        // engine skips every rule on generated files (engine/mod.rs), so a true
+        // `is_generated` flag is what suppresses these findings — and the file
+        // still produces `.hasOwnProperty()` diagnostics when run ungated,
+        // proving the skip (not the check) is doing the work.
+        use crate::files::Language;
+        use crate::project::ProjectCtx;
+        use crate::rules::file_ctx::FileCtx;
+        let src = "/*eslint-disable block-scoped-var, id-length, no-control-regex, no-magic-numbers, no-prototype-builtins, no-redeclare, no-shadow, no-var, sort-vars*/\nimport * as $protobuf from \"protobufjs/minimal\";\nfunction f(o) { return o.hasOwnProperty('k'); }\n";
+        let path = std::path::Path::new(
+            "sdk/web-pubsub/web-pubsub-client-protobuf/src/generated/clientProto.js",
+        );
+        let file = FileCtx::build(path, src, Language::JavaScript, &ProjectCtx::empty());
+        assert!(file.is_generated, "Protobuf generated file must be detected as generated");
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, src, "clientProto.js").len(),
+            1,
+            "the check itself still fires; only the is_generated gate suppresses it"
+        );
+    }
+
+    #[test]
+    fn still_flags_hand_written_file_issue1144() {
+        // A non-generated file using `.hasOwnProperty()` still flags.
+        use crate::files::Language;
+        use crate::project::ProjectCtx;
+        use crate::rules::file_ctx::FileCtx;
+        let src = "function f(o) { return o.hasOwnProperty('k'); }\n";
+        let path = std::path::Path::new("src/utils.js");
+        let file = FileCtx::build(path, src, Language::JavaScript, &ProjectCtx::empty());
+        assert!(!file.is_generated, "a hand-written file must not be detected as generated");
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "src/utils.js").len(), 1);
+    }
 }

@@ -80,7 +80,8 @@ impl FileCtx {
         let directives = scan_directives(source);
         let path_segments = scan_path(path);
         let rsc_context = classify_rsc(project.framework, directives, &path_segments);
-        let is_generated = scan_generated(source) || is_generated_filename(path);
+        let is_generated =
+            scan_generated(source) || is_generated_filename(path) || is_in_generated_dir(path);
         let is_minified = scan_minified(path, source);
         FileCtx {
             language: Some(language),
@@ -206,6 +207,15 @@ fn scan_generated(source: &str) -> bool {
         if inner == "eslint-disable" {
             return true;
         }
+        // The Protobuf compiler emits a targeted `eslint-disable` header that
+        // includes `no-prototype-builtins` (its output uses `.hasOwnProperty()`
+        // extensively). That rule list is a codegen signature, not a
+        // hand-written suppression.
+        if let Some(rules) = inner.strip_prefix("eslint-disable ")
+            && rules.split(',').any(|r| r.trim() == "no-prototype-builtins")
+        {
+            return true;
+        }
     }
     false
 }
@@ -232,6 +242,15 @@ fn is_generated_filename(path: &Path) -> bool {
     };
     let lower = name.to_ascii_lowercase();
     GENERATED_FILENAME_SUFFIXES.iter().any(|suffix| lower.ends_with(suffix))
+}
+
+/// A `generated/` directory anywhere in the path — matched as an exact path
+/// segment (between `/` delimiters) so that e.g. `generated-utils/` is NOT
+/// treated as a codegen output directory. Files here are emitted by a generator
+/// and cannot be hand-edited (e.g. Protobuf output under `src/generated/`).
+fn is_in_generated_dir(path: &Path) -> bool {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    normalized.split('/').any(|seg| seg == "generated")
 }
 
 fn scan_minified(path: &Path, source: &str) -> bool {
@@ -683,6 +702,37 @@ mod tests {
     #[test]
     fn targeted_eslint_disable_is_not_generated() {
         assert!(!scan_generated("/* eslint-disable no-console */\nconst x = 1;\n"));
+    }
+
+    #[test]
+    fn protobuf_eslint_disable_header_is_generated_issue1144() {
+        // Issue #1144: the Protobuf compiler emits a targeted eslint-disable
+        // header listing `no-prototype-builtins`; that rule list is a codegen
+        // signature.
+        let src = "/*eslint-disable block-scoped-var, id-length, no-control-regex, no-magic-numbers, no-prototype-builtins, no-redeclare, no-shadow, no-var, sort-vars*/\nimport * as $protobuf from \"protobufjs/minimal\";\n";
+        assert!(scan_generated(src));
+    }
+
+    #[test]
+    fn unrelated_targeted_eslint_disable_is_not_generated_issue1144() {
+        // A hand-written targeted disable without `no-prototype-builtins` stays
+        // non-generated.
+        assert!(!scan_generated("/* eslint-disable no-console, no-shadow */\nconst x = 1;\n"));
+    }
+
+    #[test]
+    fn generated_dir_segment_is_generated_issue1144() {
+        assert!(is_in_generated_dir(&PathBuf::from("src/generated/clientProto.js")));
+        assert!(is_in_generated_dir(&PathBuf::from(
+            "sdk/web-pubsub/web-pubsub-client-protobuf/src/generated/clientProto.js"
+        )));
+    }
+
+    #[test]
+    fn generated_dir_does_not_match_substrings_issue1144() {
+        assert!(!is_in_generated_dir(&PathBuf::from("src/generated-utils/foo.ts")));
+        assert!(!is_in_generated_dir(&PathBuf::from("src/regenerated/foo.ts")));
+        assert!(!is_in_generated_dir(&PathBuf::from("src/app.ts")));
     }
 
     #[test]
