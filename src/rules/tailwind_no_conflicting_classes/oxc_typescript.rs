@@ -123,4 +123,13 @@ mod tests {
     fn allows_flex_shorthand_with_flex_direction() {
         assert!(run(r#"const x = <div className="flex-1 flex-col" />;"#).is_empty());
     }
+
+    #[test]
+    fn allows_text_md_size_with_text_color() {
+        // Regression for rbaumier/comply#1809 — `text-md` is a size alias,
+        // not a color, so it must not conflict with `text-black`.
+        assert!(
+            run(r#"const x = <input className="text-md w-full text-black placeholder:text-neutral-500" />;"#).is_empty()
+        );
+    }
 }

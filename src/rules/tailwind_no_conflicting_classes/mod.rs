@@ -73,7 +73,9 @@ pub(crate) fn text_category(class: &str) -> Option<&'static str> {
     // `text-base/4.5`, `text-sm/4`, `text-base/lh` all match.
     let size_part = suffix.split('/').next().unwrap_or(suffix);
     match size_part {
-        "xs" | "sm" | "base" | "lg" | "xl" => return Some("text-size"),
+        // `md` is a common non-standard size alias (the "missing" step
+        // between `sm` and `lg`); it is never a color name.
+        "xs" | "sm" | "md" | "base" | "lg" | "xl" => return Some("text-size"),
         _ => {}
     }
     if size_part.ends_with("xl") && size_part.len() > 2 {
@@ -188,6 +190,14 @@ mod text_category_tests {
     fn color_tokens_remain_text_color() {
         assert_eq!(text_category("text-foreground"), Some("text-color"));
         assert_eq!(text_category("text-red-500"), Some("text-color"));
+    }
+
+    #[test]
+    fn md_size_alias_is_text_size_not_color() {
+        // Regression for rbaumier/comply#1809 — `text-md` is a size alias,
+        // not a color, so it must not share a key with `text-black`.
+        assert_eq!(text_category("text-md"), Some("text-size"));
+        assert_ne!(text_category("text-md"), text_category("text-black"));
     }
 }
 
