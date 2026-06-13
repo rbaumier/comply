@@ -321,6 +321,27 @@ mod tests {
     }
 
     #[test]
+    fn allows_url_imports() {
+        // Regression for #1904 — `https://`/`http://` URL imports (CDN / browser
+        // ESM) are resolved by the runtime, not npm. `extract_package_name`
+        // would otherwise split the URL on `/` and yield the bogus package
+        // `https:`, flagged as unlisted. They must never be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "custom-worker.js",
+                "import 'https://unpkg.com/@typescript/vfs@1.3.0/dist/vfs.globals.js';\n\
+                 import x from 'http://example.com/mod.js';",
+            ),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, Some(r#"{ "dependencies": {} }"#), None);
+        assert!(
+            diags.is_empty(),
+            "URL imports must not be flagged as unlisted dependencies: {diags:?}"
+        );
+    }
+
+    #[test]
     fn allows_listed_dependency() {
         let files: Vec<(&str, &str)> = vec![
             ("a.ts", "import _ from 'lodash';"),

@@ -129,7 +129,11 @@ pub(super) fn is_subpath_import(spec: &str) -> bool {
     spec.starts_with('#')
 }
 
-pub(super) fn is_bare_specifier(spec: &str) -> bool {
+/// True if `spec` is a bare specifier — a candidate npm package name rather
+/// than a relative path (`./`, `../`), an absolute path (`/`), or a URL import
+/// (`http://`, `https://`). URL imports are resolved by the runtime/CDN and are
+/// never npm packages, so they are excluded here.
+pub(crate) fn is_bare_specifier(spec: &str) -> bool {
     !spec.starts_with('.')
         && !spec.starts_with('/')
         && !spec.starts_with("http://")

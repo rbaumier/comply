@@ -54,6 +54,7 @@ use rayon::prelude::*;
 use tree_sitter::{Node, Parser};
 
 use crate::files::{Language, SourceFile};
+use crate::rules::no_implicit_deps::is_bare_specifier;
 use crate::rules::walker::walk_tree;
 
 /// Kind of an exported symbol. Tracks syntactic shape, not type — `Function`
@@ -742,7 +743,12 @@ fn collect_bare_specifiers(
             continue;
         }
         for imp in imps {
-            if imp.source_path.is_some() || imp.specifier.starts_with('.') {
+            // Skip imports resolved to a local file and any specifier that is
+            // not a bare package name (relative/absolute paths, URL imports).
+            // `extract_package_name` splits on `/`, so a URL like
+            // `https://cdn/pkg.js` would otherwise yield the bogus package
+            // `https:` and surface as an unlisted dependency.
+            if imp.source_path.is_some() || !is_bare_specifier(&imp.specifier) {
                 continue;
             }
             let pkg = extract_package_name(&imp.specifier);
