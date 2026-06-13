@@ -8,18 +8,26 @@ use std::sync::Arc;
 
 pub struct Check;
 
-/// Extract description lines from a JSDoc comment text.
+/// Extract description prose lines from a JSDoc comment text.
 ///
 /// The description is the prose **before the first `@tag`**. Once a
 /// `@tag` line is seen, everything after it (including the body of
 /// `@example` code blocks, `@param` descriptions, etc.) is no longer
 /// part of the description. Those bodies follow their own conventions
 /// — code in `@example` ends with `;`, `)`, `}`, not with `.`.
+///
+/// Markdown fenced code blocks (```` ```lang `` … `` ``` ````) embedded
+/// in the description — e.g. an inline `Example:` section without an
+/// `@example` tag — are not prose: the fence delimiters and the code
+/// inside them are excluded, so the closing fence is never treated as
+/// the last sentence requiring terminal punctuation. The label that
+/// introduces such a block (a line ending in `:`, like `Example:`) is a
+/// code-block heading, not a concluding sentence, so it too is dropped.
 fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
     let mut description_lines = Vec::new();
-    let lines: Vec<&str> = text.lines().collect();
+    let mut in_fence = false;
 
-    for (i, line) in lines.iter().enumerate() {
+    for (i, line) in text.lines().enumerate() {
         let trimmed = line.trim();
         let content = trimmed
             .trim_start_matches("/**")
@@ -28,6 +36,16 @@ fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
             .trim_end_matches("*/")
             .trim();
 
+        if content.starts_with("```") {
+            if !in_fence {
+                drop_trailing_code_block_label(&mut description_lines);
+            }
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
         if content.starts_with('@') {
             break;
         }
@@ -39,6 +57,19 @@ fn extract_description_lines(text: &str) -> Vec<(String, usize)> {
     }
 
     description_lines
+}
+
+/// Drop a trailing `:`-terminated label that introduces a fenced code
+/// block (e.g. `Example:`). Such a heading is not the concluding
+/// sentence of the description, so it must not gate the punctuation
+/// check.
+fn drop_trailing_code_block_label(description_lines: &mut Vec<(String, usize)>) {
+    if description_lines
+        .last()
+        .is_some_and(|(text, _)| text.trim_end().ends_with(':'))
+    {
+        description_lines.pop();
+    }
 }
 
 impl OxcCheck for Check {
@@ -208,6 +239,42 @@ function add(a: number, b: number) {}
 export function authorize(): void {}
 "#;
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_trailing_fenced_code_block_in_description() {
+        // Regression for rbaumier/comply#1159 — a description ending with a
+        // Markdown fenced code block (an inline `Example:` section without the
+        // `@example` tag) must not flag the closing ``` as missing punctuation.
+        let source = r#"
+/**
+ * Create a CommandInfo object that describes a command and its functionality.
+ *
+ * Example:
+ *
+ * ```typescript
+ * const info = makeCommandInfo('resolve', 'display info');
+ * ```
+ *
+ * @param name the name of this command
+ */
+export function makeCommandInfo(name: string): void {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_prose_missing_punctuation_with_no_fence() {
+        // The last actual prose sentence lacks terminal punctuation and no
+        // code fence is involved — this must still be flagged.
+        let source = r#"
+/**
+ * Adds two numbers together
+ */
+function add(a: number, b: number) {}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
     }
 
     #[test]
