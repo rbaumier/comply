@@ -277,7 +277,7 @@ fn merge_and_emit(
     }
 
     // Phase 2 — suppress symmetric sibling pairs.
-    // Two suppression criteria, either is sufficient:
+    // Three suppression criteria, any one is sufficient:
     //
     // A) Small-gap: the tokens NOT covered by any matching window in the
     //    reporter file are few (> 0, ≤ SYMMETRIC_SIBLING_GAP_THRESHOLD).  A
@@ -289,6 +289,11 @@ fn merge_and_emit(
     //    enable/disable, …).  These implement symmetric operations that
     //    intentionally share query structure — the shared block is not
     //    accidental copy-paste.
+    //
+    // C) Locale variant: the two files are locale implementations for related
+    //    variants of the same base language (e.g. `locale/ar-SA/…` vs
+    //    `locale/ar-EG/…`) at the same relative sub-path.  Locale files for an
+    //    overlapping language are expected to be structurally near-identical.
     let mut suppressed = std::collections::HashSet::<usize>::new();
     {
         let mut by_pair: FxHashMap<(usize, usize), Vec<usize>> = FxHashMap::default();
@@ -305,7 +310,9 @@ fn merge_and_emit(
             let small_gap = gap > 0 && gap <= SYMMETRIC_SIBLING_GAP_THRESHOLD;
             let name_siblings = gap > 0
                 && are_symmetric_name_pair(&files[*rfi].path, &files[*cfi].path);
-            if small_gap || name_siblings {
+            let locale_variants =
+                are_locale_variant_pair(&files[*rfi].path, &files[*cfi].path);
+            if small_gap || name_siblings || locale_variants {
                 suppressed.extend(idxs);
             }
         }
@@ -416,6 +423,88 @@ fn are_symmetric_name_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
         }
     }
     false
+}
+
+// --- Locale-variant detection ---
+
+/// Path segment names that establish an i18n/localization context. The segment
+/// directly following one of these is treated as a candidate locale code.
+const LOCALE_CONTEXT_SEGMENTS: &[&str] = &["locale", "locales", "i18n", "translations", "lang"];
+
+/// Extracts the base language subtag from a locale-code path segment, or `None`
+/// if the segment is not locale-shaped. A locale code is one or more `-`/`_`
+/// separated subtags whose first subtag is a 2–3 letter language code (BCP-47
+/// `ar`, `ar-SA`, `zh-Hans-CN`, `be-tarask`); the base language is that first
+/// subtag, lowercased.
+fn locale_base_language(segment: &str) -> Option<String> {
+    let first = segment.split(['-', '_']).next()?;
+    let is_language_code = (2..=3).contains(&first.len())
+        && first.bytes().all(|b| b.is_ascii_alphabetic());
+    if is_language_code {
+        Some(first.to_ascii_lowercase())
+    } else {
+        None
+    }
+}
+
+/// Returns true when both paths are locale implementations for variants of the
+/// same base language at the same relative sub-path — e.g.
+/// `locale/ar-SA/_lib/localize/index.ts` and `locale/ar-EG/_lib/localize/index.ts`
+/// (both base `ar`), or `locale/be-tarask/…` and `locale/be/…` (both base `be`).
+/// Such files implement the same interface for an overlapping language and are
+/// expected to be structurally near-identical, so their shared block must not be
+/// flagged as a clone.
+///
+/// The match requires (a) an i18n context segment shared at the same position,
+/// (b) locale-shaped code segments immediately after it that share a base
+/// language, and (c) an identical remaining sub-path. The base-language
+/// requirement keeps genuine duplication between unrelated locales
+/// (`ar-SA` vs `fr-FR`) flagged.
+fn are_locale_variant_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let segs_a: Vec<&str> = a
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => s.to_str(),
+            _ => None,
+        })
+        .collect();
+    let segs_b: Vec<&str> = b
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => s.to_str(),
+            _ => None,
+        })
+        .collect();
+
+    // Locale code lives immediately after the i18n context segment. Anchor on
+    // the last such context segment so a `locale` package name earlier in the
+    // path doesn't mis-anchor the code.
+    let code_pos = |segs: &[&str]| -> Option<usize> {
+        segs.iter()
+            .rposition(|seg| LOCALE_CONTEXT_SEGMENTS.contains(&seg.to_ascii_lowercase().as_str()))
+            .map(|ctx| ctx + 1)
+            .filter(|&pos| pos < segs.len())
+    };
+    let (Some(pos_a), Some(pos_b)) = (code_pos(&segs_a), code_pos(&segs_b)) else {
+        return false;
+    };
+
+    // Same context: identical prefix up to and including the context segment.
+    if segs_a[..pos_a] != segs_b[..pos_b] {
+        return false;
+    }
+    // Same relative sub-path after the locale-code segment.
+    if segs_a[pos_a + 1..] != segs_b[pos_b + 1..] {
+        return false;
+    }
+    // Locale-shaped code segments sharing a base language.
+    match (
+        locale_base_language(segs_a[pos_a]),
+        locale_base_language(segs_b[pos_b]),
+    ) {
+        (Some(base_a), Some(base_b)) => base_a == base_b,
+        _ => false,
+    }
 }
 
 // --- Tokenization ---
@@ -1100,5 +1189,121 @@ mod tests {
             1,
             "duplicated non-lockfile YAML must still be flagged"
         );
+    }
+
+    /// Builds two locale files at `<dir>/locale/<code_a>/<sub>` and
+    /// `<dir>/locale/<code_b>/<sub>` with near-identical content (shared
+    /// structure, differing only by a locale-specific suffix) and returns the
+    /// `SourceFile` pair.
+    fn write_locale_pair(
+        dir: &tempfile::TempDir,
+        code_a: &str,
+        code_b: &str,
+        sub: &str,
+    ) -> (SourceFile, SourceFile) {
+        // Shared structure (the localize boilerplate) plus a large block of
+        // locale-specific strings (months, weekdays, …) that differ entirely
+        // between the two locales. The differing block is wide enough that the
+        // uncovered-token gap exceeds SYMMETRIC_SIBLING_GAP_THRESHOLD, so the
+        // small-gap criterion does not apply — only the locale-variant rule can
+        // suppress this pair.
+        let shared = large_ts_block(20);
+        let strings = |tag: &str| -> String {
+            (1..=20)
+                .map(|i| format!("export const word_{i} = \"{tag}_term_{i}\";"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let content_a = format!("{shared}\n{}", strings(code_a));
+        let content_b = format!("{shared}\n{}", strings(code_b));
+        let pa = dir.path().join(format!("locale/{code_a}/{sub}"));
+        let pb = dir.path().join(format!("locale/{code_b}/{sub}"));
+        std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(pb.parent().unwrap()).unwrap();
+        std::fs::write(&pa, &content_a).unwrap();
+        std::fs::write(&pb, &content_b).unwrap();
+        (
+            SourceFile { path: pa, language: Language::TypeScript },
+            SourceFile { path: pb, language: Language::TypeScript },
+        )
+    }
+
+    #[test]
+    fn no_false_positive_on_locale_regional_variants() {
+        // Regression test for issue #1920.
+        // date-fns locale files for related regional variants of the same
+        // language (`ar-SA` vs `ar-EG`) intentionally share structure, differing
+        // only by a few locale-specific strings. Living in different directories,
+        // they escape the same-directory sibling suppression, so a locale-variant
+        // exemption is required.
+        let dir = tempfile::tempdir().unwrap();
+        let (fa, fb) = write_locale_pair(&dir, "ar-SA", "ar-EG", "_lib/localize/index.ts");
+        assert!(
+            lint_files(&[&fa, &fb]).is_empty(),
+            "regional locale variants (ar-SA/ar-EG) must not be flagged as clones"
+        );
+    }
+
+    #[test]
+    fn no_false_positive_on_locale_orthography_variants() {
+        // Issue #1920, second example: `be-tarask` (Belarusian Taraškievica
+        // orthography) vs base `be` share the base language `be`.
+        let dir = tempfile::tempdir().unwrap();
+        let (fa, fb) = write_locale_pair(&dir, "be-tarask", "be", "_lib/localize/index.ts");
+        assert!(
+            lint_files(&[&fa, &fb]).is_empty(),
+            "orthography locale variants (be-tarask/be) must not be flagged as clones"
+        );
+    }
+
+    #[test]
+    fn locale_files_of_different_languages_still_flagged() {
+        // Negative guard for the locale-variant exemption: two locale files for
+        // unrelated base languages (`ar-SA` vs `fr-FR`) that are genuine
+        // copy-paste duplicates must still be flagged — the exemption is scoped
+        // to a shared base language, not to the `locale/` directory wholesale.
+        let dir = tempfile::tempdir().unwrap();
+        let dup = large_ts_block(20);
+        let pa = dir.path().join("locale/ar-SA/_lib/localize/index.ts");
+        let pb = dir.path().join("locale/fr-FR/_lib/localize/index.ts");
+        std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(pb.parent().unwrap()).unwrap();
+        std::fs::write(&pa, &dup).unwrap();
+        std::fs::write(&pb, &dup).unwrap();
+        let fa = SourceFile { path: pa, language: Language::TypeScript };
+        let fb = SourceFile { path: pb, language: Language::TypeScript };
+        assert_eq!(
+            lint_files(&[&fa, &fb]).len(),
+            1,
+            "duplicated locale files for unrelated languages must still be flagged"
+        );
+    }
+
+    #[test]
+    fn is_locale_variant_pair_recognizes_examples() {
+        use std::path::Path;
+        assert!(are_locale_variant_pair(
+            Path::new("pkgs/core/src/locale/ar-SA/_lib/localize/index.ts"),
+            Path::new("pkgs/core/src/locale/ar-EG/_lib/localize/index.ts"),
+        ));
+        assert!(are_locale_variant_pair(
+            Path::new("pkgs/core/src/locale/be-tarask/_lib/localize/index.ts"),
+            Path::new("pkgs/core/src/locale/be/_lib/localize/index.ts"),
+        ));
+        // Different base language → not a variant pair.
+        assert!(!are_locale_variant_pair(
+            Path::new("pkgs/core/src/locale/ar-SA/_lib/localize/index.ts"),
+            Path::new("pkgs/core/src/locale/fr-FR/_lib/localize/index.ts"),
+        ));
+        // Same base language but different sub-path → not a variant pair.
+        assert!(!are_locale_variant_pair(
+            Path::new("src/locale/ar-SA/_lib/localize/index.ts"),
+            Path::new("src/locale/ar-EG/_lib/match/index.ts"),
+        ));
+        // Not under a locale context → not a variant pair.
+        assert!(!are_locale_variant_pair(
+            Path::new("src/handlers/ar-SA/index.ts"),
+            Path::new("src/handlers/ar-EG/index.ts"),
+        ));
     }
 }
