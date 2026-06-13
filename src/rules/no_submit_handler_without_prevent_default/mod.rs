@@ -4,7 +4,9 @@
 //! Without `preventDefault`, the browser performs a full-page navigation on
 //! submit, wiping any client-side state. Controlled React forms almost always
 //! want this call. The rule is scoped to inline arrow / function expressions
-//! so it does not false-positive on handlers defined elsewhere.
+//! on the native lowercase `<form>` element, so it does not false-positive on
+//! handlers defined elsewhere nor on `onSubmit` props of PascalCase React
+//! components, whose submission handling lives inside the component.
 
 mod oxc_typescript;
 #[cfg(test)]
