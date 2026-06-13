@@ -2,9 +2,10 @@ use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    AssignmentTarget, BindingPattern, Expression, Statement, VariableDeclarationKind,
+    AssignmentOperator, AssignmentTarget, BindingPattern, Expression, Statement,
+    VariableDeclarationKind,
 };
-use oxc_span::GetSpan;
+use oxc_span::{GetSpan, Span};
 use std::sync::Arc;
 
 pub struct Check;
@@ -12,7 +13,9 @@ pub struct Check;
 struct AssignInfo<'a> {
     name: &'a str,
     is_const: bool,
+    is_compound: bool,
     start: u32,
+    rhs: Span,
 }
 
 impl OxcCheck for Check {
@@ -24,7 +27,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let stmts: Option<&oxc_allocator::Vec<'a, Statement<'a>>> = match node.kind() {
@@ -34,13 +37,14 @@ impl OxcCheck for Check {
             _ => None,
         };
         let Some(stmts) = stmts else { return };
-        check_consecutive_assignments(stmts, ctx, diagnostics);
+        check_consecutive_assignments(stmts, ctx, semantic, diagnostics);
     }
 }
 
 fn check_consecutive_assignments(
     stmts: &[Statement],
     ctx: &CheckCtx,
+    semantic: &oxc_semantic::Semantic,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let infos: Vec<Option<AssignInfo>> = stmts.iter().map(|s| extract_assign(s)).collect();
@@ -49,6 +53,12 @@ fn check_consecutive_assignments(
             continue;
         };
         if a.is_const || a.name != b.name {
+            continue;
+        }
+        // A read-modify-write is not redundant: a compound op always reads the
+        // previous value, and a plain assignment whose RHS references the
+        // variable consumes it before overwriting.
+        if b.is_compound || rhs_reads_var(semantic, a.name, b.rhs) {
             continue;
         }
         let (line_a, col_a) = byte_offset_to_line_col(ctx.source, a.start as usize);
@@ -78,13 +88,14 @@ fn extract_assign<'a>(stmt: &'a Statement<'a>) -> Option<AssignInfo<'a>> {
             let BindingPattern::BindingIdentifier(id) = &declarator.id else {
                 return None;
             };
-            // Must have an initializer.
-            declarator.init.as_ref()?;
+            let init = declarator.init.as_ref()?;
             let is_const = decl.kind == VariableDeclarationKind::Const;
             Some(AssignInfo {
                 name: id.name.as_str(),
                 is_const,
+                is_compound: false,
                 start: stmt.span().start,
+                rhs: init.span(),
             })
         }
         Statement::ExpressionStatement(expr_stmt) => {
@@ -97,11 +108,23 @@ fn extract_assign<'a>(stmt: &'a Statement<'a>) -> Option<AssignInfo<'a>> {
             Some(AssignInfo {
                 name: id.name.as_str(),
                 is_const: false,
+                is_compound: assign.operator != AssignmentOperator::Assign,
                 start: stmt.span().start,
+                rhs: assign.right.span(),
             })
         }
         _ => None,
     }
+}
+
+/// True when `name` appears as an identifier reference anywhere inside `rhs`.
+fn rhs_reads_var(semantic: &oxc_semantic::Semantic, name: &str, rhs: Span) -> bool {
+    semantic.nodes().iter().any(|node| {
+        let AstKind::IdentifierReference(id) = node.kind() else {
+            return false;
+        };
+        id.name.as_str() == name && rhs.start <= id.span.start && id.span.end <= rhs.end
+    })
 }
 
 #[cfg(test)]
@@ -148,5 +171,20 @@ mod tests {
     #[test]
     fn allows_used_between() {
         assert!(run_on("let x = 1;\nconsole.log(x);\nx = 2;").is_empty());
+    }
+
+    #[test]
+    fn allows_promise_chain() {
+        assert!(run_on("let chain = glob(p);\nchain = chain.then((r) => r.sort());").is_empty());
+    }
+
+    #[test]
+    fn allows_compound_assignment() {
+        assert!(run_on("let result = \"Object {\";\nresult += printObjectProperties(val);").is_empty());
+    }
+
+    #[test]
+    fn allows_read_modify_write_via_argument() {
+        assert!(run_on("authDef = Buffer.from(authDef).toString();\nauthDef = authDef.split(\":\");").is_empty());
     }
 }
