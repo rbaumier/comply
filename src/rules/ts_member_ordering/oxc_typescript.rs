@@ -62,6 +62,17 @@ fn constructor_assigned_fields<'a>(class: &Class<'a>) -> FxHashSet<&'a str> {
     names
 }
 
+/// A property whose initializer is an arrow or function expression is a
+/// method-like member (e.g. `handleClick = () => { ... }`): the function form
+/// is chosen to capture `this`, so grouping such fields after the regular
+/// methods is a deliberate auto-binding convention, not an ordering smell.
+fn is_method_like_field(prop: &oxc_ast::ast::PropertyDefinition) -> bool {
+    matches!(
+        prop.value,
+        Some(Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_))
+    )
+}
+
 fn ts_signature_rank(sig: &TSSignature) -> Option<u8> {
     match sig {
         TSSignature::TSIndexSignature(_)
@@ -94,10 +105,11 @@ impl OxcCheck for Check {
                     let Some(rank) = class_element_rank(elem) else { continue };
                     if rank < max_rank {
                         if let ClassElement::PropertyDefinition(prop) = elem
-                            && prop
-                                .key
-                                .name()
-                                .is_some_and(|name| assigned.contains(name.as_ref()))
+                            && (is_method_like_field(prop)
+                                || prop
+                                    .key
+                                    .name()
+                                    .is_some_and(|name| assigned.contains(name.as_ref())))
                         {
                             continue;
                         }
@@ -219,6 +231,44 @@ mod tests {
             \x20 bar(): void {}\n\
             \x20 assigned: number;\n\
             \x20 stray: string;\n\
+            }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_arrow_function_fields_after_methods() {
+        // framer/motion MotionValue pattern: arrow-function fields are
+        // `this`-bound callbacks passed to external APIs, so they are
+        // intentionally grouped after the regular methods.
+        let src = "class MotionValue<V = any> {\n\
+            \x20 current!: V;\n\
+            \x20 prev: V | undefined;\n\
+            \x20 constructor(initX: V) { this.current = initX; }\n\
+            \x20 addDependent(): void {}\n\
+            \x20 updateAndNotify = (v: V) => { this.current = v; };\n\
+            \x20 get() {}\n\
+            }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_function_expression_fields_after_methods() {
+        // A `function` expression assigned to a field is method-like too.
+        let src = "class Foo {\n\
+            \x20 bar(): void {}\n\
+            \x20 handler = function () {};\n\
+            }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_data_field_after_method() {
+        // An ordinary data field (non-arrow, non-constructor-assigned)
+        // placed after methods remains a genuine ordering smell.
+        let src = "class Foo {\n\
+            \x20 bar(): void {}\n\
+            \x20 hasAnimated = false;\n\
             }";
         let diags = run(src);
         assert_eq!(diags.len(), 1);
