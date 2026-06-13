@@ -890,6 +890,87 @@ pub fn is_type_only_import_binding(
         })
 }
 
+/// Known database / ORM / query-builder packages. A file that imports none of
+/// these does not talk to a database, so database-specific rules
+/// (e.g. `db-no-n-plus-one`) must not fire on it.
+///
+/// Matched against the *root* package of every import specifier in the file
+/// (`drizzle-orm/node-postgres` → `drizzle-orm`), so subpath imports count.
+const DB_PACKAGES: &[&str] = &[
+    "drizzle-orm",
+    "@prisma/client",
+    "prisma",
+    "typeorm",
+    "@mikro-orm/core",
+    "sequelize",
+    "knex",
+    "mongoose",
+    "mongodb",
+    "pg",
+    "postgres",
+    "mysql",
+    "mysql2",
+    "sqlite",
+    "sqlite3",
+    "better-sqlite3",
+    "@planetscale/database",
+    "@neondatabase/serverless",
+    "kysely",
+    "objection",
+    "bookshelf",
+    "ioredis",
+    "redis",
+];
+
+/// Root package of a bare import specifier: `@scope/pkg/deep` → `@scope/pkg`,
+/// `drizzle-orm/node-postgres` → `drizzle-orm`. Relative specifiers (`./db`) are
+/// returned unchanged and never match a package name.
+fn import_root_package(specifier: &str) -> &str {
+    if specifier.starts_with('@') {
+        let end = specifier
+            .match_indices('/')
+            .nth(1)
+            .map(|(idx, _)| idx)
+            .unwrap_or(specifier.len());
+        return &specifier[..end];
+    }
+    specifier.split('/').next().unwrap_or(specifier)
+}
+
+/// True when the file imports at least one known database / ORM package
+/// ([`DB_PACKAGES`]). Covers static `import`/`export … from`, dynamic
+/// `import('…')`, and CommonJS `require('…')`.
+///
+/// Database rules gate on this so they never fire on files doing unrelated
+/// async I/O (blob storage, HTTP, filesystem) that merely *looks* like a query.
+#[must_use]
+pub fn file_imports_db_library(semantic: &oxc_semantic::Semantic<'_>) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{Argument, Expression};
+
+    let is_db_specifier = |spec: &str| DB_PACKAGES.contains(&import_root_package(spec));
+
+    semantic.nodes().iter().any(|node| match node.kind() {
+        AstKind::ImportDeclaration(decl) => is_db_specifier(decl.source.value.as_str()),
+        AstKind::ExportNamedDeclaration(decl) => decl
+            .source
+            .as_ref()
+            .is_some_and(|src| is_db_specifier(src.value.as_str())),
+        AstKind::ExportAllDeclaration(decl) => is_db_specifier(decl.source.value.as_str()),
+        AstKind::ImportExpression(expr) => {
+            matches!(peel_parens(&expr.source), Expression::StringLiteral(lit)
+                if is_db_specifier(lit.value.as_str()))
+        }
+        AstKind::CallExpression(call) => {
+            let is_require = matches!(&call.callee, Expression::Identifier(id) if id.name == "require");
+            is_require
+                && matches!(call.arguments.first(), Some(Argument::StringLiteral(lit))
+                    if is_db_specifier(lit.value.as_str()))
+        }
+        _ => false,
+    })
+}
+
 #[cfg(test)]
 mod oxc_helpers_tests {
     use super::{byte_offset_to_line_col, reset_file_caches, source_contains};
@@ -978,11 +1059,38 @@ mod oxc_helpers_tests {
     }
 
     use super::{
-        ClassShape, is_as_unknown_double_cast, is_outer_as_unknown_double_cast, peel_parens,
-        type_annotation_is_type_predicate, with_semantic,
+        ClassShape, file_imports_db_library, is_as_unknown_double_cast,
+        is_outer_as_unknown_double_cast, peel_parens, type_annotation_is_type_predicate,
+        with_semantic,
     };
     use oxc_ast::AstKind;
     use oxc_span::SourceType;
+
+    fn imports_db(src: &str) -> bool {
+        with_semantic(src, SourceType::ts(), file_imports_db_library)
+    }
+
+    #[test]
+    fn file_imports_db_library_detects_static_import_and_subpath() {
+        assert!(imports_db("import { drizzle } from 'drizzle-orm/node-postgres';"));
+        assert!(imports_db("import { PrismaClient } from '@prisma/client';"));
+        assert!(imports_db("import postgres from 'postgres';"));
+    }
+
+    #[test]
+    fn file_imports_db_library_detects_require_and_dynamic_import() {
+        assert!(imports_db("const pg = require('pg');"));
+        assert!(imports_db("const m = await import('mongodb');"));
+        assert!(imports_db("export * from 'knex';"));
+    }
+
+    #[test]
+    fn file_imports_db_library_rejects_non_db_imports() {
+        assert!(!imports_db("import { ContainerClient } from '@azure/storage-blob';"));
+        assert!(!imports_db("import fs from 'node:fs';"));
+        assert!(!imports_db("import { foo } from './db';"));
+        assert!(!imports_db("const x = 1;"));
+    }
 
     #[test]
     fn class_shape_separates_decorator_super_and_implements() {
