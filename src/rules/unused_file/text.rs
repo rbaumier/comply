@@ -104,6 +104,7 @@ fn detect_entry_points<'a>(
             is_entry_point(p, project, canon_root, canon_workspace_roots)
                 || is_test_file(p)
                 || project.entrypoints_contains(p)
+                || project.is_package_entry_file(p)
         })
         .collect()
 }
@@ -685,6 +686,37 @@ mod tests {
         assert!(
             diags[0].path.to_str().unwrap().contains("orphan"),
             "diagnostic should target the orphaned non-route file: {diags:?}"
+        );
+    }
+
+    // Regression for #1948: files referenced as VALUES in a package.json
+    // `browser` (or `react-native`) substitution map are the browser/native
+    // build bundlers swap in at build time. They are never `import`ed, so the
+    // import graph cannot reach them — but they are declared entry points, not
+    // dead code, and must not be flagged. A genuine orphan stays flagged.
+    #[test]
+    fn browser_substitute_targets_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"name":"axios","browser":{"./lib/platform/node/index.js":"./lib/platform/browser/index.js","./lib/adapters/http.js":"./lib/helpers/null.js"}}"#,
+            ),
+            (
+                "src/index.js",
+                "import nodeIndex from '../lib/platform/node/index.js';\nexport { nodeIndex };\n",
+            ),
+            ("lib/platform/node/index.js", "export default {};\n"),
+            // Browser substitutes — never imported, swapped in by the bundler.
+            ("lib/platform/browser/index.js", "export default {};\n"),
+            ("lib/helpers/null.js", "export default null;\n"),
+            // A genuine orphan: not imported, not a substitute, not an entry.
+            ("lib/orphan.js", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected exactly one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "only the genuine orphan must be flagged; browser substitutes are entry points: {diags:?}"
         );
     }
 }

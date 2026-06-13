@@ -91,9 +91,10 @@ pub struct PackageJson {
     /// from "ships an integration/plugin for X".
     pub script_test_runners: BTreeSet<String>,
     /// Relative paths this package declares as its own entry point: the `main`
-    /// value plus the `exports` `.` target(s). Stored manifest-dir-relative,
-    /// forward-slash, no leading `./`, so a consumer can join them onto the
-    /// manifest directory and compare against a file path.
+    /// value, the `exports` `.` target(s), and the `browser`/`react-native`
+    /// substitute targets (the browser/native build bundlers swap in). Stored
+    /// manifest-dir-relative, forward-slash, no leading `./`, so a consumer can
+    /// join them onto the manifest directory and compare against a file path.
     pub entry_files: BTreeSet<String>,
 }
 
@@ -284,10 +285,38 @@ fn collect_export_targets(node: &Value, out: &mut BTreeSet<String>) {
     }
 }
 
+/// Collect the substitute targets of a `browser`/`react-native` field. A string
+/// (`"browser": "./dist/browser.js"`) is the single substitute; an object is a
+/// substitution map whose VALUES are the substitute files swapped in at bundle
+/// time. The KEYS are normal imported node files (already reachable via the
+/// import graph), so only string values are collected — non-string values are
+/// webpack's `"./x": false` "ignore this module" form and name no file.
+fn collect_substitute_targets(node: &Value, out: &mut BTreeSet<String>) {
+    match node {
+        Value::String(s) => {
+            if let Some(rel) = normalize_main_path(s) {
+                out.insert(rel);
+            }
+        }
+        Value::Object(map) => {
+            for value in map.values() {
+                if let Some(s) = value.as_str()
+                    && let Some(rel) = normalize_main_path(s)
+                {
+                    out.insert(rel);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// The relative paths this package declares as its own entry point: the `main`
 /// value plus the `exports` `.` target(s) (including conditional `import`/
 /// `require`/`default` variants). A string `exports` (no subpath map) is itself
-/// the `.` target.
+/// the `.` target. Also includes the `browser` and `react-native` substitute
+/// targets — the browser/native build of the library that bundlers swap in at
+/// build time, reachable only through the substitution map, never `import`ed.
 fn collect_entry_files(json: &Value) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     if let Some(main) = json.get("main").and_then(Value::as_str)
@@ -307,6 +336,12 @@ fn collect_entry_files(json: &Value) -> BTreeSet<String> {
             }
         }
         _ => {}
+    }
+    if let Some(browser) = json.get("browser") {
+        collect_substitute_targets(browser, &mut out);
+    }
+    if let Some(native) = json.get("react-native") {
+        collect_substitute_targets(native, &mut out);
     }
     out
 }
