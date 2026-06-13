@@ -138,6 +138,35 @@ mod tests {
     }
 
     #[test]
+    fn does_not_flag_same_value_across_categorized_arrays() {
+        // The issue's FP: keyword lookup tables where the same value
+        // belongs to several categorized `const` arrays. Each array is a
+        // standalone enumeration, so the repetition is intentional data,
+        // not a business constant worth extracting.
+        let src = r#"
+            const SHORTHAND_PROPERTIES: &[&str] = &["align-content", "flex"];
+            const ANIMATABLE_PROPERTIES: &[&str] = &["align-content", "color"];
+            const TRANSITION_PROPERTIES: &[&str] = &["align-content", "margin"];
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_value_duplicated_in_expressions() {
+        // A genuine duplicate: the same literal hard-coded across plain
+        // expressions (not array data) is still extractable.
+        let src = r#"
+            fn f() {
+                let a = greet("welcome-banner");
+                let b = greet("welcome-banner");
+                let c = greet("welcome-banner");
+                let _ = (a, b, c);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
     fn flags_raw_string_duplicated_three_times() {
         // Same raw-string body three times → correctly flagged.
         let src = r###"
