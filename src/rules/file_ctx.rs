@@ -42,6 +42,12 @@ pub struct PathSegments {
     pub in_app_router: bool,
     pub in_pages_router: bool,
     pub in_test_dir: bool,
+    /// An `internal/` directory directly under a test root (`test/internal/`,
+    /// `tests/internal/`, `__tests__/internal/`, `_tests_/internal/`). By the
+    /// Azure-SDK convention these tests deliberately exercise — and mock —
+    /// internal implementation details, unlike `test/public/` tests that
+    /// verify the public API contract.
+    pub in_test_internal_dir: bool,
     pub in_node_modules: bool,
     pub in_storybook: bool,
     pub is_vendored: bool,
@@ -312,6 +318,18 @@ fn has_relaxed_segment(normalized: &str) -> bool {
     normalized.split('/').any(|seg| RELAXED_SEGMENTS.contains(&seg))
 }
 
+/// Test-root directory names that pair with an `internal/` child to form the
+/// `test/internal/` convention — matched as exact path segments.
+const TEST_ROOT_SEGMENTS: &[&str] = &["test", "tests", "__tests__", "_tests_"];
+
+/// An `internal/` directory directly under a test root (e.g. `test/internal/`).
+fn has_test_internal_dir(normalized: &str) -> bool {
+    let segments: Vec<&str> = normalized.split('/').collect();
+    segments
+        .windows(2)
+        .any(|pair| TEST_ROOT_SEGMENTS.contains(&pair[0]) && pair[1] == "internal")
+}
+
 pub(crate) fn scan_path(path: &Path) -> PathSegments {
     let lower = path.to_string_lossy().replace('\\', "/");
     PathSegments {
@@ -357,6 +375,7 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
             || lower == "test.tsx"
             || lower == "test.js"
             || lower == "test.jsx",
+        in_test_internal_dir: has_test_internal_dir(&lower),
         in_node_modules: lower.contains("/node_modules/"),
         in_storybook: lower.contains(".stories.") || has_storybook_segment(&lower),
         is_vendored: has_vendored_segment(&lower),
@@ -508,6 +527,28 @@ mod tests {
             ))
             .in_test_dir
         );
+    }
+
+    #[test]
+    fn test_internal_dir_convention_issue1150() {
+        // `internal/` directly under a test root marks tests that deliberately
+        // exercise internal implementation details (Azure-SDK convention).
+        assert!(
+            scan_path(&PathBuf::from(
+                "sdk/core/core-rest-pipeline/test/internal/node/userAgent.spec.ts"
+            ))
+            .in_test_internal_dir
+        );
+        assert!(scan_path(&PathBuf::from("test/internal/foo.spec.ts")).in_test_internal_dir);
+        assert!(scan_path(&PathBuf::from("tests/internal/foo.spec.ts")).in_test_internal_dir);
+        assert!(scan_path(&PathBuf::from("__tests__/internal/foo.spec.ts")).in_test_internal_dir);
+        assert!(scan_path(&PathBuf::from("_tests_/internal/foo.spec.ts")).in_test_internal_dir);
+        // `test/public/` verifies the public API contract — not exempt.
+        assert!(!scan_path(&PathBuf::from("test/public/foo.spec.ts")).in_test_internal_dir);
+        // A plain `test/` file (no `internal/` child) is not exempt.
+        assert!(!scan_path(&PathBuf::from("test/foo.spec.ts")).in_test_internal_dir);
+        // An `internal/` not under a test root is not a test-internal dir.
+        assert!(!scan_path(&PathBuf::from("src/internal/foo.ts")).in_test_internal_dir);
     }
 
     #[test]
