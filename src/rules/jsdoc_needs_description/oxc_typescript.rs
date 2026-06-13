@@ -2,6 +2,11 @@
 //!
 //! JSDoc comments are not AST nodes in oxc, so we scan the source text
 //! directly via `run_on_semantic`.
+//!
+//! A block is flagged when it has tags but no prose description, unless every
+//! tag is type-only (the type is the documentation) or a JSX compiler pragma
+//! (`@jsx`, `@jsxImportSource`, `@jsxRuntime`, `@jsxFrag`), where the whole
+//! comment is a compiler directive with no prose to add.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -29,6 +34,13 @@ fn is_type_only_tag(tag: &str) -> bool {
             | "extends"
             | "satisfies"
     )
+}
+
+/// JSX compiler pragma directives (Babel/TypeScript) carried in JSDoc syntax.
+/// The whole comment is the directive consumed by the compiler — there is no
+/// prose description to add.
+fn is_pragma_tag(tag: &str) -> bool {
+    matches!(tag, "jsx" | "jsxImportSource" | "jsxRuntime" | "jsxFrag")
 }
 
 impl OxcCheck for Check {
@@ -83,7 +95,12 @@ impl OxcCheck for Check {
                 }
             }
 
-            if !tags.is_empty() && !has_description && !tags.iter().all(|tag| is_type_only_tag(tag)) {
+            if !tags.is_empty()
+                && !has_description
+                && !tags
+                    .iter()
+                    .all(|tag| is_type_only_tag(tag) || is_pragma_tag(tag))
+            {
                 let (line, column) = byte_offset_to_line_col(src, abs_start);
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),

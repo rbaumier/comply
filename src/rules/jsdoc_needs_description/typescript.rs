@@ -40,7 +40,12 @@ crate::ast_check! { on ["comment"] prefilter = ["/**"] => |node, source, ctx, di
         }
     }
 
-    if !tags.is_empty() && !has_description && !tags.iter().all(|tag| is_type_only_tag(tag)) {
+    if !tags.is_empty()
+        && !has_description
+        && !tags
+            .iter()
+            .all(|tag| is_type_only_tag(tag) || is_pragma_tag(tag))
+    {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -73,6 +78,13 @@ fn is_type_only_tag(tag: &str) -> bool {
             | "extends"
             | "satisfies"
     )
+}
+
+/// JSX compiler pragma directives (Babel/TypeScript) carried in JSDoc syntax.
+/// The whole comment is the directive consumed by the compiler — there is no
+/// prose description to add.
+fn is_pragma_tag(tag: &str) -> bool {
+    matches!(tag, "jsx" | "jsxImportSource" | "jsxRuntime" | "jsxFrag")
 }
 
 
@@ -157,6 +169,49 @@ function important() {}
 /**
  */
 function foo() {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_jsx_pragma() {
+        let source = "/** @jsx jsx */\nimport { jsx } from '@emotion/react'";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_jsx_import_source_pragma() {
+        let source = "/** @jsxImportSource @emotion/react */\nexport const x = 1;";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_jsx_runtime_pragma() {
+        let source = "/** @jsxRuntime classic */\nexport const x = 1;";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_jsx_frag_pragma() {
+        let source = "/** @jsxFrag jsxFrag */\nexport const x = 1;";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_non_pragma_non_type_tag() {
+        let source = "/** @deprecated */\nfunction old() {}";
+        let d = run_on(source);
+        assert_eq!(d.len(), 1, "@deprecated is neither pragma nor type-only");
+    }
+
+    #[test]
+    fn allows_pragma_with_description() {
+        let source = r#"
+/**
+ * Configures the JSX runtime for this module.
+ * @jsxImportSource @emotion/react
+ */
+export const x = 1;
 "#;
         assert!(run_on(source).is_empty());
     }
