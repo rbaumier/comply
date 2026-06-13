@@ -70,6 +70,10 @@ pub struct PackageJson {
     pub peer_dependencies: BTreeMap<String, String>,
     pub optional_dependencies: BTreeMap<String, String>,
     pub engines: BTreeMap<String, String>,
+    /// Keys of the top-level `imports` field — Node.js subpath imports. Each is
+    /// a `#`-prefixed self-referencing alias (e.g. `#import-plugin`, `#dep/*`)
+    /// resolved to an internal file at runtime, never an npm package.
+    pub subpath_imports: BTreeSet<String>,
     /// True if `browserslist` is present at any form (array, object, string).
     pub has_browserslist: bool,
     pub workspaces: Vec<String>,
@@ -109,6 +113,11 @@ impl PackageJson {
             peer_dependencies: parse_dep_map(&json, "peerDependencies"),
             optional_dependencies: parse_dep_map(&json, "optionalDependencies"),
             engines: parse_dep_map(&json, "engines"),
+            subpath_imports: json
+                .get("imports")
+                .and_then(|node| node.as_object())
+                .map(|obj| obj.keys().cloned().collect())
+                .unwrap_or_default(),
             has_browserslist: json.get("browserslist").is_some(),
             is_library: json.get("main").is_some()
                 || json.get("exports").is_some()
@@ -167,6 +176,27 @@ impl PackageJson {
             || self.peer_dependencies.contains_key(name)
             || self.optional_dependencies.contains_key(name)
             || self.engines.contains_key(name)
+    }
+
+    /// True if `spec` is a Node.js subpath import declared in this manifest's
+    /// `imports` field. Matches an exact key (`#import-plugin`) or a wildcard
+    /// pattern (`#dep/*` covers `#dep/anything`). `spec` is the bare-specifier
+    /// package head, so a subpath like `#dep/db` arrives reduced to `#dep`; a
+    /// `#dep/*` key (prefix `#dep/`) therefore matches it on the trimmed prefix.
+    /// These `#`-aliases resolve to internal files, never an npm dependency.
+    pub fn declares_subpath_import(&self, spec: &str) -> bool {
+        self.subpath_imports.iter().any(|key| {
+            if key == spec {
+                return true;
+            }
+            match key.strip_suffix('*') {
+                Some(prefix) => {
+                    let prefix = prefix.strip_suffix('/').unwrap_or(prefix);
+                    spec == prefix || spec.starts_with(prefix)
+                }
+                None => false,
+            }
+        })
     }
 
     /// True if any `scripts` entry runs `name` (e.g. `vitest`) as a command.

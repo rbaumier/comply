@@ -11,6 +11,9 @@
 //! Skips:
 //!   - tsconfig path aliases (e.g. `@/utils`, `~/lib`) — they resolve to
 //!     local source via `compilerOptions.paths`, not to an npm package.
+//!   - Node.js subpath imports (`#`-prefixed specifiers) declared in the
+//!     `imports` field of the root or an importer's nearest package.json —
+//!     self-referencing aliases resolved to internal files, not npm packages.
 //!
 //! The rule produces project-wide diagnostics, not per-file ones, so it
 //! fires only on the first indexed path of the run. Every other invocation
@@ -60,6 +63,21 @@ impl TextCheck for Check {
                 continue;
             }
             if pkg.has_dep_or_engine(spec) {
+                continue;
+            }
+            // Node.js subpath imports: a `#`-prefixed specifier is a
+            // self-referencing alias declared in a package.json `imports` map,
+            // resolved to an internal file at runtime — never an npm package.
+            // Exempt it when the root or any importer's nearest manifest
+            // declares it under `imports`.
+            if spec.starts_with('#')
+                && (pkg.declares_subpath_import(spec)
+                    || info.importers.iter().any(|imp| {
+                        ctx.project
+                            .nearest_package_json(imp)
+                            .is_some_and(|p| p.declares_subpath_import(spec))
+                    }))
+            {
                 continue;
             }
             if workspace_names.contains(spec) {
@@ -328,6 +346,70 @@ mod tests {
         let (_dir, diags) = run_on_project(&files, Some(r#"{ "devDependencies": {} }"#), None);
         assert_eq!(diags.len(), 1, "`hast` is unlisted everywhere: {diags:?}");
         assert!(diags[0].message.contains("hast"));
+    }
+
+    #[test]
+    fn allows_subpath_import_declared_in_package_json_imports() {
+        // Regression for #2063 — `#`-prefixed Node.js subpath imports declared
+        // in package.json `imports` are self-referencing internal aliases, not
+        // npm packages, and must not be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "a.ts",
+                "import { importPlugin as _importPlugin } from '#import-plugin';",
+            ),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(
+            &files,
+            Some(
+                r##"{ "imports": { "#import-plugin": { "default": "./dist/import-plugin-default.js" } } }"##,
+            ),
+            None,
+        );
+        assert!(
+            diags.is_empty(),
+            "`#import-plugin` is declared in package.json `imports`: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_wildcard_subpath_import() {
+        // A `#prefix/*` wildcard key covers any subpath under it.
+        let files: Vec<(&str, &str)> = vec![
+            ("a.ts", "import { db } from '#internal/db';"),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(
+            &files,
+            Some(r##"{ "imports": { "#internal/*": "./src/internal/*.js" } }"##),
+            None,
+        );
+        assert!(
+            diags.is_empty(),
+            "`#internal/db` is covered by the `#internal/*` wildcard: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_undeclared_subpath_import() {
+        // Precision guard: a `#`-specifier with no matching key in `imports`
+        // is not exempted by the subpath-import branch.
+        let files: Vec<(&str, &str)> = vec![
+            ("a.ts", "import { x } from '#not-declared';"),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(
+            &files,
+            Some(r##"{ "imports": { "#other": "./src/other.js" } }"##),
+            None,
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "`#not-declared` is absent from `imports`: {diags:?}"
+        );
+        assert!(diags[0].message.contains("#not-declared"));
     }
 
     #[test]
