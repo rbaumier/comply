@@ -57,6 +57,17 @@ impl OxcCheck for Check {
                 }
             }
         }
+        // A method call on the template that strips the indentation at runtime
+        // (`.trim()`, `.replaceAll(/\n */gm, "")`, …) already handles it: the
+        // template is the member's object and the member is invoked.
+        if let AstKind::StaticMemberExpression(member) = parent.kind() {
+            if strips_indentation(member.property.name.as_str()) {
+                let grandparent = semantic.nodes().parent_node(parent.id());
+                if matches!(grandparent.kind(), AstKind::CallExpression(_)) {
+                    return;
+                }
+            }
+        }
         let (line, column) = byte_offset_to_line_col(ctx.source, tpl.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -71,6 +82,15 @@ impl OxcCheck for Check {
             span: Some((tpl.span.start as usize, (tpl.span.end - tpl.span.start) as usize)),
         });
     }
+}
+
+/// Whether a method call on the template literal removes its leading
+/// whitespace at runtime, so the inherited indentation never reaches output.
+fn strips_indentation(method: &str) -> bool {
+    matches!(
+        method,
+        "trim" | "trimStart" | "trimEnd" | "replace" | "replaceAll"
+    )
 }
 
 /// Compute the minimum leading-whitespace count across the template's
@@ -189,6 +209,50 @@ if (true) {
     fn allows_dedent_tagged_template() {
         let src = "dedenter`\n    line 1\n    line 2\n`;";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_template_stripped_by_replace_all() {
+        let src = r#"
+it('html-pretty', () => {
+    const div = document.createElement("div")
+    div.innerHTML = `
+        <form>
+            <label for="email">Email Address</label>
+            <input name="email" />
+        </form>
+    `.replaceAll(/\n */gm, "")
+})
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_template_stripped_by_trim() {
+        let src = r#"
+function foo() {
+    const html = `
+        <div>
+            <p>Hello</p>
+        </div>
+    `.trim();
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_template_with_non_stripping_method() {
+        let src = r#"
+function foo() {
+    const html = `
+        <div>
+            <p>Hello</p>
+        </div>
+    `.split("\n");
+}
+"#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
