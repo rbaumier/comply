@@ -5,7 +5,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -45,86 +44,6 @@ const TESTING_LIBRARY_QUERIES: &[&str] = &[
 
 fn is_testing_library_query(text: &str) -> bool {
     TESTING_LIBRARY_QUERIES.iter().any(|q| text.contains(q))
-}
-
-/// True for `reject(new Error(...))` where `reject` is the second parameter
-/// of an enclosing `new Promise((resolve, reject) => …)` executor. In
-/// promise-returning tests this rejection *is* the assertion: reaching it
-/// fails the test with that error, so the test is not assertion-less.
-fn is_promise_reject_assertion(
-    call: &CallExpression,
-    semantic: &oxc_semantic::Semantic,
-) -> bool {
-    // First argument must be `new Error(...)` (or any `*Error` constructor).
-    let Some(Argument::NewExpression(new_expr)) = call.arguments.first() else {
-        return false;
-    };
-    let Expression::Identifier(ctor) = &new_expr.callee else {
-        return false;
-    };
-    if !ctor.name.ends_with("Error") {
-        return false;
-    }
-
-    // Callee must be a bare identifier bound to a Promise-executor reject param.
-    let Expression::Identifier(callee) = &call.callee else {
-        return false;
-    };
-    let Some(ref_id) = callee.reference_id.get() else {
-        return false;
-    };
-    let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-        return false;
-    };
-    let decl = scoping.symbol_declaration(sym_id);
-    declaration_is_promise_reject_param(decl, semantic)
-}
-
-/// True when `decl` is the second formal parameter of a function passed as the
-/// executor to `new Promise(...)`.
-fn declaration_is_promise_reject_param(
-    decl: oxc_semantic::NodeId,
-    semantic: &oxc_semantic::Semantic,
-) -> bool {
-    let nodes = semantic.nodes();
-
-    // Find the enclosing function and the binding's span.
-    let decl_span = nodes.kind(decl).span();
-    let executor_id = std::iter::once(nodes.get_node(decl))
-        .chain(nodes.ancestors(decl))
-        .find(|anc| {
-            matches!(
-                anc.kind(),
-                AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
-            )
-        })
-        .map(|anc| anc.id());
-    let Some(executor_id) = executor_id else {
-        return false;
-    };
-
-    // The executor's parent must be `new Promise(...)`.
-    let parent_id = nodes.parent_id(executor_id);
-    let AstKind::NewExpression(new_expr) = nodes.kind(parent_id) else {
-        return false;
-    };
-    let Expression::Identifier(ctor) = &new_expr.callee else {
-        return false;
-    };
-    if ctor.name.as_str() != "Promise" {
-        return false;
-    }
-
-    // The binding must be the second formal parameter (the reject slot).
-    let params = match nodes.kind(executor_id) {
-        AstKind::Function(f) => &f.params,
-        AstKind::ArrowFunctionExpression(f) => &f.params,
-        _ => return false,
-    };
-    params.items.get(1).is_some_and(|second| {
-        second.span.start <= decl_span.start && decl_span.end <= second.span.end
-    })
 }
 
 /// Extract the test name from the first string argument.
@@ -206,7 +125,14 @@ impl OxcCheck for Check {
                         }
                         _ => false,
                     };
-                    if callee_is_expect || is_promise_reject_assertion(call, semantic) {
+                    if callee_is_expect
+                        || crate::rules::test_assertion_helpers::is_promise_reject_assertion(
+                            call, semantic,
+                        )
+                        || crate::rules::test_assertion_helpers::is_promise_resolve_call(
+                            call, semantic,
+                        )
+                    {
                         true
                     } else {
                         let text = &ctx.source[call.span.start as usize..call.span.end as usize];
@@ -486,15 +412,15 @@ mod tests {
         assert!(run(src).is_empty(), "{:?}", run(src));
     }
 
-    // True positive guard: a promise-returning test that only resolves (no
-    // `reject(new Error(...))`) and has no assertion must still flag.
+    // True positive guard: a promise-returning test that never calls its
+    // resolve parameter and has no other assertion must still flag — there is
+    // no completion path to fail by timeout on.
     #[test]
-    fn still_flags_promise_test_without_reject_error() {
+    fn still_flags_promise_test_that_never_resolves() {
         let src = r#"
             test("resolves only", () =>
               new Promise((resolve) => {
                 setup();
-                resolve(undefined);
               }));
         "#;
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
@@ -569,6 +495,37 @@ mod tests {
     #[test]
     fn still_flags_test_without_render_or_assertion() {
         let src = r#"it("x", () => { const x = 1; });"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #1856 — a promise-returning test whose only completion
+    // path calls the resolve parameter (`done`) of `new Promise(done => …)`
+    // asserts by timeout: if `done` is never reached the test fails. No
+    // `reject(new Error(...))` is involved.
+    #[test]
+    fn allows_promise_resolve_done_as_assertion() {
+        let src = r#"
+            describe("requestCallback basics", () => {
+              test("queue a task", () =>
+                new Promise(done => {
+                  requestCallback(() => {
+                    done(undefined);
+                  });
+                }));
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // True positive guard: a bare `done(undefined)` where `done` is NOT the
+    // first parameter of a `new Promise(...)` executor does not count.
+    #[test]
+    fn still_flags_when_done_is_not_promise_executor_param() {
+        let src = r#"
+            test("not a promise resolve", (done) => {
+              done(undefined);
+            });
+        "#;
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }

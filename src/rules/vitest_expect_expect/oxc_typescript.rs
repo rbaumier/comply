@@ -264,6 +264,16 @@ impl OxcCheck for Check {
         if crate::rules::test_assertion_helpers::delegates_to_outer_param(node, semantic) {
             return;
         }
+        // A promise-returning test whose completion path calls the resolve
+        // parameter of an enclosing `new Promise(done => …)` executor asserts
+        // by timeout: if `done(...)` is never reached the promise never settles
+        // and the runner fails the test. AST-based so it sees the call even when
+        // the callback's body is the `new Promise(...)` expression itself.
+        if crate::rules::test_assertion_helpers::body_contains_promise_resolve_call(
+            semantic, body_span,
+        ) {
+            return;
+        }
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -653,6 +663,38 @@ mod tests {
     #[test]
     fn still_flags_test_without_render_or_assertion() {
         let src = r#"it("x", () => { const x = 1; });"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #1856 — a promise-returning test whose only completion
+    // path calls the resolve parameter (`done`) of `new Promise(done => …)`
+    // asserts by timeout: if `done` is never reached the test fails. The
+    // callback body is the `new Promise(...)` expression itself, so the check
+    // must be AST-based.
+    #[test]
+    fn allows_promise_resolve_done_as_assertion() {
+        let src = r#"
+            describe("requestCallback basics", () => {
+              test("queue a task", () =>
+                new Promise(done => {
+                  requestCallback(() => {
+                    done(undefined);
+                  });
+                }));
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // True positive guard: a bare `done(undefined)` where `done` is NOT the
+    // first parameter of a `new Promise(...)` executor does not count.
+    #[test]
+    fn still_flags_when_done_is_not_promise_executor_param() {
+        let src = r#"
+            test("not a promise resolve", (done) => {
+              done(undefined);
+            });
+        "#;
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }

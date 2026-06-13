@@ -2,8 +2,9 @@
 //! `assertions-in-tests`).
 
 use crate::rules::backend::AstKind;
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{CallExpression, Expression};
 use oxc_semantic::NodeId;
+use oxc_span::GetSpan;
 use std::collections::HashSet;
 
 /// React render functions that throw when the component/hook crashes. A test
@@ -120,6 +121,132 @@ pub(crate) fn delegates_to_outer_param(
         }
     }
     false
+}
+
+/// True when `call`'s callee is a bare identifier bound to the first formal
+/// parameter (the `resolve` slot) of an enclosing `new Promise((resolve) => …)`
+/// executor. In a promise-returning test, reaching that resolve call is the
+/// implicit assertion: if it is never invoked the promise never settles and the
+/// runner fails the test by timeout. A body whose only completion path calls
+/// the resolve parameter is therefore not assertion-less:
+///
+/// ```ts
+/// test("queue a task", () =>
+///   new Promise(done => { requestCallback(() => { done(undefined); }); }));
+/// ```
+///
+/// Unlike [`is_promise_reject_assertion`], no `new Error(...)` argument is
+/// required — `done()` / `resolve(value)` all count.
+pub(crate) fn is_promise_resolve_call(
+    call: &CallExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    call_callee_is_promise_executor_param(call, semantic, 0)
+}
+
+/// True when `call` is `reject(new Error(...))` (or any `*Error` constructor)
+/// where `reject` is bound to the second formal parameter of an enclosing
+/// `new Promise((resolve, reject) => …)` executor. Reaching this rejection
+/// fails the test with that error, so it *is* the assertion.
+pub(crate) fn is_promise_reject_assertion(
+    call: &CallExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    // First argument must be `new Error(...)` (or any `*Error` constructor).
+    let Some(oxc_ast::ast::Argument::NewExpression(new_expr)) = call.arguments.first() else {
+        return false;
+    };
+    let Expression::Identifier(ctor) = &new_expr.callee else {
+        return false;
+    };
+    if !ctor.name.ends_with("Error") {
+        return false;
+    }
+    call_callee_is_promise_executor_param(call, semantic, 1)
+}
+
+/// True when a call within `body_span` invokes the resolve parameter of an
+/// enclosing `new Promise(...)` executor — see [`is_promise_resolve_call`].
+pub(crate) fn body_contains_promise_resolve_call(
+    semantic: &oxc_semantic::Semantic<'_>,
+    body_span: oxc_span::Span,
+) -> bool {
+    semantic.nodes().iter().any(|n| {
+        let AstKind::CallExpression(call) = n.kind() else {
+            return false;
+        };
+        call.span.start >= body_span.start
+            && call.span.end <= body_span.end
+            && is_promise_resolve_call(call, semantic)
+    })
+}
+
+/// True when `call`'s callee is a bare identifier bound to the formal parameter
+/// at `param_index` of an enclosing `new Promise(...)` executor.
+fn call_callee_is_promise_executor_param(
+    call: &CallExpression,
+    semantic: &oxc_semantic::Semantic,
+    param_index: usize,
+) -> bool {
+    let Expression::Identifier(callee) = &call.callee else {
+        return false;
+    };
+    let Some(ref_id) = callee.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl = scoping.symbol_declaration(sym_id);
+    declaration_is_promise_executor_param(decl, semantic, param_index)
+}
+
+/// True when `decl` is the formal parameter at `param_index` of a function
+/// passed as the executor to `new Promise(...)`.
+fn declaration_is_promise_executor_param(
+    decl: NodeId,
+    semantic: &oxc_semantic::Semantic,
+    param_index: usize,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    // Find the enclosing function and the binding's span.
+    let decl_span = nodes.kind(decl).span();
+    let executor_id = std::iter::once(nodes.get_node(decl))
+        .chain(nodes.ancestors(decl))
+        .find(|anc| {
+            matches!(
+                anc.kind(),
+                AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+            )
+        })
+        .map(|anc| anc.id());
+    let Some(executor_id) = executor_id else {
+        return false;
+    };
+
+    // The executor's parent must be `new Promise(...)`.
+    let parent_id = nodes.parent_id(executor_id);
+    let AstKind::NewExpression(new_expr) = nodes.kind(parent_id) else {
+        return false;
+    };
+    let Expression::Identifier(ctor) = &new_expr.callee else {
+        return false;
+    };
+    if ctor.name.as_str() != "Promise" {
+        return false;
+    }
+
+    // The binding must be the formal parameter at `param_index`.
+    let params = match nodes.kind(executor_id) {
+        AstKind::Function(f) => &f.params,
+        AstKind::ArrowFunctionExpression(f) => &f.params,
+        _ => return false,
+    };
+    params.items.get(param_index).is_some_and(|param| {
+        param.span.start <= decl_span.start && decl_span.end <= param.span.end
+    })
 }
 
 /// True when `decl` is a formal-parameter binding of one of `outer_fns`.
