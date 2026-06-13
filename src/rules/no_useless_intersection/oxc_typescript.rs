@@ -2,6 +2,7 @@ use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::TSType;
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -15,7 +16,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::TSIntersectionType(intersection) = node.kind() else {
@@ -25,6 +26,14 @@ impl OxcCheck for Check {
             matches!(ty, TSType::TSUnknownKeyword(_) | TSType::TSNeverKeyword(_))
         });
         if !has_useless {
+            return;
+        }
+        // `unknown &` as the leading operand is a deliberate TypeScript trick to
+        // defer/distribute conditional-type evaluation over generic parameters,
+        // not a no-op. Exempt it when used in those generic-aware contexts.
+        let leads_with_unknown =
+            matches!(intersection.types.first(), Some(TSType::TSUnknownKeyword(_)));
+        if leads_with_unknown && is_deferral_trick(node, semantic) {
             return;
         }
         let (line, column) =
@@ -38,6 +47,30 @@ impl OxcCheck for Check {
             severity: super::META.severity,
             span: None,
         });
+    }
+}
+
+/// True when a `unknown &`-leading intersection sits in a context where the
+/// `unknown &` prefix is the documented TypeScript trick to defer or distribute
+/// type evaluation over generic parameters, rather than a no-op intersection:
+///
+/// - the check type of a conditional type (`unknown & T extends … ? … : …`), or
+/// - the body of a generic type alias (`type A<P> = unknown & Foo<P>`).
+fn is_deferral_trick<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let intersection_span = node.kind().span();
+    let parent = semantic.nodes().parent_node(node.id());
+    match parent.kind() {
+        AstKind::TSConditionalType(conditional) => {
+            conditional.check_type.span() == intersection_span
+        }
+        AstKind::TSTypeAliasDeclaration(alias) => {
+            alias.type_parameters.is_some()
+                && alias.type_annotation.span() == intersection_span
+        }
+        _ => false,
     }
 }
 
@@ -97,5 +130,22 @@ mod tests {
     #[test]
     fn no_false_positive_on_any_prefix() {
         assert!(run_on("type X = anything & Foo;").is_empty());
+    }
+
+    #[test]
+    fn allows_unknown_prefix_on_conditional_check_type() {
+        let src = "export type UseSpringProps<Props extends object = any> = unknown &\n  PickAnimated<Props> extends infer State\n  ? State extends Lookup\n    ? Remap<ControllerUpdate<State> & { ref?: SpringRef<State> }>\n    : never\n  : never;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_unknown_prefix_in_generic_type_alias() {
+        let src = "export type ControllerUpdate<\n  State extends Lookup = Lookup,\n  Item = undefined,\n> = unknown & ToProps<State> & ControllerProps<State, Item>;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_non_leading_unknown_in_generic_type_alias() {
+        assert_eq!(run_on("type X<T> = Foo<T> & unknown;").len(), 1);
     }
 }
