@@ -25,6 +25,7 @@ fn is_type_only_tag(tag: &str) -> bool {
             | "returns"
             | "return"
             | "template"
+            | "typeparam"
             | "typedef"
             | "callback"
             | "property"
