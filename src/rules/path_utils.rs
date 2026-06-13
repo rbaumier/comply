@@ -133,8 +133,8 @@ pub fn is_sample_dir_path(path: &Path) -> bool {
 
 /// True for a test file that never ships in the published package: one under a
 /// `__tests__/`, `__testUtils__/`, `test/`, `tests/`, or `e2e/` directory, one
-/// carrying a `.test.`/`.spec.`/`.setup.` infix, or one whose whole stem is
-/// `test`/`spec` (a co-located `endOfWeek/test.ts`). Consumed by
+/// carrying a `.test.`/`.spec.`/`.setup.`/`.tp.` infix, or one whose whole stem
+/// is `test`/`spec` (a co-located `endOfWeek/test.ts`). Consumed by
 /// `no-extraneous-import` to allow test-only devDependency imports.
 pub fn is_extraneous_test_file(path: &Path) -> bool {
     let path_str = path.to_string_lossy();
@@ -146,7 +146,7 @@ pub fn is_extraneous_test_file(path: &Path) -> bool {
         || path_str.contains("/test/")
         || path_str.contains("/tests/")
         || path_str.contains("/e2e/");
-    is_marked || has_test_file_stem(path)
+    is_marked || has_test_file_stem(path) || has_type_probe_infix(path)
 }
 
 /// Co-located test files whose entire name (minus extension) is `test` or
@@ -168,6 +168,16 @@ pub fn has_test_d_infix(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
         .is_some_and(|name| name.to_ascii_lowercase().contains(".test-d."))
+}
+
+/// True when the file name carries a `.tp.` infix (e.g. `test.tp.ts`), the
+/// date-fns type-probe convention. Type-probe files exist solely to assert that
+/// the public API type-checks; they are never shipped or run as runtime code, so
+/// they are test files like the tsd `.test-d.` convention.
+pub fn has_type_probe_infix(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name.to_ascii_lowercase().contains(".tp."))
 }
 
 /// True for an import specifier that traverses into a build-output or
@@ -418,6 +428,8 @@ mod aux_path_tests {
         assert!(is_extraneous_test_file(&PathBuf::from("src/__testUtils__/expectJSON.ts")));
         assert!(is_extraneous_test_file(&PathBuf::from("src/endOfWeek/test.ts")));
         assert!(is_extraneous_test_file(&PathBuf::from("src/startOfWeek/spec.ts")));
+        // Issue #1915: date-fns `.tp.` type-probe convention.
+        assert!(is_extraneous_test_file(&PathBuf::from("src/addBusinessDays/test.tp.ts")));
         assert!(!is_extraneous_test_file(&PathBuf::from("src/app/login.ts")));
     }
 
@@ -429,6 +441,16 @@ mod aux_path_tests {
         // match (the directory branch lives in file_ctx::scan_path).
         assert!(!has_test_d_infix(&PathBuf::from("test-d/schema.ts")));
         assert!(!has_test_d_infix(&PathBuf::from("src/Component.tsx")));
+    }
+
+    #[test]
+    fn type_probe_infix_filename() {
+        // Issue #1915: date-fns `test.tp.ts` type-probe convention (stem
+        // `test.tp`, so the `.tp.` infix is the marker, not the stem).
+        assert!(has_type_probe_infix(&PathBuf::from("src/addBusinessDays/test.tp.ts")));
+        assert!(has_type_probe_infix(&PathBuf::from("src/addDays/foo.tp.tsx")));
+        // A plain co-located source file is not a type probe.
+        assert!(!has_type_probe_infix(&PathBuf::from("src/addDays/index.ts")));
     }
 
     #[test]
