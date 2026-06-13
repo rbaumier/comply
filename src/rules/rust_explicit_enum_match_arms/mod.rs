@@ -15,10 +15,13 @@
 //!   `Direction::North`, or `Self::Foo`.
 //!
 //! A pattern is considered enum-like if its text contains `::`, or
-//! if the leading identifier starts with an ASCII uppercase letter
-//! (`Direction`, `Foo`, …). This intentionally accepts false
+//! if it is a bare PascalCase identifier (an uppercase lead with at
+//! least one lowercase letter, e.g. `Direction`, `Foo`). Range
+//! patterns (`'a'..='z'`, `0..=9`) and SCREAMING_SNAKE_CASE constants
+//! (`EOF_CHAR`, `NUL`) apply only to scalar types (`char`, integers,
+//! bytes) and are never enum-like. This intentionally accepts false
 //! negatives (e.g. enum match with only integer-like patterns)
-//! rather than false positives (flagging a `match` on integers
+//! rather than false positives (flagging a `match` on a scalar type
 //! where `_` is genuinely necessary).
 //!
 //! Stdlib exemption: when every enum-like arm references a known
