@@ -40,11 +40,15 @@ impl OxcCheck for Check {
             }
             let ident = oxc_str::Ident::from(name);
             if let Some(outer_symbol) = scoping.find_binding(parent_scope, ident) {
-                // A type-only import (`import type ...` or `import { type X }`) is
-                // erased at compile time and creates no runtime binding, so a value
-                // binding of the same name shadows nothing observable.
+                // A type-only outer binding lives in the type namespace and is
+                // erased at compile time: a `type` alias, an interface, or a
+                // type-only import (`import type ...` / `import { type X }`).
+                // None create a runtime binding, so a value declaration of the
+                // same name shadows nothing observable.
                 let outer_decl = scoping.symbol_declaration(outer_symbol);
-                if is_type_only_import_binding(nodes, outer_decl) {
+                if is_type_only_binding_context(nodes.kind(outer_decl))
+                    || is_type_only_import_binding(nodes, outer_decl)
+                {
                     continue;
                 }
                 let span = scoping.symbol_span(symbol_id);
@@ -122,6 +126,28 @@ mod tests {
         // Real function params still flag as shadows.
         let d = run_on("const x = 1; function f(x: number) { return x; }");
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_param_shadowing_type_alias() {
+        // `type tag = ...` lives in the type namespace only; a value parameter
+        // named `tag` creates a runtime binding that shadows nothing observable.
+        let d = run_on(
+            "type tag = keyof HTMLElementTagNameMap;\n\
+             export function isElementType<T extends tag>(element: Element, tag: T | T[]) { return tag; }",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_param_shadowing_interface() {
+        // An interface is a type-namespace-only declaration; a value parameter
+        // of the same name shadows nothing at runtime.
+        let d = run_on(
+            "interface Options { id: number }\n\
+             export function build(Options: number) { return Options; }",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
     }
 
     #[test]

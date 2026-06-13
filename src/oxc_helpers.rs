@@ -848,11 +848,11 @@ pub fn type_annotation_is_type_predicate(
     annotation.is_some_and(|ann| matches!(ann.type_annotation, TSType::TSTypePredicate(_)))
 }
 
-/// True when `kind` is a type-only binding context — a node whose parameter or
-/// member names live purely in the type namespace and are erased at runtime
-/// (function/constructor types, call/construct/method/index signatures, mapped
-/// types, `infer`). A value binding sharing such a name shadows nothing
-/// observable.
+/// True when `kind` is a type-only binding context — a node whose name lives
+/// purely in the type namespace and is erased at runtime (function/constructor
+/// types, call/construct/method/index signatures, mapped types, `infer`, plus
+/// `type` aliases and interfaces). A value binding sharing such a name shadows
+/// nothing observable.
 #[must_use]
 pub fn is_type_only_binding_context(kind: oxc_ast::AstKind<'_>) -> bool {
     use oxc_ast::AstKind;
@@ -866,6 +866,8 @@ pub fn is_type_only_binding_context(kind: oxc_ast::AstKind<'_>) -> bool {
             | AstKind::TSIndexSignature(_)
             | AstKind::TSMappedType(_)
             | AstKind::TSInferType(_)
+            | AstKind::TSTypeAliasDeclaration(_)
+            | AstKind::TSInterfaceDeclaration(_)
     )
 }
 
