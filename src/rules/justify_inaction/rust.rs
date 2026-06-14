@@ -22,6 +22,12 @@
 //! least one comment child (`line_comment` / `block_comment`). Any
 //! other named child also makes the block non-empty by definition.
 //!
+//! For loops (`for` / `while` / `loop`) the justification may also sit
+//! on the line(s) immediately preceding the loop, with no blank line in
+//! between — the idiomatic place for an iterator-drain comment where the
+//! work happens in the condition and the body is intentionally empty
+//! (e.g. `while it.next_if(p).is_some() {}`).
+//!
 //! Function bodies, closure bodies, and empty `{}` used as unit
 //! expressions in other positions are out of scope — they are common
 //! in stubs, marker impls, and no-op callbacks, and flagging them
@@ -89,6 +95,31 @@ fn all_bindings_underscore_prefixed(node: tree_sitter::Node, source: &[u8]) -> b
     binding_count > 0
 }
 
+/// True when a `line_comment`/`block_comment` sits on the line(s) immediately
+/// preceding the loop, with no blank line between the comment and the loop. The
+/// loop expression is usually wrapped in an `expression_statement`, so the
+/// comment is a sibling of that statement; for a tail-position loop the comment
+/// is a sibling of the loop itself. Such a comment justifies an empty body the
+/// same way an inside-the-block comment does — it explains the intentional
+/// inaction (e.g. the iterator-drain pattern where work happens in the
+/// condition). A blank line between the two breaks the association.
+fn has_leading_comment(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let anchor = match node.parent() {
+        Some(parent) if parent.kind() == "expression_statement" => parent,
+        _ => node,
+    };
+    let Some(prev) = anchor.prev_sibling() else {
+        return false;
+    };
+    if prev.kind() != "line_comment" && prev.kind() != "block_comment" {
+        return false;
+    }
+    let gap = source
+        .get(prev.end_byte()..anchor.start_byte())
+        .unwrap_or_default();
+    gap.iter().filter(|&&b| b == b'\n').count() <= 1
+}
+
 fn loop_name(kind: &str) -> &'static str {
     match kind {
         "for_expression" => "for",
@@ -145,9 +176,10 @@ match node.kind() {
                 }
         }
         "for_expression" | "while_expression" | "loop_expression" => {
-            if let Some(body) = node.child_by_field_name("body") {
-                flag_empty(node, body, loop_name(node.kind()), ctx, diagnostics);
-            }
+            if let Some(body) = node.child_by_field_name("body")
+                && !has_leading_comment(node, _source) {
+                    flag_empty(node, body, loop_name(node.kind()), ctx, diagnostics);
+                }
         }
         _ => {}
     }
@@ -349,5 +381,43 @@ fn f(x: Option<u8>) {
     fn does_not_flag_unit_match_arm() {
         let src = "fn f(x: Option<u8>) { match x { Some(v) => go(v), None => () } }";
         assert!(run_on(src).is_empty());
+    }
+
+    // -- comment immediately above the loop (issue #2200) --
+
+    #[test]
+    fn allows_while_with_leading_comment_issue_2200() {
+        let src = "fn f() {\n    // Eager version of `skip_while`.\n    while it.next_if(|x| x.is_ws()).is_some() {}\n}\n";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_while_with_leading_block_comment() {
+        let src = "fn f() {\n    /* drain whitespace */\n    while it.next_if(|x| x.is_ws()).is_some() {}\n}\n";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_for_with_leading_comment() {
+        let src = "fn f(xs: &[u8]) {\n    // side effects happen in the iterator\n    for _ in xs.iter().inspect(|_| log()) {}\n}\n";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_loop_with_leading_comment() {
+        let src = "fn f() {\n    // spin forever on purpose\n    loop {}\n}\n";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_while_with_no_comment_anywhere() {
+        let src = "fn f() {\n    let x = 1;\n    while it.next_if(|x| x.is_ws()).is_some() {}\n}\n";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_while_with_comment_separated_by_blank_line() {
+        let src = "fn f() {\n    // unrelated note about something else\n\n    while poll() {}\n}\n";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 }
