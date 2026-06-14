@@ -2,10 +2,10 @@
 //! oxc_semantic.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_custom_element_decorator_name};
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
-use oxc_ast::ast::FunctionType;
+use oxc_ast::ast::{Expression, FunctionType};
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -139,6 +139,29 @@ fn is_rest_sibling_destructure(
     walk(root, symbol_span)
 }
 
+/// True when `decl_node` is a class declaration carrying a decorator that
+/// registers it as a custom element (`@customElement('tag')`). The decorated
+/// class is reached through its HTML tag name rather than a JavaScript reference,
+/// so an absence of identifier references is by design, not dead code.
+fn is_custom_element_class(
+    decl_node: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let AstKind::Class(class) = semantic.nodes().kind(decl_node) else {
+        return false;
+    };
+    class.decorators.iter().any(|decorator| {
+        let callee = match &decorator.expression {
+            // `@customElement('tag')` — registering form: the decorator invokes
+            // a factory that calls `customElements.define(...)`.
+            Expression::CallExpression(call) => &call.callee,
+            // `@customElement` (no call) — defensive, same registering identifier.
+            other => other,
+        };
+        matches!(callee, Expression::Identifier(id) if is_custom_element_decorator_name(&id.name))
+    })
+}
+
 /// True when the program contains any JSX element or fragment.
 fn file_contains_jsx(semantic: &oxc_semantic::Semantic) -> bool {
     semantic
@@ -180,6 +203,10 @@ impl OxcCheck for Check {
             let symbol_span = scoping.symbol_span(symbol_id);
 
             if is_named_function_expression_id(decl_node, semantic) {
+                continue;
+            }
+
+            if is_custom_element_class(decl_node, semantic) {
                 continue;
             }
 
@@ -546,6 +573,56 @@ export { machineSnapshotToJSON };
         assert!(
             diags.iter().any(|d| d.message.contains("`a`")),
             "expected unused destructured `a` (no rest sibling) to be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_custom_element_decorated_class() {
+        // A class decorated with `@customElement('tag')` is registered in the
+        // browser's custom-element registry as a side effect and reached through
+        // its HTML tag name, never a JavaScript reference — so an unreferenced
+        // local class is live, not dead code. (Closes #1805)
+        let src = r#"
+import { customElement } from 'lit/decorators.js';
+
+@customElement('row-virtualizer-dynamic')
+class RowVirtualizerDynamic extends LitElement {}
+export {};
+"#;
+        let diags = run(src);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("RowVirtualizerDynamic")),
+            "FP on @customElement-decorated class: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_undecorated_unused_class() {
+        // Negative-space guard for #1805 — a class with no registering decorator
+        // and no reference is genuinely dead code and must still fire.
+        let src = "class UnusedWidget extends LitElement {}\nexport {};";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "expected `UnusedWidget` to be flagged: {diags:?}");
+        assert!(diags[0].message.contains("UnusedWidget"));
+    }
+
+    #[test]
+    fn still_flags_class_with_unrelated_decorator() {
+        // Negative-space guard for #1805 — the exemption is scoped to
+        // custom-element-registering decorators. A class decorated with an
+        // unrelated decorator (`@sealed`) is not registered as a custom element,
+        // so an unused one stays dead code.
+        let src = r#"
+function sealed(target: unknown) { return target; }
+
+@sealed
+class UnusedSealed {}
+export {};
+"#;
+        let diags = run(src);
+        assert!(
+            diags.iter().any(|d| d.message.contains("UnusedSealed")),
+            "expected `UnusedSealed` (unrelated decorator) to be flagged: {diags:?}"
         );
     }
 
