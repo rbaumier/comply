@@ -523,6 +523,24 @@ pub fn is_sveltekit_route_file(file_name: &str) -> bool {
     )
 }
 
+/// True when `path` is a SvelteKit route-parameter matcher: a `.js`/`.ts` file
+/// directly under a `params/` directory (`src/params/integer.ts`). Each such
+/// file exports a `match` function the router calls to validate a `[x=name]`
+/// route segment — consumed by file convention, never imported.
+pub fn is_sveltekit_param_matcher_file(path: &Path) -> bool {
+    let is_script = matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("js" | "ts")
+    );
+    if !is_script {
+        return false;
+    }
+    path.parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .is_some_and(|dir| dir == "params")
+}
+
 /// True when `path` is a SvelteKit route file (`+page.svelte`,
 /// `+page.server.ts`, `+server.ts`, …) located under a `routes/` directory in
 /// a project where SvelteKit is detected. SvelteKit's file-system router
