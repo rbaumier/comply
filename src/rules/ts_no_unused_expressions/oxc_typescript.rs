@@ -232,11 +232,18 @@ fn has_side_effects(expr: &Expression) -> bool {
         Expression::TSAsExpression(inner) => has_side_effects(&inner.expression),
         Expression::TSSatisfiesExpression(inner) => has_side_effects(&inner.expression),
 
-        // Type-assertion instantiation: `expectTypeOf(x).toEqualTypeOf<T>` is a
-        // member access with explicit type arguments and no trailing call. The
-        // generic getter triggers a compile-time error when the types mismatch,
-        // so it is an intentional assertion rooted at the assertion call.
-        Expression::TSInstantiationExpression(inner) => chain_roots_at_assertion(&inner.expression),
+        // A generic instantiation expression used as a bare statement is a
+        // compile-time type assertion (TS 4.7+), never accidental dead code:
+        // supplying the type arguments forces the compiler to type-check them.
+        // Two forms qualify:
+        //   - `Expect<Equal<A, B>>;` — instantiation on a plain identifier, the
+        //     standard type-equality idiom (`Expect<T extends true>`).
+        //   - `expectTypeOf(x).toEqualTypeOf<T>;` — instantiation on a member
+        //     chain rooted at an assertion call (expect-type / Vitest).
+        Expression::TSInstantiationExpression(inner) => {
+            matches!(&inner.expression, Expression::Identifier(_))
+                || chain_roots_at_assertion(&inner.expression)
+        }
 
         // Optional chaining: `f?.()` is a side-effectful call exactly like
         // `f()`; `obj?.prop` is an unused expression exactly like `obj.prop`.
@@ -423,6 +430,17 @@ mod tests {
         // assertion chain — still an unused expression.
         let d = run_on("foo.bar<number>;");
         assert_eq!(d.len(), 1);
+    }
+
+    // Regression #2333: a bare generic instantiation expression on an identifier
+    // (`Expect<Equal<A, B>>;`) is the standard TS 4.7+ compile-time type-equality
+    // assertion idiom — it triggers type checking and is never accidental dead
+    // code, so it must not be flagged.
+    #[test]
+    fn allows_generic_instantiation_type_assertion_issue_2333() {
+        let src = "Expect<Equal<{ a: number }[], typeof leftJoinFull>>;";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+        assert!(run_on("Expect<Equal<A, B>>;").is_empty(), "{:?}", run_on("Expect<Equal<A, B>>;"));
     }
 
     // Regression #1983: a bare member-read inside a SolidJS reactive callback
