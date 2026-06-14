@@ -82,6 +82,13 @@ pub(super) fn is_node_builtin(specifier: &str) -> bool {
     if let Some(rest) = specifier.strip_prefix("node:") {
         return !rest.is_empty();
     }
+    // Bun exposes runtime built-ins under the `bun:` scheme (`bun:test`,
+    // `bun:sqlite`, `bun:ffi`, `bun:jsc`). They are provided by the runtime,
+    // never installable from npm, so they belong in `package.json` no more
+    // than `node:` builtins do.
+    if let Some(rest) = specifier.strip_prefix("bun:") {
+        return !rest.is_empty();
+    }
     let root = specifier.split('/').next().unwrap_or(specifier);
     NODE_BUILTINS.contains(&root) || RUNTIME_BUILTINS.contains(&root)
 }
