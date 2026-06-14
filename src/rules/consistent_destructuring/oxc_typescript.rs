@@ -12,6 +12,7 @@ use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
 use oxc_semantic::SymbolId;
 use oxc_span::GetSpan;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -43,6 +44,16 @@ impl OxcCheck for Check {
             start_byte: u32,
         }
         let mut candidates: Vec<Candidate> = Vec::new();
+
+        // Properties that are written somewhere on an object (`obj.prop = ...`,
+        // `obj.prop += ...`, `obj.prop++`, etc.). A written property cannot be
+        // safely cached via destructuring — the destructured copy would be the
+        // pre-mutation value — so reads of such a property are exempt.
+        // Keyed by the object's binding symbol AND source text, so a write on
+        // a different object never exempts a read on the destructured one —
+        // even when neither base resolves to a binding (unresolved globals
+        // both carry a `None` symbol and are disambiguated by text).
+        let mut mutated_props: HashSet<(Option<SymbolId>, String, String)> = HashSet::new();
 
         for node in nodes.iter() {
             match node.kind() {
@@ -113,10 +124,22 @@ impl OxcCheck for Check {
                                 }
                             }
                             AstKind::AssignmentExpression(assign) => {
-                                // Skip assignments (user.age = 5)
+                                // Skip assignments (user.age = 5) and record
+                                // the mutation so later reads stay exempt.
                                 if assign.left.span().start == member.span().start
                                     && assign.left.span().end == member.span().end
                                 {
+                                    mutated_props.insert(write_key(member, source, semantic));
+                                    continue;
+                                }
+                            }
+                            AstKind::UpdateExpression(update) => {
+                                // Skip increment/decrement (user.age++, --user.age)
+                                // and record the mutation.
+                                if update.argument.span().start == member.span().start
+                                    && update.argument.span().end == member.span().end
+                                {
+                                    mutated_props.insert(write_key(member, source, semantic));
                                     continue;
                                 }
                             }
@@ -130,6 +153,7 @@ impl OxcCheck for Check {
                                         && assign.left.span().start == member.span().start
                                             && assign.left.span().end == member.span().end
                                         {
+                                            mutated_props.insert(write_key(member, source, semantic));
                                             continue;
                                         }
                                 }
@@ -154,6 +178,20 @@ impl OxcCheck for Check {
 
         // Phase 3: match candidates against destructured objects
         for c in &candidates {
+            // A property that is written anywhere on this object cannot be
+            // cached via destructuring without risking a stale value, so its
+            // reads are never a style violation. Over-approximate over the
+            // whole file rather than tracking strict before/after ordering:
+            // mutations leak through nested closures and async IIFEs, where a
+            // later read may execute *after* the write even though it appears
+            // textually before it.
+            if mutated_props.contains(&(
+                c.obj_symbol,
+                c.obj_text.clone(),
+                c.prop_text.clone(),
+            )) {
+                continue;
+            }
             for d in &destructured {
                 if c.obj_text == d.obj_text && c.start_byte > d.end_byte {
                     // When both sides resolve to a binding, they must be the
@@ -284,6 +322,80 @@ mod tests {
     }
 
     #[test]
+    fn skips_read_of_mutated_property() {
+        // Issue #2186: `state.asyncId` is assigned (mutated) after the
+        // destructure of `state`, then read inside a nested closure. Reading
+        // it directly is correct — destructuring upfront would capture the
+        // pre-mutation (stale) value, so this is not a style violation.
+        let code = r#"
+            function runAsync(to, props, state, target) {
+                const { callId, parentId, onRest } = props;
+                const { asyncTo: prevTo, promise: prevPromise } = state;
+                return (state.promise = (async () => {
+                    state.asyncId = callId;
+                    state.asyncTo = to;
+                    const bailIfEnded = (bailSignal) => {
+                        return (callId !== state.asyncId);
+                    };
+                })());
+            }
+        "#;
+        assert!(
+            run(code).is_empty(),
+            "Should not flag a read of a property that is mutated in scope"
+        );
+    }
+
+    #[test]
+    fn skips_read_of_compound_assigned_property() {
+        // Issue #2186: compound-assignment forms (`state.count += 1`) also
+        // mutate the property, so a later read must not be flagged.
+        let code = r#"
+            function tick(state) {
+                const { name } = state;
+                state.count += 1;
+                return state.count;
+            }
+        "#;
+        assert!(
+            run(code).is_empty(),
+            "Should not flag a read of a property mutated via compound assignment"
+        );
+    }
+
+    #[test]
+    fn flags_read_of_never_assigned_property() {
+        // Negative-space guard: a property that is never written is still the
+        // rule's genuine target.
+        let code = r#"
+            function test(state) {
+                const { x } = state;
+                state.asyncId = 1;
+                return state.foo;
+            }
+        "#;
+        let diags = run(code);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("foo"));
+    }
+
+    #[test]
+    fn write_on_other_object_does_not_exempt_read() {
+        // Negative-space guard: a write to a different object must not exempt
+        // a read of the same-named property on the destructured object.
+        let code = r#"
+            function test(state, other) {
+                const { x } = state;
+                other.bar = 1;
+                return state.bar;
+            }
+        "#;
+        let diags = run(code);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("bar"));
+    }
+
+    #[test]
     fn flags_same_binding_in_same_scope() {
         // Negative-space guard: a genuine within-scope inconsistency on the
         // very same binding is still flagged.
@@ -309,6 +421,23 @@ fn identifier_symbol(expr: &Expression, semantic: &oxc_semantic::Semantic) -> Op
     };
     let ref_id = ident.reference_id.get()?;
     semantic.scoping().get_reference(ref_id).symbol_id()
+}
+
+/// Build the mutation key for a write target `obj.prop`, matching the key used
+/// for read candidates: the object's binding symbol, its source text, and the
+/// property name.
+fn write_key(
+    member: &StaticMemberExpression,
+    source: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> (Option<SymbolId>, String, String) {
+    let obj_text =
+        &source[member.object.span().start as usize..member.object.span().end as usize];
+    (
+        identifier_symbol(&member.object, semantic),
+        obj_text.to_string(),
+        member.property.name.to_string(),
+    )
 }
 
 fn is_simple_expression(expr: &Expression) -> bool {
