@@ -4,26 +4,14 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 #[derive(Debug)]
 pub struct Check;
 
-const MONEY_WORDS: &[&str] = &[
-    "price", "amount", "cost", "total", "balance", "fee", "tax", "revenue", "salary", "budget",
-    "payment", "invoice",
-];
-const FLOAT_TYPES: &[&str] = &["FLOAT", "DOUBLE", "REAL"];
-
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {
-            let lower = line.to_ascii_lowercase();
-            let has_money = MONEY_WORDS.iter().any(|w| lower.contains(w));
-            if !has_money {
-                continue;
-            }
-            let upper = line.to_ascii_uppercase();
-            if let Some(ft) = FLOAT_TYPES.iter().find(|t| upper.contains(*t)) {
+            if let Some(ft) = super::float_type_for_money_line(line) {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc), line: idx + 1, column: 1,
-                    rule_id: "sql-no-float-for-money".into(),
+                    rule_id: super::META.id.into(),
                     message: format!("`{ft}` near a monetary column — use `NUMERIC(precision, scale)` to avoid floating-point rounding errors."),
                     severity: Severity::Error,
                     span: None,
