@@ -157,6 +157,15 @@ impl OxcCheck for Check {
                 // containing one is a type-level test that passes iff the
                 // file compiles, so it counts as asserted.
                 AstKind::TSSatisfiesExpression(_) => true,
+                // A `TSTypeReference` to the `Expect`/`Equal` type-level helpers
+                // (`type t = Expect<Equal<typeof x, T>>`) is a compile-time
+                // assertion: the file fails to compile if the types differ, so
+                // it counts as asserted.
+                AstKind::TSTypeReference(type_ref) => matches!(
+                    &type_ref.type_name,
+                    TSTypeName::IdentifierReference(id)
+                        if matches!(id.name.as_str(), "Expect" | "Equal")
+                ),
                 // A `throw` is a valid assertion mechanism: timing/property/
                 // fuzzing tests fail by throwing on a violated condition
                 // (`if (after - before > 10) throw new Error(...)`), which the
@@ -687,6 +696,35 @@ mod tests {
     #[test]
     fn still_flags_test_with_no_assertion_at_all() {
         let src = r#"it("does nothing", () => { const y = compute(1, 2); return y; });"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #1306 — a compile-time type assertion via the
+    // `Expect<Equal<typeof x, T>>` type-alias idiom is the assertion: the file
+    // fails to compile if the types differ, so the test has no runtime expect
+    // by design.
+    #[test]
+    fn allows_test_with_expect_equal_type_alias() {
+        let src = r#"
+            it("infers correct type", () => {
+                type t = Expect<Equal<typeof result, { id: number }>>;
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #1306 — `expectTypeOf(...)` is a type-only assertion helper.
+    #[test]
+    fn allows_test_with_expect_type_of_value_form() {
+        let src = r#"it("expectTypeOf form", () => { expectTypeOf(result).toEqualTypeOf<{ id: number }>(); });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative-space guard for #1306: a test with no assertion at all — neither a
+    // runtime expect nor a compile-time type assertion — must still fire.
+    #[test]
+    fn still_flags_test_without_type_assertion() {
+        let src = r#"it("x", () => { type t = { id: number }; const y = 1 + 1; });"#;
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }

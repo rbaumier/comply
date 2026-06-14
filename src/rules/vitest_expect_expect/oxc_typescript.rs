@@ -270,6 +270,13 @@ impl OxcCheck for Check {
         if body_contains_satisfies(semantic, body_span) {
             return;
         }
+        // A compile-time type assertion (`type t = Expect<Equal<typeof x, T>>`)
+        // passes iff the file compiles, so no runtime assertion is expected.
+        // AST-based so the names `Expect`/`Equal` inside a string literal do not
+        // count.
+        if crate::rules::test_assertion_helpers::body_contains_type_assertion(semantic, body_span) {
+            return;
+        }
         // Cypress tests assert by chaining `.should(...)`/`.and(...)` onto a `cy`
         // command (`cy.get(x).should(...)`) instead of calling `expect(...)`.
         // AST-based and rooted at the `cy` identifier so a bare `.should(` on an
@@ -915,5 +922,34 @@ mod tests {
             "{:?}",
             run_at(src, "/tmp/index.spec.js")
         );
+    }
+
+    // Regression for #1306 — a compile-time type assertion via the
+    // `Expect<Equal<typeof x, T>>` type-alias idiom is the assertion: the file
+    // fails to compile if the types differ, so the test has no runtime expect
+    // by design.
+    #[test]
+    fn allows_test_with_expect_equal_type_alias() {
+        let src = r#"
+            it("infers correct type", () => {
+                type t = Expect<Equal<typeof result, { id: number }>>;
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #1306 — `expectTypeOf(...)` is a type-only assertion helper.
+    #[test]
+    fn allows_test_with_expect_type_of_value_form() {
+        let src = r#"it("expectTypeOf form", () => { expectTypeOf(result).toEqualTypeOf<{ id: number }>(); });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative-space guard for #1306: a test with no assertion at all — neither a
+    // runtime expect nor a compile-time type assertion — must still fire.
+    #[test]
+    fn still_flags_test_without_type_assertion() {
+        let src = r#"it("x", () => { type t = { id: number }; const y = 1 + 1; });"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
