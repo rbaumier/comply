@@ -1280,6 +1280,62 @@ export default {
         );
     }
 
+    // Regression #1360: Node.js builtins missing from the recognized list
+    // (`async_hooks` and friends) are provided by the runtime and never appear in
+    // `package.json`. Both the bare form (`async_hooks`) and the `node:` scheme
+    // (`node:async_hooks`) must be exempt.
+    #[test]
+    fn allows_missing_node_builtins_issue_1360() {
+        for spec in &[
+            "async_hooks",
+            "node:async_hooks",
+            "diagnostics_channel",
+            "inspector",
+            "trace_events",
+            "wasi",
+        ] {
+            let dir = TempDir::new().unwrap();
+            fs::write(
+                dir.path().join("package.json"),
+                r#"{"name":"@nestjs/core","dependencies":{}}"#,
+            )
+            .unwrap();
+            let src = dir.path().join("packages").join("core").join("interceptors");
+            fs::create_dir_all(&src).unwrap();
+            let file = src.join("interceptors-consumer.ts");
+            let source = format!("import {{ AsyncResource }} from '{spec}';");
+            fs::write(&file, &source).unwrap();
+            let diags = run_oxc_in_project(&file, &source);
+            assert!(
+                diags.is_empty(),
+                "Node.js builtin `{spec}` must not be flagged, got {diags:?}"
+            );
+        }
+    }
+
+    // Negative-space guard for #1360: a genuinely unlisted bare import that is not
+    // a Node.js builtin must still fire — the fix only extends the builtin list.
+    #[test]
+    fn flags_unlisted_non_builtin_issue_1360() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"@nestjs/core","dependencies":{}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("t.ts");
+        let source = "import x from 'definitely-not-a-builtin-pkg';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "a genuinely unlisted non-builtin import must still fire, got {diags:?}"
+        );
+    }
+
     // Negative-space guard for #1529: a genuinely undeclared package must still
     // fire even when Jest `modulePaths` is configured — its name does not resolve
     // to any source file under a configured root.
