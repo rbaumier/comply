@@ -89,6 +89,55 @@ fn is_process_env_assignment(stmt: &Statement) -> bool {
     )
 }
 
+/// The global-object identifiers whose properties hold runtime configuration
+/// read by modules at import time.
+const GLOBAL_OBJECTS: [&str; 4] = ["global", "globalThis", "window", "self"];
+
+/// Peels `(expr)`, `expr as T`, `expr satisfies T`, and `expr!` wrappers to the
+/// underlying expression, so a target like `(global as any)` resolves to the
+/// `global` identifier.
+fn unwrap_casts<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
+    let mut current = expr;
+    loop {
+        current = match current {
+            Expression::ParenthesizedExpression(p) => &p.expression,
+            Expression::TSAsExpression(a) => &a.expression,
+            Expression::TSSatisfiesExpression(s) => &s.expression,
+            Expression::TSNonNullExpression(n) => &n.expression,
+            _ => return current,
+        };
+    }
+}
+
+/// An assignment to a property of a global object, e.g.
+/// `(global as any).isNode = true`, `globalThis.__DEV__ = false`,
+/// `window.foo = bar`. The assigned property holds runtime configuration that
+/// modules imported afterwards read during their own initialization, so the
+/// assignment must precede those imports — the same zero-import-side-effect
+/// ordering class as the test-framework configuration calls. It is name-agnostic
+/// (no filename match) and stays narrow: the target's base object must be one of
+/// the recognized global identifiers, so `const x = compute()` or `obj.x = 1` on
+/// an ordinary object is unaffected and still flips the imports block.
+fn is_global_config_assignment(stmt: &Statement) -> bool {
+    let Statement::ExpressionStatement(expr_stmt) = stmt else {
+        return false;
+    };
+    let Expression::AssignmentExpression(assign) = &expr_stmt.expression else {
+        return false;
+    };
+
+    let target_object = match &assign.left {
+        AssignmentTarget::StaticMemberExpression(member) => &member.object,
+        AssignmentTarget::ComputedMemberExpression(member) => &member.object,
+        _ => return false,
+    };
+
+    matches!(
+        unwrap_casts(target_object),
+        Expression::Identifier(obj) if GLOBAL_OBJECTS.contains(&obj.name.as_str())
+    )
+}
+
 /// A `require("pkg")` call expression: the callee is the bare `require`
 /// identifier and the first argument is a string-literal module specifier.
 fn is_require_call(expr: &Expression) -> bool {
@@ -202,6 +251,11 @@ impl OxcCheck for Check {
                 // where it has no import side effects of its own.
                 _ if ctx.file.path_segments.in_test_dir
                     && is_process_env_assignment(stmt) => {}
+                // `(global as any).x = value` / `globalThis.x = value` etc. set
+                // runtime configuration on a global object that modules imported
+                // afterwards read at initialization time, so the assignment must
+                // precede those imports — it must not flip `saw_non_import`.
+                _ if is_global_config_assignment(stmt) => {}
                 // TypeScript type-only declarations (`type`/`interface`,
                 // `declare` modules, `export type`) are erased at compile time
                 // and have no import side effects — they must not break the
@@ -491,6 +545,69 @@ import { a } from 'a'
     fn still_flags_mixed_require_and_call_declaration_before_imports() {
         let src = r#"const fs = require('fs'), y = compute()
 import { a } from 'a'
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Regression test for https://github.com/rbaumier/comply/issues/2300
+    // An Angular test-init file interleaves side-effect imports, global
+    // configuration assignments, and framework imports in a required order: the
+    // globals must be set before the imports that read them. The
+    // `(global as any).x = ...` assignments are runtime config, not imperative
+    // code, so the imports after them must not flag.
+    #[test]
+    fn allows_global_config_assignment_between_imports() {
+        let src = r#"import 'reflect-metadata';
+import 'zone.js';
+
+(global as any).isNode = true;
+(global as any).isBrowser = false;
+
+import '@angular/compiler';
+import {NgModule, provideZonelessChangeDetection} from '@angular/core';
+import {TestBed} from '@angular/core/testing';
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // The other global-object identifiers (`globalThis`, `window`, `self`) and
+    // the plain (uncast) member form are the same runtime-config pattern.
+    #[test]
+    fn allows_uncast_global_object_assignments_between_imports() {
+        let src = r#"import 'polyfill';
+globalThis.__DEV__ = false;
+window.config = { debug: true };
+self.workerReady = true;
+import { app } from './app';
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Negative-space guard: a genuine non-import statement (a real computation
+    // and a side-effecting call, not a global-object assignment) before an import
+    // is a true ordering violation and must still flag.
+    #[test]
+    fn still_flags_runtime_code_before_import_with_global_exemption() {
+        let src = r#"import { compute, doWork } from './lib'
+
+const x = compute()
+doWork(x)
+
+import { b } from 'b'
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // An assignment to a property of an ordinary (non-global) object is genuine
+    // imperative code and must still flag the following import — the exemption
+    // is narrow to the recognized global identifiers.
+    #[test]
+    fn still_flags_ordinary_object_property_assignment_before_import() {
+        let src = r#"import { config } from './config'
+
+config.ready = true
+
+import { b } from 'b'
 "#;
         assert_eq!(run_on(src).len(), 1);
     }
