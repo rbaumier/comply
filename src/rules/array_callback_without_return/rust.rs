@@ -32,58 +32,44 @@ fn is_iterator_method_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     ITERATOR_METHODS.contains(&name)
 }
 
-fn contains_async_block(node: tree_sitter::Node) -> bool {
-    if matches!(node.kind(), "async_block") {
-        return true;
+/// True when the closure body block produces a value: it ends in a tail
+/// expression or contains an explicit `return`.
+///
+/// In Rust a block returns its final expression when that expression has no
+/// trailing `;`. tree-sitter-rust wraps block-like tail expressions (`match`,
+/// `if`/`else`, `loop`, `while`, `unsafe`) in an `expression_statement`; such a
+/// node is the implicit return iff it does not end in a semicolon. Other tail
+/// expressions (`x + 1`, `async { .. }`) appear directly as the block's final
+/// named child.
+fn block_returns_value(block: tree_sitter::Node) -> bool {
+    let count = block.named_child_count();
+    let Some(last) = count.checked_sub(1).and_then(|i| block.named_child(i)) else {
+        return false;
+    };
+    match last.kind() {
+        "let_declaration" | "empty_statement" => false,
+        "expression_statement" => !expression_statement_has_semicolon(last),
+        _ => true,
     }
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
-            if contains_async_block(child) {
-                return true;
-            }
-        }
-    }
-    false
 }
 
-fn has_return_or_tail_expr(node: tree_sitter::Node) -> bool {
+/// True when an `expression_statement` ends in a `;` (a discarded statement,
+/// not a tail expression).
+fn expression_statement_has_semicolon(stmt: tree_sitter::Node) -> bool {
+    stmt.child(stmt.child_count().saturating_sub(1))
+        .is_some_and(|last| last.kind() == ";")
+}
+
+fn has_return(node: tree_sitter::Node) -> bool {
     if node.kind() == "return_expression" {
         return true;
     }
     if matches!(node.kind(), "closure_expression" | "function_item") {
         return false;
     }
-    // In a block, check the last child (tail expression).
-    if node.kind() == "block" {
-        let count = node.named_child_count();
-        if count > 0 {
-            if let Some(last) = node.named_child(count.saturating_sub(1)) {
-                // A non-statement expression at end is an implicit return.
-                if matches!(last.kind(), "async_block") {
-                    return true;
-                }
-                // An expression_statement with an async_block inside is still a tail expression
-                // because async { ... } is an expression that gets implicitly returned.
-                if last.kind() == "expression_statement" {
-                    if contains_async_block(last) {
-                        return true;
-                    }
-                    // Not a return value, keep checking
-                } else if last.kind() != "let_declaration"
-                    && last.kind() != "empty_statement"
-                {
-                    return true;
-                }
-            }
-        }
-    }
-    let count = node.child_count();
-    for i in 0..count {
-        if has_return_or_tail_expr(node.child(i).unwrap()) {
-            return true;
-        }
-    }
-    false
+    (0..node.child_count())
+        .filter_map(|i| node.child(i))
+        .any(has_return)
 }
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
@@ -102,7 +88,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    if !has_return_or_tail_expr(body) {
+    if !block_returns_value(body) && !has_return(body) {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -178,5 +164,26 @@ mod tests {
         // Actually this should NOT flag because the block ends with the async expression
         let src = "fn f() { vec![1].iter().map(|x| { let _z = 0; async { } }); }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_trailing_match_as_implicit_return() {
+        // Issue #1503: a trailing `match` with no `;` is the tail expression.
+        let src = "fn f() { (0..n).map(|i| { let field = g(i); match h(field) { Ok(o) => Ok(Some(o)), Err(e) => Err(e), } }); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_trailing_if_else_as_implicit_return() {
+        // Issue #1503: a trailing `if`/`else` with no `;` is the tail expression.
+        let src = "fn f() { v.iter().map(|x| { let y = x; if y > 0 { y } else { -y } }); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_block_ending_in_semicolon_statement() {
+        // Negative space: a `;`-terminated final statement produces no value.
+        let src = "fn f() { vec![1].iter().map(|x| { foo(x); }); }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
