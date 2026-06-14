@@ -996,4 +996,39 @@ route.dispatch(req, {}, function (err) {
     fn allows_express_res_json() {
         assert!(run_on("res.json(data);").is_empty());
     }
+
+    // Regression tests for issue #1280: Angular's `WritableSignal.update(updater)`
+    // synchronously updates the signal value and returns void. `update` is a very
+    // common synchronous mutation name (Angular signals, Immutable.js, stores,
+    // Map-likes), so it is not in the heuristic list and must not be flagged.
+
+    #[test]
+    fn allows_angular_signal_update() {
+        // The issue's exact example: `this.page.update((c) => ...)` as a statement
+        // inside an Angular component method.
+        let src = "\
+class ExampleComponent {
+  readonly page = signal(0);
+  previousPage() {
+    this.page.update((currentPage) => {
+      return Math.max(currentPage - 1, 0);
+    });
+  }
+}
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_update_call() {
+        assert!(run_on("store.update(state);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_genuine_floating_promise_after_update_removed() {
+        // Negative-space guard: another async-dominant method name still in the
+        // heuristic (`fetch`) used as a statement stays flagged.
+        let d = run_on("api.fetch(url);");
+        assert_eq!(d.len(), 1);
+    }
 }
