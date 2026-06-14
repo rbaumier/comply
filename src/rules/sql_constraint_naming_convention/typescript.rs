@@ -32,7 +32,7 @@ impl AstCheck for Check {
                 &node,
                 super::META.id,
                 format!(
-                    "Constraint `{name}` must end with _pk|_fk|_key|_chk|_exl|_idx (format: {{table}}_{{col}}_{{suffix}})."
+                    "Constraint `{name}` must end with _pk|_fk|_key|_chk|_exl|_idx|_pkey|_fkey (format: {{table}}_{{col}}_{{suffix}})."
                 ),
                 Severity::Warning,
             ));

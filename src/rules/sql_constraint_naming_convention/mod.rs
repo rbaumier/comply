@@ -13,7 +13,7 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "sql-constraint-naming-convention",
-    description: "Constraints must follow `{table}_{col}_{suffix}` where suffix is pk|fk|key|chk|exl|idx.",
+    description: "Constraints must follow `{table}_{col}_{suffix}` where suffix is pk|fk|key|chk|exl|idx|pkey|fkey.",
     remediation: "Name constraints explicitly: `CONSTRAINT user_email_key UNIQUE (email)`, `CONSTRAINT order_user_id_fk FOREIGN KEY ...`. Deterministic names simplify migrations and error messages.",
     severity: Severity::Warning,
     doc_url: None,
@@ -44,7 +44,7 @@ pub fn register() -> RuleDef {
     }
 }
 
-const VALID_SUFFIXES: &[&str] = &["pk", "fk", "key", "chk", "exl", "idx"];
+const VALID_SUFFIXES: &[&str] = &["pk", "fk", "key", "chk", "exl", "idx", "pkey", "fkey"];
 
 fn extract_constraint_names(sql: &str) -> Vec<String> {
     let upper = sql.to_ascii_uppercase();
