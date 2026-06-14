@@ -385,15 +385,39 @@ fn is_listen_call(call: &oxc_ast::ast::CallExpression) -> bool {
     }
 }
 
+/// True when `call` is a `listen(...)` call, or a `.catch(...)`/`.then(...)`
+/// continuation chained onto one. The idiomatic Node.js server startup pattern
+/// attaches error handling to the listen promise — `app.listen({port}).catch(…)`
+/// or `app.listen({port}).then(…)` — so the top-level expression is a `.catch`
+/// member call whose object is the `listen` call. Unwrapping the trailing
+/// continuation recovers the underlying `listen`, matching both the bare call
+/// and the chained forms.
+fn call_chain_starts_with_listen(call: &oxc_ast::ast::CallExpression) -> bool {
+    if is_listen_call(call) {
+        return true;
+    }
+    let Expression::StaticMemberExpression(m) = &call.callee else {
+        return false;
+    };
+    if !matches!(m.property.name.as_str(), "catch" | "then") {
+        return false;
+    }
+    let Expression::CallExpression(inner) = &m.object else {
+        return false;
+    };
+    call_chain_starts_with_listen(inner)
+}
+
 /// True when the program has a top-level `listen(...)` call statement. Such a
 /// module is a server application entry point: it starts an HTTP server, so
 /// the route/hook/middleware registrations around it are mandatory, intentional
-/// side effects, not tree-shakeable library code.
+/// side effects, not tree-shakeable library code. A `listen` call chained with a
+/// `.catch(...)`/`.then(...)` continuation counts the same.
 fn is_server_entry_shape(program: &Program) -> bool {
     program.body.iter().any(|stmt| {
         let Statement::ExpressionStatement(es) = stmt else { return false };
         let Expression::CallExpression(call) = &es.expression else { return false };
-        is_listen_call(call)
+        call_chain_starts_with_listen(call)
     })
 }
 
@@ -2048,6 +2072,50 @@ mod tests {
             diags.len(),
             3,
             "library module without listen() must still be flagged, got {diags:?}"
+        );
+    }
+
+    // Regression for #1651: the idiomatic Node.js startup pattern chains error
+    // handling onto the listen promise — `app.listen({port}).catch(console.error)`
+    // — so the top-level expression is a `.catch()` member call whose object is
+    // the `listen` call. The server-entry detection must unwrap the continuation.
+    #[test]
+    fn allows_listen_catch_chained_server_entry_point() {
+        let src = "\
+            const app = fastify({ logger: true });\n\
+            app.get('/', schema, async (req, reply) => ({ hello: 'world' }));\n\
+            app.listen({ port: 3000 }).catch(console.error);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "examples/simple.mjs");
+        assert!(
+            diags.is_empty(),
+            "app.listen().catch() is a server entry point startup pattern, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_listen_then_chained_server_entry_point() {
+        let src = "\
+            app.register(routes);\n\
+            app.listen({ port: 3000 }).then(() => log('up')).catch(console.error);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "server.mjs");
+        assert!(
+            diags.is_empty(),
+            "app.listen().then().catch() is a server entry point startup pattern, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_non_listen_catch_chain() {
+        // A `.catch()` continuation on a non-`listen` call is an ordinary
+        // top-level side effect: unwrapping the chain must not exempt it.
+        let src = "\
+            register('widget');\n\
+            startSomething().catch(console.error);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/util.ts");
+        assert_eq!(
+            diags.len(),
+            2,
+            "a non-listen .catch() chain must still be flagged, got {diags:?}"
         );
     }
 
