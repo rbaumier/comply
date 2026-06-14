@@ -1,6 +1,9 @@
-//! Heuristic: file contains `action={` inside what looks like a JSX `<form`
-//! tag, AND the file does NOT mention `useFormStatus`, `useActionState`,
-//! or `useTransition`.
+//! Heuristic: file contains `action={fn}` inside what looks like a JSX `<form`
+//! tag where the expression is a function reference (identifier, member access,
+//! arrow, or `function` expression), AND the file does NOT mention
+//! `useFormStatus`, `useActionState`, or `useTransition`. A string-valued
+//! `action` (call expression like `fn.toString()`, template literal, or quoted
+//! string) is a plain URL form action and is never flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -13,6 +16,52 @@ fn has_pending_hook(source: &str) -> bool {
     crate::oxc_helpers::source_contains(source, "useFormStatus")
         || crate::oxc_helpers::source_contains(source, "useActionState")
         || crate::oxc_helpers::source_contains(source, "useTransition")
+}
+
+/// Extract the expression between `action={` and its balanced `}`, given the
+/// byte offset of the `{`. Returns `None` if the braces are unbalanced.
+fn balanced_brace_expr(source: &str, open_brace: usize) -> Option<&str> {
+    let bytes = source.as_bytes();
+    let mut depth = 0_u32;
+    let mut i = open_brace;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(source[open_brace + 1..i].trim());
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The React 19 form-action concern applies only when `action={...}` receives a
+/// function reference (identifier, member access, arrow, or `function`
+/// expression). String-producing expressions — a top-level call such as
+/// `fn.toString()`, a template literal, or a quoted string — are plain URL form
+/// actions and must not be flagged.
+fn action_expr_is_function_ref(expr: &str) -> bool {
+    if expr.is_empty() {
+        return false;
+    }
+    // Arrow or `function` expression: definitely a function.
+    if expr.contains("=>") || expr.starts_with("function") || expr.starts_with("async ") {
+        return true;
+    }
+    // String / template literal: a plain URL.
+    let first = expr.as_bytes()[0];
+    if first == b'"' || first == b'\'' || first == b'`' {
+        return false;
+    }
+    // A top-level call expression (e.g. `fn.toString()`, `getUrl()`) yields a
+    // value, not a function reference. Identifiers and member accesses
+    // (`submit`, `actions.submit`) do not end in a call.
+    !expr.ends_with(')')
 }
 
 impl TextCheck for Check {
@@ -40,7 +89,13 @@ impl TextCheck for Check {
                 }
                 if found {
                     let tag = &ctx.source[i..tag_end];
-                    if tag.contains("action={") {
+                    let action_is_fn = tag.find("action={").is_some_and(|rel| {
+                        // `+ 7` lands on the `{` of `action={`.
+                        let open_brace = i + rel + 7;
+                        balanced_brace_expr(ctx.source, open_brace)
+                            .is_some_and(action_expr_is_function_ref)
+                    });
+                    if action_is_fn {
                         let prefix = &ctx.source[..i];
                         let line = prefix.bytes().filter(|b| *b == b'\n').count() + 1;
                         let col = prefix.rfind('\n').map_or(i, |nl| i - nl - 1) + 1;
@@ -98,5 +153,52 @@ mod tests {
     fn ignores_form_with_string_action() {
         let src = "function F() { return <form action=\"/submit\"><button>Go</button></form>; }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_action_returning_string_from_method_call() {
+        // Issue #1622: Astro's `actions.blog.apply.toString()` yields a string
+        // URL, not an async function — flagging it is a false positive.
+        let src = "import { actions } from 'astro:actions';\n\
+                   export function ApplyForm() {\n\
+                     return (\n\
+                       <form method=\"POST\" action={actions.blog.apply.toString()}>\n\
+                         <button>Apply</button>\n\
+                       </form>\n\
+                     );\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_action_template_literal() {
+        let src = "function F({ id }) { return <form action={`/submit/${id}`}><button>Go</button></form>; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_action_string_literal_in_braces() {
+        let src = "function F() { return <form action={'/submit'}><button>Go</button></form>; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_action_call_expression() {
+        let src = "function F() { return <form action={getUrl()}><button>Go</button></form>; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_member_expression_function_ref() {
+        let src = "function F() { return <form action={actions.submit}><button>Go</button></form>; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_inline_async_arrow_action() {
+        // Negative-space guard: a genuine async function action without any
+        // pending-state hook must still fire.
+        let src = "function F() { return <form action={async (data) => { await save(data); }}><button>Go</button></form>; }";
+        assert_eq!(run(src).len(), 1);
     }
 }
