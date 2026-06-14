@@ -34,6 +34,19 @@ fn is_zero_arity_local<'a>(
     }
 }
 
+/// Returns `true` when `name` follows the PascalCase convention reserved for
+/// types, classes and constructors (leading uppercase, contains a lowercase
+/// letter). A PascalCase reference passed as the sole argument to a
+/// `find`/`map`/`flatMap` call is a node-type/constructor — e.g. jscodeshift
+/// `Collection.find(NodeType)` — not a per-element `(value, index, array)`
+/// transform, so wrapping it in an arrow function would be wrong. Screaming
+/// SNAKE_CASE constants (no lowercase) are excluded so they stay flagged.
+fn is_pascal_case(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else { return false };
+    first.is_ascii_uppercase() && name.chars().any(|c| c.is_ascii_lowercase())
+}
+
 pub struct Check;
 
 const ITERATOR_METHODS: &[&str] = &[
@@ -100,6 +113,11 @@ impl OxcCheck for Check {
                 if IGNORED_IDENTIFIERS.contains(&name) {
                     return;
                 }
+                // A PascalCase reference is a type/class/constructor, not a
+                // per-element transform — e.g. jscodeshift `root.find(NodeType)`.
+                if is_pascal_case(name) {
+                    return;
+                }
                 if is_zero_arity_local(ident, semantic) {
                     return;
                 }
@@ -118,6 +136,12 @@ impl OxcCheck for Check {
                 });
             }
             Expression::StaticMemberExpression(inner_member) => {
+                // A PascalCase property is a node-type/constructor reference
+                // (jscodeshift `root.find(j.ExportNamedDeclaration)`), not a
+                // per-element transform callback.
+                if is_pascal_case(inner_member.property.name.as_str()) {
+                    return;
+                }
                 let text = &ctx.source
                     [inner_member.span.start as usize..inner_member.span.end as usize];
                 let (line, column) =
@@ -244,5 +268,35 @@ mod tests {
             run_on("import { importedFn } from './other'; const arr: string[] = []; arr.map(importedFn);").len(),
             1
         );
+    }
+
+    // Regression #1194: jscodeshift `Collection.find(NodeType, filter)` — a
+    // node-type constructor first argument, often with a filter as the second.
+    #[test]
+    fn no_jscodeshift_find_two_arg_node_type() {
+        assert!(run_on(
+            "root.find(j.ExportNamedDeclaration, { declaration: { type: 'VariableDeclaration' } });"
+        )
+        .is_empty());
+    }
+
+    // Regression #1194: jscodeshift single-arg node-type via member expression.
+    #[test]
+    fn no_jscodeshift_find_member_node_type() {
+        assert!(run_on("root.find(j.ExportNamedDeclaration);").is_empty());
+    }
+
+    // Regression #1194: bare PascalCase node-type / constructor reference.
+    #[test]
+    fn no_pascal_case_identifier_reference() {
+        assert!(run_on("root.find(ExportNamedDeclaration);").is_empty());
+    }
+
+    // Negative-space guard #1194: a lower-camelCase function reference is still
+    // the array-callback footgun and must stay flagged.
+    #[test]
+    fn flags_camel_case_function_reference() {
+        assert_eq!(run_on("const x = items.map(transform);").len(), 1);
+        assert_eq!(run_on("const x = users.find(isActive);").len(), 1);
     }
 }
