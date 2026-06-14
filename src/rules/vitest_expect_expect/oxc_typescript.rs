@@ -504,6 +504,25 @@ mod tests {
         assert!(run(src).is_empty(), "{:?}", run(src));
     }
 
+    // Regression for #1195 — Effect-TS uses `node:assert` member calls such as
+    // `assert.strictEqual(...)` as the sole assertion across thousands of tests.
+    // The member-call receiver `assert` is the assertion, so the body must not
+    // be flagged.
+    #[test]
+    fn allows_test_with_assert_strict_equal() {
+        let src = r#"it("adds", () => { assert.strictEqual(add(2, 18), 20); });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative-space guard for #1195: a test whose body has no `expect`, no
+    // bare `assert`, and no `assert.<method>` member call must still fire
+    // exactly one diagnostic.
+    #[test]
+    fn still_flags_test_without_expect_or_assert_member_call() {
+        let src = r#"it("adds", () => { const sum = add(2, 18); log(sum); });"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
     // Member access on an `assert`-prefixed object that is NOT a call (a
     // property read) must not be mistaken for an assertion.
     #[test]
