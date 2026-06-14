@@ -23,6 +23,16 @@
 //!   from `"vitest"` and whose top-level call statements are all `describe(...)` /
 //!   `bench(...)` registrations (or standard lifecycle hooks), with a
 //!   locally-bound `describe`/`bench` name keeping the module flagged;
+//! - vanilla-extract style modules by content shape: any module importing from a
+//!   `@vanilla-extract/*` package (`@vanilla-extract/css`,
+//!   `@vanilla-extract/recipes`, …). vanilla-extract is a zero-runtime
+//!   CSS-in-TypeScript library — files using its API (`globalStyle(...)`,
+//!   `style(...)`, `keyframes(...)`, `recipe(...)`, …) are exclusively processed
+//!   at compile time by the vanilla-extract build plugin into static CSS and are
+//!   never bundled into runtime JavaScript, so the top-level style calls are the
+//!   file's whole purpose, not a tree-shaking hazard. The `@vanilla-extract/*`
+//!   import is the definitive signal, so an arbitrary `.css.ts` module that does
+//!   not import the vanilla-extract API is still flagged;
 //! - CLI entry points: files whose name is `bin.{ts,mts,js,mjs}` (the Node.js
 //!   `package.json` `"bin"` convention) or any file starting with a `#!`
 //!   shebang. Such files are executed directly (`tsx ./bin.ts`, `node ./bin.js`),
@@ -466,6 +476,31 @@ fn is_vitest_bench_shape(program: &Program) -> bool {
         }
     }
     seen_registration
+}
+
+/// True when the program imports from a vanilla-extract package at the top level:
+/// `@vanilla-extract/css` or any `@vanilla-extract/*` sub-package
+/// (`@vanilla-extract/recipes`, `@vanilla-extract/dynamic`, …). Any import form
+/// counts — the gate only needs to confirm the file uses the vanilla-extract API.
+fn has_vanilla_extract_import(program: &Program) -> bool {
+    program.body.iter().any(|stmt| {
+        let Statement::ImportDeclaration(import) = stmt else { return false };
+        let src = import.source.value.as_str();
+        src == "@vanilla-extract" || src.starts_with("@vanilla-extract/")
+    })
+}
+
+/// True when the program is a vanilla-extract style module: it imports from a
+/// `@vanilla-extract/*` package. vanilla-extract is a zero-runtime CSS-in-TS
+/// library — files using its API (`globalStyle(...)`, `style(...)`,
+/// `keyframes(...)`, `recipe(...)`, …) are exclusively processed at compile time
+/// by the vanilla-extract Vite/webpack plugin into static CSS and are never
+/// bundled into runtime JavaScript. The API is designed around top-level calls,
+/// so those calls are the file's whole purpose, not a tree-shaking hazard. The
+/// `@vanilla-extract/*` import is the definitive signal so an arbitrary `.css.ts`
+/// file that is not a vanilla-extract module is still flagged.
+fn is_vanilla_extract_style_file(program: &Program) -> bool {
+    has_vanilla_extract_import(program)
 }
 
 /// True when the call's callee is `listen` (bare) or a `.listen` member
@@ -1744,6 +1779,7 @@ impl OxcCheck for Check {
             || is_benchmark_or_profile_script(ctx.path)
             || shape_is_test_setup(program)
             || is_vitest_bench_shape(program)
+            || is_vanilla_extract_style_file(program)
             || is_server_entry_shape(program)
             || is_cli_main_entry_shape(program)
             || is_react_entry_shape(program)
@@ -2024,6 +2060,59 @@ mod tests {
             describe('x', () => { bench('y', () => {}); });\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/perf.ts");
         assert!(!diags.is_empty(), "a real top-level side effect must still flag, got {diags:?}");
+    }
+
+    #[test]
+    fn skips_vanilla_extract_style_file() {
+        // Issue #2183: vanilla-extract is a zero-runtime CSS-in-TS library. Style
+        // modules call `globalStyle(...)`/`style(...)` at the top level — these are
+        // build-time operations compiled into static CSS by the vanilla-extract
+        // plugin, never bundled into runtime JS, so tree-shaking does not apply.
+        let src = "\
+            import { globalStyle } from '@vanilla-extract/css';\n\
+            import { vars } from './theme-contract.css';\n\
+            globalStyle('html, body', { color: vars.colors.black });\n\
+            globalStyle('*, *:before, *:after', { boxSizing: 'border-box' });\n";
+        for path in [
+            "docs/app/styles/global.css.ts",
+            "docs/app/components/Code/Pre.css.ts",
+            "src/theme.css.js",
+        ] {
+            let diags = crate::rules::test_helpers::run_rule(&Check, src, path);
+            assert!(diags.is_empty(), "{path} should be exempt, got {diags:?}");
+        }
+    }
+
+    #[test]
+    fn skips_vanilla_extract_recipes_subpackage() {
+        // The exemption keys on any `@vanilla-extract/*` package, not only
+        // `@vanilla-extract/css` (e.g. `@vanilla-extract/recipes`).
+        let src = "\
+            import { recipe } from '@vanilla-extract/recipes';\n\
+            export const button = recipe({ base: { padding: 12 } });\n\
+            recipe({ base: { padding: 4 } });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/button.css.ts");
+        assert!(diags.is_empty(), "vanilla-extract recipes module should be exempt, got {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_css_ts_without_vanilla_extract_import() {
+        // Negative-space guard: the `@vanilla-extract/*` import is the definitive
+        // signal. A `.css.ts` file that does NOT import the vanilla-extract API is
+        // not a vanilla-extract module, so a genuine top-level side effect in it is
+        // still flagged.
+        let src = "initSentry();";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/styles.css.ts");
+        assert_eq!(diags.len(), 1, ".css.ts without a vanilla-extract import must still flag");
+    }
+
+    #[test]
+    fn still_flags_real_side_effect_without_vanilla_extract_import() {
+        // Negative-space guard: a genuine top-level side effect in a normal `.ts`
+        // module with no vanilla-extract import is still flagged.
+        let src = "initSentry();\nconsole.log('boot');";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/index.ts");
+        assert_eq!(diags.len(), 2, "real side effects without a vanilla-extract import must still flag");
     }
 
     // --- (a) Vitest setup file exemption ----------------------------------
