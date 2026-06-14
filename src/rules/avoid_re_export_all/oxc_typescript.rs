@@ -1,7 +1,22 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use std::path::Path;
 use std::sync::Arc;
+
+/// True when `path`'s file stem is a conventional public-API barrel name.
+///
+/// `index` is the universal barrel convention; `public-api` and `public_api`
+/// are the ng-packagr Angular library convention (the source entry whose whole
+/// job is to enumerate a package's exported surface via `export *`). Files with
+/// these stems are deliberate barrels, so wildcard re-exports in them are the
+/// intended contract, not a hidden surface.
+fn is_public_api_barrel_stem(path: &Path) -> bool {
+    matches!(
+        path.file_stem().and_then(|s| s.to_str()),
+        Some("index" | "public-api" | "public_api")
+    )
+}
 
 pub struct Check;
 
@@ -22,10 +37,12 @@ impl OxcCheck for Check {
         if decl.exported.is_some() {
             return;
         }
-        // Barrel files (`index.*`) use `export *` as their intentional public-API
-        // surface — the package entry point. Only flag wildcard re-exports in
+        // Barrel files use `export *` as their intentional public-API surface —
+        // the entry point consumers import. `index.*` is the universal barrel
+        // convention; `public-api.*` / `public_api.*` is the ng-packagr Angular
+        // library convention for the same role. Only flag wildcard re-exports in
         // non-barrel modules, where they hide the module's surface.
-        if ctx.path.file_stem().and_then(|s| s.to_str()) == Some("index") {
+        if is_public_api_barrel_stem(ctx.path) {
             return;
         }
         // A non-`index` file whose stem matches a published `package.json`
@@ -98,6 +115,38 @@ mod tests {
     fn allows_export_all_in_nested_barrel_index() {
         let diags = run_on("src/components/index.tsx", "export * from './Button.js'");
         assert!(diags.is_empty(), "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn allows_export_all_in_angular_public_api_barrel_issue_1626() {
+        // Regression for issue #1626: `public-api.ts` is the ng-packagr Angular
+        // library convention for a package's public-API barrel — the same role
+        // `index.*` serves — whose job is to enumerate the exported surface via
+        // `export *`. Reproduces `src/cdk/tree/public-api.ts` from
+        // angular/components.
+        let src = "\
+export * from './control/base-tree-control'
+export * from './nested-node'
+export * from './tree'
+";
+        let diags = run_on("src/cdk/tree/public-api.ts", src);
+        assert!(diags.is_empty(), "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn allows_export_all_in_public_api_underscore_barrel_issue_1626() {
+        // ng-packagr also accepts the legacy `public_api.ts` spelling.
+        let diags = run_on("src/lib/public_api.ts", "export * from './widget'");
+        assert!(diags.is_empty(), "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn flags_export_all_in_public_api_substring_file_issue_1626() {
+        // Negative-space guard for issue #1626: only the exact `public-api` /
+        // `public_api` stem is a barrel. An ordinary source file that merely
+        // contains the substring in its name still hides its surface and fires.
+        let diags = run_on("src/public-api-helpers.ts", "export * from './internal.js'");
+        assert_eq!(diags.len(), 1, "expected ordinary file to be flagged: {diags:?}");
     }
 
     #[test]
