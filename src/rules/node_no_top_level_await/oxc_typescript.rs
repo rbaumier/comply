@@ -5,9 +5,10 @@
 //! nearest `package.json` declaring `"type": "module"`), where top-level await
 //! is a valid Stage-4 feature, plus test files, `__mocks__/` manual-mock files
 //! (Jest/Vitest test infrastructure that uses top-level `await` for
-//! `vi.importActual()`), scripts, package-root build/CLI scripts invoked
-//! directly by a `package.json` `scripts` entry (e.g. `tsx ./build.ts`), and
-//! entrypoints.
+//! `vi.importActual()`), standalone scripts run directly (files under a
+//! `scripts/`, `bench/`, `benchmarks/`, or `benchmark/` directory, or carrying a
+//! `#!` shebang), package-root build/CLI scripts invoked directly by a
+//! `package.json` `scripts` entry (e.g. `tsx ./build.ts`), and entrypoints.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -28,7 +29,11 @@ fn is_test_file(path: &std::path::Path) -> bool {
 }
 
 fn is_script_file(path: &std::path::Path, source: &str) -> bool {
-    if path.components().any(|c| c.as_os_str() == "scripts") {
+    const SCRIPT_DIRS: &[&str] = &["scripts", "bench", "benchmarks", "benchmark"];
+    if path
+        .components()
+        .any(|c| c.as_os_str().to_str().is_some_and(|seg| SCRIPT_DIRS.contains(&seg)))
+    {
         return true;
     }
     source.starts_with("#!")
@@ -144,6 +149,40 @@ const { create: actualCreate, createStore: actualCreateStore } =
   await vi.importActual<typeof zustand>('zustand');
 "#;
         assert!(run_at(src, "apps/react-vite/__mocks__/zustand.ts").is_empty());
+    }
+
+    // Regression for #1664: benchmark runners under a `bench/` directory are
+    // standalone scripts executed directly with `node`, never imported as
+    // published modules; top-level `await` sequences their async steps. Exempt
+    // like `scripts/`. The `bench` segment may be nested (here under `docs/`).
+    #[test]
+    fn allows_top_level_await_in_bench_dir() {
+        let src = r#"
+console.log(`Crawl throughput benchmark (${PAGE_COUNT} pages, ${TRIALS} trials)`)
+await benchmark('Current implementation')
+"#;
+        assert!(run_at(src, "docs/src/prerender/bench/src/crawl-throughput.ts").is_empty());
+    }
+
+    // Regression for #1664: the same exemption for a JavaScript benchmark
+    // runner under `bench/` (esbuild-style build/watch driver).
+    #[test]
+    fn allows_top_level_await_in_bench_dir_js() {
+        let src = r#"
+let ctx = await context(buildOptions)
+await ctx.watch()
+"#;
+        assert!(run_at(src, "packages/ui/bench/frameworks/solid/build.js").is_empty());
+    }
+
+    // Negative space for #1664: a normal library module under `src/` (no
+    // `bench`/`benchmark` segment) must still be flagged — the exemption is
+    // keyed on the directory convention, not relaxed for every file.
+    #[test]
+    fn still_flags_top_level_await_outside_bench_dir() {
+        let d = run_at("const data = await fetch('/api');", "src/benchmarking/run.ts");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Top-level"));
     }
 
     /// Run the rule against `importer_rel` inside a temp tree whose root
