@@ -9,9 +9,15 @@
 //! mutually exclusive in serde — the flatten's target HashMap/struct
 //! is exactly the mechanism for accepting unknown keys, so rejecting
 //! them before the flatten can catch them defeats the field's purpose.
+//!
+//! **Exception:** structs defined inside a test context (a `#[test]`
+//! function, a path-qualified test fn like `#[tokio::test]` /
+//! `#[crate::test]`, or a `#[cfg(test)]` module) are skipped — they are
+//! throwaway fixtures that never deserialize untrusted input.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::is_in_test_context;
 
 const KINDS: &[&str] = &["struct_item"];
 
@@ -35,6 +41,11 @@ impl AstCheck for Check {
         }
 
         let source_bytes = ctx.source.as_bytes();
+        // Structs defined inside a test function or `#[cfg(test)]` module
+        // are throwaway fixtures that never see untrusted input.
+        if is_in_test_context(node, source_bytes) {
+            return;
+        }
         let attrs = collect_preceding_attrs(node, source_bytes);
         if !attrs.iter().any(|a| derives_deserialize(a)) {
             return;
@@ -319,6 +330,56 @@ mod tests {
         // `serde::Deserialize` — final path segment is exactly
         // `Deserialize`, so it must still fire without deny_unknown_fields.
         let source = "#[derive(serde::Deserialize)]\nstruct Config { rate: u32 }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_struct_inside_path_qualified_test_fn() {
+        // axum's `#[crate::test]` fixtures (json.rs) — a throwaway
+        // `Deserialize` struct inside the test fn must not be flagged.
+        // (Closes #1259)
+        let source = "#[crate::test]\n\
+                      async fn deserialize_body() {\n\
+                          #[derive(Debug, Deserialize)]\n\
+                          struct Input { foo: String }\n\
+                      }";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: Deserialize fixture inside #[crate::test] fn flagged"
+        );
+    }
+
+    #[test]
+    fn allows_struct_inside_tokio_test_fn() {
+        let source = "#[tokio::test]\n\
+                      async fn roundtrip() {\n\
+                          #[derive(Deserialize)]\n\
+                          struct Foo { bar: u32 }\n\
+                      }";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: Deserialize fixture inside #[tokio::test] fn flagged"
+        );
+    }
+
+    #[test]
+    fn allows_struct_inside_cfg_test_module() {
+        let source = "#[cfg(test)]\n\
+                      mod tests {\n\
+                          #[derive(Deserialize)]\n\
+                          struct Input { foo: String }\n\
+                      }";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: Deserialize struct inside #[cfg(test)] module flagged"
+        );
+    }
+
+    #[test]
+    fn still_flags_production_struct_outside_test_context() {
+        // Negative space: a non-test `Deserialize` struct missing
+        // `deny_unknown_fields` is still flagged.
+        let source = "#[derive(Deserialize)]\nstruct Input { foo: String }";
         assert_eq!(run_on(source).len(), 1);
     }
 
