@@ -9,6 +9,14 @@ pub struct Check;
 
 const DECORATOR: &str = "@Component(";
 
+/// Explicit, performant `ChangeDetectionStrategy` values that opt out of the
+/// default re-check-everything behavior: `OnPush` (observable/push patterns) and
+/// `Eager` (the Signals-native strategy). Setting either is a deliberate choice.
+const ACCEPTED_STRATEGIES: &[&str] = &[
+    "ChangeDetectionStrategy.OnPush",
+    "ChangeDetectionStrategy.Eager",
+];
+
 impl TextCheck for Check {
     fn prefilter(&self) -> Option<&'static [&'static str]> {
         Some(&["@Component("])
@@ -39,7 +47,7 @@ impl TextCheck for Check {
                 body_end -= 1;
             }
             let body = &ctx.source[after..body_end];
-            if !body.contains("ChangeDetectionStrategy.OnPush") {
+            if !ACCEPTED_STRATEGIES.iter().any(|s| body.contains(s)) {
                 let (line, column) = byte_to_line_col(ctx.source, start);
                 out.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
@@ -105,6 +113,22 @@ import { Component, ChangeDetectionStrategy } from '@angular/core';
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class X {}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_component_with_eager() {
+        let src = r#"
+import { Component, ChangeDetectionStrategy } from '@angular/core';
+@Component({
+  selector: 'ngrx-root',
+  standalone: true,
+  imports: [RouterModule, TestPipe],
+  template: `...`,
+  changeDetection: ChangeDetectionStrategy.Eager,
+})
+export class AppComponent {}
 "#;
         assert!(run(src).is_empty());
     }
