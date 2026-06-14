@@ -736,6 +736,18 @@ import { List } from "immutable";
     }
 
     #[test]
+    fn allows_dev_dep_in_benchmarks_dir() {
+        // Issue #1701: jotai's `benchmarks/read-write.ts` imports the `benny`
+        // benchmark runner from devDependencies. Files under a `benchmarks/`
+        // directory are performance benchmarks that never ship in the published
+        // package, so importing a benchmark-tool devDependency is correct.
+        let pkg = r#"{"devDependencies":{"benny":"^3"}}"#;
+        let src = r#"import { add, complete, cycle, save, suite } from "benny";"#;
+        let d = run_with_pkg_at_path(pkg, "benchmarks/read-write.ts", src);
+        assert!(d.is_empty(), "benchmarks/ file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
     fn still_flags_dev_dep_outside_perf_dirs() {
         // Guard against over-relaxing: a path where "performance" is a substring of
         // another segment (not its own directory) must still flag.
