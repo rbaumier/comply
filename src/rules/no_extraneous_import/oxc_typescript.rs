@@ -86,6 +86,17 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Type-only imports (`import type { X } from "pkg"`, or an import whose
+        // named specifiers all carry the inline `type` qualifier) are erased at
+        // compile time and emit no JavaScript, so they create no runtime
+        // dependency — the rule's entire concern. Importing a devDependency's
+        // types is therefore legitimate. An import that keeps any runtime
+        // binding (a value specifier, a default/namespace binding, or a
+        // side-effect `import "pkg"`) is not erased and stays checked.
+        if is_type_only_import(import) {
+            return;
+        }
+
         let root = package_root(specifier);
         let in_runtime = pkg.dependencies.contains_key(root)
             || pkg.peer_dependencies.contains_key(root)
@@ -137,6 +148,34 @@ fn is_config_variant_file(path: &std::path::Path) -> bool {
     path.file_stem()
         .and_then(|s| s.to_str())
         .is_some_and(|stem| stem.contains(".config-"))
+}
+
+/// True when an import emits no JavaScript and so creates no runtime
+/// dependency: either a declaration-level `import type { ... }`, or a named
+/// import whose every specifier carries the inline `type` qualifier
+/// (`import { type A, type B } from "pkg"`).
+///
+/// Returns false for any import that keeps a runtime binding: a value specifier
+/// (including a mixed `import { type A, b }`), a default or namespace binding,
+/// or a side-effect `import "pkg"` (no specifiers).
+fn is_type_only_import(import: &oxc_ast::ast::ImportDeclaration) -> bool {
+    use oxc_ast::ast::ImportDeclarationSpecifier;
+
+    if import.import_kind.is_type() {
+        return true;
+    }
+    // No specifiers means a side-effect import (`import "pkg"`), which runs at
+    // runtime and is never erased.
+    let Some(specifiers) = &import.specifiers else {
+        return false;
+    };
+    !specifiers.is_empty()
+        && specifiers.iter().all(|s| match s {
+            ImportDeclarationSpecifier::ImportSpecifier(named) => named.import_kind.is_type(),
+            // A default or namespace binding is always a runtime value.
+            ImportDeclarationSpecifier::ImportDefaultSpecifier(_)
+            | ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => false,
+        })
 }
 
 fn package_root(specifier: &str) -> &str {
@@ -1014,5 +1053,74 @@ import { Demo } from '@mantinex/demo';
         let d = run_with_pkg_at_path(pkg, "src/index.ts", src);
         assert_eq!(d.len(), 1, "published src should still flag: {d:?}");
         assert!(d[0].message.contains("ts-morph"));
+    }
+
+    #[test]
+    fn allows_type_only_import_of_dev_dep() {
+        // Issue #1589: nuxt's `packages/nitro-server/src/runtime/utils/app-config.ts`
+        // does `import type { AppConfig } from '@nuxt/schema'`, where `@nuxt/schema`
+        // is a devDependency. A declaration-level `import type` is erased at compile
+        // time and emits no JavaScript, so it creates no runtime dependency — there
+        // is no install-time break for downstream consumers. It must not flag.
+        let pkg = r#"{
+            "dependencies": {"klona": "^2"},
+            "devDependencies": {"@nuxt/schema": "^3"}
+        }"#;
+        let src = r#"
+import { klona } from 'klona';
+import type { AppConfig } from '@nuxt/schema';
+"#;
+        let d = run_with_pkg_at_path(
+            pkg,
+            "packages/nitro-server/src/runtime/utils/app-config.ts",
+            src,
+        );
+        assert!(d.is_empty(), "type-only import should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_all_inline_type_specifiers_of_dev_dep() {
+        // Issue #1589: an import whose every named specifier carries the inline
+        // `type` qualifier (`import { type A, type B } from 'pkg'`) is fully
+        // erased too — no runtime binding remains — so it must not flag.
+        let pkg = r#"{"devDependencies":{"@nuxt/schema":"^3"}}"#;
+        let src = r#"import { type AppConfig, type NuxtOptions } from '@nuxt/schema';"#;
+        let d = run_with_pkg_at_path(pkg, "src/runtime/app-config.ts", src);
+        assert!(d.is_empty(), "all-inline-type import should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_value_import_of_dev_dep() {
+        // Negative-space guard: a plain value import (`import { X } from 'pkg'`) of
+        // a devDependency from production source keeps a runtime binding and must
+        // still flag — the exemption is type-only, not blanket.
+        let pkg = r#"{"devDependencies":{"@nuxt/schema":"^3"}}"#;
+        let src = r#"import { defineNuxtConfig } from '@nuxt/schema';"#;
+        let d = run_with_pkg_at_path(pkg, "src/runtime/app-config.ts", src);
+        assert_eq!(d.len(), 1, "value import should still flag: {d:?}");
+        assert!(d[0].message.contains("@nuxt/schema"));
+    }
+
+    #[test]
+    fn still_flags_mixed_import_with_runtime_binding() {
+        // Negative-space guard: a mixed import (`import { type A, b } from 'pkg'`)
+        // keeps the value binding `b` at runtime, so it is not erased and must
+        // still flag.
+        let pkg = r#"{"devDependencies":{"@nuxt/schema":"^3"}}"#;
+        let src = r#"import { type AppConfig, defineNuxtConfig } from '@nuxt/schema';"#;
+        let d = run_with_pkg_at_path(pkg, "src/runtime/app-config.ts", src);
+        assert_eq!(d.len(), 1, "mixed import with runtime binding should still flag: {d:?}");
+        assert!(d[0].message.contains("@nuxt/schema"));
+    }
+
+    #[test]
+    fn still_flags_side_effect_import_of_dev_dep() {
+        // Negative-space guard: a side-effect import (`import 'pkg'`) has no
+        // specifiers but runs at runtime, so it is not erased and must still flag.
+        let pkg = r#"{"devDependencies":{"some-polyfill":"^1"}}"#;
+        let src = r#"import 'some-polyfill';"#;
+        let d = run_with_pkg_at_path(pkg, "src/runtime/setup.ts", src);
+        assert_eq!(d.len(), 1, "side-effect import should still flag: {d:?}");
+        assert!(d[0].message.contains("some-polyfill"));
     }
 }

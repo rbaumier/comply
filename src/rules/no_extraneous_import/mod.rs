@@ -16,6 +16,12 @@
 //! library members they document or test as `devDependencies` because they are
 //! never published, so importing them is correct.
 //!
+//! Type-only imports are never flagged: a declaration-level `import type { X }`,
+//! or an import whose named specifiers all carry the inline `type` qualifier,
+//! is erased at compile time and emits no JavaScript, so it creates no runtime
+//! dependency. An import that keeps any runtime binding (a value specifier, a
+//! default/namespace binding, or a side-effect `import "pkg"`) stays checked.
+//!
 //! A file is considered a test file (and therefore allowed to consume
 //! `devDependencies`) when its path contains any of `__tests__/`,
 //! `__testUtils__/`, `__mocks__/`, `testing/`, `.test.`, `.spec.`, `.stories.`,
