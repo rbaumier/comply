@@ -69,6 +69,7 @@ impl OxcCheck for Check {
         if ctx.file.path_segments.in_aux_dir
             || crate::rules::path_utils::is_build_script_path(ctx.path, &project_root)
             || crate::rules::path_utils::is_sample_dir_path(ctx.path)
+            || crate::rules::path_utils::is_top_level_resources_dir_path(ctx.path, &project_root)
         {
             return;
         }
@@ -1064,6 +1065,41 @@ import { List } from "immutable";
         let src = r#"import ts from "typescript";"#;
         let d = run_with_pkg_at_path(pkg, "src/toolsRegistry/index.ts", src);
         assert_eq!(d.len(), 1, "non-tools dir should still flag: {d:?}");
+        assert!(d[0].message.contains("typescript"));
+    }
+
+    #[test]
+    fn allows_dev_dep_in_top_level_resources_dir() {
+        // Issue #2399: graphql-js's top-level `resources/` directory holds
+        // build-time tooling (TypeScript compiler-API scripts, npm package build
+        // scripts) that never ships in the published package, like `scripts/`.
+        // Importing a devDependency from a `resources/` build script is correct.
+        let pkg = r#"{"devDependencies":{"typescript":"^5"}}"#;
+        let src = r#"import ts from "typescript";"#;
+        let d = run_with_pkg_at_path(pkg, "resources/build-npm.ts", src);
+        assert!(d.is_empty(), "resources/ build script should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_top_level_resources_nested_dir() {
+        // Issue #2399: nested build tooling under `resources/` (e.g. a benchmark
+        // runner) is still build-time tooling and must not flag.
+        let pkg = r#"{"devDependencies":{"mitata":"^1"}}"#;
+        let src = r#"import { measure } from "mitata";"#;
+        let d = run_with_pkg_at_path(pkg, "resources/benchmark/worker-timing.js", src);
+        assert!(d.is_empty(), "resources/ benchmark runner should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_in_nested_runtime_resources_dir() {
+        // Negative-space guard for #2399: a `resources/` directory nested under
+        // `src/` is runtime application code (assets, runtime config), not
+        // top-level build tooling. The exemption is anchored to the project root,
+        // so a devDependency import from `src/resources/` must still flag.
+        let pkg = r#"{"devDependencies":{"typescript":"^5"}}"#;
+        let src = r#"import ts from "typescript";"#;
+        let d = run_with_pkg_at_path(pkg, "src/resources/loader.ts", src);
+        assert_eq!(d.len(), 1, "src/resources/ runtime code should still flag: {d:?}");
         assert!(d[0].message.contains("typescript"));
     }
 
