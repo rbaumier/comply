@@ -37,7 +37,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else {
@@ -63,6 +63,13 @@ impl OxcCheck for Check {
         };
 
         if !matches {
+            return;
+        }
+
+        // `Promise.all(arr.map(async ...))` (and `allSettled`/`race`/`any`) fully
+        // consumes the returned promises, so rejections are not swallowed — the
+        // canonical concurrency idiom this rule's own remediation recommends.
+        if is_consumed_by_promise_combinator(node, semantic) {
             return;
         }
 
@@ -95,5 +102,110 @@ fn is_async_arg(arg: &Argument) -> bool {
         Argument::ArrowFunctionExpression(arrow) => arrow.r#async,
         Argument::FunctionExpression(func) => func.r#async,
         _ => false,
+    }
+}
+
+/// True when `node` (a `.map()`/`.flatMap()` CallExpression) is itself an
+/// argument of a `Promise.<all|allSettled|race|any>(...)` call. Those
+/// combinators await every promise in the array, so the returned promises are
+/// consumed rather than discarded.
+fn is_consumed_by_promise_combinator(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let AstKind::CallExpression(call) = node.kind() else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    if !matches!(member.property.name.as_str(), "map" | "flatMap") {
+        return false;
+    }
+
+    let AstKind::CallExpression(parent_call) = semantic.nodes().parent_node(node.id()).kind() else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(parent_member) = &parent_call.callee else {
+        return false;
+    };
+    let Expression::Identifier(obj) = &parent_member.object else {
+        return false;
+    };
+    if obj.name.as_str() != "Promise" {
+        return false;
+    }
+    if !matches!(
+        parent_member.property.name.as_str(),
+        "all" | "allSettled" | "race" | "any"
+    ) {
+        return false;
+    }
+
+    parent_call
+        .arguments
+        .iter()
+        .any(|arg| arg.span() == call.span)
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Check;
+    use crate::diagnostic::Diagnostic;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn flags_set_timeout_async() {
+        assert_eq!(run("setTimeout(async () => { await save(); }, 100);").len(), 1);
+    }
+
+    #[test]
+    fn flags_foreach_async() {
+        assert_eq!(run("items.forEach(async (i) => { await save(i); });").len(), 1);
+    }
+
+    #[test]
+    fn flags_bare_map_async() {
+        // result discarded, not consumed by Promise.all
+        assert_eq!(run("arr.map(async (x) => { await save(x); });").len(), 1);
+    }
+
+    // --- #2309: Promise.all(arr.map(async ...)) is the canonical idiom ---
+
+    #[test]
+    fn allows_promise_all_map_async() {
+        let src = "Promise.all(dataSources.map(async (c) => { await c.save(); }));";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_promise_all_settled_map_async() {
+        let src = "Promise.allSettled(arr.map(async (x) => { await save(x); }));";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_promise_race_map_async() {
+        let src = "Promise.race(arr.map(async (x) => { await save(x); }));";
+        assert!(run(src).is_empty());
     }
 }
