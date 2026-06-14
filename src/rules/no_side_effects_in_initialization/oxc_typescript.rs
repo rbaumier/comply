@@ -3673,4 +3673,52 @@ mod tests {
             "a genuine top-level mutating call must still be flagged, got {diags:?}"
         );
     }
+
+    // Issue #1660: dtslint-style `__tests_dts__/` type-test directories hold
+    // type-level assertions where bare calls probe the return type, not runtime
+    // side effects. The central `in_test_dir` predicate now classifies them as a
+    // test dir, so the rule (reading `ctx.file.path_segments.in_test_dir`) skips
+    // them like the existing `dtslint/` / `test-d/` exemptions.
+    #[test]
+    fn exempts_tests_dts_type_test_dir_issue1660() {
+        use crate::files::Language;
+        use crate::rules::file_ctx::FileCtx;
+
+        let src = "\
+            import { defineConfig, mergeConfig } from '../config';\n\
+            const configObjectDefined = defineConfig({});\n\
+            defineConfig({ base: '', build: { minify: 'oxc' } });\n\
+            mergeConfig({}, {});\n";
+        let path = std::path::Path::new("packages/vite/src/node/__tests_dts__/config.ts");
+        let project = crate::project::default_static_project_ctx();
+        let file = FileCtx::build(path, src, Language::TypeScript, project);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, src, path, project, &file);
+        assert!(
+            diags.is_empty(),
+            "type-level test calls in __tests_dts__/ must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #1660: the same bare calls in an ordinary source
+    // module (not under a type-test dir) are real top-level side effects and
+    // must still fire — the exemption is keyed on the directory, not the calls.
+    #[test]
+    fn still_flags_top_level_calls_outside_tests_dts_dir() {
+        use crate::files::Language;
+        use crate::rules::file_ctx::FileCtx;
+
+        let src = "\
+            import { defineConfig, mergeConfig } from '../config';\n\
+            defineConfig({ base: '' });\n\
+            mergeConfig({}, {});\n";
+        let path = std::path::Path::new("packages/vite/src/node/config.ts");
+        let project = crate::project::default_static_project_ctx();
+        let file = FileCtx::build(path, src, Language::TypeScript, project);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, src, path, project, &file);
+        assert_eq!(
+            diags.len(),
+            2,
+            "top-level calls in a normal source module must still be flagged, got {diags:?}"
+        );
+    }
 }
