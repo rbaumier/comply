@@ -331,13 +331,15 @@ impl OxcCheck for Check {
                     Expression::StaticMemberExpression(m) => {
                         if is_inside_sentry_hook(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
-                            && is_created_dom_element(id, semantic) { return; }
+                            && (is_created_dom_element(id, semantic)
+                                || is_local_object_builder_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                     }
                     Expression::ComputedMemberExpression(m) => {
                         if is_inside_sentry_hook(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
-                            && is_created_dom_element(id, semantic) { return; }
+                            && (is_created_dom_element(id, semantic)
+                                || is_local_object_builder_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                     }
                     _ => return,
@@ -720,6 +722,72 @@ mod tests {
     fn still_flags_other_string_property_assignment() {
         let src = r#"
             RadioGroup.label = "RadioGroup";
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // delete on a freshly-spread local object — issue #1336
+
+    #[test]
+    fn allows_delete_on_local_object_spread_builder_issue_1336() {
+        // Regression for rbaumier/comply#1336 — zod registries: `pm` is a fresh
+        // local spread copy; `delete pm.id` omits a key while constructing the
+        // returned value, the exact equivalent of the rule's suggested
+        // destructuring rest.
+        let src = r#"
+            function get(p, schema) {
+                const pm: any = { ...(this.get(p) ?? {}) };
+                delete pm.id;
+                return { ...pm, ...this._map.get(schema) };
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_delete_on_local_let_object_spread_builder() {
+        let src = r#"
+            function build(obj) {
+                let copy = { ...obj };
+                delete copy.secret;
+                return copy;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_delete_on_function_parameter() {
+        // A function parameter is external state, not a local object builder.
+        let src = r#"
+            function f(obj) {
+                delete obj.id;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_delete_on_const_from_external_call() {
+        // A `const` initialized from a function call (not an object literal /
+        // spread) references external state — deleting from it is still flagged.
+        let src = r#"
+            function f() {
+                const x = makeObj();
+                delete x.id;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_delete_on_this_member_chain() {
+        let src = r#"
+            class Foo {
+                clear() {
+                    delete this.cache.key;
+                }
+            }
         "#;
         assert_eq!(run(src).len(), 1);
     }
