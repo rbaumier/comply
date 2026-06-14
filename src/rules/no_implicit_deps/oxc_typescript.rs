@@ -8,8 +8,8 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 use super::{
-    is_bare_specifier, is_node_builtin, is_subpath_import, is_virtual_module, jest_module_roots,
-    matches_alias, module_federation, root_package_name,
+    is_bare_specifier, is_node_builtin, is_subpath_import, is_sveltekit_adapter_virtual_module,
+    is_virtual_module, jest_module_roots, matches_alias, module_federation, root_package_name,
 };
 
 pub struct Check;
@@ -77,6 +77,20 @@ impl OxcCheck for Check {
             return;
         }
         if is_virtual_module(spec) {
+            return;
+        }
+        // SvelteKit adapters inject bare uppercase virtual module specifiers
+        // (`HANDLER`, `ENV`, `SERVER`, `SHIMS`, `MANIFEST`) that their Rollup
+        // plugin resolves at bundle time, never installed from npm. Gate on
+        // SvelteKit being detected for this file's package so the same name
+        // still fires as an implicit dependency in a non-SvelteKit project.
+        if is_sveltekit_adapter_virtual_module(spec)
+            && ctx
+                .project
+                .frameworks_for_path(ctx.path)
+                .iter()
+                .any(|f| f.name == "svelte")
+        {
             return;
         }
         if matches_alias(spec, &alias_prefixes) {
@@ -1188,6 +1202,81 @@ export default {
         assert!(
             diags.is_empty(),
             "import resolving via package.json jest.modulePaths must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Regression #1588: SvelteKit adapters inject bare uppercase virtual module
+    // specifiers (`HANDLER`, `ENV`, `SERVER`, `SHIMS`, `MANIFEST`) that their
+    // Rollup plugin resolves at bundle time. They are never npm packages and are
+    // intentionally absent from `package.json`, so they must not be flagged when
+    // SvelteKit is detected for the importing file's package.
+    #[test]
+    fn allows_sveltekit_adapter_virtual_modules_issue_1588() {
+        for spec in &["HANDLER", "ENV", "SERVER", "SHIMS", "MANIFEST"] {
+            let dir = TempDir::new().unwrap();
+            fs::write(
+                dir.path().join("package.json"),
+                r#"{"name":"@sveltejs/adapter-node","devDependencies":{"@sveltejs/kit":"^2.4.0"}}"#,
+            )
+            .unwrap();
+            let src = dir.path().join("src");
+            fs::create_dir_all(&src).unwrap();
+            let file = src.join("index.js");
+            let source = format!("import {{ x }} from '{spec}';");
+            fs::write(&file, &source).unwrap();
+            let diags = run_oxc_in_project(&file, &source);
+            assert!(
+                diags.is_empty(),
+                "SvelteKit adapter virtual module `{spec}` must not be flagged, got {diags:?}"
+            );
+        }
+    }
+
+    // Negative-space guard for #1588: the same uppercase specifier in a
+    // NON-SvelteKit project is a genuine implicit dependency and must still fire
+    // — the exemption is gated on SvelteKit being detected.
+    #[test]
+    fn flags_uppercase_virtual_module_without_sveltekit_issue_1588() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"plain-app","dependencies":{}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("index.ts");
+        let source = "import { Server } from 'SERVER';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "uppercase bare import in a non-SvelteKit project must still fire, got {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #1588: a genuinely undeclared package must still
+    // fire in a SvelteKit project — the exemption is scoped to the known adapter
+    // virtual-module names only, not arbitrary bare imports.
+    #[test]
+    fn flags_unlisted_dep_alongside_sveltekit_issue_1588() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"@sveltejs/adapter-node","devDependencies":{"@sveltejs/kit":"^2.4.0"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("index.js");
+        let source = "import x from 'totally-undeclared-pkg';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "an undeclared package in a SvelteKit project must still fire, got {diags:?}"
         );
     }
 

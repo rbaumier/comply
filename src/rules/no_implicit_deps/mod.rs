@@ -138,6 +138,22 @@ pub(super) fn is_subpath_import(spec: &str) -> bool {
     spec.starts_with('#')
 }
 
+/// Build-time virtual module specifiers injected by SvelteKit's official
+/// adapters. The adapter's Rollup/Vite plugin resolves each of these bare
+/// uppercase specifiers to generated code at bundle time (`HANDLER` → the
+/// request handler, `SERVER` → the SSR server, `MANIFEST` → the route
+/// manifest, `ENV` → the env accessor, `SHIMS` → runtime shims). They are
+/// intentionally absent from `package.json` — they are never npm packages.
+const SVELTEKIT_ADAPTER_VIRTUAL_MODULES: &[&str] =
+    &["HANDLER", "ENV", "SERVER", "SHIMS", "MANIFEST"];
+
+/// True if `spec` is a SvelteKit adapter build-time virtual module name.
+/// Gated by the caller on SvelteKit detection so the same uppercase specifier
+/// remains a genuine implicit-dependency error in a non-SvelteKit project.
+pub(super) fn is_sveltekit_adapter_virtual_module(spec: &str) -> bool {
+    SVELTEKIT_ADAPTER_VIRTUAL_MODULES.contains(&spec)
+}
+
 /// True if `spec` is a bare specifier — a candidate npm package name rather
 /// than a relative path (`./`, `../`), an absolute path (`/`), or a URL import
 /// (`http://`, `https://`). URL imports are resolved by the runtime/CDN and are
