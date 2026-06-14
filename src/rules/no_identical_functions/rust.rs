@@ -4,7 +4,10 @@
 //! (`impl Trait for Type`) are exempt: identical bodies there are forced by
 //! the trait contract (you cannot call across impl blocks for different
 //! types, and differing argument types block a shared generic helper).
-//! Inherent impl methods and free functions are still flagged.
+//! Inherent impl methods on *different* types are also exempt: symmetric
+//! types (e.g. receive vs transmit hardware buffers) carry identical bodies
+//! by design and cannot be unified without introducing a trait. Free
+//! functions, and inherent methods on the same type, are still flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -16,29 +19,47 @@ fn normalize_body(text: &str) -> String {
         .join("\n")
 }
 
+/// A collected function: name, 1-based line, normalized body, and — when the
+/// function is an inherent-impl method — the text of its enclosing impl's
+/// self-type. `None` for free functions.
+struct CollectedFn {
+    name: String,
+    line: usize,
+    body: String,
+    inherent_type: Option<String>,
+}
+
 crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     // Only process at the root (source_file) to collect all functions once.
-    let mut functions: Vec<(String, usize, String)> = Vec::new();
+    let mut functions: Vec<CollectedFn> = Vec::new();
 
     let child_count = node.named_child_count();
     for i in 0..child_count {
         let Some(child) = node.named_child(i) else { continue };
-        collect_functions(child, source, &mut functions);
+        collect_functions(child, source, None, &mut functions);
     }
 
     for i in 1..functions.len() {
         for j in 0..i {
-            if functions[i].2 == functions[j].2 {
+            // Inherent methods on different types share a body by design
+            // (symmetric layouts) and cannot be unified without a trait.
+            if let (Some(ti), Some(tj)) =
+                (&functions[i].inherent_type, &functions[j].inherent_type)
+                && ti != tj
+            {
+                continue;
+            }
+            if functions[i].body == functions[j].body {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: functions[i].1,
+                    line: functions[i].line,
                     column: 1,
                     rule_id: "no-identical-functions".into(),
                     message: format!(
                         "Function `{}` has an identical body to `{}` (line {}). Extract the duplicated logic into a shared helper.",
-                        functions[i].0,
-                        functions[j].0,
-                        functions[j].1,
+                        functions[i].name,
+                        functions[j].name,
+                        functions[j].line,
                     ),
                     severity: Severity::Error,
                     span: None,
@@ -49,10 +70,14 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     }
 }
 
+/// `inherent_type` carries the self-type text of the nearest enclosing
+/// inherent impl, so identical methods on different types can be distinguished
+/// from identical methods on the same type.
 fn collect_functions(
     node: tree_sitter::Node,
     source: &[u8],
-    functions: &mut Vec<(String, usize, String)>,
+    inherent_type: Option<&str>,
+    functions: &mut Vec<CollectedFn>,
 ) {
     match node.kind() {
         "function_item" => {
@@ -60,7 +85,12 @@ fn collect_functions(
                 let normalized = normalize_body(&body);
                 // Only flag functions with >3 lines to avoid trivial matches.
                 if body.lines().count() > 3 {
-                    functions.push((name, line, normalized));
+                    functions.push(CollectedFn {
+                        name,
+                        line,
+                        body: normalized,
+                        inherent_type: inherent_type.map(str::to_string),
+                    });
                 }
             }
         }
@@ -73,10 +103,18 @@ fn collect_functions(
             if node.kind() == "impl_item" && node.child_by_field_name("trait").is_some() {
                 return;
             }
+            // For an inherent impl, record its self-type so methods carry the
+            // type they belong to. `mod_item` keeps the inherited type as-is.
+            let inherent_type = if node.kind() == "impl_item" {
+                node.child_by_field_name("type")
+                    .and_then(|t| t.utf8_text(source).ok())
+            } else {
+                inherent_type
+            };
             let count = node.named_child_count();
             for i in 0..count {
                 if let Some(child) = node.named_child(i) {
-                    collect_functions(child, source, functions);
+                    collect_functions(child, source, inherent_type, functions);
                 }
             }
         }
@@ -84,7 +122,7 @@ fn collect_functions(
             let count = node.named_child_count();
             for i in 0..count {
                 if let Some(child) = node.named_child(i) {
-                    collect_functions(child, source, functions);
+                    collect_functions(child, source, inherent_type, functions);
                 }
             }
         }
@@ -226,6 +264,36 @@ impl Visitor for IgnoredAny {
         let _ = x;
         let ack = ();
         Ok(IgnoredAny)
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_identical_inherent_methods_on_different_types() {
+        // Issue #1480: symmetric hardware layouts (RxFifoElement vs
+        // TxBufferElement) share an identical `reset` body but live on
+        // different types and cannot be unified without a trait.
+        let src = r#"
+struct RxFifoElement;
+struct TxBufferElement;
+
+impl RxFifoElement {
+    fn reset(&mut self) {
+        self.header.reset();
+        for byte in self.data.iter_mut() {
+            unsafe { byte.write(0) };
+        }
+    }
+}
+
+impl TxBufferElement {
+    fn reset(&mut self) {
+        self.header.reset();
+        for byte in self.data.iter_mut() {
+            unsafe { byte.write(0) };
+        }
     }
 }
 "#;
