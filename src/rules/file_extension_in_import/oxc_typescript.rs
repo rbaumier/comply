@@ -59,7 +59,16 @@ fn has_known_extension(spec: &str) -> bool {
 }
 
 fn is_directory_import(spec: &str) -> bool {
-    spec.ends_with('/') || spec.ends_with("/index")
+    spec.ends_with('/')
+        || spec.ends_with("/index")
+        // A specifier whose final segment is `.` or `..` (e.g. `../../../..`,
+        // `..`, `./sub/.`) navigates to a directory and resolves via that
+        // directory's `index.js` / package.json `main` — it is not a file
+        // missing an extension.
+        || spec == ".."
+        || spec == "."
+        || spec.ends_with("/..")
+        || spec.ends_with("/.")
 }
 
 fn is_relative(spec: &str) -> bool {
@@ -289,6 +298,23 @@ mod tests {
         );
     }
 
+    // Regression for #2340: a relative specifier whose final segment is `..`
+    // (e.g. `../../../..`, `../..`, `..`) navigates to a directory and resolves
+    // via that directory's `index.js` / package.json `main`, so it is a
+    // directory import — not a file missing an extension.
+    #[test]
+    fn skips_trailing_dotdot_directory_navigation() {
+        let pkg = r#"{"type":"module","dependencies":{}}"#;
+        let diags = run_in_project(
+            &[("package.json", pkg)],
+            "import { Knex } from '../../../..';\nimport x from '..';\nimport y from '../..';\n",
+        );
+        assert!(
+            diags.is_empty(),
+            "trailing `..` specifiers are directory imports, not files: {diags:?}"
+        );
+    }
+
     // Negative space: a plain Node ESM project (no bundler, no Angular) still
     // needs explicit extensions, so the rule must keep firing.
     #[test]
@@ -302,6 +328,22 @@ mod tests {
             diags.len(),
             1,
             "non-Angular ESM project must still require extensions: {diags:?}"
+        );
+    }
+
+    // Negative space for #2340: a multi-segment relative path with a non-`..`
+    // final segment is a real extensionless file import and must stay flagged.
+    #[test]
+    fn still_flags_nested_extensionless_file_import() {
+        let pkg = r#"{"type":"module","dependencies":{}}"#;
+        let diags = run_in_project(
+            &[("package.json", pkg)],
+            "import x from '../bar/baz';\n",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "nested extensionless file import must still be flagged: {diags:?}"
         );
     }
 }
