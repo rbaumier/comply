@@ -597,6 +597,13 @@ fn tokenize_file(parser: &mut Parser, file: &SourceFile) -> Option<FileTokens> {
     }
     let grammar_tag = grammar_family(file.language)?;
     let source_str = std::fs::read_to_string(&file.path).ok()?;
+    // Header markers (`@generated`, blanket `eslint-disable`, …) flag a file as
+    // machine-emitted even when its name and directory carry no codegen signal.
+    // The path-based filter in `lint_files` cannot see these, so drop them here
+    // — clone detection bypasses the engine gate that already honors this.
+    if crate::rules::file_ctx::is_generated_content(&source_str) {
+        return None;
+    }
     let source = source_str.into_bytes();
     let tree = parsing::parse_with_grammar(parser, file.language, &source)?;
     let mut tokens = Vec::new();
@@ -783,6 +790,31 @@ mod tests {
         let pb = dir.path().join("samples/b/index.ts");
         std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
         std::fs::create_dir_all(pb.parent().unwrap()).unwrap();
+        std::fs::write(&pa, &block).unwrap();
+        std::fs::write(&pb, &block).unwrap();
+        let fa = SourceFile {
+            path: pa,
+            language: Language::TypeScript,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::TypeScript,
+        };
+        assert!(lint_files(&[&fa, &fb]).is_empty());
+    }
+
+    #[test]
+    fn no_clones_in_content_marked_generated_files_issue1284() {
+        // Files carrying a codegen header (`@generated`, blanket `eslint-disable`)
+        // are machine-emitted and structurally repetitive by design. They carry
+        // no `.gen`/`generated/` path signal, so only the content scan inside
+        // `tokenize_file` can drop them — clone detection bypasses the engine
+        // gate that already honors this.
+        let dir = tempfile::tempdir().unwrap();
+        let block = format!("/* eslint-disable */\n// @generated\n{}", large_ts_block(20));
+        let pa = dir.path().join("src/a.ts");
+        let pb = dir.path().join("src/b.ts");
+        std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
         std::fs::write(&pa, &block).unwrap();
         std::fs::write(&pb, &block).unwrap();
         let fa = SourceFile {
