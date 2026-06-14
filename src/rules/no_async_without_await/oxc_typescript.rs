@@ -63,24 +63,23 @@ fn is_call_argument(
         .any(|arg| arg.span() == span)
 }
 
-/// Check if the async function is a shorthand method of an object literal that
-/// is passed as an argument to a call expression, e.g.
-/// `$config({ async run() {} })`. The walk is `Function -> ObjectProperty ->
-/// ObjectExpression -> CallExpression(arguments)`. Like an arrow callback, the
-/// callee owns the contract: framework-config entry points such as SST/Pulumi's
-/// `run()` are typed `() => Promise<T>`, so `async` is mandatory even when the
-/// body declares resources via synchronous constructors and never awaits.
-fn is_object_method_in_call_arg(
+/// Check if the async function is a property of an object literal that is passed
+/// as an argument to a call expression, covering both the shorthand-method shape
+/// (`$config({ async run() {} })`) and the arrow-value shape
+/// (`useForm({ onSubmit: async () => {} })`). The walk is `Function ->
+/// ObjectProperty -> ObjectExpression -> CallExpression(arguments)`. Like a bare
+/// arrow callback, the callee owns the contract: framework/library options
+/// objects type such callbacks `(...) => Promise<T>` (SST/Pulumi `run()`,
+/// TanStack Form `onSubmit`), so `async` is mandatory even when the body never
+/// awaits.
+fn is_object_property_in_call_arg(
     func_node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
     let nodes = semantic.nodes();
 
     let property = nodes.parent_node(func_node.id());
-    let AstKind::ObjectProperty(prop) = property.kind() else { return false };
-    if !prop.method {
-        return false;
-    }
+    let AstKind::ObjectProperty(_) = property.kind() else { return false };
 
     let object = nodes.parent_node(property.id());
     let AstKind::ObjectExpression(_) = object.kind() else { return false };
@@ -92,6 +91,22 @@ fn is_object_method_in_call_arg(
         .arguments
         .iter()
         .any(|arg| arg.span() == object_span)
+}
+
+/// Check if a function/arrow body is exactly one `return <CallExpression>;`,
+/// i.e. it forwards another call's result. Such a function delegates its
+/// `Promise` return to the callee; `async` declares the `Promise` return type
+/// (mirroring the companion `promise-function-async` rule) and dropping it would
+/// break the type contract, so the absent `await` is not a smell. This is the
+/// block-body analog of the already-exempt concise arrow `async () => call()`.
+fn body_is_single_return_call(body: &oxc_ast::ast::FunctionBody) -> bool {
+    let [oxc_ast::ast::Statement::ReturnStatement(ret)] = body.statements.as_slice() else {
+        return false;
+    };
+    matches!(
+        ret.argument,
+        Some(oxc_ast::ast::Expression::CallExpression(_))
+    )
 }
 
 /// Check if a method node or its class has decorators.
@@ -221,12 +236,13 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            // Async shorthand method of an object literal passed to a call,
-            // e.g. SST/Pulumi `$config({ async run() {} })`. The framework-config
-            // callback's `async` signature is mandated by the callee's type
-            // (`run: () => Promise<T>`) even when resources are declared via
-            // synchronous constructors and nothing is awaited.
-            if is_object_method_in_call_arg(node, semantic) {
+            // Async property of an object literal passed to a call, whether a
+            // shorthand method (`$config({ async run() {} })`) or an arrow value
+            // (`useForm({ onSubmit: async () => {} })`). The callback's `async`
+            // signature is mandated by the callee's type (`onSubmit: (...) =>
+            // Promise<T>`) even when the body declares resources synchronously or
+            // never awaits.
+            if is_object_property_in_call_arg(node, semantic) {
                 continue;
             }
 
@@ -261,6 +277,20 @@ impl OxcCheck for Check {
             if let AstKind::ArrowFunctionExpression(arrow) = node.kind()
                 && arrow.expression
             {
+                continue;
+            }
+
+            // Block body that is exactly `return <call>();` — the function
+            // forwards another call's `Promise`; `async` is the type-level way to
+            // declare that `Promise` return (per `promise-function-async`), so the
+            // absent `await` is not a smell. Block-body analog of the concise
+            // arrow exemption above.
+            let block_body = match node.kind() {
+                AstKind::Function(f) => f.body.as_deref(),
+                AstKind::ArrowFunctionExpression(f) if !f.expression => Some(&*f.body),
+                _ => None,
+            };
+            if block_body.is_some_and(body_is_single_return_call) {
                 continue;
             }
 
@@ -404,6 +434,52 @@ mod tests {
             },
         });"#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_arrow_value_in_call_options_object() {
+        // Regression for rbaumier/comply#1600 — TanStack Form `onSubmit` callback.
+        // The arrow is an object-property *value* (not a shorthand method) in the
+        // options object passed to `useForm(...)`; the library types the property
+        // `(...) => Promise<T>`, so `async` is required even with no await.
+        let src = r#"const form = useForm({
+            onSubmit: async ({ value }) => {
+                console.log(value)
+            },
+        });"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_block_body_forwarding_call() {
+        // Regression for rbaumier/comply#1600 — `FieldGroupApi`-style delegation.
+        // A block body that is exactly `return <call>();` forwards another call's
+        // Promise; `async` declares the Promise return type (per
+        // `promise-function-async`), so the absent await is not a smell.
+        let src = r#"class FieldGroupApi {
+            validateArrayFieldsStartingFrom = async (field, index, cause) => {
+                return this.form.validateArrayFieldsStartingFrom(field, index, cause);
+            };
+        }"#;
+        assert!(run_on(src).is_empty());
+        // Same shape as a standalone async function.
+        assert!(run_on("async function f() { return delegate(); }").is_empty());
+    }
+
+    #[test]
+    fn still_flags_async_block_body_returning_non_call() {
+        // Negative space for #1600: a block body whose return is not a call (here
+        // a member access) has no forwarded Promise to justify `async` — it stays
+        // flagged. Guards the forwarding exemption against over-broadening.
+        assert_eq!(run_on("async function f() { return this.value; }").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_async_arrow_value_outside_call() {
+        // Negative space for #1600: an async arrow property value in a plain object
+        // (not a call argument) has no callee contract — it stays flagged.
+        let src = "const handlers = { onSubmit: async () => { doSync(); } };";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
