@@ -7,8 +7,13 @@
 //! Index loops that remove elements from the indexed collection during
 //! traversal (`vec.remove(i)` / `vec.swap_remove(i)`) are exempt: removal
 //! shifts the remaining elements, so a `for`/iterator rewrite is impossible.
+//!
+//! Two-pointer loops are exempt: when the body mutates two or more distinct
+//! index variables (`old_idx += 1`, `new_idx += 1`), the indices advance at
+//! different rates and no single iterator combinator expresses the traversal.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use std::collections::HashSet;
 
 crate::ast_check! { on ["while_expression"] => |node, source, ctx, diagnostics|
     let Some(condition) = node.child_by_field_name("condition") else { return };
@@ -35,6 +40,14 @@ crate::ast_check! { on ["while_expression"] => |node, source, ctx, diagnostics|
     if let Some(index_var) = index_variable(condition, source)
         && body_removes_at_index(body, index_var, source)
     {
+        return;
+    }
+
+    // Exempt two-pointer loops: when two or more distinct index variables are
+    // mutated inside the body (`old_idx += 1`, `new_idx += 1`), the indices
+    // advance at different rates and the traversal cannot be expressed as a
+    // single `for`/iterator rewrite.
+    if count_mutated_index_variables(body, source) >= 2 {
         return;
     }
 
@@ -73,6 +86,31 @@ fn index_variable<'a>(condition: tree_sitter::Node, source: &'a [u8]) -> Option<
         }
     }
     None
+}
+
+/// Count the distinct bare-identifier index variables mutated anywhere in the
+/// loop body. A mutation is a `compound_assignment_expr` (`x += k`) or an
+/// `assignment_expression` (`x = …`) whose left-hand side is a plain
+/// identifier. Property/element/deref targets (`*sum += …`, `self.n += 1`,
+/// `v[i] = …`) are not bare identifiers and do not count, so a single-index
+/// loop accumulating into `*sum` still reports one mutated index.
+fn count_mutated_index_variables(body: tree_sitter::Node, source: &[u8]) -> usize {
+    let mut vars: HashSet<&str> = HashSet::new();
+    let mut stack = vec![body];
+    while let Some(cur) = stack.pop() {
+        if matches!(cur.kind(), "compound_assignment_expr" | "assignment_expression")
+            && let Some(left) = cur.child_by_field_name("left")
+            && left.kind() == "identifier"
+            && let Ok(name) = left.utf8_text(source)
+        {
+            vars.insert(name);
+        }
+        let mut cursor = cur.walk();
+        for child in cur.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    vars.len()
 }
 
 /// True if `node` contains a `.len()` method call anywhere in its subtree.
@@ -214,6 +252,30 @@ mod tests {
     #[test]
     fn flags_read_only_index_loop() {
         // No removal: a plain read-only index loop still fires.
+        let src = "fn f(v: &[i32], sum: &mut i32) { \
+                   let mut i = 0; \
+                   while i < v.len() { *sum += v[i]; i += 1; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_two_pointer_loop_issue_1520() {
+        // actix-web normalize.rs: `old_idx` advances every step, `new_idx` only
+        // on match — two distinct mutated index variables, no iterator rewrite.
+        let src = "fn f(old_path: &[u8], new_path: &[u8], map: &mut Vec<u16>) { \
+                   let mut old_idx = 0usize; let mut new_idx = 0usize; \
+                   while old_idx < old_path.len() { \
+                   if new_idx < new_path.len() && old_path[old_idx] == new_path[new_idx] { new_idx += 1; } \
+                   old_idx += 1; \
+                   map.push(new_idx.min(u16::MAX as usize) as u16); \
+                   } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_single_index_loop_with_deref_accumulator() {
+        // `*sum += v[i]` mutates a deref target, not a bare index — only `i` is
+        // a mutated index variable, so a plain single-index loop still fires.
         let src = "fn f(v: &[i32], sum: &mut i32) { \
                    let mut i = 0; \
                    while i < v.len() { *sum += v[i]; i += 1; } }";
