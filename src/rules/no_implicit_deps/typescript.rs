@@ -349,6 +349,7 @@ mod tests {
             "vitest-custom-virtual:math",
             "@theme/Layout",
             "@docusaurus/preset-classic",
+            "@site/src/refine-theme/tutorial-sandpack",
             "@internal/shared",
         ] {
             let src = format!("import x from '{spec}';");
@@ -359,6 +360,27 @@ mod tests {
             );
             assert!(diags.is_empty(), "virtual module `{spec}` should be skipped, got {diags:?}");
         }
+    }
+
+    #[test]
+    fn ignores_docusaurus_site_root_alias() {
+        let source = "\
+import { TutorialSandpack } from '@site/src/refine-theme/tutorial-sandpack';
+import { dependencies } from '@site/tutorial/routing/intro/react-router/sandpack';
+import { removeActiveFromFiles } from '@site/src/utils/remove-active-from-files';
+";
+        let (_d, diags) = run_in_project(Some(r#"{ "dependencies": {} }"#), None, source);
+        assert!(diags.is_empty(), "@site/ project-root alias should be skipped, got {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_unlisted_bare_import_alongside_site_alias() {
+        let source = "\
+import { TutorialSandpack } from '@site/src/refine-theme/tutorial-sandpack';
+import { foo } from 'unlisted-package';
+";
+        let (_d, diags) = run_in_project(Some(r#"{ "dependencies": {} }"#), None, source);
+        assert_eq!(diags.len(), 1, "genuine implicit dep must still be flagged, got {diags:?}");
     }
 
     #[test]
