@@ -148,6 +148,9 @@ fn is_async_looking_member_call(call: &CallExpression, ctx: &CheckCtx) -> bool {
     if is_better_sqlite3_sync_method(member, ctx) {
         return false;
     }
+    if is_threejs_sync_method(member, ctx) {
+        return false;
+    }
     if is_express_route_dispatch(call, member) {
         return false;
     }
@@ -163,6 +166,38 @@ fn is_async_looking_member_call(call: &CallExpression, ctx: &CheckCtx) -> bool {
 fn is_better_sqlite3_sync_method(member: &StaticMemberExpression, ctx: &CheckCtx) -> bool {
     matches!(member.property.name.as_str(), "run" | "exec")
         && ctx.source_contains("better-sqlite3")
+}
+
+/// The Three.js / react-three-fiber ecosystem reuses several heuristic-listed
+/// method names for synchronous, non-Promise operations: controls and animation
+/// mixers expose `connect(domElement)` (wires DOM events, returns `void`),
+/// `save()` / `load()` (snapshot and restore controls state synchronously), and
+/// `CanvasRenderingContext2D.save()` pushes rendering state to a stack. None of
+/// these return a Promise. In a file that imports the Three.js ecosystem
+/// (`three`, `@react-three/fiber`, `@react-three/drei`), a statement-level
+/// `.connect()` / `.save()` / `.load()` is one of these synchronous calls and
+/// must not be flagged. (`update` is already absent from the heuristic.)
+fn is_threejs_sync_method(member: &StaticMemberExpression, ctx: &CheckCtx) -> bool {
+    matches!(member.property.name.as_str(), "connect" | "save" | "load")
+        && file_imports_threejs(ctx.source)
+}
+
+/// True when the file imports from the Three.js ecosystem — `three`,
+/// `@react-three/fiber`, or `@react-three/drei` — via an ESM `import ... from`.
+/// Matches the quoted specifier (not a bare substring) to avoid spurious hits on
+/// unrelated identifiers, and is memoized per file via `source_contains`.
+fn file_imports_threejs(source: &str) -> bool {
+    const SPECIFIERS: &[&str] = &[
+        "from \"three\"",
+        "from 'three'",
+        "from \"three/",
+        "from 'three/",
+        "from \"@react-three/",
+        "from '@react-three/",
+    ];
+    SPECIFIERS
+        .iter()
+        .any(|s| crate::oxc_helpers::source_contains(source, s))
 }
 
 /// RxJS `TestScheduler.prototype.flush()` runs all scheduled virtual-time
@@ -995,6 +1030,64 @@ route.dispatch(req, {}, function (err) {
     #[test]
     fn allows_express_res_json() {
         assert!(run_on("res.json(data);").is_empty());
+    }
+
+    // Regression tests for issue #2284: the Three.js / react-three-fiber
+    // ecosystem reuses `connect` / `save` / `load` for synchronous, non-Promise
+    // operations (controls DOM wiring, controls state snapshot/restore,
+    // `CanvasRenderingContext2D.save()`). In a file that imports `three` /
+    // `@react-three/*`, these statement-level calls must not be flagged.
+    // (`update` was already dropped from the heuristic in #1280.)
+
+    #[test]
+    fn allows_threejs_controls_connect() {
+        // The issue's exact example from drei's OrbitControls.tsx.
+        let src = "\
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
+controls.connect(explDomElement);
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_threejs_canvas_context_save() {
+        // The issue's exact example from drei's GradientTexture.tsx.
+        let src = "\
+import * as THREE from 'three';
+context.save();
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_react_three_fiber_controls_load() {
+        let src = "\
+import { useFrame } from '@react-three/fiber';
+controls.load();
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_save_without_threejs_import() {
+        // Negative-space guard: ORM `.save()` (TypeORM/Mongoose/Sequelize) returns
+        // a Promise — floating it is a real bug — so `.save()` stays flagged in a
+        // file with no Three.js import.
+        let d = run_on("userRepository.save(user);");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_load_without_threejs_import() {
+        let d = run_on("repo.load(id);");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_connect_without_threejs_import() {
+        // A genuine Promise-returning DB/socket client `.connect()` stays flagged.
+        let d = run_on("client.connect(connectionString);");
+        assert_eq!(d.len(), 1);
     }
 
     // Regression tests for issue #1280: Angular's `WritableSignal.update(updater)`
