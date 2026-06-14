@@ -6,7 +6,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use crate::rules::jsdoc_helpers::scan_blocks;
 use oxc_ast::CommentKind;
-use oxc_ast::ast::{AssignmentTarget, Expression};
+use oxc_ast::ast::{AssignmentTarget, Expression, TSType};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -114,6 +114,30 @@ fn is_prototype_method_assignment(
         _ => return false,
     };
     is_prototype_object(object, semantic)
+}
+
+/// True when `func_id` is a `function` expression that is the initializer of a
+/// variable declared with an explicit callable type annotation — either a named
+/// function-type alias (`const m: MatcherFunction<…> = function () {…}`) or an
+/// inline function type (`const m: (this: T, …) => … = function () {…}`). The
+/// author has typed the binding as a callable, so that type — not the function
+/// node's own parameter list — supplies the `this` binding; `this` in the body is
+/// the declared contract, not a stray reference. (Jest/Vitest `MatcherFunction`,
+/// whose signature carries a `this: MatcherContext`, is the canonical case.)
+fn is_typed_callable_binding(
+    func_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let AstKind::VariableDeclarator(declarator) = nodes.kind(nodes.parent_id(func_id)) else {
+        return false;
+    };
+    declarator.type_annotation.as_ref().is_some_and(|ann| {
+        matches!(
+            ann.type_annotation,
+            TSType::TSTypeReference(_) | TSType::TSFunctionType(_)
+        )
+    })
 }
 
 /// Mocha test/suite globals whose `function` callback is invoked with a
@@ -343,6 +367,14 @@ fn is_valid_this_context(
                 // its `this` context as part of the signature, so `this` in the
                 // body is the declared binding and is valid.
                 if func.this_param.is_some() {
+                    return true;
+                }
+                // Typed callable binding: a `function` assigned to a variable
+                // whose annotation is a function-type alias or inline function
+                // type (`const m: MatcherFunction<…> = function () {…}`) is typed
+                // against a callable contract that supplies `this`, so `this` in
+                // the body is the declared binding and is valid.
+                if is_typed_callable_binding(ancestor.id(), semantic) {
                     return true;
                 }
                 // Prototype-patching idiom: a function assigned to a member
@@ -745,6 +777,42 @@ mod tests {
         // declares the type of `this`, so assigning `this.*` is valid.
         let src = "function Holder(this: HolderInstance) {\n  this.req = null;\n  this.res = null;\n  this.url = null;\n  this.context = null;\n}";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_function_typed_via_matcher_function_alias() {
+        // Regression for #2120: a `function` expression assigned to a variable
+        // typed with a function-type alias (`MatcherFunction<…>`, whose signature
+        // carries a `this: MatcherContext`) is typed against a callable contract
+        // that supplies `this` — the official Jest custom-matcher pattern.
+        let src = "const toBeWithinRange: MatcherFunction<[floor: unknown, ceiling: unknown]> = function (actual, floor, ceiling) {\n  return { pass: this.equals(actual, floor), message: () => '' };\n};";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_function_typed_via_inline_function_type() {
+        // Regression for #2120: an inline function-type annotation on the binding
+        // (`const m: (this: T, …) => …`) declares the `this` binding directly.
+        let src = "const equals: (this: Value, value: unknown) => boolean = function (value) {\n  return value === this.v;\n};";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_function_with_non_callable_binding_annotation() {
+        // Negative-space guard for #2120: the typed-binding exemption only covers
+        // function-type annotations. A function nested inside a non-callable typed
+        // binding's initializer still has an unbound `this` and must fire.
+        let diags = run_on("const x: number[] = [1].map(function () {\n  return this.v;\n});");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_this_in_function_with_untyped_binding() {
+        // Negative-space guard for #2120: a `function` assigned to a binding with
+        // no type annotation has no callable contract — `this` is unbound and
+        // must fire.
+        let diags = run_on("const f = function () {\n  return this.v;\n};");
+        assert_eq!(diags.len(), 1);
     }
 
     #[test]
