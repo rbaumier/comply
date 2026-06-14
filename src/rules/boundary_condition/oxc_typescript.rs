@@ -118,6 +118,24 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `arr[0]` where `arr` is a same-scope `const` bound to a fixed-size array
+        // construction — `new Uint32Array(N)` (any TypedArray) or `new Array(N)`
+        // with a numeric-literal length `N >= 1`, or `new Uint32Array([...])` /
+        // `new Array([...])` with a non-empty static element-list literal. The
+        // constructed length is statically known to be at least one, so the
+        // first-element read is in-bounds (e.g. the Web Crypto nonce idiom
+        // `const a = new Uint32Array(1); a[0]`).
+        if is_first
+            && let Expression::Identifier(obj_ident) = &member.object
+            && resolves_to_nonempty_fixed_array_construction(
+                node,
+                obj_ident.name.as_str(),
+                semantic,
+            )
+        {
+            return;
+        }
+
         // `p[0]` where `p`'s binding has a literal tuple type annotation
         // (`p: [number, number]`, `readonly [A, B]`) with at least one element.
         // A fixed-length tuple guarantees the first element exists, so the read
@@ -935,6 +953,93 @@ fn is_static_nonempty_array(arr: &ArrayExpression) -> bool {
     !arr.elements
         .iter()
         .any(|el| matches!(el, ArrayExpressionElement::SpreadElement(_)))
+}
+
+/// The fixed-size array constructors whose first argument fixes the length:
+/// the TypedArray family plus `Array`. `new <ctor>(N)` allocates exactly `N`
+/// slots, and `new <ctor>([...])` builds one slot per element.
+const FIXED_SIZE_ARRAY_CTORS: [&str; 12] = [
+    "Int8Array",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "Int16Array",
+    "Uint16Array",
+    "Int32Array",
+    "Uint32Array",
+    "Float32Array",
+    "Float64Array",
+    "BigInt64Array",
+    "BigUint64Array",
+    "Array",
+];
+
+/// Returns true when `name` resolves to a same-scope `const` whose initializer
+/// is a fixed-size array construction with a statically-known length `>= 1` —
+/// making `name[0]` provably in-bounds. Mirrors
+/// [`resolves_to_nonempty_array_literal`]: walks ancestor scopes innermost-first
+/// so the closest binding wins, and only a direct `const` qualifies (a `let` may
+/// be reassigned to a shorter array). A call initializer or non-qualifying
+/// `new` expression stays flagged.
+fn resolves_to_nonempty_fixed_array_construction(
+    node: &oxc_semantic::AstNode,
+    name: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        let stmts: &[Statement] = match ancestor.kind() {
+            AstKind::Program(prog) => &prog.body,
+            AstKind::FunctionBody(body) => &body.statements,
+            AstKind::BlockStatement(block) => &block.body,
+            _ => continue,
+        };
+        for stmt in stmts {
+            let Statement::VariableDeclaration(decl) = stmt else {
+                continue;
+            };
+            if decl.kind != VariableDeclarationKind::Const {
+                continue;
+            }
+            for declarator in &decl.declarations {
+                let BindingPattern::BindingIdentifier(id) = &declarator.id else {
+                    continue;
+                };
+                if id.name.as_str() != name {
+                    continue;
+                }
+                // Closest binding wins: the first declarator matching `name`
+                // decides, even if its initializer is not a qualifying `new`.
+                return matches!(
+                    &declarator.init,
+                    Some(Expression::NewExpression(new_expr))
+                        if is_nonempty_fixed_array_construction(new_expr)
+                );
+            }
+        }
+    }
+    false
+}
+
+/// Returns true when `new_expr` constructs a fixed-size array (a TypedArray or
+/// `Array`) of statically-known length `>= 1`: either `new <ctor>(N)` with a
+/// numeric-literal `N >= 1`, or `new <ctor>([...])` with a non-empty static
+/// element-list literal. A dynamic length (`new Uint32Array(n)`) or a spread in
+/// the element list leaves the length unknown, so it does not qualify.
+fn is_nonempty_fixed_array_construction(new_expr: &NewExpression) -> bool {
+    let Expression::Identifier(callee) = &new_expr.callee else {
+        return false;
+    };
+    if !FIXED_SIZE_ARRAY_CTORS.contains(&callee.name.as_str()) {
+        return false;
+    }
+    let Some(first_arg) = new_expr.arguments.first().and_then(|a| a.as_expression()) else {
+        return false;
+    };
+    match first_arg {
+        Expression::NumericLiteral(lit) => lit.value >= 1.0 && lit.value.fract() == 0.0,
+        Expression::ArrayExpression(arr) => is_static_nonempty_array(arr),
+        _ => false,
+    }
 }
 
 /// Returns true when `ident`'s binding has a literal tuple type annotation with
@@ -1888,6 +1993,59 @@ mod tests {
         // The exemption is scoped to the first-element read. A `<obj>.length - 1`
         // last-read is not covered, so it stays flagged.
         let src = "function f(p: [number, number]) { return p[p.length - 1]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_typed_array_const_literal_length_index0_issue_2127() {
+        // The issue's Web Crypto nonce idiom: `new Uint32Array(1)` allocates one
+        // slot, so the subsequent `array[0]` read is in-bounds.
+        let src = "function f() { const array = new Uint32Array(1); window.crypto.getRandomValues(array); return array[0].toString(); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_typed_array_const_element_list_index0_issue_2127() {
+        // `new Uint32Array([hash])` builds a single-element array; `[0]` is in-bounds.
+        let src = "const a = new Uint32Array([hash]); const s = a[0].toString(36);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_array_const_literal_length_index0_issue_2127() {
+        // `new Array(N)` with `N >= 1` has a known length.
+        let src = "const a = new Array(3); const x = a[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_typed_array_dynamic_length_index0_issue_2127() {
+        // Negative space: a non-constant length leaves the size unknown — for `n`
+        // of 0 the array is empty, so `[0]` stays flagged.
+        let src = "function f(n) { const a = new Uint32Array(n); return a[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_typed_array_zero_length_index0_issue_2127() {
+        // Negative space: `new Uint32Array(0)` is empty, so `[0]` is out of bounds.
+        let src = "const a = new Uint32Array(0); const x = a[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_typed_array_reassigned_let_index0_issue_2127() {
+        // Negative space: a `let` may be reassigned to a shorter array, so the
+        // fixed-size construction no longer proves the length at the read site.
+        let src = "let a = new Uint32Array(1); a = new Uint32Array(0); const x = a[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_non_array_constructor_index0_issue_2127() {
+        // Negative space: `new Foo(1)` is not a known fixed-size array, so `[0]`
+        // says nothing about bounds and stays flagged.
+        let src = "const a = new Foo(1); const x = a[0];";
         assert_eq!(run_on(src).len(), 1);
     }
 }
