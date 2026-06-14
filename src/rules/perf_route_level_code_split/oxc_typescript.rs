@@ -40,6 +40,19 @@ fn looks_like_route_module(spec: &str) -> bool {
         || spec.starts_with("../views/")
 }
 
+/// React Router v7 / Remix `*.server.*` modules are server-only: the bundler
+/// strips them from the client bundle, they hold no JSX, and they cannot be
+/// `React.lazy()`-loaded — so the code-split advice never applies, even when
+/// colocated under `/routes/`. The `.server.` suffix is matched on the path
+/// portion (a trailing `?raw`-style query is stripped); the leading `#` of a
+/// Node.js subpath import (`#app/...`) is preserved.
+fn is_server_only_module(spec: &str) -> bool {
+    let path = spec.split_once('?').map_or(spec, |(head, _)| head);
+    [".server.ts", ".server.tsx", ".server.js", ".server.jsx", ".server.mts"]
+        .iter()
+        .any(|suffix| path.ends_with(suffix))
+}
+
 fn is_test_or_e2e(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
     s.contains("/e2e/")
@@ -84,6 +97,11 @@ impl OxcCheck for Check {
 
         let spec = import.source.value.as_str();
         if !looks_like_route_module(spec) {
+            return;
+        }
+
+        // Server-only `*.server.*` modules cannot be lazy-loaded — exempt them.
+        if is_server_only_module(spec) {
             return;
         }
 
@@ -165,6 +183,25 @@ mod tests {
     #[test]
     fn allows_non_route_import() {
         assert!(run("import { clsx } from 'clsx';").is_empty());
+    }
+
+    #[test]
+    fn allows_server_only_module_under_routes() {
+        // RR v7 / Remix server-only module colocated under /routes/ — stripped
+        // from the client bundle, cannot be React.lazy()-loaded.
+        assert!(
+            run("import { requireRecentVerification } from '#app/routes/_auth/verify.server.ts';")
+                .is_empty()
+        );
+        assert!(
+            run("import { x } from '#app/routes/_auth/verify.server.tsx';").is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_route_component_without_server_suffix() {
+        // A real route component (no `.server.` suffix) must still be flagged.
+        assert_eq!(run("import Foo from '#app/routes/dashboard/route.tsx';").len(), 1);
     }
 
     #[test]
