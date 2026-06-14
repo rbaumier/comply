@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::BinaryOperator;
+use oxc_ast::ast::{BinaryOperator, Expression};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -56,6 +56,53 @@ fn looks_like_array_name(name: &str) -> bool {
         .any(|seg| ARRAY_HINTS.contains(&seg.as_str()))
 }
 
+/// Span of the topmost expression enclosing the `in` node that still belongs to
+/// the same boolean/comparison condition — the boundary inside which a sibling
+/// `Y[K]` index-back can legitimately appear (`Kind in Y && Y[Kind]...`).
+fn enclosing_condition_span<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> oxc_span::Span {
+    let mut span = node.kind().span();
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::LogicalExpression(_)
+            | AstKind::BinaryExpression(_)
+            | AstKind::ParenthesizedExpression(_) => span = ancestor.kind().span(),
+            _ => break,
+        }
+    }
+    span
+}
+
+/// Whether the in-tested key `lhs_name` is used to index the same object
+/// `rhs_text` (`Y[K]`) anywhere within the enclosing condition. This is the
+/// map-membership idiom (`K in Y && Y[K]...`): a keyed object lookup, not an
+/// array, so the array-hint heuristic must not fire.
+fn key_indexes_same_object<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    rhs_text: &str,
+    lhs_name: &str,
+    source: &str,
+) -> bool {
+    let scope = enclosing_condition_span(node, semantic);
+    semantic.nodes().iter().any(|n| {
+        let AstKind::ComputedMemberExpression(member) = n.kind() else {
+            return false;
+        };
+        if member.span.start < scope.start || member.span.end > scope.end {
+            return false;
+        }
+        let object_text =
+            &source[member.object.span().start as usize..member.object.span().end as usize];
+        let Expression::Identifier(key) = &member.expression else {
+            return false;
+        };
+        object_text == rhs_text && key.name.as_str() == lhs_name
+    })
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -89,6 +136,15 @@ impl OxcCheck for Check {
         let looks_like_array = rhs_text.starts_with('[') || looks_like_array_name(rhs_text);
 
         if !looks_like_array {
+            return;
+        }
+
+        // Map-membership idiom: when the in-tested key `K` is then used to index
+        // the same object `Y` (`K in Y && Y[K]...`), `Y` is a keyed object/map,
+        // not an array, so the array-hint heuristic is a false positive.
+        if let Expression::Identifier(lhs) = &bin.left
+            && key_indexes_same_object(node, semantic, rhs_text, lhs.name.as_str(), ctx.source)
+        {
             return;
         }
 
@@ -170,5 +226,40 @@ mod tests {
     #[test]
     fn flags_in_on_member_list() {
         assert_eq!(run_on(r#"if ("slug" in this.userList) {}"#).len(), 1);
+    }
+
+    // Regression for #2100: elysia `src/schema.ts`. `schema.items` is a JSON
+    // Schema (TypeBox) object, not an array. The map-membership idiom `Kind in
+    // schema.items && schema.items[Kind] === 'File'` indexes the same object by
+    // the in-tested key, so it must not be flagged despite the `items` hint.
+    #[test]
+    fn allows_in_when_key_indexes_same_object() {
+        let src = r#"if (type === 'Files' && Kind in schema.items && schema.items[Kind] === 'File') { return true }"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_in_when_key_indexes_same_identifier() {
+        let src = r#"if (key in items && items[key]) {}"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // Negative space: the exemption requires the same-key index-back signal, not
+    // the mere presence of an array-hint name.
+    #[test]
+    fn flags_in_when_key_not_indexed_back() {
+        assert_eq!(run_on(r#"if (x in items) {}"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_in_when_array_indexed_by_other_key() {
+        // `items[other]` indexes by a different key, not the in-tested `x`.
+        assert_eq!(run_on(r#"if (x in items && items[other]) {}"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_in_when_other_object_indexed_by_key() {
+        // `cache[x]` indexes a different object than the in-tested `items`.
+        assert_eq!(run_on(r#"if (x in items && cache[x]) {}"#).len(), 1);
     }
 }
