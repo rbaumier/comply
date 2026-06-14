@@ -66,11 +66,13 @@ impl AstCheck for Check {
             return;
         };
         let nodes = &state.nodes;
+        let mut reported: Vec<usize> = Vec::new();
         for (i, sel) in nodes.iter().enumerate() {
             let Some(sel_table) = super::extract_select_from_table(&sel.text) else {
                 continue;
             };
-            for ins in &nodes[i + 1..] {
+            for (offset, ins) in nodes[i + 1..].iter().enumerate() {
+                let ins_index = i + 1 + offset;
                 let Some(ins_table) = super::extract_insert_into_table(&ins.text) else {
                     continue;
                 };
@@ -80,6 +82,10 @@ impl AstCheck for Check {
                 if super::has_on_conflict(&ins.text) {
                     break;
                 }
+                if reported.contains(&ins_index) {
+                    break;
+                }
+                reported.push(ins_index);
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
                     line: ins.line,
@@ -130,5 +136,41 @@ mod tests {
     fn allows_on_conflict() {
         let src = r#"fn f() { let a = "SELECT id FROM user WHERE email = $1"; let b = "INSERT INTO user (email) VALUES ($1) ON CONFLICT (email) DO NOTHING"; }"#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_select_advisory_lock_without_from_issue_1451() {
+        // sqlx-postgres testing/mod.rs: `select pg_advisory_xact_lock(...)` is a
+        // lock acquisition, not a data read — no FROM clause, so it cannot be the
+        // read half of a SELECT→INSERT race.
+        let src = r##"fn setup() {
+            conn.execute(r#"select pg_advisory_xact_lock(8318549251334697844);"#);
+            query(r#"insert into _sqlx_test.databases(db_name, test_path) values ($1, $2)"#);
+        }"##;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_format_placeholder_table_issue_1451() {
+        // sqlx-postgres migrate.rs: `{table_name}` is a Rust format! placeholder,
+        // a runtime value — not a literal table identifier. The SELECT FROM and
+        // INSERT INTO both target the placeholder, so there is nothing to pair.
+        let src = r##"fn migrate() {
+            let a = AssertSqlSafe(format!(r#"SELECT version FROM {table_name} WHERE success = false ORDER BY version LIMIT 1"#));
+            let b = AssertSqlSafe(format!(r#"INSERT INTO {table_name} ( version, description ) VALUES ($1, $2)"#));
+        }"##;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_double_report_same_insert_issue_1451() {
+        // Two SELECT FROM statements on the same literal table both pair with the
+        // first INSERT; the shared INSERT location must be reported only once.
+        let src = r#"fn f() {
+            let a = "SELECT version FROM users WHERE success = false";
+            let b = "SELECT version, checksum FROM users ORDER BY version";
+            let c = "INSERT INTO users (version) VALUES ($1)";
+        }"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
