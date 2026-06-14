@@ -431,6 +431,50 @@ fn return_yields_err(ret: Node, source: &[u8]) -> bool {
     text.rsplit("::").next().unwrap_or(text).trim() == "Err"
 }
 
+/// True if `cast` (a `type_cast_expression`) casts the result of a collection
+/// size method — `<receiver>.len()`, `.count()`, or `.capacity()` — to a numeric
+/// type. A Rust collection can never hold more than `isize::MAX` elements, so
+/// such a value is bounded well within the range of `u32` and the other common
+/// narrowing targets; forcing `try_into()` there only manufactures an
+/// error path that is semantically impossible to reach.
+///
+/// The match is on the call shape, not on the receiver: the `function` field of
+/// the cast operand must be a `field_expression` whose `field` is `len`,
+/// `count`, or `capacity`, and the call must take no arguments. This rejects
+/// arbitrary same-named functions taking arguments (e.g. `count(x)`) and any
+/// other method-call operand, so genuinely unbounded narrowing casts stay
+/// flagged.
+///
+/// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`, which both
+/// otherwise flag `hunks.len() as u32` because the operand type is not resolved
+/// from the AST.
+pub fn cast_operand_is_collection_size(cast: Node, source: &[u8]) -> bool {
+    const SIZE_METHODS: &[&str] = &["len", "count", "capacity"];
+
+    let Some(value) = cast.child_by_field_name("value") else {
+        return false;
+    };
+    if value.kind() != "call_expression" {
+        return false;
+    }
+    if value
+        .child_by_field_name("arguments")
+        .is_some_and(|args| args.named_child_count() > 0)
+    {
+        return false;
+    }
+    let Some(function) = value.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    function
+        .child_by_field_name("field")
+        .and_then(|field| field.utf8_text(source).ok())
+        .is_some_and(|name| SIZE_METHODS.contains(&name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -625,6 +669,34 @@ mod tests {
                 is_under_tests_dir(Path::new(path)),
                 expected,
                 "is_under_tests_dir mismatch for `{path}`"
+            );
+        }
+    }
+
+    #[test]
+    fn cast_operand_is_collection_size_matches_size_methods_only() {
+        let cases = [
+            ("fn f(d: D) -> u32 { d.hunks.len() as u32 }", true),
+            ("fn f(&self) -> u32 { self.diff.hunks.len() as u32 }", true),
+            ("fn f(v: V) -> u16 { v.iter().count() as u16 }", true),
+            ("fn f(v: V) -> u32 { v.capacity() as u32 }", true),
+            // Same-named methods with arguments are not the size accessors.
+            ("fn f(v: V) -> u32 { v.count(2) as u32 }", false),
+            // A non-size method is unbounded — must not be exempted.
+            ("fn f(v: V) -> u8 { v.parse_count() as u8 }", false),
+            // A bare identifier operand has no call shape.
+            ("fn f(n: usize) -> u32 { n as u32 }", false),
+            // A free function `len(x)` is not a field-method call.
+            ("fn f() -> u32 { len(x) as u32 }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_of_kind(tree.root_node(), "type_cast_expression")
+                .expect("snippet should contain a type_cast_expression");
+            assert_eq!(
+                cast_operand_is_collection_size(cast, src.as_bytes()),
+                expected,
+                "cast_operand_is_collection_size mismatch for `{src}`"
             );
         }
     }

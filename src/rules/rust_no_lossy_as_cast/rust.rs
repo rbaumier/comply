@@ -17,6 +17,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::cast_operand_is_collection_size;
 
 const KINDS: &[&str] = &["type_cast_expression"];
 
@@ -65,6 +66,9 @@ impl AstCheck for Check {
             return;
         };
         if source_is_char(node, source_bytes) && char_fits(target_type) {
+            return;
+        }
+        if cast_operand_is_collection_size(node, source_bytes) {
             return;
         }
         if let Some(source_type) = source_numeric_type(node, source_bytes)
@@ -303,5 +307,36 @@ mod tests {
     #[test]
     fn flags_char_literal_to_i8() {
         assert_eq!(run_on("fn f() -> i8 { 'A' as i8 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_1309_len_as_u32_not_flagged() {
+        // A collection's `.len()` cannot exceed `isize::MAX` elements; forcing
+        // `try_into` there creates a semantically-impossible error path.
+        let src = "fn f(d: D) -> u32 { d.hunks.len() as u32 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_1309_self_field_len_as_u32_not_flagged() {
+        let src = "fn f(&self) -> u32 { self.diff.hunks.len() as u32 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_1309_count_as_u16_not_flagged() {
+        assert!(run_on("fn f(v: V) -> u16 { v.iter().count() as u16 }").is_empty());
+    }
+
+    #[test]
+    fn repro_1309_capacity_as_u32_not_flagged() {
+        assert!(run_on("fn f(v: V) -> u32 { v.capacity() as u32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_1309_unbounded_method_call_still_flagged() {
+        // `.parse_count()` is not a collection-size method — keep flagging:
+        // the exemption must not blanket-allow every method-call operand.
+        assert_eq!(run_on("fn f(v: V) -> u8 { v.parse_count() as u8 }").len(), 1);
     }
 }
