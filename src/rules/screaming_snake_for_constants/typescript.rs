@@ -12,6 +12,10 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, path)
     }
 
+    fn run_gated(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_gated(&Check, source, path)
+    }
+
     fn run_in_storybook(source: &str) -> Vec<Diagnostic> {
         let file = FileCtx {
             path_segments: PathSegments { in_storybook: true, ..Default::default() },
@@ -191,5 +195,32 @@ mod tests {
         let diags = run_at("export const maxRetries = 5;", "src/lib/retry.ts");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("maxRetries"));
+    }
+
+    // Issue #1221: top-level constants in tsd `test-d/` type-test files are
+    // type-check fixtures with intentional camelCase names, not runtime
+    // constants. The central test-dir gate (`skip_in_test_dir`) suppresses the
+    // rule there, so these produce no diagnostics.
+    #[test]
+    fn allows_type_test_fixtures_in_test_d_dir() {
+        let src = "const objectExample = {a: 1};\n\
+                   const arrayEntryString = [0, 'a'];";
+        assert!(run_gated(src, "test-d/entries.ts").is_empty());
+    }
+
+    // The gate covers the broader test-dir set, not just `test-d/`.
+    #[test]
+    fn allows_fixture_const_in_dot_test_file() {
+        assert!(run_gated("const maxRetries = 3;", "foo.test.ts").is_empty());
+    }
+
+    // Negative space: the test-dir gate only silences the rule inside test
+    // directories. A genuine non-SCREAMING constant in production source still
+    // fires through the gate.
+    #[test]
+    fn flags_production_const_through_gate() {
+        let diags = run_gated("const apiTimeout = 5000;", "src/config.ts");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("apiTimeout"));
     }
 }
