@@ -143,4 +143,57 @@ mod tests {
         let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &paths[0], &project, crate::rules::file_ctx::default_static_file_ctx());
         assert!(diags.is_empty());
     }
+
+    // Regression for #2367: TypeORM bidirectional entity pairs import each
+    // other, but each value import is referenced only in type positions
+    // (relation field annotations) and lazy decorator thunks (`() => User`).
+    // Neither is read at module-evaluation time, so the cycle is not a runtime
+    // initialization hazard and must not be flagged.
+    #[test]
+    fn allows_type_only_orm_entity_cycle_issue_2367() {
+        let user = "import { Post } from './post';\n\
+                    export class User {\n\
+                    @OneToMany(() => Post, (p) => p.user)\n\
+                    posts: Post[];\n\
+                    }";
+        let post = "import { User } from './user';\n\
+                    export class Post {\n\
+                    @ManyToOne(() => User, (u) => u.posts)\n\
+                    user: User;\n\
+                    }";
+        let (_dir, project, paths) = setup_project(&[("user.ts", user), ("post.ts", post)]);
+
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, user, &paths[0], &project, crate::rules::file_ctx::default_static_file_ctx());
+        assert!(
+            diags.is_empty(),
+            "cycle of type-only / lazy-thunk edges must not be flagged: {diags:?}"
+        );
+    }
+
+    // Negative space: a mutual VALUE import where each module reads the other
+    // as a value at module-evaluation top level is a real runtime cycle and
+    // must still be flagged.
+    #[test]
+    fn still_flags_runtime_value_cycle_issue_2367() {
+        let a = "import { b } from './b';\nexport const a = b();";
+        let b = "import { a } from './a';\nexport const b = () => a;";
+        let (_dir, project, paths) = setup_project(&[("a.ts", a), ("b.ts", b)]);
+
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, a, &paths[0], &project, crate::rules::file_ctx::default_static_file_ctx());
+        assert_eq!(diags.len(), 1, "runtime value cycle must still be flagged");
+        assert!(diags[0].message.contains("Circular import"));
+    }
+
+    // Negative space: a mixed cycle where at least one edge is a runtime value
+    // edge must still be flagged. `a` reads `b` as a value at top level; `b`
+    // uses `a` only in a deferred thunk.
+    #[test]
+    fn still_flags_mixed_cycle_with_one_runtime_edge_issue_2367() {
+        let a = "import { b } from './b';\nexport const a = b;";
+        let b = "import { a } from './a';\nexport const b = () => a;";
+        let (_dir, project, paths) = setup_project(&[("a.ts", a), ("b.ts", b)]);
+
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, a, &paths[0], &project, crate::rules::file_ctx::default_static_file_ctx());
+        assert_eq!(diags.len(), 1, "mixed cycle with a runtime edge must still be flagged");
+    }
 }
