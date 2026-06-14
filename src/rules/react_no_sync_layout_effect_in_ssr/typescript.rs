@@ -246,6 +246,18 @@ mod tests {
     }
 
     #[test]
+    fn ignores_use_layout_effect_from_ssr_safe_wrapper_package() {
+        // Regression for rbaumier/comply#1799 — radix-ui/primitives'
+        // popper.tsx imports `useLayoutEffect` from the SSR-safe wrapper
+        // `@radix-ui/react-use-layout-effect`, whose source name contains the
+        // substring `react` but is not the `react` module. The wrapper falls
+        // back to a no-op on the server, so the file is not flagged.
+        let src = "import { useLayoutEffect } from '@radix-ui/react-use-layout-effect';\n\
+useLayoutEffect(() => {}, [deps]);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
     fn ignores_isomorphic_wrapper_definition() {
         // Regression for rbaumier/comply#1844 — pmndrs/react-spring's
         // useIsomorphicEffect.ts. The `useLayoutEffect` import and the ternary
