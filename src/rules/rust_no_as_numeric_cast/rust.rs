@@ -28,7 +28,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::{cast_operand_is_collection_size, is_in_test_context};
 
 const KINDS: &[&str] = &["type_cast_expression"];
 
@@ -81,6 +81,9 @@ impl AstCheck for Check {
             return;
         }
         if is_bitwise_operand(node, source_bytes) {
+            return;
+        }
+        if cast_operand_is_collection_size(node, source_bytes) {
             return;
         }
         let source_type = source_numeric_type(node, source_bytes);
@@ -432,5 +435,43 @@ mod tests {
     fn repro_1289_plain_narrowing_still_flagged() {
         // No bitwise context — an arbitrary count/length narrowing stays flagged.
         assert_eq!(run_on("fn f(n: u32) -> u8 { n as u8 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_1309_len_as_u32_not_flagged() {
+        // A collection's `.len()` is bounded by `isize::MAX`; `try_into` there
+        // forces a semantically-impossible error path.
+        let src = "fn f(d: D) -> u32 { d.hunks.len() as u32 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_1309_self_field_len_as_u32_not_flagged() {
+        let src = "fn f(&self) -> u32 { self.diff.hunks.len() as u32 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_1309_count_as_u16_not_flagged() {
+        assert!(run_on("fn f(v: V) -> u16 { v.iter().count() as u16 }").is_empty());
+    }
+
+    #[test]
+    fn repro_1309_capacity_as_u32_not_flagged() {
+        assert!(run_on("fn f(v: V) -> u32 { v.capacity() as u32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_1309_len_as_f64_not_flagged() {
+        // `len()` is unresolved by the AST, but its bounded shape makes the
+        // cast safe regardless of the (float) target.
+        assert!(run_on("fn f(v: V) -> f64 { v.len() as f64 }").is_empty());
+    }
+
+    #[test]
+    fn repro_1309_unbounded_method_call_still_flagged() {
+        // `.parse_count()` is not a size accessor — keep flagging it so the
+        // exemption does not blanket-allow every method-call operand.
+        assert_eq!(run_on("fn f(v: V) -> u8 { v.parse_count() as u8 }").len(), 1);
     }
 }
