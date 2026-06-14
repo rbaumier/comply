@@ -1,6 +1,10 @@
 //! Flags `await` expressions inside loop bodies, except when the awaited
 //! call is a recursive call to the enclosing async function (sequential
-//! recursion is a legitimate pattern for ordered traversals).
+//! recursion is a legitimate pattern for ordered traversals), or when the
+//! enclosing loop is a retry/polling loop — one that exits early on a result
+//! (`return`/`break`) and paces itself with a delay/backoff `await`
+//! (`delay`/`sleep`/`setTimeout`). Such loops are sequential by design and
+//! cannot be parallelized with `Promise.all`.
 
 mod oxc_typescript;
 #[cfg(test)]
