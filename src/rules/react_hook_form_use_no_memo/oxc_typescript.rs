@@ -34,6 +34,13 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
+        // The proxy-memoization concern is React-Hook-Form-specific. A `useForm`
+        // imported from another library (e.g. `@tanstack/react-form`) uses a
+        // different state model, so this rule must not fire on it.
+        if crate::oxc_helpers::local_binding_imported_from_foreign_package(semantic, "useForm") {
+            return Vec::new();
+        }
+
         // A `"use no memo"` directive anywhere — file-level or inside the
         // component body — satisfies the convention.
         let has_use_no_memo = semantic.nodes().iter().any(|n| {
@@ -211,6 +218,40 @@ mod tests {
             }
         "#;
         assert_eq!(run_in_project(dir.path(), "src/dialog.tsx", src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_tanstack_react_form_useform() {
+        // Regression for rbaumier/comply#1594 — `@tanstack/react-form`'s
+        // `useForm` uses a different state model and is unaffected by the React
+        // Compiler proxy concern; this RHF rule must not fire on it.
+        let dir = compiler_project();
+        let src = r#"
+            import { useForm } from '@tanstack/react-form';
+            export default function App() {
+              const form = useForm({
+                defaultValues: { firstName: '', lastName: '' },
+                onSubmit: async ({ value }) => { console.log(value); },
+              });
+              return <form />;
+            }
+        "#;
+        assert!(run_in_project(dir.path(), "src/index.tsx", src).is_empty());
+    }
+
+    #[test]
+    fn flags_react_hook_form_useform_with_import() {
+        // Negative space: a genuine react-hook-form `useForm` under the compiler
+        // still needs the directive.
+        let dir = compiler_project();
+        let src = r#"
+            import { useForm } from 'react-hook-form';
+            export function EditForm() {
+              const form = useForm();
+              return <form />;
+            }
+        "#;
+        assert_eq!(run_in_project(dir.path(), "src/edit-form.tsx", src).len(), 1);
     }
 
     #[test]
