@@ -43,6 +43,12 @@ impl OxcCheck for Check {
         if matches!(parent.kind(), AstKind::TaggedTemplateExpression(_)) {
             return;
         }
+        // Angular `@Component({ template: `...` })` inline templates inherit the
+        // class-body indentation by construction; the template compiler strips
+        // it, so it is not excess whitespace the author can remove.
+        if is_angular_component_template(parent, semantic, ctx.source) {
+            return;
+        }
         // Rule-tester test cases embed code-under-test as template literals
         // whose indentation reflects the structure of the tested source, not
         // excess whitespace inherited from the surrounding scope.
@@ -126,6 +132,47 @@ fn object_property_key<'a>(key: &'a oxc_ast::ast::PropertyKey<'a>) -> Option<&'a
         PropertyKey::StringLiteral(s) => Some(s.value.as_str()),
         _ => None,
     }
+}
+
+/// Whether the template literal is the value of an Angular `@Component`
+/// inline `template` property.
+///
+/// Walks `TemplateLiteral` → `ObjectProperty { key: template }`
+/// → `ObjectExpression` → `CallExpression { callee: Component }`
+/// → `Decorator`. Such templates inherit the surrounding class-body
+/// indentation by construction and the Angular compiler strips it, so the
+/// indentation is not excess whitespace the author can remove.
+fn is_angular_component_template<'a>(
+    parent: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    source: &str,
+) -> bool {
+    use oxc_ast::ast::Expression;
+
+    let AstKind::ObjectProperty(prop) = parent.kind() else {
+        return false;
+    };
+    if object_property_key(&prop.key) != Some("template") {
+        return false;
+    }
+    if !crate::oxc_helpers::source_contains(source, "@Component") {
+        return false;
+    }
+    let object = semantic.nodes().parent_node(parent.id());
+    if !matches!(object.kind(), AstKind::ObjectExpression(_)) {
+        return false;
+    }
+    let call = semantic.nodes().parent_node(object.id());
+    let AstKind::CallExpression(call_expr) = call.kind() else {
+        return false;
+    };
+    if !matches!(&call_expr.callee, Expression::Identifier(id) if id.name.as_str() == "Component") {
+        return false;
+    }
+    matches!(
+        semantic.nodes().parent_node(call.id()).kind(),
+        AstKind::Decorator(_)
+    )
 }
 
 /// Whether a method call on the template literal removes its leading
@@ -362,6 +409,45 @@ ruleTester.run('rule', rule, {
 });
 "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_angular_component_inline_template() {
+        let src = r#"
+import { Component } from '@angular/core';
+
+@Component({
+  selector: 'ngrx-root',
+  standalone: true,
+  template: `
+    <h1>Welcome {{ title }} {{ val() }}</h1>
+
+    <a routerLink="/feature">Load Feature</a>
+
+    <router-outlet></router-outlet>
+  `,
+})
+export class AppComponent {}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_template_property_in_plain_component_call() {
+        // A `Component(...)` call that is not a decorator is not an Angular
+        // inline template — the indented template literal still fires.
+        let src = r#"
+const config = Component({
+    template: `
+        <div>
+            <p>Hello</p>
+        </div>
+    `,
+});
+"#;
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("common leading indentation"));
     }
 
     #[test]
