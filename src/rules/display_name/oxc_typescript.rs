@@ -20,6 +20,14 @@ impl OxcCheck for Check {
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
 
+        // Display names are a React DevTools / Fast Refresh concern. Files for
+        // non-React JSX frameworks (SolidJS, Vue, Preact, Qwik, Stencil) — whose
+        // file-based routing uses anonymous `export default function` route
+        // components — must not be flagged.
+        if crate::oxc_helpers::is_non_react_jsx_file(ctx.source, ctx.project, ctx.path) {
+            return diagnostics;
+        }
+
         for node in semantic.nodes().iter() {
             let AstKind::ExportDefaultDeclaration(export) = node.kind() else { continue };
 
@@ -113,4 +121,64 @@ fn contains_jsx(outer: oxc_span::Span, semantic: &oxc_semantic::Semantic) -> boo
         }
     }
     false
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.tsx")
+    }
+
+    #[test]
+    fn flags_anonymous_arrow_default_export_in_react_file() {
+        let src = "import { useState } from 'react';\nexport default () => <div />;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn skips_solidjs_anonymous_default_export() {
+        // SolidStart file-based routing: an anonymous `export default function`
+        // route component in a file importing from `@solidjs/router`. Display
+        // names are a React-only concern. (Closes #2218)
+        let src = "import { RouteSectionProps } from \"@solidjs/router\";\n\
+                   export default function (props: RouteSectionProps) {\n\
+                       return <h1>Layout</h1>;\n\
+                   }";
+        assert!(run(src).is_empty(), "got unexpected diagnostics: {:?}", run(src));
+    }
+
+    #[test]
+    fn skips_solid_js_anonymous_default_export() {
+        // A route file importing from `solid-js` itself.
+        let src = "import { createSignal } from \"solid-js\";\n\
+                   export default function () { return <section>x</section>; }";
+        assert!(run(src).is_empty(), "got unexpected diagnostics: {:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_anonymous_default_export_in_react_file() {
+        // Negative-space guard: a real React file (imports `react`, no Solid)
+        // with an anonymous default-export component is still flagged.
+        let src = "import { useState } from \"react\";\n\
+                   export default function () { return <div />; }";
+        assert_eq!(run(src).len(), 1);
+    }
 }

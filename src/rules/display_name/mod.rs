@@ -5,6 +5,11 @@
 //! DevTools and inside error boundaries. Giving every component a name
 //! (either via `function Foo()` or `displayName`) makes profiling, error
 //! stacks, and Fast Refresh boundaries intelligible.
+//!
+//! Files for non-React JSX frameworks (SolidJS, Vue, Preact, Qwik, Stencil)
+//! are exempt: display names are a React DevTools / Fast Refresh concern, and
+//! those frameworks use anonymous `export default function` route components in
+//! file-based routing as a first-class pattern.
 
 mod oxc_typescript;
 #[cfg(test)]
