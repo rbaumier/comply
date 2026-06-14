@@ -15,6 +15,33 @@ fn is_pascal_case(name: &str) -> bool {
     name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
+/// True for the React custom-hook naming convention: `use` followed by an
+/// uppercase letter or digit (`useQueryClient`, `useTheme`, `use2FA`). A bare
+/// `use` or `useThing`-lowercased name is not a hook by this convention, matching
+/// eslint-plugin-react-refresh's `^use[A-Z0-9]` test.
+fn is_react_hook_name(name: &str) -> bool {
+    name.strip_prefix("use")
+        .and_then(|rest| rest.chars().next())
+        .is_some_and(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+}
+
+/// True when `init` is function-shaped: an arrow function or a `function`
+/// expression (after peeling `as const`, `satisfies`, `as T`, `<T>x`, `!`, and
+/// parentheses). A custom hook is, by definition, such a value; an export named
+/// like a hook but bound to a non-function value (`export const useStuff = {...}`)
+/// is not a hook and is left subject to the rule.
+fn is_function_expression(init: &Expression) -> bool {
+    match init {
+        Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => true,
+        Expression::TSAsExpression(e) => is_function_expression(&e.expression),
+        Expression::TSSatisfiesExpression(e) => is_function_expression(&e.expression),
+        Expression::TSTypeAssertion(e) => is_function_expression(&e.expression),
+        Expression::TSNonNullExpression(e) => is_function_expression(&e.expression),
+        Expression::ParenthesizedExpression(p) => is_function_expression(&p.expression),
+        _ => false,
+    }
+}
+
 /// True when `init` is a pure constant-data value: a literal primitive, a plain
 /// object/array literal, or a template/unary/binary expression over those (after
 /// peeling `as const`, `satisfies`, `as T`, `!`, and parentheses).
@@ -237,7 +264,14 @@ fn extract_named_export_name(decl: &ExportNamedDeclaration, source: &str) -> Opt
     let declaration = decl.declaration.as_ref()?;
     match declaration {
         Declaration::FunctionDeclaration(func) => {
-            func.id.as_ref().map(|id| id.name.to_string())
+            let name = func.id.as_ref()?.name.to_string();
+            // A custom hook (`export function useFoo()`) is fast-refresh-safe to
+            // co-export with a component — exempt it, mirroring
+            // eslint-plugin-react-refresh.
+            if is_react_hook_name(&name) {
+                return None;
+            }
+            Some(name)
         }
         Declaration::ClassDeclaration(class) => {
             class.id.as_ref().map(|id| id.name.to_string())
@@ -249,6 +283,17 @@ fn extract_named_export_name(decl: &ExportNamedDeclaration, source: &str) -> Opt
                     // etc.) cannot be a component or hook and so cannot disrupt
                     // React Fast Refresh — exempt it from the rule.
                     if d.init.as_ref().is_some_and(is_constant_data_initializer) {
+                        return None;
+                    }
+                    // A custom hook bound to a function (`export const useFoo =
+                    // () => ...`) is fast-refresh-safe to co-export with a
+                    // component — exempt it. The function shape is required: an
+                    // export named like a hook but holding data (`export const
+                    // useStuff = {...}`) is not a hook and stays subject to the
+                    // rule.
+                    if is_react_hook_name(&ident.name)
+                        && d.init.as_ref().is_some_and(is_function_expression)
+                    {
                         return None;
                     }
                     Some(ident.name.to_string())
@@ -836,16 +881,17 @@ export function Widget() { return <div />; }
 
     #[test]
     fn flags_arrow_function_export_with_component() {
-        // Negative-space guard: a function-shaped const export (a potential hook
-        // or component) is the real Fast Refresh risk and is still flagged.
+        // Negative-space guard: a non-hook function-shaped const export (a plain
+        // utility, not a `use*` hook) is the real Fast Refresh risk and is still
+        // flagged.
         let source = r#"
 import React from 'react';
-export const useThing = () => { return 1; };
+export const doThing = () => { return 1; };
 export function Widget() { return <div />; }
 "#;
         let d = run(source);
         assert_eq!(d.len(), 1);
-        assert!(d[0].message.contains("useThing"));
+        assert!(d[0].message.contains("doThing"));
     }
 
     #[test]
@@ -860,5 +906,69 @@ export function Widget() { return <div />; }
         let d = run(source);
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("helper"));
+    }
+
+    // Regression tests for issue #2122 — a custom React hook (`use*` naming
+    // convention) bound to a function is fast-refresh-safe to co-export alongside
+    // a component (the idiomatic `QueryClientProvider` + `useQueryClient`
+    // pattern). eslint-plugin-react-refresh does not warn on hook exports.
+
+    #[test]
+    fn no_fp_arrow_hook_co_exported_with_provider_component() {
+        // packages/react-query/src/QueryClientProvider.tsx (issue #2122).
+        let source = r#"
+import React from 'react';
+export const useQueryClient = (queryClient) => {
+  return React.useContext(QueryClientContext);
+};
+export const QueryClientProvider = ({ children, client }) => {
+  return <QueryClientContext.Provider value={client}>{children}</QueryClientContext.Provider>;
+};
+"#;
+        assert!(run(source).is_empty(), "expected no diagnostics, got {:?}", run(source));
+    }
+
+    #[test]
+    fn no_fp_function_declaration_hook_co_exported_with_component() {
+        let source = r#"
+import React from 'react';
+export function useQueryClient() { return React.useContext(Ctx); }
+export function QueryClientProvider(props) {
+  return <Ctx.Provider>{props.children}</Ctx.Provider>;
+}
+"#;
+        assert!(run(source).is_empty(), "expected no diagnostics, got {:?}", run(source));
+    }
+
+    #[test]
+    fn flags_genuine_non_component_export_alongside_hook_and_component() {
+        // Negative-space guard: a genuinely disallowed non-component export (a
+        // plain non-hook function) is still flagged even when a component and a
+        // hook are also present — the exemption is scoped to `use*` functions.
+        let source = r#"
+import React from 'react';
+export const useQueryClient = () => React.useContext(Ctx);
+export const helper = () => {};
+export function QueryClientProvider(props) { return <Ctx.Provider />; }
+"#;
+        let d = run(source);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("helper"));
+    }
+
+    #[test]
+    fn flags_hook_named_non_function_export_with_component() {
+        // Negative-space guard: an export named like a hook but bound to a
+        // non-function, non-data value (a call, which may return anything) is not
+        // a hook and does not get the hook exemption — it stays subject to the
+        // rule.
+        let source = r#"
+import React from 'react';
+export const useStuff = makeStuff();
+export function Widget() { return <div />; }
+"#;
+        let d = run(source);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("useStuff"));
     }
 }
