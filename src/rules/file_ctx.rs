@@ -464,6 +464,8 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
             || crate::rules::path_utils::has_test_suite_factory_suffix(path)
             || lower.contains("/dtslint/")
             || lower.starts_with("dtslint/")
+            || lower.contains("/spec-dtslint/")
+            || lower.starts_with("spec-dtslint/")
             || lower.contains("/__tests_dts__/")
             || lower.starts_with("__tests_dts__/")
             || lower.contains("/__tests__/")
@@ -647,6 +649,20 @@ mod tests {
         assert!(!scan_path(&PathBuf::from("respec/x.ts")).in_test_dir);
         assert!(!scan_path(&PathBuf::from("myspec.ts")).in_test_dir);
         assert!(!scan_path(&PathBuf::from("src/spec.ts")).in_test_dir);
+        // dtslint-style `spec-dtslint/` type-test directory (issue #2308): a
+        // compound segment that is neither a bare `spec/` nor a bare `dtslint/`
+        // dir, so it needs its own segment marker.
+        assert!(scan_path(&PathBuf::from("spec-dtslint/index.d.ts")).in_test_dir);
+        assert!(
+            scan_path(&PathBuf::from(
+                "packages/rxjs/spec-dtslint/operators/bufferTime-spec.ts"
+            ))
+            .in_test_dir
+        );
+        // Segment match — `spec-dtslint-helpers.ts` is a file, not the dir
+        // segment, and an unrelated source file is not a test dir.
+        assert!(!scan_path(&PathBuf::from("spec-dtslint-helpers.ts")).in_test_dir);
+        assert!(!scan_path(&PathBuf::from("src/foo.ts")).in_test_dir);
         // dtslint type-testing convention (issue #1006).
         assert!(scan_path(&PathBuf::from("dtslint/Array.ts")).in_test_dir);
         // dtslint-style `__tests_dts__/` type-test directory (issue #1660).
