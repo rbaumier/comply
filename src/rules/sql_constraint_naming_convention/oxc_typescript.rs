@@ -100,4 +100,30 @@ mod tests {
         let src = r#"const m = await sql`CREATE TABLE "workflow" ("id" uuid NOT NULL, CONSTRAINT "workflow_bad" PRIMARY KEY ("id"))`.execute(db);"#;
         assert_eq!(run_on(src).len(), 1);
     }
+
+    #[test]
+    fn skips_if_exists_keywords_after_drop_constraint() {
+        let src = r#"const m = await sql`ALTER TABLE t DROP CONSTRAINT IF EXISTS valid_name_fkey`.execute(tx);"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn name_ending_in_constraint_does_not_rematch_next_keyword() {
+        let src = r#"const m = await sql`alter table smart_search add constraint dim_size_constraint check (array_length(embedding, 1) = 64)`.execute(trx);"#;
+        // `dim_size_constraint` lacks a valid suffix → exactly one finding;
+        // `check` must NOT be re-extracted as a second constraint name.
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("dim_size_constraint"));
+    }
+
+    #[test]
+    fn parses_following_constraint_after_name_ending_in_constraint() {
+        let src = r#"const m = await sql`ALTER TABLE t ADD CONSTRAINT t_a_constraint CHECK (a > 0), ADD CONSTRAINT t_b_key UNIQUE (b)`.execute(trx);"#;
+        // Only `t_a_constraint` is misnamed; `t_b_key` is valid and the scan
+        // must reach it correctly after the name ending in `constraint`.
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("t_a_constraint"));
+    }
 }
