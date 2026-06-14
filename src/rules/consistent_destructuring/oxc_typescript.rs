@@ -1,12 +1,16 @@
 //! consistent-destructuring OXC backend.
 //!
 //! Flags member expressions like `user.age` when the same object was
-//! already destructured earlier in the same scope.
+//! already destructured earlier in the same scope. When both the
+//! destructuring source and the member-access object resolve to a binding,
+//! matching is keyed on that binding's symbol, so two identically named
+//! variables in unrelated scopes never cross-trigger.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
+use oxc_semantic::SymbolId;
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -23,12 +27,18 @@ impl OxcCheck for Check {
         let mut diagnostics = Vec::new();
 
         // Phase 1: collect all destructuring declarations
-        // (object_text, end_byte, enclosing_fn_range)
-        let mut destructured: Vec<(String, u32, Option<(u32, u32)>)> = Vec::new();
+        struct Destructured {
+            obj_text: String,
+            obj_symbol: Option<SymbolId>,
+            end_byte: u32,
+            fn_range: Option<(u32, u32)>,
+        }
+        let mut destructured: Vec<Destructured> = Vec::new();
 
         // Phase 2: collect all member expression candidates
         struct Candidate {
             obj_text: String,
+            obj_symbol: Option<SymbolId>,
             prop_text: String,
             start_byte: u32,
         }
@@ -76,7 +86,13 @@ impl OxcCheck for Check {
                         }
                         result
                     };
-                    destructured.push((obj_text.to_string(), decl.span.end, fn_range));
+                    let obj_symbol = identifier_symbol(init, semantic);
+                    destructured.push(Destructured {
+                        obj_text: obj_text.to_string(),
+                        obj_symbol,
+                        end_byte: decl.span.end,
+                        fn_range,
+                    });
                 }
                 AstKind::StaticMemberExpression(member) => {
                     // Skip if parent is a member expression (nested: user.address.city)
@@ -123,9 +139,11 @@ impl OxcCheck for Check {
 
                     let obj_text = &source[member.object.span().start as usize..member.object.span().end as usize];
                     let prop_text = member.property.name.as_str();
+                    let obj_symbol = identifier_symbol(&member.object, semantic);
 
                     candidates.push(Candidate {
                         obj_text: obj_text.to_string(),
+                        obj_symbol,
                         prop_text: prop_text.to_string(),
                         start_byte: member.span().start,
                     });
@@ -136,12 +154,21 @@ impl OxcCheck for Check {
 
         // Phase 3: match candidates against destructured objects
         for c in &candidates {
-            for (decl_obj, decl_end, fn_range) in &destructured {
-                if c.obj_text == *decl_obj && c.start_byte > *decl_end {
-                    let scope_ok = match fn_range {
+            for d in &destructured {
+                if c.obj_text == d.obj_text && c.start_byte > d.end_byte {
+                    // When both sides resolve to a binding, they must be the
+                    // *same* binding. This rejects identically named variables
+                    // declared in unrelated scopes (e.g. a loop variable and a
+                    // sibling callback parameter that happen to share a name).
+                    if let (Some(cand_sym), Some(decl_sym)) = (c.obj_symbol, d.obj_symbol)
+                        && cand_sym != decl_sym
+                    {
+                        continue;
+                    }
+                    let scope_ok = match d.fn_range {
                         None => true,
                         Some((fn_start, fn_end)) => {
-                            c.start_byte >= *fn_start && c.start_byte <= *fn_end
+                            c.start_byte >= fn_start && c.start_byte <= fn_end
                         }
                     };
                     if scope_ok {
@@ -234,6 +261,54 @@ mod tests {
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains('y'));
     }
+
+    #[test]
+    fn skips_same_name_different_scopes() {
+        // Issue #1224: a loop variable and a sibling callback parameter share
+        // the name `sponsor` but are distinct bindings. Destructuring the loop
+        // variable must not flag member access on the callback parameter.
+        let code = r#"
+            for (const sponsor of sponsors) {
+                const { login } = sponsor;
+                console.log(login);
+            }
+            const cols = buckets.map((sponsor) => {
+                const imgSrc = new URL(sponsor.imgSrc);
+                return sponsor.link;
+            });
+        "#;
+        assert!(
+            run(code).is_empty(),
+            "Should not flag member access on a same-named binding in an unrelated scope"
+        );
+    }
+
+    #[test]
+    fn flags_same_binding_in_same_scope() {
+        // Negative-space guard: a genuine within-scope inconsistency on the
+        // very same binding is still flagged.
+        let code = r#"
+            function handle(sponsor) {
+                const { login } = sponsor;
+                console.log(login);
+                console.log(sponsor.imgSrc);
+            }
+        "#;
+        let diags = run(code);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("imgSrc"));
+    }
+}
+
+/// Resolve `expr` to the symbol of its binding when it is a plain identifier
+/// reference. Returns `None` for `this`, member chains, or unresolved globals,
+/// which have no single binding to key matching on.
+fn identifier_symbol(expr: &Expression, semantic: &oxc_semantic::Semantic) -> Option<SymbolId> {
+    let Expression::Identifier(ident) = expr else {
+        return None;
+    };
+    let ref_id = ident.reference_id.get()?;
+    semantic.scoping().get_reference(ref_id).symbol_id()
 }
 
 fn is_simple_expression(expr: &Expression) -> bool {
