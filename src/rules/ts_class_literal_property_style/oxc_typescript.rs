@@ -4,7 +4,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{ClassElement, Expression, MethodDefinitionKind, Statement};
+use oxc_ast::ast::{ClassElement, Expression, MethodDefinitionKind, PropertyKey, Statement};
 use std::sync::Arc;
 
 pub struct Check;
@@ -18,6 +18,17 @@ fn is_literal(expr: &Expression) -> bool {
             | Expression::NullLiteral(_)
             | Expression::TemplateLiteral(_)
     )
+}
+
+/// Whether a computed property key is a member access on the global `Symbol`,
+/// e.g. `[Symbol.toStringTag]` or `[Symbol.iterator]`. Such getters define a
+/// well-known symbol on the prototype; rewriting them as instance `readonly`
+/// fields changes lookup semantics, so they must not be flagged.
+fn is_symbol_member_key(key: &PropertyKey) -> bool {
+    let PropertyKey::StaticMemberExpression(member) = key else {
+        return false;
+    };
+    matches!(&member.object, Expression::Identifier(id) if id.name == "Symbol")
 }
 
 impl OxcCheck for Check {
@@ -41,6 +52,9 @@ impl OxcCheck for Check {
                 continue;
             };
             if method.kind != MethodDefinitionKind::Get {
+                continue;
+            }
+            if is_symbol_member_key(&method.key) {
                 continue;
             }
             let Some(body) = &method.value.body else {
@@ -152,5 +166,44 @@ class Foo {
 "#,
         );
         assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_computed_symbol_to_string_tag_getter() {
+        let diags = run_on(
+            r#"
+class FakeGraphQLObjectType {
+    get [Symbol.toStringTag]() {
+        return 'GraphQLObjectType';
+    }
+}
+"#,
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_computed_symbol_iterator_getter() {
+        let diags = run_on(
+            r#"
+class Foo {
+    get [Symbol.iterator]() { return "x"; }
+}
+"#,
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn still_flags_plain_named_literal_getter() {
+        let diags = run_on(
+            r#"
+class Foo {
+    get foo() { return 1; }
+}
+"#,
+        );
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("readonly"));
     }
 }
