@@ -8,7 +8,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::call_expression::call_function_name;
-use crate::rules::rust_helpers::is_inside_async_fn;
+use crate::rules::rust_helpers::{has_test_attribute, is_inside_async_fn};
 
 const KINDS: &[&str] = &["call_expression"];
 
@@ -75,6 +75,9 @@ impl AstCheck for Check {
         if is_inside_offload_closure(node, source_bytes) {
             return;
         }
+        if is_inside_test_fn(node, source_bytes) {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -139,6 +142,22 @@ fn is_inside_offload_closure(node: tree_sitter::Node, source: &[u8]) -> bool {
 fn is_offload_combinator(text: &str) -> bool {
     let segment = text.rsplit("::").next().unwrap_or(text);
     OFFLOAD_COMBINATORS.contains(&segment)
+}
+
+/// True if `node`'s nearest enclosing `function_item` carries a test
+/// attribute (`#[test]`, `#[tokio::test]`, `#[async_std::test]`,
+/// `#[actix_web::test]`, and their `(...)`-argument forms). Sync I/O in a
+/// test body blocks only that test's dedicated runtime, not a production
+/// worker pool, so it is not a finding.
+fn is_inside_test_fn(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "function_item" {
+            return has_test_attribute(parent, source);
+        }
+        cur = parent;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -215,6 +234,48 @@ mod tests {
     #[test]
     fn flags_std_fs_in_non_offload_closure() {
         let source = r#"async fn f() { items.iter().map(|x| std::fs::read(x)); }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_std_fs_in_tokio_test_multi_thread() {
+        let source = r#"
+            #[tokio::test(flavor = "multi_thread")]
+            async fn t() { let _ = std::fs::read_to_string(p); }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_std_fs_in_tokio_test() {
+        let source = r#"
+            #[tokio::test]
+            async fn t() { std::fs::create_dir(p); }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_std_fs_in_bare_test_fn() {
+        let source = r#"
+            #[test]
+            fn t() { let _ = std::fs::read(p); }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_std_fs_in_non_test_async_fn() {
+        let source = r#"async fn handler() { let _ = std::fs::read(p); }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_std_fs_in_tokio_main() {
+        let source = r#"
+            #[tokio::main]
+            async fn main() { let _ = std::fs::read(p); }
+        "#;
         assert_eq!(run_on(source).len(), 1);
     }
 }
