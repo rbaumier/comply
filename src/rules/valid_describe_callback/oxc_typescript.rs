@@ -69,8 +69,11 @@ impl OxcCheck for Check {
                 let is_async = arrow.r#async;
                 let has_params = !is_each && !arrow.params.items.is_empty();
                 let returns_value = if arrow.expression {
-                    // Arrow with expression body = implicit return
-                    true
+                    // Arrow with expression body = implicit return. A bare call
+                    // (`() => helper(arg)`) invokes a side-effecting suite helper
+                    // that registers nested `it`/`describe` blocks; the implicit
+                    // return is its (void) result, not a meaningful value.
+                    !expression_body_is_bare_call(&arrow.body.statements)
                 } else {
                     body_returns_value_stmts(&arrow.body.statements)
                 };
@@ -127,6 +130,17 @@ impl OxcCheck for Check {
             _ => {}
         }
     }
+}
+
+/// True when an expression-body arrow (`() => expr`) has `expr` as a bare
+/// call expression. oxc stores the implicit-return expression as the sole
+/// `ExpressionStatement` of the arrow body.
+fn expression_body_is_bare_call(stmts: &[oxc_ast::ast::Statement]) -> bool {
+    use oxc_ast::ast::Statement;
+    let [Statement::ExpressionStatement(expr_stmt)] = stmts else {
+        return false;
+    };
+    matches!(expr_stmt.expression, Expression::CallExpression(_))
 }
 
 /// Walk statements looking for a `return` with a value, without descending
@@ -235,5 +249,39 @@ mod tests {
         let d = crate::rules::test_helpers::run_rule(&Check, "describe('suite', (done) => { it('x', () => {}); });", "t.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("parameters"));
+    }
+
+    // Regression #2351 — expression-body arrow calling a void suite helper.
+    #[test]
+    fn allows_expression_body_arrow_calling_suite_helper() {
+        let d = crate::rules::test_helpers::run_rule(&Check, "describe('when 204', () => strip(204));", "t.ts");
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+    }
+
+    #[test]
+    fn allows_expression_body_arrow_calling_member_suite_helper() {
+        let d = crate::rules::test_helpers::run_rule(&Check, "describe('when X', () => helpers.run(arg));", "t.ts");
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_expression_body_arrow_returning_object() {
+        let d = crate::rules::test_helpers::run_rule(&Check, "describe('x', () => ({ a: 1 }));", "t.ts");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("return a value"));
+    }
+
+    #[test]
+    fn still_flags_block_body_arrow_returning_value() {
+        let d = crate::rules::test_helpers::run_rule(&Check, "describe('x', () => { return promise; });", "t.ts");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("return a value"));
+    }
+
+    #[test]
+    fn still_flags_async_describe_callback() {
+        let d = crate::rules::test_helpers::run_rule(&Check, "describe('x', async () => {});", "t.ts");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("async"));
     }
 }
