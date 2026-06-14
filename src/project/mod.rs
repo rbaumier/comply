@@ -1318,6 +1318,21 @@ impl ProjectCtx {
         detected
     }
 
+    /// Magic export names recognized for `path`: the union of the root-detected
+    /// frameworks' magic exports and those of the framework owning `path` via its
+    /// nearest `package.json`. A magic export (Next.js `metadata`/`default`,
+    /// `generateStaticParams`, …) is consumed by the framework's file-system
+    /// router by convention, never through a static import. Walking the nearest
+    /// manifest lets these be recognized for an app nested in a sub-package whose
+    /// framework dependency is invisible to root-anchored detection.
+    pub fn magic_exports_for_path(&self, path: &Path) -> HashSet<&str> {
+        let mut names: HashSet<&str> = self.framework_magic_exports().collect();
+        for fw in self.frameworks_for_path(path) {
+            names.extend(fw.magic_exports.names.iter().map(String::as_str));
+        }
+        names
+    }
+
     #[cfg(test)]
     #[must_use]
     pub fn for_test_with_framework(name: &str) -> Self {

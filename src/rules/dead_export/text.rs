@@ -377,8 +377,7 @@ impl TextCheck for Check {
             return Vec::new();
         }
 
-        let magic: std::collections::HashSet<&str> =
-            ctx.project.framework_magic_exports().collect();
+        let magic = ctx.project.magic_exports_for_path(&canon);
 
         // Co-occurrence-driven exemptions (yargs command modules, ORM migration
         // modules): a fixed set of named exports is consumed by directory /
@@ -2174,6 +2173,66 @@ mod tests {
         assert!(
             diags[0].message.contains("unusedHelper"),
             "message should name the top-level dead export, got: {}",
+            diags[0].message
+        );
+    }
+
+    // Regression #1800 (wagmi): a monorepo whose root `package.json` declares no
+    // framework, with Next.js listed only in a nested sub-package
+    // (`playgrounds/next/package.json`). The App Router file's `metadata` and
+    // `default` exports are consumed by Next.js's file-system router, never via a
+    // static import — they must not be flagged even though the framework is
+    // invisible to root-anchored detection.
+    #[test]
+    fn no_fp_for_nextjs_app_router_in_nested_package_issue_1800() {
+        let extra = vec![
+            ("package.json", r#"{"name":"workspace","private":true}"#),
+            (
+                "playgrounds/next/package.json",
+                r#"{"name":"@wagmi/next-playground","dependencies":{"next":"^15.0.0"}}"#,
+            ),
+        ];
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "playgrounds/next/src/app/layout.tsx",
+                "export const metadata = { title: 'Create Wagmi' };\n\
+                 export default function RootLayout() { return null; }\n",
+            ),
+            // A second file gives the index more than one entry so the rule runs.
+            ("packages/lib/src/index.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) =
+            run_on_project_with_extra(&extra, &files, "playgrounds/next/src/app/layout.tsx");
+        assert!(
+            diags.is_empty(),
+            "Next.js App Router exports under a nested sub-package must not be flagged, got: {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #1800: when NO framework dep exists anywhere
+    // (neither root nor any sub-package), an unimported export under an `app/`
+    // directory is genuinely dead and must still be flagged. Confirms the
+    // nested-detection fallback does not blanket-exempt every `app/` file.
+    #[test]
+    fn flags_dead_export_in_app_dir_without_framework_issue_1800() {
+        let extra = vec![
+            ("package.json", r#"{"name":"workspace","private":true}"#),
+            ("packages/lib/package.json", r#"{"name":"@scope/lib"}"#),
+        ];
+        let files: Vec<(&str, &str)> = vec![
+            ("packages/lib/src/app/helper.ts", "export function unusedHelper() {}\n"),
+            ("packages/lib/src/app/other.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) =
+            run_on_project_with_extra(&extra, &files, "packages/lib/src/app/helper.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a dead export under app/ with no framework anywhere must still fire, got: {diags:?}"
+        );
+        assert!(
+            diags[0].message.contains("unusedHelper"),
+            "message should name the dead export, got: {}",
             diags[0].message
         );
     }

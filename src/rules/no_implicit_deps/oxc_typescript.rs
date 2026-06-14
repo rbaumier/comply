@@ -1056,4 +1056,45 @@ export default {
             "a specifier declared nowhere must still fire, got {diags:?}"
         );
     }
+
+    // Regression #1800 (wagmi): a monorepo whose root `package.json` declares no
+    // framework, with `next` listed only in a nested sub-package
+    // (`playgrounds/next/package.json`). An `import ... from 'next'` in that
+    // playground must not be flagged — the nearest-`package.json` lookup resolves
+    // the dependency to the sub-package's manifest. A sibling playground file
+    // importing a specifier declared in no manifest must still fire.
+    #[test]
+    fn allows_framework_dep_in_nested_subpackage_issue_1800() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"workspace","private":true}"#,
+        )
+        .unwrap();
+        let app = dir.path().join("playgrounds").join("next").join("src").join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(
+            dir.path().join("playgrounds").join("next").join("package.json"),
+            r#"{"name":"@wagmi/next-playground","dependencies":{"next":"^15.0.0"}}"#,
+        )
+        .unwrap();
+        let file = app.join("page.tsx");
+        let source = "import { headers } from 'next/headers';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "framework dep declared in a nested sub-package must not be flagged, got {diags:?}"
+        );
+
+        let missing = app.join("missing.tsx");
+        let missing_source = "import x from 'totally-undeclared-pkg';";
+        fs::write(&missing, missing_source).unwrap();
+        let diags = run_oxc_in_project(&missing, missing_source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "a specifier declared in no manifest must still fire, got {diags:?}"
+        );
+    }
 }
