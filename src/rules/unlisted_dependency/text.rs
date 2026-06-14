@@ -122,11 +122,13 @@ impl TextCheck for Check {
                 }
             }
             // Monorepo case: the dependency may be declared in the importing
-            // package's own package.json rather than the project-root one
-            // (each importer walks up to its nearest manifest). The same
-            // nearest-manifest walk also resolves the `@types/X` provider.
+            // package's own package.json rather than the project-root one (each
+            // importer resolves its own manifest chain). When the importer's
+            // nearest manifest is a private test/harness overlay, the chain also
+            // includes the surrounding package, whose runtime deps the overlay's
+            // files may import. The same chain resolves the `@types/X` provider.
             if info.importers.iter().any(|imp| {
-                ctx.project.nearest_package_json(imp).is_some_and(|p| {
+                ctx.project.effective_package_jsons(imp).iter().any(|p| {
                     p.has_dep_or_engine(spec)
                         || types_pkg.as_deref().is_some_and(|t| p.has_dep_or_engine(t))
                 })
@@ -821,6 +823,115 @@ mod tests {
             "a `templated/` substring dir is ordinary source and must still fire: {diags:?}"
         );
         assert!(diags[0].message.contains("react"));
+    }
+
+    /// Build a 3-level layout (root with `workspaces`, an intermediate parent
+    /// package, a nested package whose manifest is `nested_manifest`) where the
+    /// nested file imports `import_spec`, then run the check. The parent package
+    /// declares `vscode-languageserver-protocol`; the root declares nothing
+    /// relevant. Used by the #2080 overlay tests.
+    fn run_nested_overlay(nested_manifest: &str, import_spec: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"astro-monorepo","private":true,"workspaces":["packages/*"]}"#,
+        )
+        .unwrap();
+        let pkg = dir.path().join("packages").join("language-server");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(
+            pkg.join("package.json"),
+            r#"{"name":"@astrojs/language-server","dependencies":{"vscode-languageserver-protocol":"^3"}}"#,
+        )
+        .unwrap();
+        let nested = pkg.join("test");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("package.json"), nested_manifest).unwrap();
+        let importer = nested.join("server.ts");
+        fs::write(&importer, format!("import x from '{import_spec}';")).unwrap();
+        let root_file = dir.path().join("a.ts");
+        fs::write(&root_file, "export const x = 1;").unwrap();
+
+        let source_files = [
+            SourceFile {
+                path: importer,
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: root_file,
+                language: Language::TypeScript,
+            },
+        ];
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        let target_path: PathBuf = project
+            .import_index()
+            .indexed_paths()
+            .min()
+            .expect("at least one indexed file")
+            .to_path_buf();
+        let source = fs::read_to_string(&target_path).unwrap();
+        let file_ctx = FileCtx::build(&target_path, &source, Language::TypeScript, &project);
+        let ctx = CheckCtx {
+            path: &target_path,
+            path_arc: std::sync::Arc::from(target_path.as_path()),
+            source: &source,
+            config: &config,
+            project: &project,
+            file: &file_ctx,
+            lang: crate::files::Language::TypeScript,
+        };
+        Check.check(&ctx)
+    }
+
+    const PRIVATE_OVERLAY: &str =
+        r#"{"name":"language-server-tests","private":true,"dependencies":{"astro":"workspace:*","svelte":"^5"}}"#;
+
+    #[test]
+    fn allows_parent_dep_imported_from_private_overlay_issue_2080() {
+        // Regression #2080 — a `test/package.json` overlay (`private:true`, no
+        // `workspaces`) declaring only test-extras. A test file importing the
+        // parent package's declared runtime dep must not be flagged: the overlay
+        // belongs to the surrounding package, whose deps it inherits.
+        let diags = run_nested_overlay(PRIVATE_OVERLAY, "vscode-languageserver-protocol");
+        assert!(diags.is_empty(), "parent dep from overlay must not fire: {diags:?}");
+    }
+
+    #[test]
+    fn flags_dep_in_neither_overlay_nor_parent_issue_2080() {
+        // Negative space for #2080: a dep declared by NEITHER the overlay nor the
+        // parent still fires — the union only adds the parent's real deps.
+        let diags = run_nested_overlay(PRIVATE_OVERLAY, "totally-undeclared-pkg");
+        assert_eq!(diags.len(), 1, "undeclared dep must still fire: {diags:?}");
+        assert!(diags[0].message.contains("totally-undeclared-pkg"));
+    }
+
+    #[test]
+    fn flags_parent_dep_from_non_private_nested_issue_2080() {
+        // Negative space for #2080: a non-private nested package is a real
+        // standalone package — its files do NOT inherit parent deps, so the
+        // parent-only dep still fires.
+        let diags = run_nested_overlay(
+            r#"{"name":"sub","dependencies":{"svelte":"^5"}}"#,
+            "vscode-languageserver-protocol",
+        );
+        assert_eq!(diags.len(), 1, "non-private nested must not inherit: {diags:?}");
+        assert!(diags[0].message.contains("vscode-languageserver-protocol"));
+    }
+
+    #[test]
+    fn flags_parent_dep_from_private_workspace_root_issue_2080() {
+        // Negative space for #2080: a private nested manifest that ALSO declares
+        // `workspaces` is a workspace root, not an overlay — it does not walk up,
+        // so the parent-only dep still fires.
+        let diags = run_nested_overlay(
+            r#"{"name":"sub","private":true,"workspaces":["pkgs/*"],"dependencies":{"svelte":"^5"}}"#,
+            "vscode-languageserver-protocol",
+        );
+        assert_eq!(diags.len(), 1, "private workspace root must not inherit: {diags:?}");
+        assert!(diags[0].message.contains("vscode-languageserver-protocol"));
     }
 
     #[test]
