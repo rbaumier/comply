@@ -63,6 +63,20 @@
 //!     through a static TS import. The exemption is gated on BOTH the
 //!     `functions/` directory and the `handler` name, so a lone `handler`
 //!     export elsewhere stays subject to the rule.
+//!   - Framework file-system-routing entry points (`is_framework_route_export`) —
+//!     a file matching a well-known routing convention exposes reserved exports
+//!     that the framework's router consumes by name, never through a static
+//!     import. Recognized conventions: Next.js Pages Router (`pages/**`, incl.
+//!     `pages/api/**`), Next.js App Router special files (`page`/`layout`/`route`/
+//!     `loading`/`error`/`not-found`/`template`/`default`/`global-error` under an
+//!     `app/` directory), Remix / React Router v7 route modules (`routes/**`) and
+//!     the app root (`root.{tsx,jsx}`), and SvelteKit route files (`+page`/
+//!     `+layout`/`+server` and their `.server` variants). This check is
+//!     path-convention-based and does NOT require the framework dependency to be
+//!     detected, so it covers monorepo
+//!     route files whose framework dep is invisible to nearest-manifest
+//!     detection. Only the convention's reserved export names are exempt, so a
+//!     genuinely-dead helper in a route file still fires.
 //!
 //! False-positive guards:
 //!   - If any file imports the current module via a namespace import
@@ -147,6 +161,169 @@ fn is_in_serverless_functions_dir(path: &Path) -> bool {
     path.components().any(|c| {
         matches!(c, std::path::Component::Normal(s) if s.to_str() == Some("functions"))
     })
+}
+
+/// TS/JS source extensions a file-system-routed framework module can carry.
+const ROUTE_MODULE_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mts", "cts", "mjs", "cjs"];
+
+/// True when `path`'s extension is a TS/JS source extension a framework router
+/// can load as a route module.
+fn has_route_module_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| ROUTE_MODULE_EXTENSIONS.contains(&ext))
+}
+
+/// True when `path` has `segment` as one of its directory components (exact
+/// segment, not substring), so `pages/` matches `app/pages/index.tsx` but not
+/// `src/subpages/x.ts`.
+fn has_path_segment(path: &Path, segment: &str) -> bool {
+    path.components()
+        .any(|c| matches!(c, std::path::Component::Normal(s) if s.to_str() == Some(segment)))
+}
+
+/// Next.js App Router special-file stems: each is consumed by the App Router by
+/// filename convention under an `app/` directory.
+const NEXT_APP_ROUTER_STEMS: &[&str] = &[
+    "page",
+    "layout",
+    "route",
+    "loading",
+    "error",
+    "not-found",
+    "template",
+    "default",
+    "global-error",
+];
+
+/// Reserved exports a Next.js App Router special file (`page`/`layout`/`route`/…)
+/// exposes for the framework to consume by name: the default component/handler,
+/// the segment-config directives, the metadata API, and the HTTP-method handlers
+/// of a `route` file. Never reached through a static import.
+const NEXT_APP_ROUTER_EXPORTS: &[&str] = &[
+    "default",
+    "generateStaticParams",
+    "generateMetadata",
+    "metadata",
+    "generateViewport",
+    "viewport",
+    "revalidate",
+    "dynamic",
+    "dynamicParams",
+    "fetchCache",
+    "runtime",
+    "preferredRegion",
+    "maxDuration",
+    "config",
+    "GET",
+    "POST",
+    "PUT",
+    "PATCH",
+    "DELETE",
+    "HEAD",
+    "OPTIONS",
+];
+
+/// Reserved exports a Next.js Pages Router module (`pages/**`, incl. `pages/api/**`)
+/// exposes for the framework: the default page component / API handler and the
+/// data-fetching hooks read by name at build/request time.
+const NEXT_PAGES_ROUTER_EXPORTS: &[&str] = &[
+    "default",
+    "getServerSideProps",
+    "getStaticProps",
+    "getStaticPaths",
+    "config",
+];
+
+/// Reserved exports a Remix / React Router v7 route module (`routes/**`) or the
+/// app root module (`root.{tsx,jsx}`) exposes for the framework's render
+/// pipeline, consumed by exact name and never imported.
+const REMIX_ROUTE_EXPORTS: &[&str] = &[
+    "default",
+    "loader",
+    "action",
+    "meta",
+    "links",
+    "headers",
+    "ErrorBoundary",
+    "CatchBoundary",
+    "handle",
+    "shouldRevalidate",
+    "clientLoader",
+    "clientAction",
+    "HydrateFallback",
+    "Layout",
+];
+
+/// Reserved exports a SvelteKit route module (`+page`/`+layout`/`+server`,
+/// incl. the `.server` variants) exposes for its file-system router, plus
+/// `default` for the `.svelte` component module.
+const SVELTEKIT_ROUTE_EXPORTS: &[&str] = &[
+    "default",
+    "load",
+    "ssr",
+    "csr",
+    "prerender",
+    "trailingSlash",
+    "config",
+    "actions",
+    "entries",
+    "GET",
+    "POST",
+    "PUT",
+    "PATCH",
+    "DELETE",
+    "OPTIONS",
+    "HEAD",
+    "fallback",
+];
+
+/// True when `export_name` is consumed by a framework file-system router for a
+/// file matching a well-known routing convention, so it has no static importer
+/// yet is live. Detection is purely path-convention-based — independent of
+/// whether the framework dependency is visible in the nearest `package.json`,
+/// which is the gap that surfaced the false positive (a monorepo route file
+/// whose `next`/`@remix-run` dep is declared out of reach of nearest-manifest
+/// detection). Matching is anchored on exact path SEGMENTS and filenames, so an
+/// ordinary module never qualifies, and only the convention's reserved export
+/// names are exempt, so a genuinely-dead helper in a route file still fires.
+fn is_framework_route_export(path: &Path, export_name: &str) -> bool {
+    if !has_route_module_extension(path) {
+        return false;
+    }
+    let basename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+
+    // Next.js App Router special files under an `app/` directory.
+    if has_path_segment(path, "app")
+        && NEXT_APP_ROUTER_STEMS.contains(&stem)
+        && NEXT_APP_ROUTER_EXPORTS.contains(&export_name)
+    {
+        return true;
+    }
+
+    // Next.js Pages Router (`pages/**`, including `pages/api/**`).
+    if has_path_segment(path, "pages") && NEXT_PAGES_ROUTER_EXPORTS.contains(&export_name) {
+        return true;
+    }
+
+    // Remix / React Router v7: route modules under a `routes/` directory, and the
+    // app root module `root.{tsx,jsx}`.
+    if (has_path_segment(path, "routes")
+        || crate::rules::path_utils::is_react_router_root_module(path))
+        && REMIX_ROUTE_EXPORTS.contains(&export_name)
+    {
+        return true;
+    }
+
+    // SvelteKit route files (`+page`, `+layout`, `+server`, and `.server` variants).
+    if crate::rules::path_utils::is_sveltekit_route_file(basename)
+        && SVELTEKIT_ROUTE_EXPORTS.contains(&export_name)
+    {
+        return true;
+    }
+
+    false
 }
 
 /// A framework convention whose named exports are discovered dynamically by a
@@ -497,6 +674,15 @@ impl TextCheck for Check {
                 continue;
             }
             if is_co_occurrence_exempt(&export.name, &export_names) {
+                continue;
+            }
+            // Framework file-system-routing entry point (Next.js pages/App
+            // Router, Remix/React Router routes, SvelteKit routes): the
+            // convention's reserved exports are consumed by the router by name,
+            // never through a static import. Path-convention-based, so it covers
+            // monorepo route files whose framework dependency is invisible to
+            // nearest-manifest detection.
+            if is_framework_route_export(&canon, &export.name) {
                 continue;
             }
             if in_serverless_functions_dir && export.name == SERVERLESS_HANDLER_EXPORT {
@@ -1277,6 +1463,124 @@ mod tests {
             "a `GET` export in a non-route file must still be flagged: {diags:?}"
         );
         assert!(diags[0].message.contains("GET"));
+    }
+
+    #[test]
+    fn ignores_framework_route_default_exports_without_detection_issue_1320() {
+        // Regression for #1320 (cal.com) — Next.js page/API-route default exports
+        // and App Router special-file exports are consumed by the file-system
+        // router by name, never through a static import. In a monorepo the `next`
+        // dependency can be invisible to nearest-manifest detection, so the
+        // path-convention exemption must fire WITHOUT a detected framework.
+        let files: Vec<(&str, &str)> = vec![
+            ("pages/index.tsx", "export default function Index() { return null; }\n"),
+            ("pages/api/x.ts", "export default function handler() {}\nexport {};\n"),
+            ("app/dashboard/page.tsx", "export default function Page() { return null; }\n"),
+            (
+                "app/dashboard/route.ts",
+                "export async function GET() { return new Response('ok'); }\n",
+            ),
+            ("src/other.ts", "export const z = 1;\nz;\n"),
+        ];
+        for target in [
+            "pages/index.tsx",
+            "pages/api/x.ts",
+            "app/dashboard/page.tsx",
+            "app/dashboard/route.ts",
+        ] {
+            let (_dir, diags) = run_on_project(&files, target);
+            assert!(
+                diags.is_empty(),
+                "framework route file {target} must not be flagged dead, got: {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_dead_named_helper_in_pages_router_file_issue_1320() {
+        // Negative-space guard for #1320 — the route exemption is scoped to the
+        // convention's reserved exports. An ordinary `helper` export in a Pages
+        // Router file, with no importer, is genuinely dead and must still fire.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "pages/about.tsx",
+                "export default function About() { return null; }\n\
+                 export const helper = () => 1;\n",
+            ),
+            ("src/other.ts", "export const z = 1;\nz;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "pages/about.tsx");
+        assert_eq!(
+            diags.len(),
+            1,
+            "an ordinary unused export in a Pages Router file must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("helper"));
+    }
+
+    #[test]
+    fn still_flags_dead_export_in_non_route_files_issue_1320() {
+        // Negative-space guard for #1320 — the exemption is path-convention-gated.
+        // A genuinely-unused `export const foo` in `src/utils.ts` and a non-route
+        // `export default` in `src/lib/helper.ts` that nothing imports are both
+        // still dead.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/utils.ts", "export const foo = 1;\n"),
+            ("src/lib/helper.ts", "export default function helper() {}\n"),
+            ("src/other.ts", "export const z = 1;\nz;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/utils.ts");
+        assert_eq!(diags.len(), 1, "unused src/utils.ts export is dead: {diags:?}");
+        assert!(diags[0].message.contains("foo"));
+
+        let (_dir, diags) = run_on_project(&files, "src/lib/helper.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "non-route default export in src/lib/helper.ts is dead: {diags:?}"
+        );
+        assert!(diags[0].message.contains("default"));
+    }
+
+    #[test]
+    fn ignores_remix_and_sveltekit_route_exports_without_detection_issue_1320() {
+        // Regression for #1320 — Remix `routes/**` modules, the `root.tsx` app
+        // root, and SvelteKit `+page`/`+server` route files expose reserved
+        // exports the router consumes by name. The path-convention exemption
+        // fires without a detected framework.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "app/routes/dashboard.tsx",
+                "export async function loader() { return {}; }\n\
+                 export default function Dashboard() { return null; }\n",
+            ),
+            (
+                "app/root.tsx",
+                "export default function Root() { return null; }\n\
+                 export function Layout() { return null; }\n",
+            ),
+            (
+                "src/routes/+page.ts",
+                "export const ssr = false;\nexport async function load() { return {}; }\n",
+            ),
+            (
+                "src/routes/+server.ts",
+                "export async function GET() { return new Response('ok'); }\n",
+            ),
+            ("src/other.ts", "export const z = 1;\nz;\n"),
+        ];
+        for target in [
+            "app/routes/dashboard.tsx",
+            "app/root.tsx",
+            "src/routes/+page.ts",
+            "src/routes/+server.ts",
+        ] {
+            let (_dir, diags) = run_on_project(&files, target);
+            assert!(
+                diags.is_empty(),
+                "route file {target} must not be flagged dead, got: {diags:?}"
+            );
+        }
     }
 
     #[test]
