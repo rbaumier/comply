@@ -242,6 +242,11 @@ pub struct ImportIndex {
     /// file under such a directory is reachable and its exports are live —
     /// `unused-file` and `dead-export` must not flag them.
     dynamic_import_dirs: Vec<PathBuf>,
+    /// Rust-only: declaring `.rs` file → the files it includes via `mod foo;`.
+    /// Reachability traverses these so a crate root reaches every `mod.rs` and
+    /// submodule file in its module tree, which `mod foo;` (unlike a `use`
+    /// import) does not record as an import edge.
+    mod_edges: HashMap<PathBuf, Vec<PathBuf>>,
 }
 
 impl ImportIndex {
@@ -283,6 +288,9 @@ impl ImportIndex {
         // paths but module paths (`crate::a::b::Sym`) that need a module graph
         // built from `mod foo;` declarations. Build it once here.
         let rust_graph = RustModuleGraph::build(&per_file, &known_paths);
+        // Module-inclusion edges (`mod foo;`) for reachability — captured before
+        // `rust_graph` is moved into the parallel resolve closure below.
+        let mod_edges = rust_graph.mod_edges();
 
         // Load module resolver (tsconfig paths + node_modules) for TS resolution.
         // Discovers all tsconfigs reachable from the indexed files so each
@@ -484,6 +492,7 @@ impl ImportIndex {
             reexport_targets,
             reexport_edges,
             dynamic_import_dirs,
+            mod_edges,
         }
     }
 
@@ -669,6 +678,15 @@ impl ImportIndex {
             // A barrel reached here re-exports through `export … from './m'`;
             // its source files are reachable too.
             if let Some(edges) = self.reexport_edges.get(&current) {
+                for src in edges {
+                    if !visited.contains(src) {
+                        queue.push_back(src.clone());
+                    }
+                }
+            }
+            // A Rust file reached here pulls submodules in via `mod foo;`; those
+            // files (and their own submodules, transitively) are reachable too.
+            if let Some(edges) = self.mod_edges.get(&current) {
                 for src in edges {
                     if !visited.contains(src) {
                         queue.push_back(src.clone());
@@ -1092,6 +1110,12 @@ struct FileExtract {
     /// computed, so it cannot resolve to one file; resolution treats the whole
     /// directory as referenced. Resolved to absolute dirs in `ImportIndex::build`.
     dynamic_dirs: Vec<String>,
+    /// Rust-only: names of file-backed submodules declared by this file via
+    /// `mod foo;` (both `pub mod` and private `mod`). A `mod foo;` pulls
+    /// `foo.rs` / `foo/mod.rs` into the crate's compilation but is not a `use`
+    /// import, so reachability needs these to follow the module tree from a
+    /// crate root down to `mod.rs` and submodule files.
+    mod_decls: Vec<String>,
 }
 
 /// A `new X(...)` / `X(...)` site captured during per-file extract. The
@@ -1114,7 +1138,7 @@ fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileE
         let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
         parser.set_language(&lang).ok()?;
         let tree = parser.parse(source.as_bytes(), None)?;
-        let (exports, imports) = extract_rust(&tree, source.as_bytes());
+        let (exports, imports, mod_decls) = extract_rust(&tree, source.as_bytes());
         let canon = std::fs::canonicalize(&file.path).unwrap_or_else(|_| file.path.clone());
         // Cross-file call-site tracking is TS-only for now.
         return Some((
@@ -1124,6 +1148,7 @@ fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileE
                 imports,
                 calls: Vec::new(),
                 dynamic_dirs: Vec::new(),
+                mod_decls,
             },
         ));
     }
@@ -1235,6 +1260,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
             imports,
             calls,
             dynamic_dirs,
+            mod_decls: Vec::new(),
         },
     ))
 }
@@ -2137,6 +2163,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
         imports,
         calls,
         dynamic_dirs,
+        mod_decls: Vec::new(),
     })
 }
 
@@ -3100,25 +3127,37 @@ impl OxcPathResolver {
 
 // -------------------------- Rust extraction --------------------------
 
-/// Walk a parsed Rust source file and collect `pub` item exports + `use`
-/// declaration imports. The specifier on Rust imports is the full path as
-/// written (e.g. `crate::a::b::Sym`); resolution to a file path happens in a
-/// separate pass using `RustModuleGraph`.
+/// Walk a parsed Rust source file and collect `pub` item exports, `use`
+/// declaration imports, and the names of file-backed submodules declared via
+/// `mod foo;` (the third tuple element). The specifier on Rust imports is the
+/// full path as written (e.g. `crate::a::b::Sym`); resolution to a file path
+/// happens in a separate pass using `RustModuleGraph`.
 fn extract_rust(
     tree: &tree_sitter::Tree,
     source: &[u8],
-) -> (Vec<ExportedSymbol>, Vec<ImportedSymbol>) {
+) -> (Vec<ExportedSymbol>, Vec<ImportedSymbol>, Vec<String>) {
     let mut exports = Vec::new();
     let mut imports = Vec::new();
+    let mut mod_decls = Vec::new();
     walk_tree(tree, |node| match node.kind() {
         "function_item" | "struct_item" | "enum_item" | "trait_item" | "type_item"
-        | "const_item" | "static_item" | "mod_item" => {
-            extract_rust_item(node, source, &mut exports)
+        | "const_item" | "static_item" => extract_rust_item(node, source, &mut exports),
+        "mod_item" => {
+            extract_rust_item(node, source, &mut exports);
+            // A file-backed `mod foo;` (no inline `{ … }` body) pulls
+            // `foo.rs` / `foo/mod.rs` into the crate. Record its name —
+            // including private `mod` — so reachability can follow the module
+            // tree, independent of whether the module is `pub` (exported).
+            if node.child_by_field_name("body").is_none()
+                && let Some(name) = rust_item_name(node, source)
+            {
+                mod_decls.push(name);
+            }
         }
         "use_declaration" => extract_rust_use(node, source, &mut exports, &mut imports),
         _ => {}
     });
-    (exports, imports)
+    (exports, imports, mod_decls)
 }
 
 /// Emit an export for a `pub`-qualified item. Non-`pub` items are ignored —
@@ -3384,23 +3423,18 @@ impl RustModuleGraph {
             .map(|(p, _)| p)
             .collect();
 
-        // `declared_mods[parent_file]` lists the mod names declared by that
-        // file. We surface only `pub mod` here (private `mod foo;` isn't
-        // tracked by the exports list); that's enough for cross-crate-internal
-        // resolution since `use crate::foo::…` requires `foo` to be visible.
+        // `declared_mods[parent_file]` lists every file-backed submodule the
+        // file declares via `mod foo;` — both `pub mod` and private `mod`. The
+        // private ones matter for reachability (a private `mod foo;` still pulls
+        // `foo.rs` into the crate) and let `use crate::foo::…` resolve through
+        // crate-internal modules regardless of their visibility.
         let mut declared_mods: HashMap<PathBuf, Vec<String>> = HashMap::new();
         for (path, extract) in per_file {
             if !matches!(path.extension().and_then(|e| e.to_str()), Some("rs")) {
                 continue;
             }
-            let mods: Vec<String> = extract
-                .exports
-                .iter()
-                .filter(|e| e.kind == ExportKind::Module)
-                .map(|e| e.name.clone())
-                .collect();
-            if !mods.is_empty() {
-                declared_mods.insert(path.clone(), mods);
+            if !extract.mod_decls.is_empty() {
+                declared_mods.insert(path.clone(), extract.mod_decls.clone());
             }
         }
 
@@ -3465,6 +3499,22 @@ impl RustModuleGraph {
             crate_root,
             children,
         }
+    }
+
+    /// Module-inclusion edges: declaring file → the files it pulls in via
+    /// `mod foo;`. Reachability follows these so a crate root reaches every
+    /// `mod.rs` / submodule file in its module tree, even when no `use` ever
+    /// references them (the `mod foo;` declaration alone makes `foo` part of the
+    /// crate's compilation).
+    fn mod_edges(&self) -> HashMap<PathBuf, Vec<PathBuf>> {
+        let mut edges: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+        for ((parent, _name), child) in &self.children {
+            let bucket = edges.entry(parent.clone()).or_default();
+            if !bucket.contains(child) {
+                bucket.push(child.clone());
+            }
+        }
+        edges
     }
 
     /// Resolve a Rust `use` specifier (e.g. `crate::a::b::Sym`, `super::X`,
@@ -4496,6 +4546,7 @@ mod tests {
             imports,
             calls,
             dynamic_dirs,
+            mod_decls: Vec::new(),
         }
     }
 
