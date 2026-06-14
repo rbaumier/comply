@@ -14,6 +14,9 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     if crate::rules::rust_helpers::is_in_test_context(node, source) {
         return;
     }
+    if is_in_partial_eq_eq_method(node, source) {
+        return;
+    }
     let Some(op) = node.child_by_field_name("operator") else { return };
     let op_text = op.utf8_text(source).unwrap_or("");
     if op_text != "==" && op_text != "!=" {
@@ -50,6 +53,58 @@ fn operand_name<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a
             .and_then(|f| f.utf8_text(source).ok()),
         _ => None,
     }
+}
+
+/// True if `node` sits inside the `eq` method of an `impl PartialEq for T`.
+///
+/// A `self.hash == other.hash` fast-path inside `PartialEq::eq` compares two
+/// fields of the same `&Self` value — a structural-hash short-circuit, not a
+/// secret check. There is no attacker-controlled input vs. stored-secret
+/// asymmetry, so the timing-attack premise does not apply and the comparison is
+/// exempt.
+///
+/// Walks up to the nearest enclosing `function_item`; the exemption applies only
+/// when that method is named `eq` and its enclosing `impl_item` implements
+/// `PartialEq` (bare or generic `PartialEq<Rhs>`, optionally path-qualified).
+fn is_in_partial_eq_eq_method(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut current = node.parent();
+    while let Some(ancestor) = current {
+        if ancestor.kind() == "function_item" {
+            let is_eq = ancestor
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok())
+                == Some("eq");
+            return is_eq && enclosing_impl_is_partial_eq(ancestor, source);
+        }
+        current = ancestor.parent();
+    }
+    false
+}
+
+/// True if the nearest `impl_item` enclosing `node` implements `PartialEq`.
+fn enclosing_impl_is_partial_eq(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut current = node.parent();
+    while let Some(ancestor) = current {
+        if ancestor.kind() == "impl_item" {
+            let Some(trait_node) = ancestor.child_by_field_name("trait") else {
+                return false;
+            };
+            let trait_text = trait_node.utf8_text(source).unwrap_or("");
+            // Strip any `<Rhs>` generic args, then the trailing path segment, so
+            // `PartialEq`, `PartialEq<Self>`, and `core::cmp::PartialEq` all match.
+            let bare = trait_text
+                .split('<')
+                .next()
+                .unwrap_or(trait_text)
+                .rsplit("::")
+                .next()
+                .unwrap_or(trait_text)
+                .trim();
+            return bare == "PartialEq";
+        }
+        current = ancestor.parent();
+    }
+    false
 }
 
 
@@ -183,5 +238,98 @@ fn check(member: tree_sitter::Node) {
     fn does_not_flag_lsp_signature() {
         let src = "fn f(old_lsp_sig: &Sig, lsp_signature: &Sig) -> bool { old_lsp_sig != lsp_signature }";
         assert!(run_on(src).is_empty());
+    }
+
+    /// bevy_platform/src/hash.rs:95 — a structural-hash fast-path inside
+    /// `PartialEq::eq`; both operands are fields of `&Self`, no secret.
+    #[test]
+    fn does_not_flag_hash_fastpath_in_partial_eq() {
+        let src = r#"
+impl<V: PartialEq, H> PartialEq for Hashed<V, H> {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash && self.value.eq(&other.value)
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// bevy_diagnostic/src/diagnostic.rs:97 — same shape on `DiagnosticPath`.
+    #[test]
+    fn does_not_flag_hash_in_partial_eq_diagnostic_path() {
+        let src = r#"
+impl PartialEq for DiagnosticPath {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash && self.path == other.path
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Generic `PartialEq<Rhs>` is still the equality trait — exempt.
+    #[test]
+    fn does_not_flag_hash_in_generic_partial_eq() {
+        let src = r#"
+impl PartialEq<Other> for Thing {
+    fn eq(&self, other: &Other) -> bool {
+        self.hash == other.hash
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Negative-space guard: a genuine secret comparison inside `eq` of a
+    /// non-equality trait is NOT exempt — only `PartialEq::eq` is.
+    #[test]
+    fn flags_password_in_non_partial_eq_trait_eq_method() {
+        let src = r#"
+impl MyTrait for Thing {
+    fn eq(&self, other: &Self) -> bool {
+        self.password == other.password
+    }
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// Negative-space guard: a `hash` comparison in an inherent method (no
+    /// trait) is NOT exempt — the exemption is scoped to `PartialEq::eq`.
+    #[test]
+    fn flags_hash_in_inherent_eq_method() {
+        let src = r#"
+impl Thing {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash
+    }
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// Negative-space guard: a secret comparison in a non-`eq` method of a
+    /// `PartialEq` impl is NOT exempt — only the `eq` method short-circuit is.
+    #[test]
+    fn flags_password_in_partial_eq_non_eq_method() {
+        let src = r#"
+impl PartialEq for Thing {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+    fn check(&self, input: &str) -> bool {
+        self.password == input
+    }
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// Negative-space guard: pattern 3 from #1445 (cache invalidation outside
+    /// any `PartialEq` impl) remains flagged — no crisp non-secret signal.
+    #[test]
+    fn flags_hash_cache_invalidation_outside_partial_eq() {
+        let src = "fn process(info: &Info, new_hash: u64) -> bool { info.hash == new_hash }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
