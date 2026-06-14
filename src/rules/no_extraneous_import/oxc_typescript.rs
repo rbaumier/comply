@@ -72,6 +72,14 @@ impl OxcCheck for Check {
         {
             return;
         }
+        // Custom linter tooling (`lint-rules/`, `lint-processors/`) and general
+        // development tooling (`tools/`) run only during development and never
+        // ship in the published package (e.g. type-fest excludes them from its
+        // `files` field), so importing a devDependency from them is correct
+        // (issue #1299).
+        if is_dev_tooling_dir_path(ctx.path) {
+            return;
+        }
         // A directory housing a `package.json` `scripts` entry file (e.g.
         // `omnidoc/generateApiDoc.ts` run by `"omnidoc": "tsx ./omnidoc/..."`)
         // is a build-time codegen/doc toolchain. Its entry and the sibling
@@ -157,6 +165,22 @@ fn is_config_variant_file(path: &std::path::Path) -> bool {
     path.file_stem()
         .and_then(|s| s.to_str())
         .is_some_and(|stem| stem.contains(".config-"))
+}
+
+/// True when `path` lives under a conventional development-tooling directory:
+/// custom ESLint rule definitions (`lint-rules/`), custom ESLint processors
+/// (`lint-processors/`), or general dev tooling (`tools/`). These directories
+/// hold code run only during development; it never ships in the published
+/// package, so importing a devDependency from them is correct. Matched as exact
+/// path segments so an unrelated `src/toolsRegistry/` does not match.
+fn is_dev_tooling_dir_path(path: &std::path::Path) -> bool {
+    path.components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::Normal(s)
+                if matches!(s.to_str(), Some("lint-rules" | "lint-processors" | "tools"))
+        )
+    })
 }
 
 /// True when an import emits no JavaScript and so creates no runtime
@@ -951,6 +975,77 @@ import { List } from "immutable";
         let src = r#"import { Project } from 'ts-morph';"#;
         let d = run_with_pkg_at_path(pkg, "omnidoc/readProject.ts", src);
         assert!(d.is_empty(), "script-entry toolchain dir should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_lint_rules_dir() {
+        // Issue #1299: type-fest's `lint-rules/readme-jsdoc-sync.js` is a custom
+        // ESLint rule run only during development; it imports `typescript`, a
+        // devDependency. The `files` field excludes `lint-rules/` from the
+        // published package, so importing a devDependency from it is correct.
+        let pkg = r#"{"devDependencies":{"typescript":"^5"}}"#;
+        let src = r#"import ts from "typescript";"#;
+        let d = run_with_pkg_at_path(pkg, "lint-rules/readme-jsdoc-sync.js", src);
+        assert!(d.is_empty(), "lint-rules/ file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_lint_processors_dir() {
+        // Issue #1299: type-fest's `lint-processors/jsdoc-codeblocks.js` is a
+        // custom ESLint processor run only during development; it imports
+        // `@typescript-eslint/parser`, a devDependency. Files under
+        // `lint-processors/` never ship, so the import is correct.
+        let pkg = r#"{"devDependencies":{"@typescript-eslint/parser":"^8"}}"#;
+        let src = r#"import parser from "@typescript-eslint/parser";"#;
+        let d = run_with_pkg_at_path(pkg, "lint-processors/jsdoc-codeblocks.js", src);
+        assert!(d.is_empty(), "lint-processors/ file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_tools_dir() {
+        // Issue #1299: a `tools/` directory holds development tooling that never
+        // ships in the published package, like `scripts/`. Importing a
+        // devDependency from a `tools/` file is correct.
+        let pkg = r#"{"devDependencies":{"typescript":"^5"}}"#;
+        let src = r#"import ts from "typescript";"#;
+        let d = run_with_pkg_at_path(pkg, "tools/codegen.ts", src);
+        assert!(d.is_empty(), "tools/ file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_in_scripts_genuinely_missing_pkg_unaffected() {
+        // Negative-space guard for #1299: a devDependency import in a normal
+        // `src/` file must still flag — the dev-tooling exemption is scoped to
+        // the dev-tooling directories.
+        let pkg = r#"{"devDependencies":{"typescript":"^5"}}"#;
+        let src = r#"import ts from "typescript";"#;
+        let d = run_with_pkg_at_path(pkg, "src/feature.ts", src);
+        assert_eq!(d.len(), 1, "src/ file should still flag: {d:?}");
+        assert!(d[0].message.contains("typescript"));
+    }
+
+    #[test]
+    fn still_silent_on_genuinely_missing_pkg_in_dev_tooling_dir() {
+        // Negative-space guard for #1299: a package absent from package.json
+        // entirely (in NO dependency list) is a genuine missing import. This rule
+        // only owns the devDependency case (no-implicit-deps owns the missing
+        // case), so it stays silent — confirm the dev-tooling exemption does not
+        // suppress a diagnostic this rule would otherwise own, and never adds one.
+        let pkg = r#"{"devDependencies":{"typescript":"^5"}}"#;
+        let src = r#"import { x } from "totally-undeclared-pkg";"#;
+        let d = run_with_pkg_at_path(pkg, "scripts/build.js", src);
+        assert!(d.is_empty(), "undeclared pkg is not this rule's concern: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_outside_lint_tooling_dirs() {
+        // Guard against over-relaxing: a path where "tools" is a substring of
+        // another segment (not its own directory) must still flag.
+        let pkg = r#"{"devDependencies":{"typescript":"^5"}}"#;
+        let src = r#"import ts from "typescript";"#;
+        let d = run_with_pkg_at_path(pkg, "src/toolsRegistry/index.ts", src);
+        assert_eq!(d.len(), 1, "non-tools dir should still flag: {d:?}");
+        assert!(d[0].message.contains("typescript"));
     }
 
     /// Stage a monorepo on disk: a root `package.json` declaring `workspaces`,
