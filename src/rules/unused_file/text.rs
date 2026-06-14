@@ -600,6 +600,51 @@ mod tests {
         );
     }
 
+    // Regression for #1816: pnpm monorepos declare workspace members in
+    // `pnpm-workspace.yaml` (no `workspaces` field in the root package.json) and
+    // each member publishes its library as subpath exports pointing at non-`.`
+    // index files (e.g. `@tiptap/pm` exposing `./inputrules` →
+    // `./inputrules/index.ts`). Those subpath entry files, and everything
+    // reachable from them, must be seeded. A genuinely orphaned file inside a
+    // workspace package is still flagged.
+    #[test]
+    fn pnpm_workspace_subpath_export_entries_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("pnpm-workspace.yaml", "packages:\n  - 'packages/*'\n"),
+            // Root package.json declares no `workspaces` field and is not a
+            // library (no main/exports), so the rule's anchor (root index.ts)
+            // does not short-circuit the run.
+            ("package.json", r#"{"name":"tiptap","private":true}"#),
+            ("index.ts", "export const root = 1;\n"),
+            // @tiptap/pm: subpath export with no `.` target, pointing at a
+            // nested index file.
+            (
+                "packages/pm/package.json",
+                r#"{"name":"@tiptap/pm","exports":{"./inputrules":"./inputrules/index.ts"}}"#,
+            ),
+            (
+                "packages/pm/inputrules/index.ts",
+                "import { helper } from './helper';\nexport { helper };\n",
+            ),
+            ("packages/pm/inputrules/helper.ts", "export const helper = 1;\n"),
+            // Genuine orphan inside a workspace package: not exported, not
+            // imported by anything — must still be flagged.
+            ("packages/pm/inputrules/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(
+            diags.len(),
+            1,
+            "only the orphan must be flagged; subpath-export entries and their \
+             imports must be seeded: {diags:?}"
+        );
+        assert!(
+            diags[0].path.to_str().is_some_and(|p| p.contains("orphan")),
+            "the flagged file must be the genuine orphan inside the workspace \
+             package, not a subpath-export entry: {diags:?}"
+        );
+    }
+
     // Regression for #776: files under top-level `examples/` are entry points.
     #[test]
     fn examples_dir_files_are_not_flagged() {

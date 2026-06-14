@@ -467,12 +467,17 @@ fn collect_substitute_targets(node: &Value, out: &mut BTreeSet<String>) {
     }
 }
 
-/// The relative paths this package declares as its own entry point: the `main`
-/// value plus the `exports` `.` target(s) (including conditional `import`/
-/// `require`/`default` variants). A string `exports` (no subpath map) is itself
-/// the `.` target. Also includes the `browser` and `react-native` substitute
-/// targets — the browser/native build of the library that bundlers swap in at
-/// build time, reachable only through the substitution map, never `import`ed.
+/// The relative paths this package declares as its own entry points: the `main`
+/// value plus every `exports` target — the `.` subpath and every other subpath
+/// (e.g. `./inputrules`), each including its conditional `import`/`require`/
+/// `default` variants. A package that publishes a library as a set of subpath
+/// exports (e.g. `@tiptap/pm` exposing `@tiptap/pm/inputrules` →
+/// `./inputrules/index.ts`) makes each target file a real entry point, reachable
+/// only through the package boundary and never `import`ed within the repo. A
+/// string `exports` (no subpath map) is itself the `.` target. Also includes the
+/// `browser` and `react-native` substitute targets — the browser/native build of
+/// the library that bundlers swap in at build time, reachable only through the
+/// substitution map, never `import`ed.
 fn collect_entry_files(json: &Value) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     if let Some(main) = json.get("main").and_then(Value::as_str)
@@ -480,18 +485,8 @@ fn collect_entry_files(json: &Value) -> BTreeSet<String> {
     {
         out.insert(rel);
     }
-    match json.get("exports") {
-        Some(Value::String(s)) => {
-            if let Some(rel) = normalize_export_path(s) {
-                out.insert(rel);
-            }
-        }
-        Some(Value::Object(map)) => {
-            if let Some(dot) = map.get(".") {
-                collect_export_targets(dot, &mut out);
-            }
-        }
-        _ => {}
+    if let Some(exports) = json.get("exports") {
+        collect_export_targets(exports, &mut out);
     }
     if let Some(browser) = json.get("browser") {
         collect_substitute_targets(browser, &mut out);
@@ -3130,6 +3125,24 @@ mod tests {
         assert!(ctx.is_package_entry_file(&dir.path().join("index.mjs")));
         assert!(ctx.is_package_entry_file(&dir.path().join("index.cjs")));
         assert!(!ctx.is_package_entry_file(&dir.path().join("other.js")));
+    }
+
+    #[test]
+    fn is_package_entry_file_matches_exports_subpath_targets() {
+        // A package that publishes its library as a set of subpath exports
+        // (no `.` key) — e.g. `@tiptap/pm` exposing `@tiptap/pm/inputrules` and
+        // `@tiptap/pm/state` — makes each target file a real entry point.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"@tiptap/pm","exports":{"./inputrules":"./inputrules/index.ts","./state":{"import":"./state/index.ts"}}}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.is_package_entry_file(&dir.path().join("inputrules/index.ts")));
+        assert!(ctx.is_package_entry_file(&dir.path().join("state/index.ts")));
+        assert!(!ctx.is_package_entry_file(&dir.path().join("other/index.ts")));
     }
 
     #[test]
