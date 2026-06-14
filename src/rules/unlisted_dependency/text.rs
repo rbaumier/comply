@@ -29,6 +29,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::no_implicit_deps::{is_virtual_module, types_package_name};
+use crate::rules::path_utils::is_scaffold_template_path;
 
 const RULE_ID: &str = "unlisted-dependency";
 
@@ -94,6 +95,20 @@ impl TextCheck for Check {
                 continue;
             }
             if workspace_names.contains(spec) {
+                continue;
+            }
+            // Scaffold-template content: when every importer of this specifier
+            // lives in a `template/`/`templates/`/`scaffold/`/`boilerplate/`
+            // directory, it is source a generator CLI (create-t3-app,
+            // create-react-app) copies into the generated project. Such imports
+            // describe the generated app's dependency graph, not the CLI's own —
+            // the CLI's package.json never lists them. A specifier also imported
+            // from a non-template file is still flagged (that importer is real
+            // project code), so the guard requires ALL importers to be template
+            // files before skipping.
+            if !info.importers.is_empty()
+                && info.importers.iter().all(|imp| is_scaffold_template_path(imp))
+            {
                 continue;
             }
             // DefinitelyTyped case: a type-only import of `X` is satisfied by
@@ -714,6 +729,65 @@ mod tests {
         let diags = Check.check(&ctx);
         assert_eq!(diags.len(), 1, "axios is unlisted everywhere: {diags:?}");
         assert!(diags[0].message.contains("axios"));
+    }
+
+    #[test]
+    fn allows_scaffold_template_only_import_issue_1381() {
+        // Regression #1381: a scaffold CLI (create-t3-app, create-react-app)
+        // keeps a `template/` directory of source files copied into the generated
+        // project. `react` is imported only from a template file, so it describes
+        // the generated app's deps, not the CLI's — the CLI's package.json never
+        // lists it, and it must not be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "cli/template/extras/src/app/_components/post.tsx",
+                "import { useState } from 'react';",
+            ),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, Some(r#"{ "dependencies": {} }"#), None);
+        assert!(
+            diags.is_empty(),
+            "an import only from a scaffold template dir must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_import_from_both_template_and_src_issue_1381() {
+        // Negative-space guard for #1381: a specifier imported from BOTH a
+        // template file AND a real `src/` file must still fire — the real
+        // importer is genuine project code missing the dependency.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "cli/template/extras/post.tsx",
+                "import { useState } from 'react';",
+            ),
+            ("src/app.tsx", "import { useEffect } from 'react';"),
+        ];
+        let (_dir, diags) = run_on_project(&files, Some(r#"{ "dependencies": {} }"#), None);
+        assert_eq!(
+            diags.len(),
+            1,
+            "a specifier also imported from non-template src/ must still fire: {diags:?}"
+        );
+        assert!(diags[0].message.contains("react"));
+    }
+
+    #[test]
+    fn flags_import_in_template_substring_dir_issue_1381() {
+        // Negative-space guard for #1381: a `templated/` substring directory is
+        // ordinary source (segment match, not substring), so a missing dep fires.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/templated/index.ts", "import { useState } from 'react';"),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, Some(r#"{ "dependencies": {} }"#), None);
+        assert_eq!(
+            diags.len(),
+            1,
+            "a `templated/` substring dir is ordinary source and must still fire: {diags:?}"
+        );
+        assert!(diags[0].message.contains("react"));
     }
 
     #[test]
