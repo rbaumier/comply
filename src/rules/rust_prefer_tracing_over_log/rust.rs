@@ -13,13 +13,22 @@
 //! a `scoped_identifier` macro path, so the textual prefix check
 //! (`text.starts_with("log::")`) is the simplest correct match.
 //!
-//! ## Async-only exemption
+//! ## Library-crate exemption
 //!
-//! `tracing`'s key advantage over `log` is span context propagation across
-//! `async` boundaries. In synchronous crates (no `tokio`, `async-std`, or
-//! `futures` in the nearest `Cargo.toml`), `log` is the established standard
-//! and switching would add a heavier dependency for no functional gain. The
-//! rule is therefore silenced for crates that have no async runtime dependency.
+//! `log` is the ecosystem-standard logging facade for Rust *libraries*: it lets
+//! downstream consumers pick their own backend without forcing a `tracing`
+//! dependency on them. A crate that builds a `[lib]` target (declares `[lib]`
+//! or has `src/lib.rs`) is therefore never flagged — switching it to `tracing`
+//! would impose a heavier dependency on everyone who depends on it.
+//!
+//! ## Async-only exemption (binary crates)
+//!
+//! For application/binary crates, `tracing`'s key advantage over `log` is span
+//! context propagation across `async` boundaries. In synchronous binaries (no
+//! `tokio`, `async-std`, or `futures` in the nearest `Cargo.toml`), `log` is the
+//! established standard and switching would add a heavier dependency for no
+//! functional gain. A binary crate is therefore only flagged when it depends on
+//! an async runtime.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -52,15 +61,14 @@ impl AstCheck for Check {
         if !hit {
             return;
         }
-        // Silence the rule for crates that have no async runtime dependency.
-        // `tracing`'s advantage (span context across `async` boundaries) does
-        // not apply in purely synchronous code, where `log` is the established
-        // standard with a smaller footprint.
-        // Missing/unparseable Cargo.toml defaults to flagging (`None` -> `true`).
-        if !ctx
-            .project
-            .nearest_cargo_manifest(ctx.path)
-            .is_none_or(|m| m.has_async_runtime())
+        // Library crates use `log` as the ecosystem-standard facade so downstream
+        // consumers can pick their own backend; switching to `tracing` would force
+        // a heavier dependency on them. Binary crates only benefit from `tracing`
+        // when they are async (span context across `async` boundaries), so a
+        // synchronous binary is left alone too.
+        // Missing/unparseable Cargo.toml defaults to flagging (`None` -> flag).
+        if let Some(manifest) = ctx.project.nearest_cargo_manifest(ctx.path)
+            && (manifest.declares_library() || !manifest.has_async_runtime())
         {
             return;
         }
@@ -244,6 +252,60 @@ log = "0.4"
             run_on_with_cargo(ASYNC_CARGO_TOML, src).len(),
             1,
             "must flag log::info! when tokio is a dependency"
+        );
+    }
+
+    // ── Library-crate exemption regression tests (Closes #1265) ─────────
+
+    /// A library crate that declares `[lib]` *and* pulls in an async runtime.
+    /// ripgrep's `searcher` is a library that intentionally uses `log` so that
+    /// downstream consumers can choose their own backend; flagging it would
+    /// force a `tracing` dependency on every consumer.
+    const LIB_WITH_ASYNC_CARGO_TOML: &str = r#"
+[package]
+name = "searcher"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "searcher"
+path = "src/lib.rs"
+
+[dependencies]
+log = "0.4.20"
+futures = "0.3"
+"#;
+
+    /// Regression for #1265: `log` usage in a library crate must not be flagged,
+    /// even when the crate depends on an async runtime — a library should not
+    /// impose `tracing` on its downstream consumers.
+    #[test]
+    fn no_fp_on_library_crate_log_macro() {
+        let src = r#"fn f() { log::trace!("searcher core"); }"#;
+        assert!(
+            run_on_with_cargo(LIB_WITH_ASYNC_CARGO_TOML, src).is_empty(),
+            "must not flag log::trace! in a library crate"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_library_crate_log_use() {
+        assert!(
+            run_on_with_cargo(LIB_WITH_ASYNC_CARGO_TOML, "use log::trace;").is_empty(),
+            "must not flag `use log::…` in a library crate"
+        );
+    }
+
+    /// Negative-space guard for #1265: an async *binary* crate (no `[lib]`, no
+    /// `src/lib.rs`) is still flagged — the library exemption must not leak to
+    /// application crates, which is where the rule's intent applies.
+    #[test]
+    fn still_flags_log_macro_in_async_binary_crate() {
+        let src = r#"fn f() { log::info!("hello"); }"#;
+        assert_eq!(
+            run_on_with_cargo(ASYNC_CARGO_TOML, src).len(),
+            1,
+            "must flag log::info! in an async binary crate"
         );
     }
 
