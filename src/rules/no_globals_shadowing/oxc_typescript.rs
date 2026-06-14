@@ -95,6 +95,45 @@ fn is_global_typed_di_binding<'a>(
     false
 }
 
+/// True when the symbol is a parameter label of a TypeScript function *type* —
+/// a function type (`type F = (process: Foo) => Bar`), a constructor type, or a
+/// call/construct/method signature in an interface or object type. These labels
+/// exist only in the type system: the signature has no body, so the name is
+/// never bound at runtime and cannot shadow the global of that name.
+///
+/// The distinguishing AST signal is the parameter's enclosing construct: a real
+/// runtime parameter is nested under an `AstKind::Function` body or an
+/// `AstKind::ArrowFunctionExpression`, whereas a type-level label is nested
+/// under a `TSFunctionType` / `TSConstructorType` / signature node — these never
+/// wrap a runtime function body, so the binding is purely type-position.
+fn is_type_position_param<'a>(
+    symbol_id: oxc_semantic::SymbolId,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let scoping = semantic.scoping();
+    let decl_node_id = scoping.symbol_declaration(symbol_id);
+    let nodes = semantic.nodes();
+    if !matches!(nodes.kind(decl_node_id), AstKind::FormalParameter(_)) {
+        return false;
+    }
+    for kind in nodes.ancestor_kinds(decl_node_id) {
+        match kind {
+            AstKind::TSFunctionType(_)
+            | AstKind::TSConstructorType(_)
+            | AstKind::TSCallSignatureDeclaration(_)
+            | AstKind::TSConstructSignatureDeclaration(_)
+            | AstKind::TSMethodSignature(_) => return true,
+            // A runtime function body/arrow binds the parameter — it genuinely
+            // shadows the global (#1880). Stop before reaching any type node.
+            AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Program(_) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Identifiers that name the global object itself. A binding initialized from
 /// one of these is capturing the global value, not masking it.
 const GLOBAL_OBJECT_NAMES: &[&str] = &["global", "globalThis", "window", "self"];
@@ -258,6 +297,9 @@ impl OxcCheck for Check {
                 continue;
             }
             if is_ambient_declaration(symbol_id, semantic) {
+                continue;
+            }
+            if is_type_position_param(symbol_id, semantic) {
                 continue;
             }
             if is_import_binding(symbol_id, semantic) {
@@ -567,6 +609,70 @@ mod tests {
     fn flags_window_assigned_unrelated_initializer() {
         // Negative space: `const window = makeFakeWindow()` masks the global.
         assert_eq!(run_on_browser("const window = makeFakeWindow();").len(), 1);
+    }
+
+    #[test]
+    fn allows_type_function_param_named_global() {
+        // Issue #2096: a parameter label inside a function TYPE has no runtime
+        // binding — it lives only in the type system and cannot shadow anything.
+        assert!(run_on("type F = (process: Foo) => Bar;").is_empty());
+    }
+
+    #[test]
+    fn allows_nested_type_function_param_named_global() {
+        // Issue #2096 (elysia src/trace.ts): a function-type label nested inside
+        // another function type. Both `process` labels are type-only.
+        assert!(
+            run_on(
+                "export type TraceListener = (callback?: (process: P) => unknown) => Promise<P>;"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_type_assertion_function_param_named_global() {
+        // Issue #2096 (elysia src/trace.ts): the function type inside a type
+        // assertion `<((process: T) => () => void)[]>[]` is type-position only.
+        assert!(run_on("const resolvers = <((process: T) => () => void)[]>[];").is_empty());
+    }
+
+    #[test]
+    fn allows_call_signature_param_named_global() {
+        // A call signature in an interface is a type-level construct: its
+        // parameter labels are documentation-only, never bound at runtime.
+        assert!(run_on("interface I { (process: Foo): void; }").is_empty());
+    }
+
+    #[test]
+    fn allows_method_signature_param_named_global() {
+        assert!(run_on("interface I { run(process: Foo): void; }").is_empty());
+    }
+
+    #[test]
+    fn allows_construct_signature_param_named_global() {
+        assert!(run_on("interface I { new (process: Foo): Bar; }").is_empty());
+    }
+
+    #[test]
+    fn allows_constructor_type_param_named_global() {
+        assert!(run_on("type C = new (process: Foo) => Bar;").is_empty());
+    }
+
+    #[test]
+    fn flags_runtime_function_param_named_global() {
+        // Negative space (#1880): a REAL runtime function body binds its
+        // parameter — that genuinely shadows the global and must still fire.
+        assert_eq!(run_on("function f(process) { return process; }").len(), 1);
+    }
+
+    #[test]
+    fn flags_runtime_arrow_param_named_global() {
+        // Negative space: an arrow function body binds `document` at runtime.
+        assert_eq!(
+            run_on_browser("const g = (document) => { return document; };").len(),
+            1
+        );
     }
 
     #[test]
