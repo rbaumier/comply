@@ -1,8 +1,11 @@
 //! rn-expo-router-layout-required — each Expo Router group directory needs `_layout.tsx`.
 //!
 //! Expo Router relies on a `_layout` file at each routable directory level to
-//! compose navigation. A file importing `expo-router` inside a directory
-//! without `_layout.*` almost always indicates a routing bug.
+//! compose navigation. A file importing `expo-router` inside an `app/`
+//! directory without a `_layout.*` sibling almost always indicates a routing
+//! bug. Files outside the `app/` tree (library packages, server-side code,
+//! test utilities) import `expo-router` for its types and are not route
+//! directories, so they are exempt.
 
 mod oxc_typescript;
 #[cfg(test)]
