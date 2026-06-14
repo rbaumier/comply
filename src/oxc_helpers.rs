@@ -784,20 +784,27 @@ pub fn peel_parens<'a>(
 /// no such parameter. The target-origin rules must therefore only inspect a
 /// window-like receiver, otherwise they flag those same-origin-by-design APIs.
 ///
+/// `self` and `globalThis` are deliberately excluded: in a worker script they
+/// resolve to `DedicatedWorkerGlobalScope`, whose `postMessage(message, transfer)`
+/// has no `targetOrigin`. They are genuinely ambiguous without type information,
+/// and cross-origin messaging never targets the current realm, so treating them
+/// as window-like only produces false positives on worker globals.
+///
 /// Recognised as window-like:
-///  - identifiers `window`, `self`, `globalThis`, `parent`, `top`, `opener`;
+///  - identifiers `window`, `parent`, `top`, `opener`;
 ///  - any member access ending in `.contentWindow` (`iframe.contentWindow`),
 ///    or in `.parent`/`.top`/`.opener`/`.self`/`.window` (window navigators);
 ///  - a `window.open(...)`/`open(...)` call result.
 ///
 /// Any other receiver (a `BroadcastChannel`/`Worker`/`MessagePort` instance,
-/// `this.channel`, an arbitrary local binding, `new BroadcastChannel(...)`) is
-/// not window-like and is left unflagged.
+/// `self`/`globalThis` worker globals, `this.channel`, an arbitrary local
+/// binding, `new BroadcastChannel(...)`) is not window-like and is left
+/// unflagged.
 #[must_use]
 pub fn is_window_like_post_message_target(object: &oxc_ast::ast::Expression) -> bool {
     use oxc_ast::ast::Expression;
 
-    const WINDOW_IDENTS: &[&str] = &["window", "self", "globalThis", "parent", "top", "opener"];
+    const WINDOW_IDENTS: &[&str] = &["window", "parent", "top", "opener"];
     const WINDOW_PROPERTIES: &[&str] =
         &["contentWindow", "parent", "top", "opener", "self", "window"];
 

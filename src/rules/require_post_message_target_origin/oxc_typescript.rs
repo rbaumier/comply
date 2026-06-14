@@ -106,4 +106,13 @@ mod oxc_tests {
         assert!(run("worker.postMessage(msg);").is_empty());
         assert!(run("port.postMessage(msg);").is_empty());
     }
+
+    #[test]
+    fn ignores_worker_global_scope() {
+        // Regression for #1655 — inside a worker, `self`/`globalThis` is
+        // DedicatedWorkerGlobalScope.postMessage(message, transfer), which has
+        // no targetOrigin parameter.
+        assert!(run("self.postMessage(msg);").is_empty());
+        assert!(run("globalThis.postMessage(msg);").is_empty());
+    }
 }

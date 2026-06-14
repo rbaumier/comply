@@ -28,15 +28,16 @@ impl OxcCheck for Check {
             return;
         };
 
+        // Only `Window.postMessage` takes a `targetOrigin`; `BroadcastChannel`,
+        // `Worker`, and `MessagePort` expose a one-argument `postMessage` with no
+        // such parameter, so flag only window-like member receivers. A bare
+        // `postMessage(data)` is the worker global's `postMessage` (no
+        // `targetOrigin`) and is intentionally not flagged.
         let is_post_message = match &call.callee {
             Expression::StaticMemberExpression(member) => {
-                // Only `Window.postMessage` takes a `targetOrigin`; `BroadcastChannel`,
-                // `Worker`, and `MessagePort` expose a one-argument `postMessage` with
-                // no such parameter, so flag only window-like receivers.
                 member.property.name.as_str() == "postMessage"
                     && is_window_like_post_message_target(&member.object)
             }
-            Expression::Identifier(ident) => ident.name.as_str() == "postMessage",
             _ => false,
         };
 
@@ -135,5 +136,25 @@ mod oxc_tests {
         // Worker / MessagePort postMessage have no targetOrigin parameter.
         assert!(run("worker.postMessage(msg)").is_empty());
         assert!(run("port.postMessage(msg)").is_empty());
+    }
+
+    #[test]
+    fn ignores_worker_global_scope() {
+        // Regression for #1655 — inside a worker, `self`/`globalThis`/bare
+        // `postMessage` is DedicatedWorkerGlobalScope.postMessage(message,
+        // transfer), which has no targetOrigin parameter.
+        assert!(run("self.postMessage({ msg: 'load worker' })").is_empty());
+        assert!(run("globalThis.postMessage({ msg: 'load worker' })").is_empty());
+        assert!(run("postMessage({ msg: 'load worker' })").is_empty());
+        assert!(run("const port = event.ports[0]; port.postMessage({ type: 'error' })").is_empty());
+    }
+
+    #[test]
+    fn still_flags_genuine_cross_origin() {
+        // Negative-space guard for #1655 — genuine cross-origin window/frame
+        // receivers missing a targetOrigin must still fire.
+        assert_eq!(run("window.postMessage(data)").len(), 1);
+        assert_eq!(run("iframe.contentWindow.postMessage(data)").len(), 1);
+        assert_eq!(run("parent.postMessage(data)").len(), 1);
     }
 }
