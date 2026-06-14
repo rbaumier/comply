@@ -23,7 +23,12 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["rust"],
 
-    skip_in_test_dir: false,
+    // Cargo integration test files (`tests/*.rs` and the modules they include,
+    // e.g. `tests/common/mod.rs`) are compiled test-only as a whole — an inner
+    // `mod tests` there needs no `#[cfg(test)]`. The `in_test_dir` gate scopes
+    // the rule off for those paths while keeping it on for `src/*.rs`, where a
+    // `mod tests` genuinely needs the attribute.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: true,
 };
 pub fn register() -> RuleDef {

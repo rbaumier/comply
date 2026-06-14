@@ -108,6 +108,30 @@ mod tests {
     }
 
     #[test]
+    fn skips_cargo_integration_test_file() {
+        // Under a `tests/` dir the whole file is compiled test-only — an inner
+        // `mod tests` without `#[cfg(test)]` must not be flagged (issue #1325).
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            "mod tests { #[test] fn t() {} }",
+            "tests/integration.rs",
+        );
+        assert!(diags.is_empty(), "must not flag mod tests in a tests/ integration file");
+    }
+
+    #[test]
+    fn still_flags_mod_tests_in_src_file() {
+        // A regular `src/*.rs` file is compiled into the production binary, so a
+        // `mod tests` there genuinely needs `#[cfg(test)]` and stays flagged.
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            "mod tests { #[test] fn t() {} }",
+            "src/lib.rs",
+        );
+        assert_eq!(diags.len(), 1, "must still flag mod tests in a src/ file");
+    }
+
+    #[test]
     fn still_flags_mod_tests_with_non_test_cfg() {
         let cases = [
             "mod tests { #[test] fn t() {} }",
