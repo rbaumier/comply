@@ -3077,12 +3077,25 @@ fn walk_up_finding_cached(
 const TS_SOURCE_EXTENSIONS: &[&str] =
     &["ts", "tsx", "d.ts", "mts", "cts", "js", "jsx", "mjs", "cjs", "vue", "json"];
 
-/// True if `candidate` (an extension-less module path) points at an existing
-/// local source file — directly, with a TS/JS extension appended, or as a
-/// directory containing an `index.*` entry.
+/// True if `candidate` (a module path that may carry an emitted JS-family
+/// extension) points at an existing local source file — directly, with a TS/JS
+/// extension appended, with a written `.js`/`.jsx`/`.mjs`/`.cjs` extension
+/// resolved to its on-disk TS counterpart, or as a directory containing an
+/// `index.*` entry.
 fn local_source_exists(candidate: &Path) -> bool {
     if candidate.is_file() {
         return true;
+    }
+    // TypeScript ESM (`"module": "NodeNext"`/`"Bundler"`) requires writing the
+    // emitted `.js` extension in specifiers even when the on-disk source is
+    // `.ts`/`.tsx`, so `__helpers/e2e/foo.js` resolves to `foo.ts`. Strip a
+    // JS-family extension and probe its TS counterparts on the stem.
+    if let Some(ext) = candidate.extension().and_then(|e| e.to_str()) {
+        for ts_ext in crate::project::import_index::ts_counterpart_exts(ext) {
+            if candidate.with_extension(ts_ext).is_file() {
+                return true;
+            }
+        }
     }
     if let Some(name) = candidate.file_name().and_then(|n| n.to_str()) {
         if let Some(parent) = candidate.parent() {

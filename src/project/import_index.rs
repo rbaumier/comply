@@ -2674,7 +2674,7 @@ fn lexical_normalize(p: &Path) -> PathBuf {
 /// JS-family extension. TypeScript ESM (`"module": "NodeNext"` / `"ESNext"`)
 /// requires writing the emitted `.js` extension in specifiers even when the
 /// on-disk source is `.ts`, so `./checks.js` must resolve to `checks.ts`.
-fn ts_counterpart_exts(ext: &str) -> &'static [&'static str] {
+pub(crate) fn ts_counterpart_exts(ext: &str) -> &'static [&'static str] {
     match ext {
         "js" | "jsx" => &["ts", "tsx"],
         "mjs" => &["mts"],

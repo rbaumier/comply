@@ -481,6 +481,85 @@ mod tests {
         );
     }
 
+    // Regression #1375 (payloadcms): with `baseUrl: "."` a root `__helpers/`
+    // directory is importable as a bare specifier. TypeScript ESM requires the
+    // emitted `.js` extension in the specifier even though the on-disk source is
+    // `.ts`, so `__helpers/e2e/checkFocusIndicators.js` resolves to
+    // `<root>/__helpers/e2e/checkFocusIndicators.ts` and must not be flagged.
+    #[test]
+    fn allows_base_url_js_extension_import_issue_1375() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"payload"}"#).unwrap();
+        fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"baseUrl":"."}}"#,
+        )
+        .unwrap();
+        let e2e = dir.path().join("__helpers").join("e2e");
+        fs::create_dir_all(&e2e).unwrap();
+        fs::write(e2e.join("checkFocusIndicators.ts"), "export const checkFocusIndicators = () => {};\n").unwrap();
+        let test = dir.path().join("test").join("plugin-seo");
+        fs::create_dir_all(&test).unwrap();
+        let file = test.join("e2e.spec.ts");
+        let source = "import { checkFocusIndicators } from '__helpers/e2e/checkFocusIndicators.js';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "baseUrl import with .js extension resolving to a .ts source must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Regression #1375 (formik): with `baseUrl: "src"` a directory under the
+    // baseUrl root (`src/components/`) is importable as a bare specifier
+    // (`import { Banner } from 'components/Banner'`). It must not be flagged.
+    #[test]
+    fn allows_base_url_subdir_import_issue_1375() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"formik-website"}"#).unwrap();
+        fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"baseUrl":"src"}}"#,
+        )
+        .unwrap();
+        let components = dir.path().join("src").join("components");
+        fs::create_dir_all(&components).unwrap();
+        fs::write(components.join("Banner.ts"), "export const Banner = () => {};\n").unwrap();
+        let file = components.join("LayoutDocs.tsx");
+        let source = "import { Banner } from 'components/Banner';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "baseUrl subdir import must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Negative space for #1375: a genuinely-unlisted npm package that does NOT
+    // resolve under the baseUrl root must still fire even when `baseUrl` is set.
+    #[test]
+    fn flags_unresolvable_dep_with_base_url_issue_1375() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"payload"}"#).unwrap();
+        fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"baseUrl":"."}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("test");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("e2e.spec.ts");
+        // `left-pad` does not resolve under baseUrl and is not in package.json.
+        let source = "import leftPad from 'left-pad';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "an unlisted package not resolvable under baseUrl must still fire, got {diags:?}"
+        );
+    }
+
     // A genuine undeclared package import must still fire even when `baseUrl` is
     // configured — the baseUrl candidate does not exist on disk.
     #[test]
