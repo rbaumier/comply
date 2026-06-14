@@ -101,4 +101,29 @@ mod tests {
     fn ignores_non_express_files() {
         assert!(run("const x = 1;").is_empty());
     }
+
+    // tRPC adapter test server (issue #1514): a test file spinning up an Express
+    // app does not need production security headers.
+    const TEST_SERVER_SRC: &str = "import express from 'express';\nconst app = express();\napp.use('/', trpcExpress.createExpressMiddleware({ router, createContext, ...opts }));";
+
+    #[test]
+    fn skips_express_app_in_test_dir() {
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                TEST_SERVER_SRC,
+                "packages/tests/server/adapters/express.test.tsx",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn fires_on_same_express_app_in_source_dir() {
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(&Check, TEST_SERVER_SRC, "src/server.ts")
+                .len(),
+            1
+        );
+    }
 }
