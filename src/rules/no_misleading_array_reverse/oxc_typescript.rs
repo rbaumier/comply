@@ -11,7 +11,14 @@ pub struct Check;
 
 const MUTATING_METHODS: &[&str] = &["reverse", "sort", "fill", "splice"];
 
-/// Check if a call expression is a mutating array method call (not on a spread copy).
+/// Non-mutating array methods that always return a fresh array. Chaining a
+/// mutating method onto one of these is safe — the caller holds the only
+/// reference to the new array, so nothing shared is silently mutated.
+const FRESH_ARRAY_METHODS: &[&str] =
+    &["filter", "map", "slice", "concat", "flat", "flatMap"];
+
+/// Check if a call expression is a mutating array method call (not on a spread
+/// copy nor a fresh array returned by a non-mutating method).
 fn is_mutating_call(expr: &Expression, source: &str) -> bool {
     let Expression::CallExpression(call) = expr else {
         return false;
@@ -28,6 +35,14 @@ fn is_mutating_call(expr: &Expression, source: &str) -> bool {
         if text.contains("...") {
             return false;
         }
+    }
+    // Allow chaining onto a fresh array, e.g. `arr.filter(p).sort(cmp)` — the
+    // receiver is a brand-new array, so the mutation is not observable.
+    if let Expression::CallExpression(inner) = &member.object
+        && let Expression::StaticMemberExpression(inner_member) = &inner.callee
+        && FRESH_ARRAY_METHODS.contains(&inner_member.property.name.as_str())
+    {
+        return false;
     }
     true
 }
@@ -87,5 +102,79 @@ impl OxcCheck for Check {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod oxc_tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    #[test]
+    fn flags_const_reverse() {
+        assert_eq!(run("const reversed = arr.reverse();").len(), 1);
+    }
+
+    #[test]
+    fn flags_const_sort() {
+        // `arr.sort(cmp)` mutates the shared `arr` directly — still misleading.
+        assert_eq!(run("const x = arr.sort((a, b) => a - b);").len(), 1);
+    }
+
+    #[test]
+    fn flags_return_sort() {
+        assert_eq!(run("function f() { return arr.sort(); }").len(), 1);
+    }
+
+    #[test]
+    fn flags_direct_property_reverse() {
+        // `obj.items.reverse()` mutates the shared `obj.items` — still misleading.
+        assert_eq!(run("const x = obj.items.reverse();").len(), 1);
+    }
+
+    #[test]
+    fn allows_spread_copy() {
+        assert!(run("const reversed = [...arr].reverse();").is_empty());
+    }
+
+    // === issue #2382: mutating method chained on a fresh-array-returning call ===
+
+    #[test]
+    fn allows_filter_then_sort() {
+        assert!(run("const x = arr.filter((p) => p.active).sort((a, b) => a.n - b.n);").is_empty());
+    }
+
+    #[test]
+    fn allows_map_then_reverse() {
+        assert!(run("const r = arr.map((f) => f.value).reverse();").is_empty());
+    }
+
+    #[test]
+    fn allows_slice_then_sort() {
+        assert!(run("const s = arr.slice(1).sort((a, b) => a - b);").is_empty());
+    }
+
+    #[test]
+    fn allows_filter_then_sort_in_return() {
+        assert!(run("function f() { return arr.filter((p) => p.active).sort(cmp); }").is_empty());
     }
 }
