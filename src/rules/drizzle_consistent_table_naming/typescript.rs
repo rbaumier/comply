@@ -194,4 +194,25 @@ mod tests {
         let src = "const t = pgTable('profile', { id: serial('id') })";
         assert_eq!(run(src).len(), 1);
     }
+
+    #[test]
+    fn skips_scratch_schemas_in_test_dirs() {
+        // Test files create scratch schemas with intentional short/generic
+        // names for isolation. Table-naming consistency is a production-schema
+        // concern, so the central gate must suppress the rule here.
+        let src = "const t = pgTable('test', {});\nconst c = pgTable('cities1', {});";
+        let diagnostics =
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "tests/pg-common.ts");
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn still_flags_singular_table_in_production_file() {
+        // The rule is silenced only in test dirs, not globally: a production
+        // schema with a singular, non-plural-snake_case name is still flagged.
+        let src = "const t = pgTable('user_profile', {});";
+        let diagnostics =
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "src/schema.ts");
+        assert_eq!(diagnostics.len(), 1);
+    }
 }
