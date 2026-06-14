@@ -68,6 +68,43 @@ fn is_sort_comparator_param(
     matches!(member.property.name.as_str(), "sort" | "toSorted")
 }
 
+/// True when `param`'s name mirrors an in-scope generic type variable: it is
+/// annotated with a bare type reference (`g: G`) whose name equals the
+/// uppercased parameter name AND that type name is declared as a type parameter
+/// on an enclosing function/method. This is the idiomatic pipe/compose-overload
+/// shape (`pipe<…, G, H>(…, gh: (g: G) => H)`), where the single-letter name is
+/// the only sensible mirror of the type variable.
+fn is_type_variable_mirror_param(
+    param: &FormalParameter,
+    name: &str,
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(ann) = param.type_annotation.as_ref() else {
+        return false;
+    };
+    let TSType::TSTypeReference(type_ref) = &ann.type_annotation else {
+        return false;
+    };
+    let TSTypeName::IdentifierReference(type_id) = &type_ref.type_name else {
+        return false;
+    };
+    if type_id.name.as_str() != name.to_uppercase() {
+        return false;
+    }
+    crate::oxc_helpers::name_is_generic_type_param_in_scope(type_id.name.as_str(), node_id, semantic)
+}
+
+/// True when `param` is annotated exactly `unknown` (`u: unknown`). A
+/// single-letter handle for an opaque value is a conventional shorthand, and the
+/// annotation already documents the intent better than any longer name could.
+fn is_unknown_typed_param(param: &FormalParameter) -> bool {
+    param
+        .type_annotation
+        .as_ref()
+        .is_some_and(|ann| matches!(ann.type_annotation, TSType::TSUnknownKeyword(_)))
+}
+
 /// Single-letter names idiomatic in TS/JS: loop indices, math coordinates,
 /// key/value pairs, error/file/string handles — mirrors CONVENTIONAL_RUST_NAMES.
 fn is_conventional_short_binding(name: &str) -> bool {
@@ -150,6 +187,11 @@ impl OxcCheck for Check {
                     return;
                 }
                 if let Some((name, span)) = binding_name(&param.pattern) {
+                    if is_type_variable_mirror_param(param, name, node.id(), semantic)
+                        || is_unknown_typed_param(param)
+                    {
+                        return;
+                    }
                     vec![(name, span)]
                 } else {
                     return;
@@ -281,5 +323,36 @@ mod tests {
     fn allows_conventional_params_in_plain_function() {
         let src = "function move(x, y) { return x + y; }";
         assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #1217: pipe-overload params that mirror an in-scope type
+    // variable (`g: G` in `pipe<…, G, H>`) are the only sensible names.
+    #[test]
+    fn allows_pipe_overload_type_variable_mirror_param() {
+        let src = "export function pipe<G, H>(gh: (g: G) => H): H { return null as any; }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #1217: `u: unknown` is a conventional opaque-value handle.
+    #[test]
+    fn allows_unknown_typed_param() {
+        let src = "function stringOrHash(u: unknown): string { return typeof u === \"string\" ? u : \"\"; }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative space for #1217: a single-letter param NOT mirroring a type
+    // variable (no `<Q>` in scope, annotated with a concrete type) is still flagged.
+    #[test]
+    fn flags_short_param_not_mirroring_type_variable() {
+        let src = "function helper(q: number) { return q; }";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Negative space for #1217: a param whose name collides with a type param
+    // but is annotated with a concrete (non-mirroring) type is still flagged.
+    #[test]
+    fn flags_short_param_with_concrete_annotation_despite_type_param() {
+        let src = "function f<Q>(q: number): number { return q; }";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
