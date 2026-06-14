@@ -237,6 +237,11 @@ pub struct ImportIndex {
     /// reached through the import graph keeps the files it re-exports reachable,
     /// so reachability traversal follows these edges as well as import edges.
     reexport_edges: HashMap<PathBuf, Vec<PathBuf>>,
+    /// Canonical directories referenced by a template-literal dynamic import
+    /// (`import(\`./locales/${lang}\`)`). The runtime path is computed, so any
+    /// file under such a directory is reachable and its exports are live —
+    /// `unused-file` and `dead-export` must not flag them.
+    dynamic_import_dirs: Vec<PathBuf>,
 }
 
 impl ImportIndex {
@@ -290,7 +295,7 @@ impl ImportIndex {
         // the rayon pool. The resolvers it reads (`rust_graph`, `known_paths`,
         // `path_resolver`) are immutable and `Sync`. Map insertion below stays
         // sequential: it's pure in-memory work and would only contend on locks.
-        let resolved: Vec<(PathBuf, FileExtract)> = per_file
+        let resolved: Vec<(PathBuf, FileExtract, Vec<PathBuf>)> = per_file
             .into_par_iter()
             .map(|(path, mut extract)| {
                 let is_rust = matches!(path.extension().and_then(|e| e.to_str()), Some("rs"));
@@ -305,15 +310,26 @@ impl ImportIndex {
                         imp.source_path = Some(resolved);
                     }
                 }
-                (path, extract)
+                // Resolve each template-literal dynamic-import directory prefix
+                // against the importer's directory into a canonical directory.
+                let dyn_dirs: Vec<PathBuf> = extract
+                    .dynamic_dirs
+                    .iter()
+                    .filter_map(|rel| resolve_dynamic_dir(&path, rel))
+                    .collect();
+                (path, extract, dyn_dirs)
             })
             .collect();
 
-        for (path, extract) in resolved {
+        let mut dynamic_import_dirs: Vec<PathBuf> = Vec::new();
+        for (path, extract, dyn_dirs) in resolved {
             exports.insert(path.clone(), extract.exports);
             imports.insert(path.clone(), extract.imports);
             file_calls.insert(path, extract.calls);
+            dynamic_import_dirs.extend(dyn_dirs);
         }
+        dynamic_import_dirs.sort();
+        dynamic_import_dirs.dedup();
 
         // Second pass: link imports → exports via symbol_usages. Only named
         // and default imports link cleanly; namespace imports touch every
@@ -467,6 +483,7 @@ impl ImportIndex {
             namespace_imported,
             reexport_targets,
             reexport_edges,
+            dynamic_import_dirs,
         }
     }
 
@@ -630,6 +647,14 @@ impl ImportIndex {
         let mut visited = std::collections::HashSet::new();
         let mut queue: std::collections::VecDeque<PathBuf> =
             roots.iter().map(|p| p.to_path_buf()).collect();
+        // Any file under a template-literal dynamic-import directory is reachable
+        // at runtime: the substitution path resolves to one of these files, but
+        // statically we cannot tell which, so the whole directory is referenced.
+        for path in self.exports.keys() {
+            if self.is_under_dynamic_import_dir(path) {
+                queue.push_back(path.clone());
+            }
+        }
         while let Some(current) = queue.pop_front() {
             if !visited.insert(current.clone()) {
                 continue;
@@ -652,6 +677,17 @@ impl ImportIndex {
             }
         }
         visited
+    }
+
+    /// True when `path` lives under a directory referenced by a template-literal
+    /// dynamic import (`import(\`./locales/${lang}\`)`). The runtime path is
+    /// computed, so any file under such a directory is reachable and every
+    /// export of it is live — `unused-file` and `dead-export` must not flag it.
+    #[must_use]
+    pub fn is_under_dynamic_import_dir(&self, path: &Path) -> bool {
+        self.dynamic_import_dirs
+            .iter()
+            .any(|dir| path.starts_with(dir))
     }
 
     /// All import cycles (SCCs with 2+ members), computed once via Tarjan.
@@ -1050,6 +1086,11 @@ struct FileExtract {
     /// Cross-file linkage (local → exported name + source path) happens in
     /// `ImportIndex::build` using the file's import list.
     calls: Vec<LocalCall>,
+    /// Relative directory prefixes of template-literal dynamic imports
+    /// (`import(\`./locales/${lang}\`)` → `./locales`). The runtime path is
+    /// computed, so it cannot resolve to one file; resolution treats the whole
+    /// directory as referenced. Resolved to absolute dirs in `ImportIndex::build`.
+    dynamic_dirs: Vec<String>,
 }
 
 /// A `new X(...)` / `X(...)` site captured during per-file extract. The
@@ -1081,6 +1122,7 @@ fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileE
                 exports,
                 imports,
                 calls: Vec::new(),
+                dynamic_dirs: Vec::new(),
             },
         ));
     }
@@ -1122,6 +1164,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
     let mut exports = Vec::new();
     let mut imports = Vec::new();
     let mut calls = Vec::new();
+    let mut dynamic_dirs = Vec::new();
     let mut has_setup = false;
 
     for block in &blocks {
@@ -1148,7 +1191,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
                     .child_by_field_name("function")
                     .is_some_and(|c| c.kind() == "import")
                 {
-                    extract_dynamic_import(node, source_bytes, &mut imports);
+                    extract_dynamic_import(node, source_bytes, &mut imports, &mut dynamic_dirs);
                 } else {
                     extract_require(node, source_bytes, &mut imports);
                     extract_call(node, source_bytes, CallKind::Call, &mut calls);
@@ -1187,6 +1230,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
             exports,
             imports,
             calls,
+            dynamic_dirs,
         },
     ))
 }
@@ -1324,7 +1368,12 @@ fn extract_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
 }
 
 /// Capture `import('./foo')` as a namespace-style import edge.
-fn extract_dynamic_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
+fn extract_dynamic_import(
+    node: Node,
+    source: &[u8],
+    out: &mut Vec<ImportedSymbol>,
+    dyn_dirs: &mut Vec<String>,
+) {
     let Some(args) = node.child_by_field_name("arguments") else {
         return;
     };
@@ -1332,6 +1381,22 @@ fn extract_dynamic_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbo
     let Some(first_arg) = args.named_children(&mut cursor).next() else {
         return;
     };
+    // `import(\`./locales/${lang}\`)` — the path is computed at runtime, so it
+    // names a directory rather than one file. Record the static directory prefix.
+    if first_arg.kind() == "template_string" {
+        let has_substitution = first_arg
+            .children(&mut first_arg.walk())
+            .any(|c| c.kind() == "template_substitution");
+        if has_substitution {
+            let raw = text_of(first_arg, source);
+            let inner = raw.trim_start_matches('`');
+            let static_prefix = inner.split("${").next().unwrap_or("");
+            if let Some(dir) = template_static_dir(static_prefix) {
+                dyn_dirs.push(dir);
+            }
+        }
+        return;
+    }
     if first_arg.kind() != "string" {
         return;
     }
@@ -1349,6 +1414,26 @@ fn extract_dynamic_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbo
         line: node.start_position().row + 1,
         is_type_only: false,
     });
+}
+
+/// Static directory prefix of an interpolated template-literal import path.
+///
+/// `static_prefix` is the literal text that precedes the first `${…}`
+/// substitution (`../a/b/${x}` → `../a/b/`, `./locales/${lang}.ts` →
+/// `./locales/`). Returns the directory of that prefix: `../a/b/` → `../a/b`,
+/// `./locales/` → `./locales`. Returns `None` when the prefix is not relative
+/// (a bare-package or alias specifier, whose target directory is not in the
+/// input set) or when no directory separator precedes the substitution
+/// (`./${name}` — the whole importer directory, too broad to mark referenced).
+fn template_static_dir(static_prefix: &str) -> Option<String> {
+    if !static_prefix.starts_with('.') {
+        return None;
+    }
+    let dir = static_prefix.rsplit_once('/')?.0;
+    if dir.is_empty() {
+        return None;
+    }
+    Some(dir.to_string())
 }
 
 /// Capture `require('./foo')` as a namespace-style import edge.
@@ -1831,6 +1916,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
     let mut exports = Vec::new();
     let mut imports = Vec::new();
     let mut calls = Vec::new();
+    let mut dynamic_dirs = Vec::new();
     let lines = oxc_line_starts(source);
 
     // Pre-order over `nodes().iter()` (NodeId order == SemanticBuilder visit
@@ -1865,7 +1951,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
                 oxc_extract_call_call(&lines, call, &mut calls);
             }
             AstKind::ImportExpression(import_expr) => {
-                oxc_extract_dynamic_import(&lines, import_expr, &mut imports);
+                oxc_extract_dynamic_import(&lines, import_expr, &mut imports, &mut dynamic_dirs);
             }
             _ => {}
         }
@@ -1875,6 +1961,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
         exports,
         imports,
         calls,
+        dynamic_dirs,
     })
 }
 
@@ -2277,8 +2364,20 @@ fn oxc_extract_dynamic_import(
     lines: &[usize],
     import_expr: &oxc_ast::ast::ImportExpression,
     out: &mut Vec<ImportedSymbol>,
+    dyn_dirs: &mut Vec<String>,
 ) {
     use oxc_ast::ast::Expression;
+    // `import(\`./locales/${lang}\`)` — the path is computed at runtime, so it
+    // names a directory rather than one file. Record the static directory prefix.
+    if let Expression::TemplateLiteral(tpl) = &import_expr.source {
+        if !tpl.expressions.is_empty()
+            && let Some(first) = tpl.quasis.first()
+            && let Some(dir) = template_static_dir(first.value.raw.as_str())
+        {
+            dyn_dirs.push(dir);
+        }
+        return;
+    }
     let Expression::StringLiteral(lit) = &import_expr.source else {
         return;
     };
@@ -2343,6 +2442,17 @@ fn resolve_relative(
     }
     let base_dir = importer.parent()?;
     probe_path(&base_dir.join(specifier), known)
+}
+
+/// Resolve a template-literal dynamic-import directory prefix (`../locales`,
+/// `./pages`) against `importer`'s directory into a canonical directory.
+/// Falls back to lexical normalization when the directory does not exist on
+/// disk (e.g. unit tests over synthetic paths). Returns `None` when the
+/// importer has no parent.
+fn resolve_dynamic_dir(importer: &Path, rel: &str) -> Option<PathBuf> {
+    let base_dir = importer.parent()?;
+    let joined = base_dir.join(rel);
+    Some(std::fs::canonicalize(&joined).unwrap_or_else(|_| lexical_normalize(&joined)))
 }
 
 /// Probe an absolute path (without or with extension) against the known set,
@@ -4073,6 +4183,7 @@ mod tests {
         let mut exports = Vec::new();
         let mut imports = Vec::new();
         let mut calls = Vec::new();
+        let mut dynamic_dirs = Vec::new();
         walk_tree(&tree, |node| match node.kind() {
             "import_statement" => extract_import(node, bytes, &mut imports),
             "export_statement" => extract_export(node, bytes, &mut exports),
@@ -4082,7 +4193,7 @@ mod tests {
                     .child_by_field_name("function")
                     .is_some_and(|c| c.kind() == "import")
                 {
-                    extract_dynamic_import(node, bytes, &mut imports);
+                    extract_dynamic_import(node, bytes, &mut imports, &mut dynamic_dirs);
                 } else {
                     extract_require(node, bytes, &mut imports);
                     extract_call(node, bytes, CallKind::Call, &mut calls);
@@ -4094,6 +4205,7 @@ mod tests {
             exports,
             imports,
             calls,
+            dynamic_dirs,
         }
     }
 
@@ -4125,6 +4237,10 @@ mod tests {
         // template-literal specifiers must be ignored by both (not StringLiteral)
         "const t = import(`./tpl`);",
         "const r = require(`./tpl`);",
+        // interpolated template-literal dynamic import: both extractors record
+        // the static directory prefix into `dynamic_dirs`, not into `imports`.
+        "const d = import(`./locales/${lang}.ts`);",
+        "const e = import(`../../compositions/src/${scope}/${name}`);",
         // --- exports ---
         "export * from './m';",
         "export * as ns from './m';",

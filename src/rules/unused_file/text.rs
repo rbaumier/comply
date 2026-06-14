@@ -349,6 +349,52 @@ mod tests {
     }
 
     #[test]
+    fn allows_files_under_template_literal_dynamic_import_dir_issue_1789() {
+        // Regression for #1789 (chakra-ui): every file under
+        // `apps/compositions/src/` is loaded ONLY via the template-literal
+        // dynamic import in `example.tsx`, never via a static `import`. They must
+        // not be flagged as unreachable. A file outside the prefix still is.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "index.ts",
+                "import { ExamplePreview } from './components/example';\nExamplePreview();\n",
+            ),
+            (
+                "components/example.tsx",
+                "import dynamic from 'next/dynamic';\n\
+                 export const ExamplePreview = (props) => {\n\
+                   const { name, scope = 'examples' } = props;\n\
+                   const Component = dynamic(() =>\n\
+                     import(`../compositions/src/${scope}/${name}`).then(\n\
+                       (mod) => mod[name] || mod.default,\n\
+                     ),\n\
+                   );\n\
+                   return Component;\n\
+                 };\n",
+            ),
+            (
+                "compositions/src/ui/steps.tsx",
+                "export const StepsRoot = 1;\nexport const StepsList = 2;\n",
+            ),
+            (
+                "compositions/src/examples/badge-basic.tsx",
+                "export const BadgeBasic = 3;\n",
+            ),
+            ("orphan.tsx", "export const orphan = 4;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        let flagged: Vec<&str> = diags.iter().filter_map(|d| d.path.to_str()).collect();
+        assert!(
+            !flagged.iter().any(|p| p.contains("compositions/src")),
+            "files under the dynamic-import dir must not be flagged: {flagged:?}"
+        );
+        assert!(
+            flagged.iter().any(|p| p.contains("orphan")),
+            "a genuinely unreachable file outside the prefix is still flagged: {flagged:?}"
+        );
+    }
+
+    #[test]
     fn allows_reachable_file() {
         let files: Vec<(&str, &str)> = vec![
             ("index.ts", "import { a } from './a';\n"),
