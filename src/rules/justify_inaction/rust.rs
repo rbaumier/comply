@@ -11,6 +11,10 @@
 //!   named variant no-ops (`Progress::None => {}`) are exempt: the
 //!   explicit catch-all / variant name documents the intent, and the
 //!   wildcard arm is required for match exhaustiveness anyway.
+//!   An `Err(…)` arm is also exempt when every variable it binds is
+//!   underscore-prefixed (e.g. `Err(_frame) => {}`): the `_` prefix is
+//!   Rust's signal that the value is intentionally discarded, so the
+//!   empty body is already documented by the binding name.
 //! - `for_expression.body` / `while_expression.body` /
 //!   `loop_expression.body` — empty loop body.
 //!
@@ -49,13 +53,40 @@ fn pattern_needs_justification(node: tree_sitter::Node, source: &[u8]) -> bool {
             false
         }
         "tuple_struct_pattern" => {
-            if let Ok(text) = node.utf8_text(source) {
-                return text.starts_with("Err(") || text.contains("::Err(");
+            let Ok(text) = node.utf8_text(source) else {
+                return false;
+            };
+            if !(text.starts_with("Err(") || text.contains("::Err(")) {
+                return false;
             }
-            false
+            !all_bindings_underscore_prefixed(node, source)
         }
         _ => false,
     }
+}
+
+/// True when the pattern introduces at least one variable binding and every
+/// such binding is underscore-prefixed (Rust's signal for intentional
+/// discard, e.g. `Err(_frame)`). Bindings are the `identifier` children of
+/// the pattern other than the constructor path (`type` field of a
+/// `tuple_struct_pattern`). A pattern with no bindings — e.g. `Err(_)` whose
+/// `_` is a bare wildcard, not a binding — returns false.
+fn all_bindings_underscore_prefixed(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut binding_count = 0usize;
+    let mut cursor = node.walk();
+    for (i, child) in node.children(&mut cursor).enumerate() {
+        if child.kind() != "identifier" {
+            continue;
+        }
+        if node.field_name_for_child(i as u32) == Some("type") {
+            continue;
+        }
+        binding_count += 1;
+        if !child.utf8_text(source).is_ok_and(|name| name.starts_with('_')) {
+            return false;
+        }
+    }
+    binding_count > 0
 }
 
 fn loop_name(kind: &str) -> &'static str {
@@ -213,6 +244,36 @@ mod tests {
     fn allows_empty_wildcard_arm() {
         let src = "fn f(x: u8) { match x { 0 => go(), _ => {} } }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_empty_err_arm_with_underscore_binding_issue_1444() {
+        let src = "fn f(r: Result<u8, E>) { match r { Ok(v) => go(v), Err(_frame) => {} } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_or_arm_all_underscore_bindings() {
+        let src = "fn f(r: Result<u8, E>) { match r { Ok(_a) | Err(_b) => {} } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_err_arm_with_named_binding() {
+        let src = "fn f(r: Result<u8, E>) { match r { Ok(v) => go(v), Err(e) => {} } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_err_arm_with_named_frame_binding() {
+        let src = "fn f(r: Result<u8, E>) { match r { Ok(v) => go(v), Err(frame) => {} } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_scoped_err_arm_with_named_binding() {
+        let src = "fn f(r: Result<u8, E>) { match r { Ok(v) => go(v), my::Err(e) => {} } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
