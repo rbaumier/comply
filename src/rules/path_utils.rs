@@ -416,12 +416,26 @@ pub fn is_in_framework_entry_dir(path: &Path, project: &ProjectCtx) -> bool {
 /// True when `file_name` is a SvelteKit route file: a `+`-prefixed basename
 /// from the framework's file-system routing set (`+page`, `+layout`,
 /// `+server`, `+error` with `.svelte`/`.ts`/`.js` and an optional `.server`
-/// segment). These are discovered by the router at build time, never imported.
+/// segment). `+page`/`+layout` may carry the layout-break `@<group>` syntax
+/// (`+page@.svelte`, `+layout@(group).ts`) that reparents the route's layout.
+/// These are discovered by the router at build time, never imported.
 pub fn is_sveltekit_route_file(file_name: &str) -> bool {
     let Some(rest) = file_name.strip_prefix('+') else {
         return false;
     };
-    let parts: Vec<&str> = rest.split('.').collect();
+    let mut parts: Vec<&str> = rest.split('.').collect();
+    // SvelteKit's layout-break syntax appends `@<group>` to the `page`/`layout`
+    // base segment (`+page@.js`, `+page@(admin).svelte`), reparenting which
+    // layout the route inherits. The `@` and everything after it up to the
+    // first `.` is the layout target, not part of the route kind — strip it so
+    // the base matches the same `page`/`layout` patterns as the plain form.
+    // Only `page`/`layout` carry this syntax, so an `@` after any other kind is
+    // left intact and stays a non-match.
+    if let Some(base) = parts.first_mut()
+        && let Some((kind @ ("page" | "layout"), _)) = base.split_once('@')
+    {
+        *base = kind;
+    }
     matches!(
         parts.as_slice(),
         ["page" | "layout" | "error", "svelte"]
@@ -745,5 +759,40 @@ mod aux_path_tests {
         assert!(!is_generated_file_specifier("./generated"));
         assert!(!is_generated_file_specifier("./idle.js"));
         assert!(!is_generated_file_specifier("./prebuilt"));
+    }
+
+    #[test]
+    fn sveltekit_route_file_matches_plain_and_layout_break_forms() {
+        // Plain file-router forms.
+        for name in [
+            "+page.svelte",
+            "+layout.svelte",
+            "+error.svelte",
+            "+page.ts",
+            "+layout.js",
+            "+page.server.ts",
+            "+server.js",
+        ] {
+            assert!(is_sveltekit_route_file(name), "{name} is a SvelteKit route file");
+        }
+        // Issue #1608: layout-break `@<group>` syntax on `+page`/`+layout`.
+        for name in [
+            "+page@.js",
+            "+page@group.js",
+            "+page@(admin).svelte",
+            "+page@.server.ts",
+            "+layout@.svelte",
+            "+layout@reset.ts",
+        ] {
+            assert!(is_sveltekit_route_file(name), "{name} is a SvelteKit layout-break route file");
+        }
+        // Negative space: a genuinely misnamed file must still be flagged.
+        assert!(!is_sveltekit_route_file("PageComponent.svelte"));
+        assert!(!is_sveltekit_route_file("+widget.svelte"));
+        assert!(!is_sveltekit_route_file("page.svelte"));
+        // `@` is only the layout-break marker on `page`/`layout`; other kinds
+        // carrying it are not framework route files.
+        assert!(!is_sveltekit_route_file("+server@.js"));
+        assert!(!is_sveltekit_route_file("+error@.svelte"));
     }
 }
