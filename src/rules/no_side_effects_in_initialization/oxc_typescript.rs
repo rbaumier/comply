@@ -45,6 +45,16 @@
 //!   top-level call is an intentional side effect. The `solid-js/web` import is
 //!   required so an ordinary module that happens to call a local `render()` is
 //!   still flagged;
+//! - Vue 3 application entry points by content shape: a module that creates the
+//!   app at module scope with a top-level `createApp(...)` call and mounts it
+//!   with a top-level `.mount(...)` call, covering both the split form
+//!   (`const app = createApp(App); app.use(router); app.mount('#app')`) and the
+//!   chained form (`createApp(App).use(router).mount('#app')`). Mounting the app
+//!   at module level is the entry file's purpose, and entry points are never
+//!   imported by other modules, so the surrounding `app.use` / `app.component` /
+//!   `app.provide` registrations are intentional side effects. Both `createApp`
+//!   and `.mount` are required, so an ordinary module that merely calls a local
+//!   `createApp()` helper or some unrelated `.mount()` is still flagged;
 //! - Gulp task-registration files by content shape: a module that imports
 //!   `gulp` and registers tasks at the top level (`task(...)`, `gulp.task(...)`,
 //!   `series(...)`, `parallel(...)`, …). The registrations are the file's whole
@@ -450,6 +460,79 @@ fn is_solid_entry_shape(program: &Program) -> bool {
         let Statement::ExpressionStatement(es) = stmt else { return false };
         let Expression::CallExpression(call) = &es.expression else { return false };
         matches!(&call.callee, Expression::Identifier(id) if id.name == "render")
+    })
+}
+
+/// True when any expression in `expr`'s member/call chain is a `createApp(...)`
+/// call (a `createApp(...)` whose callee is the bare identifier `createApp`).
+///
+/// Walks the receiver chain so both the chained form
+/// (`createApp(App).use(router).mount('#app')`) and a bare `createApp(App)`
+/// declaration init are recognized.
+fn chain_contains_create_app_call(expr: &Expression) -> bool {
+    let mut current = expr;
+    loop {
+        match current {
+            Expression::CallExpression(call) => {
+                if matches!(&call.callee, Expression::Identifier(id) if id.name == "createApp") {
+                    return true;
+                }
+                current = &call.callee;
+            }
+            Expression::StaticMemberExpression(m) => current = &m.object,
+            Expression::ComputedMemberExpression(m) => current = &m.object,
+            _ => return false,
+        }
+    }
+}
+
+/// True when any call in `expr`'s member/call chain is a `.mount(...)` member
+/// call (`app.mount('#app')` or the chained `createApp(App).mount('#app')`).
+fn chain_contains_mount_call(expr: &Expression) -> bool {
+    let mut current = expr;
+    loop {
+        match current {
+            Expression::CallExpression(call) => {
+                if matches!(&call.callee, Expression::StaticMemberExpression(m) if m.property.name == "mount")
+                {
+                    return true;
+                }
+                current = &call.callee;
+            }
+            Expression::StaticMemberExpression(m) => current = &m.object,
+            Expression::ComputedMemberExpression(m) => current = &m.object,
+            _ => return false,
+        }
+    }
+}
+
+/// True when the program is a Vue 3 application entry point (`main.ts`,
+/// `main.tsx`, …): it both creates the app at module scope with a top-level
+/// `createApp(...)` call and mounts it with a top-level `.mount(...)` call,
+/// covering the split form (`const app = createApp(App); app.use(router);
+/// app.mount('#app')`) and the chained form
+/// (`createApp(App).use(router).mount('#app')`). Mounting the app at module
+/// level is the entry file's whole purpose, and entry points are never imported
+/// by other modules, so the surrounding `app.use` / `app.component` /
+/// `app.provide` registrations are intentional side effects, not tree-shakeable
+/// library code. Requiring both `createApp` and `.mount` keeps an ordinary
+/// module that merely calls a local `createApp()` helper, or some unrelated
+/// `.mount()`, still flagged.
+fn is_vue_entry_shape(program: &Program) -> bool {
+    let has_create_app = program.body.iter().any(|stmt| match stmt {
+        Statement::ExpressionStatement(es) => chain_contains_create_app_call(&es.expression),
+        Statement::VariableDeclaration(decl) => decl
+            .declarations
+            .iter()
+            .any(|d| d.init.as_ref().is_some_and(chain_contains_create_app_call)),
+        _ => false,
+    });
+    if !has_create_app {
+        return false;
+    }
+    program.body.iter().any(|stmt| {
+        let Statement::ExpressionStatement(es) = stmt else { return false };
+        chain_contains_mount_call(&es.expression)
     })
 }
 
@@ -1239,6 +1322,7 @@ impl OxcCheck for Check {
             || is_server_entry_shape(program)
             || is_react_entry_shape(program)
             || is_solid_entry_shape(program)
+            || is_vue_entry_shape(program)
             || is_gulp_task_file(program)
             || is_storybook_addon_file(program)
             || is_data_generation_script(program)
@@ -1871,7 +1955,68 @@ mod tests {
         );
     }
 
-    // --- (g) CLI entry points (Closes #2050) ------------------------------
+    // --- (g) Vue 3 application entry points (Closes #1709) ------------------
+
+    // Regression for #1709: the canonical Vue 3 entry point creates the app with
+    // `createApp(App)`, registers plugins/components with `app.use(...)` /
+    // `app.component(...)`, and mounts it with `app.mount('#app')`. That is the
+    // entry file's whole purpose and it is never imported, so it must not be
+    // flagged.
+    #[test]
+    fn allows_vue_create_app_entry_point() {
+        let src = "\
+            import { createApp } from 'vue';\n\
+            import App from './App.vue';\n\
+            import { createPinia } from 'pinia';\n\
+            import { router } from './router/resolver';\n\
+            const app = createApp(App);\n\
+            app.use(createPinia());\n\
+            app.use(PiniaColada, {});\n\
+            app.use(DataLoaderPlugin, { router: router as any });\n\
+            app.component('RouterLink', RouterLink);\n\
+            app.component('RouterView', RouterView);\n\
+            app.use(router);\n\
+            app.mount('#app');\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "packages/playground-file-based/src/main.ts");
+        assert!(
+            diags.is_empty(),
+            "Vue createApp + app.use + app.mount entry point is exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_vue_chained_create_app_entry_point() {
+        let src = "\
+            import { createApp } from 'vue';\n\
+            import App from './App.vue';\n\
+            import { router } from './router';\n\
+            import { pinia } from './store';\n\
+            createApp(App).use(router).use(pinia).mount('#app');\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/main.ts");
+        assert!(
+            diags.is_empty(),
+            "chained createApp().use().mount() entry point is exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_top_level_side_effects_without_vue_mount() {
+        // An ordinary imported module with genuine top-level side effects and no
+        // Vue app-mount bootstrap chain must still be flagged — neither a local
+        // `mount()` helper nor unrelated calls grant the entry-point exemption.
+        let src = "\
+            import { mount } from './widget';\n\
+            mount(document.body);\n\
+            registerGlobals();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget.ts");
+        assert_eq!(
+            diags.len(),
+            2,
+            "top-level side effects without a createApp().mount() chain must still be flagged, got {diags:?}"
+        );
+    }
+
+    // --- (h) CLI entry points (Closes #2050) ------------------------------
 
     // Regression for #2050: a yargs-based CLI entry named `bin.ts` runs the CLI
     // at module level (`yargs(hideBin(process.argv)).parse()`) with no shebang.
