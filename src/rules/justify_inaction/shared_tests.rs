@@ -30,8 +30,11 @@ fn commented_else_not_flagged_cross_backend() {
 
 #[test]
 fn empty_loop_flagged_cross_backend() {
-    let rs = "fn f() { while poll() {} }";
-    let ts = "while (poll()) {}";
+    // A bare-flag condition has no call, so both backends flag it. (A
+    // call-condition `while poll() {}` is exempt in the Rust backend per the
+    // embedded register-polling idiom — see rust::tests, issue #1436.)
+    let rs = "fn f(running: bool) { while running {} }";
+    let ts = "while (running) {}";
     assert_eq!(run_rs(rs).len(), 1);
     assert_eq!(run_ts(ts).len(), 1);
 }

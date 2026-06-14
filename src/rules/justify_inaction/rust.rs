@@ -28,6 +28,17 @@
 //! work happens in the condition and the body is intentionally empty
 //! (e.g. `while it.next_if(p).is_some() {}`).
 //!
+//! An empty-bodied `while` is additionally exempt when its condition
+//! contains a call expression (`while !peripheral.ready() {}`,
+//! `while reg.read().bit() != X {}`, `while set.join_next().await.is_some() {}`).
+//! The call makes the condition self-documenting: it is the standard
+//! embedded register-polling / iterator-drain idiom where all the work
+//! happens in the condition and the body is empty by design, so a body
+//! comment would only restate the condition. A condition with no call —
+//! a bare flag (`while running {}`), a literal (`while true {}`), or a
+//! pure comparison (`while x < n {}`) — is not self-documenting and is
+//! still flagged.
+//!
 //! Function bodies, closure bodies, and empty `{}` used as unit
 //! expressions in other positions are out of scope — they are common
 //! in stubs, marker impls, and no-op callbacks, and flagging them
@@ -120,6 +131,20 @@ fn has_leading_comment(node: tree_sitter::Node, source: &[u8]) -> bool {
     gap.iter().filter(|&&b| b == b'\n').count() <= 1
 }
 
+/// True when the subtree rooted at `node` contains a `call_expression`. Used on
+/// a `while` condition: a call there (`!peripheral.ready()`, `reg.read().bit()`,
+/// `set.join_next().await.is_some()`) makes the condition self-documenting, so
+/// the empty body is the standard polling / iterator-drain idiom and needs no
+/// body comment. Negations (`unary_expression`) and comparisons
+/// (`binary_expression`) wrapping the call are walked through.
+fn contains_call(node: tree_sitter::Node) -> bool {
+    if node.kind() == "call_expression" {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor).any(contains_call)
+}
+
 fn loop_name(kind: &str) -> &'static str {
     match kind {
         "for_expression" => "for",
@@ -177,7 +202,11 @@ match node.kind() {
         }
         "for_expression" | "while_expression" | "loop_expression" => {
             if let Some(body) = node.child_by_field_name("body")
-                && !has_leading_comment(node, _source) {
+                && !has_leading_comment(node, _source)
+                && !(node.kind() == "while_expression"
+                    && node
+                        .child_by_field_name("condition")
+                        .is_some_and(contains_call)) {
                     flag_empty(node, body, loop_name(node.kind()), ctx, diagnostics);
                 }
         }
@@ -345,7 +374,7 @@ fn f(x: Option<u8>) {
 
     #[test]
     fn flags_empty_while() {
-        assert_eq!(run_on("fn f() { while poll() {} }").len(), 1);
+        assert_eq!(run_on("fn f(running: bool) { while running {} }").len(), 1);
     }
 
     #[test]
@@ -411,13 +440,56 @@ fn f(x: Option<u8>) {
 
     #[test]
     fn flags_while_with_no_comment_anywhere() {
-        let src = "fn f() {\n    let x = 1;\n    while it.next_if(|x| x.is_ws()).is_some() {}\n}\n";
+        let src = "fn f(running: bool) {\n    let x = 1;\n    while running {}\n}\n";
         assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 
     #[test]
     fn flags_while_with_comment_separated_by_blank_line() {
-        let src = "fn f() {\n    // unrelated note about something else\n\n    while poll() {}\n}\n";
+        let src = "fn f(running: bool) {\n    // unrelated note about something else\n\n    while running {}\n}\n";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    // -- call-in-condition exemption (issue #1436) --
+
+    #[test]
+    fn allows_empty_while_polling_register_negated_call_issue_1436() {
+        let src = "fn f() { while !RCC.cr().read().hsirdy() {} }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_while_polling_register_compared_call_issue_1436() {
+        let src = "fn f() { while RCC.cfgr().read().sws() != Sysclk::Hsi {} }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_while_join_next_await_call_issue_1436() {
+        let src = "async fn f() { while clients.join_next().await.is_some() {} }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_while_plain_call_issue_1436() {
+        let src = "fn f() { while poll() {} }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_while_bare_flag_no_call_issue_1436() {
+        let src = "fn f(running: bool) { while running {} }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_while_literal_no_call_issue_1436() {
+        assert_eq!(run_on("fn f() { while true {} }").len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_while_comparison_no_call_issue_1436() {
+        let src = "fn f(x: i32, n: i32) { while x < n {} }";
         assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 }
