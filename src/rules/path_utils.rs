@@ -199,10 +199,23 @@ fn is_root_level_build_script(path: &Path, project_root: &Path) -> bool {
 }
 
 /// True for demonstration code under `samples/`, `samples-dev/`, `examples/`,
-/// or `example-apps/`. Compiled and run at dev time to show library usage; it
-/// never ships in the published package.
+/// `example/`, `example-apps/`, `demo/`, or `demos/`. Compiled and run at dev
+/// time to show library usage; it never ships in the published package. (A
+/// component library's `components/**/demo/` files are documentation examples
+/// that legitimately import devDependencies — issue #1563.)
 pub fn is_sample_dir_path(path: &Path) -> bool {
-    has_path_segment(path, &["samples", "samples-dev", "examples", "example-apps"])
+    has_path_segment(
+        path,
+        &[
+            "samples",
+            "samples-dev",
+            "examples",
+            "example",
+            "example-apps",
+            "demo",
+            "demos",
+        ],
+    )
 }
 
 /// True for source files housed in a scaffold CLI's template directory
@@ -692,7 +705,13 @@ mod aux_path_tests {
         assert!(!is_build_script_path(&root.join("app.ts"), &root));
         assert!(is_sample_dir_path(&PathBuf::from("samples-dev/x.ts")));
         assert!(is_sample_dir_path(&PathBuf::from("examples/app.ts")));
+        // Issue #1563: component-library demo/example directories.
+        assert!(is_sample_dir_path(&PathBuf::from("components/tabs/demo/style-class.tsx")));
+        assert!(is_sample_dir_path(&PathBuf::from("packages/foo/demos/index.tsx")));
+        assert!(is_sample_dir_path(&PathBuf::from("example/app.ts")));
         assert!(!is_sample_dir_path(&PathBuf::from("src/mysamples/index.ts")));
+        // Segment (not substring) match — `demonstration` must not match `demo`.
+        assert!(!is_sample_dir_path(&PathBuf::from("src/demonstration/index.ts")));
     }
 
     #[test]
