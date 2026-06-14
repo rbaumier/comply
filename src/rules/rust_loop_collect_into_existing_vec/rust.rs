@@ -1,9 +1,17 @@
 //! rust-loop-collect-into-existing-vec backend.
 //!
 //! Match `for_expression` whose body is a single-statement block calling
-//! `<receiver>.push(...)`. We do not require the push argument to be the
-//! loop variable — `for x in src { v.push(transform(x)); }` is still
-//! better written as `v.extend(src.into_iter().map(transform))`.
+//! `<receiver>.push(...)` where `<receiver>` is a local binding confirmed to
+//! be a `Vec`. We do not require the push argument to be the loop variable —
+//! `for x in src { v.push(transform(x)); }` is still better written as
+//! `v.extend(src.into_iter().map(transform))`.
+//!
+//! `.push` exists on many non-`Vec` types (`VecDeque`, crossbeam `Worker`,
+//! `Injector`, custom queues), none of which `extend`s the same way, so we
+//! only flag when the receiver is an in-scope `let` whose initializer is
+//! `Vec`-shaped (`Vec::new()`, `Vec::with_capacity(...)`, `vec![...]`) or
+//! that carries an explicit `: Vec<...>` annotation. When the receiver's
+//! `Vec`-ness cannot be confirmed locally, we stay silent.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -67,6 +75,21 @@ impl AstCheck for Check {
         if method != "push" {
             return;
         }
+        // Only flag when the receiver is a plain local identifier we can
+        // resolve to a confirmable `Vec`. A field access (`self.q.push`) or
+        // method chain receiver can't be checked, so it is left untouched.
+        let Some(receiver) = function.child_by_field_name("value") else {
+            return;
+        };
+        if receiver.kind() != "identifier" {
+            return;
+        }
+        let Ok(var) = receiver.utf8_text(source) else {
+            return;
+        };
+        if !receiver_is_local_vec(node, var, source) {
+            return;
+        }
         diagnostics.push(Diagnostic::at_node(
             ctx.path,
             &node,
@@ -77,6 +100,65 @@ impl AstCheck for Check {
             Severity::Warning,
         ));
     }
+}
+
+/// Walk up the enclosing scopes from `for_node` looking for a `let`
+/// declaration that binds `var` to a confirmable `Vec`. Only declarations
+/// that lexically precede the loop in their block are considered.
+fn receiver_is_local_vec(for_node: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
+    let mut child = for_node;
+    while let Some(parent) = child.parent() {
+        let mut cursor = parent.walk();
+        for sib in parent.children(&mut cursor) {
+            if sib.id() == child.id() {
+                break;
+            }
+            if sib.kind() == "let_declaration" && let_binds_vec(sib, var, source) {
+                return true;
+            }
+        }
+        child = parent;
+    }
+    false
+}
+
+/// Whether `let_node` declares `var` with a `Vec`-shaped initializer or an
+/// explicit `Vec<...>` type annotation.
+fn let_binds_vec(let_node: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
+    let Some(pattern) = let_node.child_by_field_name("pattern") else {
+        return false;
+    };
+    if !pattern_binds(pattern, var, source) {
+        return false;
+    }
+    if let Some(ty) = let_node.child_by_field_name("type")
+        && ty.utf8_text(source).unwrap_or("").trim_start().starts_with("Vec<")
+    {
+        return true;
+    }
+    if let Some(value) = let_node.child_by_field_name("value") {
+        let text = value.utf8_text(source).unwrap_or("");
+        if text.starts_with("Vec::") || text.starts_with("vec!") {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether a `let` pattern (`x` or `mut x`) binds the name `var`.
+fn pattern_binds(pattern: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
+    let name = match pattern.kind() {
+        "identifier" => pattern.utf8_text(source).ok(),
+        "mut_pattern" => {
+            let mut cursor = pattern.walk();
+            pattern
+                .children(&mut cursor)
+                .find(|c| c.kind() == "identifier")
+                .and_then(|c| c.utf8_text(source).ok())
+        }
+        _ => None,
+    };
+    name == Some(var)
 }
 
 #[cfg(test)]
@@ -104,19 +186,37 @@ mod tests {
 
     #[test]
     fn flags_for_with_single_push() {
-        let src = "fn f(src: Vec<u32>, mut dst: Vec<u32>) { for x in src { dst.push(x); } }";
+        let src = "fn f(src: Vec<u32>) { let mut dst = Vec::new(); for x in src { dst.push(x); } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
     fn flags_for_with_push_of_transform() {
-        let src = "fn f(src: Vec<u32>, mut dst: Vec<u32>) { for x in src { dst.push(x + 1); } }";
+        let src = "fn f(src: Vec<u32>) { let mut dst = Vec::new(); for x in src { dst.push(x + 1); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_vec_macro_initializer() {
+        let src = "fn f(src: Vec<u32>) { let mut dst = vec![]; for x in src { dst.push(x); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_with_capacity_initializer() {
+        let src = "fn f(src: Vec<u32>) { let mut dst = Vec::with_capacity(src.len()); for x in src { dst.push(x); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_explicit_vec_type_annotation() {
+        let src = "fn f(src: Vec<u32>) { let mut dst: Vec<u32> = make(); for x in src { dst.push(x); } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
     fn allows_for_with_multiple_statements() {
-        let src = "fn f(src: Vec<u32>, mut dst: Vec<u32>) { for x in src { let y = x + 1; dst.push(y); } }";
+        let src = "fn f(src: Vec<u32>) { let mut dst = Vec::new(); for x in src { let y = x + 1; dst.push(y); } }";
         assert!(run_on(src).is_empty());
     }
 
@@ -128,7 +228,36 @@ mod tests {
 
     #[test]
     fn allows_extend_call() {
-        let src = "fn f(src: Vec<u32>, mut dst: Vec<u32>) { dst.extend(src); }";
+        let src = "fn f(src: Vec<u32>) { let mut dst = Vec::new(); dst.extend(src); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // The receiver's `Vec`-ness can't be confirmed from a parameter binding,
+    // so a push to an unknown receiver type is left alone.
+    #[test]
+    fn allows_push_to_unconfirmed_param() {
+        let src = "fn f(src: Vec<u32>, mut dst: Vec<u32>) { for x in src { dst.push(x); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // crossbeam-deque Worker — push to a concurrent deque, not a Vec.
+    #[test]
+    fn allows_push_to_worker_deque_issue_1478() {
+        let src = "fn f() { let w = Worker::new_fifo(); for i in 1..=3 { w.push(i); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // crossbeam-deque Injector — push to a concurrent queue, not a Vec.
+    #[test]
+    fn allows_push_to_injector_issue_1478() {
+        let src = "fn f() { let q = Injector::new(); for i in 0..200 { q.push(i); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // crossbeam-epoch Queue with explicit type annotation — not a Vec.
+    #[test]
+    fn allows_push_to_typed_queue_issue_1478() {
+        let src = "fn f() { let q: Queue<i64> = Queue::new(); for i in 0..200 { q.push(i) } }";
         assert!(run_on(src).is_empty());
     }
 }
