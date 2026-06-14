@@ -106,6 +106,7 @@ const RAW: &[(&str, &str)] = &[
     ("graphql", include_str!("graphql.toml")),
     ("gatsby", include_str!("gatsby.toml")),
     ("docusaurus", include_str!("docusaurus.toml")),
+    ("astro", include_str!("astro.toml")),
 ];
 
 fn registry() -> &'static [FrameworkDef] {

@@ -1,0 +1,23 @@
+[detection]
+dependencies = ["astro"]
+
+[entry_points]
+dirs = ["/pages/", "/src/pages/", "/src/content/"]
+files = ["middleware.ts", "middleware.js"]
+root_files = ["astro.config"]
+
+[magic_exports]
+names = []
+
+# Astro's file-system router consumes a fixed set of named exports from page and
+# API-route modules under `src/pages/` (and content collections under
+# `src/content/`) by exact name, never through a static import. These are scoped
+# to those route files so a same-named export (`GET`, `default`, `prerender`, …)
+# in an ordinary module stays flaggable. `onRequest` is not listed here — it is
+# consumed in `src/middleware.{ts,js}`, which is an `entry_points.files` match
+# that bails out entirely.
+[route_magic_exports]
+route_files = [
+    "default", "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "ALL",
+    "getStaticPaths", "prerender", "partial",
+]

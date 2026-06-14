@@ -1833,6 +1833,143 @@ mod tests {
     }
 
     #[test]
+    fn ignores_astro_middleware_on_request_issue_1807() {
+        // Regression for #1807 (clerk/javascript) — Astro's `src/middleware.ts`
+        // must export `onRequest`, invoked by the request pipeline by convention,
+        // never through a static import, so it has no importer yet is live.
+        let pkg = r#"{ "dependencies": { "astro": "4.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/middleware.ts",
+                "export const onRequest = (context, next) => next();\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/middleware.ts");
+        assert!(
+            diags.is_empty(),
+            "Astro middleware `onRequest` is a framework entry: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_astro_page_exports_issue_1807() {
+        // Regression for #1807 — files under `src/pages/` are consumed by Astro's
+        // file-system router: the default component export, HTTP method handlers
+        // in API routes, and `getStaticPaths`/`prerender` directives are never
+        // imported by user code.
+        let pkg = r#"{ "dependencies": { "astro": "4.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/pages/api/me.ts",
+                "export const GET = async ({ locals }) => new Response(null);\n\
+                 export const prerender = false;\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/pages/api/me.ts");
+        assert!(
+            diags.is_empty(),
+            "Astro src/pages/* exports are router-consumed entry points: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_astro_page_route_magic_exports_with_entrypoints_issue_1807() {
+        // Regression for #1807 — when entrypoint globs are configured the
+        // framework-entry-dir bailout is skipped, so a page's reserved exports
+        // (`getStaticPaths`, HTTP method handlers) would look dead. They are
+        // route-scoped magic exports and stay live in `/pages/` files.
+        let pkg = r#"{ "dependencies": { "astro": "4.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/pages/blog/[slug].ts",
+                "export async function getStaticPaths() { return []; }\n\
+                 export const GET = async () => new Response(null);\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg_and_entrypoints(
+            pkg,
+            vec!["src/util.ts".to_string()],
+            &files,
+            "src/pages/blog/[slug].ts",
+        );
+        assert!(
+            diags.is_empty(),
+            "Astro page route magic exports are framework-consumed: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_on_request_export_in_non_astro_project_issue_1807() {
+        // Negative-space guard for #1807 — the Astro middleware exemption is gated
+        // on the `astro` dependency. The same `onRequest` shape in a `middleware.ts`
+        // of a non-Astro project, with no importer, is genuinely dead and fires.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/middleware.ts",
+                "export const onRequest = (context, next) => next();\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/middleware.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "an `onRequest` export in a non-Astro project must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("onRequest"));
+    }
+
+    #[test]
+    fn still_flags_get_export_in_non_page_astro_module_issue_1807() {
+        // Negative-space guard for #1807 — the HTTP-handler exemption is scoped to
+        // `/pages/` files. A `GET` export from an ordinary module (not under
+        // `src/pages/`) in an Astro project, with no importer, is genuinely dead.
+        let pkg = r#"{ "dependencies": { "astro": "4.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            ("src/lib/http.ts", "export function GET() { return 0; }\n"),
+            ("src/lib/other.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/lib/http.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a `GET` export in a non-page module must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("GET"));
+    }
+
+    #[test]
+    fn still_flags_ordinary_export_in_astro_page_file_issue_1807() {
+        // Negative-space guard for #1807 — the page exemption is scoped to Astro's
+        // reserved names. An ordinary `helper` export in the same page file, with
+        // no importer, is genuinely dead and must still be flagged.
+        let pkg = r#"{ "dependencies": { "astro": "4.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/pages/blog/[slug].ts",
+                "export async function getStaticPaths() { return []; }\n\
+                 export const helper = () => 1;\n",
+            ),
+            ("src/util.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg_and_entrypoints(
+            pkg,
+            vec!["src/util.ts".to_string()],
+            &files,
+            "src/pages/blog/[slug].ts",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "an ordinary unused export in an Astro page file must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("helper"));
+    }
+
+    #[test]
     fn ignores_module_consumed_via_namespace_import() {
         // When `import * as ns from './m'` exists, individual symbol usages
         // are intentionally not linked; flagging every export would be noise.
