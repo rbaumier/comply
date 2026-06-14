@@ -85,6 +85,16 @@ impl OxcCheck for Check {
                 if is_iife_parameter_aliasing_argument(nodes, decl_node, name) {
                     continue;
                 }
+                // The ORM table-definition idiom destructures column-builder
+                // helpers from a callback parameter
+                // (`tableFn('name', ({ int, json }) => ...)`), deliberately
+                // re-binding the equally-named module imports inside the
+                // callback. Drizzle exposes these helpers via the callback
+                // argument so the destructured names shadow the imports on
+                // purpose, not by accident.
+                if is_destructured_callback_argument_param(nodes, decl_node) {
+                    continue;
+                }
                 let span = scoping.symbol_span(symbol_id);
                 let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
                 diagnostics.push(Diagnostic {
@@ -230,6 +240,41 @@ fn is_iife_parameter_aliasing_argument(
         call.arguments.get(param_index),
         Some(Argument::Identifier(arg)) if arg.name.as_str() == symbol_name
     )
+}
+
+/// True when `decl` is a binding introduced by an object-destructuring pattern
+/// of a parameter belonging to an arrow / function expression that is itself a
+/// direct argument of a call expression — the ORM table-definition idiom
+/// `tableFn('name', ({ col, ... }) => ...)`.
+///
+/// The discriminator is structural and name-agnostic: the binding sits inside an
+/// `ObjectPattern` that is the pattern of a `FormalParameter`, and the function
+/// owning that parameter is passed as a call argument (the callback shape). It
+/// does not key off any specific function name or import specifier.
+fn is_destructured_callback_argument_param(nodes: &AstNodes, decl: NodeId) -> bool {
+    use oxc_ast::ast::BindingPattern;
+
+    // The binding's declaration node is the `FormalParameter` itself, and its
+    // pattern must be an object-destructuring pattern; otherwise a plain
+    // `(x) => ...` parameter would be wrongly exempted.
+    let AstKind::FormalParameter(param) = nodes.kind(decl) else {
+        return false;
+    };
+    if !matches!(param.pattern, BindingPattern::ObjectPattern(_)) {
+        return false;
+    }
+
+    // The parameter's owning callable must be an arrow / function expression
+    // passed directly as a call argument (the callback shape).
+    let Some(fn_id) = nodes.ancestor_ids(decl).find(|&id| {
+        matches!(
+            nodes.kind(id),
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+        )
+    }) else {
+        return false;
+    };
+    matches!(nodes.parent_kind(fn_id), AstKind::CallExpression(_))
 }
 
 #[cfg(test)]
@@ -519,6 +564,52 @@ mod tests {
         let d = run_on(
             "const handler = 1;\n\
              const Component = memo(function handler() { return null; });",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_drizzle_table_callback_destructured_column_helpers() {
+        // Issue #1275 reproduction (pattern 1): the drizzle table-definition
+        // callback destructures column-builder helpers from its parameter,
+        // intentionally shadowing the equally-named module imports.
+        let d = run_on(
+            "import { int, json, serial, text } from 'drizzle-orm/singlestore-core';\n\
+             singlestoreTable('test', ({ int, json, serial, text }) => ({ id: int().primaryKey(), data: json(), seq: serial(), label: text() }));",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_value_binding_shadowing_type_only_import() {
+        // Issue #1275 reproduction (pattern 2): a value binding whose name
+        // matches an `import type` cannot shadow at runtime.
+        let d = run_on(
+            "import type { TopLevelCondition } from 'json-rules-engine';\n\
+             const TopLevelCondition: Type<TopLevelCondition, {}> = type('unknown.any') as any;",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_value_binding_shadowing_value_import() {
+        // Negative space: a value binding shadowing a normal *value* import is a
+        // real runtime shadow and must still fire.
+        let d = run_on(
+            "import { TopLevelCondition } from 'json-rules-engine';\n\
+             function build() { const TopLevelCondition = 1; return TopLevelCondition; }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_destructured_param_outside_call_argument_callback() {
+        // Negative space: a normal nested-scope variable shadowing an outer
+        // let/const is a genuine shadow, even via destructuring, when the
+        // function is not a callback argument to a call expression.
+        let d = run_on(
+            "const int = 1;\n\
+             function build({ int }: { int: number }) { return int; }",
         );
         assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
     }
