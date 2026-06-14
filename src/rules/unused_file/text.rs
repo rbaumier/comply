@@ -4,6 +4,7 @@
 //! path). Emits one diagnostic per unreachable file in a single pass.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::files::Language;
 use crate::project::{ImportIndex, ProjectCtx};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::path_utils::{
@@ -109,12 +110,81 @@ fn detect_entry_points<'a>(
         .filter(|p| {
             is_entry_point(p, project, canon_root, canon_workspace_roots)
                 || is_test_file(p)
+                || is_typeorm_glob_loaded_file(p)
                 || project.entrypoints_contains(p)
                 || project.is_package_entry_file(p)
                 || project.is_in_published_files_surface(p)
                 || project.is_declared_entry_barrel(p)
         })
         .collect()
+}
+
+/// True for a TypeORM artifact registered at runtime through a DataSource glob
+/// pattern (`entities`/`subscribers`/`migrations`), never `import`ed from an
+/// entry point — so the import-graph BFS cannot reach it. TypeORM scans these
+/// globs at load time and registers every matching file, so each is a real
+/// entry point whose transitive imports are live. Seeding them keeps the file
+/// (and the helpers it imports) out of the unused-file results.
+///
+/// The signal is the file's own content, not its directory name: a file is
+/// recognised when it declares an `@Entity`/`@ViewEntity`/`@ChildEntity`/
+/// `@EventSubscriber` decorator or `implements MigrationInterface`. This is
+/// TypeORM-specific — a project not using TypeORM cannot carry these markers —
+/// so no separate dependency gate is needed, and it holds even in the TypeORM
+/// repo itself (which does not list `typeorm` as a dependency). A cheap path
+/// pre-filter (the conventional `entity`/`subscriber`/`migration` directory or
+/// filename) bounds the source reads to DB-shaped files. An ordinary module
+/// merely sitting under such a directory, with none of the markers, is not
+/// recognised and stays flaggable.
+fn is_typeorm_glob_loaded_file(path: &Path) -> bool {
+    if !matches!(Language::from_path(path), Some(Language::TypeScript | Language::Tsx)) {
+        return false;
+    }
+    if !has_typeorm_artifact_path_shape(path) {
+        return false;
+    }
+    let Ok(source) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    source_has_typeorm_artifact_marker(&source)
+}
+
+/// Cheap pre-filter: the file's name or one of its directory segments follows
+/// the conventional TypeORM entity/subscriber/migration layout (`*.entity.ts`,
+/// or a path segment of `entity`/`entities`/`subscriber`/`subscribers`/
+/// `migration`/`migrations`). Bounds [`is_typeorm_glob_loaded_file`]'s source
+/// read to DB-shaped files instead of every indexed path.
+fn has_typeorm_artifact_path_shape(path: &Path) -> bool {
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    if stem.ends_with(".entity")
+        || stem.ends_with(".subscriber")
+        || stem.ends_with(".migration")
+    {
+        return true;
+    }
+    path.components().any(|c| {
+        matches!(
+            c.as_os_str().to_str(),
+            Some("entity")
+                | Some("entities")
+                | Some("subscriber")
+                | Some("subscribers")
+                | Some("migration")
+                | Some("migrations")
+        )
+    })
+}
+
+/// True when `source` carries a TypeORM-specific registration marker: an
+/// `@Entity`/`@ViewEntity`/`@ChildEntity`/`@EventSubscriber` decorator call or
+/// an `implements MigrationInterface` clause. These come from `typeorm` imports
+/// and are the runtime hooks the DataSource glob loader keys on.
+fn source_has_typeorm_artifact_marker(source: &str) -> bool {
+    source.contains("@Entity(")
+        || source.contains("@ViewEntity(")
+        || source.contains("@ChildEntity(")
+        || source.contains("@EventSubscriber(")
+        || source.contains("implements MigrationInterface")
 }
 
 fn is_entry_point(
@@ -1723,6 +1793,101 @@ mod tests {
         assert!(
             diags[0].path.to_str().unwrap().contains("orphan"),
             "the genuinely unreferenced non-library file must still be flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #2311 (typeorm): entity, subscriber, and migration files are
+    // registered at runtime via the DataSource `entities`/`subscribers`/
+    // `migrations` glob patterns, never `import`ed from an entry point, so the
+    // import-graph BFS cannot reach them. The TypeORM-specific decorators
+    // (`@Entity`, `@EventSubscriber`) and the `MigrationInterface` implementation
+    // are strong evidence the file is glob-loaded; such files (and everything they
+    // import) must not be flagged.
+    #[test]
+    fn typeorm_glob_loaded_files_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"app"}"#),
+            // Real entry point so the rule runs. It boots the DataSource, which
+            // registers entities/subscribers/migrations via runtime glob strings
+            // — there is no static import edge to any of those files.
+            (
+                "src/index.ts",
+                "import { ds } from './data-source';\nvoid ds;\n",
+            ),
+            (
+                "src/data-source.ts",
+                "import { DataSource } from 'typeorm';\n\
+                 export const ds = new DataSource({\n\
+                 \x20\x20entities: [__dirname + '/entity/*.ts'],\n\
+                 \x20\x20subscribers: [__dirname + '/subscriber/*.ts'],\n\
+                 \x20\x20migrations: [__dirname + '/migration/*.ts'],\n\
+                 });\n",
+            ),
+            // Entity referenced only via the entities glob. It imports a sibling
+            // entity and a non-decorated column helper — both must stay reachable.
+            (
+                "src/entity/Category.ts",
+                "import { Entity, PrimaryColumn, ManyToMany } from 'typeorm';\n\
+                 import { Post } from './Post';\n\
+                 import { slugify } from './slug';\n\
+                 @Entity()\n\
+                 export class Category {\n\
+                 \x20\x20@PrimaryColumn()\n\
+                 \x20\x20id!: string;\n\
+                 \x20\x20@ManyToMany(() => Post)\n\
+                 \x20\x20posts!: Post[];\n\
+                 \x20\x20slug = slugify(this.id);\n\
+                 }\n",
+            ),
+            (
+                "src/entity/Post.ts",
+                "import { Entity, PrimaryColumn } from 'typeorm';\n\
+                 @Entity()\n\
+                 export class Post { @PrimaryColumn() id!: string; }\n",
+            ),
+            // Non-decorated helper reachable only through the glob-loaded entity.
+            ("src/entity/slug.ts", "export const slugify = (s: string) => s;\n"),
+            (
+                "src/subscriber/PostSubscriber.ts",
+                "import { EventSubscriber, EntitySubscriberInterface } from 'typeorm';\n\
+                 @EventSubscriber()\n\
+                 export class PostSubscriber implements EntitySubscriberInterface {}\n",
+            ),
+            (
+                "src/migration/1700000000000-Init.ts",
+                "import { MigrationInterface, QueryRunner } from 'typeorm';\n\
+                 export class Init1700000000000 implements MigrationInterface {\n\
+                 \x20\x20async up(q: QueryRunner): Promise<void> {}\n\
+                 \x20\x20async down(q: QueryRunner): Promise<void> {}\n\
+                 }\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        let flagged: Vec<&str> = diags.iter().filter_map(|d| d.path.to_str()).collect();
+        assert!(
+            flagged.is_empty(),
+            "TypeORM glob-loaded entity/subscriber/migration files and their \
+             transitive imports must not be flagged: {flagged:?}"
+        );
+    }
+
+    // Regression for #2311: the TypeORM exemption is gated on the file content
+    // signal, not the directory name alone. An ordinary orphaned source file under
+    // an `entity/` directory that carries no `@Entity`/`@EventSubscriber`/
+    // `MigrationInterface` signal is still a true positive.
+    #[test]
+    fn orphan_in_entity_dir_without_typeorm_signal_still_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"app"}"#),
+            ("src/index.ts", "export const app = 1;\n"),
+            // Lives under entity/ but is a plain module — no decorator/interface.
+            ("src/entity/helpers.ts", "export const helper = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("helpers"),
+            "a plain module under entity/ with no TypeORM signal is still flagged: {diags:?}"
         );
     }
 
