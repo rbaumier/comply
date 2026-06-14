@@ -8,6 +8,10 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
+    fn run_at(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, path)
+    }
+
     fn run_in_storybook(source: &str) -> Vec<Diagnostic> {
         let file = FileCtx {
             path_segments: PathSegments { in_storybook: true, ..Default::default() },
@@ -135,5 +139,35 @@ mod tests {
     fn flags_numeric_constant_in_non_story_file() {
         let diags = run("const maxRetries = 3;");
         assert_eq!(diags.len(), 1);
+    }
+
+    // Issue #1586: SvelteKit page options are `const` exports whose lowercase
+    // names are mandated by the framework; SvelteKit reads them by exact name,
+    // so they cannot be SCREAMING_SNAKE_CASE.
+    #[test]
+    fn allows_sveltekit_page_options_in_route_file() {
+        let src = "export const prerender = true;\n\
+                   export const ssr = false;\n\
+                   export const csr = false;";
+        assert!(run_at(src, "src/routes/spa-shell/+page.ts").is_empty());
+        assert!(run_at(src, "src/routes/prerendered/+page.server.ts").is_empty());
+    }
+
+    // Negative space 1: a genuine lowercase magic constant in a SvelteKit route
+    // file is NOT a reserved page option, so it must still fire.
+    #[test]
+    fn flags_non_page_option_const_in_route_file() {
+        let diags = run_at("export const maxRetries = 5;", "src/routes/x/+page.ts");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("maxRetries"));
+    }
+
+    // Negative space 2: the same reserved name outside a SvelteKit route file is
+    // an ordinary constant and must still fire.
+    #[test]
+    fn flags_page_option_name_outside_route_file() {
+        let diags = run_at("export const prerender = true;", "src/lib/options.ts");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("prerender"));
     }
 }
