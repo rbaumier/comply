@@ -44,13 +44,19 @@ pub fn register() -> RuleDef {
     }
 }
 
-pub(super) fn extract_select_from_table(sql: &str) -> Option<String> {
-    let upper = sql.to_ascii_uppercase();
-    if !upper.contains("SELECT") {
+/// Reads the table identifier sitting immediately after `keyword` in `upper`
+/// (already uppercased SQL). Returns `None` when the target token contains a
+/// `{…}` format placeholder (e.g. Rust `format!("… FROM {table_name}")`): the
+/// real table is a runtime value, unknown at lint time, and must not be treated
+/// as a literal name. Leading whitespace between the keyword and the target is
+/// tolerated.
+fn extract_table_after(upper: &str, keyword: &str) -> Option<String> {
+    let idx = upper.find(keyword)?;
+    let after = upper[idx + keyword.len()..].trim_start();
+    let token = after.split_whitespace().next().unwrap_or("");
+    if token.contains('{') {
         return None;
     }
-    let idx = upper.find(" FROM ")?;
-    let after = &upper[idx + " FROM ".len()..];
     let mut name = String::new();
     for ch in after.chars() {
         if ch.is_alphanumeric() || ch == '_' {
@@ -64,21 +70,17 @@ pub(super) fn extract_select_from_table(sql: &str) -> Option<String> {
     if name.is_empty() { None } else { Some(name) }
 }
 
+pub(super) fn extract_select_from_table(sql: &str) -> Option<String> {
+    let upper = sql.to_ascii_uppercase();
+    if !upper.contains("SELECT") {
+        return None;
+    }
+    extract_table_after(&upper, " FROM ")
+}
+
 pub(super) fn extract_insert_into_table(sql: &str) -> Option<String> {
     let upper = sql.to_ascii_uppercase();
-    let idx = upper.find("INSERT INTO ")?;
-    let after = &upper[idx + "INSERT INTO ".len()..];
-    let mut name = String::new();
-    for ch in after.chars() {
-        if ch.is_alphanumeric() || ch == '_' {
-            name.push(ch);
-        } else if name.is_empty() {
-            continue;
-        } else {
-            break;
-        }
-    }
-    if name.is_empty() { None } else { Some(name) }
+    extract_table_after(&upper, "INSERT INTO ")
 }
 
 pub(super) fn has_on_conflict(sql: &str) -> bool {
