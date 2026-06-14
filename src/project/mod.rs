@@ -1337,6 +1337,26 @@ impl ProjectCtx {
             .any(|entry| manifest_dir.join(entry) == path)
     }
 
+    /// True when `path` is invoked directly as a CLI entry by its nearest
+    /// `package.json` `scripts` (e.g. `"build": "tsx ./build.ts"` makes the
+    /// sibling `build.ts` a script entry). Such a file is run as a one-shot
+    /// executable by a runner, never `import`-ed by another module and never
+    /// part of the published `dist/`, so rules that constrain *published module*
+    /// semantics (e.g. `node-no-top-level-await`) must not fire on it. The
+    /// extracted entries are manifest-dir-relative, so the comparison joins each
+    /// onto the manifest directory and matches against `path`.
+    pub fn is_script_entry_file(&self, path: &Path) -> bool {
+        let Some(manifest_dir) = self.nearest_package_json_dir(path) else {
+            return false;
+        };
+        let Some(pkg) = self.nearest_package_json(path) else {
+            return false;
+        };
+        pkg.script_entry_files
+            .iter()
+            .any(|entry| manifest_dir.join(entry) == path)
+    }
+
     /// True when `path`'s file stem matches one of the published entry-point
     /// stems its nearest `package.json` declares (any `exports` subpath, plus
     /// `main`/`module`). A multi-entry package ships built artifacts under
@@ -2536,6 +2556,22 @@ mod tests {
         assert!(ctx.is_package_entry_file(&dir.path().join("index.mjs")));
         assert!(ctx.is_package_entry_file(&dir.path().join("index.cjs")));
         assert!(!ctx.is_package_entry_file(&dir.path().join("other.js")));
+    }
+
+    #[test]
+    fn is_script_entry_file_matches_scripts_invocation() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"@redwoodjs/auth-azure-web","scripts":{"build":"tsx ./build.ts"},"main":"./dist/cjs/index.js"}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx::empty();
+        // The file `scripts.build` runs directly is a script entry.
+        assert!(ctx.is_script_entry_file(&dir.path().join("build.ts")));
+        // A sibling library module the scripts never invoke is not.
+        assert!(!ctx.is_script_entry_file(&dir.path().join("src/load.ts")));
     }
 
     #[test]

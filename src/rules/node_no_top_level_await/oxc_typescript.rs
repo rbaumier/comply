@@ -5,7 +5,9 @@
 //! nearest `package.json` declaring `"type": "module"`), where top-level await
 //! is a valid Stage-4 feature, plus test files, `__mocks__/` manual-mock files
 //! (Jest/Vitest test infrastructure that uses top-level `await` for
-//! `vi.importActual()`), scripts, and entrypoints.
+//! `vi.importActual()`), scripts, package-root build/CLI scripts invoked
+//! directly by a `package.json` `scripts` entry (e.g. `tsx ./build.ts`), and
+//! entrypoints.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -60,6 +62,7 @@ impl OxcCheck for Check {
             || is_test_file(ctx.path)
             || crate::rules::path_utils::is_auto_mock_dir_path(ctx.path)
             || is_script_file(ctx.path, ctx.source)
+            || ctx.project.is_script_entry_file(ctx.path)
             || is_entrypoint(ctx.source)
         {
             return;
@@ -199,6 +202,45 @@ export const AppleAdapter = (config: OauthBasicConfig) => {
     fn flags_top_level_await_in_commonjs_package() {
         let src = "const data = await fetch('/api');";
         let pkg = r#"{ "main": "./dist/index.js" }"#;
+        let diags = run_in_package("src/load.ts", src, pkg);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Top-level"));
+    }
+
+    // Regression for #1690: a package-root `build.ts` invoked directly by the
+    // `scripts.build` entry (`tsx ./build.ts`) is a one-shot executable script,
+    // not a published module, even when the package itself is CommonJS and
+    // declares `main`/`exports`. Top-level await is idiomatic there.
+    #[test]
+    fn allows_top_level_await_in_package_root_build_script() {
+        let src = r#"
+import { buildCjs, buildEsm } from '@redwoodjs/framework-tools'
+
+await buildEsm()
+await buildCjs()
+"#;
+        let pkg = r#"{
+  "scripts": { "build": "tsx ./build.ts" },
+  "main": "./dist/cjs/index.js",
+  "exports": { ".": { "import": "./dist/esm/index.js" } }
+}"#;
+        assert!(
+            run_in_package("build.ts", src, pkg).is_empty(),
+            "top-level await in a package-root build.ts run via tsx is not a published module"
+        );
+    }
+
+    // Negative space for #1690: an ordinary library module under `src/` in the
+    // same CommonJS package — one that is NOT a script entry — must still be
+    // flagged. The script-entry exemption is keyed on the `scripts` invocation,
+    // not on the mere presence of a `scripts` field.
+    #[test]
+    fn still_flags_top_level_await_in_library_module_of_build_script_package() {
+        let src = "const data = await fetch('/api');";
+        let pkg = r#"{
+  "scripts": { "build": "tsx ./build.ts" },
+  "main": "./dist/cjs/index.js"
+}"#;
         let diags = run_in_package("src/load.ts", src, pkg);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("Top-level"));
