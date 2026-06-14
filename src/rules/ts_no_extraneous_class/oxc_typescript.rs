@@ -62,6 +62,13 @@ impl OxcCheck for Check {
             .collect();
 
         if members.is_empty() {
+            // In NestJS, empty exported classes are idiomatic DI tokens / DTOs /
+            // entities: `@Body() dto: CreateDogDto`, `class Dog {}`. NestJS's
+            // ValidationPipe requires a runtime class (not an interface) to
+            // instantiate, so an empty class is "no fields yet", not dead code.
+            if ctx.project.has_framework("nestjs") {
+                return;
+            }
             let (line, column) =
                 byte_offset_to_line_col(ctx.source, class.span.start as usize);
             diagnostics.push(Diagnostic {
@@ -138,5 +145,75 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_in_nestjs(src: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            src,
+            path,
+            &crate::project::ProjectCtx::for_test_with_framework("nestjs"),
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    // Regression for #1241: NestJS DTO/entity classes start empty because they
+    // are DI tokens / ValidationPipe targets, not dead namespaces.
+    #[test]
+    fn allows_empty_dto_class_in_nestjs_project() {
+        assert!(
+            run_in_nestjs("export class CreateDogDto {}", "src/dogs/dto/create-dog.dto.ts")
+                .is_empty(),
+            "empty DTO in a NestJS project must not be flagged"
+        );
+    }
+
+    #[test]
+    fn allows_empty_entity_class_in_nestjs_project() {
+        assert!(
+            run_in_nestjs("export class Dog {}", "src/dogs/entities/dog.entity.ts").is_empty(),
+            "empty entity in a NestJS project must not be flagged"
+        );
+    }
+
+    // Negative-space guard: a genuinely-extraneous empty class in a project with
+    // no class-DI framework is still flagged — the exemption is framework-gated,
+    // not a blanket disable.
+    #[test]
+    fn still_flags_empty_class_in_non_framework_project() {
+        let diags = crate::rules::test_helpers::run_rule(&Check, "export class Empty {}", "src/widget.ts");
+        assert_eq!(diags.len(), 1, "empty class outside a DI framework must still fire");
+        assert!(diags[0].message.contains("empty"));
+    }
+
+    // The NestJS gate is scoped to the empty-class case; a static-only namespace
+    // class (no constructor, never instantiated) is extraneous everywhere and
+    // must still fire even inside a NestJS project.
+    #[test]
+    fn still_flags_static_only_class_in_nestjs_project() {
+        let diags = run_in_nestjs("export class Utils { static foo() {} }", "src/utils.ts");
+        assert_eq!(diags.len(), 1, "static-only namespace class must still fire in NestJS");
+        assert!(diags[0].message.contains("static"));
     }
 }
