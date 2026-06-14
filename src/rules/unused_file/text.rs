@@ -105,18 +105,128 @@ fn detect_entry_points<'a>(
     canon_root: Option<&Path>,
     canon_workspace_roots: &std::collections::HashSet<std::path::PathBuf>,
 ) -> Vec<&'a Path> {
+    let gecko_loaded_module_names = gecko_dynamic_loaded_module_names(index);
     index
         .indexed_paths()
         .filter(|p| {
             is_entry_point(p, project, canon_root, canon_workspace_roots)
                 || is_test_file(p)
                 || is_typeorm_glob_loaded_file(p)
+                || is_gecko_dynamic_loaded_file(p, &gecko_loaded_module_names)
                 || project.entrypoints_contains(p)
                 || project.is_package_entry_file(p)
                 || project.is_in_published_files_surface(p)
                 || project.is_declared_entry_barrel(p)
         })
         .collect()
+}
+
+/// File basenames referenced by a Gecko/Firefox runtime module loader anywhere
+/// in the tree: the trailing path component of each `ChromeUtils.importESModule`,
+/// `ChromeUtils.import`, or `Services.scriptloader.loadSubScript` string argument
+/// (e.g. `chrome://juggler/content/Helper.js` →  `Helper.js`,
+/// `resource://gre/modules/ChannelEventSink.sys.mjs` → `ChannelEventSink.sys.mjs`).
+///
+/// These loaders take a `chrome://`/`resource://` URL whose prefix maps to the
+/// on-disk path through a build manifest (`jar.mn`/`chrome.manifest`) that the
+/// import-graph scanner does not parse, so the URL cannot be resolved to a file.
+/// Matching on the trailing filename sidesteps that mapping: a module loaded this
+/// way is keyed by its basename and seeded as a reachable entry point.
+///
+/// The set is empty unless one of those loader calls actually appears in the
+/// tree, so a plain-JS project (no Gecko signal) gets no exemption — a bare
+/// `.sys.mjs` name alone never grants a free pass.
+fn gecko_dynamic_loaded_module_names(
+    index: &ImportIndex,
+) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    for path in index.indexed_paths() {
+        if !matches!(
+            Language::from_path(path),
+            Some(Language::TypeScript | Language::Tsx | Language::JavaScript)
+        ) {
+            continue;
+        }
+        let Ok(source) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        if !source.contains("ChromeUtils.importESModule")
+            && !source.contains("ChromeUtils.import")
+            && !source.contains("loadSubScript")
+        {
+            continue;
+        }
+        collect_gecko_loaded_module_names(&source, &mut names);
+    }
+    names
+}
+
+/// Extract the trailing filename of every quoted URL passed to a Gecko module
+/// loader call in `source` (`ChromeUtils.importESModule`, `ChromeUtils.import`,
+/// `Services.scriptloader.loadSubScript`). A filename is taken only when it has a
+/// JS/TS-module extension (`.js`/`.mjs`/`.jsm`/`.sys.mjs`/`.ts`/…), keeping
+/// unrelated URL strings out of the set.
+fn collect_gecko_loaded_module_names(source: &str, names: &mut std::collections::HashSet<String>) {
+    const LOADERS: [&str; 3] = [
+        "ChromeUtils.importESModule",
+        "ChromeUtils.import",
+        "loadSubScript",
+    ];
+    for loader in LOADERS {
+        let mut rest = source;
+        while let Some(pos) = rest.find(loader) {
+            let after = &rest[pos + loader.len()..];
+            rest = after;
+            if let Some(url) = first_quoted_string(after) {
+                let filename = url.rsplit('/').next().unwrap_or(url);
+                if is_module_filename(filename) {
+                    names.insert(filename.to_string());
+                }
+            }
+        }
+    }
+}
+
+/// The first single- or double-quoted string literal in `s`, if it begins (after
+/// optional whitespace and an opening paren) with a quote. Returns the string
+/// contents without the quotes. Used to read the URL argument of a Gecko loader
+/// call; a non-string-literal first argument (e.g. a variable) yields `None`.
+fn first_quoted_string(s: &str) -> Option<&str> {
+    let trimmed = s.trim_start();
+    let trimmed = trimmed.strip_prefix('(').unwrap_or(trimmed).trim_start();
+    let quote = trimmed.chars().next().filter(|c| *c == '\'' || *c == '"')?;
+    let body = &trimmed[1..];
+    let end = body.find(quote)?;
+    Some(&body[..end])
+}
+
+/// True when `name` ends in a JS/TS module extension recognised as a Gecko
+/// loadable module: `.js`, `.mjs`, `.cjs`, `.jsm`, `.ts`, `.mts`, `.tsx`, `.jsx`
+/// (covers the `.sys.mjs` system-module convention via the `.mjs` suffix).
+fn is_module_filename(name: &str) -> bool {
+    [".js", ".mjs", ".cjs", ".jsm", ".ts", ".mts", ".tsx", ".jsx"]
+        .iter()
+        .any(|ext| name.ends_with(ext))
+}
+
+/// True for a module loaded at runtime by Firefox/Gecko's `ChromeUtils.import*`
+/// or `Services.scriptloader.loadSubScript`, identified by its basename matching
+/// one referenced by such a loader elsewhere in the tree
+/// (see [`gecko_dynamic_loaded_module_names`]). These modules are pulled in via a
+/// `chrome://`/`resource://` URL string, never a static `import`, so the
+/// import-graph BFS cannot reach them — yet they are real entry points, not dead
+/// code. The match is gated on the loader signal being present in the tree, so a
+/// project that does not use Gecko loaders is unaffected.
+fn is_gecko_dynamic_loaded_file(
+    path: &Path,
+    loaded_module_names: &std::collections::HashSet<String>,
+) -> bool {
+    if loaded_module_names.is_empty() {
+        return false;
+    }
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| loaded_module_names.contains(name))
 }
 
 /// True for a TypeORM artifact registered at runtime through a DataSource glob
@@ -1936,6 +2046,92 @@ mod tests {
         assert!(
             diags[0].path.to_str().unwrap().contains("scratch"),
             "only the orphan outside the published `files` surface is flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #2268 (playwright firefox juggler): files loaded at runtime
+    // by Firefox/Gecko's `ChromeUtils.importESModule` / `loadSubScript` via a
+    // `chrome://`/`resource://` URL string are never `import`ed, so the
+    // import-graph BFS cannot reach them. The URL prefix maps to disk through a
+    // build manifest the scanner does not parse, so the trailing filename is
+    // matched instead. Both the `.sys.mjs` system-module and the plain `.js`
+    // modules referenced this way (and everything they import) must not be
+    // flagged.
+    #[test]
+    fn gecko_chromeutils_loaded_modules_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"app"}"#),
+            ("src/index.ts", "export const app = 1;\n"),
+            // The Gecko loader: references modules by chrome://resource:// URL.
+            (
+                "juggler/content/main.js",
+                "Services.scriptloader.loadSubScript('chrome://juggler/content/SimpleChannel.js');\n\
+                 const {Helper} = ChromeUtils.importESModule('chrome://juggler/content/Helper.js');\n\
+                 const {Sink} = ChromeUtils.importESModule('resource://gre/modules/ChannelEventSink.sys.mjs');\n",
+            ),
+            // A `.sys.mjs` system module — referenced only via importESModule.
+            (
+                "juggler/ChannelEventSink.sys.mjs",
+                "import { helper } from './shared.mjs';\nexport const Sink = helper;\n",
+            ),
+            // A plain `.js` module referenced via importESModule.
+            ("juggler/Helper.js", "export class Helper {}\n"),
+            // A plain `.js` module referenced via loadSubScript (no ChromeUtils
+            // in its own body — it must still be seeded by the importer signal).
+            ("juggler/SimpleChannel.js", "class SimpleChannel {}\n"),
+            // A non-loaded helper reachable only through a Gecko-loaded module.
+            ("juggler/shared.mjs", "export const helper = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        let flagged: Vec<&str> = diags.iter().filter_map(|d| d.path.to_str()).collect();
+        assert!(
+            flagged.is_empty(),
+            "Gecko ChromeUtils/loadSubScript-loaded modules and their transitive \
+             imports must not be flagged: {flagged:?}"
+        );
+    }
+
+    // Regression for #2268: the Gecko exemption is gated on a real loader signal.
+    // A `.sys.mjs` (or `.js`) file in a project with NO `ChromeUtils.import*` /
+    // `loadSubScript` reference is not exempted — a bare `.sys.mjs` name alone
+    // does not earn a free pass, so a genuinely orphaned one stays flagged.
+    #[test]
+    fn sys_mjs_without_gecko_signal_is_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"app"}"#),
+            ("src/index.ts", "export const app = 1;\n"),
+            // No ChromeUtils/loadSubScript anywhere → no Gecko signal.
+            ("src/orphan.sys.mjs", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "a .sys.mjs with no Gecko loader signal in the tree is still flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #2268: the Gecko exemption is precise — even with a loader
+    // signal present, a module whose basename is referenced by NO loader call is
+    // still a true positive when orphaned.
+    #[test]
+    fn unreferenced_module_in_gecko_project_still_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"app"}"#),
+            ("src/index.ts", "export const app = 1;\n"),
+            (
+                "juggler/main.js",
+                "const {Helper} = ChromeUtils.importESModule('chrome://juggler/content/Helper.js');\n",
+            ),
+            ("juggler/Helper.js", "export class Helper {}\n"),
+            // Referenced by no loader call — genuine dead code.
+            ("juggler/orphan.js", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "a module referenced by no Gecko loader call is still flagged: {diags:?}"
         );
     }
 }
