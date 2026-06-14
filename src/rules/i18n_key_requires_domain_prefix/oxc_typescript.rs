@@ -28,7 +28,7 @@ fn is_valid_namespaced(key: &str) -> bool {
             return false;
         }
         for c in chars {
-            if !c.is_ascii_alphanumeric() {
+            if !c.is_ascii_alphanumeric() && c != '-' {
                 return false;
             }
         }
@@ -93,5 +93,41 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    #[test]
+    fn allows_hyphenated_domain() {
+        // Hyphenated domains follow npm package naming (e.g. `@grafana/data`).
+        assert!(run("t('grafana-data.some.key')").is_empty());
+    }
+
+    #[test]
+    fn flags_missing_domain() {
+        assert_eq!(run("t('welcome')").len(), 1);
     }
 }
