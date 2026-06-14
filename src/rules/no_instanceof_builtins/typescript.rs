@@ -14,7 +14,6 @@ const BUILTINS: &[&str] = &[
     "TypeError",
     "URIError",
     "RegExp",
-    "Promise",
     "Map",
     "Set",
     "WeakMap",
@@ -97,9 +96,11 @@ mod tests {
     }
 
     #[test]
-    fn flags_instanceof_promise() {
+    fn ignores_instanceof_promise() {
+        // Regression for rbaumier/comply#1672 — no `Promise.isPromise()`
+        // built-in exists, so the warning would be unactionable.
         let d = run_on("if (p instanceof Promise) {}");
-        assert_eq!(d.len(), 1);
+        assert!(d.is_empty());
     }
 
     #[test]
