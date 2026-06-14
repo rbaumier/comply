@@ -453,6 +453,14 @@ impl TextCheck for Check {
         // the parse.
         let mut cloudflare_worker_entry: Option<bool> = None;
 
+        // Whether this module is an OXLint custom-plugin entry point — it imports
+        // `definePlugin` from `@oxlint/plugins` and `export default`s a
+        // `definePlugin(...)` call. OXLint resolves plugin modules from its
+        // config and loads the default export at run time, never through a static
+        // import, so the `default` export is live despite having no importer.
+        // Computed lazily: only a surviving `default` export pays for the parse.
+        let mut oxlint_plugin_entry: Option<bool> = None;
+
         let mut diagnostics = Vec::new();
         for export in exports {
             if matches!(export.kind, ExportKind::StarReExport) {
@@ -480,6 +488,19 @@ impl TextCheck for Check {
                     crate::project::is_cloudflare_worker_entry_source(ctx.source, ctx.lang)
                 });
                 if is_worker_entry {
+                    continue;
+                }
+            }
+            // OXLint custom plugin entry: the `default` export of a module that
+            // imports `definePlugin` from `@oxlint/plugins` and exports
+            // `definePlugin(...)` is loaded by OXLint from its config, never
+            // imported. Gated on the export being `default` so an ordinary module
+            // pays nothing.
+            if crate::project::OXLINT_PLUGIN_ENTRY_EXPORTS.contains(&export.name.as_str()) {
+                let is_plugin_entry = *oxlint_plugin_entry.get_or_insert_with(|| {
+                    crate::project::is_oxlint_plugin_entry_source(ctx.source, ctx.lang)
+                });
+                if is_plugin_entry {
                     continue;
                 }
             }
@@ -1386,6 +1407,80 @@ mod tests {
             "an ordinary named export in a Worker entry must still be flagged: {diags:?}"
         );
         assert!(diags[0].message.contains("unusedHelper"));
+    }
+
+    #[test]
+    fn ignores_oxlint_plugin_default_export_issue_1557() {
+        // Regression for #1557 (remix oxlint-plugins) — an OXLint custom plugin
+        // imports `definePlugin` from `@oxlint/plugins` and `export default`s a
+        // `definePlugin(...)` call. OXLint resolves plugin modules from its
+        // config and loads the default export by itself; no JavaScript file
+        // imports it, so the default export looks dead. The import-source +
+        // call-shape detection is what protects it.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "scripts/oxlint-plugins/interface-pascal-case-plugin.ts",
+                "import { definePlugin, defineRule } from '@oxlint/plugins';\n\
+                 export default definePlugin({\n\
+                   name: 'interface-pascal-case',\n\
+                   rules: {\n\
+                     'interface-pascal-case': defineRule({ create() { return {}; } }),\n\
+                   },\n\
+                 });\n",
+            ),
+            ("scripts/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) =
+            run_on_project(&files, "scripts/oxlint-plugins/interface-pascal-case-plugin.ts");
+        assert!(
+            diags.is_empty(),
+            "OXLint plugin default export is loaded by the linter config at runtime: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_ordinary_default_export_without_define_plugin_issue_1557() {
+        // Negative-space guard for #1557 — the exemption is keyed on the OXLint
+        // plugin shape. An ordinary `export default {}` with no `definePlugin`
+        // call and no `@oxlint/plugins` import, never imported, is genuinely dead
+        // and must still be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/config.ts", "export default { name: 'app' };\n"),
+            ("src/other.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/config.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "an ordinary unused default export must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("default"));
+    }
+
+    #[test]
+    fn still_flags_define_plugin_default_without_oxlint_import_issue_1557() {
+        // Negative-space guard for #1557 — both signals are required. A
+        // `export default definePlugin(...)` whose `definePlugin` does NOT come
+        // from `@oxlint/plugins` (here a local helper) is not the OXLint plugin
+        // shape, so an unimported default export must still be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/widget.ts",
+                "import { definePlugin } from './local-helpers';\n\
+                 export default definePlugin({ name: 'widget' });\n",
+            ),
+            (
+                "src/local-helpers.ts",
+                "export function definePlugin(x) { return x; }\ndefinePlugin;\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/widget.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a definePlugin default export without the @oxlint/plugins import must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("default"));
     }
 
     #[test]
