@@ -1,7 +1,9 @@
-//! no-await-in-loop OXC backend — flag `await` inside a loop body, but
-//! exempt recursive calls to the enclosing async function (deliberate
-//! depth-first traversal) and retry/polling loops that exit early on a
-//! result and pace themselves with a delay/backoff `await`.
+//! no-await-in-loop OXC backend — flag `await` inside the body of a
+//! collection/range loop (`for…of`, `for…in`, C-style `for(;;)`), but
+//! exempt `while`/`do…while` loops entirely (no iteration set to
+//! parallelize), recursive calls to the enclosing async function
+//! (deliberate depth-first traversal), and retry/polling loops that exit
+//! early on a result and pace themselves with a delay/backoff `await`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -160,8 +162,6 @@ fn is_retry_polling_loop(loop_kind: &AstKind) -> bool {
         AstKind::ForStatement(stmt) => &stmt.body,
         AstKind::ForOfStatement(stmt) => &stmt.body,
         AstKind::ForInStatement(stmt) => &stmt.body,
-        AstKind::WhileStatement(stmt) => &stmt.body,
-        AstKind::DoWhileStatement(stmt) => &stmt.body,
         _ => return false,
     };
     let mut has_exit = false;
@@ -170,11 +170,14 @@ fn is_retry_polling_loop(loop_kind: &AstKind) -> bool {
     has_exit && has_delay
 }
 
-/// Walk ancestors of the `await` looking for a loop boundary. Stops at
-/// function boundaries (a nested `async` function starts a fresh
-/// context — its awaits are not "in" the outer loop). Returns the name
-/// of the enclosing async function when a loop is found, so the caller
-/// can compare against the awaited callee for recursion detection.
+/// Walk ancestors of the `await` looking for a collection/range loop
+/// boundary (`for…of`, `for…in`, C-style `for(;;)`). `while`/`do…while`
+/// are not loop boundaries here — they have no iteration set to
+/// parallelize and are inherently sequential. Stops at function
+/// boundaries (a nested `async` function starts a fresh context — its
+/// awaits are not "in" the outer loop). Returns the name of the
+/// enclosing async function when a loop is found, so the caller can
+/// compare against the awaited callee for recursion detection.
 ///
 /// An `await` in a loop's once-evaluated header (the `for-of`/`for-in`
 /// iterable, or a `for(;;)` `init`) is not treated as in-loop.
@@ -200,9 +203,7 @@ fn enclosing_loop_and_fn_name<'a>(
         match parent.kind() {
             kind @ (AstKind::ForStatement(_)
             | AstKind::ForOfStatement(_)
-            | AstKind::ForInStatement(_)
-            | AstKind::WhileStatement(_)
-            | AstKind::DoWhileStatement(_)) => {
+            | AstKind::ForInStatement(_)) => {
                 if !await_in_loop_header(&kind, await_span) {
                     // Retry/polling exemption: the nearest enclosing loop
                     // exits early on a result and paces itself with a delay —

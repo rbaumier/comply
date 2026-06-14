@@ -33,8 +33,11 @@ mod tests {
         assert_eq!(run(src).len(), 1);
     }
 
+    /// `while` loops have no iteration set to map over — they are inherently
+    /// sequential control flow (polling, queue-drain), not parallelizable. An
+    /// `await` in a `while` body must not be flagged.
     #[test]
-    fn flags_await_in_while_loop() {
+    fn ignores_await_in_while_loop() {
         let src = r"
             async function drain(q: any) {
                 while (q.has()) {
@@ -42,11 +45,13 @@ mod tests {
                 }
             }
         ";
-        assert_eq!(run(src).len(), 1);
+        assert!(run(src).is_empty());
     }
 
+    /// `do…while` is likewise sequential-by-design control flow with no
+    /// collection to parallelize. An `await` in its body must not be flagged.
     #[test]
-    fn flags_await_in_do_while_loop() {
+    fn ignores_await_in_do_while_loop() {
         let src = r"
             async function poll() {
                 do {
@@ -54,7 +59,7 @@ mod tests {
                 } while (running);
             }
         ";
-        assert_eq!(run(src).len(), 1);
+        assert!(run(src).is_empty());
     }
 
     #[test]
@@ -430,6 +435,72 @@ mod tests {
         ";
         // Two body awaits, neither exempted (no early exit) → two diagnostics.
         assert_eq!(run(src).len(), 2);
+    }
+
+    /// Regression for #2263 — a polling `while` loop where each iteration
+    /// depends on the previous (await an event, then re-check the loop
+    /// condition) cannot be parallelized with `Promise.all`; there is no
+    /// collection to map over. Must not be flagged.
+    #[test]
+    fn ignores_await_in_polling_while_loop() {
+        let src = r"
+            async function waitForTarget(browser: any, helper: any) {
+                let target = this._browserToTarget.get(browser);
+                while (!target) {
+                    await helper.awaitEvent(this, 'TargetCreated');
+                    target = this._browserToTarget.get(browser);
+                }
+                return target;
+            }
+        ";
+        assert!(run(src).is_empty());
+    }
+
+    /// Negative space for #2263 — a `for…of` over a collection awaits each
+    /// independent item and CAN be parallelized with `Promise.all(items.map)`.
+    /// The while/do-while exemption must not leak into collection iteration.
+    #[test]
+    fn flags_await_in_for_of_after_while_exemption() {
+        let src = r"
+            async function run(items: Item[]) {
+                for (const item of items) {
+                    await f(item);
+                }
+            }
+        ";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    /// Negative space for #2263 — a C-style `for(;;)` iterates a range that can
+    /// be mapped into a parallel `Promise.all`; it stays flaggable.
+    #[test]
+    fn flags_await_in_c_style_for_after_while_exemption() {
+        let src = r"
+            async function run(n: number) {
+                for (let i = 0; i < n; i++) {
+                    await f(i);
+                }
+            }
+        ";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    /// An `await` inside a `for…of` nested in a `while` is still flagged — the
+    /// `for…of` is the nearest collection loop and its work is parallelizable.
+    #[test]
+    fn flags_await_in_for_of_nested_in_while() {
+        let src = r"
+            async function run(getBatch: () => Item[] | null) {
+                let batch = getBatch();
+                while (batch) {
+                    for (const item of batch) {
+                        await f(item);
+                    }
+                    batch = getBatch();
+                }
+            }
+        ";
+        assert_eq!(run(src).len(), 1);
     }
 
     /// Regression for #366 — class property arrow function self-recursion via
