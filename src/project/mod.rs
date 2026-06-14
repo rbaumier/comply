@@ -1377,7 +1377,14 @@ impl ProjectCtx {
         let is_sveltekit_route = crate::rules::path_utils::is_sveltekit_route_file(basename);
         let is_param_matcher = crate::rules::path_utils::is_sveltekit_param_matcher_file(path);
         let is_remix_route = crate::rules::path_utils::is_remix_route_file(path);
-        if !is_sveltekit_route && !is_param_matcher && !is_remix_route {
+        let is_rr_root = crate::rules::path_utils::is_react_router_root_module(path);
+        let is_rr_config = crate::rules::path_utils::is_react_router_routes_config(path);
+        if !is_sveltekit_route
+            && !is_param_matcher
+            && !is_remix_route
+            && !is_rr_root
+            && !is_rr_config
+        {
             return;
         }
         // Only frameworks detected for this path (root manifest + nearest
@@ -1389,9 +1396,11 @@ impl ProjectCtx {
             .copied()
             .chain(self.frameworks_for_path(path));
         for fw in owning {
+            // `root.tsx`/`root.jsx` shares the route module export contract, so
+            // it draws on the same `route_files` set (plus `Layout`).
             let route_file_match = match fw.name.as_str() {
                 "svelte" => is_sveltekit_route,
-                "remix" => is_remix_route,
+                "remix" => is_remix_route || is_rr_root,
                 _ => false,
             };
             if route_file_match {
@@ -1399,6 +1408,9 @@ impl ProjectCtx {
             }
             if is_param_matcher {
                 names.extend(fw.route_magic_exports.param_matchers.iter().map(String::as_str));
+            }
+            if fw.name == "remix" && is_rr_config {
+                names.extend(fw.route_magic_exports.config_files.iter().map(String::as_str));
             }
         }
     }

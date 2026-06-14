@@ -1,5 +1,11 @@
 [detection]
-dependencies = ["@remix-run/react", "@remix-run/node", "@remix-run/server-runtime"]
+# `@react-router/dev` / `@react-router/fs-routes` are React Router v7's
+# framework-mode (formerly Remix) build packages — present only in full-stack
+# apps, never in a plain `react-router` SPA, so detection stays narrow.
+dependencies = [
+    "@remix-run/react", "@remix-run/node", "@remix-run/server-runtime",
+    "@react-router/dev", "@react-router/fs-routes",
+]
 
 [entry_points]
 dirs = ["/routes/", "/app/routes/"]
@@ -11,16 +17,21 @@ names = []
 
 # Remix (React Router v7) reserves a fixed set of named exports that its
 # file-system router consumes by exact name at run time, never through a static
-# import. These are scoped to route modules (under `app/routes/`) so a
-# same-named export (`loader`, `meta`, `default`, …) in an ordinary module stays
-# flaggable. `root.tsx` and `entry.{client,server}.tsx` already bail out
-# whole-file via `entry_points.files`.
+# import. These are scoped to convention files so a same-named export (`loader`,
+# `meta`, `default`, …) in an ordinary module stays flaggable.
+#
+# `route_files` apply in route modules (under `app/routes/`) and in the app root
+# module (`root.tsx`/`root.jsx`), which shares the same render-pipeline export
+# contract (plus `Layout`, the v7-only root wrapper). `config_files` apply in the
+# route-configuration entry (`routes.ts`/`routes.js`), whose `default` export is
+# consumed by `@react-router/dev`.
 [route_magic_exports]
 route_files = [
     "default", "loader", "action", "meta", "links", "headers",
     "ErrorBoundary", "CatchBoundary", "handle", "shouldRevalidate",
-    "clientLoader", "clientAction", "HydrateFallback",
+    "clientLoader", "clientAction", "HydrateFallback", "Layout",
 ]
+config_files = ["default"]
 
 [tooling_deps]
 names = ["@remix-run/dev", "@remix-run/eslint-config", "@remix-run/serve"]

@@ -344,8 +344,16 @@ impl TextCheck for Check {
         if ctx.project.entrypoints_contains(&canon) {
             return Vec::new();
         }
-        // Framework entry FILE/SUFFIX/ROOT_FILE match — always bail out.
-        if is_framework_specific_entry_point(&canon, ctx.project) {
+        // Framework entry FILE/SUFFIX/ROOT_FILE match — always bail out, except
+        // React Router v7 convention modules (`root.tsx`, `routes.ts`). Those
+        // are entry points for file-level rules (unused-file, side-effects) but
+        // here only their reserved exports are framework-consumed; an ordinary
+        // dead export in the same file is still genuinely dead. The per-export
+        // magic-exports check below exempts just the reserved names.
+        let is_rr_convention_module =
+            crate::rules::path_utils::is_react_router_root_module(&canon)
+                || crate::rules::path_utils::is_react_router_routes_config(&canon);
+        if !is_rr_convention_module && is_framework_specific_entry_point(&canon, ctx.project) {
             return Vec::new();
         }
         // ng-packagr public-API entry file (`lib.entryFile` of an
@@ -2603,5 +2611,98 @@ mod tests {
             "message should name the dead export, got: {}",
             diags[0].message
         );
+    }
+
+    // --- Issue #1833: React Router v7 `root.tsx` / `routes.ts` conventions ---
+
+    #[test]
+    fn ignores_react_router_v7_root_module_exports_issue_1833() {
+        // Regression for #1833 (pmndrs/react-spring) — React Router v7's app root
+        // module (`app/root.tsx`) exports `Layout`, `links`, `meta`, and a default
+        // component that its server/client render pipeline consumes by exact name,
+        // never through a static import. The project depends on `react-router`
+        // (v7, the framework formerly Remix), not `@remix-run/*`.
+        let pkg = r#"{ "dependencies": { "react-router": "7.0.0" }, "devDependencies": { "@react-router/dev": "7.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "app/root.tsx",
+                "export const meta = () => [{ title: \"x\" }];\n\
+                 export const links = () => [];\n\
+                 export function Layout({ children }) { return children; }\n\
+                 export default function App() { return null; }\n",
+            ),
+            ("app/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "app/root.tsx");
+        assert!(
+            diags.is_empty(),
+            "React Router v7 root.tsx convention exports are framework-consumed: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_react_router_v7_routes_config_default_export_issue_1833() {
+        // Regression for #1833 — the route-config entry (`app/routes.ts`) default
+        // export is consumed by `@react-router/dev`, never statically imported.
+        let pkg = r#"{ "dependencies": { "react-router": "7.0.0" }, "devDependencies": { "@react-router/dev": "7.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "app/routes.ts",
+                "export default [{ path: \"/\", file: \"home.tsx\" }];\n",
+            ),
+            ("app/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "app/routes.ts");
+        assert!(
+            diags.is_empty(),
+            "React Router v7 routes.ts default export is framework-consumed: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_ordinary_export_in_react_router_root_module_issue_1833() {
+        // Negative-space guard for #1833 — the exemption covers only React Router's
+        // reserved root names. An ordinary `helper` export in `root.tsx`, with no
+        // importer, is genuinely dead and must still be flagged.
+        let pkg = r#"{ "dependencies": { "react-router": "7.0.0" }, "devDependencies": { "@react-router/dev": "7.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "app/root.tsx",
+                "export function Layout({ children }) { return children; }\n\
+                 export const helper = () => 1;\n",
+            ),
+            ("app/util.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "app/root.tsx");
+        assert_eq!(
+            diags.len(),
+            1,
+            "an ordinary unused export in root.tsx must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("helper"));
+    }
+
+    #[test]
+    fn still_flags_layout_export_in_non_root_module_issue_1833() {
+        // Negative-space guard for #1833 — `Layout`/`links`/`meta` are common
+        // generic names. A `Layout` export from an ordinary module (not the app
+        // root or a route file), with no importer, is genuinely dead and must
+        // still fire: the React Router exemption is scoped to convention files.
+        let pkg = r#"{ "dependencies": { "react-router": "7.0.0" }, "devDependencies": { "@react-router/dev": "7.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "app/components/Shell.tsx",
+                "export function Layout({ children }) { return children; }\n",
+            ),
+            ("app/components/other.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) =
+            run_on_project_with_pkg(Some(pkg), &files, "app/components/Shell.tsx");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a `Layout` export in a non-convention module must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("Layout"));
     }
 }
