@@ -141,4 +141,32 @@ const rows = await db.select().from(users).leftJoin(posts, eq(posts.userId, user
         let src = "const rows = db.select({ userId: posts.userId }).from(users).leftJoin(posts, eq(posts.userId, users.id));";
         assert_eq!(run(src).len(), 1);
     }
+
+    // Issue #1203: test code exercises LEFT JOIN execution, not production
+    // null-safety. The rule is silent inside test directories.
+    #[test]
+    fn skips_leftjoin_in_test_dir() {
+        let src = r#"
+const result = await db.select()
+  .from(users)
+  .leftJoin(cities, eq(users.cityId, cities.id));
+"#;
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "tests/sqlite/sqlite-common.ts")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_leftjoin_outside_test_dir() {
+        let src = r#"
+const result = await db.select()
+  .from(users)
+  .leftJoin(cities, eq(users.cityId, cities.id));
+"#;
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "src/queries/users.ts").len(),
+            1
+        );
+    }
 }
