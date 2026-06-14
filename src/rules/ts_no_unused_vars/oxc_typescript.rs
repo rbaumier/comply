@@ -45,6 +45,37 @@ fn is_react_pragma_import(
     )
 }
 
+/// True when `decl_node` is a named `h`/`Fragment` import from a Preact-like
+/// package (`preact`, `preact/compat`, `preact/jsx-runtime`). Under Preact's
+/// classic JSX transform (`jsxFactory: "h"`, `jsxFragmentFactory: "Fragment"`),
+/// each JSX element compiles to an `h(...)` call and each fragment to a
+/// `Fragment` reference, so the binding is consumed by the JSX in the file even
+/// though it never appears as an explicit source reference. oxc's semantic
+/// analysis only sees source references, so it reports this factory import as
+/// unused.
+fn is_preact_jsx_factory_import(
+    decl_node: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let AstKind::ImportSpecifier(spec) = nodes.kind(decl_node) else {
+        return false;
+    };
+    if !matches!(spec.local.name.as_str(), "h" | "Fragment") {
+        return false;
+    }
+    nodes.ancestor_kinds(decl_node).any(|k| {
+        matches!(
+            k,
+            AstKind::ImportDeclaration(import)
+                if matches!(
+                    import.source.value.as_str(),
+                    "preact" | "preact/compat" | "preact/jsx-runtime"
+                )
+        )
+    })
+}
+
 /// True when `decl_node` is the id of a named function *expression*
 /// (`const f = function name() {}`). That name is the function's own identity,
 /// scoped to its body for self-reference / stack traces — it is intentionally
@@ -423,6 +454,12 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            if is_preact_jsx_factory_import(decl_node, semantic)
+                && *has_jsx.get_or_insert_with(|| file_contains_jsx(semantic))
+            {
+                continue;
+            }
+
             // A binding named by a per-file `/** @jsx X */` / `// @jsx X` (or
             // `@jsxFrag X`) pragma is the JSX factory: every JSX element/fragment
             // in the file compiles to a call on it, so it is consumed by the
@@ -714,6 +751,97 @@ export const El = () => <div />;
         assert!(
             diags.iter().any(|d| d.message.contains("`unusedDefault`")),
             "expected unused non-React default import to be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_preact_h_and_fragment_import_with_jsx() {
+        // Preact's classic JSX transform (`jsxFactory: "h"`,
+        // `jsxFragmentFactory: "Fragment"`): each JSX element compiles to an
+        // `h(...)` call and each fragment to a `Fragment` reference, so the named
+        // `h`/`Fragment` imports are used by the JSX even though neither appears
+        // as an explicit reference. (Closes #2085)
+        let src = r#"
+import { h, Fragment } from 'preact';
+
+export default function Component({ children }) {
+    return (
+        <Fragment>
+            <div>{children}</div>
+        </Fragment>
+    );
+}
+"#;
+        let diags = run(src);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`h`")),
+            "FP on `h` named import from preact in a JSX file: {diags:?}"
+        );
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`Fragment`")),
+            "FP on `Fragment` named import from preact in a JSX file: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_preact_compat_and_jsx_runtime_h_import_with_jsx() {
+        // The exemption covers Preact-like subpaths used as the factory source.
+        for source in ["preact/compat", "preact/jsx-runtime"] {
+            let src = format!(
+                "import {{ h }} from '{source}';\nexport const El = () => <div />;\n"
+            );
+            let diags = run(&src);
+            assert!(
+                !diags.iter().any(|d| d.message.contains("`h`")),
+                "FP on `h` import from {source} in a JSX file: {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_preact_h_import_without_jsx() {
+        // No JSX in the file → the classic transform consumes nothing, so an
+        // unused `h` import from preact is genuinely dead code.
+        let src = "import { h } from 'preact';\nexport {};";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "expected `h` to be flagged: {diags:?}");
+        assert!(diags[0].message.contains("`h`"));
+    }
+
+    #[test]
+    fn still_flags_unused_non_factory_preact_import_with_jsx() {
+        // The carve-out is scoped to the `h`/`Fragment` factory bindings. An
+        // unrelated unused named import from preact is still dead code, even when
+        // the file contains JSX.
+        let src = r#"
+import { h, foo } from 'preact';
+
+export const El = () => <div />;
+"#;
+        let diags = run(src);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`h`")),
+            "FP on `h` factory import: {diags:?}"
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("`foo`")),
+            "expected unused non-factory preact import to be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_unused_h_import_from_non_preact_source_with_jsx() {
+        // The carve-out is scoped to Preact-like sources. An unused `h` from an
+        // unrelated package is still dead code, even when the file contains JSX.
+        let src = r#"
+import { h } from './local-helpers';
+
+export const El = () => <div />;
+"#;
+        let diags = run(src);
+        assert!(
+            diags.iter().any(|d| d.message.contains("`h`")),
+            "expected unused `h` from a non-preact source to be flagged: {diags:?}"
         );
     }
 
