@@ -39,6 +39,13 @@ impl OxcCheck for Check {
                     return;
                 };
                 if is_then_key(&prop.key) {
+                    // A `then` whose value is not a function (numeric/string/null
+                    // literal, identifier, member expression, etc.) is plain data,
+                    // e.g. MongoDB aggregation `$cond`/`$switch` branches. Such an
+                    // object cannot be accidentally awaited, so it is not a thenable.
+                    if !is_function_value(&prop.value) {
+                        return;
+                    }
                     if is_intentional_thenable(is_canonical_then_value(&prop.value), || {
                         object_is_promise_like(obj)
                     }) {
@@ -213,6 +220,17 @@ fn key_name<'a>(key: &'a PropertyKey) -> Option<&'a str> {
 /// (a full Promise-like interface, e.g. an Azure LRO `PollerLike`).
 fn is_intentional_thenable(canonical_signature: bool, host_is_promise_like: impl FnOnce() -> bool) -> bool {
     canonical_signature || host_is_promise_like()
+}
+
+/// Whether a property value is a function expression or arrow function. Only a
+/// function-valued `then` makes an object an accidental thenable; a `then`
+/// holding any other value (literal, identifier, member, object/array, …) is
+/// plain data and `await` resolves to the host object itself.
+fn is_function_value(value: &Expression) -> bool {
+    matches!(
+        value,
+        Expression::FunctionExpression(_) | Expression::ArrowFunctionExpression(_)
+    )
 }
 
 /// Whether a property value is a function with the canonical two-parameter
@@ -406,5 +424,42 @@ const obj = {
         // A class `then(onfulfilled, onrejected)` with the canonical signature.
         let d = run_on("class Awaitable { then(onfulfilled, onrejected) { return p.then(onfulfilled, onrejected); } }");
         assert!(d.is_empty(), "canonical class `then` must be allowed: {d:?}");
+    }
+
+    // ── Issue #2329: a `then` whose value is not a function is plain data ──
+
+    #[test]
+    fn allows_object_then_numeric_literal_value() {
+        // MongoDB aggregation `$cond`: `then` is a numeric literal, not a
+        // function — the object can never be accidentally awaited.
+        let d = run_on("const e = { $cond: { if: '$x', then: 0.9, else: 1 } };");
+        assert!(d.is_empty(), "numeric `then` value must be allowed: {d:?}");
+    }
+
+    #[test]
+    fn allows_object_then_string_literal_value() {
+        // MongoDB aggregation `$switch` branch: `then` is a string literal.
+        let d = run_on("const b = { case: cond, then: 'Detlef' };");
+        assert!(d.is_empty(), "string `then` value must be allowed: {d:?}");
+    }
+
+    #[test]
+    fn allows_object_then_null_value() {
+        let d = run_on("const obj = { then: null };");
+        assert!(d.is_empty(), "null `then` value must be allowed: {d:?}");
+    }
+
+    #[test]
+    fn flags_object_then_function_expression_value() {
+        let d = run_on("const obj = { then: function() {} };");
+        assert_eq!(d.len(), 1, "function-valued `then` must still flag: {d:?}");
+        assert!(d[0].message.contains("object"));
+    }
+
+    #[test]
+    fn flags_object_then_arrow_value() {
+        let d = run_on("const obj = { then: () => {} };");
+        assert_eq!(d.len(), 1, "arrow-valued `then` must still flag: {d:?}");
+        assert!(d[0].message.contains("object"));
     }
 }
