@@ -2,7 +2,7 @@
 //! no `await` or `for await` in their own body.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{ClassShape, byte_offset_to_line_col, enclosing_class};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_span::GetSpan;
 use std::sync::Arc;
@@ -119,6 +119,29 @@ fn has_decorators(
     false
 }
 
+/// Check if the async function is a direct member of a class that declares an
+/// `implements` clause. The immediate parent must be a `MethodDefinition`
+/// (`async formData() {}`) or a `PropertyDefinition` (`handleError = async () =>
+/// {}`); a nested arrow inside a method body is not a class member and is not
+/// covered. comply is syntactic and cannot read the implemented interface, but
+/// `async` on a member of an `implements`-ing class is the standard way to
+/// satisfy a Promise-returning interface method without writing the explicit
+/// return annotation, so the missing `await` is not a smell.
+fn is_method_of_implementing_class(
+    func_node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let member = nodes.parent_node(func_node.id());
+    if !matches!(
+        member.kind(),
+        AstKind::MethodDefinition(_) | AstKind::PropertyDefinition(_)
+    ) {
+        return false;
+    }
+    enclosing_class(member.id(), nodes).is_some_and(|class| ClassShape::of(class).has_implements)
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[]
@@ -174,6 +197,16 @@ impl OxcCheck for Check {
             }
 
             if has_decorators(node, semantic) {
+                continue;
+            }
+
+            // Async method/property of a class with an `implements` clause. The
+            // interface controls the contract (commonly `(): Promise<T>`), and
+            // `async` is the standard way to satisfy it without an explicit
+            // return annotation, so the missing `await` is not a smell. Members
+            // of a class without `implements`, and standalone functions, stay
+            // flagged.
+            if is_method_of_implementing_class(node, semantic) {
                 continue;
             }
 
@@ -371,6 +404,56 @@ mod tests {
             },
         });"#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_method_of_implementing_class() {
+        // Regression for rbaumier/comply#1678 — a class method marked `async` to
+        // satisfy a Promise-returning interface method (Web API `Body.formData(): \
+        // Promise<FormData>`), with no `await` and no explicit return annotation.
+        let src = r#"class ElysiaRequest implements Body {
+            async formData() {
+                if (this.init?.body instanceof FormData) return this.init.body;
+                throw new Error('Unable to parse body as FormData');
+            }
+        }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_property_arrow_of_implementing_class() {
+        // Second covered shape — an async class-property arrow (assigned to a
+        // class field) in a class that declares `implements`.
+        let src = r#"class Handler implements Contract {
+            handle = async (x: number) => { return x; };
+        }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_async_method_of_non_implementing_class() {
+        // Negative space (a): an async method with no await in a class WITHOUT an
+        // `implements` clause has no external contract to satisfy — stays flagged.
+        let src = r#"class Plain {
+            async formData() { return 42; }
+        }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_nested_async_arrow_in_implementing_class_method() {
+        // The exemption is gated on the function being a *direct* class member.
+        // An async arrow nested inside a method body is not a class member, so it
+        // stays flagged even though the enclosing class declares `implements`.
+        let src = r#"class C implements I {
+            async run() {
+                const inner = async () => { return 1; };
+                return inner;
+            }
+        }"#;
+        // Only the nested arrow is flagged; the `run` method awaits nothing but is
+        // exempt as a member of an implementing class.
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
