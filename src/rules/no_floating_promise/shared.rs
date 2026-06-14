@@ -19,7 +19,13 @@
 /// Angular's `WritableSignal.update(fn)` returns `void`, Immutable.js `.update()`
 /// returns the collection, and store/Map-like `.update(...)` are synchronous. The
 /// name alone is too weak an async signal to flag.
+///
+/// `sync` is excluded because the `.sync` suffix is a widespread Node.js
+/// convention for the *synchronous* counterpart of an async API — `execa.sync()`,
+/// `cross-spawn.sync()`, `glob.sync()` all return a plain value, never a Promise.
+/// The name explicitly says "I am synchronous", so it is the opposite of an
+/// async signal.
 pub(super) const ASYNC_LOOKING_METHODS: &[&str] = &[
-    "save", "load", "fetch", "query", "publish", "insert", "connect", "dispatch", "sync",
+    "save", "load", "fetch", "query", "publish", "insert", "connect", "dispatch",
     "flush", "commit", "rollback", "run", "exec", "execute", "process", "handle",
 ];
