@@ -4,6 +4,22 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 #[derive(Debug)]
 pub struct Check;
 
+/// Strips a leading zero-padded numeric ordering prefix (`<digits>_`) from a
+/// stem, e.g. `0065_comment_newline` -> `comment_newline`. Such prefixes are a
+/// widespread convention for lexicographically ordered fixtures, migrations and
+/// parser test cases, and the remainder is what must satisfy the convention.
+/// Returns the stem unchanged when there is no prefix or nothing follows it.
+fn strip_ordering_prefix(stem: &str) -> &str {
+    let digits = stem.bytes().take_while(u8::is_ascii_digit).count();
+    if digits == 0 {
+        return stem;
+    }
+    match stem[digits..].strip_prefix('_') {
+        Some(rest) if !rest.is_empty() => rest,
+        _ => stem,
+    }
+}
+
 fn is_snake_case(stem: &str) -> bool {
     if stem.is_empty() {
         return false;
@@ -37,7 +53,7 @@ impl TextCheck for Check {
         if stem.is_empty() {
             return Vec::new();
         }
-        if is_snake_case(stem) {
+        if is_snake_case(strip_ordering_prefix(stem)) {
             return Vec::new();
         }
         vec![Diagnostic {
@@ -114,5 +130,25 @@ mod tests {
     #[test]
     fn flags_double_underscore() {
         assert_eq!(run("src/user__profile.rs").len(), 1);
+    }
+
+    #[test]
+    fn allows_zero_padded_ordering_prefix() {
+        assert!(run("crates/parser/test_data/parser/ok/0065_comment_newline.rs").is_empty());
+    }
+
+    #[test]
+    fn flags_miscased_remainder_after_ordering_prefix() {
+        assert_eq!(run("test_data/0065_CommentNewline.rs").len(), 1);
+    }
+
+    #[test]
+    fn flags_non_prefixed_bad_name() {
+        assert_eq!(run("src/BadName.rs").len(), 1);
+    }
+
+    #[test]
+    fn flags_purely_numeric_stem() {
+        assert_eq!(run("src/404.rs").len(), 1);
     }
 }
