@@ -36,6 +36,9 @@ impl TextCheck for Check {
         if super::is_sveltekit_route_file(file_name) {
             return Vec::new();
         }
+        if super::is_nuxt_dynamic_route_file(ctx.path, file_name) {
+            return Vec::new();
+        }
         if stem.is_empty() || is_pascal_case(stem) || super::text::is_kebab_case(stem) {
             return Vec::new();
         }
@@ -107,6 +110,43 @@ mod tests {
     fn allows_index_route_file_issue_1820() {
         assert!(run("demos/preview/index.vue").is_empty());
         assert!(run("demos/src/Marks/Underline/Vue/index.vue").is_empty());
+    }
+
+    // Regression for #1585: Nuxt file-based-routing dynamic-segment Vue SFCs
+    // under a `pages/` directory are framework-mandated route filenames and must
+    // not be flagged. The kebab/lowercase route files (`index.vue`, `about.vue`,
+    // `default.vue`, `app.vue`) are already covered by the kebab-case allowance;
+    // only the bracket-wrapped segments need the dedicated exemption.
+    #[test]
+    fn allows_nuxt_dynamic_param_route_issue_1585() {
+        assert!(run("test/fixtures/basic/pages/[id].vue").is_empty());
+    }
+
+    #[test]
+    fn allows_nuxt_catch_all_route_issue_1585() {
+        assert!(run("test/fixtures/basic/app/pages/[...slug].vue").is_empty());
+    }
+
+    #[test]
+    fn allows_nuxt_optional_dynamic_param_route_issue_1585() {
+        assert!(run("test/fixtures/basic/pages/[[id]].vue").is_empty());
+    }
+
+    // Already-passing Nuxt route files: confirm the kebab-case allowance keeps
+    // them quiet (these never reached the dynamic-route exemption).
+    #[test]
+    fn allows_nuxt_index_about_default_app_issue_1585() {
+        assert!(run("test/fixtures/basic/pages/index.vue").is_empty());
+        assert!(run("test/fixtures/basic/pages/about.vue").is_empty());
+        assert!(run("test/fixtures/basic/app/layouts/default.vue").is_empty());
+        assert!(run("test/fixtures/basic/app.vue").is_empty());
+    }
+
+    // Guard: the bracket exemption only applies inside a `pages/` tree. A
+    // bracket-named Vue SFC elsewhere is not a route segment and still fires.
+    #[test]
+    fn flags_bracket_stem_outside_pages_issue_1585() {
+        assert_eq!(run("src/components/[id].vue").len(), 1);
     }
 
     #[test]
