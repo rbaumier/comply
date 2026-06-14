@@ -16,7 +16,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         // `*.test-d.{ts,tsx}` are tsd / `expect-type` type-declaration tests:
@@ -29,6 +29,15 @@ impl OxcCheck for Check {
         let AstKind::ExpressionStatement(stmt) = node.kind() else {
             return;
         };
+
+        // OXC normalises an arrow's concise body (`() => expr`) into a synthetic
+        // ExpressionStatement (sometimes wrapped in a FunctionBody) under an
+        // ArrowFunctionExpression with `expression == true`. Such a node is the
+        // function's implicit return value, not a discarded statement, so a
+        // promise it produces is handed back to the caller, not floated.
+        if is_concise_arrow_body(node, semantic) {
+            return;
+        }
         let Expression::CallExpression(call) = &stmt.expression else {
             return;
         };
@@ -60,6 +69,26 @@ impl OxcCheck for Check {
 }
 
 use oxc_ast::ast::*;
+
+/// True when `node` (an ExpressionStatement) is the synthetic body of a
+/// concise-body arrow function — its grandparent (through the optional
+/// `FunctionBody` wrapper) is an `ArrowFunctionExpression` with
+/// `expression == true`, meaning the expression is the arrow's implicit return.
+fn is_concise_arrow_body(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let parent = semantic.nodes().parent_node(node.id());
+    let arrow_node = match parent.kind() {
+        AstKind::FunctionBody(_) => semantic.nodes().parent_node(parent.id()),
+        AstKind::ArrowFunctionExpression(_) => parent,
+        _ => return false,
+    };
+    matches!(
+        arrow_node.kind(),
+        AstKind::ArrowFunctionExpression(arrow) if arrow.expression
+    )
+}
 
 /// Does the call end with `.then(...)` / `.catch(...)` / `.finally(...)`?
 fn has_promise_handler(call: &CallExpression) -> bool {
@@ -691,6 +720,39 @@ it('infers the result type', () => {
     fn still_flags_floating_call_in_regular_file() {
         // Control: the same statement still fires outside a `.test-d.` file.
         let d = run_at("db.save(user);", "src/index.ts");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression tests for issue #1636: a promise-returning call that is the
+    // concise (expression) body of an arrow function is the function's implicit
+    // return value, not a discarded statement — it must not be flagged.
+
+    #[test]
+    fn allows_promise_combinator_in_arrow_concise_body() {
+        assert!(run_on("page.evaluate(value => Promise.resolve(value), null);").is_empty());
+    }
+
+    #[test]
+    fn allows_member_call_in_arrow_concise_body() {
+        // `browser.close()` is the concise body of the `.map` callback — its
+        // promise is collected by `map`, not floated.
+        assert!(
+            run_on("await Promise.all(browsers.map(browser => browser.close()));").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_promise_reject_in_async_arrow_concise_body() {
+        assert!(
+            run_on("const fail = async () => Promise.reject(new Error('error'));").is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_floating_call_in_arrow_block_body() {
+        // Negative-space guard: a promise-returning call as a discarded statement
+        // inside an arrow's *block* body (not the concise body) still fires.
+        let d = run_on("const run = () => { db.save(user); };");
         assert_eq!(d.len(), 1);
     }
 }
