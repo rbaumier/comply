@@ -8,7 +8,9 @@
 //! - is **not** in a binary file (`main.rs`, `src/bin/*.rs`), and
 //! - is **not** in a crate that declares a binary (the nearest
 //!   `Cargo.toml` declares a `[[bin]]` target or a `src/main.rs`
-//!   exists next to it).
+//!   exists next to it), and
+//! - is **not** in the `then` branch of an `if` gated by a
+//!   verbose/debug-style flag (`if self.verbose() { eprintln!(...) }`).
 //!
 //! `eprintln!` is fine in CLI binaries — that's where it belongs.
 //! It's a problem in libraries because consumers can't redirect or
@@ -16,6 +18,14 @@
 //! one of its source files is exempt, not just the entry points —
 //! even when it also carries a `[lib]` purely to expose internals to
 //! its own integration tests (the `lib.rs` + `main.rs` split).
+//!
+//! Output gated behind a runtime verbosity flag is opt-in diagnostics,
+//! not unconditional library noise: the consumer only sees it after
+//! turning the flag on. The guard is recognised only when the `if`
+//! condition is a *simple* flag reference — a bare identifier, a field
+//! access, or a no-argument method call — whose final segment names a
+//! known flag (`verbose`, `debug`, `quiet`, `trace`, …). Negated,
+//! compared, or compound conditions stay flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -23,6 +33,22 @@ use crate::rules::rust_helpers::is_in_test_context;
 use std::path::Path;
 
 const KINDS: &[&str] = &["macro_invocation"];
+
+/// Final-segment names that mark an `if` condition as a runtime
+/// verbose/debug flag. Kept deliberately small: only output gated by a
+/// recognised diagnostics flag is opt-in, everything else stays flagged.
+const VERBOSE_FLAG_NAMES: &[&str] = &[
+    "verbose",
+    "debug",
+    "quiet",
+    "trace",
+    "is_verbose",
+    "is_debug",
+    "is_quiet",
+    "is_trace",
+    "debug_mode",
+    "verbose_mode",
+];
 
 #[derive(Debug)]
 pub struct Check;
@@ -61,6 +87,9 @@ impl AstCheck for Check {
         {
             return;
         }
+        if is_under_verbose_flag_guard(node, source_bytes) {
+            return;
+        }
         diagnostics.push(Diagnostic::at_node(
             std::sync::Arc::clone(&ctx.path_arc),
             &node,
@@ -88,6 +117,72 @@ fn is_binary_file(path: &Path) -> bool {
         return true;
     }
     path.components().any(|c| c.as_os_str() == "bin")
+}
+
+/// True when `node` sits in the `then` branch of an enclosing `if`
+/// whose condition is a simple verbose/debug-flag reference. Walks
+/// every ancestor `if_expression` (so a flag guard several blocks up
+/// still exempts), requiring the node to be inside the `consequence`
+/// (not the `else`) of at least one of them.
+fn is_under_verbose_flag_guard(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        if parent.kind() == "if_expression"
+            && let Some(consequence) = parent.child_by_field_name("consequence")
+            && is_descendant_of(node, consequence)
+            && parent
+                .child_by_field_name("condition")
+                .is_some_and(|cond| is_verbose_flag_condition(cond, source))
+        {
+            return true;
+        }
+        current = parent;
+    }
+    false
+}
+
+/// True if `node` is `ancestor` or nested anywhere inside it.
+fn is_descendant_of(node: tree_sitter::Node, ancestor: tree_sitter::Node) -> bool {
+    let mut current = Some(node);
+    while let Some(n) = current {
+        if n == ancestor {
+            return true;
+        }
+        current = n.parent();
+    }
+    false
+}
+
+/// True when `cond` is a *simple* flag reference: a bare identifier, a
+/// field access, or a no-argument method call, whose final path segment
+/// is a known verbose/debug flag name. Negation (`!self.verbose()`),
+/// comparison, or any compound expression returns false — those are not
+/// plain "is the flag on" guards and stay flagged.
+fn is_verbose_flag_condition(cond: tree_sitter::Node, source: &[u8]) -> bool {
+    flag_segment(cond, source).is_some_and(|seg| VERBOSE_FLAG_NAMES.contains(&seg))
+}
+
+/// Extract the final segment of a simple flag reference, or `None` if
+/// `cond` is not one of the accepted simple shapes.
+fn flag_segment<'a>(cond: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    match cond.kind() {
+        // `verbose`
+        "identifier" => cond.utf8_text(source).ok(),
+        // `self.verbose`, `opts.debug`
+        "field_expression" => cond
+            .child_by_field_name("field")
+            .and_then(|f| f.utf8_text(source).ok()),
+        // `self.verbose()` — only the no-argument call form.
+        "call_expression" => {
+            let args = cond.child_by_field_name("arguments")?;
+            if args.named_child_count() != 0 {
+                return None;
+            }
+            let func = cond.child_by_field_name("function")?;
+            flag_segment(func, source)
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -215,6 +310,58 @@ path = "src/main.rs"
     fn allows_eprintln_in_bin_dir() {
         let source = "fn main() { eprintln!(\"oops\"); }";
         assert!(run_on(source, "src/bin/tool.rs").is_empty());
+    }
+
+    /// Regression for #1310: `eprintln!` gated behind `if self.verbose() { … }`
+    /// is opt-in diagnostics (polars sets the flag via `POLARS_VERBOSE`),
+    /// not unconditional library noise.
+    #[test]
+    fn allows_eprintln_under_self_verbose_method_guard() {
+        let source = "fn f(&self) { if self.verbose() { eprintln!(\"CACHE SET: {id}\"); } }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    #[test]
+    fn allows_eprintln_under_bare_debug_ident_guard() {
+        let source = "fn f() { if debug { eprintln!(\"trace\"); } }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    #[test]
+    fn allows_eprintln_under_field_verbose_guard() {
+        let source = "fn f(&self) { if self.verbose { eprintln!(\"trace\"); } }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// Bare, un-gated `eprintln!` in library code stays flagged even when a
+    /// flag-guarded sibling exists in the same function.
+    #[test]
+    fn flags_ungated_eprintln_alongside_guarded_one() {
+        let source = "fn f(&self) { eprintln!(\"oops\"); if self.verbose() { eprintln!(\"dbg\"); } }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// An `if` whose condition is not a verbose-style flag does not exempt.
+    #[test]
+    fn flags_eprintln_under_non_flag_guard() {
+        let source = "fn f(items: Vec<u8>) { if items.is_empty() { eprintln!(\"oops\"); } }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// A negated flag guard is the inverse case — output when the flag is
+    /// *off* is exactly the unconditional noise the rule targets.
+    #[test]
+    fn flags_eprintln_under_negated_verbose_guard() {
+        let source = "fn f(&self) { if !self.verbose() { eprintln!(\"oops\"); } }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// The `else` branch of a flag guard is not the gated path.
+    #[test]
+    fn flags_eprintln_in_else_of_verbose_guard() {
+        let source =
+            "fn f(&self) { if self.verbose() { let _ = 1; } else { eprintln!(\"oops\"); } }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
     }
 
     #[test]
