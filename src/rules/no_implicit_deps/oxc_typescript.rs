@@ -335,6 +335,56 @@ mod tests {
         assert_eq!(diags.len(), 1, "unlisted dep in flat project must be flagged, got {diags:?}");
     }
 
+    // Regression #1823 (mswjs/msw): the importer's nearest manifest is a
+    // marker-only `/test/package.json` ({"type":"module"}). The dep lives in the
+    // root `devDependencies`. The marker is not a package boundary, so dep
+    // lookup resolves the substantive root and the import is satisfied.
+    #[test]
+    fn allows_root_dep_when_nearest_is_marker_only_issue_1823() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"msw","main":"./lib/index.js","devDependencies":{"vitest":"^1.0.0"}}"#,
+        )
+        .unwrap();
+        let sub = dir.path().join("test").join("memory");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(dir.path().join("test").join("package.json"), r#"{"type":"module"}"#).unwrap();
+        let file = sub.join("vitest.config.ts");
+        let source = "import { defineConfig } from 'vitest/config';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "root dep reached past a marker-only manifest must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Negative space for #1823: a marker-only nearest manifest must not mask a
+    // genuinely-undeclared dependency — the substantive root is consulted and
+    // the missing package still fires.
+    #[test]
+    fn flags_undeclared_dep_when_nearest_is_marker_only_issue_1823() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"msw","main":"./lib/index.js","devDependencies":{"vitest":"^1.0.0"}}"#,
+        )
+        .unwrap();
+        let sub = dir.path().join("test").join("memory");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(dir.path().join("test").join("package.json"), r#"{"type":"module"}"#).unwrap();
+        let file = sub.join("t.ts");
+        let source = "import x from 'genuinely-undeclared';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "undeclared dep must still fire past a marker manifest, got {diags:?}"
+        );
+    }
+
     // Regression #1365: `~/` path alias (Vite/webpack `resolve.alias`) used
     // without a parsed tsconfig `paths` entry. `~` can never start an npm
     // package name, so the import is a local alias, not a missing dependency.

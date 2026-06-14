@@ -938,6 +938,59 @@ mod tests {
     }
 
     #[test]
+    fn no_fp_when_nearest_package_json_is_marker_only_issue_1823() {
+        // Regression for #1823 (mswjs/msw) — `src/core/index.ts`'s nearest
+        // manifest is a marker-only `/src/package.json` ({"type":"module"}) with
+        // no `main`/`exports`, so library detection would read `is_library=false`
+        // and flag every public export. The real library root sits above; the
+        // marker is transparent, so the rule sees `is_library=true` and bails.
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"msw","main":"./lib/index.js","exports":{".":"./lib/index.js"}}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join("src").join("core")).unwrap();
+        fs::write(dir.path().join("src").join("package.json"), r#"{"type":"module"}"#).unwrap();
+        fs::write(
+            dir.path().join("src").join("core").join("index.ts"),
+            "export const HttpResponse = 42;\n",
+        )
+        .unwrap();
+        // A second source file so the scan is not in single-file mode.
+        fs::write(dir.path().join("src").join("other.ts"), "export const z = 1;\n").unwrap();
+
+        let config = Config::default();
+        let source_files: Vec<SourceFile> = ["src/core/index.ts", "src/other.ts"]
+            .iter()
+            .map(|rel| SourceFile {
+                path: dir.path().join(rel),
+                language: Language::TypeScript,
+            })
+            .collect();
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let project = ProjectCtx::load(&refs, &config);
+
+        let target_path = dir.path().join("src").join("core").join("index.ts");
+        let source = fs::read_to_string(&target_path).unwrap();
+        let file_ctx = FileCtx::build(&target_path, &source, Language::TypeScript, &project);
+        let ctx = CheckCtx {
+            path: &target_path,
+            path_arc: std::sync::Arc::from(target_path.as_path()),
+            source: &source,
+            config: &config,
+            project: &project,
+            file: &file_ctx,
+            lang: Language::TypeScript,
+        };
+        let diags = Check.check(&ctx);
+        assert!(
+            diags.is_empty(),
+            "library root above a marker-only manifest must exempt exports, got: {diags:?}"
+        );
+    }
+
+    #[test]
     fn skips_in_single_file_scan_mode() {
         // Regression for rbaumier/comply#33 — `comply src/shared/foo.ts`
         // sees only one indexed file, so it can't see consumers and
