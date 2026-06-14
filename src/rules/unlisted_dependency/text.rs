@@ -15,6 +15,10 @@
 //!     `#` prefix for internal aliases resolved via a package.json `imports`
 //!     map or a framework's module resolver (Nuxt's `#app`/`#imports`), never
 //!     for npm package names.
+//!   - build-time virtual modules — Vite's `virtual:`/colon-namespaced
+//!     specifiers and Docusaurus framework aliases (`@theme/`, `@docusaurus/`)
+//!     via `is_virtual_module`, plus the Docusaurus `@site/` source-root alias.
+//!     These are resolved by the bundler, never published as npm packages.
 //!
 //! The rule produces project-wide diagnostics, not per-file ones, so it
 //! fires only on the first indexed path of the run. Every other invocation
@@ -67,7 +71,14 @@ impl TextCheck for Check {
             // Virtual modules: Vite's `virtual:` convention and custom
             // namespace separators (`vitest-custom-virtual:math`) are plugin-
             // provided, never npm packages — a `:` is invalid in an npm name.
+            // Also covers Docusaurus theme/core aliases (`@theme/`, `@docusaurus/`).
             if is_virtual_module(spec) {
+                continue;
+            }
+            // Docusaurus maps `@site/` to the site root at build time (webpack),
+            // so `@site/src/...` resolves to local project source, not an npm
+            // package. `@site` is not a publishable npm name.
+            if is_docusaurus_site_alias(spec) {
                 continue;
             }
             if pkg.has_dep_or_engine(spec) {
@@ -129,6 +140,13 @@ impl TextCheck for Check {
         }
         diagnostics
     }
+}
+
+/// True if `spec` is a Docusaurus `@site/` alias, which the bundler maps to
+/// the project source root at build time. Such specifiers resolve to local
+/// files, never to an npm package (`@site` is not a publishable name).
+fn is_docusaurus_site_alias(spec: &str) -> bool {
+    spec == "@site" || spec.starts_with("@site/")
 }
 
 /// DefinitelyTyped name for a runtime package: `foo` → `@types/foo`,
@@ -513,6 +531,53 @@ mod tests {
         let (_dir, diags) = run_on_project(&files, Some(r#"{ "dependencies": {} }"#), None);
         assert_eq!(diags.len(), 1, "`lodash` is unlisted: {diags:?}");
         assert!(diags[0].message.contains("lodash"));
+    }
+
+    #[test]
+    fn allows_docusaurus_virtual_subpath_modules() {
+        // Regression for #1689 — Docusaurus resolves `@docusaurus/*` and
+        // `@theme/*` to virtual modules via `@docusaurus/core`, and maps
+        // `@site/*` to the project source root at build time. None of these is
+        // an npm package, so they must not be flagged as unlisted dependencies.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "documentation/src/theme/DocItem/Layout/index.tsx",
+                "import Link from '@docusaurus/Link';\n\
+                 import { useHistory } from '@docusaurus/router';\n\
+                 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';\n\
+                 import Layout from '@theme/Layout';\n\
+                 import Tabs from '@theme/Tabs';\n\
+                 import Hero from '@site/src/components/Hero';",
+            ),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, Some(r#"{ "dependencies": {} }"#), None);
+        assert!(
+            diags.is_empty(),
+            "Docusaurus `@docusaurus/*`, `@theme/*`, `@site/*` are framework \
+             virtual modules, not npm packages: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_unlisted_package_alongside_docusaurus_aliases() {
+        // Negative-space guard for #1689 — the Docusaurus exemptions must not
+        // suppress a genuinely unlisted bare package imported in the same file.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "a.tsx",
+                "import Layout from '@theme/Layout';\n\
+                 import { thing } from 'some-unlisted-pkg';",
+            ),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, Some(r#"{ "dependencies": {} }"#), None);
+        assert_eq!(
+            diags.len(),
+            1,
+            "`some-unlisted-pkg` is a real bare import and must still fire: {diags:?}"
+        );
+        assert!(diags[0].message.contains("some-unlisted-pkg"));
     }
 
     #[test]
