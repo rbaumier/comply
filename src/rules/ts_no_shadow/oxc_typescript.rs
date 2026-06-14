@@ -75,6 +75,16 @@ impl OxcCheck for Check {
                 if is_named_fn_expr_self_reference(nodes, decl_node, name) {
                     continue;
                 }
+                // The UMD / module-factory idiom passes an outer binding into an
+                // immediately-invoked function expression whose parameter
+                // deliberately re-binds the same name to create a local alias
+                // (`(function (Prism) { ... })(Prism)`). The parameter shadow is
+                // the intended encapsulation, not an accidental one, so a
+                // parameter of an IIFE whose matching argument is the outer
+                // binding of the same name is exempt.
+                if is_iife_parameter_aliasing_argument(nodes, decl_node, name) {
+                    continue;
+                }
                 let span = scoping.symbol_span(symbol_id);
                 let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
                 diagnostics.push(Diagnostic {
@@ -144,6 +154,82 @@ fn is_named_fn_expr_self_reference(nodes: &AstNodes, decl: NodeId, symbol_name: 
             BindingPattern::BindingIdentifier(id) => id.name.as_str() == symbol_name,
             _ => false,
         })
+}
+
+/// True when `decl` is a parameter of an immediately-invoked function expression
+/// whose argument at the same position is the outer binding of the same name —
+/// the UMD / module-factory aliasing idiom `(function (X) { ... })(X)` (also in
+/// arrow form `((X) => { ... })(X)`).
+///
+/// The discriminator is structural: the parameter belongs to a function
+/// expression that is the callee of the `CallExpression` invoking it in place
+/// (`ParenthesizedExpression` wrappers are transparent), and the call passes a
+/// plain identifier of `symbol_name` at the parameter's index. A function that
+/// is merely *referenced* by a call rather than *being* its callee, or one whose
+/// matching argument is anything other than that same-named identifier, is not
+/// exempt.
+fn is_iife_parameter_aliasing_argument(
+    nodes: &AstNodes,
+    decl: NodeId,
+    symbol_name: &str,
+) -> bool {
+    use oxc_ast::ast::{Argument, Expression};
+
+    let AstKind::FormalParameter(param) = nodes.kind(decl) else {
+        return false;
+    };
+    let BindingPattern::BindingIdentifier(id) = &param.pattern else {
+        return false;
+    };
+    if id.name.as_str() != symbol_name {
+        return false;
+    }
+
+    // The nearest enclosing callable owns this parameter; its parameter list
+    // gives the index to match against the call argument.
+    let Some(fn_id) = nodes.ancestor_ids(decl).find(|&id| {
+        matches!(
+            nodes.kind(id),
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+        )
+    }) else {
+        return false;
+    };
+    let (params, fn_span) = match nodes.kind(fn_id) {
+        AstKind::Function(func) => (&func.params, func.span),
+        AstKind::ArrowFunctionExpression(arrow) => (&arrow.params, arrow.span),
+        _ => return false,
+    };
+    let Some(param_index) = params
+        .items
+        .iter()
+        .position(|item| item.span == param.span)
+    else {
+        return false;
+    };
+
+    // Walk past `ParenthesizedExpression` wrappers to the node that uses the
+    // function; an IIFE's function expression is the callee of that call.
+    let mut current = fn_id;
+    while matches!(nodes.parent_kind(current), AstKind::ParenthesizedExpression(_)) {
+        current = nodes.parent_id(current);
+    }
+    let AstKind::CallExpression(call) = nodes.parent_kind(current) else {
+        return false;
+    };
+    let callee_span = match crate::oxc_helpers::peel_parens(&call.callee) {
+        Expression::FunctionExpression(func) => func.span,
+        Expression::ArrowFunctionExpression(arrow) => arrow.span,
+        _ => return false,
+    };
+    if callee_span != fn_span {
+        return false;
+    }
+
+    matches!(
+        call.arguments.get(param_index),
+        Some(Argument::Identifier(arg)) if arg.name.as_str() == symbol_name
+    )
 }
 
 #[cfg(test)]
@@ -355,6 +441,72 @@ mod tests {
         // A function *declaration* (not an expression passed to a call) named
         // like the outer const is a genuine shadow and must still fire.
         let d = run_on("const Foo = 1; function outer() { function Foo() {} return Foo; }");
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_iife_parameter_aliasing_imported_value() {
+        // Issue #1653 reproduction: the UMD / Prism-plugin idiom passes the
+        // outer import into an IIFE whose parameter re-binds the same name.
+        let d = run_on(
+            "import { Prism } from 'prism-react-renderer';\n\
+             (function (Prism) { Prism.languages.bash = {}; })(Prism);",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_arrow_iife_parameter_aliasing_outer_binding() {
+        // The same idiom in arrow form.
+        let d = run_on(
+            "const config = { debug: false };\n\
+             ((config) => { config.debug = true; })(config);",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_nested_non_iife_function_param_shadowing_import() {
+        // Negative space: a parameter of an ordinary (not immediately invoked)
+        // function that shadows an outer import is a genuine accidental shadow.
+        let d = run_on(
+            "import { Prism } from 'prism-react-renderer';\n\
+             function extend(Prism) { return Prism; }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_nested_const_shadowing_outer_binding() {
+        // Negative space: an inner `const` shadowing an outer binding is a real
+        // shadow regardless of any IIFE elsewhere.
+        let d = run_on(
+            "const value = 1;\n\
+             function outer() { const value = 2; return value; }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_iife_parameter_when_argument_is_a_different_binding() {
+        // The exemption requires the matching argument to be the same-named
+        // outer binding. Passing a *different* identifier is real shadowing.
+        let d = run_on(
+            "import { Prism } from 'prism-react-renderer';\n\
+             const other = {};\n\
+             (function (Prism) { Prism.x = 1; })(other);",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_function_expression_referenced_not_immediately_invoked() {
+        // A function expression assigned to a variable and shadowing an outer
+        // binding is not an IIFE; the parameter shadow still fires.
+        let d = run_on(
+            "import { Prism } from 'prism-react-renderer';\n\
+             const plugin = function (Prism) { return Prism; };",
+        );
         assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
     }
 
