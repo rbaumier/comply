@@ -62,9 +62,9 @@ fn is_axis_suffix(suffix: &str) -> bool {
     )
 }
 
-/// Count the bucket members that are NOT part of a CSS-inspired
-/// shorthand + per-axis family, i.e. the members that still look like a
-/// discriminated-union state cluster.
+/// Count the bucket members that still look like a discriminated-union
+/// state cluster, i.e. the members that are neither part of a CSS-inspired
+/// shorthand + per-axis family nor in a base + elaboration prefix pair.
 ///
 /// A shorthand + per-axis family is a bare base field `F` (the shorthand,
 /// e.g. `translate`, `extrapolate`) together with the siblings formed by
@@ -75,14 +75,31 @@ fn is_axis_suffix(suffix: &str) -> bool {
 /// only suffixed siblings (`translateX`/`translateY`, no `translate`)
 /// lacks the shorthand signature and every member still counts.
 ///
+/// A base + elaboration pair is a member that is a strict prefix of, or
+/// strictly prefixed by, another bucket member (`sources`/`sourcesContent`,
+/// `version`/`versionId`). One name extends the other, so they are an
+/// independent base + detail pair, not a common stem with mutually-exclusive
+/// suffixes — both can be present, so they are excluded from the count.
+/// A genuine variant (`cancelledAt`/`cancelledReason`) shares a stem but
+/// neither name is a prefix of the other, so every member still counts.
+///
 /// Members sharing the prefix but belonging to no family (e.g. `transform`
 /// alongside the `translate*` family in the `tran` bucket) keep counting,
 /// so an unrelated state cluster is not masked by an adjacent family.
 fn variant_field_count(names: &[&str]) -> usize {
     names
         .iter()
-        .filter(|name| !is_in_shorthand_axis_family(name, names))
+        .filter(|name| !is_in_shorthand_axis_family(name, names) && !is_in_elaboration_pair(name, names))
         .count()
+}
+
+/// Whether `name` is a strict prefix of, or strictly prefixed by, another
+/// bucket member — a base + elaboration relationship (`sources` extended to
+/// `sourcesContent`), not a discriminated variant.
+fn is_in_elaboration_pair(name: &str, names: &[&str]) -> bool {
+    names
+        .iter()
+        .any(|other| *other != name && (other.starts_with(name) || name.starts_with(other)))
 }
 
 /// Whether `name` is the bare base of, or a suffixed sibling in, a
@@ -331,6 +348,34 @@ mod tests {
         // `translateY`/`translateZ`, no bare `translate`) lack the shorthand
         // signature, so the cluster is not exempt.
         let src = "type T = { translateX?: number; translateY?: number; translateZ?: number };";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_prefix_of_other_elaboration_pair() {
+        // Regression for #2082: in the Source Map V3 spec, `sources` and
+        // `sourcesContent` share the `sour` bucket, but `sources` is a strict
+        // prefix of `sourcesContent` — a base + elaboration relationship
+        // (independent, both-can-be-present fields), not a common stem with
+        // mutually-exclusive suffixes. They must not be flagged.
+        let src = r#"export interface SourceMap {
+  file?: string
+  mappings?: string
+  names?: string[]
+  sources?: string[]
+  sourcesContent?: string[]
+  version?: number
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_variant_without_prefix_of_other() {
+        // Negative-space guard for #2082: `cancelledAt` / `cancelledReason`
+        // share the stem `cancelled` with different, mutually-exclusive
+        // suffixes; neither is a prefix of the other, so the cluster is a
+        // genuine discriminated-union smell and stays flagged.
+        let src = "interface Order { id: string; cancelledAt?: string; cancelledReason?: string }";
         assert_eq!(run_on(src).len(), 1);
     }
 
