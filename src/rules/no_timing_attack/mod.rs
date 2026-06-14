@@ -30,6 +30,11 @@
 //! sensitive when it also contains a secret indicator (`auth`, `access`,
 //! `api`, …): `auth_token` is flagged, `comment_token` is not.
 //!
+//! A comparison inside the `eq` method of an `impl PartialEq for T` (Rust) is
+//! exempt: `self.hash == other.hash` there is a structural-hash short-circuit
+//! over two fields of the same `&Self`, with no attacker-input vs. stored-secret
+//! asymmetry, so the timing-attack premise does not apply.
+//!
 //! ## Known gap
 //!
 //! No constant propagation. A comparison whose operand is the result
