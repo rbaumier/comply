@@ -8,26 +8,39 @@ use std::sync::Arc;
 
 pub struct Check;
 
-/// True when the namespace has a block body in which every statement is a
-/// type-only declaration (a `type` alias or an `interface`, bare or exported).
+/// True when every statement in a namespace block is a type-level declaration:
+/// a `type` alias, an `interface`, an `enum`, or a nested type-only namespace
+/// (bare or `export`ed).
 ///
-/// Such a namespace introduces no runtime value — it is a type-grouping idiom
-/// (e.g. `Schedule.Props`), not a legacy module-system construct, and cannot be
-/// replaced by ES `export` / `import` without changing the consumer API.
-/// Any value declaration, nested namespace, or other statement disqualifies it.
+/// Such a namespace is the declaration-merging idiom for grouping members under
+/// a co-named type (e.g. `ComputerAction.Click` in `type ComputerAction =
+/// ComputerAction.Click | ...`). It introduces no module-system construct that
+/// ES `export` / `import` could replace without changing the consumer API.
+/// Any value declaration (`const`/`let`/`var`, `function`, `class`), executable
+/// statement, or value-bearing nested namespace disqualifies it.
 /// An empty body is type-only: TypeScript elides it at runtime.
 fn is_type_only_namespace(decl: &TSModuleDeclaration<'_>) -> bool {
     let Some(TSModuleDeclarationBody::TSModuleBlock(block)) = &decl.body else {
         return false;
     };
-    block.body.iter().all(|stmt| match stmt {
-        Statement::TSTypeAliasDeclaration(_) | Statement::TSInterfaceDeclaration(_) => true,
-        Statement::ExportNamedDeclaration(export) => matches!(
-            export.declaration,
+    block.body.iter().all(statement_is_type_level)
+}
+
+/// True when a namespace-body statement declares only type-level members.
+fn statement_is_type_level(stmt: &Statement<'_>) -> bool {
+    match stmt {
+        Statement::TSTypeAliasDeclaration(_)
+        | Statement::TSInterfaceDeclaration(_)
+        | Statement::TSEnumDeclaration(_) => true,
+        Statement::TSModuleDeclaration(module) => is_type_only_namespace(module),
+        Statement::ExportNamedDeclaration(export) => match &export.declaration {
             Some(Declaration::TSTypeAliasDeclaration(_) | Declaration::TSInterfaceDeclaration(_))
-        ),
+            | Some(Declaration::TSEnumDeclaration(_)) => true,
+            Some(Declaration::TSModuleDeclaration(module)) => is_type_only_namespace(module),
+            _ => false,
+        },
         _ => false,
-    })
+    }
 }
 
 impl OxcCheck for Check {
@@ -149,7 +162,60 @@ mod tests {
     }
 
     #[test]
-    fn flags_nested_namespace() {
-        assert_eq!(run("namespace Outer { export namespace Inner {} }").len(), 1);
+    fn allows_declaration_merging_interfaces() {
+        let diags = run(
+            "export namespace ComputerAction {\n  export interface Click { type: 'click'; x: number; y: number; }\n  export interface Drag { type: 'drag'; path: number[]; }\n}",
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_jest_matcher_augmentation() {
+        // `declare global { namespace jest { interface Matchers<R> {...} } }`
+        // is the documented way to add custom matchers; the inner namespace is
+        // not itself `declare`, but its body is a type-only interface.
+        let diags = run(
+            "declare global {\n  namespace jest {\n    interface Matchers<R> {\n      toBeSimilarTo(c: string, d: number): R;\n    }\n  }\n}",
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_type_only_enum_namespace() {
+        let diags = run("export namespace N {\n  export enum Status { Open, Closed }\n}");
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_nested_type_only_namespace() {
+        let diags = run(
+            "namespace Outer {\n  export namespace Inner {\n    export interface A { x: number }\n  }\n}",
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn flags_value_bearing_nested_namespace() {
+        // Both the outer namespace (not type-only, since its body holds a
+        // value-bearing nested namespace) and the inner one (a `const`) flag.
+        assert_eq!(
+            run("namespace Outer { export namespace Inner { export const x = 1; } }").len(),
+            2
+        );
+    }
+
+    #[test]
+    fn flags_namespace_with_function() {
+        assert_eq!(run("namespace Foo { export function f() {} }").len(), 1);
+    }
+
+    #[test]
+    fn flags_namespace_with_class() {
+        assert_eq!(run("namespace Foo { export class C {} }").len(), 1);
+    }
+
+    #[test]
+    fn flags_namespace_with_statement() {
+        assert_eq!(run("namespace Foo { console.log('side effect'); }").len(), 1);
     }
 }
