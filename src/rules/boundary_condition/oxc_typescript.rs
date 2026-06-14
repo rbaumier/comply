@@ -626,22 +626,25 @@ fn body_has_early_exit(stmt: &Statement) -> bool {
     }
 }
 
-/// Matchers that, applied to `expect(<arr>.length)`, assert a concrete length —
-/// making subsequent indexed access on `<arr>` safe.
-const LENGTH_MATCHERS: [&str; 5] = [
-    "toBe",
-    "toEqual",
-    "toStrictEqual",
-    "toBeGreaterThan",
-    "toBeGreaterThanOrEqual",
-];
+/// Equality matchers that, applied to `expect(<arr>.length)`, assert the length
+/// equals their argument. The array is proven non-empty only when that argument
+/// is `>= 1` — `expect(arr.length).toEqual(0)` asserts the array is EMPTY, so it
+/// must not vouch a subsequent `arr[0]` read safe.
+const LENGTH_EQUALITY_MATCHERS: [&str; 3] = ["toBe", "toEqual", "toStrictEqual"];
+
+/// `expect(<arr>.length).<matcher>(N)` matchers that assert a lower bound on the
+/// length, paired with the smallest `N` that still proves `length >= 1`:
+///   - `toBeGreaterThan(N)` means `length > N`, non-empty for `N >= 0`.
+///   - `toBeGreaterThanOrEqual(N)` means `length >= N`, non-empty for `N >= 1`.
+const LENGTH_LOWER_BOUND_MATCHERS: [(&str, u32); 2] =
+    [("toBeGreaterThan", 0), ("toBeGreaterThanOrEqual", 1)];
 
 /// Scans `stmts` for the statement containing `node_span_start`, then checks
 /// all preceding siblings for one of these guard patterns:
 ///   1. `if (...length...) { return/throw/process.exit }` (early-exit guard)
 ///   2. `expect(<obj_text>).toHaveLength(N)` (Vitest/Jest assertion guard)
-///   3. `expect(<obj_text>.length).<matcher>(N)` (equivalent length assertion,
-///      where `<matcher>` is one of [`LENGTH_MATCHERS`])
+///   3. `expect(<obj_text>.length).<matcher>(N)` with `N` proving `length >= 1`
+///      (see [`length_expect_proves_nonempty`])
 ///   4. chai length assertion on the same array (see [`stmt_has_chai_length_assertion`])
 ///   5. Node/Deno throwing assertion proving non-emptiness on the same array
 ///      (see [`stmt_is_assert_nonempty_length`])
@@ -676,10 +679,7 @@ fn scan_preceding_stmts(
             return true;
         }
         if let Some(after_prefix) = find_after(stmt_text, &length_expect_prefix) {
-            if LENGTH_MATCHERS
-                .iter()
-                .any(|matcher| after_prefix.starts_with(&format!("{matcher}(")))
-            {
+            if length_expect_proves_nonempty(after_prefix) {
                 return true;
             }
         }
@@ -691,6 +691,38 @@ fn scan_preceding_stmts(
         }
     }
     false
+}
+
+/// Given `after_prefix` — the text immediately following `expect(<arr>.length).`
+/// — returns true when it is a matcher call that proves `length >= 1`. The
+/// matcher's leading integer argument is checked against the threshold for its
+/// family: an equality matcher ([`LENGTH_EQUALITY_MATCHERS`]) needs `N >= 1`, a
+/// lower-bound matcher ([`LENGTH_LOWER_BOUND_MATCHERS`]) needs `N >= its_min`.
+/// A non-integer or absent argument (`toEqual(expected)`, `toBeGreaterThan(x)`)
+/// can't be proven non-empty, so it does not qualify.
+fn length_expect_proves_nonempty(after_prefix: &str) -> bool {
+    for matcher in LENGTH_EQUALITY_MATCHERS {
+        if let Some(arg) = matcher_int_arg(after_prefix, matcher) {
+            return arg >= 1;
+        }
+    }
+    for (matcher, min) in LENGTH_LOWER_BOUND_MATCHERS {
+        if let Some(arg) = matcher_int_arg(after_prefix, matcher) {
+            return arg >= min;
+        }
+    }
+    false
+}
+
+/// When `after_prefix` is `<matcher>(<int>...)`, returns the leading unsigned
+/// integer argument. Returns `None` when the matcher name doesn't match or the
+/// argument is not an integer literal (so a non-literal expression argument
+/// stays unproven rather than silently treated as zero).
+fn matcher_int_arg(after_prefix: &str, matcher: &str) -> Option<u32> {
+    let call = format!("{matcher}(");
+    let rest = after_prefix.strip_prefix(&call)?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse::<u32>().ok()
 }
 
 /// Throwing-assertion callees that take a single boolean condition argument:
@@ -1777,6 +1809,42 @@ mod tests {
     fn unrelated_expect_does_not_suppress_issue_1985() {
         let src = "expect(other).toBe(1); const first = releases[0];";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_expect_length_to_equal_issue_1341() {
+        let src = "const traces = JSON.parse(x); expect(traces.length).toEqual(1); expect(traces[0].name).toEqual('test-span'); expect(traces[0].id).toEqual(127); expect(traces[0].duration).toEqual(321);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_expect_length_to_be_first_access_issue_1341() {
+        let src = "expect(arr.length).toBe(3); const first = arr[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_without_length_assertion_issue_1341() {
+        let src = "const first = arr[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn expect_length_to_equal_zero_is_not_guard_issue_1341() {
+        let src = "expect(arr.length).toEqual(0); const first = arr[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn expect_length_to_be_zero_is_not_guard_issue_1341() {
+        let src = "expect(arr.length).toBe(0); const first = arr[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_expect_length_greater_than_zero_issue_1341() {
+        let src = "expect(arr.length).toBeGreaterThan(0); const first = arr[0];";
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
