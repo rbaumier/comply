@@ -88,6 +88,26 @@ fn strip_private_prefix(stem: &str) -> &str {
     stem.trim_start_matches('_')
 }
 
+/// Returns `true` when `path` is an Angular public-API barrel: a `.ts` file
+/// whose stem is `public_api` or `public-api`. ng-packagr names this source
+/// entry — the file that enumerates a library package's exported surface via
+/// `export *` and is referenced as `entryFile` in `ng-package.json` — by this
+/// convention, with the snake_case spelling being the Angular standard. Renaming
+/// it would break the package's export contract, so the snake/kebab stem is the
+/// intended name, not a convention violation. Mirrors the public-API barrel
+/// allowance in `avoid-re-export-all`.
+fn is_public_api_barrel_file(path: &std::path::Path) -> bool {
+    let is_ts = matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("ts" | "tsx" | "mts" | "cts")
+    );
+    is_ts
+        && matches!(
+            path.file_stem().and_then(|s| s.to_str()),
+            Some("public_api" | "public-api")
+        )
+}
+
 fn is_ts_or_jsx_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
     s.ends_with(".ts")
@@ -119,6 +139,9 @@ impl TextCheck for Check {
             return Vec::new();
         }
         if super::is_nextjs_pages_router_file(ctx.path, file_name, stem) {
+            return Vec::new();
+        }
+        if is_public_api_barrel_file(ctx.path) {
             return Vec::new();
         }
         // A leading `_`/`__` marks a private/internal module; validate the
@@ -429,5 +452,38 @@ mod tests {
     #[test]
     fn flags_all_underscore_stem_issue_1616() {
         assert_eq!(run("src/__.ts").len(), 1);
+    }
+
+    // Regression for #1534: Angular's ng-packagr `public_api.ts` library barrel
+    // is a framework-mandated entry filename and must not be flagged.
+    #[test]
+    fn allows_angular_public_api_snake_case_barrel_issue_1534() {
+        assert!(run("packages/misc/angular-in-memory-web-api/public_api.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_angular_public_api_nested_barrel_issue_1534() {
+        assert!(run("schematics-for-libraries/projects/my-lib/src/public_api.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_angular_public_api_kebab_case_barrel_issue_1534() {
+        assert!(run("src/cdk/tree/public-api.ts").is_empty());
+    }
+
+    // Guard: a snake_case file that merely contains `public_api` as a substring
+    // of a longer name is an ordinary module, not the barrel, and must still be
+    // flagged — the exemption matches the exact stem only, not a substring.
+    #[test]
+    fn flags_public_api_substring_file_issue_1534() {
+        assert_eq!(run("src/public_api_helper.ts").len(), 1);
+        assert_eq!(run("src/public_api_registry.ts").len(), 1);
+    }
+
+    // Guard: the exemption does not loosen the case rule — a genuinely
+    // snake_cased file still fires, only the exact barrel stem is exempt.
+    #[test]
+    fn flags_snake_case_still_fires_after_public_api_exemption_issue_1534() {
+        assert_eq!(run("src/user_profile.ts").len(), 1);
     }
 }
