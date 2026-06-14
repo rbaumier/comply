@@ -28,7 +28,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::no_implicit_deps::is_virtual_module;
+use crate::rules::no_implicit_deps::{is_virtual_module, types_package_name};
 
 const RULE_ID: &str = "unlisted-dependency";
 
@@ -147,15 +147,6 @@ impl TextCheck for Check {
 /// files, never to an npm package (`@site` is not a publishable name).
 fn is_docusaurus_site_alias(spec: &str) -> bool {
     spec == "@site" || spec.starts_with("@site/")
-}
-
-/// DefinitelyTyped name for a runtime package: `foo` → `@types/foo`,
-/// `@scope/bar` → `@types/scope__bar` (scope marker folded to `__`).
-fn types_package_name(spec: &str) -> String {
-    if let Some(scoped) = spec.strip_prefix('@') {
-        return format!("@types/{}", scoped.replacen('/', "__", 1));
-    }
-    format!("@types/{spec}")
 }
 
 /// True if `spec` matches any tsconfig alias prefix (exact or `prefix/...`).
