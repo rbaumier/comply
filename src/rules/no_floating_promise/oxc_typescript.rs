@@ -118,6 +118,9 @@ fn is_async_looking_member_call(call: &CallExpression) -> bool {
     if is_fluent_builder_run(member) {
         return false;
     }
+    if is_event_emitter_emit(member) {
+        return false;
+    }
     let method = member.property.name.as_str();
     ASYNC_LOOKING_METHODS.contains(&method)
 }
@@ -149,6 +152,26 @@ fn chain_is_rooted_in_chain_call(expr: &Expression) -> bool {
             return true;
         }
         current = peel_parens(&member.object);
+    }
+}
+
+/// Node's `EventEmitter.prototype.emit(event, ...args)` returns `boolean`
+/// (whether any listener fired), not a Promise — there is nothing to await.
+/// Matches `.emit(...)` whose receiver is `this` (a class extending
+/// `EventEmitter`, e.g. tiptap's `Editor.emit(...)`) or a bare identifier whose
+/// name (case-insensitive) reads as an event emitter, e.g. `emitter`,
+/// `eventEmitter`, `eventBus`, `bus`.
+fn is_event_emitter_emit(member: &StaticMemberExpression) -> bool {
+    if member.property.name.as_str() != "emit" {
+        return false;
+    }
+    match &member.object {
+        Expression::ThisExpression(_) => true,
+        Expression::Identifier(id) => {
+            let name = id.name.as_str().to_lowercase();
+            name.contains("emitter") || name == "eventbus" || name == "bus"
+        }
+        _ => false,
     }
 }
 
@@ -592,6 +615,45 @@ editor
         // A bare `.run()` whose receiver is not a `.chain()`-rooted builder stays
         // flagged — e.g. a job/task runner.
         let d = run_on("job.run();");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression tests for issue #1819: Node's `EventEmitter.prototype.emit(...)`
+    // returns `boolean`, not a Promise — tiptap's `Editor` extends an EventEmitter
+    // and calls `this.emit(...)` for lifecycle hooks, so a `.emit(...)` on `this`
+    // or an emitter-named receiver must not be flagged.
+
+    #[test]
+    fn allows_this_emit() {
+        let src = "\
+this.emit('beforeCreate', { editor: this })
+this.emit('mount', { editor: this })
+this.emit('create', { editor: this })
+this.emit('unmount', { editor: this })
+this.emit('update', { editor: this, transaction: this.state.tr, appendedTransactions: [] })
+this.emit('selectionUpdate', { editor: this, transaction: this.state.tr })
+this.emit('transaction', { editor: this, transaction: this.state.tr, appendedTransactions: [] })
+this.emit('focus', { editor: this, event: view.dom, transaction })
+this.emit('blur', { editor: this, event: view.dom, transaction })
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_named_emitter_emit() {
+        let src = "\
+emitter.emit('done', payload);
+eventBus.emit('change', value);
+bus.emit('tick');
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_emitter_emit() {
+        // Control: `.emit(...)` on a non-emitter receiver stays flagged —
+        // e.g. a producer that returns a Promise.
+        let d = run_on("producer.emit(record);");
         assert_eq!(d.len(), 1);
     }
 
