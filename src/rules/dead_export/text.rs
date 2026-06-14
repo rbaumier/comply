@@ -1986,4 +1986,59 @@ mod tests {
             "vitest.workspace.ts default export must not be flagged, got: {diags:?}"
         );
     }
+
+    #[test]
+    fn no_fp_for_export_in_declare_module_augmentation_issue_1731() {
+        // Regression for #1731 (pinia) — an `export interface` inside a
+        // `declare module '...'` block is a TypeScript module augmentation: the
+        // compiler merges it into the augmented module's types, so it is never
+        // imported by name. dead-export must not flag it.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/augment.ts",
+                "import { RouteLocationNormalizedLoaded } from 'vue-router';\n\
+                 declare module 'pinia' {\n\
+                   export interface PiniaCustomProperties {\n\
+                     get route(): RouteLocationNormalizedLoaded\n\
+                   }\n\
+                 }\n",
+            ),
+            ("src/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/augment.ts");
+        assert!(
+            diags.is_empty(),
+            "export inside declare module augmentation must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_top_level_export_alongside_declare_module_augmentation() {
+        // Negative-space guard for #1731 — the augmentation exemption is scoped
+        // to exports nested in a `declare module` block. A genuinely unused
+        // top-level export in the same file is still flagged.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/augment.ts",
+                "declare module 'pinia' {\n\
+                   export interface PiniaCustomProperties {\n\
+                     count: number\n\
+                   }\n\
+                 }\n\
+                 export const unusedHelper = 1;\n",
+            ),
+            ("src/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/augment.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "only the top-level unusedHelper is dead, got: {diags:?}"
+        );
+        assert!(
+            diags[0].message.contains("unusedHelper"),
+            "message should name the top-level dead export, got: {}",
+            diags[0].message
+        );
+    }
 }

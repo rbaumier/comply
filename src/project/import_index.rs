@@ -1926,13 +1926,23 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
             AstKind::ImportDeclaration(import) => {
                 oxc_extract_import(&lines, import, &mut imports);
             }
-            AstKind::ExportNamedDeclaration(export) => {
+            // Exports nested inside a `declare module '...'` / `declare global`
+            // block are TypeScript module augmentations: the compiler merges them
+            // into another module's types, so they are never imported by name and
+            // must not be counted as project exports (else dead-export flags them).
+            AstKind::ExportNamedDeclaration(export)
+                if !crate::oxc_helpers::is_in_ambient_declaration(node.id(), &semantic) =>
+            {
                 oxc_extract_export_named(&lines, export, &mut exports);
             }
-            AstKind::ExportAllDeclaration(export) => {
+            AstKind::ExportAllDeclaration(export)
+                if !crate::oxc_helpers::is_in_ambient_declaration(node.id(), &semantic) =>
+            {
                 oxc_extract_export_all(&lines, export, &mut exports);
             }
-            AstKind::ExportDefaultDeclaration(export) => {
+            AstKind::ExportDefaultDeclaration(export)
+                if !crate::oxc_helpers::is_in_ambient_declaration(node.id(), &semantic) =>
+            {
                 exports.push(ExportedSymbol {
                     name: "default".into(),
                     kind: ExportKind::Default,
