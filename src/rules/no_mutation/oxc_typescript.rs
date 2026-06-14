@@ -823,6 +823,55 @@ mod tests {
         "#;
         assert_eq!(run(src).len(), 1);
     }
+
+    // Array.reduce() accumulator — issue #2239
+
+    #[test]
+    fn allows_mutation_on_reduce_accumulator_issue_2239() {
+        // Regression for rbaumier/comply#2239 — pinia mapHelpers: the reduce
+        // accumulator is a fresh local object literal passed as the seed; it
+        // never escapes until `reduce` returns, so building it up via property
+        // assignment is the canonical reduce-to-object pattern.
+        let src = r#"
+            function build(stores, suffix) {
+                return stores.reduce((reduced, useStore) => {
+                    reduced[useStore.$id + suffix] = function () {
+                        return useStore();
+                    };
+                    return reduced;
+                }, {});
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_const_mutation_on_non_accumulator_inside_reduce() {
+        // Negative space: a `const` declared inside a reduce callback (not the
+        // accumulator parameter) references whatever it was initialised from —
+        // mutating it stays flagged.
+        let src = r#"
+            arr.reduce((reduced, item) => {
+                const cfg = getConfig();
+                cfg.x = 1;
+                return reduced;
+            }, {});
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_const_mutation_on_accumulator_of_non_reduce_call() {
+        // Negative space: the callback of a non-`.reduce()` call has no local
+        // accumulator; mutating a const inside it stays flagged.
+        let src = r#"
+            arr.forEach((acc, item) => {
+                const cfg = getConfig();
+                cfg.x = item;
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
 }
 
 fn report(diagnostics: &mut Vec<Diagnostic>, ctx: &CheckCtx, span_start: u32, root: &str, kind: &str) {

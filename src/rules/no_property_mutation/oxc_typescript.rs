@@ -3,6 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
     byte_offset_to_line_col, is_local_object_builder_binding, is_react_display_name_assignment,
+    is_reduce_accumulator_param,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
@@ -242,7 +243,8 @@ impl OxcCheck for Check {
                         if root_object_name(&m.object) == Some("set") { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
-                                || is_local_object_builder_binding(id, semantic)) { return; }
+                                || is_local_object_builder_binding(id, semantic)
+                                || is_reduce_accumulator_param(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
 
                         let (line, column) = byte_offset_to_line_col(ctx.source, assign.span.start as usize);
@@ -267,7 +269,8 @@ impl OxcCheck for Check {
                         if root_object_name(&m.object) == Some("set") { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
-                                || is_local_object_builder_binding(id, semantic)) { return; }
+                                || is_local_object_builder_binding(id, semantic)
+                                || is_reduce_accumulator_param(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
 
                         let (line, column) = byte_offset_to_line_col(ctx.source, assign.span.start as usize);
@@ -332,14 +335,16 @@ impl OxcCheck for Check {
                         if is_inside_sentry_hook(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
-                                || is_local_object_builder_binding(id, semantic)) { return; }
+                                || is_local_object_builder_binding(id, semantic)
+                                || is_reduce_accumulator_param(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                     }
                     Expression::ComputedMemberExpression(m) => {
                         if is_inside_sentry_hook(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
-                                || is_local_object_builder_binding(id, semantic)) { return; }
+                                || is_local_object_builder_binding(id, semantic)
+                                || is_reduce_accumulator_param(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                     }
                     _ => return,
@@ -788,6 +793,52 @@ mod tests {
                     delete this.cache.key;
                 }
             }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Array.reduce() accumulator — issue #2239
+
+    #[test]
+    fn allows_property_mutation_on_reduce_accumulator_issue_2239() {
+        // Regression for rbaumier/comply#2239 — pinia mapHelpers: the reduce
+        // accumulator is a fresh local object literal passed as the seed; it
+        // never escapes until `reduce` returns, so building it up via property
+        // assignment is the canonical reduce-to-object pattern.
+        let src = r#"
+            function build(stores, suffix) {
+                return stores.reduce((reduced, useStore) => {
+                    reduced[useStore.$id + suffix] = function () {
+                        return useStore();
+                    };
+                    return reduced;
+                }, {});
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_property_mutation_on_non_accumulator_parameter() {
+        // Negative space: a normal function parameter is external state, not a
+        // reduce accumulator — mutating it stays flagged.
+        let src = r#"
+            arr.reduce((reduced, item) => {
+                item.x = 1;
+                return reduced;
+            }, {});
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_property_mutation_on_accumulator_of_non_reduce_call() {
+        // Negative space: the first parameter of a callback to a non-`.reduce()`
+        // call is not a local accumulator; mutating it stays flagged.
+        let src = r#"
+            arr.forEach((acc, item) => {
+                acc.x = item;
+            });
         "#;
         assert_eq!(run(src).len(), 1);
     }
