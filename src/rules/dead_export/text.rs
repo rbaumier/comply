@@ -106,6 +106,7 @@ use crate::project::import_index::ExportKind;
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::path_utils::{
     is_config_file, is_framework_specific_entry_point, is_in_framework_entry_dir,
+    is_sample_dir_path,
 };
 use crate::rules::walker::walk_tree;
 use std::collections::HashSet;
@@ -500,6 +501,16 @@ impl TextCheck for Check {
             return Vec::new();
         }
         if is_in_fixture_dir(ctx.path) {
+            return Vec::new();
+        }
+        // Files under a demonstration directory (`examples/`, `example/`,
+        // `example-apps/`, `demo/`, `demos/`, `samples/`, …) are standalone
+        // runnable demo apps: each has its own non-library `package.json` and a
+        // nested entry file (e.g. `examples/svelte/.../src/main.ts` exporting
+        // `export default app`) that nothing imports. The root-only entry-point
+        // check misses these nested mains, so reuse the same sample-dir
+        // classifier `unused-file` uses to keep the two rules in agreement.
+        if is_sample_dir_path(ctx.path) {
             return Vec::new();
         }
         if is_nextra_meta_file(ctx.path) {
@@ -3793,5 +3804,46 @@ mod tests {
             "a named export in a Docusaurus theme file must still be flagged: {diags:?}"
         );
         assert!(diags[0].message.contains("unusedHelper"));
+    }
+
+    // Regression for #2201 (TanStack/virtual) — a demo app's entry file under a
+    // top-level `examples/` directory exports its mounted instance by the Vite
+    // `export default app` convention; nothing imports it, but it is a runnable
+    // demo entry, not dead code. Nested `examples/.../src/main.ts` is missed by
+    // the root-only `is_entry_point` and the example's non-library
+    // `package.json`, so the sample-dir guard must carry it.
+    #[test]
+    fn no_fp_for_export_in_examples_dir_main_issue_2201() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "examples/svelte/infinite-scroll/src/main.ts",
+                "import App from './App.svelte'\n\
+                 const app = new App({ target: document.getElementById('app')! })\n\
+                 export default app\n",
+            ),
+            ("src/index.ts", "export const used = 1;\nused;\n"),
+        ];
+        let (_dir, diags) =
+            run_on_project(&files, "examples/svelte/infinite-scroll/src/main.ts");
+        assert!(
+            diags.is_empty(),
+            "an export in a top-level examples/ demo entry must not be flagged: {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #2201 — the sample-dir exemption is scoped to
+    // demonstration directories. An unimported export in an ordinary source
+    // file (not under examples/demo/sample) is genuinely dead and still fires.
+    #[test]
+    fn still_flags_unimported_export_in_normal_source_issue_2201() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/lib/foo.ts", "export const orphan = 1;\n"),
+            ("src/index.ts", "export const used = 1;\nused;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/lib/foo.ts");
+        assert!(
+            diags.iter().any(|d| d.message.contains("orphan")),
+            "an unimported export in a normal source file must still be flagged: {diags:?}"
+        );
     }
 }
