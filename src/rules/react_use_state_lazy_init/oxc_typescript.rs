@@ -1,13 +1,46 @@
 //! react-use-state-lazy-init — oxc backend for TSX.
 //!
-//! Flags `useState(expensive())` and `useState(window.innerWidth)` where
-//! the argument is a call expression or member expression.
+//! Flags `useState(arg)` only when `arg` is a genuinely expensive initializer:
+//! a call expression (`compute()`, `JSON.parse(s)`, `obj.compute()`), a
+//! `new X(...)` construction, or a member access rooted on a browser global
+//! (`window.innerWidth`, `document.title`). Plain property access on a local
+//! value (`todo.is_complete`, `props.value`, `this.x`) is a single memory read
+//! and is left untouched.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, receiver_root_identifier};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
+
+/// Browser globals whose member access does real work or crashes in SSR, so
+/// reading them in a bare `useState(...)` warrants the lazy form. Property
+/// access on any other root (a local, a prop, `this`) is cheap.
+const BROWSER_GLOBALS: &[&str] = &[
+    "window",
+    "document",
+    "navigator",
+    "screen",
+    "location",
+    "performance",
+    "localStorage",
+    "sessionStorage",
+    "history",
+];
+
+/// Whether `expr` is an initializer expensive enough to justify the lazy
+/// `useState(() => …)` form. Calls and constructions always qualify; member
+/// access qualifies only when rooted on a browser global.
+fn is_expensive_init(expr: &Expression) -> bool {
+    match expr {
+        Expression::CallExpression(_) | Expression::NewExpression(_) => true,
+        Expression::StaticMemberExpression(_)
+        | Expression::ComputedMemberExpression(_)
+        | Expression::PrivateFieldExpression(_) => receiver_root_identifier(expr)
+            .is_some_and(|root| BROWSER_GLOBALS.contains(&root.as_str())),
+        _ => false,
+    }
+}
 
 pub struct Check;
 
@@ -38,17 +71,13 @@ impl OxcCheck for Check {
         if !is_use_state {
             return;
         }
-        // Check first argument is a call expression or member expression.
+        // Flag only when the first argument is an expensive initializer.
         let Some(first_arg) = call.arguments.first() else {
             return;
         };
         let expr = first_arg.as_expression();
         let Some(expr) = expr else { return };
-        let is_expensive = matches!(
-            expr.without_parentheses(),
-            Expression::CallExpression(_) | Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_) | Expression::PrivateFieldExpression(_)
-        );
-        if !is_expensive {
+        if !is_expensive_init(expr.without_parentheses()) {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
@@ -107,5 +136,30 @@ mod tests {
     #[test]
     fn allows_primitive_init() {
         assert!(run_on("const [w] = useState(0);").is_empty());
+    }
+
+    // Regression #2131: cheap property access is not an expensive initializer.
+    #[test]
+    fn allows_prop_access_on_local() {
+        assert!(run_on("const [c, sc] = useState(props.initialCount);").is_empty());
+        assert!(run_on("const [c, sc] = useState(obj.a.b);").is_empty());
+        assert!(run_on("const [c, sc] = useState(this.x);").is_empty());
+        assert!(run_on("const [c, sc] = useState(arr[0]);").is_empty());
+    }
+
+    // A call on a member (`obj.compute()`) is a call expression, still expensive.
+    #[test]
+    fn flags_method_call_on_member() {
+        assert_eq!(run_on("const [c, sc] = useState(obj.compute());").len(), 1);
+    }
+
+    #[test]
+    fn flags_new_expression() {
+        assert_eq!(run_on("const [c, sc] = useState(new Map());").len(), 1);
+    }
+
+    #[test]
+    fn flags_json_parse() {
+        assert_eq!(run_on("const [c, sc] = useState(JSON.parse(s));").len(), 1);
     }
 }
