@@ -6,6 +6,7 @@
 //! (`@return` → `@returns`, `@arg` → `@param`, `@desc` →
 //! `@description`) that the documentation tooling will silently
 //! ignore — catching them at lint time prevents invisible rot.
+//! `@return` (singular) is accepted as the documented alias of `@returns`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::jsdoc_helpers::scan_blocks;
@@ -85,6 +86,8 @@ const KNOWN_TAGS: &[&str] = &[
     "readonly",
     "record",
     "requires",
+    // `@return` is the documented JSDoc/TypeDoc singular alias of `@returns`.
+    "return",
     "returns",
     "satisfies",
     "see",
@@ -149,7 +152,6 @@ fn is_known(name: &str) -> bool {
 fn suggest(name: &str) -> Option<&'static str> {
     let lower = name.to_ascii_lowercase();
     match lower.as_str() {
-        "return" => Some("returns"),
         "arg" | "argument" | "parameter" => Some("param"),
         "desc" => Some("description"),
         "exemple" => Some("example"),
@@ -194,10 +196,17 @@ mod tests {
 
     #[test]
     fn suggests_canonical_for_common_typos() {
-        let src = "/**\n * @return thing\n */\n";
+        let src = "/**\n * @arg thing\n */\n";
         let diags = run(src);
         assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("@returns"));
+        assert!(diags[0].message.contains("@param"));
+    }
+
+    #[test]
+    fn allows_return_alias_issue_2283() {
+        // `@return` is the documented JSDoc singular alias of `@returns`.
+        let src = "/**\n * @return all nodes of kind, or [] if none is found\n */\n";
+        assert!(run(src).is_empty(), "{:?}", run(src));
     }
 
     #[test]
