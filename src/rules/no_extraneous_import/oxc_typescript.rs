@@ -934,6 +934,57 @@ export default class CustomReporter implements Reporter {}
     }
 
     #[test]
+    fn allows_dev_dep_in_package_root_test_setup_file() {
+        // Issue #2118: TanStack Query's `packages/*/test-setup.ts` is a Vitest
+        // global setup file referenced via `setupFiles: ['test-setup.ts']` in
+        // `vite.config.ts`. It lives at the package root, not under a test
+        // directory, and its name carries no `.setup.` infix, so the existing
+        // directory/infix checks miss it. It runs only inside the test runner and
+        // never ships, so importing test-only devDependencies (vitest,
+        // @testing-library/*) is correct.
+        let pkg = r#"{
+            "devDependencies": {
+                "vitest": "^1",
+                "@testing-library/react": "^14",
+                "@testing-library/jest-dom": "^6"
+            }
+        }"#;
+        let src = r#"
+import '@testing-library/jest-dom/vitest';
+import { act, cleanup as cleanupRTL } from '@testing-library/react';
+import { afterEach } from 'vitest';
+"#;
+        let d = run_with_pkg_at_path(
+            pkg,
+            "packages/query-broadcast-client-experimental/test-setup.ts",
+            src,
+        );
+        assert!(d.is_empty(), "test-setup.ts should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_vitest_setup_infix_file() {
+        // Issue #2118: the `*.setup.*` infix form (`vitest.setup.ts`) is the same
+        // global-setup convention and must be exempt for the same reason.
+        let pkg = r#"{"devDependencies":{"vitest":"^1"}}"#;
+        let src = r#"import { afterEach } from "vitest";"#;
+        let d = run_with_pkg_at_path(pkg, "vitest.setup.ts", src);
+        assert!(d.is_empty(), "vitest.setup.ts should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_in_setup_prefixed_production_file() {
+        // Negative-space guard for #2118: a production file whose name merely
+        // contains "setup" as part of a larger word (not the setup-file
+        // convention) must still flag a devDependency import.
+        let pkg = r#"{"devDependencies":{"vitest":"^1"}}"#;
+        let src = r#"import { describe } from "vitest";"#;
+        let d = run_with_pkg_at_path(pkg, "src/setupStore.ts", src);
+        assert_eq!(d.len(), 1, "setupStore.ts should still flag: {d:?}");
+        assert!(d[0].message.contains("vitest"));
+    }
+
+    #[test]
     fn still_flags_dev_dep_in_production_index() {
         // Guard against over-relaxing: a genuine production entry point importing a
         // devDependency must still flag — the prefix exemption is name-anchored.
