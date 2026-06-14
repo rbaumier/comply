@@ -1,10 +1,15 @@
 //! rust-no-float-for-money backend.
 //!
 //! Walks struct fields, function parameters, and let bindings.
-//! Flags any binding whose name matches a money-shaped word
-//! (`price`, `amount`, `cost`, `balance`, `fee`, `total`,
-//! `subtotal`, `tax`, `discount`, `revenue`) AND whose declared
-//! type is `f32` or `f64`.
+//! Flags any binding whose name matches an unambiguously monetary
+//! word (`price`, `cost`, `balance`, `fee`, `total`, `subtotal`,
+//! `tax`, `discount`, `revenue`, `salary`, `wage`, `fare`, `charge`)
+//! AND whose declared type is `f32` or `f64`.
+//!
+//! The name list excludes polysemous words like `amount`, which in
+//! non-monetary domains (color-channel/lightness adjustments, animation
+//! seek offsets, GUI pixel measurements, physics) is correctly an
+//! `f32`/`f64` and carries no AST signal distinguishing it from money.
 //!
 //! False positives are possible (`average_score`, `tax_rate`) but
 //! the failure mode of using a float for money is bad enough that
@@ -16,8 +21,8 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 const KINDS: &[&str] = &["field_declaration", "parameter"];
 
 const MONEY_NAMES: &[&str] = &[
-    "price", "amount", "cost", "balance", "fee", "total", "subtotal", "tax", "discount", "revenue",
-    "salary", "wage", "fare", "charge",
+    "price", "cost", "balance", "fee", "total", "subtotal", "tax", "discount", "revenue", "salary",
+    "wage", "fare", "charge",
 ];
 
 #[derive(Debug)]
@@ -134,8 +139,27 @@ mod tests {
     }
 
     #[test]
-    fn flags_amount_param() {
-        assert_eq!(run_on("fn charge(amount: f64) {}").len(), 1);
+    fn flags_price_param() {
+        assert_eq!(run_on("fn quote(price: f64) {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_cost_param() {
+        assert_eq!(run_on("fn bill(total_cost: f64) {}").len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_amount_param() {
+        // `amount` is polysemous: in color/physics/GUI domains it is a
+        // correct float adjustment, not money. See issue #1434.
+        assert!(run_on("fn saturate_fixed(amount: f64) {}").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_amount_color_method() {
+        // wezterm color-funcs FP shape: `fn(&self, amount: f64) -> Self`.
+        let src = "impl Color { fn lighten_fixed(&self, amount: f64) -> Self { self } }";
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
