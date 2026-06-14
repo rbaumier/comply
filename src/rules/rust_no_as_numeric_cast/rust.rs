@@ -13,6 +13,11 @@
 //! Casts like `*const u8 as usize` are false positives; suppress with
 //! `// comply-ignore` on the offending line.
 //!
+//! Casts whose operand's outermost expression is a bitwise op
+//! (`>>`, `<<`, `&`, `|`, `^`, parens transparent) are bit manipulation —
+//! e.g. `(x >> 8) as u8`, `(x & 0xFF) as u8`. The truncation is intentional,
+//! so `try_from` would be wrong; these are left alone.
+//!
 //! Float-target casts (`as f32` / `as f64`) are only flagged when the
 //! source type is statically known to have a matching `From` impl
 //! (`f64: From<{i8,i16,i32,u8,u16,u32,f32}>`, `f32: From<{i8,i16,u8,u16}>`).
@@ -73,6 +78,9 @@ impl AstCheck for Check {
             return;
         }
         if is_literal_cast(node, source_bytes) {
+            return;
+        }
+        if is_bitwise_operand(node, source_bytes) {
             return;
         }
         let source_type = source_numeric_type(node, source_bytes);
@@ -213,6 +221,30 @@ fn pattern_contains_identifier(pattern: tree_sitter::Node, name: &str, source: &
     pattern
         .children(&mut cursor)
         .any(|child| pattern_contains_identifier(child, name, source))
+}
+
+/// Whether the cast operand's outermost expression is a bitwise operation
+/// (`>>`, `<<`, `&`, `|`, `^`). Such a cast is bit manipulation — the
+/// truncation to the target width is intentional (`(x >> 8) as u8`,
+/// `(x & 0xFF) as u8`), so `try_from` would be semantically wrong. Parens
+/// around the operand are transparent.
+fn is_bitwise_operand(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(mut value) = node.child_by_field_name("value") else {
+        return false;
+    };
+    while value.kind() == "parenthesized_expression" {
+        let Some(inner) = value.named_child(0) else {
+            return false;
+        };
+        value = inner;
+    }
+    if value.kind() != "binary_expression" {
+        return false;
+    }
+    value
+        .child_by_field_name("operator")
+        .and_then(|op| op.utf8_text(source).ok())
+        .is_some_and(|op| matches!(op, ">>" | "<<" | "&" | "|" | "^"))
 }
 
 fn is_literal_cast(node: tree_sitter::Node, _source: &[u8]) -> bool {
@@ -372,5 +404,33 @@ mod tests {
     fn allows_u32_as_f32_no_from_impl() {
         // `f32: From<u32>` does not exist (lossy) — `as` is correct here.
         assert!(run_on("fn f(x: u32) -> f32 { x as f32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_1289_shift_narrowing_not_flagged() {
+        // `(x >> 8) as u8` — bit extraction, truncation intentional.
+        assert!(run_on("fn f(x: u32) -> u8 { (x >> 8) as u8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_1289_mask_narrowing_not_flagged() {
+        // `(x & 0xFF) as u8` — masked low byte, truncation intentional.
+        assert!(run_on("fn f(x: u32) -> u8 { (x & 0xFF) as u8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_1289_or_narrowing_not_flagged() {
+        assert!(run_on("fn f(a: u32, b: u32) -> u16 { (a | b) as u16 }").is_empty());
+    }
+
+    #[test]
+    fn repro_1289_xor_shift_not_flagged() {
+        assert!(run_on("fn f(a: u32, b: u32) -> u8 { (a ^ b) as u8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_1289_plain_narrowing_still_flagged() {
+        // No bitwise context — an arbitrary count/length narrowing stays flagged.
+        assert_eq!(run_on("fn f(n: u32) -> u8 { n as u8 }").len(), 1);
     }
 }
