@@ -63,6 +63,11 @@ pub struct RouteMagicExports {
     /// `src/params/*`).
     #[serde(default)]
     pub param_matchers: Vec<String>,
+    /// Names consumed in a framework's route-configuration entry file (React
+    /// Router v7 `routes.ts`/`routes.js`, whose `default` export is read by
+    /// `@react-router/dev`).
+    #[serde(default)]
+    pub config_files: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]

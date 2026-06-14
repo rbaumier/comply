@@ -575,6 +575,30 @@ pub fn is_remix_route_file(path: &Path) -> bool {
     false
 }
 
+/// True when `path` is a React Router v7 app root module (`root.tsx`/`root.jsx`).
+/// Its `Layout`, `meta`, `links`, and default exports are consumed by the
+/// framework's render pipeline by exact name, never through a static import, so
+/// they have no importer but are live. Scoping is provided by the caller's
+/// framework-detection gate (React Router v7 framework mode), so basename match
+/// is enough here.
+pub fn is_react_router_root_module(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|n| n.to_str()),
+        Some("root.tsx" | "root.jsx")
+    )
+}
+
+/// True when `path` is a React Router v7 route-configuration entry
+/// (`routes.ts`/`routes.js`). Its `default` export is consumed by
+/// `@react-router/dev`, never through a static import. As with the root module,
+/// the caller's framework-detection gate scopes the exemption.
+pub fn is_react_router_routes_config(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|n| n.to_str()),
+        Some("routes.ts" | "routes.js")
+    )
+}
+
 /// True when `path` is a SvelteKit route file (`+page.svelte`,
 /// `+page.server.ts`, `+server.ts`, …) located under a `routes/` directory in
 /// a project where SvelteKit is detected. SvelteKit's file-system router
@@ -1004,5 +1028,25 @@ mod aux_path_tests {
         assert!(!is_remix_route_file(Path::new("app/lib/data.ts")));
         assert!(!is_remix_route_file(Path::new("app/root.tsx")));
         assert!(!is_remix_route_file(Path::new("routes/index.tsx")));
+    }
+
+    #[test]
+    fn react_router_root_module_matches_root_tsx_and_jsx() {
+        assert!(is_react_router_root_module(Path::new("app/root.tsx")));
+        assert!(is_react_router_root_module(Path::new("docs/app/root.jsx")));
+        // Negative space: TanStack's `__root.tsx`, a route file, and an ordinary
+        // module must not match.
+        assert!(!is_react_router_root_module(Path::new("src/routes/__root.tsx")));
+        assert!(!is_react_router_root_module(Path::new("app/routes/index.tsx")));
+        assert!(!is_react_router_root_module(Path::new("app/root.css")));
+    }
+
+    #[test]
+    fn react_router_routes_config_matches_routes_ts_and_js() {
+        assert!(is_react_router_routes_config(Path::new("app/routes.ts")));
+        assert!(is_react_router_routes_config(Path::new("docs/app/routes.js")));
+        // Negative space: the `routes/` directory and an ordinary module name.
+        assert!(!is_react_router_routes_config(Path::new("app/routes/index.tsx")));
+        assert!(!is_react_router_routes_config(Path::new("app/route.ts")));
     }
 }
