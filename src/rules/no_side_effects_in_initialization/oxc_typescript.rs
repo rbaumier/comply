@@ -10,7 +10,8 @@
 //! - test files (path heuristic);
 //! - test-runner setup files matched by convention path/name (`*.setup.*`,
 //!   `setup.*`, `setup-*`, `*-setup`, `globalSetup`, `setupTests.*`, anything
-//!   under `test-helpers/`, or any Cypress support file under `cypress/support/`),
+//!   under `test-helpers/`, any Cypress support file under `cypress/support/`,
+//!   or a Playwright component-testing setup file at `playwright/index.{ts,js}`),
 //!   or by content shape where every top-level call is a standard test-runner
 //!   lifecycle hook (`beforeAll`/`beforeEach`/`afterEach`/`afterAll`/
 //!   `expect.extend`) whose name is not a local value binding — covering both
@@ -176,6 +177,16 @@ fn is_test_setup_path(path: &std::path::Path) -> bool {
     // `…/commands.ts`) are loaded by the test runner before each run for their
     // top-level registrations — that is the Cypress support-file contract.
     if s.contains("/cypress/support/") || s.starts_with("cypress/support/") {
+        return true;
+    }
+    // Playwright component-testing setup files (`playwright/index.{ts,js}`) are
+    // the Playwright analogue of Cypress support files: the runner loads them
+    // for their top-level fixture registrations (e.g. `setProjectAnnotations`).
+    if s.ends_with("/playwright/index.ts")
+        || s.ends_with("/playwright/index.js")
+        || s.starts_with("playwright/index.ts")
+        || s.starts_with("playwright/index.js")
+    {
         return true;
     }
     let name = path
@@ -1573,6 +1584,51 @@ mod tests {
         assert!(
             diags.is_empty(),
             "cypress/support/ files are test-runner entry points, got {diags:?}"
+        );
+    }
+
+    // Regression for #1670: Playwright component-testing setup files
+    // (`playwright/index.{ts,js}`) are loaded by the runner for their top-level
+    // fixture registrations — the Playwright analogue of Cypress support files.
+    #[test]
+    fn allows_playwright_component_setup_file() {
+        let src = "\
+            import { setProjectAnnotations } from '@storybook/react-vite';\n\
+            import sbAnnotations from '../.storybook/preview';\n\
+            setProjectAnnotations([sbAnnotations]);\n";
+        let diags = crate::rules::test_helpers::run_rule(
+            &Check,
+            src,
+            "test-storybooks/portable-stories-kitchen-sink/react/playwright/index.ts",
+        );
+        assert!(
+            diags.is_empty(),
+            "playwright/index.ts is a Playwright component-testing setup file, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_index_file_outside_playwright_dir() {
+        // `index.ts` is only exempt under a `playwright/` directory, not blanket.
+        let diags = crate::rules::test_helpers::run_rule(
+            &Check,
+            "setProjectAnnotations([sbAnnotations]);",
+            "src/foo.ts",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "a top-level side-effect call in a non-setup file must still fire, got {diags:?}"
+        );
+        let diags = crate::rules::test_helpers::run_rule(
+            &Check,
+            "registerSideEffect();",
+            "src/index.ts",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "index.ts outside playwright/ must not be blanket-exempted, got {diags:?}"
         );
     }
 
