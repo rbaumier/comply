@@ -127,10 +127,31 @@ pub fn is_developer_script_path(path: &Path) -> bool {
     has_path_segment(path, &["scripts", "bin", "migrations"])
 }
 
-/// True for build/codegen scripts under a `scripts/` or `config/` directory.
-/// These run at dev/CI time and are not part of the shipped bundle.
-pub fn is_build_script_path(path: &Path) -> bool {
+/// True for build/codegen scripts: files under a `scripts/` or `config/`
+/// directory, or a root-level `build`/`bundle` script (e.g. `build.ts`,
+/// `bundle.mjs`) sitting directly in `project_root`. Both run at dev/CI time
+/// and are not part of the shipped bundle, so importing a devDependency from
+/// them is correct.
+pub fn is_build_script_path(path: &Path, project_root: &Path) -> bool {
     has_path_segment(path, &["scripts", "config"])
+        || is_root_level_build_script(path, project_root)
+}
+
+/// True when `path` is a `build`/`bundle` script (stem `build` or `bundle`
+/// with a JS/TS extension) sitting directly in `project_root`, rather than
+/// under `src/` or any other subdirectory. Scoping to the project root keeps
+/// a shipped `src/build.ts` from being mistaken for a tooling script.
+fn is_root_level_build_script(path: &Path, project_root: &Path) -> bool {
+    if path.parent() != Some(project_root) {
+        return false;
+    }
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs")
+    ) && (stem == "build" || stem == "bundle")
 }
 
 /// True for demonstration code under `samples/`, `samples-dev/`, `examples/`,
@@ -487,9 +508,15 @@ mod aux_path_tests {
 
     #[test]
     fn build_script_and_sample_dir_segments() {
-        assert!(is_build_script_path(&PathBuf::from("scripts/gen.ts")));
-        assert!(is_build_script_path(&PathBuf::from("config/helpers.ts")));
-        assert!(!is_build_script_path(&PathBuf::from("src/appconfig/index.ts")));
+        let root = PathBuf::from("/repo");
+        assert!(is_build_script_path(&root.join("scripts/gen.ts"), &root));
+        assert!(is_build_script_path(&root.join("config/helpers.ts"), &root));
+        assert!(!is_build_script_path(&root.join("src/appconfig/index.ts"), &root));
+        // Root-level build/bundle scripts are tooling, exempt at the root only.
+        assert!(is_build_script_path(&root.join("build.ts"), &root));
+        assert!(is_build_script_path(&root.join("bundle.mjs"), &root));
+        assert!(!is_build_script_path(&root.join("src/build.ts"), &root));
+        assert!(!is_build_script_path(&root.join("app.ts"), &root));
         assert!(is_sample_dir_path(&PathBuf::from("samples-dev/x.ts")));
         assert!(is_sample_dir_path(&PathBuf::from("examples/app.ts")));
         assert!(!is_sample_dir_path(&PathBuf::from("src/mysamples/index.ts")));
