@@ -201,6 +201,18 @@ impl OxcCheck for Check {
             match node.kind() {
                 AstKind::Function(func) => {
                     let Some(ref id) = func.id else { continue };
+                    // A named function expression bound to a variable
+                    // (`var f = function f() { ... }`) is also reached by the
+                    // `VariableDeclarator` branch below, which names it after
+                    // the binding. Collecting it here as well would double-count
+                    // the same source function and report it as a duplicate of
+                    // itself, so skip the function-expression case here.
+                    if matches!(
+                        nodes.parent_node(node.id()).kind(),
+                        AstKind::VariableDeclarator(_)
+                    ) {
+                        continue;
+                    }
                     let name = id.name.to_string();
                     let Some(ref body) = func.body else { continue };
                     let body_text =
@@ -665,6 +677,49 @@ it('computes both', () => {
             "{:?}",
             run_with_file_ctx(src, "test/compute.test.tsx")
         );
+    }
+
+    // Regression for #1734 — a named function expression bound to a variable
+    // (`var merge = function merge(...) {...}`) is reachable by both the
+    // `Function` and `VariableDeclarator` collection branches. It must yield a
+    // single candidate, never be reported as a duplicate of itself.
+    #[test]
+    fn allows_named_function_expression_bound_to_variable() {
+        let src = r#"
+var merge = function merge(options, defaults) {
+    if (!options) { return defaults; }
+    var result = {};
+    for (var key in defaults) {
+        result[key] = hasOwnProperty.call(options, key) ? options[key] : defaults[key];
+    }
+    return result;
+};
+"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // Negative-space guard for #1734 — the dedup must not silence genuine
+    // duplicates: two distinct named function expressions bound to different
+    // variables with identical bodies are still a real "extract a shared helper"
+    // opportunity and must stay flagged.
+    #[test]
+    fn flags_distinct_named_function_expressions_with_identical_bodies() {
+        let src = r#"
+var mergeA = function mergeA(options, defaults) {
+    if (!options) { return defaults; }
+    var result = {};
+    result.merged = true;
+    return result;
+};
+
+var mergeB = function mergeB(options, defaults) {
+    if (!options) { return defaults; }
+    var result = {};
+    result.merged = true;
+    return result;
+};
+"#;
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 
     // Generated files (AutoRest `models.ts` carrying a DO NOT EDIT header) emit
