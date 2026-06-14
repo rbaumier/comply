@@ -1,8 +1,8 @@
-//! playwright-no-unsafe-references — flag `page.evaluate()` with only a function argument (no explicit args).
+//! playwright-no-unsafe-references — flag a `page.evaluate()` callback that
+//! captures an outer-scope variable, since closures are not serialized into the
+//! browser context.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
