@@ -318,7 +318,7 @@ impl Config {
     }
 }
 
-const ALL_LANGUAGES: [Language; 13] = [
+const ALL_LANGUAGES: [Language; 14] = [
     Language::TypeScript,
     Language::Tsx,
     Language::JavaScript,
@@ -332,6 +332,7 @@ const ALL_LANGUAGES: [Language; 13] = [
     Language::Dockerfile,
     Language::Sql,
     Language::GraphQl,
+    Language::Markdown,
 ];
 
 /// Extract language-qualified rule keys (e.g. `"id-length.ts"`,

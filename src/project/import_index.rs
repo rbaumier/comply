@@ -991,6 +991,7 @@ fn is_indexable(lang: Language) -> bool {
             | Language::JavaScript
             | Language::Rust
             | Language::Vue
+            | Language::Markdown
     )
 }
 
@@ -1078,7 +1079,7 @@ fn compute_cycles(imports: &HashMap<PathBuf, Vec<ImportedSymbol>>) -> Vec<Vec<Pa
 }
 
 /// Raw per-file extract before cross-file resolution.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct FileExtract {
     exports: Vec<ExportedSymbol>,
     imports: Vec<ImportedSymbol>,
@@ -1128,6 +1129,9 @@ fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileE
     }
     if matches!(file.language, Language::Vue) {
         return extract_vue(parser, &source, &file.path);
+    }
+    if matches!(file.language, Language::Markdown) {
+        return extract_markdown(&source, &file.path);
     }
     if !matches!(
         file.language,
@@ -1233,6 +1237,131 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
             dynamic_dirs,
         },
     ))
+}
+
+/// Extract the top-of-file ESM `import` statements from a Markdown / MDX file.
+///
+/// MDX (and MDX-flavored Markdown processed by Docusaurus / Nextra / Astro) uses
+/// standard ESM `import … from '…'` statements, so a component consumed only
+/// from a docs page is a real cross-file usage. Markdown is not valid JS, so the
+/// whole file is never handed to the parser: import-statement line spans are
+/// isolated (skipping fenced code blocks and prose), every other line is blanked
+/// to a newline to preserve line numbers, and the resulting import-only program
+/// is parsed by oxc — reusing the exact import-clause logic as TS/JS imports.
+///
+/// Only import edges are produced; a Markdown file declares no exports.
+fn extract_markdown(source: &str, path: &Path) -> Option<(PathBuf, FileExtract)> {
+    let import_only = blank_non_import_lines(source);
+    if !import_only.contains("import") {
+        // No ESM imports — index the file as a participant with no edges so it
+        // still counts toward the file set, mirroring an import-free TS module.
+        let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        return Some((canon, FileExtract::default()));
+    }
+
+    let imports = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        extract_imports_from_module(&import_only)
+    }))
+    .ok()
+    .unwrap_or_default();
+
+    let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    Some((
+        canon,
+        FileExtract {
+            imports,
+            ..FileExtract::default()
+        },
+    ))
+}
+
+/// Parse `source` as a JS module and return only its import edges. Shares the
+/// oxc import-clause extraction used for real TS/JS files so named/default/
+/// namespace/type-only/aliased imports are recorded identically.
+fn extract_imports_from_module(source: &str) -> Vec<ImportedSymbol> {
+    use oxc_allocator::Allocator;
+    use oxc_ast::AstKind;
+    use oxc_parser::Parser as OxcParser;
+    use oxc_span::SourceType;
+
+    let allocator = Allocator::default();
+    let parse_ret = OxcParser::new(&allocator, source, SourceType::mjs()).parse();
+    let semantic = oxc_semantic::SemanticBuilder::new()
+        .build(&parse_ret.program)
+        .semantic;
+
+    let lines = oxc_line_starts(source);
+    let mut imports = Vec::new();
+    for node in semantic.nodes().iter() {
+        if let AstKind::ImportDeclaration(import) = node.kind() {
+            oxc_extract_import(&lines, import, &mut imports);
+        }
+    }
+    imports
+}
+
+/// Reduce a Markdown / MDX file to its ESM import statements, blanking every
+/// other line to an empty line so import line numbers are preserved and the
+/// result parses as JS. Lines inside fenced code blocks (```` ``` ```` / `~~~`)
+/// are treated as prose. A statement starts at a line whose first non-blank
+/// token is the `import` keyword and continues until the line that closes the
+/// `from '…'` / bare `import '…'` specifier with a string quote — so multi-line
+/// import clauses survive while inline `import` words in prose are dropped.
+fn blank_non_import_lines(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut in_fence = false;
+    let mut in_import = false;
+    for line in source.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\n', '\r']);
+        let trimmed = body.trim_start();
+
+        if !in_import && is_code_fence(trimmed) {
+            in_fence = !in_fence;
+            out.push('\n');
+            continue;
+        }
+
+        let keep = if in_import {
+            true
+        } else {
+            !in_fence && starts_import_statement(trimmed)
+        };
+
+        if keep {
+            out.push_str(body);
+            in_import = !import_statement_complete(body);
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// True when `trimmed` opens or closes a fenced code block (```` ``` ```` or
+/// `~~~`, optionally with an info string).
+fn is_code_fence(trimmed: &str) -> bool {
+    trimmed.starts_with("```") || trimmed.starts_with("~~~")
+}
+
+/// True when `trimmed` begins with the `import` keyword as a statement — the
+/// next character is whitespace or one of the clause openers `{ * ' " (`. This
+/// rejects identifiers like `imported` and prose sentences containing `import`
+/// mid-line (those never begin the line with the bare keyword).
+fn starts_import_statement(trimmed: &str) -> bool {
+    let Some(rest) = trimmed.strip_prefix("import") else {
+        return false;
+    };
+    match rest.chars().next() {
+        None => true,
+        Some(c) => c.is_whitespace() || matches!(c, '{' | '*' | '\'' | '"' | '('),
+    }
+}
+
+/// True when an import statement that began on a prior line is closed on `body`
+/// — i.e. the line contains a string-quote terminator for the specifier. A
+/// single-line `import … from '…'` is complete on its own line; a multi-line
+/// clause stays open until the closing line carries the quoted specifier.
+fn import_statement_complete(body: &str) -> bool {
+    body.contains('\'') || body.contains('"') || body.contains('`')
 }
 
 /// Capture a `new_expression` / `call_expression` when its callee is a bare
@@ -3532,6 +3661,72 @@ mod tests {
             imp.source_path.as_ref(),
             Some(&canon_lib),
             "cross-package name import must resolve to the sibling's source index"
+        );
+    }
+
+    // Regression for #1556: a `.md` / `.mdx` doc page imports a component via a
+    // relative ESM specifier; the import edge is collected and resolved to the
+    // component's source file exactly like a `.ts` import, so the component
+    // counts as cross-file used.
+    #[test]
+    fn markdown_and_mdx_imports_are_collected_and_resolved() {
+        let (_dir, index, paths) = build_index(&[
+            (
+                "components/DetailedExplanation.jsx",
+                "export const DetailedExplanation = () => null;\n",
+            ),
+            (
+                "docs/CodeStructure.md",
+                "# Heading\n\nimport { DetailedExplanation } from '../components/DetailedExplanation'\n\n<DetailedExplanation />\n",
+            ),
+            (
+                "docs/side-effects.mdx",
+                "import { DetailedExplanation } from '../components/DetailedExplanation'\n\n<DetailedExplanation />\n",
+            ),
+        ]);
+
+        let component = &paths[0];
+        let md = &paths[1];
+        let mdx = &paths[2];
+
+        for (label, doc) in [("md", md), ("mdx", mdx)] {
+            let imp = index
+                .get_imports(doc)
+                .iter()
+                .find(|i| i.local_name == "DetailedExplanation")
+                .unwrap_or_else(|| panic!("{label} import must be indexed"));
+            assert_eq!(
+                imp.source_path.as_ref(),
+                Some(component),
+                "{label} import must resolve to the component source"
+            );
+        }
+
+        // The named import flows into the per-symbol usage map, so dead-export
+        // sees the component as used.
+        assert_eq!(
+            index.get_usages(component, "DetailedExplanation").len(),
+            2,
+            "both doc pages register a usage of the component"
+        );
+    }
+
+    // Prose containing the word "import" and `import` lines inside fenced code
+    // blocks are not real ESM imports — they must not produce edges.
+    #[test]
+    fn markdown_prose_and_code_fences_are_not_treated_as_imports() {
+        let (_dir, index, paths) = build_index(&[
+            ("lib/widget.ts", "export const Widget = 1;\n"),
+            (
+                "docs/guide.md",
+                "You can import the widget when needed.\n\n```ts\nimport { Widget } from '../lib/widget'\n```\n",
+            ),
+        ]);
+
+        let doc = &paths[1];
+        assert!(
+            index.get_imports(doc).is_empty(),
+            "prose and fenced-code imports must not create edges"
         );
     }
 

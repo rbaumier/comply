@@ -658,7 +658,13 @@ fn grammar_family(lang: Language) -> Option<u8> {
         Language::Css => Some(3),
         Language::Yaml => Some(4),
         Language::Dockerfile => Some(5),
-        Language::Vue | Language::Toml | Language::Json | Language::Sql | Language::GraphQl | Language::Svelte => None,
+        Language::Vue
+        | Language::Toml
+        | Language::Json
+        | Language::Sql
+        | Language::GraphQl
+        | Language::Svelte
+        | Language::Markdown => None,
     }
 }
 

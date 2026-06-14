@@ -17,7 +17,12 @@ pub(crate) fn ts_language_for(language: Language) -> Option<tree_sitter::Languag
         Language::Css => tree_sitter_css::LANGUAGE.into(),
         Language::Yaml => tree_sitter_yaml::LANGUAGE.into(),
         Language::Dockerfile => tree_sitter_dockerfile_updated::language(),
-        Language::Toml | Language::Json | Language::Sql | Language::GraphQl | Language::Svelte => return None,
+        Language::Toml
+        | Language::Json
+        | Language::Sql
+        | Language::GraphQl
+        | Language::Svelte
+        | Language::Markdown => return None,
     })
 }
 
