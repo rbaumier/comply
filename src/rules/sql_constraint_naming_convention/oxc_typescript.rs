@@ -126,4 +126,30 @@ mod tests {
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("t_a_constraint"));
     }
+
+    #[test]
+    fn rename_constraint_does_not_flag_old_typeorm_hash_name() {
+        let src = r#"const m = await sql`ALTER TABLE "user" RENAME CONSTRAINT "PK_a3ffb1c0c8416b9fc6f907b7433" TO "user_pkey"`.execute(db);"#;
+        // The old TypeORM hash name is being removed; the new name is valid.
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn rename_constraint_validates_new_name() {
+        let src = r#"const m = await sql`ALTER TABLE t RENAME CONSTRAINT "old_pkey" TO "BadName"`.execute(db);"#;
+        // The new name `BadName` lacks a valid suffix and must be flagged;
+        // the old name `old_pkey` must not appear.
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("BadName"));
+        assert!(!diags[0].message.contains("old_pkey"));
+    }
+
+    #[test]
+    fn add_constraint_with_bad_name_still_flagged() {
+        let src = r#"const m = await sql`ALTER TABLE t ADD CONSTRAINT bad_name UNIQUE (email)`.execute(db);"#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("bad_name"));
+    }
 }
