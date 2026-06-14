@@ -16,7 +16,11 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["react"],
 
-    skip_in_test_dir: false,
+    // Test-harness components legitimately use `useEffect(() => onReady(data), [])`
+    // to expose a ref/state to the outer test — the only way to get an imperative
+    // handle into the test body. There is no production render-cycle concern in a
+    // fixture, so the rule is scoped out of test directories.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
