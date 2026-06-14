@@ -522,6 +522,15 @@ impl OxcCheck for Check {
                     if binding_annotation_is_unknown(node, semantic) {
                         return;
                     }
+                    // The identifier is a parameter of an arrow/function that is
+                    // an object-literal property value (e.g. TanStack Table's
+                    // `cell: (info) => …`, `accessorFn: (row) => …`). The
+                    // library's own API prescribes the parameter name, so the
+                    // author has no rename freedom — same rationale already
+                    // applied to banned prefixes (`onSuccess: (data) => …`).
+                    if is_in_callback_property(node, semantic) {
+                        return;
+                    }
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, span.start as usize);
                     diagnostics.push(Diagnostic {
@@ -1064,6 +1073,44 @@ mod tests {
     fn flags_cell_and_cells_banned_words() {
         assert_eq!(run("const cell = 1;").len(), 1);
         assert_eq!(run("const cells = [];").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_tanstack_table_column_def_callback_params_issue_1716() {
+        // Regression for #1716 — TanStack Table column definitions prescribe
+        // `row`/`cell`/`info` as the callback parameter names (`Row<TData>`,
+        // `CellContext<TData, TValue>`). The params are values of object-literal
+        // properties (`cell:`, `accessorFn:`), so the library API fixes the name.
+        let src = r#"
+            const columns = [
+                {
+                    accessorKey: 'firstName',
+                    cell: (info) => info.getValue(),
+                },
+                {
+                    accessorFn: (row) => row.lastName,
+                    cell: (info) => info.getValue(),
+                },
+                {
+                    header: (info) => info.column.id,
+                },
+            ];
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_row_cell_info_params_in_call_argument_callbacks_issue_1716() {
+        // Negative space: the exemption is for callbacks that are object-literal
+        // *property values*. A `row`/`cell`/`info` param of a callback passed as
+        // a *call argument* (`.map((row) => …)`) is not API-prescribed and is
+        // still a vague name — must still flag.
+        let src = r#"
+            items.map((row) => row[0]);
+            items.forEach((cell) => use(cell));
+            items.filter((info) => info.ok);
+        "#;
+        assert_eq!(run(src).len(), 3);
     }
 
     #[test]
