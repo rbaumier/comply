@@ -27,6 +27,14 @@
 //!   has nowhere to be propagated or reported, so `let _ =` intentionally drops
 //!   it. Scoped to receiver chains rooted at `stderr()`/`stdout()` so a plain
 //!   `let _ = file.write_all(..)` still fires.
+//! - `let _ = expr.write_str(..)` / `let _ = expr.write_char(..)`: the
+//!   `core::fmt::Write` trait methods. Writing to an in-memory buffer (`String`,
+//!   `fmt::Formatter`, a `Vec<u8>` wrapper) yields a `fmt::Result` that is
+//!   structurally `Ok(())`, so discarding it with `let _ =` drops an always-Ok
+//!   unit, not an error. The method names `write_str`/`write_char` are specific
+//!   to `fmt::Write` (distinct from `io::Write`'s `write`/`write_all`), so this
+//!   is exempt by method name without type inference — a plain
+//!   `let _ = file.write_all(..)` still fires.
 //!
 //! NOTE: This rule uses a heuristic (call-like pattern matching) rather than
 //! type awareness. It may flag `let _ = infallible_fn()` where the function
@@ -90,6 +98,12 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
     // Skip the best-effort standard-stream write `let _ = stderr()/stdout()...`:
     // the I/O error has nowhere to go in an error-reporting path.
     if is_std_stream_write(value, source) {
+        return;
+    }
+
+    // Skip the `core::fmt::Write` idiom `let _ = expr.write_str/write_char(..)`:
+    // on an in-memory buffer the `fmt::Result` is always `Ok(())`.
+    if is_fmt_write_method(value, source) {
         return;
     }
 
@@ -157,6 +171,29 @@ fn is_channel_send(value: Node, source: &[u8]) -> bool {
         return false;
     };
     matches!(field.utf8_text(source), Ok("send"))
+}
+
+/// True if `value` is a `core::fmt::Write` method call (`write_str`/
+/// `write_char`). These names are specific to `fmt::Write`; on an in-memory
+/// buffer (`String`, `fmt::Formatter`, `Vec<u8>` wrapper) the returned
+/// `fmt::Result` is structurally `Ok(())`, so `let _ =` drops an always-Ok
+/// unit rather than ignoring an error. Matching by method name keeps the
+/// exemption type-safe without type inference, since `io::Write`'s fallible
+/// methods (`write`/`write_all`) use different names.
+fn is_fmt_write_method(value: Node, source: &[u8]) -> bool {
+    if value.kind() != "call_expression" {
+        return false;
+    }
+    let Some(function) = value.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    let Some(field) = function.child_by_field_name("field") else {
+        return false;
+    };
+    matches!(field.utf8_text(source), Ok("write_str" | "write_char"))
 }
 
 /// True if `value` is a write method call (`write_all`/`write`/`write_fmt`/
@@ -396,6 +433,28 @@ mod tests {
         let business = "fn f() { let _ = persist_to_disk(record); }";
         assert_eq!(run_on(file).len(), 1);
         assert_eq!(run_on(business).len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_fmt_write_method() {
+        // Regression for #1517: `core::fmt::Write` methods on an in-memory
+        // buffer return a `fmt::Result` that is always `Ok(())`. The issue's
+        // exact axum `sse.rs` examples.
+        let write_str = "fn f() { let _ = writer.write_str(data.as_ref()); }";
+        let write_char = "fn f() { let _ = event.buffer.as_mut().write_char('\\n'); }";
+        let framing = r#"fn f() { let _ = buffer.write_str("data: "); }"#;
+        assert!(run_on(write_str).is_empty());
+        assert!(run_on(write_char).is_empty());
+        assert!(run_on(framing).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_io_write_method() {
+        // Negative space for #1517: `io::Write`'s `write_all` uses a different
+        // method name from `fmt::Write` and can return a real I/O error, so a
+        // discarded result on an ordinary writer must still fire.
+        let write_all = "fn f(mut file: File) { let _ = file.write_all(buf); }";
+        assert_eq!(run_on(write_all).len(), 1);
     }
 
     #[test]
