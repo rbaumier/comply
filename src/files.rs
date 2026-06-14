@@ -32,6 +32,7 @@ const YAML_EXTENSIONS: &[&str] = &["yml", "yaml"];
 const DOCKERFILE_EXTENSIONS: &[&str] = &["dockerfile"];
 const SQL_EXTENSIONS: &[&str] = &["sql"];
 const GRAPHQL_EXTENSIONS: &[&str] = &["graphql", "gql"];
+const MARKDOWN_EXTENSIONS: &[&str] = &["md", "mdx"];
 
 /// A discovered file tagged with its detected language.
 #[derive(Debug)]
@@ -81,6 +82,12 @@ pub enum Language {
     GraphQl,
     /// Svelte component `.svelte` — text-based rules only.
     Svelte,
+    /// Markdown / MDX documentation `.md` / `.mdx`. Indexed only for the ESM
+    /// `import` statements at the top of the file (MDX/Docusaurus/Nextra/Astro
+    /// process these at build time), so a component consumed exclusively from a
+    /// docs page is recorded as a real cross-file usage. No tree-sitter grammar
+    /// is bundled; no lint rule targets it.
+    Markdown,
 }
 
 impl Language {
@@ -102,6 +109,7 @@ impl Language {
             Language::Sql => "sql",
             Language::GraphQl => "graphql",
             Language::Svelte => "svelte",
+            Language::Markdown => "md",
         }
     }
 
@@ -157,6 +165,8 @@ impl Language {
             Some(Language::Sql)
         } else if GRAPHQL_EXTENSIONS.contains(&ext) {
             Some(Language::GraphQl)
+        } else if MARKDOWN_EXTENSIONS.contains(&ext) {
+            Some(Language::Markdown)
         } else if DOCKERFILE_EXTENSIONS.contains(&ext)
             || path
                 .file_name()
@@ -362,6 +372,8 @@ fn classify(path: &Path) -> Option<SourceFile> {
             Language::Sql
         } else if GRAPHQL_EXTENSIONS.contains(&ext) {
             Language::GraphQl
+        } else if MARKDOWN_EXTENSIONS.contains(&ext) {
+            Language::Markdown
         } else if DOCKERFILE_EXTENSIONS.contains(&ext) {
             Language::Dockerfile
         } else {
@@ -408,10 +420,18 @@ mod tests {
 
     #[test]
     fn classify_skips_unsupported_or_extensionless() {
-        for ext in ["txt", "md", "py"] {
+        for ext in ["txt", "py"] {
             assert!(classify(&PathBuf::from(format!("foo.{ext}"))).is_none());
         }
         assert!(classify(&PathBuf::from("Makefile")).is_none());
+    }
+
+    #[test]
+    fn classify_markdown_files() {
+        // `.md` / `.mdx` are indexed for their top-of-file ESM imports so a
+        // component consumed only from a docs page is recorded as used.
+        assert_eq!(lang_for("md"), Language::Markdown);
+        assert_eq!(lang_for("mdx"), Language::Markdown);
     }
 
     #[test]
