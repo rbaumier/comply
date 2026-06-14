@@ -554,6 +554,27 @@ pub fn is_sveltekit_param_matcher_file(path: &Path) -> bool {
         .is_some_and(|dir| dir == "params")
 }
 
+/// True when `path` is a Remix (React Router v7) route module: a file directly
+/// or transitively under an `app/routes/` directory. Remix's file-system router
+/// consumes the route conventions (`loader`, `action`, `meta`, `default`, …) by
+/// exact name, never through a static import, so they have no importer but are
+/// live. The `app/routes/` ancestor scopes the exemption to route modules,
+/// keeping a same-named export in an ordinary module flaggable.
+pub fn is_remix_route_file(path: &Path) -> bool {
+    let mut components = path.components();
+    while let Some(component) = components.next() {
+        if component.as_os_str() == std::ffi::OsStr::new("app")
+            && components
+                .clone()
+                .next()
+                .is_some_and(|next| next.as_os_str() == std::ffi::OsStr::new("routes"))
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// True when `path` is a SvelteKit route file (`+page.svelte`,
 /// `+page.server.ts`, `+server.ts`, …) located under a `routes/` directory in
 /// a project where SvelteKit is detected. SvelteKit's file-system router
@@ -962,5 +983,26 @@ mod aux_path_tests {
         // carrying it are not framework route files.
         assert!(!is_sveltekit_route_file("+server@.js"));
         assert!(!is_sveltekit_route_file("+error@.svelte"));
+    }
+
+    #[test]
+    fn remix_route_file_matches_app_routes_paths() {
+        for rel in [
+            "app/routes/index.tsx",
+            "app/routes/api.v1.projects.$projectRef.ts",
+            "app/routes/_auth.login.tsx",
+            "apps/webapp/app/routes/vercel.install.tsx",
+        ] {
+            assert!(
+                is_remix_route_file(Path::new(rel)),
+                "{rel} is a Remix route module"
+            );
+        }
+        // Negative space: `routes/` not under `app/`, an `app/` dir without a
+        // `routes/` child, and an ordinary module must not match.
+        assert!(!is_remix_route_file(Path::new("src/routes/index.tsx")));
+        assert!(!is_remix_route_file(Path::new("app/lib/data.ts")));
+        assert!(!is_remix_route_file(Path::new("app/root.tsx")));
+        assert!(!is_remix_route_file(Path::new("routes/index.tsx")));
     }
 }
