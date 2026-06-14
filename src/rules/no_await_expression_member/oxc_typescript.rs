@@ -175,4 +175,27 @@ mod tests {
     fn allows_named_member_on_dynamic_import() {
         assert!(run("async function f() { const x = (await import('./mod.ts')).foo; }").is_empty());
     }
+
+    // Issue #1546: HTTP integration tests idiomatically access `.data`/`.status`
+    // on an awaited response; the rule must not fire inside test files.
+    #[test]
+    fn skips_member_access_on_await_in_spec_file() {
+        let d = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            "async function f() { expect((await api.get('/admin/orders')).data.order.status).toBe('completed'); }",
+            "integration-tests/http/__tests__/workflow-engine/admin/index.spec.ts",
+        );
+        assert!(d.is_empty(), "rule must be suppressed in spec files");
+    }
+
+    // Negative-space guard: the same smell in production (non-test) code still fires.
+    #[test]
+    fn still_flags_member_access_on_await_in_production_file() {
+        let d = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            "async function f() { return (await api.get('/admin/orders')).data; }",
+            "src/services/order.ts",
+        );
+        assert_eq!(d.len(), 1, "rule must still fire in production code");
+    }
 }
