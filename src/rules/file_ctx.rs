@@ -437,6 +437,8 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
             || lower.starts_with("test-helper/")
             || lower.contains("/test-d/")
             || lower.starts_with("test-d/")
+            || lower.contains("/test-tsd/")
+            || lower.starts_with("test-tsd/")
             || crate::rules::path_utils::has_test_d_infix(path)
             || crate::rules::path_utils::has_type_probe_infix(path)
             || crate::rules::path_utils::has_codemod_snapshot_infix(path)
@@ -611,6 +613,10 @@ mod tests {
         // tsd type-testing convention (issue #793).
         assert!(scan_path(&PathBuf::from("test-d/schema.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("src/test-d/types.ts")).in_test_dir);
+        // tsd `test-tsd/` directory convention (issue #2338): a sibling helper
+        // without the `.test-d.` infix is still type-test infrastructure.
+        assert!(scan_path(&PathBuf::from("test-tsd/common.ts")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("packages/foo/test-tsd/common.ts")).in_test_dir);
         // dtslint type-testing convention (issue #1006).
         assert!(scan_path(&PathBuf::from("dtslint/Array.ts")).in_test_dir);
         // dtslint-style `__tests_dts__/` type-test directory (issue #1660).

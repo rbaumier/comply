@@ -1271,6 +1271,43 @@ import type { AppConfig } from '@nuxt/schema';
     }
 
     #[test]
+    fn allows_dev_dep_in_test_tsd_type_declaration_file() {
+        // Issue #2338: knex's `test-tsd/transaction.test-d.ts` is a tsd type
+        // declaration test that imports `tsd` and `expect-type` (devDependencies)
+        // to assert the public API type-checks. The `.test-d.` filename infix and
+        // the `test-tsd/` directory are the tsd type-testing convention; such
+        // files are never shipped or run as runtime code, so importing a
+        // devDependency from them is correct — like any other test file.
+        let pkg = r#"{
+            "name": "knex",
+            "main": "knex.js",
+            "devDependencies": {"tsd": "^0.31", "expect-type": "^1"}
+        }"#;
+        let src = r#"
+import { expectType } from 'tsd';
+import { expectAssignable } from 'expect-type';
+"#;
+        let d = run_with_pkg_at_path(pkg, "test-tsd/transaction.test-d.ts", src);
+        assert!(d.is_empty(), "test-tsd type-test file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_test_tsd_dir_without_test_d_infix() {
+        // Issue #2338: a helper module inside `test-tsd/` that lacks the
+        // `.test-d.` infix (e.g. `test-tsd/common.ts`) is still type-test
+        // infrastructure consumed only by the tsd suite, so importing a
+        // devDependency from it is correct.
+        let pkg = r#"{
+            "name": "knex",
+            "main": "knex.js",
+            "devDependencies": {"expect-type": "^1"}
+        }"#;
+        let src = r#"import { expectAssignable } from 'expect-type';"#;
+        let d = run_with_pkg_at_path(pkg, "test-tsd/common.ts", src);
+        assert!(d.is_empty(), "test-tsd helper file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
     fn allows_dev_dep_in_private_package() {
         // Issue #1373: directus' `@directus/app` dashboard is a bundled Vue SPA
         // marked `"private": true` and never published to npm. It lists all its
