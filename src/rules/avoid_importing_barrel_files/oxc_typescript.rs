@@ -15,6 +15,10 @@
 //! context) the rule falls back to the filename shape, treating any
 //! `index`-suffixed specifier as a barrel.
 //!
+//! Type-only imports (`import type { X } from '.'`, or a named import whose
+//! every specifier carries an inline `type` qualifier) are erased at compile
+//! time and carry no runtime barrel cost, so they are never flagged.
+//!
 //! Skipped when the importing file lives under a `routes/` directory: that's
 //! the TanStack Router file-system convention where `index.tsx` is the leaf
 //! route module for a segment, not a re-export hub.
@@ -23,6 +27,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::project::import_index::{ExportKind, ExportedSymbol};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::{ImportDeclaration, ImportDeclarationSpecifier};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -67,6 +72,35 @@ fn is_tanstack_route_file(path: &Path) -> bool {
         .any(|c| c.as_os_str() == "routes")
 }
 
+/// `true` when the import has zero runtime impact: either a top-level
+/// `import type { ... }` declaration, or a declaration where every named
+/// specifier carries an inline `type` qualifier (`import { type A, type B }`).
+/// Such imports are erased at compile time and pull nothing from the module
+/// graph at runtime, so the barrel-file cost the rule guards against does not
+/// apply.
+fn is_type_only(import: &ImportDeclaration) -> bool {
+    if import.import_kind.is_type() {
+        return true;
+    }
+    let Some(specifiers) = &import.specifiers else {
+        return false;
+    };
+    let mut saw_named = false;
+    for spec in specifiers {
+        match spec {
+            ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                saw_named = true;
+                if !named.import_kind.is_type() {
+                    return false;
+                }
+            }
+            // A default or namespace specifier is always a value binding.
+            _ => return false,
+        }
+    }
+    saw_named
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -84,6 +118,11 @@ impl OxcCheck for Check {
         let AstKind::ImportDeclaration(import) = node.kind() else {
             return;
         };
+        // Type-only imports are erased at compile time and carry no runtime
+        // barrel cost, so they are never flagged.
+        if is_type_only(import) {
+            return;
+        }
         let module = import.source.value.as_str();
         if !is_barrel_path(module) {
             return;
@@ -213,6 +252,48 @@ mod tests {
         // import `./<segment>/index` as a leaf route module, not a barrel.
         let d = crate::rules::test_helpers::run_rule(&Check, "import { Route } from './_authed/index';", "src/routes/__root.tsx");
         assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn allows_type_only_import_from_current_dir() {
+        // Regression for #1696: `import type { X } from '.'` is erased at
+        // compile time and has zero runtime barrel cost.
+        assert!(run_on("import type { SandpackFileExplorerProp } from '.';").is_empty());
+    }
+
+    #[test]
+    fn allows_type_only_import_from_index() {
+        assert!(run_on("import type { Foo } from './utils/index';").is_empty());
+    }
+
+    #[test]
+    fn allows_inline_all_type_specifiers_from_barrel() {
+        // `import { type A, type B }` — every specifier is type-only, so the
+        // whole declaration is erased at runtime.
+        assert!(run_on("import { type A, type B } from '.';").is_empty());
+    }
+
+    #[test]
+    fn flags_value_import_from_barrel() {
+        // Negative space: a genuine value import from a barrel is still flagged.
+        let d = run_on("import { X } from '.';");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("barrel file"));
+    }
+
+    #[test]
+    fn flags_mixed_import_with_value_specifier() {
+        // At least one value specifier means the barrel is loaded at runtime.
+        let d = run_on("import { type A, B } from '.';");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("barrel file"));
+    }
+
+    #[test]
+    fn flags_default_import_from_barrel() {
+        // A default specifier is always a value binding, never type-only.
+        let d = run_on("import Foo from '.';");
+        assert_eq!(d.len(), 1);
     }
 
     #[test]
