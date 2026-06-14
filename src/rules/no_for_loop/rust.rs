@@ -3,6 +3,10 @@
 //! Flag `while` loops with manual index that could be `for item in iter`.
 //! Rust doesn't have C-style `for` loops, but `while i < len { ... i += 1 }`
 //! is the equivalent anti-pattern.
+//!
+//! Index loops that remove elements from the indexed collection during
+//! traversal (`vec.remove(i)` / `vec.swap_remove(i)`) are exempt: removal
+//! shifts the remaining elements, so a `for`/iterator rewrite is impossible.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -19,20 +23,126 @@ crate::ast_check! { on ["while_expression"] => |node, source, ctx, diagnostics|
     let Some(body) = node.child_by_field_name("body") else { return };
     let Ok(body_text) = body.utf8_text(source) else { return };
 
-    if body_text.contains("+= 1") || body_text.contains("= i + 1") {
-        let pos = node.start_position();
-        diagnostics.push(Diagnostic {
-            path: std::sync::Arc::clone(&ctx.path_arc),
-            line: pos.row + 1,
-            column: pos.column + 1,
-            rule_id: "no-for-loop".into(),
-            message: "Manual index loop — use `for item in collection` or `.iter().enumerate()`.".into(),
-            severity: Severity::Warning,
-            span: None,
-        });
+    if !body_text.contains("+= 1") && !body_text.contains("= i + 1") {
+        return;
     }
+
+    // Exempt loops that remove elements from the indexed collection during
+    // traversal: `remove(i)`/`swap_remove(i)` shifts the remaining elements,
+    // so the index is advanced conditionally and no `for`/iterator rewrite is
+    // possible. The argument must be the loop's index variable — a `remove`
+    // on an unrelated collection (e.g. `map.remove(&key)`) does not exempt.
+    if let Some(index_var) = index_variable(condition, source)
+        && body_removes_at_index(body, index_var, source)
+    {
+        return;
+    }
+
+    let pos = node.start_position();
+    diagnostics.push(Diagnostic {
+        path: std::sync::Arc::clone(&ctx.path_arc),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "no-for-loop".into(),
+        message: "Manual index loop — use `for item in collection` or `.iter().enumerate()`.".into(),
+        severity: Severity::Warning,
+        span: None,
+    });
 }
 
+/// Extract the loop's index variable from the condition: the bare identifier
+/// on the left of a `<` comparison whose right side is a `.len()` call
+/// (`i < self.items.len()`). Returns its source text.
+fn index_variable<'a>(condition: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    let mut stack = vec![condition];
+    while let Some(cur) = stack.pop() {
+        if cur.kind() == "binary_expression"
+            && let Some(op) = cur.child_by_field_name("operator")
+            && op.utf8_text(source) == Ok("<")
+            && let Some(left) = cur.child_by_field_name("left")
+            && left.kind() == "identifier"
+            && let Some(right) = cur.child_by_field_name("right")
+            && subtree_calls_len(right, source)
+            && let Ok(name) = left.utf8_text(source)
+        {
+            return Some(name);
+        }
+        let mut cursor = cur.walk();
+        for child in cur.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    None
+}
+
+/// True if `node` contains a `.len()` method call anywhere in its subtree.
+fn subtree_calls_len(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut stack = vec![node];
+    while let Some(cur) = stack.pop() {
+        if cur.kind() == "call_expression"
+            && let Some(func) = cur.child_by_field_name("function")
+            && func.kind() == "field_expression"
+            && let Some(field) = func.child_by_field_name("field")
+            && field.utf8_text(source) == Ok("len")
+        {
+            return true;
+        }
+        let mut cursor = cur.walk();
+        for child in cur.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
+/// True if the loop body contains a `remove(index_var)` or
+/// `swap_remove(index_var)` method call whose sole argument is the loop's
+/// index variable as a bare identifier. Nested loops are not skipped: a
+/// removal anywhere inside the body is enough to make the rewrite impossible.
+fn body_removes_at_index(body: tree_sitter::Node, index_var: &str, source: &[u8]) -> bool {
+    let mut stack = vec![body];
+    while let Some(cur) = stack.pop() {
+        if is_remove_at_index(cur, index_var, source) {
+            return true;
+        }
+        let mut cursor = cur.walk();
+        for child in cur.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
+/// True if `node` is `<receiver>.remove(index_var)` or
+/// `<receiver>.swap_remove(index_var)`.
+fn is_remove_at_index(node: tree_sitter::Node, index_var: &str, source: &[u8]) -> bool {
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    let Some(func) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "field_expression" {
+        return false;
+    }
+    let Some(field) = func.child_by_field_name("field") else {
+        return false;
+    };
+    let method = field.utf8_text(source).unwrap_or("");
+    if method != "remove" && method != "swap_remove" {
+        return false;
+    }
+    let Some(args) = node.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut cursor = args.walk();
+    for arg in args.named_children(&mut cursor) {
+        if arg.kind() == "identifier" && arg.utf8_text(source) == Ok(index_var) {
+            return true;
+        }
+    }
+    false
+}
 
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
@@ -67,5 +177,55 @@ mod tests {
     fn allows_for_in() {
         let src = "fn f(v: &[i32]) { for item in v { println!(\"{item}\"); } }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_remove_during_traversal_issue_1509() {
+        // typst pattern from the issue: conditional `remove(i)` during traversal.
+        let src = "fn f(s: &mut S, list: &mut Vec<Item>, n: usize) { \
+                   let mut i = 0; \
+                   while i < s.items.len() && list.len() < n { \
+                   if s.items[i].name.is_none() { list.push(s.items.remove(i)); } \
+                   else { i += 1; } \
+                   } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_minimal_remove_during_traversal() {
+        let src = "fn f(v: &mut Vec<i32>) { \
+                   let mut i = 0; \
+                   while i < v.len() { \
+                   if pred(&v[i]) { v.remove(i); } else { i += 1; } \
+                   } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_swap_remove_during_traversal() {
+        let src = "fn f(v: &mut Vec<i32>) { \
+                   let mut i = 0; \
+                   while i < v.len() { \
+                   if pred(&v[i]) { v.swap_remove(i); } else { i += 1; } \
+                   } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_read_only_index_loop() {
+        // No removal: a plain read-only index loop still fires.
+        let src = "fn f(v: &[i32], sum: &mut i32) { \
+                   let mut i = 0; \
+                   while i < v.len() { *sum += v[i]; i += 1; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_remove_on_unrelated_collection() {
+        // `map.remove(&key)` does not use the index variable — still fires.
+        let src = "fn f(v: &[i32], map: &mut std::collections::HashMap<i32, i32>, key: i32) { \
+                   let mut i = 0; \
+                   while i < v.len() { map.remove(&key); i += 1; } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
