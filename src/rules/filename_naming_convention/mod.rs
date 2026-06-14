@@ -71,6 +71,26 @@ fn is_nextjs_pages_router_file(path: &std::path::Path, file_name: &str, stem: &s
         .any(|c| c.as_os_str() == std::ffi::OsStr::new("pages"))
 }
 
+/// Returns `true` for a Nuxt file-based-routing dynamic-segment Vue SFC living
+/// under any `pages/` ancestor directory: a bracket-wrapped routing base
+/// (`[id].vue`, `[...slug].vue`, `[[id]].vue`), where the segment before the
+/// `.vue` extension starts with `[` and ends with `]`.
+///
+/// Nuxt maps these filenames to dynamic and catch-all URL params, so they cannot
+/// adopt kebab/Pascal case without breaking the route.
+/// See https://nuxt.com/docs/guide/directory-structure/pages#dynamic-routes.
+fn is_nuxt_dynamic_route_file(path: &std::path::Path, file_name: &str) -> bool {
+    // Catch-all segments (`[...slug].vue`) contain dots inside the brackets, so
+    // the routing base is the text before the *file* extension, not the
+    // dot-split stem. Strip a single trailing extension to recover it.
+    let routing_base = file_name.rsplit_once('.').map_or(file_name, |(base, _)| base);
+    if !(routing_base.starts_with('[') && routing_base.ends_with(']')) {
+        return false;
+    }
+    path.components()
+        .any(|c| c.as_os_str() == std::ffi::OsStr::new("pages"))
+}
+
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
