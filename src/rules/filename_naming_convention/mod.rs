@@ -58,6 +58,29 @@ fn is_nextjs_pages_router_file(path: &std::path::Path, file_name: &str, stem: &s
         .any(|c| c.as_os_str() == std::ffi::OsStr::new("pages"))
 }
 
+/// Returns `true` for a SolidStart file-router name that the framework mandates,
+/// living under any `routes/` ancestor directory, recognised by the leading
+/// shape of the filename:
+/// - a splat / catch-all segment starting with `[...` (`[...404].tsx`,
+///   `[...stories].tsx`);
+/// - a route group starting with `(` whose name carries a matching `)`, with an
+///   optional name after the close paren (`(home).tsx`, `(group2).tsx`,
+///   `(ignored)route0.tsx`), and any trailing dotted segments
+///   (`(basic).browser.test.tsx`).
+///
+/// Both forms are dictated by SolidStart's file router and cannot adopt
+/// kebab/camel/Pascal case without breaking the route.
+/// See https://docs.solidjs.com/solid-start/building-your-application/routing.
+fn is_solidstart_route_file(path: &std::path::Path, file_name: &str) -> bool {
+    let is_route_shape = file_name.starts_with("[...")
+        || (file_name.starts_with('(') && file_name[1..].contains(')'));
+    if !is_route_shape {
+        return false;
+    }
+    path.components()
+        .any(|c| c.as_os_str() == std::ffi::OsStr::new("routes"))
+}
+
 /// Returns `true` for a Nuxt file-based-routing dynamic-segment Vue SFC living
 /// under any `pages/` ancestor directory: a bracket-wrapped routing base
 /// (`[id].vue`, `[...slug].vue`, `[[id]].vue`), where the segment before the

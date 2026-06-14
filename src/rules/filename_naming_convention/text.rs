@@ -141,6 +141,9 @@ impl TextCheck for Check {
         if super::is_nextjs_pages_router_file(ctx.path, file_name, stem) {
             return Vec::new();
         }
+        if super::is_solidstart_route_file(ctx.path, file_name) {
+            return Vec::new();
+        }
         if is_public_api_barrel_file(ctx.path) {
             return Vec::new();
         }
@@ -513,5 +516,66 @@ mod tests {
     #[test]
     fn flags_snake_case_still_fires_after_public_api_exemption_issue_1534() {
         assert_eq!(run("src/user_profile.ts").len(), 1);
+    }
+
+    // Regression for #2223: SolidStart file-router conventions under a `routes/`
+    // ancestor — splat/catch-all (`[...name]`), bare route groups (`(group)`),
+    // and prefixed group routes (`(group)name`) — are framework-mandated and
+    // must not be flagged.
+    #[test]
+    fn allows_solidstart_splat_route_issue_2223() {
+        assert!(run("apps/tests/src/routes/[...404].tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_solidstart_splat_named_route_issue_2223() {
+        assert!(run("apps/fixtures/hackernews/src/routes/[...stories].tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_solidstart_route_group_issue_2223() {
+        assert!(run("apps/tests/src/routes/(home).tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_solidstart_route_group_with_digits_issue_2223() {
+        assert!(run("apps/fixtures/experiments/src/routes/(group2).tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_solidstart_prefixed_group_route_issue_2223() {
+        assert!(
+            run("apps/fixtures/experiments/src/routes/nested/(level1)/(ignored)route0.tsx")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_solidstart_route_group_with_dotted_segments_issue_2223() {
+        assert!(run("apps/tests/src/routes/(basic).browser.test.tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_solidstart_nested_route_group_issue_2223() {
+        assert!(run("apps/fixtures/experiments/src/routes/test/(hi).tsx").is_empty());
+    }
+
+    // Guard: the exemption is `routes/`-scoped — the same shapes outside a
+    // `routes/` ancestor are NOT framework routes and still fire.
+    #[test]
+    fn flags_solidstart_splat_shape_outside_routes_issue_2223() {
+        assert_eq!(run("src/app/[...404].tsx").len(), 1);
+    }
+
+    #[test]
+    fn flags_solidstart_group_shape_outside_routes_issue_2223() {
+        assert_eq!(run("src/app/(home).tsx").len(), 1);
+    }
+
+    // Guard: an ordinary mis-cased file under `routes/` does not match the
+    // SolidStart shapes and still fires.
+    #[test]
+    fn flags_mis_cased_file_under_routes_issue_2223() {
+        assert_eq!(run("src/routes/my_component.tsx").len(), 1);
     }
 }
