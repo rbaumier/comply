@@ -99,6 +99,12 @@ impl OxcCheck for Check {
         if !is_test_file(ctx.path) || is_snippet_test_file(ctx.path) {
             return Vec::new();
         }
+        // Playwright E2E files import their runner from `@playwright/test` and
+        // use Playwright's own assertion/auto-waiting model, not a vitest/jest
+        // `expect(...)` — they don't follow this rule's contract.
+        if crate::rules::test_assertion_helpers::imports_playwright_test(semantic) {
+            return Vec::new();
+        }
 
         // Pass 1: collect node IDs of functions/arrows that contain assertions.
         let mut has_assertion: std::collections::HashSet<oxc_semantic::NodeId> =
@@ -330,6 +336,30 @@ mod tests {
     fn allows_direct_expect_in_it_body() {
         let src = r#"it("works", () => { expect(1).toBe(1); });"#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression for #2348: Playwright test files import their runner from
+    // `@playwright/test` and use Playwright's own assertion/auto-waiting model,
+    // so an action-only or `await expect(locator).toBeVisible()` body is valid.
+    #[test]
+    fn allows_action_only_playwright_test() {
+        let src = r#"
+            import { test } from '@playwright/test';
+            test('send message', async ({ page }) => {
+                await page.goto('/api/auth/signin');
+                await page.click('[type="submit"]');
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_vitest_test_without_assertion_no_playwright_import() {
+        let src = r#"
+            import { test } from 'vitest';
+            test('does nothing', () => { const y = 1 + 1; });
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]

@@ -56,6 +56,22 @@ pub(crate) fn is_node_assert_function(name: &str) -> bool {
     NODE_ASSERT_FUNCTIONS.contains(&name)
 }
 
+/// True when the file imports anything from `@playwright/test`. Playwright E2E
+/// tests pull their `test`/`expect` from that module and rely on Playwright's
+/// own assertion and auto-waiting model (`await expect(locator).toBeVisible()`,
+/// `page.waitForSelector(...)`); action-only tests need no `expect(...)` at all.
+/// Such files therefore do not follow the vitest/jest "every test asserts"
+/// contract, so the test-assertion rules must not fire on them. Detected from
+/// the import source specifier so it is independent of filename or identifiers.
+pub(crate) fn imports_playwright_test(semantic: &oxc_semantic::Semantic<'_>) -> bool {
+    semantic.nodes().iter().any(|n| {
+        let AstKind::ImportDeclaration(import) = n.kind() else {
+            return false;
+        };
+        import.source.value.as_str() == "@playwright/test"
+    })
+}
+
 /// True when `text` contains a call to one of [`RENDER_ASSERTION_CALLS`]. The
 /// identifier is word-boundary-anchored on the left so `customRender(` /
 /// `prerenderToString(` do not match, and the call's `(` must immediately
