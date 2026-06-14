@@ -71,6 +71,14 @@
 //!   directory: vanilla `<script>`-loaded scripts served verbatim by the web
 //!   server, never bundled, so the tree-shaking concern does not apply (a
 //!   bundler never processes these files);
+//! - package-root script entry files reported by
+//!   `ProjectCtx::is_script_entry_file`: a file the nearest `package.json`'s
+//!   `scripts` invoke directly (e.g. `"build": "tsx ./build.ts"` makes the
+//!   sibling `build.ts` a script entry). Such a file is run as a one-shot
+//!   executable by a runner, never `import`-ed by another module and never part
+//!   of the published `dist/`, so its top-level build steps are intentional and
+//!   the tree-shaking concern does not apply. An ordinary library module the
+//!   scripts never invoke is still flagged;
 //! - framework entry points reported by `is_framework_entry_point`;
 //! - TanStack Start entry files (`app/{client,router,server}.{ts,tsx}` or
 //!   `src/app/…`) when the `tanstack-router` framework is detected;
@@ -1240,6 +1248,7 @@ impl OxcCheck for Check {
 
         if is_framework_entry_point(ctx.path, ctx.project)
             || is_tanstack_start_entry(ctx.path, ctx.project)
+            || ctx.project.is_script_entry_file(ctx.path)
             || is_config_file(ctx.path)
             || is_browser_asset_dir_path(ctx.path)
         {
@@ -2622,4 +2631,68 @@ mod tests {
         );
     }
 
+    // Regression for #1694: a package-root build script (`build.ts`) the
+    // package's `scripts.build` runs directly via `tsx` is a one-shot
+    // executable, never imported as a library, so its top-level build steps are
+    // not initialization side effects.
+    #[test]
+    fn allows_package_root_build_script_invoked_by_scripts() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"@redwoodjs/cli-helpers","scripts":{"build":"tsx ./build.ts"},"main":"./dist/cjs/index.js","exports":{".":{"default":{"default":"./dist/index.js"}}}}"#,
+        )
+        .unwrap();
+        let src = "\
+            import { writeFileSync } from 'node:fs';\n\
+            import { build, defaultBuildOptions } from '@redwoodjs/framework-tools';\n\
+            await build({ buildOptions: { ...defaultBuildOptions, format: 'esm', packages: 'external' } });\n\
+            await build({ buildOptions: { ...defaultBuildOptions, outdir: 'dist/cjs', packages: 'external' } });\n\
+            writeFileSync('dist/cjs/package.json', JSON.stringify({ type: 'commonjs' }));\n\
+            writeFileSync('dist/package.json', JSON.stringify({ type: 'module' }));\n";
+        let project = crate::project::ProjectCtx::empty();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            src,
+            dir.path().join("build.ts"),
+            &project,
+            file,
+        );
+        assert!(
+            diags.is_empty(),
+            "package-root build.ts run by scripts.build must be exempt, got {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #1694: an ordinary library module the package's
+    // `scripts` never invoke — even one sitting next to the same `package.json`
+    // — keeps its genuine top-level side effects flagged.
+    #[test]
+    fn still_flags_ordinary_module_not_invoked_by_scripts() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"@redwoodjs/cli-helpers","scripts":{"build":"tsx ./build.ts"},"main":"./dist/cjs/index.js"}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        let src = "\
+            import { registerGlobals } from '@redwoodjs/framework-tools';\n\
+            registerGlobals();\n";
+        let project = crate::project::ProjectCtx::empty();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            src,
+            dir.path().join("src/loader.ts"),
+            &project,
+            file,
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "an imported src/ module the scripts never run must still be flagged, got {diags:?}"
+        );
+    }
 }
