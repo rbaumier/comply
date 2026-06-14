@@ -155,4 +155,21 @@ mod tests {
         let not_chain = "class QB { whereNotExists(callback) { return this._not(true).whereExists(callback); } }";
         assert!(run(not_chain).is_empty(), "expected no diagnostics, got: {:?}", run(not_chain));
     }
+
+    #[test]
+    fn allows_active_record_repository_delegation() {
+        // Regression for #2368: TypeORM `BaseEntity` Active Record static methods
+        // delegate via `this.getRepository().<op>(...)`. The receiver of the
+        // delegated call is a `CallExpression` (the repository lookup), not a
+        // bare `this`, so the registry resolution is real logic — not a shallow
+        // pass-through.
+        let find = "class BaseEntity { static findActive() { return this.getRepository().find({ where: { active: true } }); } }";
+        assert!(run(find).is_empty(), "expected no diagnostics, got: {:?}", run(find));
+
+        let delete_arg = "class BaseEntity { static delete(criteria) { return this.getRepository().delete(criteria); } }";
+        assert!(run(delete_arg).is_empty(), "expected no diagnostics, got: {:?}", run(delete_arg));
+
+        let generic_lookup = "class BaseEntity { static getId(entity) { return this.getRepository<T>().getId(entity); } }";
+        assert!(run(generic_lookup).is_empty(), "expected no diagnostics, got: {:?}", run(generic_lookup));
+    }
 }
