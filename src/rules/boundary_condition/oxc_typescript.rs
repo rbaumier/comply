@@ -136,6 +136,19 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `parts[0]` / `parts[parts.length - 1]` where `parts` is a same-scope
+        // `const` bound to a `String.prototype.split` call (`str.split(sep)`).
+        // `split` is specified to always return an array with at least one element
+        // (even `''.split(',')` yields `['']`), so both the first and last reads
+        // are in-bounds with no length guard. Covers the file-extension /
+        // path-splitting idiom `const parts = name.split('.'); parts[parts.length - 1]`.
+        if (is_first || is_last)
+            && let Expression::Identifier(obj_ident) = &member.object
+            && resolves_to_split_call(node, obj_ident.name.as_str(), semantic)
+        {
+            return;
+        }
+
         // `p[0]` where `p`'s binding has a literal tuple type annotation
         // (`p: [number, number]`, `readonly [A, B]`) with at least one element.
         // A fixed-length tuple guarantees the first element exists, so the read
@@ -1146,6 +1159,63 @@ fn is_regex_exec_or_match_call(expr: &Expression) -> bool {
     matches!(member.property.name.as_str(), "exec" | "match")
 }
 
+/// Returns true when `name` resolves to a same-scope `const` whose initializer is
+/// a `String.prototype.split` call (`str.split(sep)`) — making `name[0]` and
+/// `name[name.length - 1]` provably in-bounds. Mirrors
+/// [`resolves_to_regex_match`]: walks ancestor scopes innermost-first so the
+/// closest binding wins, and only a direct `const` qualifies (a `let` may be
+/// reassigned to a shorter or empty array). `split` always returns an array with
+/// at least one element, so a non-empty length is guaranteed.
+fn resolves_to_split_call(
+    node: &oxc_semantic::AstNode,
+    name: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        let stmts: &[Statement] = match ancestor.kind() {
+            AstKind::Program(prog) => &prog.body,
+            AstKind::FunctionBody(body) => &body.statements,
+            AstKind::BlockStatement(block) => &block.body,
+            _ => continue,
+        };
+        for stmt in stmts {
+            let Statement::VariableDeclaration(decl) = stmt else {
+                continue;
+            };
+            if decl.kind != VariableDeclarationKind::Const {
+                continue;
+            }
+            for declarator in &decl.declarations {
+                let BindingPattern::BindingIdentifier(id) = &declarator.id else {
+                    continue;
+                };
+                if id.name.as_str() != name {
+                    continue;
+                }
+                // Closest binding wins: the first declarator matching `name`
+                // decides, even if its initializer is not a `split` call.
+                return matches!(&declarator.init, Some(init) if is_split_call(init));
+            }
+        }
+    }
+    false
+}
+
+/// Returns true when `expr` is a `<recv>.split(...)` call. `<recv>` may itself be
+/// a member chain (e.g. `this.name.split(...)`), so only the called property name
+/// is checked. Any argument shape qualifies — `split()` with no argument returns
+/// `[wholeString]`, still non-empty.
+fn is_split_call(expr: &Expression) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    member.property.name.as_str() == "split"
+}
+
 /// Returns true when `name` is the element binding of an enclosing
 /// `for (const name of <expr>.matchAll(...))` loop. Walks ancestors
 /// innermost-first so the closest binding for-of wins (a nested loop shadowing
@@ -2046,6 +2116,53 @@ mod tests {
         // Negative space: `new Foo(1)` is not a known fixed-size array, so `[0]`
         // says nothing about bounds and stays flagged.
         let src = "const a = new Foo(1); const x = a[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_split_result_index0_issue_2128() {
+        // The issue's exact pattern: a `const` bound to a `String.split()` result.
+        // `split()` always returns an array with at least one element, so `[0]` is
+        // always in-bounds.
+        let src = "const parts = pathname.split('/'); const firstPart = parts[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_split_result_last_index_issue_2128() {
+        // The String.split contract guarantees `length >= 1`, so the last-element
+        // read `parts[parts.length - 1]` is also in-bounds.
+        let src = "const segments = noExtension.split('/'); const last = segments[segments.length - 1];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_split_result_member_receiver_issue_2128() {
+        // The split receiver may itself be a member chain (`this.name.split`).
+        let src = "const parts = this.name.split('.'); const ext = parts[parts.length - 1];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_split_no_args_index0_issue_2128() {
+        // `split()` with no argument still returns `[wholeString]` — non-empty.
+        let src = "const parts = s.split(); const first = parts[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_arbitrary_call_init_index0_issue_2128() {
+        // Negative space: a non-`split` call initializer leaves emptiness unknown,
+        // so `parts[0]` stays flagged.
+        let src = "const parts = getParts(); const x = parts[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_split_reassigned_let_index0_issue_2128() {
+        // Negative space: a `let` may be reassigned to a non-split value, so the
+        // split contract no longer proves non-emptiness at the read site.
+        let src = "let parts = s.split(','); parts = []; const x = parts[0];";
         assert_eq!(run_on(src).len(), 1);
     }
 }
