@@ -46,10 +46,14 @@ const CLIENT_COMPONENT_FACTORY_CALLS: &[&str] = &[
     "withRootProvider",
 ];
 
-/// Packages whose re-exports implicitly use client APIs (hooks, event listeners,
-/// resize observers, etc.) that are invisible to static analysis. The `next/*`
-/// entries are Next.js client components/hooks that already ship `"use client"`,
-/// so a barrel re-export propagating the directive is the idiomatic pattern.
+/// Packages whose imports or re-exports implicitly use client APIs (hooks, event
+/// listeners, resize observers, SVG/DOM rendering, etc.) that are invisible to
+/// static analysis, so a file rendering their components legitimately needs
+/// `"use client"` even with no direct hook call. The `next/*` entries are Next.js
+/// client components/hooks that already ship `"use client"`, so a barrel
+/// re-export propagating the directive is the idiomatic pattern. The charting and
+/// table entries (`recharts`, `@tanstack/react-table`, …) drive browser-only
+/// rendering through `ResizeObserver` and hook-powered objects internally.
 const CLIENT_ONLY_PACKAGE_PREFIXES: &[&str] = &[
     "@base-ui/react",
     "@radix-ui/",
@@ -61,6 +65,10 @@ const CLIENT_ONLY_PACKAGE_PREFIXES: &[&str] = &[
     "next/router",
     "next/headers",
     "next/dynamic",
+    "recharts",
+    "@tanstack/react-table",
+    "@tanstack/react-virtual",
+    "@tanstack/react-charts",
 ];
 
 pub struct Check;
@@ -679,6 +687,59 @@ export { Button } from '../button';
     fn still_flags_package_named_reexport_without_client_api_oxc() {
         let src = r#"'use client';
 export { isEqual } from 'lodash';
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression tests for #1628 — files importing client-only chart/table
+    // libraries (recharts, @tanstack/react-table) render browser-only components
+    // and legitimately need `"use client"` despite calling no hook directly.
+    #[test]
+    fn no_fp_for_recharts_import_oxc() {
+        let src = r#""use client"
+
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  XAxis,
+  YAxis,
+} from "recharts"
+
+export function TrafficOverview() {
+  return (
+    <LineChart data={DATA}>
+      <CartesianGrid />
+      <XAxis dataKey="date" />
+      <YAxis />
+      <Line type="linear" dataKey="views" />
+    </LineChart>
+  )
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_tanstack_react_table_import_oxc() {
+        let src = r#""use client"
+
+import { flexRender } from "@tanstack/react-table"
+
+export function DataTable({ table }) {
+  return <div>{flexRender(table)}</div>
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_use_client_with_unknown_import_and_no_client_api_oxc() {
+        let src = r#""use client"
+
+import { format } from "date-fns"
+
+export const label = format(new Date(), "yyyy")
 "#;
         assert_eq!(run(src).len(), 1);
     }
