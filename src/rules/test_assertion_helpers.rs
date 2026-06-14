@@ -2,10 +2,17 @@
 //! `assertions-in-tests`).
 
 use crate::rules::backend::AstKind;
-use oxc_ast::ast::{CallExpression, Expression};
+use oxc_ast::ast::{BindingPattern, CallExpression, Expression};
 use oxc_semantic::NodeId;
-use oxc_span::GetSpan;
+use oxc_span::{GetSpan, Span};
 use std::collections::HashSet;
+
+/// How many call-graph edges into same-file helpers the assertion search
+/// follows. The test body is depth 0; a helper it calls is depth 1; a helper
+/// that helper calls is depth 2. Three hops covers realistic test-helper nesting
+/// while bounding the work even on pathological mutual recursion (the visited
+/// set already prevents revisiting a helper, so this only caps fresh chains).
+const MAX_HELPER_DEPTH: u32 = 3;
 
 /// React render functions that throw when the component/hook crashes. A test
 /// whose body is only `render(<App/>)`, `renderToString(<C/>)`, or
@@ -247,6 +254,151 @@ fn declaration_is_promise_executor_param(
     params.items.get(param_index).is_some_and(|param| {
         param.span.start <= decl_span.start && decl_span.end <= param.span.end
     })
+}
+
+/// True when a call within `body_span` resolves to a same-file helper function
+/// (defined at module scope or any enclosing `describe`/function scope) whose
+/// own body asserts. The assertion may sit directly in that helper or, in turn,
+/// in a further same-file helper it calls.
+///
+/// This recognises the common shared-assertion pattern where several tests
+/// delegate their only `expect(...)` to a locally-defined closure:
+///
+/// ```ts
+/// describe("Cache-Control header", () => {
+///   const shouldNotSetCacheControlHeader = (response) => {
+///     expect(response.headers.get("cache-control")).toBeUndefined();
+///   };
+///   it("is not set", async () => {
+///     const response = await makePlugin();
+///     shouldNotSetCacheControlHeader(response); // assertion lives in the helper
+///   });
+/// });
+/// ```
+///
+/// Only plain-identifier callees bound to a function/arrow/function-expression
+/// declared in the same file are followed; imported symbols and parameters are
+/// not chased. The search is bounded by [`MAX_HELPER_DEPTH`] and a visited set
+/// of helper declarations, so self-recursive and mutually-recursive helpers
+/// terminate.
+pub(crate) fn body_calls_asserting_local_helper(
+    body_span: Span,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let mut visited = HashSet::new();
+    span_reaches_asserting_helper(body_span, semantic, &mut visited, 0)
+}
+
+/// Walk every call expression inside `span`; if any resolves to a same-file
+/// helper whose body asserts (directly or transitively), return true.
+fn span_reaches_asserting_helper(
+    span: Span,
+    semantic: &oxc_semantic::Semantic,
+    visited: &mut HashSet<NodeId>,
+    depth: u32,
+) -> bool {
+    if depth >= MAX_HELPER_DEPTH {
+        return false;
+    }
+    let nodes = semantic.nodes();
+    for node in nodes.iter() {
+        let AstKind::CallExpression(call) = node.kind() else {
+            continue;
+        };
+        if call.span.start < span.start || call.span.end > span.end {
+            continue;
+        }
+        let Expression::Identifier(callee) = &call.callee else {
+            continue;
+        };
+        let Some(ref_id) = callee.reference_id.get() else {
+            continue;
+        };
+        let Some(sym_id) = semantic.scoping().get_reference(ref_id).symbol_id() else {
+            continue;
+        };
+        let decl = semantic.scoping().symbol_declaration(sym_id);
+        // Skip a helper already on the current path (recursion guard).
+        if !visited.insert(decl) {
+            continue;
+        }
+        if let Some(helper_body) = local_function_body_span(decl, semantic)
+            && (span_has_direct_assertion(helper_body, semantic)
+                || span_reaches_asserting_helper(helper_body, semantic, visited, depth + 1))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Map a declaration node to the body span of the function it binds, when that
+/// declaration is a same-file function definition: `function f() { … }`,
+/// `const f = () => { … }`, or `const f = function () { … }`. Returns `None` for
+/// any other binding (imports have no declaration node in this file's AST, so
+/// they are excluded for free).
+fn local_function_body_span(decl: NodeId, semantic: &oxc_semantic::Semantic) -> Option<Span> {
+    let nodes = semantic.nodes();
+    match nodes.kind(decl) {
+        AstKind::Function(func) => func.body.as_ref().map(|b| b.span),
+        AstKind::VariableDeclarator(declarator) => {
+            let BindingPattern::BindingIdentifier(_) = &declarator.id else {
+                return None;
+            };
+            match declarator.init.as_ref()? {
+                Expression::ArrowFunctionExpression(arrow) => Some(arrow.body.span),
+                Expression::FunctionExpression(func) => func.body.as_ref().map(|b| b.span),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// True when an assertion AST node lies directly within `span`: a call to an
+/// `expect`/`assert`-prefixed or `attest` identifier, an `expect.*`/`assert.*`
+/// member call, a React render call, a matcher member (`.toBe`/`.toEqual`/…), a
+/// `throw` statement, or a `satisfies` expression. Mirrors the assertion signals
+/// both test-assertion rules accept; nested helper calls are followed by the
+/// caller, not here.
+fn span_has_direct_assertion(span: Span, semantic: &oxc_semantic::Semantic) -> bool {
+    semantic.nodes().iter().any(|n| {
+        let in_span = |s: Span| s.start >= span.start && s.end <= span.end;
+        match n.kind() {
+            AstKind::CallExpression(call) if in_span(call.span) => call_is_assertion(call),
+            AstKind::StaticMemberExpression(member) if in_span(member.span) => matches!(
+                member.property.name.as_str(),
+                "should" | "toBe" | "toEqual" | "toMatch" | "toThrow"
+            ),
+            AstKind::ThrowStatement(throw) if in_span(throw.span) => true,
+            AstKind::TSSatisfiesExpression(sat) if in_span(sat.span) => true,
+            _ => false,
+        }
+    })
+}
+
+/// True when a call's callee names an assertion entry point: an `expect`/`assert`
+/// identifier (or prefixed helper like `expectProblem`), `attest`, a React
+/// render call, or an `expect.*`/`assert.*` member call.
+fn call_is_assertion(call: &CallExpression) -> bool {
+    match &call.callee {
+        Expression::Identifier(id) => {
+            let name = id.name.as_str();
+            name.starts_with("expect")
+                || name.starts_with("assert")
+                || name == "attest"
+                || RENDER_ASSERTION_CALLS.contains(&name)
+        }
+        Expression::StaticMemberExpression(member) => {
+            let object = member.object.get_inner_expression();
+            matches!(
+                object,
+                Expression::Identifier(obj)
+                    if obj.name.as_str() == "expect" || obj.name.as_str() == "assert"
+            )
+        }
+        _ => false,
+    }
 }
 
 /// True when `decl` is a formal-parameter binding of one of `outer_fns`.
