@@ -137,6 +137,15 @@ pub struct ImportedSymbol {
     pub line: usize,
     /// `import type { X }` or `import { type X }` — value never needed at runtime.
     pub is_type_only: bool,
+    /// `true` when the binding is read as a value during the importer's
+    /// top-level (module-evaluation) execution. `false` when every reference is
+    /// erased (type position) or deferred (inside a function/arrow body — e.g. a
+    /// method body or a lazy decorator thunk `() => User`), so the value is never
+    /// accessed before the importer finishes evaluating. Only such runtime-value
+    /// edges can form an initialization cycle; type-only / deferred-only edges
+    /// cannot. Defaults to `true` for index paths that do not compute usage
+    /// (Rust / Vue / Markdown), preserving their prior cycle behavior.
+    pub is_runtime_value: bool,
 }
 
 /// One use-site of a cross-file exported symbol — i.e. a matching import.
@@ -1014,10 +1023,21 @@ fn is_indexable(lang: Language) -> bool {
 }
 
 /// Iterative Tarjan SCC — returns only components with 2+ members (cycles).
-/// Type-only edges are excluded so `import type` doesn't create false cycles.
+///
+/// Two edge classes matter. `import type` edges are dropped from the graph
+/// entirely (they emit no JS, so they never load their source). The remaining
+/// value edges are kept, but each is tagged `is_runtime_value`: `false` when the
+/// binding is referenced only in type positions and/or deferred bodies (e.g. ORM
+/// bidirectional relations through lazy `() => Entity` decorator thunks), `true`
+/// otherwise. A detected cycle is reported only if at least one edge among its
+/// members is a runtime-value edge; a cycle whose every edge is deferred-only
+/// carries no module-evaluation hazard and is suppressed.
 fn compute_cycles(imports: &HashMap<PathBuf, Vec<ImportedSymbol>>) -> Vec<Vec<PathBuf>> {
     let mut adj: HashMap<&Path, Vec<&Path>> = HashMap::new();
     let mut all_nodes: HashSet<&Path> = HashSet::new();
+    // Edges (importer → source) that read a value at module-evaluation time. A
+    // cycle survives suppression only if it contains one of these.
+    let mut runtime_edges: HashSet<(&Path, &Path)> = HashSet::new();
     for (file, imps) in imports {
         all_nodes.insert(file.as_path());
         for imp in imps {
@@ -1027,6 +1047,9 @@ fn compute_cycles(imports: &HashMap<PathBuf, Vec<ImportedSymbol>>) -> Vec<Vec<Pa
             if let Some(src) = &imp.source_path {
                 adj.entry(file.as_path()).or_default().push(src.as_path());
                 all_nodes.insert(src.as_path());
+                if imp.is_runtime_value {
+                    runtime_edges.insert((file.as_path(), src.as_path()));
+                }
             }
         }
     }
@@ -1079,7 +1102,7 @@ fn compute_cycles(imports: &HashMap<PathBuf, Vec<ImportedSymbol>>) -> Vec<Vec<Pa
                             break;
                         }
                     }
-                    if scc.len() > 1 {
+                    if scc.len() > 1 && scc_has_runtime_edge(&scc, &adj, &runtime_edges) {
                         result.push(scc);
                     }
                 }
@@ -1094,6 +1117,28 @@ fn compute_cycles(imports: &HashMap<PathBuf, Vec<ImportedSymbol>>) -> Vec<Vec<Pa
     }
 
     result
+}
+
+/// True when at least one edge internal to `scc` (both endpoints are members)
+/// is a runtime-value edge. A cycle with no such edge is formed entirely by
+/// deferred-only / type-position imports and carries no initialization hazard.
+fn scc_has_runtime_edge(
+    scc: &[PathBuf],
+    adj: &HashMap<&Path, Vec<&Path>>,
+    runtime_edges: &HashSet<(&Path, &Path)>,
+) -> bool {
+    let members: HashSet<&Path> = scc.iter().map(PathBuf::as_path).collect();
+    for &from in &members {
+        let Some(neighbors) = adj.get(from) else {
+            continue;
+        };
+        for &to in neighbors {
+            if members.contains(to) && runtime_edges.contains(&(from, to)) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Raw per-file extract before cross-file resolution.
@@ -1320,7 +1365,7 @@ fn extract_imports_from_module(source: &str) -> Vec<ImportedSymbol> {
     let mut imports = Vec::new();
     for node in semantic.nodes().iter() {
         if let AstKind::ImportDeclaration(import) = node.kind() {
-            oxc_extract_import(&lines, import, &mut imports);
+            oxc_extract_import(&lines, import, &semantic, &mut imports);
         }
     }
     imports
@@ -1458,6 +1503,7 @@ fn extract_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
             source_path: None,
             line,
             is_type_only: false,
+            is_runtime_value: true,
         });
         return;
     };
@@ -1476,6 +1522,7 @@ fn extract_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
                     source_path: None,
                     line,
                     is_type_only: stmt_type_only,
+                    is_runtime_value: true,
                 });
             }
             "namespace_import" => {
@@ -1493,6 +1540,7 @@ fn extract_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
                         source_path: None,
                         line,
                         is_type_only: stmt_type_only,
+                        is_runtime_value: true,
                     });
                 }
             }
@@ -1514,6 +1562,7 @@ fn extract_import(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
                         source_path: None,
                         line,
                         is_type_only: spec_type_only,
+                        is_runtime_value: true,
                     });
                 }
             }
@@ -1568,6 +1617,7 @@ fn extract_dynamic_import(
         source_path: None,
         line: node.start_position().row + 1,
         is_type_only: false,
+        is_runtime_value: true,
     });
 }
 
@@ -1622,6 +1672,7 @@ fn extract_require(node: Node, source: &[u8], out: &mut Vec<ImportedSymbol>) {
         source_path: None,
         line: node.start_position().row + 1,
         is_type_only: false,
+        is_runtime_value: true,
     });
 }
 
@@ -2105,7 +2156,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
     for node in semantic.nodes().iter() {
         match node.kind() {
             AstKind::ImportDeclaration(import) => {
-                oxc_extract_import(&lines, import, &mut imports);
+                oxc_extract_import(&lines, import, &semantic, &mut imports);
             }
             // `import X = require("pkg")` (TypeScript CommonJS interop): a real
             // import of `pkg`, semantically equivalent to `import X from "pkg"`
@@ -2204,6 +2255,7 @@ pub fn declaration_file_exports(path: &Path) -> Option<HashSet<String>> {
 fn oxc_extract_import(
     lines: &[usize],
     import: &oxc_ast::ast::ImportDeclaration,
+    semantic: &oxc_semantic::Semantic,
     out: &mut Vec<ImportedSymbol>,
 ) {
     use oxc_ast::ast::ImportDeclarationSpecifier;
@@ -2223,6 +2275,9 @@ fn oxc_extract_import(
             source_path: None,
             line,
             is_type_only: false,
+            // A side-effect import runs the imported module at the importer's
+            // module-evaluation time, so it is a runtime edge.
+            is_runtime_value: true,
         });
         return;
     };
@@ -2230,6 +2285,8 @@ fn oxc_extract_import(
     for spec in specifiers {
         match spec {
             ImportDeclarationSpecifier::ImportDefaultSpecifier(def) => {
+                let is_runtime_value =
+                    import_binding_is_runtime_value(def.local.symbol_id.get(), semantic);
                 out.push(ImportedSymbol {
                     local_name: def.local.name.as_str().to_string(),
                     imported_name: "default".into(),
@@ -2238,9 +2295,12 @@ fn oxc_extract_import(
                     source_path: None,
                     line,
                     is_type_only: stmt_type_only,
+                    is_runtime_value,
                 });
             }
             ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) => {
+                let is_runtime_value =
+                    import_binding_is_runtime_value(ns.local.symbol_id.get(), semantic);
                 out.push(ImportedSymbol {
                     local_name: ns.local.name.as_str().to_string(),
                     imported_name: "*".into(),
@@ -2249,6 +2309,7 @@ fn oxc_extract_import(
                     source_path: None,
                     line,
                     is_type_only: stmt_type_only,
+                    is_runtime_value,
                 });
             }
             ImportDeclarationSpecifier::ImportSpecifier(named) => {
@@ -2260,6 +2321,8 @@ fn oxc_extract_import(
                     .identifier_name()
                     .map_or_else(|| local.clone(), |id| id.as_str().to_string());
                 let spec_type_only = stmt_type_only || named.import_kind.is_type();
+                let is_runtime_value =
+                    import_binding_is_runtime_value(named.local.symbol_id.get(), semantic);
                 out.push(ImportedSymbol {
                     local_name: local,
                     imported_name: imported,
@@ -2268,10 +2331,93 @@ fn oxc_extract_import(
                     source_path: None,
                     line,
                     is_type_only: spec_type_only,
+                    is_runtime_value,
                 });
             }
         }
     }
+}
+
+/// True when the import binding `symbol_id` participates in the importer's
+/// module-evaluation as a runtime value edge — i.e. it can pull in or read its
+/// source module during top-level execution and so contribute a real
+/// initialization cycle.
+///
+/// Returns `false` only when the binding is referenced AND every reference is
+/// either erased (type position — annotations, type args, `extends`/`implements`,
+/// `typeof X` queries) or deferred inside a function/arrow/method body. The ORM
+/// bidirectional-relation pattern lands here: the import is used only as a
+/// relation field type (erased) and inside a lazy decorator thunk
+/// (`@ManyToOne(() => User)`) that runs after both modules finish evaluating, so
+/// no value is read before initialization completes.
+///
+/// Returns `true` when the binding has at least one eager value read, OR when it
+/// has no references at all (an unused value import still loads its module at
+/// evaluation time), OR when scope info is missing (unresolved `symbol_id`) —
+/// keeping the edge rather than silently dropping it.
+fn import_binding_is_runtime_value(
+    symbol_id: Option<oxc_semantic::SymbolId>,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(symbol_id) = symbol_id else {
+        return true;
+    };
+    let scoping = semantic.scoping();
+    let nodes = semantic.nodes();
+    let mut has_reference = false;
+    for reference in scoping.get_resolved_references(symbol_id) {
+        has_reference = true;
+        if reference.is_value() && !reference_is_deferred(nodes, reference.node_id()) {
+            return true;
+        }
+    }
+    // No references → unused import that still loads its module at eval time:
+    // keep the edge. Otherwise every reference was erased or deferred.
+    !has_reference
+}
+
+/// True when `ref_node_id` sits inside a deferred execution body — a function
+/// declaration, function/arrow expression, class method/getter/setter/
+/// constructor, or instance field initializer — none of which run during the
+/// importer's module evaluation. A non-IIFE function/arrow boundary defers the
+/// reference; a static field initializer or static block runs at class-definition
+/// (module-evaluation) time, so it is NOT deferred. A reference reached at the
+/// program root with no intervening deferred boundary is a module-eval-time read.
+fn reference_is_deferred(nodes: &oxc_semantic::AstNodes, ref_node_id: oxc_semantic::NodeId) -> bool {
+    use oxc_ast::AstKind;
+    for ancestor_id in nodes.ancestor_ids(ref_node_id) {
+        match nodes.kind(ancestor_id) {
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
+                return !oxc_function_is_immediately_invoked(nodes, ancestor_id);
+            }
+            AstKind::MethodDefinition(_) => return true,
+            AstKind::PropertyDefinition(prop) => return !prop.r#static,
+            AstKind::StaticBlock(_) | AstKind::Program(_) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// True when the function/arrow node `func_id` is the direct callee of a call
+/// expression — an IIFE (`(() => ...)()`). An IIFE runs immediately in the
+/// synchronous module-evaluation flow, so a reference inside it is not deferred.
+/// Parenthesized wrappers around the callee are transparent.
+fn oxc_function_is_immediately_invoked(
+    nodes: &oxc_semantic::AstNodes,
+    func_id: oxc_semantic::NodeId,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+    let mut child_span = nodes.get_node(func_id).kind().span();
+    for ancestor_id in nodes.ancestor_ids(func_id) {
+        match nodes.kind(ancestor_id) {
+            AstKind::ParenthesizedExpression(_) => child_span = nodes.kind(ancestor_id).span(),
+            AstKind::CallExpression(call) => return call.callee.span() == child_span,
+            _ => return false,
+        }
+    }
+    false
 }
 
 fn oxc_extract_export_named(
@@ -2618,6 +2764,7 @@ fn oxc_extract_dynamic_import(
         source_path: None,
         line: oxc_line_at(lines, import_expr.span.start as usize),
         is_type_only: false,
+        is_runtime_value: true,
     });
 }
 
@@ -2651,6 +2798,7 @@ fn oxc_extract_require(
         source_path: None,
         line: oxc_line_at(lines, call.span.start as usize),
         is_type_only: false,
+        is_runtime_value: true,
     });
 }
 
@@ -2679,6 +2827,7 @@ fn oxc_extract_import_equals(
         source_path: None,
         line: oxc_line_at(lines, import_eq.span.start as usize),
         is_type_only: import_eq.import_kind.is_type(),
+        is_runtime_value: true,
     });
 }
 
@@ -3281,6 +3430,7 @@ fn extract_rust_use(
             source_path: None,
             line,
             is_type_only: false,
+            is_runtime_value: true,
         });
 
         if is_pub && leaf.imported != "*" {
@@ -4734,7 +4884,15 @@ mod tests {
             let path = Path::new(file);
             for (i, src) in DIFF_CASES.iter().enumerate() {
                 let ts = extract_ts_treesitter(src, *lang);
-                let oxc = extract_ts_oxc(src, path).expect("oxc extract");
+                let mut oxc = extract_ts_oxc(src, path).expect("oxc extract");
+                // `is_runtime_value` is a semantic enrichment only the oxc path
+                // computes (it needs scope/reference analysis); the tree-sitter
+                // path leaves it at the conservative `true`. Normalize it before
+                // the syntactic-equivalence comparison so the differential test
+                // keeps checking what tree-sitter can express.
+                for imp in &mut oxc.imports {
+                    imp.is_runtime_value = true;
+                }
                 assert_eq!(
                     oxc, ts,
                     "case #{i} ({file}) diverged:\n--- source ---\n{src}\n\
