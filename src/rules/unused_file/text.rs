@@ -7,7 +7,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::{ImportIndex, ProjectCtx};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::path_utils::{
-    is_auto_mock_dir_path, is_config_file, is_framework_entry_point, is_top_level_script_dir_path,
+    is_angular_schematic_or_migration_entry, is_auto_mock_dir_path, is_config_file,
+    is_framework_entry_point, is_top_level_script_dir_path,
 };
 use std::path::Path;
 
@@ -130,6 +131,10 @@ fn is_entry_point(
         return true;
     }
 
+    if is_angular_schematic_or_migration_factory(path, project) {
+        return true;
+    }
+
     // `main.{ts,js,mts,tsx,...}` is universally a bootstrapper/entry point: it is
     // launched directly (by a runtime or a test runner), never imported. Multi-app
     // monorepos (NestJS integration tests, Nx, Turborepo) place a `src/main.ts` in
@@ -188,6 +193,21 @@ fn is_entry_point(
     }
 
     false
+}
+
+/// True for an Angular schematic or `ng update` migration factory file: a
+/// source file under a `schematics/`/`migrations/` directory of an Angular
+/// package (one declaring `@angular/core` in its nearest `package.json`). The
+/// Angular CLI loads these by path string from the `collection.json`/
+/// `migration.json` manifest's `factory` field, never via a TypeScript
+/// `import`, so the import-graph BFS cannot reach them — yet they are real
+/// entry points. The Angular gate keeps a non-Angular project's `migrations/`
+/// directory (database migration scripts) flaggable.
+fn is_angular_schematic_or_migration_factory(path: &Path, project: &ProjectCtx) -> bool {
+    if !is_angular_schematic_or_migration_entry(path) {
+        return false;
+    }
+    project.frameworks_for_path(path).iter().any(|fw| fw.name == "angular")
 }
 
 /// True for a standalone sample script: a `*Sample.{ts,js,...}` file living
@@ -1227,6 +1247,86 @@ mod tests {
         assert!(
             diags[0].path.to_str().unwrap().contains("orphan"),
             "an orphan outside the Docusaurus entry dirs must still be flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #1624: Angular schematic (`schematics/ng-add/index.ts`) and
+    // `ng update` migration (`migrations/14_0_0/index.ts`) factory files are
+    // loaded by the Angular CLI by path string from `collection.json` /
+    // `migration.json`, never `import`ed, so the import-graph BFS cannot reach
+    // them. They are framework entry points and must not be flagged. The root
+    // package.json is a non-library (rule runs); the Angular module declares the
+    // `schematics`/`ng-update` keys.
+    #[test]
+    fn angular_schematic_and_migration_entries_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"platform"}"#),
+            ("src/index.ts", "export const root = 1;\n"),
+            (
+                "modules/router-store/package.json",
+                r#"{"name":"@ngrx/router-store","dependencies":{"@angular/core":"^17.0.0"},"schematics":"./schematics/collection.json","ng-update":{"migrations":"./migrations/migration.json"}}"#,
+            ),
+            (
+                "modules/router-store/schematics/ng-add/index.ts",
+                "export default function(): unknown { return {}; }\n",
+            ),
+            (
+                "modules/router-store/migrations/14_0_0/index.ts",
+                "export default function(): unknown { return {}; }\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "Angular schematic/migration factory entry points must not be flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #1624: the Angular schematic/migration exemption is gated on
+    // an Angular dependency in the nearest package.json — a project WITHOUT
+    // `@angular/core` does not get a blanket pass for an orphaned file that merely
+    // sits under a `schematics/` directory.
+    #[test]
+    fn schematics_dir_orphan_flagged_without_angular() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"app"}"#),
+            ("src/index.ts", "export const app = 1;\n"),
+            (
+                "schematics/ng-add/index.ts",
+                "export default function(): unknown { return {}; }\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("schematics"),
+            "without Angular, an orphaned schematics/ file is still flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #1624: the exemption is precise — in an Angular project, a
+    // genuinely orphaned ordinary source file (outside any schematics/migrations
+    // directory) is still a true positive.
+    #[test]
+    fn orphan_file_in_angular_project_still_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"platform"}"#),
+            ("src/index.ts", "export const root = 1;\n"),
+            (
+                "modules/router-store/package.json",
+                r#"{"name":"@ngrx/router-store","dependencies":{"@angular/core":"^17.0.0"},"schematics":"./schematics/collection.json"}"#,
+            ),
+            (
+                "modules/router-store/schematics/ng-add/index.ts",
+                "export default function(): unknown { return {}; }\n",
+            ),
+            ("modules/router-store/src/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "only the genuine orphan must be flagged; schematic entries are entry points: {diags:?}"
         );
     }
 
