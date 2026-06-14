@@ -34,6 +34,15 @@
 //!   top-level `listen(...)` / `*.listen(...)` call (Fastify/Express/Node HTTP
 //!   servers start the server this way, so the surrounding route/hook/
 //!   middleware registrations are mandatory side effects, not library code);
+//! - Node.js CLI script entry points by content shape: a module that defines a
+//!   `main` function at module scope (`async function main() { … }` /
+//!   `const main = …`) and invokes it at the top level (`main()` or the
+//!   `main().catch(err => { … })` form that surfaces async failures). Such a file
+//!   is executed directly (`tsx ./index.mts`, `node ./cli.js`), never imported as
+//!   a library module, so its top-level entry invocation is the program's
+//!   purpose, not a tree-shakeable side effect. Both the local `main` definition
+//!   and the top-level call are required, so a `main()` whose callee is imported,
+//!   or a bare unrelated top-level call, is still flagged;
 //! - React application entry points by content shape: any module with a
 //!   top-level React DOM bootstrap call — `createRoot(...).render(...)`,
 //!   `ReactDOM.createRoot(...).render(...)`, `hydrateRoot(...)`, or legacy
@@ -443,6 +452,52 @@ fn is_server_entry_shape(program: &Program) -> bool {
         let Statement::ExpressionStatement(es) = stmt else { return false };
         let Expression::CallExpression(call) = &es.expression else { return false };
         call_chain_starts_with_listen(call)
+    })
+}
+
+/// True when `call` is a bare `main()` call, or a `.catch(...)`/`.then(...)`
+/// continuation chained onto one. CLI entry points commonly invoke the program
+/// through `main().catch(err => { … })` to surface async failures, so the
+/// top-level expression is a `.catch` member call whose object is the `main`
+/// call. Unwrapping the trailing continuation recovers the underlying `main`,
+/// matching both the bare call and the chained forms.
+fn call_chain_starts_with_main(call: &oxc_ast::ast::CallExpression) -> bool {
+    if matches!(&call.callee, Expression::Identifier(id) if id.name == "main") {
+        return true;
+    }
+    let Expression::StaticMemberExpression(m) = &call.callee else {
+        return false;
+    };
+    if !matches!(m.property.name.as_str(), "catch" | "then") {
+        return false;
+    }
+    let Expression::CallExpression(inner) = &m.object else {
+        return false;
+    };
+    call_chain_starts_with_main(inner)
+}
+
+/// True when the program is a Node.js CLI script entry point that runs itself by
+/// invoking a locally-defined `main` function at the top level — the
+/// conventional CLI shape `async function main() { … }` followed by `main()` (or
+/// the `main().catch(err => { … })` form that surfaces async failures). Such a
+/// file is executed directly (`tsx ./index.mts`, `node ./cli.js`), never imported
+/// as a library module, so its top-level entry invocation is the program's
+/// purpose, not a tree-shakeable side effect.
+///
+/// Both signals are required: a top-level `main(...)` call statement AND a
+/// top-level value declaration binding `main` (a `function main`/`const main =
+/// …` in this module). The local-definition requirement keeps the exemption
+/// precise — a bare `register()` or a `main()` call whose `main` is imported from
+/// another module is not this self-invocation pattern and is still flagged.
+fn is_cli_main_entry_shape(program: &Program) -> bool {
+    if !module_top_level_value_bindings(program).contains("main") {
+        return false;
+    }
+    program.body.iter().any(|stmt| {
+        let Statement::ExpressionStatement(es) = stmt else { return false };
+        let Expression::CallExpression(call) = &es.expression else { return false };
+        call_chain_starts_with_main(call)
     })
 }
 
@@ -1598,6 +1653,7 @@ impl OxcCheck for Check {
             || is_benchmark_or_profile_script(ctx.path)
             || shape_is_test_setup(program)
             || is_server_entry_shape(program)
+            || is_cli_main_entry_shape(program)
             || is_react_entry_shape(program)
             || is_solid_entry_shape(program)
             || is_vue_entry_shape(program)
@@ -2604,6 +2660,74 @@ mod tests {
             diags.len(),
             1,
             "binary.ts is an ordinary module and must still be flagged, got {diags:?}"
+        );
+    }
+
+    // --- (h2) Node.js CLI script entry points — main() pattern (Closes #1629)
+
+    // Regression for #1629: a Node.js CLI script defines `async function main()`
+    // and invokes it at the top level (`main();`). The file is run directly
+    // (`tsx ./index.mts`), never imported as a library, so the entry invocation
+    // is the program's purpose, not a tree-shakeable side effect.
+    #[test]
+    fn allows_main_entry_invocation() {
+        let src = "\
+            import { extractApi } from './extract';\n\
+            async function main() {\n\
+              await extractApi(process.argv.slice(2));\n\
+            }\n\
+            main();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "tools/adev-api-extraction/index.mts");
+        assert!(
+            diags.is_empty(),
+            "a self-invoked local main() CLI entry should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_main_catch_chained_entry_invocation() {
+        // The idiomatic async-CLI form chains `.catch(...)` onto `main()` to
+        // surface failures; unwrapping the continuation recovers the `main` call.
+        let src = "\
+            const main = async () => { await run(); };\n\
+            main().catch((err) => { console.error(err); process.exit(1); });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/cli.ts");
+        assert!(
+            diags.is_empty(),
+            "main().catch() CLI entry should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_main_call_without_local_definition() {
+        // `main` is imported, not defined in this module — a top-level `main()`
+        // here is an ordinary side-effect call, not the self-invocation entry
+        // pattern, so it stays flagged.
+        let src = "\
+            import { main } from './app';\n\
+            main();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "imported main() is not a CLI entry self-invocation and must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_local_function_other_than_main() {
+        // A locally-defined `boot()` invoked at the top level is NOT the `main`
+        // convention — a genuine top-level side effect that still blocks
+        // tree-shaking. The exemption is keyed to the `main` name, not any
+        // self-invoked local function.
+        let src = "\
+            function boot() { registerGlobals(); }\n\
+            boot();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a self-invoked local boot() is not the main() entry pattern and must still be flagged, got {diags:?}"
         );
     }
 
