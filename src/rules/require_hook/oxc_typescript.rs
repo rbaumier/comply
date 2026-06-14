@@ -273,6 +273,24 @@ fn is_pure_path_call(call: &CallExpression) -> bool {
     })
 }
 
+/// A `vi.fn(...)` / `vi.spyOn(...)` / `jest.fn(...)` / `jest.spyOn(...)` mock-factory
+/// call. These construct an isolated mock function (or spy) as a value — declaring one
+/// at module scope is the idiomatic vitest/jest pattern for a shared mock that is reset
+/// in `beforeEach(() => mockFn.mockReset())`. It has no cross-test ordering side effect,
+/// so it belongs at module scope and must not be required to move into a hook.
+fn is_mock_factory_call(call: &CallExpression) -> bool {
+    let Expression::StaticMemberExpression(mem) = &call.callee else {
+        return false;
+    };
+    let Expression::Identifier(obj) = &mem.object else {
+        return false;
+    };
+    matches!(
+        (obj.name.as_str(), mem.property.name.as_str()),
+        ("vi", "fn") | ("vi", "spyOn") | ("jest", "fn") | ("jest", "spyOn")
+    )
+}
+
 /// Is `name` a side-effect-free `String.prototype` / `Array.prototype` predicate or
 /// accessor — one that reads its receiver and returns a value without mutating it or
 /// touching anything outside? Used to clear version-gate reads such as
@@ -384,10 +402,14 @@ fn is_pure_initializer(expr: &Expression) -> bool {
         // `import.meta.dirname` / `import.meta.url` pure via the member arm below.
         Expression::MetaProperty(_) => true,
         // `path.join(...)` / `path.resolve(...)` over pure arguments is a
-        // deterministic, side-effect-free module-relative path computation, and a
+        // deterministic, side-effect-free module-relative path computation; a
         // call to a known-pure built-in prototype method over a pure receiver
-        // (`React.version.startsWith('18.')`) is a side-effect-free read.
-        Expression::CallExpression(call) => is_pure_path_call(call) || is_pure_method_call(call),
+        // (`React.version.startsWith('18.')`) is a side-effect-free read; and a
+        // `vi.fn()` / `vi.spyOn()` / `jest.fn()` / `jest.spyOn()` mock-factory call
+        // constructs an isolated mock value with no cross-test side effect.
+        Expression::CallExpression(call) => {
+            is_pure_path_call(call) || is_pure_method_call(call) || is_mock_factory_call(call)
+        }
         // A ternary is a pure read when its condition and both branches are pure —
         // e.g. `isReact18 ? test : test.skip` just selects between two existing
         // function references. An impure branch (a call) still fires.
@@ -756,6 +778,63 @@ test('repeated test', { repeats: 2 }, async ({ task }) => {
         assert!(
             d.is_empty(),
             "module-scope vi.defineHelper() declaration must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_module_scope_vi_fn_mock_declarations() {
+        let src = r#"
+import { vi, describe, beforeEach, it } from 'vitest'
+
+const onError = vi.fn()
+const afterEach = vi.fn()
+
+describe('Errors & Navigation failures', () => {
+  beforeEach(() => {
+    onError.mockReset()
+    afterEach.mockReset()
+  })
+
+  it('reports errors', () => {})
+})
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "errors.spec.ts");
+        assert!(
+            d.is_empty(),
+            "module-scope const mocks built by vi.fn() must be allowed (shared mock pattern): {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_module_scope_vi_spy_on_and_jest_mock_declarations() {
+        let src = r#"
+const spy = vi.spyOn(console, 'log')
+const mockFetch = jest.fn()
+const jestSpy = jest.spyOn(globalThis, 'fetch')
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert!(
+            d.is_empty(),
+            "module-scope vi.spyOn / jest.fn / jest.spyOn mock declarations must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_bare_vi_fn_call_statement_at_top_level() {
+        let src = r#"
+import { vi } from 'vitest'
+
+vi.fn()
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a bare vi.fn() expression statement (no assignment) must still be flagged: {d:?}"
         );
     }
 
