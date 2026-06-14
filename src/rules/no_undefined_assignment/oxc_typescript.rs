@@ -3,10 +3,23 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{AssignmentOperator, AssignmentTarget, Expression};
 use std::sync::Arc;
 
 pub struct Check;
+
+/// True for `<expr>.current = undefined` — the React ref-clearing idiom.
+///
+/// A `MutableRefObject<T>` has `current: T | null` (never `T | undefined`), so
+/// `delete ref.current` is a TypeScript error and would break the ref contract.
+/// Assigning `undefined` is the intended way to mark the ref as holding no value.
+fn is_ref_current_target(target: &AssignmentTarget) -> bool {
+    matches!(
+        target,
+        AssignmentTarget::StaticMemberExpression(member)
+            if member.property.name.as_str() == "current"
+    )
+}
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
@@ -36,6 +49,11 @@ impl OxcCheck for Check {
                     &assign.right,
                     Expression::Identifier(id) if id.name.as_str() == "undefined"
                 );
+                if assign.operator == AssignmentOperator::Assign
+                    && is_ref_current_target(&assign.left)
+                {
+                    return;
+                }
                 (is_undef, assign.span.start)
             }
             _ => return,
@@ -56,5 +74,51 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn allows_ref_current_undefined() {
+        assert!(run_on("jointRef.current = undefined;").is_empty());
+        assert!(run_on("someRef.current = undefined;").is_empty());
+    }
+
+    #[test]
+    fn flags_let_undefined() {
+        assert_eq!(run_on("let x = undefined;").len(), 1);
+    }
+
+    #[test]
+    fn flags_plain_identifier_reassignment() {
+        assert_eq!(run_on("instance = undefined;").len(), 1);
+    }
+
+    #[test]
+    fn flags_member_property_not_current() {
+        assert_eq!(run_on("obj.value = undefined;").len(), 1);
     }
 }
