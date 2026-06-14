@@ -75,9 +75,12 @@ fn react_equivalent(name: &str) -> Option<String> {
 
 /// True when the file is JSX for a framework that uses native HTML attribute
 /// names (`class`, `for`, …) rather than React's camelCase — Vue, Solid,
-/// Preact, Qwik, or Stencil — detected via its imports or `@jsxImportSource`
-/// pragma. `no-unknown-property` encodes React's prop conventions and must not
-/// fire on these.
+/// Preact, Qwik, or Stencil. Detected three ways: via a framework import, via an
+/// in-file `@jsxImportSource` pragma, or via the nearest `tsconfig.json`'s
+/// `compilerOptions.jsxImportSource` set to a non-React runtime (which injects
+/// the JSX factory project-wide, so files need no framework import).
+/// `no-unknown-property` encodes React's prop conventions and must not fire on
+/// these.
 fn is_non_react_jsx_file(ctx: &CheckCtx) -> bool {
     ctx.source_contains("solid-js")
         || ctx.source_contains("@solidjs/")
@@ -92,6 +95,7 @@ fn is_non_react_jsx_file(ctx: &CheckCtx) -> bool {
         || ctx.source_contains("\"preact\"")
         || ctx.source_contains("jsxImportSource vue")
         || ctx.source_contains("jsxImportSource preact")
+        || ctx.project.has_non_react_jsx_import_source(ctx.path)
 }
 
 fn is_intrinsic_tag(tag: &str) -> bool {
@@ -215,6 +219,44 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, src, "t.tsx")
     }
 
+    /// Run the check against `source` placed at `importer_rel`, with a
+    /// `tsconfig.json` written at `tsconfig_rel`, both under a fresh temp dir.
+    /// Lets a test exercise the on-disk tsconfig lookup the rule performs.
+    fn run_with_tsconfig(
+        importer_rel: &str,
+        source: &str,
+        tsconfig_rel: &str,
+        tsconfig: &str,
+    ) -> Vec<Diagnostic> {
+        use crate::config::Config;
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
+        let ts_path = dir.path().join(tsconfig_rel);
+        fs::create_dir_all(ts_path.parent().unwrap()).unwrap();
+        fs::write(&ts_path, tsconfig).unwrap();
+        let importer = dir.path().join(importer_rel);
+        fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        fs::write(&importer, source).unwrap();
+        let canon = fs::canonicalize(&importer).unwrap();
+        let source_file = SourceFile {
+            path: canon.clone(),
+            language: Language::from_path(&canon).unwrap(),
+        };
+        let project = ProjectCtx::load(&[&source_file], &Config::default());
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
     #[test]
     fn flags_class_in_react_jsx() {
         let src = "const a = <div class=\"x\" />;";
@@ -256,6 +298,47 @@ mod tests {
     fn flags_for_in_react_jsx() {
         let src = "const a = <label for=\"x\" />;";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_class_in_qwik_tsconfig_jsx_import_source() {
+        // A Qwik file with no `@builder.io/qwik` import — the JSX factory comes
+        // solely from the package tsconfig's `compilerOptions.jsxImportSource`.
+        // `class` is correct here and must not be flagged. (Closes #2235)
+        let diags = run_with_tsconfig(
+            "src/repl-options.tsx",
+            "export const X = () => <div class=\"x\" />;",
+            "tsconfig.json",
+            r#"{"compilerOptions":{"jsx":"react-jsx","jsxImportSource":"@builder.io/qwik"}}"#,
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn flags_class_in_react_file_with_react_jsx_import_source() {
+        // A real React project whose tsconfig sets `jsxImportSource: "react"`
+        // (or omits it) still gets the `className` suggestion.
+        let diags = run_with_tsconfig(
+            "src/app.tsx",
+            "export const X = () => <div class=\"x\" />;",
+            "tsconfig.json",
+            r#"{"compilerOptions":{"jsx":"react-jsx","jsxImportSource":"react"}}"#,
+        );
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("className"));
+    }
+
+    #[test]
+    fn flags_class_in_react_file_with_no_jsx_import_source() {
+        // tsconfig with no `jsxImportSource` at all — plain React, still flagged.
+        let diags = run_with_tsconfig(
+            "src/app.tsx",
+            "export const X = () => <div class=\"x\" />;",
+            "tsconfig.json",
+            r#"{"compilerOptions":{"jsx":"react-jsx"}}"#,
+        );
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("className"));
     }
 
     #[test]
