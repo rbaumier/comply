@@ -286,9 +286,15 @@ fn has_side_effects(expr: &Expression) -> bool {
         // TS non-null assertion: unwrap
         Expression::TSNonNullExpression(inner) => has_side_effects(&inner.expression),
 
-        // TS `as` / `satisfies`: unwrap
+        // TS `as` cast: unwrap and judge the underlying expression.
         Expression::TSAsExpression(inner) => has_side_effects(&inner.expression),
-        Expression::TSSatisfiesExpression(inner) => has_side_effects(&inner.expression),
+
+        // TS 4.9+ `expr satisfies T` used as a bare statement is always a
+        // deliberate compile-time type assertion: supplying the type forces the
+        // compiler to verify `expr` is assignable to `T`, erroring otherwise.
+        // The statement IS the assertion ("this matches the type"), with no
+        // runtime effect by design — never accidental dead code.
+        Expression::TSSatisfiesExpression(_) => true,
 
         // A generic instantiation expression used as a bare statement is a
         // compile-time type assertion (TS 4.7+), never accidental dead code:
@@ -675,6 +681,29 @@ mod tests {
         assert_eq!(run_on_path("fn().prop;", "src/foo.ts").len(), 1);
         assert_eq!(run_on_path("obj.prop;", "src/foo.tsx").len(), 1);
         assert_eq!(run_on_path("obj?.prop;", "src/foo.ts").len(), 1);
+    }
+
+    // Regression #2091: the TypeScript 4.9+ `satisfies` operator used as a bare
+    // statement (`expr satisfies T`) is a deliberate compile-time type assertion
+    // — it has no runtime effect by design, that is the point. It must never be
+    // flagged as an unused expression, regardless of the inner expression shape.
+    #[test]
+    fn allows_satisfies_type_assertion_statement_issue_2091() {
+        assert!(
+            run_on(r#"z.string().def.type satisfies "string";"#).is_empty(),
+            "{:?}",
+            run_on(r#"z.string().def.type satisfies "string";"#)
+        );
+        assert!(run_on(r#"x satisfies "string";"#).is_empty());
+        assert!(run_on("config satisfies Record<string, number>;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_dead_expression_alongside_satisfies_exemption_issue_2091() {
+        // The exemption is specific to `satisfies` expressions; a genuinely
+        // useless bare member access or literal must still be flagged.
+        assert_eq!(run_on("foo.bar;").len(), 1);
+        assert_eq!(run_on("42;").len(), 1);
     }
 
     #[test]
