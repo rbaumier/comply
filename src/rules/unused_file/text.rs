@@ -6,7 +6,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::{ImportIndex, ProjectCtx};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::path_utils::{is_config_file, is_framework_entry_point};
+use crate::rules::path_utils::{
+    is_config_file, is_framework_entry_point, is_top_level_script_dir_path,
+};
 use std::path::Path;
 
 const RULE_ID: &str = "unused-file";
@@ -146,13 +148,9 @@ fn is_entry_point(
     };
 
     // CLIs and smoke/build tools are run directly, never imported. They live in
-    // a top-level `scripts/`, `bin/`, `examples/`, `example-apps/`, `tools/`,
+    // a top-level `scripts/`, `bin/`, `tools/`, `examples/`, `example-apps/`,
     // `benchmark/`, or `benchmarks/` directory.
-    if in_top_level_dir(
-        path,
-        canon_root,
-        &["scripts", "bin", "examples", "example-apps", "tools", "benchmark", "benchmarks"],
-    ) {
+    if is_top_level_script_dir_path(path, canon_root) {
         return true;
     }
 
@@ -206,19 +204,6 @@ fn is_standalone_sample_script(path: &Path, stem: &str) -> bool {
     path.components().any(|c| {
         matches!(c.as_os_str().to_str(), Some("samples") | Some("samples-dev"))
     })
-}
-
-/// True when `path` lives anywhere inside one of `dirs` taken as a top-level
-/// directory of the project (e.g. `<root>/scripts/cli.ts`).
-fn in_top_level_dir(path: &Path, canon_root: &Path, dirs: &[&str]) -> bool {
-    let canon_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let Ok(rel) = canon_path.strip_prefix(canon_root) else {
-        return false;
-    };
-    rel.components()
-        .next()
-        .and_then(|c| c.as_os_str().to_str())
-        .is_some_and(|first| dirs.contains(&first))
 }
 
 fn is_declaration_file(path: &Path) -> bool {
