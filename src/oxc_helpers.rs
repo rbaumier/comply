@@ -1152,6 +1152,31 @@ pub fn type_annotation_is_type_predicate(
     annotation.is_some_and(|ann| matches!(ann.type_annotation, TSType::TSTypePredicate(_)))
 }
 
+/// True when any enclosing function/arrow of `node_id` declares a type-predicate
+/// (`value is T`) return type. Such a function IS a hand-written type guard: the
+/// `as` casts in its body are needed to read discriminant properties off the
+/// loosely-typed input before returning the narrowing, so flagging them is
+/// circular (every alternative guard would need the same cast).
+#[must_use]
+pub fn is_inside_type_predicate_fn(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node_id) {
+        let return_type = match ancestor.kind() {
+            AstKind::Function(f) => f.return_type.as_deref(),
+            AstKind::ArrowFunctionExpression(a) => a.return_type.as_deref(),
+            _ => None,
+        };
+        if type_annotation_is_type_predicate(return_type) {
+            return true;
+        }
+    }
+    false
+}
+
 /// True when `kind` is a type-only binding context — a node whose name lives
 /// purely in the type namespace and is erased at runtime (function/constructor
 /// types, call/construct/method/index signatures, mapped types, `infer`, plus
