@@ -3,6 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -17,6 +18,46 @@ const STATIC_ASSET_EXTENSIONS: &[&str] = &[
 fn is_static_asset_path(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     STATIC_ASSET_EXTENSIONS.iter().any(|ext| lower.ends_with(ext))
+}
+
+/// Test-runner lifecycle hooks whose callback bodies legitimately call
+/// `require()`: after `jest.resetModules()` / `vi.resetModules()` the module
+/// registry is cleared, and a fresh CommonJS `require()` is the only way to
+/// re-import the reset module (a static `import` is hoisted and cannot observe
+/// the reset). The require lives inside the hook callback by necessity.
+const LIFECYCLE_HOOK_IDENTS: &[&str] = &["beforeEach", "beforeAll", "afterEach", "afterAll"];
+
+/// Identifier name of a hook call's callee for the bare (`beforeEach(...)`) and
+/// member (`test.beforeEach(...)`) forms; `None` for any other callee shape.
+fn hook_callee_name<'a>(call: &'a oxc_ast::ast::CallExpression) -> Option<&'a str> {
+    match &call.callee {
+        oxc_ast::ast::Expression::Identifier(id) => Some(id.name.as_str()),
+        oxc_ast::ast::Expression::StaticMemberExpression(m) => Some(m.property.name.as_str()),
+        _ => None,
+    }
+}
+
+/// True when `func_node` is the callback argument of a test lifecycle hook call
+/// (`beforeEach`/`beforeAll`/`afterEach`/`afterAll`). The callback's immediate
+/// parent in oxc's semantic tree is the `CallExpression` itself (arguments have
+/// no wrapper node); requiring the function to appear in `arguments` excludes an
+/// IIFE in the callee position.
+fn is_lifecycle_hook_callback(
+    func_node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let parent = semantic.nodes().parent_node(func_node.id());
+    let AstKind::CallExpression(call) = parent.kind() else {
+        return false;
+    };
+    let Some(name) = hook_callee_name(call) else {
+        return false;
+    };
+    if !LIFECYCLE_HOOK_IDENTS.contains(&name) {
+        return false;
+    }
+    let span = func_node.kind().span();
+    call.arguments.iter().any(|arg| arg.span() == span)
 }
 
 impl OxcCheck for Check {
@@ -61,9 +102,18 @@ impl OxcCheck for Check {
                 continue;
             }
             match ancestor.kind() {
-                AstKind::Function(_)
-                | AstKind::ArrowFunctionExpression(_)
-                | AstKind::MethodDefinition(_)
+                AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
+                    // A `require()` inside a test lifecycle-hook callback
+                    // (`beforeEach`/`beforeAll`/`afterEach`/`afterAll`) is the
+                    // documented Jest/Vitest way to re-import a module after
+                    // `resetModules()`; do not flag it.
+                    if is_lifecycle_hook_callback(ancestor, semantic) {
+                        return;
+                    }
+                    in_function = true;
+                    break;
+                }
+                AstKind::MethodDefinition(_)
                 | AstKind::IfStatement(_)
                 | AstKind::ForStatement(_)
                 | AstKind::ForInStatement(_)
@@ -133,6 +183,46 @@ mod tests {
     #[test]
     fn flags_module_require_in_function() {
         let d = run(r#"function init() { const fs = require("fs"); return fs; }"#);
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression for #1727: `require()` after `jest.resetModules()` inside a
+    // `beforeEach` hook is the only way to re-import a reset module.
+    #[test]
+    fn allows_require_in_before_each_hook() {
+        let d = run(
+            r#"beforeEach(() => { jest.resetModules(); const m = require("../act-compat").default; });"#,
+        );
+        assert!(d.is_empty());
+    }
+
+    // Regression for #1727: same pattern with `beforeAll`.
+    #[test]
+    fn allows_require_in_before_all_hook() {
+        let d = run(
+            r#"beforeAll(() => { process.env.X = "true"; const rtl = require("../"); });"#,
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_require_in_after_each_hook() {
+        let d = run(r#"afterEach(() => { const m = require("./reset"); });"#);
+        assert!(d.is_empty());
+    }
+
+    // Vitest member form `test.beforeEach(() => ...)`.
+    #[test]
+    fn allows_require_in_member_form_hook() {
+        let d = run(r#"test.beforeEach(() => { const m = require("./reset"); });"#);
+        assert!(d.is_empty());
+    }
+
+    // Negative space: a genuine production `require()` inside a non-hook callback
+    // is still flagged — the exemption is scoped to the four lifecycle hooks.
+    #[test]
+    fn flags_require_in_non_hook_callback() {
+        let d = run(r#"setup(() => { const fs = require("fs"); return fs; });"#);
         assert_eq!(d.len(), 1);
     }
 }
