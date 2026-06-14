@@ -1859,7 +1859,24 @@ impl ProjectCtx {
         if self.is_vitest_global_setup_file(path) {
             names.extend(VITEST_GLOBAL_SETUP_EXPORTS.iter().copied());
         }
+        if self.is_docusaurus_for_path(path)
+            && (crate::rules::path_utils::is_docusaurus_theme_swizzle(path)
+                || crate::rules::path_utils::is_docusaurus_plugin_entry(path))
+        {
+            names.insert("default");
+        }
         names
+    }
+
+    /// True when Docusaurus owns `path` — detected either at the project root or
+    /// via the nearest `package.json` (a docs site nested in a monorepo package,
+    /// e.g. `packages/website/`, is invisible to root-anchored detection).
+    fn is_docusaurus_for_path(&self, path: &Path) -> bool {
+        self.has_framework("docusaurus")
+            || self
+                .frameworks_for_path(path)
+                .iter()
+                .any(|f| f.name == "docusaurus")
     }
 
     /// Add a framework's route-scoped magic exports when `path` matches the file

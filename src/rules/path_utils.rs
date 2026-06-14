@@ -38,7 +38,11 @@ fn canonicalize_cached(p: &Path) -> PathBuf {
 /// True if `path` is a build/tooling config file. Matches `*.config.*`
 /// (e.g. `vite.config.ts`, `jest.config.js`), the Vitest `*.workspace.*`
 /// convention (e.g. `vitest.workspace.ts`, loaded by filename and never
-/// imported), and dotfile-rc entries (e.g. `.eslintrc.js`, `.babelrc.ts`).
+/// imported), dotfile-rc entries (e.g. `.eslintrc.js`, `.babelrc.ts`), and the
+/// extensionless Knip config name (`knip.ts`/`knip.js`) — the Knip tool reads
+/// its config by filename and never `import`s it, so its `default` export has
+/// no static importer. `knip.config.*` is already covered by the `*.config.*`
+/// branch.
 pub fn is_config_file(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
@@ -46,6 +50,9 @@ pub fn is_config_file(path: &Path) -> bool {
         return true;
     }
     if name.starts_with('.') && stem.ends_with("rc") {
+        return true;
+    }
+    if matches!(name, "knip.ts" | "knip.js") {
         return true;
     }
     false
@@ -633,6 +640,42 @@ pub fn is_react_router_routes_config(path: &Path) -> bool {
         path.file_name().and_then(|n| n.to_str()),
         Some("routes.ts" | "routes.js")
     )
+}
+
+/// True when `path` is a Docusaurus theme swizzle component — a file under a
+/// `src/theme/` directory (consecutive `src` then `theme` segments, e.g.
+/// `src/theme/MDXComponents/index.tsx`). Docusaurus's theme system discovers
+/// these overrides by their path under `src/theme/` and resolves them through
+/// its webpack theme aliases, never through a static import, so the component's
+/// `default` export has no importer yet is live. Detection-gated by the caller.
+pub fn is_docusaurus_theme_swizzle(path: &Path) -> bool {
+    let segs: Vec<&str> = path
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => s.to_str(),
+            _ => None,
+        })
+        .collect();
+    segs.windows(2).any(|w| w == ["src", "theme"])
+}
+
+/// True when `path` is a Docusaurus plugin entry — an `index.{ts,js}` file
+/// directly inside a `plugins/<name>/` directory (e.g.
+/// `plugins/recent-blog-posts/index.ts`). Docusaurus loads local plugins by
+/// the path string declared in `docusaurus.config`, calling the module's
+/// `default` export, never through a static import, so it has no importer yet
+/// is live. Detection-gated by the caller.
+pub fn is_docusaurus_plugin_entry(path: &Path) -> bool {
+    if !matches!(
+        path.file_name().and_then(|n| n.to_str()),
+        Some("index.ts" | "index.js")
+    ) {
+        return false;
+    }
+    let Some(grandparent) = path.parent().and_then(Path::parent) else {
+        return false;
+    };
+    grandparent.file_name().and_then(|n| n.to_str()) == Some("plugins")
 }
 
 /// True when `path` is a SvelteKit route file (`+page.svelte`,
