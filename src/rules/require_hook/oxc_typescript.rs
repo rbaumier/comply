@@ -237,6 +237,58 @@ fn is_pure_path_call(call: &CallExpression) -> bool {
     })
 }
 
+/// Is `name` a side-effect-free `String.prototype` / `Array.prototype` predicate or
+/// accessor — one that reads its receiver and returns a value without mutating it or
+/// touching anything outside? Used to clear version-gate reads such as
+/// `React.version.startsWith('18.')` at module scope.
+fn is_pure_builtin_method(name: &str) -> bool {
+    matches!(
+        name,
+        "startsWith"
+            | "endsWith"
+            | "includes"
+            | "indexOf"
+            | "lastIndexOf"
+            | "slice"
+            | "substring"
+            | "substr"
+            | "charAt"
+            | "charCodeAt"
+            | "codePointAt"
+            | "toLowerCase"
+            | "toUpperCase"
+            | "trim"
+            | "trimStart"
+            | "trimEnd"
+            | "padStart"
+            | "padEnd"
+            | "repeat"
+            | "concat"
+            | "at"
+    )
+}
+
+/// A call to a known-pure built-in prototype method
+/// (`React.version.startsWith('18.')`, `name.toLowerCase()`): the method must be a
+/// side-effect-free `String`/`Array` predicate, the receiver chain a pure read, and
+/// every argument a pure initializer. An impure receiver (`fetch().includes(...)`) or
+/// an unknown method (`obj.save()`) still fires.
+fn is_pure_method_call(call: &CallExpression) -> bool {
+    let Expression::StaticMemberExpression(mem) = &call.callee else {
+        return false;
+    };
+    if !is_pure_builtin_method(mem.property.name.as_str()) {
+        return false;
+    }
+    if !is_pure_initializer(&mem.object) {
+        return false;
+    }
+    call.arguments.iter().all(|arg| match arg.as_expression() {
+        Some(inner) => is_pure_initializer(inner),
+        None => false,
+    })
+}
+
 /// Is `expr` the `import.meta.url` member read?
 fn is_import_meta_url(expr: &Expression) -> bool {
     let Expression::StaticMemberExpression(mem) = expr else {
@@ -296,8 +348,18 @@ fn is_pure_initializer(expr: &Expression) -> bool {
         // `import.meta.dirname` / `import.meta.url` pure via the member arm below.
         Expression::MetaProperty(_) => true,
         // `path.join(...)` / `path.resolve(...)` over pure arguments is a
-        // deterministic, side-effect-free module-relative path computation.
-        Expression::CallExpression(call) => is_pure_path_call(call),
+        // deterministic, side-effect-free module-relative path computation, and a
+        // call to a known-pure built-in prototype method over a pure receiver
+        // (`React.version.startsWith('18.')`) is a side-effect-free read.
+        Expression::CallExpression(call) => is_pure_path_call(call) || is_pure_method_call(call),
+        // A ternary is a pure read when its condition and both branches are pure —
+        // e.g. `isReact18 ? test : test.skip` just selects between two existing
+        // function references. An impure branch (a call) still fires.
+        Expression::ConditionalExpression(c) => {
+            is_pure_initializer(&c.test)
+                && is_pure_initializer(&c.consequent)
+                && is_pure_initializer(&c.alternate)
+        }
         // A template literal is a pure read when every interpolation is a plain
         // identifier reference to an already-bound value (e.g.
         // `http://localhost:${PORT}/`). Calls or member access can throw or have
@@ -1089,6 +1151,89 @@ describe("x", () => { it("works", () => {}); });
             d.len(),
             1,
             "a package import call that is not a *Tester runner must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_const_version_gate_string_method_call() {
+        let src = r#"
+import * as React from 'react'
+import { render, configure } from '../'
+
+const isReact18 = React.version.startsWith('18.')
+const isReact19 = React.version.startsWith('19.')
+
+const testGateReact18 = isReact18 ? test : test.skip
+const testGateReact19 = isReact19 ? test : test.skip
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "src/__tests__/render.js");
+        assert!(
+            d.is_empty(),
+            "module-scope const version gates built by a pure String method + ternary must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_const_impure_method_call_initializer() {
+        let src = r#"
+const data = client.fetchSync('users')
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a member-call to an unknown (non-pure-builtin) method must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_top_level_setup_server_call() {
+        let src = r#"
+import { setupServer } from 'msw/node'
+
+setupServer()
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a genuine side-effecting top-level setup call must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_const_pure_method_call_on_impure_receiver() {
+        let src = r#"
+const ok = fetchVersion().startsWith('18.')
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a pure-builtin method on an impure (call) receiver must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_const_ternary_with_call_branch() {
+        let src = r#"
+const value = cond ? makeThing() : fallback
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a ternary with a call in one branch must still be flagged: {d:?}"
         );
     }
 
