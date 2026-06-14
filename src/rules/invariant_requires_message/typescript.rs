@@ -7,6 +7,10 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
+    fn run_gated(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_gated(&Check, source, path)
+    }
+
     #[test]
     fn flags_invariant_without_message() {
         let diags = run("invariant(router != null);");
@@ -41,6 +45,23 @@ mod tests {
     #[test]
     fn flags_invariant_with_nested_call_no_message() {
         let diags = run("invariant(arr.includes(x));");
+        assert_eq!(diags.len(), 1);
+    }
+
+    // Regression #2220: in test files, messageless `invariant(cond)` is an
+    // intentional type-narrowing assertion (the runner reports file+line), so
+    // the central `skip_in_test_dir` gate suppresses the rule there.
+    #[test]
+    fn skips_messageless_invariant_in_test_file() {
+        assert!(run_gated("invariant(x instanceof Comment);", "src/frame.test.tsx").is_empty());
+        assert!(run_gated("invariant(node != null);", "src/router.spec.ts").is_empty());
+    }
+
+    // Negative-space guard: messageless `invariant()` in production source is a
+    // genuine warning and must still fire.
+    #[test]
+    fn flags_messageless_invariant_in_production_file() {
+        let diags = run_gated("invariant(router != null);", "src/router.ts");
         assert_eq!(diags.len(), 1);
     }
 }
