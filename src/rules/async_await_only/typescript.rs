@@ -9,7 +9,8 @@ mod tests {
 
     #[test]
     fn flags_then_chain() {
-        let diags = run("fetchUser(id).then(data => { console.log(data); });");
+        let diags =
+            run("async function f() { fetchUser(id).then(data => { console.log(data); }); }");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains(".then()"));
     }
@@ -25,8 +26,30 @@ mod tests {
 
     #[test]
     fn flags_then_and_catch() {
-        let diags = run("function f() { fetchUser(id).then(d => d).catch(e => e); }");
+        let diags = run("async function f() { fetchUser(id).then(d => d).catch(e => e); }");
         assert_eq!(diags.len(), 2);
+    }
+
+    #[test]
+    fn allows_angular_router_lazy_loading() {
+        // Regression for #2292 — the canonical Angular Router lazy-loading factory
+        // is a non-async arrow that reshapes a dynamic import via `.then()`. There
+        // is no async host, so `.then()` cannot be swapped for `await` without
+        // changing the factory signature; structurally identical to React.lazy().
+        let diags = run(
+            r#"export const routes = [
+  {
+    path: 'lazy',
+    loadComponent: () =>
+      import('./feature/feature.component').then((c) => c.FeatureComponent),
+  },
+  {
+    path: 'children',
+    loadChildren: () => import('./feature/feature.routes').then((m) => m.routes),
+  },
+];"#,
+        );
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
     }
 
     #[test]
