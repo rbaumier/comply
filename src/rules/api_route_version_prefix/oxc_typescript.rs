@@ -278,6 +278,31 @@ mod tests {
     }
 
     #[test]
+    fn ignores_test_suite_factory_file() {
+        // Issue #1661 — a `*Tests.ts` test-suite-factory file (apollo-server's
+        // `apolloServerTests.ts`) spins up ephemeral Express servers for
+        // integration testing; its unversioned routes are test scaffolding.
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "app.get('/', (req, res) => res.json({ ok: true }));",
+            "packages/integration-testsuite/src/apolloServerTests.ts",
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn flags_production_file_ending_in_lowercase_tests() {
+        // Negative space: a real source file whose name merely ends in lowercase
+        // `tests` (no capital boundary) is not a test factory and still flags.
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "app.get('/users', handler);",
+            "src/manifests.ts",
+        );
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
     fn ignores_jest_mocks_dir() {
         let d = crate::rules::test_helpers::run_rule(
             &Check,
