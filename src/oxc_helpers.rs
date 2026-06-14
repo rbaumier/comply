@@ -533,19 +533,20 @@ pub fn is_fixed_signature_library_callback<'a>(
     TANSTACK_QUERY_FACTORIES.contains(&callee_name)
 }
 
-/// True when `ident` resolves to a local binding declared with `const` whose
-/// initializer is a plain object literal or object-spread (`Expression::Object\
-/// Expression`, which covers both `{ key: val }` and `{ ...other }`). Such a
-/// binding is a freshly-created local builder, not a reference to shared state:
-/// assigning its properties (`value.x = ...`) before returning it is the object
-/// analogue of the `const items = []; items.push(x)` accumulator pattern, and
-/// mutates no external state.
+/// True when `ident` resolves to a local binding declared with `const` or `let`
+/// whose initializer is a plain object literal or object-spread
+/// (`Expression::ObjectExpression`, which covers both `{ key: val }` and
+/// `{ ...other }`). Such a binding is a freshly-created local builder, not a
+/// reference to shared state: assigning its properties (`value.x = ...`) or
+/// deleting them (`delete value.x`) before returning it is the object analogue
+/// of the `const items = []; items.push(x)` accumulator pattern, and mutates no
+/// external state.
 ///
 /// Resolves the binding via `reference_id` → symbol → declaration node, then
-/// inspects the `VariableDeclarator` (whose `kind` carries the const-ness). A
-/// function parameter, imported binding, `this`, or a `let`/`var` resolves to a
-/// non-`VariableDeclarator` declaration or a non-const kind, so it is rejected
-/// and any mutation through it is still flagged.
+/// inspects the `VariableDeclarator` (whose `kind` carries the declaration
+/// keyword). A function parameter, imported binding, or `this` resolves to a
+/// non-`VariableDeclarator` declaration; a `var` binding or a non-object-literal
+/// initializer is rejected, so any mutation through it is still flagged.
 #[must_use]
 pub fn is_local_object_builder_binding(
     ident: &oxc_ast::ast::IdentifierReference,
@@ -567,8 +568,10 @@ pub fn is_local_object_builder_binding(
         std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         if let AstKind::VariableDeclarator(decl) = kind {
-            return decl.kind == VariableDeclarationKind::Const
-                && matches!(decl.init, Some(Expression::ObjectExpression(_)));
+            return matches!(
+                decl.kind,
+                VariableDeclarationKind::Const | VariableDeclarationKind::Let
+            ) && matches!(decl.init, Some(Expression::ObjectExpression(_)));
         }
     }
     false
