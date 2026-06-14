@@ -12,7 +12,7 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "next-metadata-missing-viewport",
-    description: "Pages exporting `metadata` should also export `viewport`.",
+    description: "Layout files exporting `metadata` should also export `viewport` (inherited by nested pages).",
     remediation: "Add `export const viewport: Viewport = { width: 'device-width', initialScale: 1 };` next to your `metadata` export.",
     severity: Severity::Warning,
     doc_url: Some("https://nextjs.org/docs/app/api-reference/functions/generate-viewport"),
