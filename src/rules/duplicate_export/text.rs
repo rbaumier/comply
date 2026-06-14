@@ -39,6 +39,14 @@
 //!     This is the bundle-size measurement / consumer-script shape (e.g.
 //!     `size-checks/` entry files), structurally distinct from a source barrel,
 //!     so it adds no ambiguous source-import path and is excluded from the count.
+//!   - Dev/prod entry-point variants — a library ships parallel dev and prod
+//!     variants of one module (`index.ts` / `production.ts`, `foo.dev.ts` /
+//!     `foo.prod.ts`) that a bundler or `exports` condition picks between; a
+//!     consumer reaches exactly one. Two such variants in the same directory
+//!     re-exporting the same name *type-only* are not an ambiguous flat path —
+//!     types are erased at compile time and emit no runtime JS — so the variant
+//!     group collapses to a single effective path. A runtime-value re-export by
+//!     any member is left untouched, so genuine value duplicates still flag.
 //!   - JSX automatic-runtime entries — a `jsx-runtime`/`jsx-dev-runtime` barrel
 //!     is a special entry point mandated by the JSX automatic-runtime transform
 //!     (React/Preact/etc.). The transform imports `jsx`, `jsxs`, and `Fragment`
@@ -119,6 +127,15 @@ impl TextCheck for Check {
         let indexed: HashSet<&Path> = index.indexed_paths().collect();
         let namespace_wrapped = collect_namespace_wrapped_barrels(&indexed);
 
+        // `(barrel, name)` pairs whose re-export is type-only — either the
+        // statement form `export type { X } from '…'` or the per-specifier form
+        // `export { type X } from '…'`. The import index records re-exports but
+        // not their type-only flag, so it is recovered here by scanning each
+        // indexed barrel's source. Type-only re-exports are erased at compile
+        // time and emit no runtime JS, which gates the dev/prod-variant collapse
+        // below.
+        let type_only_reexports = collect_type_only_reexports(&indexed);
+
         // Indexed barrel paths are canonical; canonicalize the project root once
         // so message paths strip cleanly to project-relative form.
         let root = ctx
@@ -185,6 +202,20 @@ impl TextCheck for Check {
                 .into_iter()
                 .filter(|barrel| !is_jsx_runtime_barrel(barrel))
                 .collect();
+            // Libraries ship dev and prod entry-point variants of one module
+            // (`index.ts` / `production.ts`, `foo.dev.ts` / `foo.prod.ts`) that a
+            // bundler or export condition picks between. A consumer reaches only
+            // one variant, so the variants re-exporting the same *type* are not an
+            // ambiguous flat path — types are erased at compile time and emit no
+            // runtime JS. Collapse a set of dev/prod variants of one base name
+            // into a single effective path when every variant re-exports this name
+            // type-only. Runtime-value duplicates across variants are a real
+            // ambiguity and are left untouched.
+            let independent = collapse_devprod_type_variants(
+                independent,
+                name,
+                &type_only_reexports,
+            );
             // A package may publish several barrels as distinct `exports`
             // subpath entry points (e.g. `.` → `index.ts`, `./dom` → `dom.ts`)
             // that intentionally re-export shared symbols for backward
@@ -235,6 +266,85 @@ fn display_path(path: &Path, root: Option<&Path>) -> String {
         .unwrap_or(path)
         .display()
         .to_string()
+}
+
+/// `(barrel path, exported name)` pairs whose re-export is type-only across the
+/// indexed set. Covers both the statement form `export type { A, B } from '…'`
+/// (every name is type-only) and the per-specifier form
+/// `export { type A, B } from '…'` (only `A` is type-only). The import index
+/// records re-exports without a type-only flag, so it is recovered by scanning
+/// each barrel's source. Only re-export statements (`export … from '…'`) are
+/// considered — local `export type { X }` without a `from` clause is a binding,
+/// not a barrel re-export.
+fn collect_type_only_reexports(indexed: &HashSet<&Path>) -> HashSet<(PathBuf, String)> {
+    let mut out = HashSet::new();
+    for &file in indexed {
+        let Ok(source) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        for name in type_only_reexport_names(&source) {
+            out.insert((file.to_path_buf(), name));
+        }
+    }
+    out
+}
+
+/// Exported names that a source's `export … from '…'` statements re-export
+/// type-only. A statement-level `export type { … } from` marks every listed
+/// name; otherwise each `type`-prefixed specifier (`export { type X, Y } from`)
+/// marks only that name. Aliased specifiers report the exported (right-hand)
+/// name, matching the index's `name`. Lines without a `from` clause are skipped.
+fn type_only_reexport_names(source: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed.strip_prefix("export") else {
+            continue;
+        };
+        if !rest.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let rest = rest.trim_start();
+        // Only `export … from '…'` re-exports concern barrels; a clause with no
+        // `from` is a local binding, not a re-export.
+        if !rest.contains(" from ") {
+            continue;
+        }
+        let stmt_type_only = rest
+            .strip_prefix("type")
+            .is_some_and(|after| after.starts_with(char::is_whitespace) || after.starts_with('{'));
+        let Some(open) = rest.find('{') else {
+            continue;
+        };
+        let Some(close_rel) = rest[open..].find('}') else {
+            continue;
+        };
+        let inner = &rest[open + 1..open + close_rel];
+        for spec in inner.split(',') {
+            let spec = spec.trim();
+            if spec.is_empty() {
+                continue;
+            }
+            let (spec_type_only, body) = match spec.strip_prefix("type") {
+                Some(after) if after.starts_with(char::is_whitespace) => (true, after.trim_start()),
+                _ => (false, spec),
+            };
+            if !(stmt_type_only || spec_type_only) {
+                continue;
+            }
+            // `local as exported` re-exports under `exported`; the index keys on
+            // that exported name.
+            let exported = body
+                .split_whitespace()
+                .skip_while(|tok| *tok != "as")
+                .nth(1)
+                .unwrap_or_else(|| body.split_whitespace().next().unwrap_or(body));
+            if !exported.is_empty() {
+                out.push(exported.to_string());
+            }
+        }
+    }
+    out
 }
 
 /// Canonical paths of barrels that are the target of an
@@ -354,6 +464,81 @@ fn is_jsx_runtime_barrel(barrel: &Path) -> bool {
         .file_stem()
         .and_then(|stem| stem.to_str())
         .is_some_and(|stem| stem == "jsx-runtime" || stem == "jsx-dev-runtime")
+}
+
+/// Collapse dev/prod entry-point variants that share a type-only re-export of
+/// `name` into a single effective barrel.
+///
+/// A library ships parallel dev and prod variants of one module (`index.ts` /
+/// `production.ts`, `foo.dev.ts` / `foo.prod.ts`) that a bundler or export
+/// condition selects between; a consumer reaches exactly one. When two such
+/// variants in the same directory re-export the same name *type-only* (erased at
+/// compile time, no runtime JS), the overlap is not an ambiguous flat path.
+/// Among `barrels`, every group of variants of one base name whose re-export of
+/// `name` is type-only across the whole group collapses to a single
+/// representative (the lexicographically smallest), so the group counts as one
+/// import path. Barrels that are not part of such a group pass through unchanged.
+/// A runtime-value re-export by any member leaves the group untouched, preserving
+/// detection of genuine value duplicates.
+fn collapse_devprod_type_variants<'a>(
+    barrels: Vec<&'a Path>,
+    name: &str,
+    type_only_reexports: &HashSet<(PathBuf, String)>,
+) -> Vec<&'a Path> {
+    // Group candidate barrels by (parent dir, base name) — variants of one
+    // module live side by side and differ only in their dev/prod marker.
+    let mut groups: HashMap<(PathBuf, String), Vec<&'a Path>> = HashMap::new();
+    let mut passthrough: Vec<&'a Path> = Vec::new();
+    for barrel in barrels {
+        let is_type_only =
+            type_only_reexports.contains(&(barrel.to_path_buf(), name.to_string()));
+        match (is_type_only, devprod_variant_key(barrel)) {
+            (true, Some(key)) => groups.entry(key).or_default().push(barrel),
+            _ => passthrough.push(barrel),
+        }
+    }
+    let mut out = passthrough;
+    for (_, mut members) in groups {
+        // A single barrel under a base name is not a variant pair — it remains a
+        // standalone path. Two or more variants collapse to one representative.
+        members.sort();
+        out.push(members[0]);
+    }
+    out
+}
+
+/// Key identifying a dev/prod entry-point variant: the barrel's parent directory
+/// paired with the module base name once its dev/prod marker is stripped.
+/// `index.ts` and `production.ts` are the conventional dev/prod pair for one
+/// entry point, so both map to the base `index`. `foo.dev.ts` / `foo.prod.ts`
+/// (and `.development` / `.production`) map to the base `foo`. Returns `None`
+/// when the stem carries no recognized dev/prod marker — an ordinary barrel is
+/// never collapsed.
+fn devprod_variant_key(barrel: &Path) -> Option<(PathBuf, String)> {
+    let parent = barrel.parent()?.to_path_buf();
+    let stem = barrel.file_stem().and_then(|s| s.to_str())?;
+    let base = devprod_base_name(stem)?;
+    Some((parent, base))
+}
+
+/// Base module name a dev/prod variant stem reduces to, or `None` when the stem
+/// is not a dev/prod variant. `production` and `index` both reduce to `index`
+/// (the `index.ts` / `production.ts` entry-point pair). A trailing
+/// `.dev`/`.prod`/`.development`/`.production` segment is stripped to its base
+/// (`foo.prod` → `foo`).
+fn devprod_base_name(stem: &str) -> Option<String> {
+    // `index.ts` / `production.ts` are the conventional dev/prod entry-point
+    // pair: both name the same logical entry point. Reduce each to `index` so
+    // they share a variant key.
+    if stem == "index" || stem == "production" || stem == "development" {
+        return Some("index".to_string());
+    }
+    const MARKERS: [&str; 4] = ["dev", "prod", "development", "production"];
+    let (base, marker) = stem.rsplit_once('.')?;
+    if base.is_empty() || !MARKERS.contains(&marker) {
+        return None;
+    }
+    Some(base.to_string())
 }
 
 /// Resolve `.`/`..` components lexically — no filesystem access. Indexed paths
@@ -906,6 +1091,108 @@ mod tests {
             "Fragment shared by jsx-dev-runtime.ts and the main barrel is a JSX contract requirement, got: {:?}",
             diags
         );
+    }
+
+    /// #1711: a library ships a dev/prod split via `index.ts` / `production.ts`
+    /// entry-point variants. The `./production` variant strips development tooling
+    /// but re-exports the same TypeScript *type* (`TableDevtoolsPreactInit`) as the
+    /// `.` entry. Types are erased at compile time and a consumer reaches exactly
+    /// one variant, so the shared type is not an ambiguous import path and must not
+    /// be flagged — even when the variant origins differ.
+    #[test]
+    fn allows_type_shared_by_index_and_production_variants() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"preact-table-devtools"}"#),
+            (
+                "src/PreactTableDevtools.ts",
+                "export interface TableDevtoolsPreactInit {}\nexport function TableDevtoolsPanel() {}",
+            ),
+            (
+                "src/production/PreactTableDevtools.ts",
+                "export interface TableDevtoolsPreactInit {}\nexport function TableDevtoolsPanel() {}",
+            ),
+            (
+                "src/index.ts",
+                "export type { TableDevtoolsPreactInit } from './PreactTableDevtools';",
+            ),
+            (
+                "src/production.ts",
+                "export { TableDevtoolsPanel } from './production/PreactTableDevtools';\n\
+                 export type { TableDevtoolsPreactInit } from './production/PreactTableDevtools';",
+            ),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert!(
+            diags.is_empty(),
+            "a type shared by dev/prod entry-point variants must not be flagged, got: {:?}",
+            diags
+        );
+    }
+
+    /// #1711: the same dev/prod split expressed as `*.dev.ts` / `*.prod.ts`
+    /// variants of one base name, sharing a type-only re-export, is also exempt.
+    #[test]
+    fn allows_type_shared_by_dev_prod_suffix_variants() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"@scope/widget"}"#),
+            ("src/Widget.ts", "export interface WidgetInit {}"),
+            ("src/widget.dev.ts", "export type { WidgetInit } from './Widget';"),
+            ("src/widget.prod.ts", "export type { WidgetInit } from './Widget';"),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert!(
+            diags.is_empty(),
+            "a type shared by *.dev / *.prod variants must not be flagged, got: {:?}",
+            diags
+        );
+    }
+
+    /// Negative space: dev/prod variants sharing a *runtime value* (not a type)
+    /// re-export it from the same origin, so a consumer importing the value sees
+    /// two paths to it — a genuine ambiguity. The type-only collapse must not
+    /// silence value duplicates between variants.
+    #[test]
+    fn flags_runtime_value_shared_by_dev_prod_variants() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"@scope/widget"}"#),
+            ("src/Widget.ts", "export function mountWidget() {}"),
+            ("src/widget.dev.ts", "export { mountWidget } from './Widget';"),
+            ("src/widget.prod.ts", "export { mountWidget } from './Widget';"),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert_eq!(
+            diags.len(),
+            1,
+            "a runtime value shared by dev/prod variants remains ambiguous, got: {:?}",
+            diags
+        );
+        assert!(diags[0].message.contains("mountWidget"));
+    }
+
+    /// Negative space: two ordinary source barrels with unrelated names (no
+    /// dev/prod marker) re-exporting the same type are still a genuine ambiguous
+    /// import path. The dev/prod-variant collapse only fires on recognized
+    /// variant names and must not silence real duplicates between plain barrels.
+    #[test]
+    fn flags_type_shared_by_two_plain_barrels() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"@scope/widget"}"#),
+            ("src/Widget.ts", "export interface WidgetInit {}"),
+            ("src/entry-a.ts", "export type { WidgetInit } from './Widget';"),
+            ("src/entry-b.ts", "export type { WidgetInit } from './Widget';"),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert_eq!(
+            diags.len(),
+            1,
+            "two plain barrels sharing a type remain ambiguous, got: {:?}",
+            diags
+        );
+        assert!(diags[0].message.contains("WidgetInit"));
     }
 
     /// Negative space: two ordinary source barrels re-exporting the same name
