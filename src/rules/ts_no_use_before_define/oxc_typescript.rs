@@ -27,12 +27,14 @@
 //! call is already initialized when the callback runs.
 //!
 //! Also skips forward references to module-scoped bindings made from inside a
-//! deferred class member body — a method/getter/setter/constructor, or an
-//! instance field initializer. Those bodies run only on instance/method
-//! invocation, after the module has finished evaluating, so the module-level
-//! `const`/`let` is already initialized. Static field initializers and static
-//! blocks run at class-definition time (during module evaluation) and stay
-//! flagged.
+//! deferred definition body — a function declaration (`function Foo() {...}`),
+//! a class method/getter/setter/constructor, or an instance field initializer.
+//! Those bodies run only on explicit invocation, after the module has finished
+//! evaluating, so the module-level `const`/`let` is already initialized. Static
+//! field initializers and static blocks run at class-definition time (during
+//! module evaluation) and stay flagged; function and arrow *expressions* stay
+//! flagged too, since the binding they initialize can be invoked during module
+//! evaluation.
 //!
 //! Ambient `declare` declarations (`declare const`/`declare let`/`declare var`/
 //! `declare function`/`declare class`, or any binding inside a `declare global`
@@ -108,7 +110,7 @@ impl OxcCheck for Check {
                         continue;
                     }
                     if decl_is_module_scoped
-                        && is_inside_deferred_class_member(nodes, ref_node_id)
+                        && is_inside_deferred_definition(nodes, ref_node_id)
                     {
                         continue;
                     }
@@ -318,18 +320,30 @@ fn call_is_tanstack_route_factory(call: &oxc_ast::ast::CallExpression) -> bool {
     false
 }
 
-/// True when the reference sits inside a class member body that executes only
-/// after module evaluation: a method/getter/setter/constructor, or an instance
-/// (non-static) field initializer. The reference may be nested in any number of
-/// closures or blocks inside that member. Static field initializers and static
-/// blocks run at class-definition time (during module evaluation), so they are
-/// NOT deferred and any forward reference inside them is a real TDZ hazard.
-fn is_inside_deferred_class_member<'a>(
+/// True when the reference sits inside a definition body that executes only
+/// after module evaluation completes, so a module-scoped binding declared later
+/// in the file is already initialized by the time that body actually runs:
+///
+/// - A function declaration (`function Foo() { ... }`): naming it does not call
+///   it. Its body — including any closures nested inside it — runs only on
+///   explicit invocation by name, which cannot happen before the declaration
+///   line is reached during module evaluation.
+/// - A class method/getter/setter/constructor, or an instance (non-static)
+///   field initializer: those run on instance/method invocation.
+///
+/// Static field initializers and static blocks run at class-definition time
+/// (during module evaluation), so they are NOT deferred and any forward
+/// reference inside them is a real TDZ hazard. Function/arrow *expressions*
+/// (`const f = () => x`) are likewise not treated as deferred here: the binding
+/// they initialize can be invoked during module evaluation (IIFE, or a `const`
+/// that is called at top level), so those forward references stay flagged.
+fn is_inside_deferred_definition<'a>(
     nodes: &'a oxc_semantic::AstNodes<'a>,
     ref_node_id: NodeId,
 ) -> bool {
     for ancestor_id in nodes.ancestor_ids(ref_node_id) {
         match nodes.get_node(ancestor_id).kind() {
+            AstKind::Function(func) if func.is_function_declaration() => return true,
             AstKind::MethodDefinition(_) => return true,
             AstKind::PropertyDefinition(prop) => return !prop.r#static,
             AstKind::StaticBlock(_) | AstKind::Program(_) => return false,
@@ -457,8 +471,11 @@ mod tests {
 
     #[test]
     fn still_flags_non_tanstack_forward_ref() {
+        // A module-eval-time read of a `Route` initialized by a non-TanStack
+        // factory is a real TDZ hazard: the TanStack-factory exemption must not
+        // cover it. (The read is at the top level, not inside a deferred body.)
         let d = run_on(
-            "function f() { return Route.x; }\n\
+            "const x = Route.x;\n\
              const Route = makeRoute();",
         );
         assert_eq!(d.len(), 1, "non-TanStack forward refs still flagged");
@@ -686,6 +703,69 @@ mod tests {
              const getOperationSpec = { path: \"/x\" };",
         );
         assert_eq!(d.len(), 1, "static block must still be flagged");
+    }
+
+    // Regression for #1652: a module-scoped `const` is referenced inside the
+    // body of a function declaration that appears earlier in the file (here via
+    // a render closure returned by the component). The function body only runs
+    // on invocation, after module evaluation, so the const is initialized by
+    // then — safe forward reference.
+    #[test]
+    fn no_fp_module_const_used_in_function_declaration_body_issue_1652() {
+        let source = "function GetStartedCard() {\n\
+                      return () => createElement(\"div\", { style: cardStyle });\n\
+                      }\n\
+                      const cardStyle = css({ padding: \"24px\" });";
+        assert!(
+            run_on_tsx(source).is_empty(),
+            "module const used in a function declaration body should not be flagged: {:?}",
+            run_on_tsx(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_module_const_used_directly_in_function_declaration_body() {
+        // The reference need not be nested in a closure: a direct read inside a
+        // function declaration body is deferred just the same.
+        let source = "function getSpec() { return operationSpec; }\n\
+                      const operationSpec = { path: \"/x\" };";
+        assert!(
+            run_on(source).is_empty(),
+            "module const read directly in a function declaration body should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn still_flags_top_level_use_before_define_issue_1652() {
+        // Negative space: a genuine module-eval-time use-before-define — the
+        // const is read at the module top level before its declaration line —
+        // must still fire. It is not inside any deferred definition body.
+        let d = run_on("console.log(cardStyle);\n\
+             const cardStyle = css({ padding: \"24px\" });");
+        assert_eq!(
+            d.len(),
+            1,
+            "top-level use before define must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`cardStyle`"));
+    }
+
+    #[test]
+    fn still_flags_module_const_in_function_expression_called_at_module_level() {
+        // A function *expression* assigned to a const and invoked at module
+        // level reads the binding during module evaluation — a real TDZ hazard,
+        // so the forward reference stays flagged.
+        let d = run_on(
+            "const f = () => later;\n\
+             f();\n\
+             const later = 1;",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "forward ref in a function expression invoked at module level must still be flagged: {d:?}"
+        );
     }
 
     // Regression for #1418: `declare const globalThis: any` is an ambient
