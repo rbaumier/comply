@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Expression, ForStatementLeft, VariableDeclarationKind};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -32,6 +32,28 @@ fn is_loop(kind: AstKind) -> bool {
             | AstKind::WhileStatement(_)
             | AstKind::DoWhileStatement(_)
     )
+}
+
+/// True for a `for…of` / `for…in` loop whose head declares its variable with
+/// `const` or `let`. Per the language spec these create a fresh, immutable (or
+/// per-iteration) binding on every iteration, so a closure declared in the body
+/// captures its own value — there is no shared-mutable-binding hazard, which is
+/// the bug this rule targets. Excludes the C-style `for (let i…)`/`for (var i…)`
+/// form (a single binding mutated across iterations) and `for (x of …)` over a
+/// pre-declared target (re-assigns the same outer binding).
+fn is_per_iteration_binding_loop(kind: AstKind) -> bool {
+    let left = match kind {
+        AstKind::ForOfStatement(stmt) => &stmt.left,
+        AstKind::ForInStatement(stmt) => &stmt.left,
+        _ => return false,
+    };
+    match left {
+        ForStatementLeft::VariableDeclaration(decl) => matches!(
+            decl.kind,
+            VariableDeclarationKind::Const | VariableDeclarationKind::Let
+        ),
+        _ => false,
+    }
 }
 
 fn is_function_boundary(kind: AstKind) -> bool {
@@ -119,6 +141,13 @@ impl OxcCheck for Check {
                 continue;
             }
             let kind = ancestor.kind();
+            // A `for…of`/`for…in` with a `const`/`let` head binds a fresh value
+            // per iteration; a closure here captures its own value safely. Keep
+            // walking — an *enclosing* loop (e.g. a C-style `for` whose binding
+            // this closure could still capture) must remain flagged.
+            if is_per_iteration_binding_loop(kind) {
+                continue;
+            }
             if is_loop(kind) {
                 let span = match node.kind() {
                     AstKind::Function(f) => f.span,
@@ -259,9 +288,11 @@ mod tests {
 
     #[test]
     fn flags_unknown_callee_even_in_test_file() {
+        // C-style loop (shared binding): the test-registrar exemption must not
+        // blanket-exempt an unknown callee in a test file.
         let src = r#"
-            for (const c of cases) {
-                myCustomRegister(c.label, () => {});
+            for (let i = 0; i < cases.length; i++) {
+                myCustomRegister(cases[i].label, () => {});
             }
         "#;
         let d = run(src, "src/foo.test.ts");
@@ -270,9 +301,11 @@ mod tests {
 
     #[test]
     fn flags_vitest_pattern_outside_test_file() {
+        // C-style loop (shared binding) outside a test file: the test-registrar
+        // exemption is gated on test files, so this stays flagged.
         let src = r#"
-            for (const c of cases) {
-                test(c.label, async () => {});
+            for (let i = 0; i < cases.length; i++) {
+                test(cases[i].label, async () => {});
             }
         "#;
         let d = run(src, "src/app.ts");
@@ -328,6 +361,104 @@ mod tests {
         let src = r#"
             for (let i = 0; i < 10; i++) {
                 register(() => i);
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_bench_in_for_of_const_in_bench_file() {
+        // Issue #2196: Vitest Bench parameterized benchmarks registered inside a
+        // `for (const n of [...])` loop. Each iteration has its own immutable
+        // binding, so the arrow captures its own `n` — no closure hazard.
+        let src = r#"
+            describe('Exp 1: Cold mount', () => {
+                for (const n of [1000, 10000, 100000, 500000]) {
+                    bench(`n=${n}`, () => {
+                        const v = new Virtualizer({ count: n });
+                        v.calculateRange();
+                    });
+                }
+            });
+        "#;
+        let d = run(src, "packages/virtual-core/tests/bench.bench.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn allows_plain_arrow_in_for_of_const_in_prod_code() {
+        // The per-iteration-binding exemption is general, not test-specific:
+        // a closure inside any `for…of`/`const` loop is sound.
+        let src = r#"
+            for (const item of items) {
+                const handler = () => process(item);
+                register(handler);
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn allows_arrow_in_for_in_const_in_prod_code() {
+        let src = r#"
+            for (const key in obj) {
+                const read = () => obj[key];
+                register(read);
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn flags_arrow_in_c_style_for_let_capturing_shared_binding() {
+        // Negative-space guard: the genuine bug — a closure capturing the shared
+        // C-style loop binding — must STILL be flagged.
+        let src = r#"
+            for (let i = 0; i < n; i++) {
+                setTimeout(() => console.log(i), 0);
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_arrow_in_c_style_for_var_capturing_shared_binding() {
+        let src = r#"
+            for (var i = 0; i < n; i++) {
+                setTimeout(() => console.log(i), 0);
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_arrow_in_for_of_over_predeclared_target() {
+        // `for (x of …)` reassigns the same outer binding each iteration — a
+        // captured closure sees the last value, so this stays flagged.
+        let src = r#"
+            let x;
+            for (x of items) {
+                arr.push(() => x);
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_closure_in_for_of_nested_in_c_style_for() {
+        // The inner loop binds per iteration, but the closure could still
+        // capture the outer C-style binding `i`, so it must remain flagged.
+        let src = r#"
+            for (var i = 0; i < 3; i++) {
+                for (const x of arr) {
+                    setTimeout(() => console.log(i), 0);
+                }
             }
         "#;
         let d = run(src, "src/app.ts");
