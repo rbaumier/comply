@@ -212,4 +212,34 @@ mod tests {
         let src = "const u = await db.query.users.findFirst({ columns: { id: true } });";
         assert_eq!(run_in_test_file(src).len(), 1);
     }
+
+    // Regression for rbaumier/comply#1209 — seeded test code controls its own
+    // data, so an unfiltered `findFirst` is intentional. The engine's
+    // `skip_in_test_dir` gate suppresses the rule for any file in a test
+    // directory.
+    #[test]
+    fn gated_no_fp_in_test_directory() {
+        let src = "const user = await db.query.users.findFirst({ columns: { name: true } });";
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "tests/relational/pg.postgresjs.test.ts",
+            )
+            .is_empty(),
+            "skip_in_test_dir must suppress the rule for test-directory files"
+        );
+    }
+
+    // The same code at a non-test path must still fire — the exemption is
+    // test-directory-specific, not a blanket disable.
+    #[test]
+    fn gated_still_fires_outside_test_directory() {
+        let src = "const user = await db.query.users.findFirst({ columns: { name: true } });";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "src/repo/users.ts").len(),
+            1,
+            "the rule must still fire on production paths"
+        );
+    }
 }
