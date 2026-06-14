@@ -55,6 +55,8 @@ const KNOWN_TAGS: &[&str] = &[
     "implements",
     "inheritdoc",
     "inheritDoc",
+    // JSDoc3-era inheritance tag, an alias of `@augments`/`@extends`.
+    "inherits",
     "inner",
     "instance",
     "interface",
@@ -227,5 +229,13 @@ mod tests {
     fn accepts_camel_inheritdoc() {
         let src = "/**\n * @inheritDoc\n */\n";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn accepts_inherits_alias_issue_2326() {
+        // `@inherits` is the JSDoc3-era inheritance tag (alias of `@augments`).
+        assert!(run("/**\n * @inherits SchemaTypeOptions\n */\n").is_empty());
+        // A genuine typo of the tag stays flagged.
+        assert_eq!(run("/**\n * @inhertis Foo\n */\n").len(), 1);
     }
 }
