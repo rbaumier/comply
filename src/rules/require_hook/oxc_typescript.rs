@@ -377,6 +377,29 @@ fn is_url_resolution(expr: &Expression) -> bool {
     is_pure_initializer(first) && is_import_meta_url(second)
 }
 
+/// A `new Set(...)` / `new Map(...)` whose every argument is itself a pure
+/// initializer — e.g. `new Set(['a', 'b'])` or `new Map([['a', 1]])`. These
+/// build a deterministic, side-effect-free data structure from constant values,
+/// semantically equivalent to the array/object literals already allowed. An
+/// impure argument (a call, like `new Set([doSomething()])`) is rejected by the
+/// recursion, and any other constructor (`new WeakSet()`, `new SomeClass()`)
+/// fails the callee-name gate.
+fn is_pure_collection_construction(expr: &Expression) -> bool {
+    let Expression::NewExpression(new_expr) = expr else {
+        return false;
+    };
+    let Expression::Identifier(callee) = &new_expr.callee else {
+        return false;
+    };
+    if !matches!(callee.name.as_str(), "Set" | "Map") {
+        return false;
+    }
+    new_expr
+        .arguments
+        .iter()
+        .all(|arg| arg.as_expression().is_some_and(is_pure_initializer))
+}
+
 /// Is this initializer pure enough to allow at module scope?
 fn is_pure_initializer(expr: &Expression) -> bool {
     if is_hoisted_test_api(expr) {
@@ -386,6 +409,9 @@ fn is_pure_initializer(expr: &Expression) -> bool {
         return true;
     }
     if is_url_resolution(expr) {
+        return true;
+    }
+    if is_pure_collection_construction(expr) {
         return true;
     }
     match expr {
@@ -1060,6 +1086,86 @@ describe("x", () => { it("works", () => {}); });
             d.len(),
             1,
             "new URL with a non-import.meta.url base must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_const_new_set_of_literals() {
+        let src = r#"
+const classes = new Set([
+  'font-sans',
+  'font-mono',
+  'font-lobster',
+  'font-lato',
+])
+
+it('web-fonts', async () => {
+  classes.has('font-sans')
+})
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "preset-web-fonts.test.ts");
+        assert!(
+            d.is_empty(),
+            "module-scope const built by new Set([...literals]) must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_const_new_map_of_literals() {
+        let src = r#"
+const lookup = new Map([['a', 1], ['b', 2]])
+
+describe("x", () => { it("works", () => { lookup.get('a') }); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert!(
+            d.is_empty(),
+            "module-scope const built by new Map([[lit, lit], ...]) must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_const_new_set_with_impure_arg() {
+        let src = r#"
+const x = new Set([doSomething()])
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "new Set with a call inside its argument must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_const_new_weakset() {
+        let src = r#"
+const y = new WeakSet()
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a non-Set/Map constructor (new WeakSet) must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_const_new_some_class() {
+        let src = r#"
+const z = new SomeClass()
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "an arbitrary constructor (new SomeClass) must still be flagged: {d:?}"
         );
     }
 
