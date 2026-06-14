@@ -4,11 +4,26 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
-/// Path markers that identify files where snapshots are the correct tool:
-/// protocol/contract/serialization tests pin a wire format, and files testing
-/// the snapshot mechanism itself (a test framework asserting on its own
-/// `toMatchSnapshot` output) intentionally embed the exact output inline.
-const CONTRACT_MARKERS: &[&str] = &["contract", "serial", "wire", "protocol", "snapshot"];
+/// Path markers that identify files where snapshots are the correct tool.
+/// `contract`/`serial`/`wire`/`protocol` tests pin a wire format; `snapshot`
+/// marks files testing the snapshot mechanism itself (a test framework asserting
+/// on its own `toMatchSnapshot` output), which intentionally embeds the exact
+/// output inline. `upgrade`/`codemod`/`migration`/`transform` mark code-
+/// transformation tests (upgrade/migration integration suites, codemod and
+/// compiler runners): the exact output the tool produces IS the specification,
+/// so any change should break the snapshot and there are no "specific fields" to
+/// assert on instead.
+const CONTRACT_MARKERS: &[&str] = &[
+    "contract",
+    "serial",
+    "wire",
+    "protocol",
+    "snapshot",
+    "upgrade",
+    "codemod",
+    "migration",
+    "transform",
+];
 
 pub struct Check;
 
@@ -163,6 +178,41 @@ mod tests {
                 "test/ui/fixtures/snapshot.test.ts"
             )
             .is_empty()
+        );
+    }
+
+    // Regression #2156 — code-transformation tests (upgrade/migration integration
+    // suites, codemod and compiler runners) assert the exact output a tool
+    // produces; the output IS the spec, so an inline snapshot is the correct tool.
+    #[test]
+    fn no_fp_in_transformation_test_files() {
+        let src = "expect(await run('underline')).toMatchInlineSnapshot(`\"a { color: red }\"`);";
+        for path in [
+            "integrations/upgrade/index.test.ts",
+            "packages/tailwindcss/src/codemods/replace.test.ts",
+            "src/migrations/v3-to-v4.test.ts",
+            "packages/compiler/transform.test.ts",
+        ] {
+            assert!(
+                crate::rules::test_helpers::run_rule(&Check, src, path).is_empty(),
+                "{path} should be exempt (transformation-output test)"
+            );
+        }
+    }
+
+    // Negative space — an inline snapshot of a string result in an ordinary test
+    // file (no transformation/contract marker) is still the maintenance trap the
+    // rule targets, so it must stay flagged.
+    #[test]
+    fn still_flags_string_snapshot_in_ordinary_test_file() {
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                "expect(renderError()).toMatchInlineSnapshot(`\"Something went wrong\"`);",
+                "src/components/error-message.test.tsx"
+            )
+            .len(),
+            1
         );
     }
 }

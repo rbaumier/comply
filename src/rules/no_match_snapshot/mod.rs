@@ -17,9 +17,11 @@ pub const META: RuleMeta = RuleMeta {
                   refactors and get blindly updated, losing all assertion \
                   value. \
                   Exception: files whose path contains `contract`, `serial`, \
-                  `wire`, `protocol`, or `snapshot` are exempt — snapshots pin a \
-                  protocol/wire-format contract, or test the snapshot mechanism \
-                  itself, and are the correct tool there.",
+                  `wire`, `protocol`, `snapshot`, `upgrade`, `codemod`, \
+                  `migration`, or `transform` are exempt — snapshots pin a \
+                  protocol/wire-format contract, test the snapshot mechanism \
+                  itself, or assert the exact output of a code transformation \
+                  (where the output IS the spec), and are the correct tool there.",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["testing"],
