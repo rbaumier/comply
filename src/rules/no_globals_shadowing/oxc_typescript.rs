@@ -1,15 +1,16 @@
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::project::Framework;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
 use oxc_ast::ast::{TSType, TSTypeName};
 use std::path::Path;
 use std::sync::Arc;
 
-const SHADOWED_GLOBALS: &[&str] = &[
+/// Globals that exist in every JS runtime (Node, Deno, browser, workers).
+/// Shadowing one is always confusing, regardless of where the file runs.
+const UNIVERSAL_GLOBALS: &[&str] = &[
     "console",
-    "window",
-    "document",
     "process",
     "global",
     "globalThis",
@@ -17,7 +18,35 @@ const SHADOWED_GLOBALS: &[&str] = &[
     "setInterval",
 ];
 
+/// Globals that only exist in a browser/DOM environment. In a pure Node.js
+/// project there is no `window`/`document` to shadow, so a local of that name
+/// (e.g. a GraphQL `DocumentNode` named `document`) collides with nothing and
+/// is only flagged when the file actually runs in a browser context — see
+/// [`file_runs_in_browser`].
+const BROWSER_GLOBALS: &[&str] = &["window", "document"];
+
 pub struct Check;
+
+/// True when the file plausibly runs in a browser/DOM environment, so the
+/// browser-only globals in [`BROWSER_GLOBALS`] are genuinely in scope. The
+/// signals are read-only from central project/file context:
+///   - the file is JSX/TSX — JSX renders to the DOM;
+///   - the project uses a DOM-rendering framework (anything but `Plain`);
+///   - the nearest `package.json` declares `browserslist` — explicit browser
+///     build targets.
+/// When none hold the file is treated as Node.js / server-side, where `window`
+/// and `document` are not globals.
+fn file_runs_in_browser(ctx: &CheckCtx) -> bool {
+    if ctx.lang == crate::files::Language::Tsx {
+        return true;
+    }
+    if ctx.project.framework != Framework::Plain {
+        return true;
+    }
+    ctx.project
+        .nearest_package_json(ctx.path)
+        .is_some_and(|pkg| pkg.has_browserslist)
+}
 
 /// True when `path` is a TypeScript declaration file (`*.d.ts`).
 fn is_declaration_file(path: &Path) -> bool {
@@ -137,11 +166,18 @@ impl OxcCheck for Check {
         if is_declaration_file(ctx.path) {
             return Vec::new();
         }
+        let in_browser = file_runs_in_browser(ctx);
         let scoping = semantic.scoping();
         let mut diagnostics = Vec::new();
         for symbol_id in scoping.symbol_ids() {
             let name = scoping.symbol_name(symbol_id);
-            if !SHADOWED_GLOBALS.contains(&name) {
+            let is_universal = UNIVERSAL_GLOBALS.contains(&name);
+            let is_browser = BROWSER_GLOBALS.contains(&name);
+            if !is_universal && !is_browser {
+                continue;
+            }
+            // Browser-only globals shadow nothing outside a DOM environment.
+            if is_browser && !in_browser {
                 continue;
             }
             if is_ambient_declaration(symbol_id, semantic) {
@@ -191,6 +227,12 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
+    /// A `.tsx` path is a browser/DOM context, so browser-only globals
+    /// (`window`/`document`) are in scope and a local shadowing one fires.
+    fn run_on_browser(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
+    }
+
     #[test]
     fn flags_const_console() {
         assert_eq!(run_on("const console = {};").len(), 1);
@@ -198,7 +240,7 @@ mod tests {
 
     #[test]
     fn flags_let_window() {
-        assert_eq!(run_on("let window = {};").len(), 1);
+        assert_eq!(run_on_browser("let window = {};").len(), 1);
     }
 
     #[test]
@@ -246,14 +288,15 @@ mod tests {
 
     #[test]
     fn flags_untyped_document_var() {
-        // A genuine shadow with no LSP `*Document` annotation must still fire.
-        assert_eq!(run_on("const document = {};").len(), 1);
+        // A genuine shadow with no LSP `*Document` annotation must still fire
+        // in a browser context.
+        assert_eq!(run_on_browser("const document = {};").len(), 1);
     }
 
     #[test]
     fn flags_document_param_non_document_type() {
         assert_eq!(
-            run_on("function f(document: string) { return document; }").len(),
+            run_on_browser("function f(document: string) { return document; }").len(),
             1
         );
     }
@@ -285,13 +328,16 @@ mod tests {
 
     #[test]
     fn flags_window_param_no_annotation() {
-        assert_eq!(run_on("function f(window) { return window; }").len(), 1);
+        assert_eq!(
+            run_on_browser("function f(window) { return window; }").len(),
+            1
+        );
     }
 
     #[test]
     fn flags_window_param_non_window_type() {
         assert_eq!(
-            run_on("function f(window: string) { return window; }").len(),
+            run_on_browser("function f(window: string) { return window; }").len(),
             1
         );
     }
@@ -339,5 +385,37 @@ mod tests {
         // A genuine runtime binding must still fire — ambient exemption must
         // not leak to ordinary declarations.
         assert_eq!(run_on("const console = {};").len(), 1);
+    }
+
+    #[test]
+    fn allows_document_domain_var_in_node_project() {
+        // Issue #1729: in a pure Node.js project (no browser signal), `document`
+        // is not a global — graphql-js names a parsed `DocumentNode` `document`.
+        // Nothing is shadowed, so the rule must stay silent.
+        assert!(run_on("const document = parse('{ syncField }');").is_empty());
+    }
+
+    #[test]
+    fn allows_document_param_in_node_project() {
+        // VS Code extension convention (issue #1506): `document: TextDocument`
+        // in the Node extension host shadows no real DOM global.
+        assert!(
+            run_on("function lens(document) { return document.lineCount; }").is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_document_var_in_browser_project() {
+        // Negative space: in a browser/DOM context the real `document` global is
+        // in scope, so a local named `document` is a genuine shadow.
+        assert_eq!(run_on_browser("const document = {};").len(), 1);
+    }
+
+    #[test]
+    fn flags_universal_global_in_node_project() {
+        // Universal globals (`process`/`console`/timers) exist in Node too, so a
+        // local shadowing one fires regardless of environment.
+        assert_eq!(run_on("const process = {};").len(), 1);
+        assert_eq!(run_on("let setTimeout = () => {};").len(), 1);
     }
 }
