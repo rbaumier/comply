@@ -9,6 +9,16 @@ pub struct Check;
 
 const SHUTDOWN_SIGNALS: &[&str] = &["SIGTERM", "SIGINT"];
 
+/// Import specifiers of CLI-argument-parsing frameworks. A file importing one of
+/// these is treated as a CLI entry point, where `process.exit()` is intentional.
+const CLI_FRAMEWORK_SPECIFIERS: &[&str] = &[
+    "commander",
+    "@commander-js/extra-typings",
+    "yargs",
+    "yargs/yargs",
+    "yargs/helpers",
+];
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [oxc_ast::AstType] {
         &[]
@@ -28,6 +38,13 @@ impl OxcCheck for Check {
         }
 
         let nodes = semantic.nodes();
+
+        // CLI entry point: a file that imports a CLI-argument-parsing framework
+        // (commander/yargs) calls process.exit() intentionally for clean exits.
+        // The .ts source has no shebang (the build tool adds it to compiled output).
+        if imports_cli_framework(nodes) {
+            return Vec::new();
+        }
 
         // Phase 1a: find process.on('SIGTERM'/'SIGINT', callback) calls.
         // Collect spans of inline function callbacks and names of referenced functions.
@@ -99,6 +116,16 @@ impl OxcCheck for Check {
 
         diagnostics
     }
+}
+
+/// True if any top-level `import ... from "<cli-framework>"` is present.
+fn imports_cli_framework(nodes: &oxc_semantic::AstNodes) -> bool {
+    nodes.iter().any(|node| {
+        let AstKind::ImportDeclaration(import) = node.kind() else {
+            return false;
+        };
+        CLI_FRAMEWORK_SPECIFIERS.contains(&import.source.value.as_str())
+    })
 }
 
 fn is_process_on_signal(call: &oxc_ast::ast::CallExpression) -> bool {
@@ -309,5 +336,52 @@ async function shutdown() {
         let diags = run(src);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("process.exit()"));
+    }
+
+    // Regression: issue #2081 — a commander-based CLI entry point (no shebang in
+    // the .ts source; the build tool adds it) calls process.exit() intentionally.
+    #[test]
+    fn allows_process_exit_in_commander_cli() {
+        let src = r#"
+import { Command } from "commander";
+const program = new Command();
+if (incompatible) {
+  process.exit(0);
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_process_exit_in_commander_extra_typings_cli() {
+        let src = r#"
+import { Command } from "@commander-js/extra-typings";
+main().catch(() => process.exit(1));
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_process_exit_in_yargs_cli() {
+        let src = r#"
+import yargs from "yargs/yargs";
+import { hideBin } from "yargs/helpers";
+yargs(hideBin(process.argv)).parse();
+process.exit(0);
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Negative-space guard: a regular library/app file (no shebang, no
+    // commander/yargs import) calling process.exit() is STILL flagged.
+    #[test]
+    fn still_flags_process_exit_in_library_file() {
+        let src = r#"
+import { readFile } from "node:fs/promises";
+export function load() {
+  process.exit(1);
+}
+"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
