@@ -17,15 +17,13 @@ use std::sync::Arc;
 
 pub struct Check;
 
-const TEST_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test.", ".e2e."];
-
+/// Test files legitimately use top-level `await` (e.g. enumerating fixtures at
+/// module init); they are never published. Delegates to the shared path
+/// classifier so the exemption stays in sync with every other rule's
+/// test-directory handling, covering both `test/` and `tests/`, `__tests__/`,
+/// `e2e/`, and `.test.`/`.spec.` name markers.
 fn is_test_file(path: &std::path::Path) -> bool {
-    let s = path.to_string_lossy();
-    if TEST_MARKERS.iter().any(|m| s.contains(m)) {
-        return true;
-    }
-    path.components()
-        .any(|c| c.as_os_str() == "tests" || c.as_os_str() == "e2e")
+    crate::rules::file_ctx::scan_path(path).in_test_dir
 }
 
 fn is_script_file(path: &std::path::Path, source: &str) -> bool {
@@ -181,6 +179,32 @@ await ctx.watch()
     #[test]
     fn still_flags_top_level_await_outside_bench_dir() {
         let d = run_at("const data = await fetch('/api');", "src/benchmarking/run.ts");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Top-level"));
+    }
+
+    // Regression for #1620: a `test/` (singular) directory is a standard test
+    // directory just like `tests/`; top-level `await` enumerating fixtures at
+    // module init there is never published and must not be flagged.
+    #[test]
+    fn allows_top_level_await_in_singular_test_dir() {
+        let src = r#"
+import fs from 'node:fs/promises';
+const testFiles = await fs.readdir(new URL('.', import.meta.url));
+"#;
+        assert!(
+            run_at(src, "packages/integrations/alpinejs/test/test-utils.ts").is_empty(),
+            "top-level await in a singular `test/` directory is test scaffolding, not a published module"
+        );
+    }
+
+    // Negative space for #1620: a genuine production module under `src/` (no
+    // test-directory segment or name marker) must still be flagged. The
+    // exemption is keyed on the test-directory convention, not relaxed for files
+    // that merely mention `test` elsewhere.
+    #[test]
+    fn still_flags_top_level_await_in_production_source() {
+        let d = run_at("const data = await fetch('/api');", "src/index.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("Top-level"));
     }
