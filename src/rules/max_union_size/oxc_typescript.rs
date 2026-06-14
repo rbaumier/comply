@@ -124,4 +124,23 @@ mod tests {
         let src = "type X = A | B | C | D | E;";
         assert!(run_on(src).is_empty());
     }
+
+    /// Issue #1304: a large union inside a `test-d/` type-assertion file is the
+    /// expected type being verified, not a maintainability smell — skip via the
+    /// central `in_test_dir` gate (`skip_in_test_dir = true`).
+    #[test]
+    fn skips_large_union_in_type_test_dir_issue_1304() {
+        let src = "function foo(x: A | B | C | D | E | F) {}";
+        let diags = crate::rules::test_helpers::run_rule_gated(&Check, src, "test-d/replace.ts");
+        assert!(diags.is_empty(), "expected no diagnostics in test-d/, got {diags:?}");
+    }
+
+    /// Negative-space guard: the same large union in production code is still
+    /// flagged once the test-dir gate is applied.
+    #[test]
+    fn flags_large_union_in_production_path_issue_1304() {
+        let src = "function foo(x: A | B | C | D | E | F) {}";
+        let diags = crate::rules::test_helpers::run_rule_gated(&Check, src, "src/types.ts");
+        assert_eq!(diags.len(), 1, "expected 1 diagnostic in src/, got {diags:?}");
+    }
 }
