@@ -138,6 +138,31 @@ pub(crate) fn body_contains_throw(
     })
 }
 
+/// True when a compile-time type assertion lies within `body_span` — a
+/// `TSTypeReference` to the `Expect` or `Equal` type-level helpers. These power
+/// the `type t = Expect<Equal<typeof x, T>>` idiom: the file fails to compile if
+/// the types differ, so the assertion *is* the type check and no runtime
+/// `expect(...)` is expected. AST-based so the word `Expect`/`Equal` inside a
+/// string literal or an unrelated value identifier does not count.
+pub(crate) fn body_contains_type_assertion(
+    semantic: &oxc_semantic::Semantic<'_>,
+    body_span: oxc_span::Span,
+) -> bool {
+    use oxc_ast::ast::TSTypeName;
+    semantic.nodes().iter().any(|n| {
+        let AstKind::TSTypeReference(type_ref) = n.kind() else {
+            return false;
+        };
+        if type_ref.span.start < body_span.start || type_ref.span.end > body_span.end {
+            return false;
+        }
+        let TSTypeName::IdentifierReference(id) = &type_ref.type_name else {
+            return false;
+        };
+        matches!(id.name.as_str(), "Expect" | "Equal")
+    })
+}
+
 /// True when the test callback (2nd argument of an `it`/`test` call) invokes an
 /// identifier bound to a formal parameter of an *enclosing* function. Such a
 /// test is a factory whose real body — and its assertions — is supplied by the
