@@ -63,6 +63,14 @@ impl OxcCheck for Check {
         {
             return;
         }
+        // A directory housing a `package.json` `scripts` entry file (e.g.
+        // `omnidoc/generateApiDoc.ts` run by `"omnidoc": "tsx ./omnidoc/..."`)
+        // is a build-time codegen/doc toolchain. Its entry and the sibling
+        // helpers it imports run at build time and never ship, so importing a
+        // devDependency from any file in that directory is correct (issue #1862).
+        if ctx.project.is_in_script_entry_dir(ctx.path) {
+            return;
+        }
         // Library build input: when the package publishes its entries from
         // outside `src/` (e.g. monaco-editor's `main`/`module` point into
         // `min/`/`esm/`), the `src/` tree is compiled away into the shipped
@@ -817,5 +825,48 @@ import { List } from "immutable";
         let d = run_with_pkg_at_path(pkg, "src/app/features/auth/login.ts", src);
         assert_eq!(d.len(), 1, "production code should still flag: {d:?}");
         assert!(d[0].message.contains("vitest"));
+    }
+
+    #[test]
+    fn allows_dev_dep_in_script_entry_toolchain_dir() {
+        // Issue #1862: recharts' `omnidoc/` is a build-time doc-generation
+        // toolchain. The `omnidoc` script runs `tsx ./omnidoc/generateApiDoc.ts`,
+        // whose sibling helper `omnidoc/readProject.ts` imports `ts-morph` (a
+        // devDependency). The directory is housed by a package.json script entry
+        // and never ships in the published package, so the import is correct.
+        let pkg = r#"{
+            "name": "recharts",
+            "main": "./lib/index.js",
+            "files": ["lib"],
+            "scripts": {
+                "omnidoc": "npm exec --prefix ./www -- tsx ./omnidoc/generateApiDoc.ts"
+            },
+            "devDependencies": {"ts-morph": "^21", "prettier": "^3"}
+        }"#;
+        let src = r#"import { Project } from 'ts-morph';"#;
+        let d = run_with_pkg_at_path(pkg, "omnidoc/readProject.ts", src);
+        assert!(d.is_empty(), "script-entry toolchain dir should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_in_published_source_alongside_script_entry_dir() {
+        // Guard against over-relaxing: the script-entry-dir exemption is scoped
+        // to the toolchain directory. A library that ships its `src/` as-is
+        // (published entry points into `src/`) is runtime production code, so a
+        // devDependency import there must still flag even when the package also
+        // declares an `omnidoc/` script-entry toolchain directory.
+        let pkg = r#"{
+            "name": "ships-src-lib",
+            "main": "./src/index.js",
+            "exports": {".": "./src/index.js"},
+            "scripts": {
+                "omnidoc": "npm exec --prefix ./www -- tsx ./omnidoc/generateApiDoc.ts"
+            },
+            "devDependencies": {"ts-morph": "^21"}
+        }"#;
+        let src = r#"import { Project } from 'ts-morph';"#;
+        let d = run_with_pkg_at_path(pkg, "src/index.ts", src);
+        assert_eq!(d.len(), 1, "published src should still flag: {d:?}");
+        assert!(d[0].message.contains("ts-morph"));
     }
 }
