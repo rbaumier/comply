@@ -80,6 +80,8 @@ fn react_equivalent(name: &str) -> Option<String> {
 /// fire on these.
 fn is_non_react_jsx_file(ctx: &CheckCtx) -> bool {
     ctx.source_contains("solid-js")
+        || ctx.source_contains("@solidjs/")
+        || ctx.source_contains("solid-start")
         || ctx.source_contains("@vue/")
         || ctx.source_contains("@builder.io/qwik")
         || ctx.source_contains("@stencil/core")
@@ -228,6 +230,25 @@ mod tests {
     #[test]
     fn allows_class_in_solid_jsx() {
         let src = "import { createSignal } from 'solid-js';\nconst a = <div class=\"x\" />;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_class_in_react_file_importing_react() {
+        // A React file (imports `react`, no Solid signal) must still be flagged
+        // with the `className` suggestion. (Closes #1244)
+        let src = "import { useState } from 'react';\nconst a = <div class=\"x\" />;";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("className"));
+    }
+
+    #[test]
+    fn allows_class_in_solidstart_route_without_solid_js_import() {
+        // SolidStart routes often import only from the `@solidjs/*` ecosystem
+        // (meta/router/start) and never from `solid-js` itself, yet use the
+        // native `class` attribute. They must not be flagged. (Closes #1244)
+        let src = "import { Title } from '@solidjs/meta';\nconst a = <div class=\"description\" />;";
         assert!(run(src).is_empty());
     }
 
