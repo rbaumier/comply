@@ -31,6 +31,9 @@ impl OxcCheck for Check {
         let AstKind::CallExpression(call) = node.kind() else {
             return;
         };
+        if !super::engines_allow_import_meta_dirname(ctx) {
+            return;
+        }
         let source = ctx.source;
 
         // 1. `path.dirname(fileURLToPath(import.meta.url))`

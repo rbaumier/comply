@@ -110,6 +110,10 @@ fn single_argument<'a>(
 }
 
 crate::ast_check! { on ["call_expression"] prefilter = ["import.meta"] => |node, source, ctx, diagnostics|
+    if !super::engines_allow_import_meta_dirname(ctx) {
+        return;
+    }
+
     // Order matters: the `dirname(...)` and `path.dirname(...)` matches
     // wrap a `fileURLToPath(import.meta.url)` call, so when those match
     // the inner call's diagnostic would be redundant. We dedupe by checking
@@ -281,5 +285,114 @@ mod tests {
     fn no_duplicate_for_dirname_containing_file_url() {
         let d = crate::rules::test_helpers::run_rule(&Check, "const dir = dirname(fileURLToPath(import.meta.url));", "t.ts");
         assert_eq!(d.len(), 1);
+    }
+
+    /// Run the rule against a file whose nearest `package.json` declares the
+    /// given `engines.node` range, so the `engines`-gating path is exercised.
+    fn run_with_engine(node_version: &str, source: &str) -> Vec<Diagnostic> {
+        use crate::config::Config;
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let pkg =
+            format!(r#"{{"name":"t","version":"0.0.0","engines":{{"node":"{node_version}"}}}}"#);
+        fs::write(dir.path().join("package.json"), pkg).unwrap();
+        let src_path = dir.path().join("app.ts");
+        fs::write(&src_path, source).unwrap();
+        let src_path = fs::canonicalize(&src_path).unwrap();
+
+        let source_file = SourceFile { path: src_path.clone(), language: Language::TypeScript };
+        let refs: Vec<&SourceFile> = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &src_path,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    const DIRNAME_PATTERN: &str = "const __dirname = path.dirname(fileURLToPath(import.meta.url));";
+
+    // Issue #1702: a project supporting Node below 21.2/20.11 must NOT be told
+    // to use `import.meta.dirname`, which would break at runtime there.
+    #[test]
+    fn skips_when_engines_node_below_backport() {
+        assert!(run_with_engine(">=12.20.0", DIRNAME_PATTERN).is_empty());
+    }
+
+    #[test]
+    fn skips_when_engines_node_minimum_is_21_0() {
+        // 21.2 is the threshold; 21.0/21.1 lack the properties.
+        assert!(run_with_engine(">=21.0.0", DIRNAME_PATTERN).is_empty());
+    }
+
+    #[test]
+    fn skips_when_engines_node_minimum_is_20_0() {
+        // 20.11 is the backport threshold; 20.0–20.10 lack the properties.
+        assert!(run_with_engine(">=20.0.0", DIRNAME_PATTERN).is_empty());
+    }
+
+    // Negative space: the rule must still fire when the minimum guarantees the
+    // properties exist.
+    #[test]
+    fn fires_when_engines_node_at_21_2() {
+        let d = run_with_engine(">=21.2.0", DIRNAME_PATTERN);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("import.meta.dirname"));
+    }
+
+    #[test]
+    fn fires_when_engines_node_at_20_11_backport() {
+        let d = run_with_engine(">=20.11.0", DIRNAME_PATTERN);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("import.meta.dirname"));
+    }
+
+    #[test]
+    fn fires_when_engines_node_well_above_threshold() {
+        let d = run_with_engine(">=22.0.0", DIRNAME_PATTERN);
+        assert_eq!(d.len(), 1);
+    }
+
+    // No `engines.node` constraint: the package targets a modern runtime by
+    // default, so the suggestion stands.
+    #[test]
+    fn fires_when_no_engines_node_constraint() {
+        let d = run_without_node_engine(DIRNAME_PATTERN);
+        assert_eq!(d.len(), 1);
+    }
+
+    fn run_without_node_engine(source: &str) -> Vec<Diagnostic> {
+        use crate::config::Config;
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"t","version":"0.0.0"}"#).unwrap();
+        let src_path = dir.path().join("app.ts");
+        fs::write(&src_path, source).unwrap();
+        let src_path = fs::canonicalize(&src_path).unwrap();
+
+        let source_file = SourceFile { path: src_path.clone(), language: Language::TypeScript };
+        let refs: Vec<&SourceFile> = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &src_path,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
     }
 }
