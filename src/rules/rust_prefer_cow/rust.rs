@@ -12,6 +12,14 @@
 //! Generic `String` aliases (`std::string::String`), `&String`, and
 //! `Option<String>` are deliberately not flagged — keeping the match
 //! shallow mirrors the other conservative Rust rules in this crate.
+//!
+//! A parameter is also left alone when the body moves it by value into a
+//! struct or enum-variant literal (`Thing { name }` / `Variant { error }` /
+//! `Thing { name: name }`). There the function genuinely needs ownership,
+//! so taking `String` is the correct API — switching to `&str` would only
+//! shift the allocation into the body. A borrow (`&name`) or a clone
+//! (`name.clone()`) does not consume the owned value and still warrants the
+//! warning.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::is_in_test_context;
@@ -21,6 +29,7 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
     if !is_pub(node, source) { return; }
 
     let Some(params) = node.child_by_field_name("parameters") else { return; };
+    let body = node.child_by_field_name("body");
     let mut cursor = params.walk();
     for param in params.named_children(&mut cursor) {
         if param.kind() != "parameter" { continue; }
@@ -34,6 +43,17 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
         let has_mut = param.children(&mut param_cursor)
             .any(|c| c.kind() == "mutable_specifier");
         if has_mut { continue; }
+
+        // Skip params the body moves by value into a struct/enum literal —
+        // ownership is genuinely needed there.
+        let Some(pattern) = param.child_by_field_name("pattern") else { continue; };
+        if pattern.kind() != "identifier" { continue; }
+        let Ok(param_name) = pattern.utf8_text(source) else { continue; };
+        if let Some(body) = body
+            && param_moved_into_struct(body, source, param_name)
+        {
+            continue;
+        }
 
         diagnostics.push(Diagnostic::at_node(
             ctx.path,
@@ -52,6 +72,45 @@ fn is_pub(item: tree_sitter::Node, source: &[u8]) -> bool {
             && let Ok(text) = child.utf8_text(source)
             && text.starts_with("pub")
         {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether `param_name` is moved by value into a struct or enum-variant
+/// literal anywhere in `node`'s subtree. A field value that is a bare
+/// `identifier` equal to the param (`{ x }` shorthand, or `{ x: x }`)
+/// consumes the owned value; `&x` (`reference_expression`) or `x.clone()`
+/// (`call_expression`) do not and are ignored.
+fn param_moved_into_struct(node: tree_sitter::Node, source: &[u8], param_name: &str) -> bool {
+    if node.kind() == "struct_expression"
+        && let Some(fields) = node.child_by_field_name("body")
+    {
+        let mut cursor = fields.walk();
+        for field in fields.named_children(&mut cursor) {
+            let value = match field.kind() {
+                "shorthand_field_initializer" => {
+                    let mut field_cursor = field.walk();
+                    field
+                        .named_children(&mut field_cursor)
+                        .find(|c| c.kind() == "identifier")
+                }
+                "field_initializer" => field.child_by_field_name("value"),
+                _ => None,
+            };
+            if let Some(value) = value
+                && value.kind() == "identifier"
+                && value.utf8_text(source) == Ok(param_name)
+            {
+                return true;
+            }
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if param_moved_into_struct(child, source, param_name) {
             return true;
         }
     }
@@ -127,5 +186,52 @@ mod tests {
     #[test]
     fn allows_in_test_context() {
         assert!(run("#[cfg(test)]\nmod tests { pub fn f(s: String) {} }").is_empty());
+    }
+
+    #[test]
+    fn allows_param_moved_into_enum_variant() {
+        assert!(
+            run("pub fn volt_installing(&self, error: String) { self.notification(CoreNotification::VoltInstalling { error }); }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_param_moved_into_struct_shorthand() {
+        assert!(run("fn make(name: String) -> Thing { Thing { name } }").is_empty());
+    }
+
+    #[test]
+    fn allows_param_moved_into_struct_explicit_field() {
+        assert!(run("pub fn make(name: String) -> Thing { Thing { name: name } }").is_empty());
+    }
+
+    #[test]
+    fn flags_param_only_read_in_body() {
+        assert_eq!(
+            run(r#"pub fn log(msg: String) { println!("{}", msg); }"#).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_param_read_only_len() {
+        assert_eq!(run("pub fn count(s: String) -> usize { s.len() }").len(), 1);
+    }
+
+    #[test]
+    fn flags_param_borrowed_into_struct() {
+        assert_eq!(
+            run("pub fn make(name: String) -> Thing { Thing { name: &name } }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_param_cloned_into_struct() {
+        assert_eq!(
+            run("pub fn make(name: String) -> Thing { Thing { name: name.clone() } }").len(),
+            1
+        );
     }
 }
