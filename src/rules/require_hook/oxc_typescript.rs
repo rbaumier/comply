@@ -7,6 +7,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
 use oxc_span::GetSpan;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -111,6 +112,61 @@ fn is_suite_factory_call(expr: &Expression) -> bool {
         .and_then(Argument::as_expression)
         .is_some_and(|e| matches!(e, Expression::StringLiteral(_)));
     has_title && call.arguments.iter().any(is_callback_arg)
+}
+
+/// Is `spec` a bare package specifier (`babel-tester`, `@scope/pkg`) rather than a
+/// relative or absolute path import? Fixture-runner helpers ship as packages, so a
+/// relative `./helpers` binding is never treated as one.
+fn is_bare_specifier(spec: &str) -> bool {
+    !(spec.starts_with("./") || spec.starts_with("../") || spec.starts_with('/'))
+}
+
+/// Local identifier names bound to a default or named import from a bare package
+/// specifier. Used to recognise fixture-runner helpers (`import babelTester from
+/// 'babel-tester'`, `import { pluginTester } from 'babel-plugin-tester'`) imported
+/// from a published test-utility package.
+fn package_import_bindings<'a>(program: &Program<'a>) -> FxHashSet<&'a str> {
+    let mut out = FxHashSet::default();
+    for stmt in &program.body {
+        let Statement::ImportDeclaration(import) = stmt else { continue };
+        if !is_bare_specifier(import.source.value.as_str()) {
+            continue;
+        }
+        let Some(specifiers) = &import.specifiers else { continue };
+        for spec in specifiers {
+            match spec {
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(def) => {
+                    out.insert(def.local.name.as_str());
+                }
+                ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                    out.insert(named.local.name.as_str());
+                }
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {}
+            }
+        }
+    }
+    out
+}
+
+/// Is `expr` a top-level call to a fixture-runner helper imported from a package —
+/// `babelTester('@emotion/babel-plugin', __dirname, { ... })`,
+/// `pluginTester({ ... })`?
+///
+/// These helpers discover fixture files in a directory and register one test case
+/// per file: they ARE the test-suite declaration (structurally `describe(...)`),
+/// so they belong at module scope and cannot move into a hook. The callee must be a
+/// bare identifier following the documented `*Tester` naming convention AND be bound
+/// to a package import — a relative `setup()` import or any non-`Tester` call stays
+/// flagged.
+fn is_fixture_runner_call(expr: &Expression, package_bindings: &FxHashSet<&str>) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    let Expression::Identifier(callee) = &call.callee else {
+        return false;
+    };
+    let name = callee.name.as_str();
+    name.ends_with("Tester") && package_bindings.contains(name)
 }
 
 /// Calls that *must* live at module scope because the test runner hoists
@@ -325,7 +381,11 @@ fn imports_node_test(program: &Program<'_>) -> bool {
 }
 
 /// Classify a top-level statement.
-fn top_level_is_allowed(stmt: &Statement, node_test_mode: bool) -> bool {
+fn top_level_is_allowed(
+    stmt: &Statement,
+    node_test_mode: bool,
+    package_bindings: &FxHashSet<&str>,
+) -> bool {
     match stmt {
         Statement::ImportDeclaration(_)
         | Statement::ExportAllDeclaration(_)
@@ -360,6 +420,9 @@ fn top_level_is_allowed(stmt: &Statement, node_test_mode: bool) -> bool {
                 return true;
             }
             if is_suite_factory_call(expr) {
+                return true;
+            }
+            if is_fixture_runner_call(expr, package_bindings) {
                 return true;
             }
             callee_is_allowed_test_call(expr)
@@ -961,6 +1024,75 @@ test("works", () => { expect(1).toBe(1); });
     }
 
     #[test]
+    fn allows_babel_tester_fixture_runner_at_top_level() {
+        let src = r#"
+import babelTester from 'babel-tester'
+import plugin from '@emotion/babel-plugin'
+
+babelTester('@emotion/babel-plugin', __dirname, {
+  plugins: [plugin, [plugin, undefined, 'emotion-copy']]
+})
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "index.js");
+        assert!(
+            d.is_empty(),
+            "a *Tester fixture runner imported from a package must be allowed at top level: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_named_plugin_tester_fixture_runner_at_top_level() {
+        let src = r#"
+import { pluginTester } from 'babel-plugin-tester'
+import plugin from '../src'
+
+pluginTester({
+  plugin,
+  fixtures: __dirname,
+})
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "fixtures.test.js");
+        assert!(
+            d.is_empty(),
+            "a named *Tester fixture runner imported from a package must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_tester_named_call_imported_from_relative_path() {
+        let src = r#"
+import myTester from './helpers'
+
+myTester(__dirname)
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a *Tester call bound to a relative import must still be flagged (not a published runner): {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_non_tester_package_call_at_top_level() {
+        let src = r#"
+import setup from 'some-pkg'
+
+setup()
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a package import call that is not a *Tester runner must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
     fn allows_declare_global_namespace_augmentation() {
         let src = r#"
 declare global {
@@ -997,10 +1129,11 @@ impl OxcCheck for Check {
 
         let program = semantic.nodes().program();
         let node_test_mode = imports_node_test(program);
+        let package_bindings = package_import_bindings(program);
         let mut diagnostics = Vec::new();
 
         for stmt in &program.body {
-            if top_level_is_allowed(stmt, node_test_mode) {
+            if top_level_is_allowed(stmt, node_test_mode, &package_bindings) {
                 continue;
             }
             let span = stmt.span();
