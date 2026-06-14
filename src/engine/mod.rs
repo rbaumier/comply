@@ -628,6 +628,24 @@ mod tests {
     }
 
     #[test]
+    fn next_no_assign_module_variable_gated_off_outside_nextjs() {
+        let meta = &crate::rules::next_no_assign_module_variable::META;
+        // Non-Next.js project: `const module = ...` is a legitimate identifier,
+        // so the Next.js-only rule must be skipped.
+        let non_next = ProjectCtx::empty();
+        assert!(
+            super::should_skip_framework_scoped_rule(meta, &non_next),
+            "rule must be skipped when the project is not Next.js"
+        );
+        // Next.js project: the rule must still fire.
+        let next = ProjectCtx::for_test_with_framework("nextjs");
+        assert!(
+            !super::should_skip_framework_scoped_rule(meta, &next),
+            "rule must still fire on a Next.js project"
+        );
+    }
+
+    #[test]
     fn dedup_mutation_family_keeps_most_specific() {
         let mut diags = vec![
             mk("no-mutation", 30, 18),

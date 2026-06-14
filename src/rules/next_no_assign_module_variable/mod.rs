@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Rename the local variable. Reserved names: `module`, `exports`, `require`, `process`, `Buffer`, `__dirname`, `__filename`.",
     severity: Severity::Error,
     doc_url: Some("https://nextjs.org/docs/messages/no-assign-module-variable"),
-    categories: &["next"],
+    categories: &["nextjs"],
 
     skip_in_test_dir: false,
     skip_in_relaxed_dir: false,
