@@ -63,6 +63,22 @@ fn is_react_router_route_file(ctx: &CheckCtx) -> bool {
         || crate::oxc_helpers::source_contains(ctx.source, "from \"react-router\"")
 }
 
+/// Framework magic exports the file-system router consumes by convention, when
+/// `path` is a Next.js App/Pages Router file. `metadata`, `generateMetadata`,
+/// `revalidate`, `dynamic`, `generateStaticParams`, etc. must live next to the
+/// default page/layout component — the framework reads them from the route
+/// module itself, so flagging them as Fast-Refresh-breaking non-component
+/// exports is a false positive. The names come from the central per-framework
+/// magic-export registry (`magic_exports_for_path`), which only resolves them
+/// when the file's package actually depends on the framework, so a coincidental
+/// non-router export named `dynamic` elsewhere is still flagged.
+fn next_router_magic_exports<'a>(ctx: &CheckCtx<'a>) -> std::collections::HashSet<&'a str> {
+    if !(ctx.file.path_segments.in_app_router || ctx.file.path_segments.in_pages_router) {
+        return std::collections::HashSet::new();
+    }
+    ctx.project.magic_exports_for_path(ctx.path)
+}
+
 impl OxcCheck for Check {
     fn run_on_semantic<'a>(
         &self,
@@ -104,6 +120,7 @@ impl OxcCheck for Check {
         let program = semantic.nodes().program();
         let next_pages_router = is_next_pages_router_file(ctx);
         let react_router_route = is_react_router_route_file(ctx);
+        let next_magic_exports = next_router_magic_exports(ctx);
 
         let mut component_exports: Vec<String> = Vec::new();
         let mut non_component_exports: Vec<(String, usize)> = Vec::new();
@@ -120,6 +137,9 @@ impl OxcCheck for Check {
                         if react_router_route
                             && REACT_ROUTER_ROUTE_EXPORTS.contains(&name.as_str())
                         {
+                            continue;
+                        }
+                        if next_magic_exports.contains(name.as_str()) {
                             continue;
                         }
                         let offset = named.span.start as usize;
@@ -608,6 +628,109 @@ export function Chart() { return <div />; }
 export const helper = () => {};
 "#;
         let d = crate::rules::test_helpers::run_rule_gated(&Check, source, "src/Foo.tsx");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("helper"));
+    }
+
+    // Regression tests for issue #1630 — Next.js App Router pages/layouts export
+    // framework-consumed directives (metadata/revalidate/dynamic/...) alongside
+    // the default page component. Next.js reads these from the route module by
+    // convention and its own HMR pipeline tolerates them, so flagging them as
+    // Fast-Refresh-breaking non-component exports is a false positive.
+
+    /// Run the check with a real `ProjectCtx` rooted at a tempdir whose
+    /// `package.json` is `pkg_json`, with `source` written to `rel_path`.
+    /// Exercises the magic-export exemption, which depends on framework
+    /// detection via `magic_exports_for_path`.
+    fn run_at_path(pkg_json: &str, rel_path: &str, source: &str) -> Vec<Diagnostic> {
+        use crate::config::Config;
+        use crate::files::{Language, SourceFile};
+        use oxc_allocator::Allocator;
+        use oxc_parser::Parser as OxcParser;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), pkg_json).unwrap();
+        let file_path = dir.path().join(rel_path);
+        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        std::fs::write(&file_path, source).unwrap();
+        let source_file = SourceFile { path: file_path.clone(), language: Language::Tsx };
+        let refs = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = std::fs::canonicalize(&file_path).unwrap();
+        let lang = Language::Tsx;
+        let file = crate::rules::file_ctx::FileCtx::build(&canon, source, lang, &project);
+
+        let allocator = Allocator::default();
+        let source_type = crate::oxc_helpers::source_type_for_path(&canon);
+        let parse_ret = OxcParser::new(&allocator, source, source_type).parse();
+        let semantic =
+            oxc_semantic::SemanticBuilder::new().build(&parse_ret.program).semantic;
+        let ctx = CheckCtx::for_test_full(&canon, source, &project, &file);
+        Check.run_on_semantic(&semantic, &ctx)
+    }
+
+    #[test]
+    fn no_fp_next_app_router_metadata_with_default_component() {
+        // apps/v4/app/(app)/blocks/layout.tsx (issue #1630): App Router layout
+        // exporting `metadata` alongside the default component.
+        let source = r#"
+import { type Metadata } from "next"
+import React from "react"
+
+export const metadata: Metadata = {
+  title: "Building Blocks for the Web",
+  description: "Clean, modern building blocks.",
+}
+
+export default function BlocksLayout({ children }: { children: React.ReactNode }) {
+  return <div>{children}</div>
+}
+"#;
+        let d = run_at_path(
+            r#"{ "name": "v4", "dependencies": { "next": "15.0.0", "react": "19.0.0" } }"#,
+            "app/(app)/blocks/layout.tsx",
+            source,
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn no_fp_next_app_router_revalidate_and_dynamic() {
+        // App Router page exporting route-segment config directives.
+        let source = r#"
+import React from "react"
+
+export const revalidate = 60
+export const dynamic = "force-dynamic"
+
+export default function Page() { return <div /> }
+"#;
+        let d = run_at_path(
+            r#"{ "name": "site", "dependencies": { "next": "15.0.0", "react": "19.0.0" } }"#,
+            "app/page.tsx",
+            source,
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn flags_non_magic_export_in_next_app_router() {
+        // A genuine non-component export (not a Next.js magic name) alongside a
+        // component still breaks Fast Refresh, even in a Next.js App Router file —
+        // the exemption is scoped to framework-recognized magic exports.
+        let source = r#"
+import React from "react"
+
+export const helper = () => {}
+
+export default function Page() { return <div /> }
+"#;
+        let d = run_at_path(
+            r#"{ "name": "site", "dependencies": { "next": "15.0.0", "react": "19.0.0" } }"#,
+            "app/page.tsx",
+            source,
+        );
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("helper"));
     }
