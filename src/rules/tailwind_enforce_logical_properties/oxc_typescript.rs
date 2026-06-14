@@ -3,6 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::path_utils::is_in_framework_entry_dir;
 use std::sync::Arc;
 
 pub struct Check;
@@ -23,6 +24,14 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Email templates (react-email convention dirs like `emails/`) must use
+        // physical directional classes: HTML email clients (Outlook, Gmail, Apple
+        // Mail) don't support CSS logical properties, so `ps-`/`pe-` would break
+        // the layout. The dir check only fires when react-email is detected, so a
+        // same-named directory in a non-email project stays flaggable.
+        if is_in_framework_entry_dir(ctx.path, ctx.project) {
+            return;
+        }
         let AstKind::JSXAttribute(attr) = node.kind() else {
             return;
         };
@@ -100,5 +109,55 @@ mod tests {
     fn ignores_neutral_spacing() {
         let src = r#"const x = <div className="m-4 p-2 mt-1 mb-2" />;"#;
         assert!(run(src).is_empty());
+    }
+
+    /// #1355: email templates require physical directional classes because email
+    /// clients don't support CSS logical properties. A `pr-2.5` in a react-email
+    /// `emails/` file must not be flagged.
+    #[test]
+    fn ignores_physical_classes_in_react_email_template() {
+        let src = r#"const x = <div className="pr-2.5 pl-1" />;"#;
+        let project = crate::project::ProjectCtx::for_test_with_framework("react-email");
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        let out = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            src,
+            "apps/demo/emails/01-Barebone/product-update.tsx",
+            &project,
+            file,
+        );
+        assert!(out.is_empty(), "react-email template must not be flagged");
+    }
+
+    /// Negative space: the same classes in a non-email file of a react-email
+    /// project are still flagged — the exemption is scoped to email convention
+    /// dirs, not the whole project.
+    #[test]
+    fn flags_physical_classes_outside_email_dir_in_react_email_project() {
+        let src = r#"const x = <div className="pr-2.5 pl-1" />;"#;
+        let project = crate::project::ProjectCtx::for_test_with_framework("react-email");
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        let out = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            src,
+            "apps/demo/src/components/button.tsx",
+            &project,
+            file,
+        );
+        assert_eq!(out.len(), 1, "non-email file must still be flagged");
+    }
+
+    /// Negative space: an `emails/` path without react-email detected is still
+    /// flagged — the directory name alone never exempts a non-email project.
+    #[test]
+    fn flags_physical_classes_in_emails_dir_without_react_email() {
+        let src = r#"const x = <div className="pr-2.5 pl-1" />;"#;
+        let out =
+            crate::rules::test_helpers::run_rule(&Check, src, "src/emails/welcome.tsx");
+        assert_eq!(
+            out.len(),
+            1,
+            "emails/ dir without react-email must still be flagged"
+        );
     }
 }
