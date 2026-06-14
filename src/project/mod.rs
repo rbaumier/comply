@@ -1896,18 +1896,20 @@ impl ProjectCtx {
     }
 
     /// Directory of the nearest ancestor `package.json` (starting at `importer`)
-    /// that declares a non-empty `workspaces` field — the npm-workspaces root.
-    /// Walks the chain of ancestor manifests, jumping to each manifest's parent
-    /// directory, so a member manifest without `workspaces` does not stop the
-    /// search. Bounded to 8 manifest hops to defend against a pathological tree.
-    /// `None` when no ancestor manifest declares `workspaces`.
+    /// that declares a non-empty `workspaces` field, or that has a
+    /// `pnpm-workspace.yaml` beside it — the workspaces root. Walks the chain of
+    /// ancestor manifests, jumping to each manifest's parent directory, so a
+    /// member manifest without `workspaces` does not stop the search. Bounded to
+    /// 8 manifest hops to defend against a pathological tree. `None` when no
+    /// ancestor manifest declares a workspace layout.
     fn workspaces_root(&self, importer: &Path) -> Option<PathBuf> {
         let mut probe = importer.join("_");
         for _ in 0..8 {
             let manifest_dir = self.nearest_package_json_dir(&probe)?;
-            if let Some(pkg) = self.nearest_package_json(&probe)
-                && !pkg.workspaces.is_empty()
-            {
+            let declares_npm_workspaces = self
+                .nearest_package_json(&probe)
+                .is_some_and(|pkg| !pkg.workspaces.is_empty());
+            if declares_npm_workspaces || manifest_dir.join("pnpm-workspace.yaml").is_file() {
                 return Some(manifest_dir);
             }
             probe = manifest_dir.parent()?.join("_");
@@ -2018,20 +2020,28 @@ fn parse_prisma_soft_delete_models(schema: &str) -> HashSet<String> {
 /// Resolve workspace glob patterns to actual package directories.
 /// Returns the list of workspace root directories that contain a `package.json`.
 ///
-/// Each `/`-separated segment is expanded against the filesystem: a literal
-/// segment is joined directly, a `*` segment fans out to every subdirectory at
-/// that level. Multi-level globs (e.g. `packages/auth-providers/*/*`) are fully
+/// Member globs come from the root manifest's `workspaces` field; when that is
+/// absent (pnpm monorepos declare members in `pnpm-workspace.yaml` instead) the
+/// globs are read from `pnpm-workspace.yaml` beside the manifest. Each
+/// `/`-separated segment is expanded against the filesystem: a literal segment
+/// is joined directly, a `*` segment fans out to every subdirectory at that
+/// level. Multi-level globs (e.g. `packages/auth-providers/*/*`) are fully
 /// expanded so packages nested several directories deep are still discovered.
 fn resolve_workspace_roots(project_root: Option<&Path>, pkg: &PackageJson) -> Vec<PathBuf> {
     let Some(root) = project_root else {
         return Vec::new();
     };
-    if pkg.workspaces.is_empty() {
+    let patterns = if pkg.workspaces.is_empty() {
+        read_pnpm_workspace_globs(root)
+    } else {
+        pkg.workspaces.clone()
+    };
+    if patterns.is_empty() {
         return Vec::new();
     }
 
     let mut roots = Vec::new();
-    for pattern in &pkg.workspaces {
+    for pattern in &patterns {
         for dir in expand_workspace_glob(root, pattern) {
             if dir.join("package.json").exists() {
                 roots.push(dir);
@@ -2039,6 +2049,31 @@ fn resolve_workspace_roots(project_root: Option<&Path>, pkg: &PackageJson) -> Ve
         }
     }
     roots
+}
+
+/// Read the workspace package globs from `pnpm-workspace.yaml` at `dir`.
+///
+/// pnpm monorepos declare members under a top-level `packages:` sequence here
+/// instead of `package.json#workspaces`, so the globs feed the same
+/// [`expand_workspace_glob`] machinery as the npm field. Negated patterns
+/// (a leading `!`, pnpm's exclusion syntax) are dropped — they would otherwise
+/// be expanded as if they selected members. Returns an empty list when the file
+/// is absent, unparseable, or declares no `packages:` sequence.
+fn read_pnpm_workspace_globs(dir: &Path) -> Vec<String> {
+    let Ok(raw) = std::fs::read_to_string(dir.join("pnpm-workspace.yaml")) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(&raw) else {
+        return Vec::new();
+    };
+    let Some(seq) = value.get("packages").and_then(|node| node.as_sequence()) else {
+        return Vec::new();
+    };
+    seq.iter()
+        .filter_map(|item| item.as_str())
+        .filter(|pattern| !pattern.starts_with('!'))
+        .map(String::from)
+        .collect()
 }
 
 /// Expand a single workspace glob pattern into the directories it matches on
@@ -3070,6 +3105,49 @@ mod tests {
 
         let ctx = ProjectCtx::default();
         assert!(ctx.workspace_package_names().is_empty());
+    }
+
+    // Regression #1797: pnpm monorepos (wagmi) declare members in
+    // `pnpm-workspace.yaml`, leaving `package.json#workspaces` empty. The
+    // members must still resolve so a cross-workspace import is recognized.
+    #[test]
+    fn resolves_pnpm_workspace_packages() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"workspace","private":true}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("pnpm-workspace.yaml"),
+            "packages:\n  - packages/*\n  - playgrounds/*\n  - '!**/dist/**'\n",
+        )
+        .unwrap();
+        let connectors = dir.path().join("packages").join("connectors");
+        let test_pkg = dir.path().join("packages").join("test");
+        std::fs::create_dir_all(&connectors).unwrap();
+        std::fs::create_dir_all(&test_pkg).unwrap();
+        std::fs::write(
+            connectors.join("package.json"),
+            r#"{"name":"@wagmi/connectors"}"#,
+        )
+        .unwrap();
+        std::fs::write(test_pkg.join("package.json"), r#"{"name":"@wagmi/test"}"#).unwrap();
+
+        let pkg = PackageJson::parse(r#"{"name":"workspace","private":true}"#).unwrap();
+        let roots = resolve_workspace_roots(Some(dir.path()), &pkg);
+        assert_eq!(roots.len(), 2);
+
+        let ctx = ProjectCtx {
+            workspace_roots: roots,
+            ..ProjectCtx::default()
+        };
+        let mut names = ctx.workspace_package_names().to_vec();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["@wagmi/connectors".to_string(), "@wagmi/test".to_string()]
+        );
     }
 
     #[test]
