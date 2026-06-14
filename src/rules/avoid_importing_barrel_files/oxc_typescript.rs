@@ -11,9 +11,12 @@
 //! When the cross-file import index is populated, the target is classified by
 //! its exports. A pure re-export `index` is still left alone when it is the
 //! only source file in its directory: that is the module organized across its
-//! own subtree, not a hub over sibling modules. Without the index (no project
-//! context) the rule falls back to the filename shape, treating any
-//! `index`-suffixed specifier as a barrel.
+//! own subtree, not a hub over sibling modules. A target that is its own
+//! package's declared entry point (`main` / `exports["."]`) is also left alone:
+//! a relative import reaching another monorepo package's root `index` is the
+//! intended cross-package consumption path, not a deep same-package barrel.
+//! Without the index (no project context) the rule falls back to the filename
+//! shape, treating any `index`-suffixed specifier as a barrel.
 //!
 //! Type-only imports (`import type { X } from '.'`, or a named import whose
 //! every specifier carries an inline `type` qualifier) are erased at compile
@@ -146,6 +149,13 @@ impl OxcCheck for Check {
             let Some(target) = resolved else {
                 return;
             };
+            // A relative import that reaches another package's declared entry
+            // point (`main` / `exports["."]`) is the intended cross-package
+            // consumption path, not a deep same-package barrel: the entry `index`
+            // is the package's public surface, with no direct alternative.
+            if ctx.project.is_package_entry_file(target) {
+                return;
+            }
             if !target_is_genuine_barrel(index.get_exports(target)) {
                 return;
             }
@@ -467,6 +477,72 @@ mod cross_file_tests {
             &Check,
             source,
             &paths[3],
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        );
+        assert_eq!(diags.len(), 1, "expected one diagnostic, got {diags:?}");
+        assert!(diags[0].message.contains("barrel file"));
+    }
+
+    #[test]
+    fn allows_cross_package_relative_import_to_package_root_index() {
+        // Regression for #1599: in a monorepo, a test config imports a sibling
+        // package via a relative path to that package's root `index.js`, which
+        // the package's own `package.json` declares as its `exports["."]` entry
+        // point. The entry `index` is the package's public surface, so the
+        // cross-package relative reference must not be flagged.
+        let (_dir, project, paths) = setup_project(&[
+            (
+                "packages/adapter-cloudflare/package.json",
+                "{\n  \"name\": \"@sveltejs/adapter-cloudflare\",\n  \"exports\": { \".\": { \"import\": \"./index.js\" } }\n}\n",
+            ),
+            (
+                "packages/adapter-cloudflare/index.js",
+                "export { a } from './a.js';\nexport { b } from './b.js';\n",
+            ),
+            ("packages/adapter-cloudflare/a.js", "export const a = 1;"),
+            ("packages/adapter-cloudflare/b.js", "export const b = 2;"),
+            (
+                "packages/adapter-cloudflare/test/apps/workers/svelte.config.js",
+                "import adapter from '../../../index.js';\nadapter;",
+            ),
+        ]);
+        let source = "import adapter from '../../../index.js';\nadapter;";
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &paths[4],
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        );
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn flags_same_package_deep_barrel_when_package_entry_is_elsewhere() {
+        // Negative space for #1599: a deep same-package barrel (`src/lib/index.ts`
+        // re-exporting siblings) sitting beside a `package.json` whose declared
+        // entry is a *different* file is still a genuine barrel and must fire —
+        // the entry-point exemption must not over-exempt every index in a package.
+        let (_dir, project, paths) = setup_project(&[
+            (
+                "package.json",
+                "{\n  \"name\": \"pkg\",\n  \"exports\": { \".\": \"./index.js\" }\n}\n",
+            ),
+            ("index.js", "export const root = 1;"),
+            ("src/lib/a.ts", "export const a = 1;"),
+            ("src/lib/b.ts", "export const b = 2;"),
+            (
+                "src/lib/index.ts",
+                "export { a } from './a';\nexport { b } from './b';",
+            ),
+            ("src/app.ts", "import { a } from './lib/index.ts';\na;"),
+        ]);
+        let source = "import { a } from './lib/index.ts';\na;";
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &paths[5],
             &project,
             crate::rules::file_ctx::default_static_file_ctx(),
         );
