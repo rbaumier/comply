@@ -270,4 +270,28 @@ mod tests {
         let src = "function f() {\n  cache.update(k, v);\n  cache.delete(old);\n}";
         assert!(run(src).is_empty());
     }
+
+    // Issue #1200: the rule's concern (production transaction safety) does not
+    // apply to test code, which intentionally seeds via sequential mutations.
+    const SEEDING_SRC: &str = "async function seed() {\n  \
+        await db.insert(users).values({ id: 1, name: 'Alice' });\n  \
+        await db.insert(posts).values({ userId: 1, title: 'Hello' });\n  \
+        await db.insert(comments).values({ postId: 1, text: 'World' });\n}";
+
+    #[test]
+    fn skips_test_directory() {
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            SEEDING_SRC,
+            "tests/relational/pg.postgresjs.test.ts",
+        );
+        assert!(diags.is_empty(), "must be silent in test files");
+    }
+
+    #[test]
+    fn still_fires_in_production_code() {
+        let diags =
+            crate::rules::test_helpers::run_rule_gated(&Check, SEEDING_SRC, "src/repo/users.ts");
+        assert!(!diags.is_empty(), "must still fire in non-test code");
+    }
 }
