@@ -7,10 +7,12 @@
 use tree_sitter::Node;
 
 /// True if `node` is inside an `async fn`. Walks up parents looking
-/// for the nearest `function_item` and checks whether its signature
-/// text contains the `async` keyword. We use a text scan rather than
-/// a field lookup because tree-sitter-rust doesn't expose `async` as
-/// a named field — it's an anonymous keyword child of `function_item`.
+/// for the nearest `function_item` and inspects its `function_modifiers`
+/// child for the `async` keyword. tree-sitter-rust groups `async`,
+/// `const`, `unsafe`, `extern "C"` etc. under a `function_modifiers`
+/// node, so a sync function never has `async` there — even one named
+/// with a raw identifier (`fn r#async()`), whose `async` lives only in
+/// the `name` field, not in any modifier.
 ///
 /// Closures (`async move { … }`) are not handled here on purpose:
 /// the typical footgun is calling sync APIs from `async fn` bodies,
@@ -19,24 +21,25 @@ pub fn is_inside_async_fn(node: Node, source: &[u8]) -> bool {
     let mut cur = node;
     while let Some(parent) = cur.parent() {
         if parent.kind() == "function_item" {
-            // Read the signature up to the body's `{` so we don't scan
-            // the entire function body for the keyword `async`.
-            let body_start = parent
-                .child_by_field_name("body")
-                .map(|b| b.start_byte())
-                .unwrap_or(parent.end_byte());
-            let sig_start = parent.start_byte();
-            let signature = &source[sig_start..body_start];
-            if let Ok(text) = std::str::from_utf8(signature)
-                && text.contains("async")
-            {
-                return true;
-            }
-            // We found the enclosing fn but it's not async — stop
-            // walking, nested fns can't change the answer.
-            return false;
+            return fn_modifiers_contain_async(parent, source);
         }
         cur = parent;
+    }
+    false
+}
+
+/// True if a `function_item`'s `function_modifiers` child contains the
+/// `async` keyword. Scans the modifiers node only, so raw identifiers
+/// (`fn r#async()`), parameter types, and return types named "async"
+/// can't trip the check.
+fn fn_modifiers_contain_async(function_item: Node, source: &[u8]) -> bool {
+    let mut cursor = function_item.walk();
+    for child in function_item.children(&mut cursor) {
+        if child.kind() == "function_modifiers" {
+            return child
+                .utf8_text(source)
+                .is_ok_and(|text| text.split_whitespace().any(|word| word == "async"));
+        }
     }
     false
 }
@@ -317,6 +320,20 @@ mod tests {
         None
     }
 
+    /// Find the first `call_expression` node anywhere in the tree.
+    fn first_call_expression(node: Node) -> Option<Node> {
+        if node.kind() == "call_expression" {
+            return Some(node);
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(found) = first_call_expression(child) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
     #[test]
     fn canonical_is_pub_excludes_pub_crate_and_pub_super() {
         let cases = [
@@ -357,6 +374,27 @@ mod tests {
                 is_in_trait_impl(func),
                 expected,
                 "is_in_trait_impl mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_inside_async_fn_distinguishes_async_from_raw_identifier() {
+        let cases = [
+            ("async fn f() { g(); }", true),
+            ("pub async fn f() { g(); }", true),
+            ("fn r#async() { g(); }", false),
+            ("fn f() { g(); }", false),
+            ("fn f(r#async: u8) { g(); }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let call = first_call_expression(tree.root_node())
+                .expect("snippet should contain a call_expression");
+            assert_eq!(
+                is_inside_async_fn(call, src.as_bytes()),
+                expected,
+                "is_inside_async_fn mismatch for `{src}`"
             );
         }
     }
