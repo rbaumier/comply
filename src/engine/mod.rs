@@ -382,6 +382,18 @@ fn dispatch_with_lang(
 ) -> Vec<Diagnostic> {
     let path = &file.path;
 
+    // Test-only seam to exercise the per-file panic isolation in
+    // `lint_one_file_with_dispatch` without depending on a specific
+    // parser-crashing input (those are oxc-version-specific and brittle).
+    // Compiles to nothing outside `cfg(test)`.
+    #[cfg(test)]
+    if path
+        .file_name()
+        .is_some_and(|n| n == "comply_panic_probe.ts")
+    {
+        panic!("injected per-file analysis panic (test seam)");
+    }
+
     let line_count = source.bytes().filter(|&b| b == b'\n').count() + 1;
     if line_count > ENGINE_MAX_FILE_LINES {
         return Vec::new();
@@ -548,9 +560,29 @@ fn lint_one_file_with_dispatch(
         return Ok(vec![]);
     }
     let source = std::mem::take(&mut worker.source_buf);
-    let diagnostics = dispatch_with_lang(file, &source, ld, worker, config, project);
+    // Isolate the whole per-file dispatch behind `catch_unwind`: a linter must
+    // never let one pathological file take down the entire run. The oxc parser
+    // panics on some inputs (an `oxc_span` assertion), and a tree-sitter rule
+    // could panic too; without this net the panic unwinds past the rayon worker
+    // and the `--json` writer never runs, so every successfully-analyzed file's
+    // findings are lost and stdout is empty. On panic we drop this file's
+    // diagnostics and keep going. The inner oxc `catch_unwind` stays so an
+    // oxc-only panic still preserves the file's tree-sitter diagnostics; this
+    // outer net only catches what the inner one cannot.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        dispatch_with_lang(file, &source, ld, worker, config, project)
+    }));
     worker.source_buf = source;
-    Ok(diagnostics)
+    match result {
+        Ok(diagnostics) => Ok(diagnostics),
+        Err(_) => {
+            eprintln!(
+                "comply: skipping {} (analysis panicked); other files still analyzed",
+                file.path.display()
+            );
+            Ok(Vec::new())
+        }
+    }
 }
 
 /// Mutation-family rules that all flag the same `.sort()` / `.push()` /
@@ -991,6 +1023,51 @@ key = "válue é 💡"
         assert!(
             diagnostics.is_empty(),
             "expected no diagnostics for oversized file, got {diagnostics:?}"
+        );
+    }
+
+    /// Regression for #1440: a panic while analyzing one file (e.g. the oxc
+    /// parser tripping an internal assertion) must not take down the whole run.
+    /// The other files' diagnostics must still be collected so `--json` can
+    /// serialize partial results instead of emitting zero bytes.
+    ///
+    /// `comply_panic_probe.ts` hits a `cfg(test)` panic seam in
+    /// `dispatch_with_lang`; the run must isolate it and still report the throw
+    /// in `clean.ts`.
+    #[test]
+    fn one_file_panic_does_not_lose_other_files() {
+        use crate::files::SourceFile;
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let panic_path = dir.path().join("comply_panic_probe.ts");
+        let normal_path = dir.path().join("clean.ts");
+        std::fs::write(&panic_path, "export const x = 1;\n").expect("write probe");
+        std::fs::write(
+            &normal_path,
+            "export function boom() { throw new Error('x'); }\n",
+        )
+        .expect("write normal");
+
+        let files = vec![
+            SourceFile {
+                path: panic_path,
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: normal_path.clone(),
+                language: Language::TypeScript,
+            },
+        ];
+        let refs: Vec<&SourceFile> = files.iter().collect();
+        let project = Arc::new(ProjectCtx::load(&refs, default_static_config()));
+
+        let diagnostics =
+            super::lint_files_with_project(&refs, default_static_config(), &project, None)
+                .expect("lint must not error out when one file panics");
+
+        assert!(
+            diagnostics.iter().any(|d| d.path.as_ref() == normal_path),
+            "the non-panicking file's diagnostics must survive a sibling's panic, got {diagnostics:?}",
         );
     }
 }
