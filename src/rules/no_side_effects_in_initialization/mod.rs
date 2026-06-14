@@ -31,7 +31,10 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: Some("https://github.com/lukastaegert/eslint-plugin-tree-shaking"),
     categories: &["code-quality"],
 
-    skip_in_test_dir: false,
+    // Test files (including codemod `.actual.`/`.expected.` snapshot fixtures)
+    // are read as test data, never imported or bundled as library modules, so
+    // the tree-shaking concern does not apply to their top-level code.
+    skip_in_test_dir: true,
     // Files under examples/example/demo(s)/samples directories are demonstration
     // scripts: meant to be run directly to show library usage, never imported as
     // library modules, so their top-level side effects are intentional and the

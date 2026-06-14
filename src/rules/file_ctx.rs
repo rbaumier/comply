@@ -424,6 +424,7 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
             || lower.starts_with("test-d/")
             || crate::rules::path_utils::has_test_d_infix(path)
             || crate::rules::path_utils::has_type_probe_infix(path)
+            || crate::rules::path_utils::has_codemod_snapshot_infix(path)
             || crate::rules::path_utils::has_test_suite_factory_suffix(path)
             || lower.contains("/dtslint/")
             || lower.starts_with("dtslint/")
@@ -625,6 +626,18 @@ mod tests {
             ))
             .in_test_dir
         );
+        // jscodeshift/babel codemod snapshot fixtures (issue #1353).
+        assert!(scan_path(&PathBuf::from("foo.actual.js")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("bar.expected.ts")).in_test_dir);
+        assert!(
+            scan_path(&PathBuf::from(
+                "src/deprecations/typography-props/test-cases/theme.actual.js"
+            ))
+            .in_test_dir
+        );
+        // Ordinary modules — including a leading-`actual` word — are not fixtures.
+        assert!(!scan_path(&PathBuf::from("foo.js")).in_test_dir);
+        assert!(!scan_path(&PathBuf::from("src/factual.ts")).in_test_dir);
     }
 
     #[test]

@@ -3372,6 +3372,47 @@ mod tests {
         );
     }
 
+    // --- (h) codemod .actual/.expected snapshot fixtures (Closes #1353) ----
+
+    // Regression for #1353: material-ui's codemod packages keep jscodeshift
+    // input/output snapshots as `*.actual.js` / `*.expected.js` files whose
+    // top-level calls (`fn({...})`) are intentional test data. They are read as
+    // text by the codemod harness, never imported or bundled, so the
+    // tree-shaking concern does not apply. The codemod-snapshot infix marks them
+    // as test files, which the `skip_in_test_dir` gate then exempts.
+    #[test]
+    fn allows_codemod_actual_fixture() {
+        let src = "\
+            fn({\n\
+              MuiTypography: { defaultProps: {} },\n\
+            });\n\
+            fn({\n\
+              MuiTypography: { defaultProps: { className: \"my-class\" } },\n\
+            });\n";
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            src,
+            "src/deprecations/typography-props/test-cases/theme.actual.js",
+        );
+        assert!(
+            diags.is_empty(),
+            "codemod .actual.js snapshot fixtures are exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_codemod_expected_fixture() {
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            "fn({ MuiTypography: {} });\n",
+            "src/v1.0.0/color-imports/theme.expected.ts",
+        );
+        assert!(
+            diags.is_empty(),
+            "codemod .expected.ts snapshot fixtures are exempt, got {diags:?}"
+        );
+    }
+
     // --- code-generation utility scripts (#1813) --------------------------
 
     // Regression for #1813: a `generate.ts` script under `src/utils/` iterates a
