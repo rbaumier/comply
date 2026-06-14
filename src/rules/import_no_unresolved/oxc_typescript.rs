@@ -484,6 +484,31 @@ mod angular_schema_json_tests {
         assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
         assert!(diags[0].message.contains("schema.ts"));
     }
+
+    #[test]
+    fn no_fp_for_bare_specifier_resolving_to_dts_issue_1638() {
+        // playwright reproducer: `import './types'` where the only file on disk
+        // is `types.d.ts` (a declaration-only file, excluded from the index).
+        // TypeScript resolves the bare extensionless specifier to its `.d.ts`
+        // sibling, so the import must not be flagged.
+        let source = "import type { HTMLReport } from './types';\n";
+        let diags = run_with_siblings(
+            "packages/html-reporter/src/index.tsx",
+            source,
+            &["packages/html-reporter/src/types.d.ts"],
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_missing_bare_specifier_without_dts_issue_1638() {
+        // A bare extensionless specifier with no source OR declaration sibling on
+        // disk is a genuine broken import and must still fire.
+        let source = "import type { T } from './nope';\n";
+        let diags = run_with_siblings("packages/html-reporter/src/index.tsx", source, &[]);
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("./nope"));
+    }
 }
 
 #[cfg(test)]

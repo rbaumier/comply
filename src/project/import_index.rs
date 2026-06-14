@@ -2451,7 +2451,8 @@ fn resolve_relative(
         return None;
     }
     let base_dir = importer.parent()?;
-    probe_path(&base_dir.join(specifier), known)
+    let target = base_dir.join(specifier);
+    probe_path(&target, known).or_else(|| probe_decl_sibling(&target))
 }
 
 /// Resolve a template-literal dynamic-import directory prefix (`../locales`,
@@ -2636,6 +2637,21 @@ fn probe_path(raw: &Path, known: &std::collections::HashSet<PathBuf>) -> Option<
         }
     }
     None
+}
+
+/// Resolve an extensionless import target to its declaration-file sibling
+/// (`./types` → `./types.d.ts`, `.d.mts`, or `.d.cts`). TypeScript resolves a
+/// bare specifier to a declaration-only sibling when no source file exists.
+/// Existence-only, since `.d.*` files are excluded from the indexed `known` set.
+/// Applies to relative and tsconfig-alias specifiers, which name a concrete
+/// target; package resolution (`main`/`types`) is handled by the resolver, so
+/// this is not used there.
+fn probe_decl_sibling(raw: &Path) -> Option<PathBuf> {
+    const DECL_EXTS: &[&str] = &[".d.ts", ".d.mts", ".d.cts"];
+    let raw_str = raw.to_str()?;
+    DECL_EXTS
+        .iter()
+        .find_map(|decl| std::fs::canonicalize(PathBuf::from(format!("{raw_str}{decl}"))).ok())
 }
 
 /// Try to resolve a specifier into an absolute path that appears in the input
@@ -2887,7 +2903,9 @@ impl OxcPathResolver {
                 } else {
                     target.clone()
                 };
-                if let Some(resolved) = probe_path(&expanded, known) {
+                if let Some(resolved) =
+                    probe_path(&expanded, known).or_else(|| probe_decl_sibling(&expanded))
+                {
                     return Some(resolved);
                 }
             }
