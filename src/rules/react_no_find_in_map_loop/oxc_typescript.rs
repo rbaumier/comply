@@ -2,7 +2,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::Language;
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{
+    byte_offset_to_line_col, callback_first_param_name, receiver_root_identifier,
+};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
@@ -94,7 +96,7 @@ fn flagged_inside_loop_or_map(
                 if is_map_call(call) {
                     // If the find/filter receiver root matches the map callback param,
                     // it's not the O(n^2) pattern.
-                    let param = map_callback_param_name(call);
+                    let param = callback_first_param_name(call);
                     match (receiver_root, param.as_deref()) {
                         (Some(recv), Some(p)) if recv == p => {
                             // derived from current iteration item — keep looking up
@@ -113,34 +115,6 @@ fn is_map_call(call: &oxc_ast::ast::CallExpression) -> bool {
         mem.property.name == "map"
     } else {
         false
-    }
-}
-
-/// Extract the first parameter name from a `.map(callback)`.
-fn map_callback_param_name(call: &oxc_ast::ast::CallExpression) -> Option<String> {
-    let first_arg = call.arguments.first()?;
-    let Some(expr) = first_arg.as_expression() else { return None };
-    let params = match expr {
-        Expression::ArrowFunctionExpression(arrow) => &arrow.params,
-        Expression::FunctionExpression(func) => &func.params,
-        _ => return None,
-    };
-    let first_param = params.items.first()?;
-    let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &first_param.pattern else {
-        return None;
-    };
-    Some(id.name.to_string())
-}
-
-/// Walk down the object chain of a member expression to find the leftmost
-/// identifier. For `x.tags.find(...)` returns "x".
-fn receiver_root_identifier(expr: &Expression) -> Option<String> {
-    match expr {
-        Expression::Identifier(id) => Some(id.name.to_string()),
-        Expression::StaticMemberExpression(mem) => receiver_root_identifier(&mem.object),
-        Expression::ComputedMemberExpression(mem) => receiver_root_identifier(&mem.object),
-        Expression::CallExpression(call) => receiver_root_identifier(&call.callee),
-        _ => None,
     }
 }
 

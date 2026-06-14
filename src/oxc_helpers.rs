@@ -1432,6 +1432,43 @@ pub fn file_imports_db_library(semantic: &oxc_semantic::Semantic<'_>) -> bool {
     })
 }
 
+/// Leftmost identifier of a member/call chain: the object the chain is rooted
+/// on. `x.tags.find(...)` → `"x"`, `conn.manager.qb().execute()` → `"conn"`.
+/// Returns `None` for chains not rooted on a plain identifier (e.g. `this`,
+/// a literal, or a parenthesised expression).
+#[must_use]
+pub fn receiver_root_identifier(expr: &oxc_ast::ast::Expression) -> Option<String> {
+    use oxc_ast::ast::Expression;
+    match expr {
+        Expression::Identifier(id) => Some(id.name.to_string()),
+        Expression::StaticMemberExpression(mem) => receiver_root_identifier(&mem.object),
+        Expression::ComputedMemberExpression(mem) => receiver_root_identifier(&mem.object),
+        Expression::CallExpression(call) => receiver_root_identifier(&call.callee),
+        _ => None,
+    }
+}
+
+/// Name of the first parameter of a call's callback argument, when that
+/// argument is an arrow or function expression with a plain identifier first
+/// parameter: `items.map((x) => …)` → `"x"`. This is the iteration binding for
+/// array-iteration callbacks (`map`/`forEach`/…). Returns `None` for spreads,
+/// non-function args, or destructured/rest first parameters.
+#[must_use]
+pub fn callback_first_param_name(call: &oxc_ast::ast::CallExpression) -> Option<String> {
+    use oxc_ast::ast::{BindingPattern, Expression};
+    let expr = call.arguments.first()?.as_expression()?;
+    let params = match expr {
+        Expression::ArrowFunctionExpression(arrow) => &arrow.params,
+        Expression::FunctionExpression(func) => &func.params,
+        _ => return None,
+    };
+    let first_param = params.items.first()?;
+    let BindingPattern::BindingIdentifier(id) = &first_param.pattern else {
+        return None;
+    };
+    Some(id.name.to_string())
+}
+
 /// Packages whose `useForm` export is React Hook Form's. `react-hook-form`
 /// itself plus the `@hookform/*` resolver/devtools scope, which re-export it.
 fn is_react_hook_form_package(specifier: &str) -> bool {
