@@ -7,7 +7,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
-use crate::rules::path_utils::is_mock_or_fixture_dir_path;
+use crate::rules::path_utils::{is_mock_or_fixture_dir_path, is_scaffold_template_path};
 
 use super::{
     is_bare_specifier, is_node_builtin, is_path_alias_prefix, is_subpath_import,
@@ -52,6 +52,17 @@ impl OxcCheck for Check {
         // `@tanstack/react-query`) the codemod package itself does not depend on,
         // by design, so their bare imports are not implicit dependencies.
         if is_mock_or_fixture_dir_path(ctx.path) {
+            return;
+        }
+
+        // Scaffold-template directories (`template/`, `templates/`, `scaffold/`,
+        // `boilerplate/`) hold source files a generator CLI (create-t3-app,
+        // create-react-app) copies into the generated project. Their imports
+        // (`react`, `@trpc/client`, …) describe the generated app's dependency
+        // graph, not the CLI's own — the CLI's package.json never lists them. The
+        // files never run as part of the CLI, so a bare import is not an implicit
+        // dependency of this package.
+        if is_scaffold_template_path(ctx.path) {
             return;
         }
 
@@ -1873,6 +1884,85 @@ export default {
             diags.len(),
             1,
             "an undeclared package not under any Jest root must still fire, got {diags:?}"
+        );
+    }
+
+    // Regression #1381: a scaffold CLI (create-t3-app, create-react-app) keeps a
+    // `template/` directory of source files copied into the generated project.
+    // Their imports (`react`, `~/trpc/react`, …) describe the generated app's
+    // dependency graph, not the CLI's; the CLI's package.json never lists them.
+    // These files never run as part of the CLI, so a bare import must not fire.
+    #[test]
+    fn allows_scaffold_template_import_issue_1381() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"create-t3-app","dependencies":{"commander":"^12"}}"#,
+        )
+        .unwrap();
+        let tpl = dir
+            .path()
+            .join("cli")
+            .join("template")
+            .join("extras")
+            .join("src")
+            .join("app")
+            .join("_components");
+        fs::create_dir_all(&tpl).unwrap();
+        let file = tpl.join("post.tsx");
+        let source = "import { useState } from 'react';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "scaffold template file import must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #1381: a normal `src/` file with a genuinely
+    // missing dependency must STILL fire — the exemption is scoped to scaffold
+    // template directories only.
+    #[test]
+    fn flags_missing_dep_outside_template_dir_issue_1381() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"create-t3-app","dependencies":{"commander":"^12"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("cli").join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("index.ts");
+        let source = "import { useState } from 'react';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "a genuinely missing dep in src/ must still fire, got {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #1381: a `templated/` substring directory is
+    // ordinary source (segment match, not substring), so a missing dep fires.
+    #[test]
+    fn flags_missing_dep_in_template_substring_dir_issue_1381() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","dependencies":{}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src").join("templated");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("index.ts");
+        let source = "import { useState } from 'react';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "a `templated/` substring dir is ordinary source and must still fire, got {diags:?}"
         );
     }
 }
