@@ -469,6 +469,16 @@ impl TextCheck for Check {
         // a k6 magic export pays for the parse.
         let mut k6_script_entry: Option<bool> = None;
 
+        // Names of this module's Convex backend exports — present only when the
+        // module imports from `convex/server` (or `convex/_generated/server`) and
+        // exposes a `defineSchema(...)` default or a `query`/`mutation`/`action`
+        // (or internal-variant) wrapper-call export. The Convex deployment
+        // registers each by path and the generated `api.*` types call them, never
+        // through a static import, so they are live despite having no importer.
+        // Computed lazily: only a surviving export pays for the parse, and the set
+        // is scoped to the wrapper-call exports so a plain export stays flagged.
+        let mut convex_magic_exports: Option<HashSet<String>> = None;
+
         let mut diagnostics = Vec::new();
         for export in exports {
             if matches!(export.kind, ExportKind::StarReExport) {
@@ -524,6 +534,18 @@ impl TextCheck for Check {
                 if is_k6_entry {
                     continue;
                 }
+            }
+            // Convex backend function: a `defineSchema(...)` default or a
+            // `query`/`mutation`/`action` (or internal-variant) wrapper-call
+            // export of a module importing from `convex/server` is registered by
+            // the Convex deployment and called via the generated `api.*` types,
+            // never imported. Export names are arbitrary, so the exemption is the
+            // precise set the source scan returns — a plain export stays flagged.
+            let convex_magic = convex_magic_exports.get_or_insert_with(|| {
+                crate::project::convex_magic_exports_for_source(ctx.source, ctx.lang)
+            });
+            if convex_magic.contains(export.name.as_str()) {
+                continue;
             }
             let structurally_consumed = structurally_consumed
                 .get_or_insert_with(|| collect_structurally_consumed_types(ctx.source, ctx.lang));
@@ -1570,6 +1592,98 @@ mod tests {
             "a k6-importing module without an export default is not a k6 script — its unused `options` export must still be flagged: {diags:?}"
         );
         assert!(diags[0].message.contains("options"));
+    }
+
+    #[test]
+    fn ignores_convex_function_and_schema_exports_issue_1559() {
+        // Regression for #1559 — Convex backend modules import their wrappers from
+        // `convex/server` and export `query`/`mutation` calls (named, arbitrary
+        // names) plus a `defineSchema(...)` default in `schema.ts`. The Convex
+        // deployment registers each by path and the generated `api.*` types call
+        // them, never through a static import, so they look dead. The
+        // import-source + wrapper-call shape is what protects them.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "convex/myFunctions.ts",
+                "import { query, mutation } from 'convex/server';\n\
+                 export const listNumbers = query({\n\
+                   args: { count: v.number() },\n\
+                   handler: async (ctx, args) => { return []; },\n\
+                 });\n\
+                 export const addNumber = mutation({\n\
+                   args: { value: v.number() },\n\
+                   handler: async (ctx, args) => {},\n\
+                 });\n",
+            ),
+            (
+                "convex/schema.ts",
+                "import { defineSchema, defineTable } from 'convex/server';\n\
+                 export default defineSchema({\n\
+                   numbers: defineTable({ value: v.number(), userId: v.string() }),\n\
+                 });\n",
+            ),
+            ("src/other.ts", "export const z = 1;\nz;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "convex/myFunctions.ts");
+        assert!(
+            diags.is_empty(),
+            "Convex query/mutation exports are deployment-consumed: {diags:?}"
+        );
+        let (_dir, diags) = run_on_project(&files, "convex/schema.ts");
+        assert!(
+            diags.is_empty(),
+            "Convex defineSchema default export is consumed by codegen: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_query_export_without_convex_import_issue_1559() {
+        // Negative-space guard for #1559 — both signals are required. A module with
+        // `export const x = query({...})` whose `query` is a local helper, not from
+        // `convex/server`, is not a Convex module, so an unimported export must
+        // still be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/data.ts",
+                "import { query } from './local-query';\n\
+                 export const listNumbers = query({ count: 1 });\n",
+            ),
+            (
+                "src/local-query.ts",
+                "export function query(x) { return x; }\nquery;\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/data.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a query() export without the convex/server import must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("listNumbers"));
+    }
+
+    #[test]
+    fn still_flags_plain_export_in_convex_module_issue_1559() {
+        // Negative-space guard for #1559 — the exemption is scoped to the
+        // wrapper-call exports. A plain `export const helper = 5` in a genuine
+        // Convex module (not a `query`/`mutation`/`action` call) is not
+        // deployment-consumed, so an unimported plain export must still be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "convex/myFunctions.ts",
+                "import { query } from 'convex/server';\n\
+                 export const listNumbers = query({ handler: async () => [] });\n\
+                 export const helper = 5;\n",
+            ),
+            ("src/other.ts", "export const z = 1;\nz;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "convex/myFunctions.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a plain non-wrapper export in a Convex module must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("helper"));
     }
 
     #[test]
