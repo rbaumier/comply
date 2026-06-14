@@ -1,0 +1,6 @@
+[detection]
+dependencies = ["@docusaurus/core", "@docusaurus/preset-classic"]
+files = ["docusaurus.config.ts", "docusaurus.config.js"]
+
+[entry_points]
+dirs = ["/src/pages/", "/src/theme/", "/src/components/", "/versioned_docs/"]

@@ -1128,4 +1128,82 @@ mod tests {
             "a *Sample file outside any samples/ dir is not a standalone script: {diags:?}"
         );
     }
+
+    // Regression for #1687: Docusaurus loads `src/pages/` via filesystem
+    // routing, `src/theme/` via swizzling, `src/components/` via MDX injection,
+    // and `versioned_docs/` components by path — none through JS imports, so the
+    // import-graph BFS cannot reach them. Detection is gated on `@docusaurus/core`
+    // in the nearest package.json (here the nested `docs/` site), so these dirs
+    // are treated as framework entry points and must not be flagged.
+    #[test]
+    fn docusaurus_framework_loaded_files_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.ts", "export const root = 1;\n"),
+            (
+                "docs/package.json",
+                r#"{"name":"docs","private":true,"dependencies":{"@docusaurus/core":"^3.0.0"}}"#,
+            ),
+            ("docs/docusaurus.config.ts", "export default { title: 'Docs' };\n"),
+            (
+                "docs/src/pages/index.js",
+                "import React from 'react';\nexport default function Home() { return null; }\n",
+            ),
+            (
+                "docs/src/theme/Footer.tsx",
+                "export default function Footer() { return null; }\n",
+            ),
+            (
+                "docs/src/components/ReactPlayer.jsx",
+                "export default function Player() { return null; }\n",
+            ),
+            (
+                "docs/versioned_docs/version-1.0/ReactPlayer.jsx",
+                "export default function Player() { return null; }\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "Docusaurus framework-loaded files must not be flagged: {diags:?}"
+        );
+    }
+
+    // The Docusaurus exemption is precise: a genuinely orphaned file under a
+    // non-entry-point directory of the same Docusaurus site (here `src/utils/`)
+    // is still a true positive.
+    #[test]
+    fn docusaurus_orphan_outside_entry_dirs_is_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.ts", "export const root = 1;\n"),
+            (
+                "docs/package.json",
+                r#"{"name":"docs","private":true,"dependencies":{"@docusaurus/core":"^3.0.0"}}"#,
+            ),
+            ("docs/docusaurus.config.ts", "export default { title: 'Docs' };\n"),
+            ("docs/src/utils/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "an orphan outside the Docusaurus entry dirs must still be flagged: {diags:?}"
+        );
+    }
+
+    // Detection-gating keeps the broad `src/components/` exemption Docusaurus-only:
+    // in a project WITHOUT `@docusaurus/core`, an orphaned `src/components/` file
+    // is still flagged.
+    #[test]
+    fn components_dir_orphan_flagged_without_docusaurus() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.ts", "export const root = 1;\n"),
+            ("src/components/orphan.tsx", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "without Docusaurus, an orphaned src/components/ file is still flagged: {diags:?}"
+        );
+    }
 }
