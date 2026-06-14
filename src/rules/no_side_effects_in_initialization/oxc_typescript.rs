@@ -130,6 +130,16 @@
 //!   as a library, so the repeated top-level calls are its intentional payload.
 //!   A single top-level call, heterogeneous callees, or no filesystem import are
 //!   all still flagged;
+//! - library entry barrels by content shape: a module with at least one
+//!   `export *` re-export (`export * from "./schemas.js"`) where those star
+//!   re-exports outnumber its top-level effectful call/`new` statements. Such a
+//!   module surfaces the package's full API through one subpath export — it is
+//!   imported to obtain that API, never as a tree-shaking target — so the small
+//!   number of accompanying top-level registration calls (e.g. zod's
+//!   `config(en())` registering the default English locale at module load) are
+//!   intentional initialization. A module with real logic that is not dominated
+//!   by `export *` re-exports, or one with no `export *` re-export at all, is
+//!   still flagged;
 //! - static browser assets under a `public/`, `static/`, or `assets/`
 //!   directory: vanilla `<script>`-loaded scripts served verbatim by the web
 //!   server, never bundled, so the tree-shaking concern does not apply (a
@@ -1874,6 +1884,38 @@ fn is_data_init_foreach(
         .all(|stmt| is_local_mutation_stmt(stmt, locals))
 }
 
+/// True when the program is a library's public entry barrel by content shape:
+/// it has at least one `export *` re-export (`export * from "./schemas.js"`,
+/// `export * as ns from "..."`) and those star re-exports outnumber its
+/// top-level effectful call/`new` statements. Such a module's whole purpose is
+/// to surface the package's full API through one subpath export — it is imported
+/// to obtain that API, never as a tree-shaking target — so the small number of
+/// top-level registration calls that accompany the re-exports (e.g. zod's
+/// `config(en())` registering the default English locale at module load) are
+/// intentional initialization, not a tree-shaking hazard.
+///
+/// Requiring the star re-exports to dominate keeps the exemption tied to the
+/// barrel shape: a module with real logic (only a handful of `export *` lines
+/// among many top-level side-effecting statements) is not dominated by
+/// re-exports and stays flagged, and a module with no `export *` re-export at
+/// all is never a barrel.
+fn is_entry_barrel_shape(program: &Program) -> bool {
+    let mut star_reexports = 0usize;
+    let mut effectful_calls = 0usize;
+    for stmt in &program.body {
+        match stmt {
+            Statement::ExportAllDeclaration(_) => star_reexports += 1,
+            Statement::ExpressionStatement(es)
+                if effectful_expression_label(&es.expression).is_some() =>
+            {
+                effectful_calls += 1;
+            }
+            _ => {}
+        }
+    }
+    star_reexports > 0 && star_reexports > effectful_calls
+}
+
 fn effectful_expression_label(expr: &Expression) -> Option<&'static str> {
     match expr {
         Expression::CallExpression(_) => Some("call"),
@@ -1932,6 +1974,7 @@ impl OxcCheck for Check {
             || is_storybook_addon_file(program)
             || is_mcp_server_file(program)
             || is_data_generation_script(program)
+            || is_entry_barrel_shape(program)
         {
             return Vec::new();
         }
@@ -3802,6 +3845,78 @@ mod tests {
             diags.len(),
             1,
             "Object.assign onto a global must still be flagged, got {diags:?}"
+        );
+    }
+
+    // --- (n) library entry barrels (Closes #2084) --------------------------
+
+    // Regression for #2084: zod's `packages/zod/src/v4/classic/external.ts` is
+    // the package's public entry barrel — it re-exports the full API with
+    // `export *` and registers the default English locale at module load with a
+    // top-level `config(en())` call. The barrel is imported to obtain the API,
+    // never as a tree-shaking target, so the registration call is intentional
+    // initialization, not a tree-shaking hazard.
+    #[test]
+    fn allows_config_call_in_entry_barrel() {
+        let src = "\
+            export * from './schemas.js';\n\
+            export * from './checks.js';\n\
+            import { config } from '../core/index.js';\n\
+            import en from '../locales/en.js';\n\
+            config(en());\n";
+        let diags =
+            crate::rules::test_helpers::run_rule(&Check, src, "packages/zod/src/v4/classic/external.ts");
+        assert!(
+            diags.is_empty(),
+            "a top-level registration call in an export-* entry barrel should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_export_star_namespace_entry_barrel() {
+        // `export * as ns from "..."` is also a star re-export.
+        let src = "\
+            export * as schemas from './schemas.js';\n\
+            export * as checks from './checks.js';\n\
+            registerDefaults();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/index.ts");
+        assert!(
+            diags.is_empty(),
+            "a registration call in a namespaced export-* barrel should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_side_effect_in_non_barrel_module() {
+        // Real logic, not just re-exports: a single `export *` does not dominate
+        // the four top-level side-effecting calls, so the module is not a barrel
+        // and stays flagged.
+        let src = "\
+            export * from './types.js';\n\
+            analytics.track('load');\n\
+            db.connect();\n\
+            cache.warm();\n\
+            logger.info('ready');\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/service.ts");
+        assert_eq!(
+            diags.len(),
+            4,
+            "a module not dominated by export-* re-exports must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_top_level_call_without_export_star() {
+        // No `export *` re-export at all — not a barrel, stays flagged even though
+        // the file also has a named export.
+        let src = "\
+            export { thing } from './thing.js';\n\
+            config(en());\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/external.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a top-level call in a file with no export-* re-export must still be flagged, got {diags:?}"
         );
     }
 
