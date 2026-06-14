@@ -1,0 +1,19 @@
+[detection]
+dependencies = ["gatsby"]
+files = ["gatsby-config.js", "gatsby-config.ts", "gatsby-node.js", "gatsby-node.ts"]
+
+[entry_points]
+dirs = ["/src/pages/"]
+root_files = ["gatsby-ssr", "gatsby-browser", "gatsby-config", "gatsby-node"]
+
+[magic_exports]
+names = [
+    "default", "Head",
+    "wrapRootElement", "wrapPageElement", "onRenderBody",
+    "onClientEntry", "onInitialClientRender", "onRouteUpdate",
+    "shouldUpdateScroll", "replaceHydrateFunction",
+    "createPages", "createPagesStatefully", "onCreatePage", "onCreateNode",
+    "onCreateBabelConfig", "onCreateWebpackConfig", "createSchemaCustomization",
+    "sourceNodes", "onPreBuild", "onPostBuild", "onPreInit", "onPreBootstrap",
+    "pluginOptionsSchema", "config",
+]

@@ -82,6 +82,7 @@ const RAW: &[(&str, &str)] = &[
     ("nestjs", include_str!("nestjs.toml")),
     ("svelte", include_str!("svelte.toml")),
     ("graphql", include_str!("graphql.toml")),
+    ("gatsby", include_str!("gatsby.toml")),
 ];
 
 fn registry() -> &'static [FrameworkDef] {
