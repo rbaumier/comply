@@ -24,11 +24,19 @@ const TEST_FUNCTIONS: &[&str] = &[
 const KARMA_CONFIG_NAMES: &[&str] =
     &["karma.conf.js", "karma.conf.ts", "karma.conf.cjs", "karma.conf.mjs"];
 
-fn has_done_param(params: &FormalParameters) -> bool {
-    params.items.iter().any(|p| match &p.pattern {
-        BindingPattern::BindingIdentifier(id) => id.name.as_str() == "done",
+/// True when the callback's *first* parameter is named `done`.
+///
+/// Vitest/Jest's legacy callback style passes `done` as the sole parameter
+/// (`test("x", (done) => …)`). The `node:test` runner instead passes the test
+/// context first and the completion callback second (`test("x", (t, done) => …)`),
+/// where `done` is a supported part of its API. Gating on the *first* parameter
+/// fires only for the Jest-legacy shape and leaves the `node:test` signature
+/// untouched.
+fn first_param_is_done(params: &FormalParameters) -> bool {
+    match params.items.first().map(|p| &p.pattern) {
+        Some(BindingPattern::BindingIdentifier(id)) => id.name.as_str() == "done",
         _ => false,
-    })
+    }
 }
 
 /// True when `dir` holds any `karma.conf.*` file.
@@ -95,7 +103,7 @@ impl OxcCheck for Check {
             Argument::FunctionExpression(f) => &f.params,
             _ => return,
         };
-        if !has_done_param(params) {
+        if !first_param_is_done(params) {
             return;
         }
         if runs_under_karma(ctx, ctx.path) {
@@ -177,6 +185,27 @@ mod tests {
     fn allows_promise_callback() {
         let src = r#"test("x", async () => { await waitFor(); });"#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression #1640: `node:test` uses a `(t, done)` signature where the test
+    // context comes first and `done` is the second, officially-supported
+    // completion callback. This is not the Jest-legacy `(done)` shape and must
+    // not be flagged.
+    #[test]
+    fn allows_node_test_context_done_signature_issue_1640() {
+        let src = r#"test('handles null', (t, done) => { t.plan(1); done(); });"#;
+        assert!(
+            run(src).is_empty(),
+            "node:test (t, done) signature must not be flagged"
+        );
+    }
+
+    // A genuine Jest/Vitest legacy `(done)` callback — `done` as the sole, first
+    // parameter — must still fire.
+    #[test]
+    fn flags_done_as_sole_param() {
+        let src = r#"it("does a thing", (done) => { setTimeout(done, 10); });"#;
+        assert_eq!(run(src).len(), 1);
     }
 
     // Regression #1747: a test file under a directory configured to run with
