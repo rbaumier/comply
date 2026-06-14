@@ -96,6 +96,8 @@ const KNOWN_TAGS: &[&str] = &[
     // TypeDoc/TSDoc tag for supplemental documentation beyond the description.
     "remarks",
     "requires",
+    // `@return` is the documented JSDoc/TypeDoc singular alias of `@returns`.
+    "return",
     "returns",
     "satisfies",
     // TypeDoc/TSDoc tag marking a class as not intended to be subclassed.
@@ -124,7 +126,6 @@ fn is_known(name: &str) -> bool {
 fn suggest(name: &str) -> Option<&'static str> {
     let lower = name.to_ascii_lowercase();
     match lower.as_str() {
-        "return" => Some("returns"),
         "arg" | "argument" | "parameter" => Some("param"),
         "exemple" => Some("example"),
         "thrown" | "throw" => Some("throws"),
@@ -273,9 +274,17 @@ mod tests {
     }
 
     #[test]
+    fn allows_return_alias_issue_2283() {
+        // `@return` is the documented JSDoc singular alias of `@returns`
+        // (Angular DevKit schematics, ngrx/platform use it throughout).
+        let src = "/**\n * @return all nodes of kind, or [] if none is found\n */\n";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
     fn still_flags_lowercase_typos() {
         // Genuine misspellings of standard tags are all lowercase.
-        assert_eq!(run("/**\n * @return thing\n */\n").len(), 1);
+        assert_eq!(run("/**\n * @retrun thing\n */\n").len(), 1);
         assert_eq!(run("/**\n * @arg x\n */\n").len(), 1);
         assert_eq!(run("/**\n * @bogus foo\n */\n").len(), 1);
     }
