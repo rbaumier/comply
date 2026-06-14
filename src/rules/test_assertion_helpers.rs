@@ -277,6 +277,106 @@ pub(crate) fn delegates_to_outer_param(
     false
 }
 
+/// True when the test body (the `it`/`test` call span) invokes an identifier
+/// bound to a formal parameter of a callback the test itself passes to *another*
+/// call. The parameter's value is supplied by that outer callee — typically a
+/// cross-file custom tester helper — so its assertions live in another module
+/// and are invisible to this per-file pass:
+///
+/// ```ts
+/// it("inserts", async () => {
+///   await knex("accounts")
+///     .insert({ ... }, "id")
+///     .testSql(function (tester) {        // `tester` is supplied by `.testSql`
+///       tester("mysql", "insert into ...", [...], 1); // the real expect() is in
+///       tester("pg", "insert into ...", [...], [{ id: 1 }]); // testSqlTester()
+///     });
+/// });
+/// ```
+///
+/// This is the inverse of [`delegates_to_outer_param`]: there the test delegates
+/// to a parameter of an *enclosing* wrapper; here it delegates to a parameter of
+/// a callback it passes *outward*. The callback must be an argument of a separate
+/// call (not the `it`/`test` call itself), so a plain non-asserting body call
+/// such as `it("x", () => { doThing(); })` is not matched.
+pub(crate) fn delegates_to_callback_param(
+    it_call: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let AstKind::CallExpression(call) = it_call.kind() else {
+        return false;
+    };
+    let (lo, hi) = (call.span.start, call.span.end);
+
+    for node in nodes.iter() {
+        let AstKind::CallExpression(inner) = node.kind() else {
+            continue;
+        };
+        if inner.span.start < lo || inner.span.end > hi {
+            continue;
+        }
+        let Expression::Identifier(callee) = &inner.callee else {
+            continue;
+        };
+        let Some(ref_id) = callee.reference_id.get() else {
+            continue;
+        };
+        let Some(sym_id) = semantic.scoping().get_reference(ref_id).symbol_id() else {
+            continue;
+        };
+        let decl = semantic.scoping().symbol_declaration(sym_id);
+        if binding_is_outward_callback_param(decl, it_call.id(), semantic) {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when `decl` is a formal parameter of a function/arrow that is passed as
+/// an argument to a call expression *other than* the `it`/`test` call — i.e. a
+/// callback the test hands outward whose parameter is supplied by that outer
+/// callee.
+fn binding_is_outward_callback_param(
+    decl: NodeId,
+    it_call_id: NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    // Find the function/arrow that owns `decl`, requiring `decl` to be a formal
+    // parameter of it (a local `const`/`let` binding is not a callback param).
+    let mut saw_param = matches!(
+        nodes.kind(decl),
+        AstKind::FormalParameter(_) | AstKind::FormalParameters(_)
+    );
+    let mut owner_fn = None;
+    for anc in nodes.ancestors(decl) {
+        match anc.kind() {
+            AstKind::FormalParameter(_) | AstKind::FormalParameters(_) => saw_param = true,
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
+                owner_fn = Some(anc.id());
+                break;
+            }
+            _ => {}
+        }
+    }
+    let Some(owner_fn) = owner_fn else {
+        return false;
+    };
+    if !saw_param {
+        return false;
+    }
+
+    // The owning callback must be an argument of a call that is not the it/test
+    // call itself — that call's callee supplies the parameter's value.
+    let parent_id = nodes.parent_id(owner_fn);
+    if parent_id == it_call_id {
+        return false;
+    }
+    matches!(nodes.kind(parent_id), AstKind::CallExpression(_))
+}
+
 /// True when `call`'s callee is a bare identifier bound to the first formal
 /// parameter (the `resolve` slot) of an enclosing `new Promise((resolve) => …)`
 /// executor. In a promise-returning test, reaching that resolve call is the

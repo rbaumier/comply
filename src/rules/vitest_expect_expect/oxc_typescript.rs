@@ -312,6 +312,13 @@ impl OxcCheck for Check {
         if crate::rules::test_assertion_helpers::delegates_to_outer_param(node, semantic) {
             return;
         }
+        // The test delegates to a callback it passes outward whose parameter is
+        // supplied by a cross-file tester helper (knex's
+        // `.testSql(tester => tester(...))`) — the real assertions live in that
+        // helper, in another module.
+        if crate::rules::test_assertion_helpers::delegates_to_callback_param(node, semantic) {
+            return;
+        }
         // A promise-returning test whose completion path calls the resolve
         // parameter of an enclosing `new Promise(done => …)` executor asserts
         // by timeout: if `done(...)` is never reached the promise never settles
@@ -913,6 +920,35 @@ mod tests {
                 await setupRouter("/async");
             });
         "#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #2339 — knex's `.testSql(tester => tester(...))` pattern:
+    // the callback's `tester` parameter is supplied by a cross-file helper
+    // (`testSqlTester` in logger.js) that performs the real `expect(...)`. The
+    // test body only invokes that supplied parameter, so its assertions live in
+    // another module.
+    #[test]
+    fn allows_test_delegating_to_cross_file_tester_callback_param() {
+        let src = r#"
+            it("should handle simple inserts", async function () {
+                await knex("accounts")
+                    .insert({ first_name: "Test" }, "id")
+                    .testSql(function (tester) {
+                        tester("mysql", "insert into `accounts` ...", [], 1);
+                        tester("pg", "insert into \"accounts\" ...", [], [{ id: 1 }]);
+                    });
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative-space guard for #2339: a plain non-asserting call in the body
+    // (the callee is not a callback parameter supplied from outside) must still
+    // fire — the carve-out must not silence genuinely assertion-less tests.
+    #[test]
+    fn still_flags_test_with_plain_body_call() {
+        let src = r#"it("x", () => { doThing(); });"#;
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 
