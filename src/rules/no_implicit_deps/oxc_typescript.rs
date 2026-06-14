@@ -8,9 +8,9 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 use super::{
-    is_bare_specifier, is_node_builtin, is_subpath_import, is_sveltekit_adapter_virtual_module,
-    is_sveltekit_app_alias, is_virtual_module, jest_module_roots, matches_alias, module_federation,
-    root_package_name, types_package_name,
+    is_bare_specifier, is_node_builtin, is_path_alias_prefix, is_subpath_import,
+    is_sveltekit_adapter_virtual_module, is_sveltekit_app_alias, is_virtual_module,
+    jest_module_roots, matches_alias, module_federation, root_package_name, types_package_name,
 };
 
 pub struct Check;
@@ -75,6 +75,14 @@ impl OxcCheck for Check {
             return;
         }
         if is_subpath_import(spec) {
+            return;
+        }
+        // `~/…` and `@/…` are path aliases (Vite/webpack `resolve.alias`,
+        // tsconfig `paths`, or framework defaults), never npm packages: a name
+        // cannot start with `~`, and `@/` is a scoped name with an empty scope.
+        // Exempt them structurally so an alias used without a parsed tsconfig
+        // `paths` entry is not reported as a missing dependency.
+        if is_path_alias_prefix(spec) {
             return;
         }
         if is_virtual_module(spec) {
@@ -325,6 +333,53 @@ mod tests {
         fs::write(&file, source).unwrap();
         let diags = run_oxc_in_project(&file, source);
         assert_eq!(diags.len(), 1, "unlisted dep in flat project must be flagged, got {diags:?}");
+    }
+
+    // Regression #1365: `~/` path alias (Vite/webpack `resolve.alias`) used
+    // without a parsed tsconfig `paths` entry. `~` can never start an npm
+    // package name, so the import is a local alias, not a missing dependency.
+    #[test]
+    fn allows_tilde_slash_path_alias_issue_1365() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"app","dependencies":{}}"#).unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("t.tsx");
+        let source = "import { Carbon } from '~/components/Carbon';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(diags.is_empty(), "`~/` path alias must not be flagged, got {diags:?}");
+    }
+
+    // Regression #1376: `@/` path alias (WXT/Vite framework default) used
+    // without a parsed tsconfig `paths` entry. `@/` is a scoped name with an
+    // empty scope, so it can never name a package.
+    #[test]
+    fn allows_at_slash_path_alias_issue_1376() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"app","dependencies":{}}"#).unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("t.tsx");
+        let source = "import { y } from '@/utils/bar';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(diags.is_empty(), "`@/` path alias must not be flagged, got {diags:?}");
+    }
+
+    // Negative space for #1376: the `@/` exemption must not over-reach to a
+    // genuine scoped package (non-empty scope), which stays flagged if unlisted.
+    #[test]
+    fn still_flags_real_scoped_package_not_at_slash_alias() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"app","dependencies":{}}"#).unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("t.ts");
+        let source = "import { x } from '@scope/pkg';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(diags.len(), 1, "real scoped package must still be flagged, got {diags:?}");
     }
 
     // Regression #1385: Node.js subpath imports (`#`-prefixed aliases from the

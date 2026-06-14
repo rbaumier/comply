@@ -151,6 +151,24 @@ pub(super) fn is_subpath_import(spec: &str) -> bool {
     spec.starts_with('#')
 }
 
+/// True if `spec` begins with a `~/` or `@/` path-alias prefix.
+///
+/// Both prefixes are structurally impossible npm package names, so a bare
+/// specifier carrying either is always a local path alias (Vite/webpack
+/// `resolve.alias`, tsconfig `paths`, or a framework default such as Nuxt/WXT)
+/// and never an unlisted npm dependency:
+///   - `~/…`: npm package names cannot begin with `~`.
+///   - `@/…`: an npm scoped name is `@scope/name` with a non-empty scope; `@/`
+///     has an empty scope, so it can never name a package.
+///
+/// Only the exact `~/` and `@/` prefixes match: a legitimate scoped package
+/// (`@scope/pkg`, non-empty scope) or a `~foo` specifier without a slash is not
+/// exempted. Whether the alias resolves on disk is `import-no-unresolved`'s
+/// concern, not this dependency-declaration rule's.
+pub(super) fn is_path_alias_prefix(spec: &str) -> bool {
+    spec.starts_with("~/") || spec.starts_with("@/")
+}
+
 /// Build-time virtual module specifiers injected by SvelteKit's official
 /// adapters. The adapter's Rollup/Vite plugin resolves each of these bare
 /// uppercase specifiers to generated code at bundle time (`HANDLER` → the

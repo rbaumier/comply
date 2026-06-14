@@ -28,8 +28,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 use super::{
-    is_bare_specifier, is_node_builtin, is_virtual_module, matches_alias, root_package_name,
-    strip_quotes,
+    is_bare_specifier, is_node_builtin, is_path_alias_prefix, is_virtual_module, matches_alias,
+    root_package_name, strip_quotes,
 };
 
 crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
@@ -54,6 +54,14 @@ crate::ast_check! { on ["import_statement"] => |node, source, ctx, diagnostics|
         return;
     }
     if is_node_builtin(spec) {
+        return;
+    }
+    // `~/…` and `@/…` are path aliases (Vite/webpack `resolve.alias`, tsconfig
+    // `paths`, or framework defaults), never npm packages: a name cannot start
+    // with `~`, and `@/` is a scoped name with an empty scope. Exempt them
+    // structurally so an alias used without a parsed tsconfig `paths` entry is
+    // not reported as a missing dependency.
+    if is_path_alias_prefix(spec) {
         return;
     }
     if is_virtual_module(spec) {
@@ -253,6 +261,44 @@ mod tests {
             "import { http } from '@/http';",
         );
         assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn ignores_tilde_slash_alias_without_tsconfig_paths() {
+        // Issue #1365: a `~/` path alias (Vite/webpack `resolve.alias`) used
+        // without a parsed tsconfig `paths` entry must not be flagged — `~` can
+        // never start an npm package name.
+        let (_d, diags) = run_in_project(
+            Some(r#"{ "dependencies": {} }"#),
+            None,
+            "import { Carbon } from '~/components/Carbon';",
+        );
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn ignores_at_slash_alias_without_tsconfig_paths() {
+        // Issue #1376: a `@/` path alias (WXT/Vite framework default) used
+        // without a parsed tsconfig `paths` entry must not be flagged — `@/` is
+        // a scoped name with an empty scope, never a valid package.
+        let (_d, diags) = run_in_project(
+            Some(r#"{ "dependencies": {} }"#),
+            None,
+            "import { y } from '@/utils/bar';",
+        );
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_real_scoped_package_alongside_path_alias() {
+        // Negative space: the `@/` exemption must not over-reach to genuine
+        // scoped packages (non-empty scope), which stay flagged when unlisted.
+        let source = "\
+import { y } from '@/utils/bar';
+import { x } from '@scope/pkg';
+";
+        let (_d, diags) = run_in_project(Some(r#"{ "dependencies": {} }"#), None, source);
+        assert_eq!(diags.len(), 1, "real scoped package must still be flagged, got {diags:?}");
     }
 
     #[test]
