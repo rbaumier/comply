@@ -16,6 +16,12 @@
 //! library members they document or test as `devDependencies` because they are
 //! never published, so importing them is correct.
 //!
+//! A package declaring `"private": true` is never flagged: the dependencies vs
+//! devDependencies distinction only matters for published packages whose
+//! consumers `npm install` them and need runtime deps in `dependencies`. A
+//! private package (a bundled app/dashboard/internal tool) ships everything at
+//! build time, so importing from `devDependencies` is correct.
+//!
 //! Type-only imports are never flagged: a declaration-level `import type { X }`,
 //! or an import whose named specifiers all carry the inline `type` qualifier,
 //! is erased at compile time and emits no JavaScript, so it creates no runtime
