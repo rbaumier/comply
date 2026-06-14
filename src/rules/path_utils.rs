@@ -324,6 +324,26 @@ fn has_test_file_stem(path: &Path) -> bool {
     ) && (stem == "test" || stem == "spec")
 }
 
+/// True when the file name carries a `.stories.` or `.story.` infix and a
+/// JS/TS/MDX extension (e.g. `Button.stories.tsx`, `Header.story.js`,
+/// `Intro.stories.mdx`), the Storybook story-file convention. Storybook
+/// discovers these by the `stories: ["**/*.stories.@(ts|tsx|js|jsx|mdx)"]`
+/// glob in `.storybook/main.*` and loads them at runtime — nothing `import`s
+/// them, so the import-graph BFS cannot reach them, yet they are real entry
+/// points, not dead code. The extension gate keeps an asset like
+/// `Button.stories.css` (matched by a CSS tool, not Storybook's loader) out.
+pub fn is_storybook_story(path: &Path) -> bool {
+    if !matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mdx")
+    ) {
+        return false;
+    }
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name.contains(".stories.") || name.contains(".story."))
+}
+
 /// True when the file name carries a `.test-d.` infix (e.g.
 /// `Component.test-d.tsx`), the tsd type-testing convention for files that
 /// live beside their source rather than in a `test-d/` directory.
@@ -914,6 +934,26 @@ mod aux_path_tests {
         // Guard: the prefix must be a real `vitest-`/`jest-` name boundary, not a
         // substring of an unrelated production file name.
         assert!(!is_extraneous_test_file(&PathBuf::from("src/jester.ts")));
+    }
+
+    #[test]
+    fn storybook_story_infix_and_extension() {
+        // Issue #1359: Storybook story files discovered via the glob loader.
+        assert!(is_storybook_story(&PathBuf::from("components/Button.stories.tsx")));
+        assert!(is_storybook_story(&PathBuf::from("src/Header.stories.ts")));
+        assert!(is_storybook_story(&PathBuf::from("src/Card.stories.jsx")));
+        assert!(is_storybook_story(&PathBuf::from("src/Card.stories.js")));
+        assert!(is_storybook_story(&PathBuf::from("docs/Intro.stories.mdx")));
+        // Older singular `.story.` convention.
+        assert!(is_storybook_story(&PathBuf::from("src/Toggle.story.tsx")));
+        // The extension gate keeps non-loaded sibling assets out.
+        assert!(!is_storybook_story(&PathBuf::from("src/Button.stories.css")));
+        assert!(!is_storybook_story(&PathBuf::from("src/Button.stories.json")));
+        // An ordinary component file is not a story.
+        assert!(!is_storybook_story(&PathBuf::from("src/Button.tsx")));
+        // `stories`/`story` must be a `.`-delimited infix, not a stem substring.
+        assert!(!is_storybook_story(&PathBuf::from("src/stories.ts")));
+        assert!(!is_storybook_story(&PathBuf::from("src/storyboard.ts")));
     }
 
     #[test]
