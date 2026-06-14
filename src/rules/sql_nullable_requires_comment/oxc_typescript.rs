@@ -88,4 +88,26 @@ mod tests {
         let src = "const dts = `Create a copy of this Type.\n  updatedAt: Date | null\n`;";
         assert!(run_on(src).is_empty(), "{:?}", run_on(src));
     }
+
+    // Inline SQL DDL with two uncommented nullable columns (issue #1199 example).
+    const TEST_SCHEMA: &str = "const schema = `\n  CREATE TABLE users (\n    id SERIAL PRIMARY KEY,\n    name TEXT,\n    deleted_at TIMESTAMP\n  )\n`;";
+
+    #[test]
+    fn skips_test_files_issue_1199() {
+        // Test schemas exist to exercise queries, not to document nullable design.
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            TEST_SCHEMA,
+            "tests/seeder/pg.test.ts",
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn still_fires_in_production_code_issue_1199() {
+        // The same schema under a non-test path must still be flagged.
+        let diags =
+            crate::rules::test_helpers::run_rule_gated(&Check, TEST_SCHEMA, "src/db/schema.ts");
+        assert!(!diags.is_empty(), "expected diagnostics in production code");
+    }
 }
