@@ -133,11 +133,17 @@ impl TextCheck for Check {
             }) {
                 continue;
             }
-            // Anchor the diagnostic on the first importer when available;
-            // fall back to the file the rule was invoked on.
+            // Anchor the diagnostic on the lexicographically-smallest importer
+            // when available; fall back to the file the rule was invoked on.
+            // `importers` is built in `import_index`'s `HashMap` iteration order
+            // (randomized per process), so `.first()` would pick a different
+            // carrier file run-to-run for a package imported from many sites.
+            // Selecting the `min` path makes the carrier deterministic without
+            // changing which packages are flagged.
             let anchor = info
                 .importers
-                .first()
+                .iter()
+                .min()
                 .cloned()
                 .unwrap_or_else(|| ctx.path.to_path_buf());
             diagnostics.push(Diagnostic {
@@ -256,6 +262,33 @@ mod tests {
             "message should name the package, got: {}",
             diags[0].message
         );
+    }
+
+    #[test]
+    fn anchors_multi_site_dependency_on_lexicographically_first_importer() {
+        // Regression for #1542 — when one unlisted package is imported from
+        // multiple files, the diagnostic was anchored on `importers.first()`,
+        // whose value came from `import_index`'s randomized `HashMap` iteration
+        // order, so the carrier file churned run-to-run. The anchor must be the
+        // lexicographically-smallest importer, stable across runs. Repeating the
+        // selection must always yield the same `axios.ts` anchor.
+        let files: Vec<(&str, &str)> = vec![
+            ("z.ts", "import axios from 'axios';"),
+            ("m.ts", "import axios from 'axios';"),
+            ("axios.ts", "import axios from 'axios';"),
+        ];
+        // Repeat the full selection: every run must anchor on `axios.ts`. The
+        // tempdir prefix differs per run but is a shared prefix, so the
+        // lexicographic min is the same file every time.
+        for _ in 0..8 {
+            let (_dir, diags) = run_on_project(&files, Some(r#"{ "dependencies": {} }"#), None);
+            assert_eq!(diags.len(), 1, "axios should be flagged once: {diags:?}");
+            let path = diags[0].path.to_string_lossy().to_string();
+            assert!(
+                path.ends_with("axios.ts"),
+                "anchor must be the lexicographically-first importer (axios.ts), got: {path}"
+            );
+        }
     }
 
     #[test]
