@@ -174,4 +174,34 @@ mod tests {
     fn allows_exported_decorated_empty_class() {
         assert!(run_on("@Module({})\nexport class AppModule {}").is_empty());
     }
+
+    // Regression for rbaumier/comply#2303 — empty stub/mock/token classes in
+    // test files are idiomatic (Angular DI tokens, component stubs), so the
+    // central `skip_in_test_dir` gate suppresses the rule for any file in a
+    // test directory.
+    #[test]
+    fn gated_no_fp_on_empty_stub_class_in_spec_file() {
+        let src = "describe('x', () => { class MockComponent {} class MockService {} });";
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "src/lib/router-tree.spec.ts",
+            )
+            .is_empty(),
+            "skip_in_test_dir must suppress empty stub classes in spec files"
+        );
+    }
+
+    // The same empty class at a production path must still fire — the exemption
+    // is test-directory-specific, not a blanket disable.
+    #[test]
+    fn gated_still_fires_on_empty_class_outside_test_directory() {
+        let src = "class Empty {}";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "src/lib/widget.ts").len(),
+            1,
+            "the rule must still fire on production paths"
+        );
+    }
 }
