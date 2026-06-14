@@ -3,8 +3,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
-use oxc_ast::ast::{AssignmentTarget, BindingPattern, Expression, FormalParameters, TSType};
-use rustc_hash::{FxHashMap, FxHashSet};
+use oxc_ast::ast::{Expression, FormalParameters, TSType};
+use oxc_semantic::ReferenceFlags;
 use std::sync::Arc;
 
 struct FunctionInfo {
@@ -18,6 +18,68 @@ fn count_params(params: &FormalParameters) -> (usize, bool) {
     (count, has_rest)
 }
 
+/// Derive the callable arity of the binding that `callee` resolves to in its
+/// lexical scope. Returns `None` when the binding is not a statically known
+/// function-shaped value, so shadowing is respected: the symbol table picks the
+/// declaration actually in scope at the call site, never an outer same-named one.
+fn resolve_arity<'a>(
+    callee: &oxc_ast::ast::IdentifierReference,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<FunctionInfo> {
+    let scoping = semantic.scoping();
+    let ref_id = callee.reference_id.get()?;
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
+
+    // A binding reassigned via `name = ...` has an arity at the call site that
+    // cannot be derived from its initial declaration, so it is not checked.
+    let reassigned = scoping
+        .get_resolved_references(sym_id)
+        .any(|reference| reference.flags().contains(ReferenceFlags::Write));
+    if reassigned {
+        return None;
+    }
+
+    let nodes = semantic.nodes();
+    let decl_id = scoping.symbol_declaration(sym_id);
+    let decl_kind = std::iter::once(nodes.kind(decl_id))
+        .chain(nodes.ancestor_kinds(decl_id))
+        .find(|kind| {
+            matches!(kind, AstKind::Function(_) | AstKind::VariableDeclarator(_))
+        })?;
+
+    match decl_kind {
+        AstKind::Function(func) => {
+            let (count, has_rest) = count_params(&func.params);
+            Some(FunctionInfo { param_count: count, has_rest })
+        }
+        AstKind::VariableDeclarator(decl) => {
+            // An explicit type annotation governs the call arity, not the
+            // implementation: TypeScript lets an implementation function
+            // declare fewer parameters than its declared type. Counting the
+            // impl's params (e.g. `() => {}`) would flag every call that
+            // passes the type-required arguments.
+            let params = if let Some(annotation) = &decl.type_annotation {
+                // Inline function type → its params define the arity. Anything
+                // else (a type-alias reference, etc.) is not cheaply resolvable
+                // here, so skip arity checking.
+                let TSType::TSFunctionType(fn_type) = &annotation.type_annotation else {
+                    return None;
+                };
+                &fn_type.params
+            } else {
+                match decl.init.as_ref()? {
+                    Expression::ArrowFunctionExpression(arrow) => &arrow.params,
+                    Expression::FunctionExpression(func) => &func.params,
+                    _ => return None,
+                }
+            };
+            let (count, has_rest) = count_params(params);
+            Some(FunctionInfo { param_count: count, has_rest })
+        }
+        _ => None,
+    }
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -27,63 +89,7 @@ impl OxcCheck for Check {
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
-        let mut functions: FxHashMap<String, FunctionInfo> = FxHashMap::default();
-        // Names reassigned via `name = ...` anywhere. Their arity at a call site
-        // cannot be derived from the initial declarator, so they are not tracked.
-        let mut reassigned: FxHashSet<String> = FxHashSet::default();
 
-        // Pass 1: collect function declarations and arrow/function expression
-        // assignments, and record identifiers used as assignment targets.
-        for node in semantic.nodes().iter() {
-            match node.kind() {
-                AstKind::AssignmentExpression(assign) => {
-                    if let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left {
-                        reassigned.insert(target.name.as_str().to_string());
-                    }
-                }
-                AstKind::Function(func) => {
-                    if let Some(id) = &func.id {
-                        let name = id.name.as_str().to_string();
-                        let (count, has_rest) = count_params(&func.params);
-                        functions.insert(name, FunctionInfo { param_count: count, has_rest });
-                    }
-                }
-                AstKind::VariableDeclarator(decl) => {
-                    let BindingPattern::BindingIdentifier(id) = &decl.id else {
-                        continue;
-                    };
-                    // An explicit type annotation governs the call arity, not the
-                    // implementation: TypeScript lets an implementation function
-                    // declare fewer parameters than its declared type. Counting the
-                    // impl's params (e.g. `() => {}`) would flag every call that
-                    // passes the type-required arguments.
-                    let params = if let Some(annotation) = &decl.type_annotation {
-                        // Inline function type → its params define the arity.
-                        // Anything else (a type-alias reference, etc.) is not
-                        // cheaply resolvable here, so skip arity checking.
-                        let TSType::TSFunctionType(fn_type) = &annotation.type_annotation else {
-                            continue;
-                        };
-                        &fn_type.params
-                    } else {
-                        let Some(init) = &decl.init else { continue };
-                        match init {
-                            Expression::ArrowFunctionExpression(arrow) => &arrow.params,
-                            Expression::FunctionExpression(func) => &func.params,
-                            _ => continue,
-                        }
-                    };
-                    let (count, has_rest) = count_params(params);
-                    functions.insert(
-                        id.name.as_str().to_string(),
-                        FunctionInfo { param_count: count, has_rest },
-                    );
-                }
-                _ => {}
-            }
-        }
-
-        // Pass 2: check call expressions.
         for node in semantic.nodes().iter() {
             let AstKind::CallExpression(call) = node.kind() else {
                 continue;
@@ -91,11 +97,7 @@ impl OxcCheck for Check {
             let Expression::Identifier(callee) = &call.callee else {
                 continue;
             };
-            let name = callee.name.as_str();
-            if reassigned.contains(name) {
-                continue;
-            }
-            let Some(info) = functions.get(name) else {
+            let Some(info) = resolve_arity(callee, semantic) else {
                 continue;
             };
             if info.has_rest {
@@ -103,6 +105,7 @@ impl OxcCheck for Check {
             }
             let arg_count = call.arguments.len();
             if arg_count > info.param_count {
+                let name = callee.name.as_str();
                 let (line, column) =
                     byte_offset_to_line_col(ctx.source, call.span.start as usize);
                 diagnostics.push(Diagnostic {
@@ -209,6 +212,38 @@ mod tests {
         let src = r#"
             let f = () => {}
             f(1)
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn inner_shadow_does_not_taint_outer_binding() {
+        // Outer `test` is a factory-returned object that legitimately accepts 2
+        // args; an inner 0-param `test` arrow shadows it only inside `helper`.
+        // The outer call site must not be flagged against the inner arity
+        // (#2136).
+        let src = r#"
+            const test = testFactory('./fixtures/basics/');
+            test('syncs tabs', async ({ page }) => {});
+            function helper() {
+                const test = async () => {};
+                return test;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_extra_args_against_inner_shadow_in_its_scope() {
+        // Negative-space guard: the in-scope binding at the call site is the
+        // inner 0-param `g`, so an extra-args call inside that scope is still
+        // flagged against the correctly-resolved arity.
+        let src = r#"
+            function g(a, b) {}
+            function helper() {
+                const g = () => {};
+                g(1);
+            }
         "#;
         assert_eq!(run(src).len(), 1);
     }
