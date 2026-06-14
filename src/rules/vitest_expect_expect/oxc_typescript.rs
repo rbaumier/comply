@@ -274,6 +274,14 @@ impl OxcCheck for Check {
         ) {
             return;
         }
+        // The test's only assertion may live in a same-file helper function
+        // (module or describe scope) called from the body — follow that call
+        // edge before flagging.
+        if crate::rules::test_assertion_helpers::body_calls_asserting_local_helper(
+            body_span, semantic,
+        ) {
+            return;
+        }
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -695,6 +703,62 @@ mod tests {
               done(undefined);
             });
         "#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #1677 — the test's only assertion lives in a helper
+    // defined in the same `describe` scope and called from the body.
+    #[test]
+    fn allows_test_calling_describe_scope_helper_with_assertion() {
+        let src = r#"
+            describe("Cache-Control header", () => {
+                describe("is not set", () => {
+                    const shouldNotSetCacheControlHeader = (response) => {
+                        expect(response.headers.get("cache-control")).toBeUndefined();
+                    };
+                    it("is not set when disabled", async () => {
+                        const response = await makePlugin();
+                        shouldNotSetCacheControlHeader(response);
+                    });
+                });
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #1617 — same root cause for a module-scope helper.
+    #[test]
+    fn allows_test_calling_module_scope_helper_with_assertion() {
+        let src = r#"
+            function assertOk(response) {
+                expect(response.status).toBe(200);
+            }
+            it("returns ok", async () => {
+                const response = await fetchThing();
+                assertOk(response);
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // True positive guard for #1677: a helper with no assertion does not
+    // launder an empty test.
+    #[test]
+    fn still_flags_test_calling_helper_without_assertion() {
+        let src = r#"
+            const setupThing = (x) => { const y = x + 1; };
+            it("does nothing", () => {
+                setupThing(1);
+            });
+        "#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // True positive guard for #1677: a test that asserts nothing and calls
+    // nothing still fires.
+    #[test]
+    fn still_flags_test_with_no_assertion_and_no_call() {
+        let src = r#"it("x", () => { const y = 1 + 1; });"#;
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
