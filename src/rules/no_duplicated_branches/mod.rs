@@ -1,6 +1,14 @@
 //! no-duplicated-branches — flag if/else or match branches with identical
 //! bodies.
 //!
+//! ## Adjacency
+//!
+//! Only directly-adjacent arms in a chain are flagged. Two arms with an
+//! identical body are trivially mergeable (`if A || B`) only when they are
+//! consecutive. When a distinct arm sits between them, merging requires
+//! reordering the chain, which changes top-to-bottom evaluation once
+//! conditions overlap — so non-adjacent duplicates are left alone.
+//!
 //! ## Pattern-binding mode (Rust only)
 //!
 //! When a Rust `if`/`else if` chain contains at least one `let_condition`
@@ -19,10 +27,7 @@
 //!
 //! ## Dedup
 //!
-//! Each duplicate line is reported at most once per chain. The previous
-//! implementation used an O(n²) pairwise loop that reported line `j` once
-//! per earlier match, emitting three diagnostics on a three-branch
-//! repeat.
+//! Each duplicate line is reported at most once per chain.
 
 mod oxc_typescript;
 mod rust;
