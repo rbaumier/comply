@@ -149,6 +149,53 @@ fn block_has_truthy_guard<'a>(
     false
 }
 
+/// True when `expr` is, or chains off, a bare `expect(...)` call — covering
+/// `expect(a).toBe(b)`, `expect(a).to.equal(b)` (chai), and bare `expect(a)`.
+/// Walks the call/member chain down to its root identifier.
+fn is_expect_chain(expr: &Expression) -> bool {
+    match expr.without_parentheses() {
+        Expression::Identifier(id) => id.name.as_str() == "expect",
+        Expression::CallExpression(call) => is_expect_chain(&call.callee),
+        Expression::StaticMemberExpression(m) => is_expect_chain(&m.object),
+        Expression::ComputedMemberExpression(m) => is_expect_chain(&m.object),
+        _ => false,
+    }
+}
+
+/// True when `stmt` is an expression statement that performs an `expect(...)`
+/// assertion (any matcher form, including chai chains and bare property
+/// assertions like `expect(x).to.be.undefined`).
+fn statement_asserts(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::ExpressionStatement(es) => is_expect_chain(&es.expression),
+        _ => false,
+    }
+}
+
+/// True when every statement-list of `branch` contains at least one assertion.
+/// A branch is the consequent or alternate of an `if`; it is normally a
+/// `BlockStatement` but may be a bare statement.
+fn branch_asserts(branch: &Statement) -> bool {
+    match branch {
+        Statement::BlockStatement(block) => block.body.iter().any(statement_asserts),
+        other => statement_asserts(other),
+    }
+}
+
+/// True when `if_stmt` is an if/else(-if) chain in which EVERY arm asserts and
+/// a final `else` is present, so one arm always executes an assertion — the
+/// enclosed `expect(...)` is never silently skipped.
+fn every_arm_asserts(if_stmt: &oxc_ast::ast::IfStatement) -> bool {
+    if !branch_asserts(&if_stmt.consequent) {
+        return false;
+    }
+    match &if_stmt.alternate {
+        None => false,
+        Some(Statement::IfStatement(else_if)) => every_arm_asserts(else_if),
+        Some(alternate) => branch_asserts(alternate),
+    }
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -189,10 +236,11 @@ impl OxcCheck for Check {
                         AstKind::Program(p) => block_has_truthy_guard(&p.body, if_stmt, ctx.source),
                         _ => false,
                     };
-                    if is_type_narrowing(&if_stmt.test) || guarded {
-                        // Type narrowing (result.isErr(), instanceof, !== null) or a
-                        // preceding unconditional assertion guarantees the branch —
-                        // not conditional logic.
+                    if is_type_narrowing(&if_stmt.test) || guarded || every_arm_asserts(if_stmt) {
+                        // Type narrowing (result.isErr(), instanceof, !== null), a
+                        // preceding unconditional assertion, or an if/else chain
+                        // whose every arm asserts (a final `else` present) all
+                        // guarantee that an assertion fires — not conditional logic.
                     } else if !in_test {
                         // Only an `if` reached before crossing the enclosing
                         // `it()`/`test()` call sits inside the test body. Once
@@ -355,6 +403,64 @@ mod tests {
   });\n\
 }";
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #1231: an `if/else` where BOTH branches assert is never
+    // silent — one branch always executes, so every run fires an assertion.
+    #[test]
+    fn allows_if_else_when_both_branches_assert() {
+        let src = "it('a', async () => {\n\
+                     const result = await query.executeTakeFirst();\n\
+                     if (dialect === 'mysql') {\n\
+                       expect(result.numChangedRows).to.equal(1n);\n\
+                     } else {\n\
+                       expect(result.numChangedRows).to.be.undefined;\n\
+                     }\n\
+                   });";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative space: an `if` without an `else` can still silently skip the
+    // assertion — it stays flagged.
+    #[test]
+    fn flags_if_without_else() {
+        let src = "it('a', () => {\n\
+                     if (c) { expect(a).toBe(1); }\n\
+                   });";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Negative space: an `else` that does NOT assert leaves the consequent
+    // assertion effectively conditional — it stays flagged.
+    #[test]
+    fn flags_if_else_when_else_does_not_assert() {
+        let src = "it('a', () => {\n\
+                     if (c) { expect(a).toBe(1); } else { log('skip'); }\n\
+                   });";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Negative space: an `if/else-if/else` chain where the final arm does not
+    // assert leaves the earlier assertions conditional — they stay flagged.
+    #[test]
+    fn flags_if_else_if_chain_with_non_asserting_final_arm() {
+        let src = "it('a', () => {\n\
+                     if (c) { expect(a).toBe(1); }\n\
+                     else if (d) { expect(b).toBe(2); }\n\
+                     else { log('skip'); }\n\
+                   });";
+        assert_eq!(run(src).len(), 2, "{:?}", run(src));
+    }
+
+    // An `if/else-if/else` chain where EVERY arm asserts is exempt.
+    #[test]
+    fn allows_if_else_if_chain_when_every_arm_asserts() {
+        let src = "it('a', () => {\n\
+                     if (c) { expect(a).toBe(1); }\n\
+                     else if (d) { expect(b).toBe(2); }\n\
+                     else { expect(e).toBe(3); }\n\
+                   });";
+        assert!(run(src).is_empty(), "{:?}", run(src));
     }
 
     // A plain if without a guard is still flagged.
