@@ -193,7 +193,11 @@ impl OxcCheck for Check {
         // Test files mutate local fixtures, accumulators, and mock-captured
         // state freely — bounded to the test scope with no non-mutating
         // alternative. Consistent with no-mutation / no-mutating-assign.
-        if ctx.file.path_segments.in_test_dir {
+        //
+        // Storybook CSF2 attaches story metadata (args, storyName, play,
+        // parameters, decorators) by assigning named properties on the exported
+        // story function — the designed API with no immutable alternative.
+        if ctx.file.path_segments.in_test_dir || ctx.file.path_segments.in_storybook {
             return;
         }
         match node.kind() {
@@ -364,6 +368,38 @@ mod tests {
             ..FileCtx::default()
         };
         crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.tsx", crate::project::default_static_project_ctx(), &file)
+    }
+
+    fn run_in_storybook_file(src: &str) -> Vec<Diagnostic> {
+        let file = FileCtx {
+            path_segments: PathSegments { in_storybook: true, ..PathSegments::default() },
+            ..FileCtx::default()
+        };
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.tsx", crate::project::default_static_project_ctx(), &file)
+    }
+
+    #[test]
+    fn skips_csf2_story_property_assignment_issue_1679() {
+        // Storybook CSF2 attaches story metadata via property assignment on the
+        // exported story function — the designed API with no immutable
+        // alternative.
+        let src = r#"
+            export const WithArgs = (args) => <Button {...args} />;
+            WithArgs.args = { label: 'With args' };
+            WithArgs.play = () => { /* interaction test */ };
+        "#;
+        assert!(run_in_storybook_file(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_same_pattern_in_non_story_file() {
+        // The same property-assignment pattern in a non-story file is still a
+        // mutation: the Storybook exemption is scoped to `.stories.*` files.
+        let src = r#"
+            export const WithArgs = (args) => renderButton(args);
+            WithArgs.args = { label: 'With args' };
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
