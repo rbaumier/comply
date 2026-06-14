@@ -54,6 +54,11 @@ const CLIENT_COMPONENT_FACTORY_CALLS: &[&str] = &[
 /// re-export propagating the directive is the idiomatic pattern. The charting and
 /// table entries (`recharts`, `@tanstack/react-table`, …) drive browser-only
 /// rendering through `ResizeObserver` and hook-powered objects internally.
+///
+/// The unified `radix-ui` v4 package (shadcn/ui v4 migrated to it from the
+/// per-component `@radix-ui/react-*` packages) is matched separately by
+/// [`is_client_only_package`] as an exact package or subpath, so `radix-ui-foo`
+/// is not exempted by accident.
 const CLIENT_ONLY_PACKAGE_PREFIXES: &[&str] = &[
     "@base-ui/react",
     "@radix-ui/",
@@ -93,10 +98,7 @@ impl OxcCheck for Check {
         for node in semantic.nodes().iter() {
             if let AstKind::ImportDeclaration(decl) = node.kind() {
                 let pkg = decl.source.value.as_str();
-                if CLIENT_ONLY_PACKAGE_PREFIXES
-                    .iter()
-                    .any(|prefix| pkg.starts_with(prefix))
-                {
+                if is_client_only_package(pkg) {
                     return Vec::new();
                 }
             }
@@ -301,6 +303,20 @@ fn has_use_client_directive(source: &str) -> bool {
 /// sibling file inside the same package rather than an npm dependency.
 fn is_relative_specifier(spec: &str) -> bool {
     spec.starts_with("./") || spec.starts_with("../")
+}
+
+/// True for an import specifier resolving to a package whose components use
+/// client APIs internally. Matches the prefix entries in
+/// [`CLIENT_ONLY_PACKAGE_PREFIXES`], plus the unified `radix-ui` v4 package as an
+/// exact package (`radix-ui`) or subpath (`radix-ui/internal`) — never a
+/// lookalike scope like `radix-ui-foo`.
+fn is_client_only_package(pkg: &str) -> bool {
+    if pkg == "radix-ui" || pkg.starts_with("radix-ui/") {
+        return true;
+    }
+    CLIENT_ONLY_PACKAGE_PREFIXES
+        .iter()
+        .any(|prefix| pkg.starts_with(prefix))
 }
 
 /// True for React-hook-shaped names: `use` followed by an uppercase letter
@@ -740,6 +756,61 @@ export function DataTable({ table }) {
 import { format } from "date-fns"
 
 export const label = format(new Date(), "yyyy")
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression tests for #1345 — shadcn/ui v4 patterns.
+    // P1: `React.useXxx` qualified hook access (already handled by the
+    // `IdentifierName` arm from #2004; locked here against the exact issue file).
+    #[test]
+    fn no_fp_for_qualified_react_use_state_and_callback_oxc() {
+        let src = r#""use client"
+
+import * as React from "react"
+
+export function AppearanceSettings() {
+  const [gpuCount, setGpuCount] = React.useState(8)
+  const handleGpuAdjustment = React.useCallback((adj) => {
+    setGpuCount(prev => Math.max(1, Math.min(99, prev + adj)))
+  }, [])
+  return <div>{gpuCount}</div>
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    // P2: the unified `radix-ui` v4 package is client-only.
+    #[test]
+    fn no_fp_for_unified_radix_ui_import_oxc() {
+        let src = r#""use client"
+
+import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui"
+
+export const Root = DropdownMenuPrimitive.Root
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_unified_radix_ui_subpath_import_oxc() {
+        let src = r#""use client"
+
+import { Primitive } from "radix-ui/internal"
+
+export const Root = Primitive.div
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Negative space: a lookalike scope with no client API is still flagged.
+    #[test]
+    fn still_flags_radix_ui_lookalike_package_oxc() {
+        let src = r#""use client"
+
+import { thing } from "radix-ui-foo"
+
+export const value = thing
 "#;
         assert_eq!(run(src).len(), 1);
     }
