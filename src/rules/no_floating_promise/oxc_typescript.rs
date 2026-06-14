@@ -150,8 +150,38 @@ fn is_async_looking_member_call(call: &CallExpression) -> bool {
     if is_event_emitter_emit(member) {
         return false;
     }
+    if is_audio_node_connect(call, member) {
+        return false;
+    }
     let method = member.property.name.as_str();
     ASYNC_LOOKING_METHODS.contains(&method)
+}
+
+/// Web Audio's `AudioNode.prototype.connect(destination)` returns the destination
+/// `AudioNode` (for chaining) or `void` — never a Promise.
+/// Matches a `.connect(...)` call by either type-free syntactic signal:
+///   - the receiver is itself a `.connect(...)` call, e.g.
+///     `osc.connect(gain).connect(masterGain)` — a Promise has no `.connect`
+///     method, so chaining `.connect()` proves the inner call returns a node; or
+///   - the sole argument is an `AudioContext`/`OfflineAudioContext` sink, i.e. a
+///     member access ending in `.destination`, e.g. `gain.connect(ctx.destination)`.
+fn is_audio_node_connect(call: &CallExpression, member: &StaticMemberExpression) -> bool {
+    if member.property.name.as_str() != "connect" {
+        return false;
+    }
+    if matches!(peel_parens(&member.object), Expression::CallExpression(inner) if callee_method_is(inner, "connect"))
+    {
+        return true;
+    }
+    let Some(arg) = call.arguments.first().and_then(Argument::as_expression) else {
+        return false;
+    };
+    matches!(peel_parens(arg), Expression::StaticMemberExpression(m) if m.property.name.as_str() == "destination")
+}
+
+/// Does `call`'s callee read as `<receiver>.<method>(...)` for the given method?
+fn callee_method_is(call: &CallExpression, method: &str) -> bool {
+    matches!(&call.callee, Expression::StaticMemberExpression(m) if m.property.name.as_str() == method)
 }
 
 /// A fluent command-builder `.run()` terminal — e.g. tiptap's
@@ -753,6 +783,46 @@ it('infers the result type', () => {
         // Negative-space guard: a promise-returning call as a discarded statement
         // inside an arrow's *block* body (not the concise body) still fires.
         let d = run_on("const run = () => { db.save(user); };");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression tests for issue #1649: Web Audio's
+    // `AudioNode.prototype.connect(destination)` returns the destination AudioNode
+    // (for chaining) or void — never a Promise — so chained `.connect().connect()`
+    // calls and `.connect(ctx.destination)` calls must not be flagged.
+
+    #[test]
+    fn allows_audio_node_connect_to_destination() {
+        let src = "\
+let ctx = new AudioContext();
+let masterGain = ctx.createGain();
+masterGain.connect(ctx.destination);
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_chained_audio_node_connect() {
+        let src = "\
+osc.connect(gain).connect(masterGain);
+noise.connect(band).connect(noiseGain).connect(masterGain);
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_audio_connect() {
+        // Negative-space guard: a genuine Promise-returning `.connect()` (e.g. a
+        // DB/socket client) on a plain receiver with no Web Audio signal stays
+        // flagged.
+        let d = run_on("client.connect(connectionString);");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_floating_async_call() {
+        // Negative-space guard: a discarded async-function result still fires.
+        let d = run_on("repo.save(entity);");
         assert_eq!(d.len(), 1);
     }
 }
