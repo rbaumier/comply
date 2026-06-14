@@ -6,14 +6,16 @@
 //! - is **not** in test context (`#[test]` / `#[cfg(test)]` /
 //!   `tests/` integration directory), and
 //! - is **not** in a binary file (`main.rs`, `src/bin/*.rs`), and
-//! - is **not** in a binary-only crate (the nearest `Cargo.toml`
-//!   declares no `[lib]` table and no `src/lib.rs` exists next to it).
+//! - is **not** in a crate that declares a binary (the nearest
+//!   `Cargo.toml` declares a `[[bin]]` target or a `src/main.rs`
+//!   exists next to it).
 //!
 //! `eprintln!` is fine in CLI binaries — that's where it belongs.
 //! It's a problem in libraries because consumers can't redirect or
-//! capture it. A crate that builds no library has no library
-//! consumers, so every one of its source files is exempt, not just
-//! the entry points.
+//! capture it. A crate that ships a binary is an application: every
+//! one of its source files is exempt, not just the entry points —
+//! even when it also carries a `[lib]` purely to expose internals to
+//! its own integration tests (the `lib.rs` + `main.rs` split).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -55,7 +57,7 @@ impl AstCheck for Check {
         if ctx
             .project
             .nearest_cargo_manifest(ctx.path)
-            .is_some_and(|m| m.is_binary_only())
+            .is_some_and(|m| m.declares_binary())
         {
             return;
         }
@@ -147,6 +149,25 @@ name = "mytool"
 path = "src/main.rs"
 "#;
 
+    /// starship shape: a CLI binary that carries a `[lib]` table (and a
+    /// `src/lib.rs`) purely to expose internals to its own integration tests,
+    /// alongside a `[[bin]]` target that is the real entry point.
+    /// `is_binary_only()` is false here, yet the crate still owns its stderr.
+    const CLI_WITH_LIB_CARGO_TOML: &str = r#"
+[package]
+name = "starship"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "starship"
+path = "src/lib.rs"
+
+[[bin]]
+name = "starship"
+path = "src/main.rs"
+"#;
+
     #[test]
     fn flags_eprintln_in_library_file() {
         let source = "fn f() { eprintln!(\"oops\"); }";
@@ -172,6 +193,16 @@ path = "src/main.rs"
     fn flags_eprintln_in_library_crate_module() {
         let source = "fn f() { eprintln!(\"oops\"); }";
         assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/util.rs", source).len(), 1);
+    }
+
+    /// Regression for #1312: starship declares a `[[bin]]` target (the
+    /// `starship` CLI) alongside a `[lib]` used only to expose internals to
+    /// integration tests. `eprintln!` in setup/logger code is controlled CLI
+    /// error output — not a library writing to a consumer's stderr.
+    #[test]
+    fn allows_eprintln_in_cli_crate_with_internal_lib() {
+        let source = "fn init_logger() { eprintln!(\"Unable to create log dir\"); }";
+        assert!(run_in_crate(CLI_WITH_LIB_CARGO_TOML, "src/logger.rs", source).is_empty());
     }
 
     #[test]
