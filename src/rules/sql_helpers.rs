@@ -115,6 +115,41 @@ pub fn is_sql_ddl(text: &str) -> bool {
     false
 }
 
+/// DDL verb/object/target triples that form a complete statement. Each
+/// entry is `(verb, object)`; a complete statement names the target
+/// object after `object` (e.g. `ALTER TABLE users …`, `CREATE INDEX idx …`).
+const DDL_STATEMENT_SHAPES: &[(&str, &str)] = &[
+    ("alter", "table"),
+    ("create", "index"),
+    ("drop", "index"),
+    ("add", "constraint"),
+];
+
+/// Returns true if `text` contains a *complete* DDL statement, i.e. a
+/// `verb object target …` shape where a target name follows the object
+/// keyword.
+///
+/// This distinguishes a real migration statement (`ALTER TABLE users ADD
+/// COLUMN age INT`) from a query-builder fragment (`query_builder
+/// .push_sql("ALTER TABLE ")`), where the literal holds only the keyword
+/// prefix with no target — there is no standalone statement to which a
+/// `SET lock_timeout` could be attached.
+///
+/// Heuristic: a whole-word `verb` immediately followed by its `object`
+/// keyword, immediately followed by at least one more word (the target).
+/// Adjacency rejects English prose, and requiring the trailing target
+/// rejects builder fragments.
+pub fn contains_complete_ddl_statement(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty())
+        .collect();
+    DDL_STATEMENT_SHAPES.iter().any(|(verb, object)| {
+        words.windows(3).any(|w| w[0] == *verb && w[1] == *object)
+    })
+}
+
 /// Returns true if `lower_text` (already lowercase) contains `word`
 /// (lowercase) at a word boundary AND the next non-whitespace
 /// character is `(`. Use this to detect SQL function/type calls
@@ -242,6 +277,31 @@ mod tests {
         assert!(is_sql_ddl("CREATE OR REPLACE TYPE status AS ENUM ('a')"));
         assert!(is_sql_ddl("CREATE GLOBAL TEMPORARY TABLE t (x INT)"));
         assert!(is_sql_ddl("CREATE UNLOGGED TABLE t (x INT)"));
+    }
+
+    #[test]
+    fn complete_ddl_statement_accepts_full_alter_table() {
+        assert!(contains_complete_ddl_statement(
+            "ALTER TABLE users ADD COLUMN age INT"
+        ));
+        assert!(contains_complete_ddl_statement(
+            "CREATE INDEX idx_users_age ON users(age)"
+        ));
+        assert!(contains_complete_ddl_statement("DROP INDEX idx_users_age"));
+        assert!(contains_complete_ddl_statement(
+            "ALTER TABLE users ADD CONSTRAINT fk FOREIGN KEY (id)"
+        ));
+    }
+
+    #[test]
+    fn complete_ddl_statement_rejects_builder_fragments_issue_1498() {
+        // diesel diff_schema.rs query-builder fragments: the keyword prefix
+        // is pushed alone, with no target name — not a standalone statement.
+        assert!(!contains_complete_ddl_statement("ALTER TABLE "));
+        assert!(!contains_complete_ddl_statement(" ADD COLUMN "));
+        assert!(!contains_complete_ddl_statement(" DROP COLUMN "));
+        assert!(!contains_complete_ddl_statement(" ADD CONSTRAINT "));
+        assert!(!contains_complete_ddl_statement("CREATE INDEX "));
     }
 
     #[test]

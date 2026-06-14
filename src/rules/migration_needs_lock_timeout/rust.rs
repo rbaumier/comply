@@ -1,8 +1,8 @@
 //! migration-needs-lock-timeout — Rust backend.
 //!
 //! Scoped to migration files. Walks Rust string literals, uses
-//! `is_sql_ddl` to confirm the string is DDL before checking for
-//! `lock_timeout`.
+//! `contains_ddl` to confirm the string is a complete DDL statement
+//! before checking for `lock_timeout`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -74,5 +74,29 @@ mod tests {
     fn ignores_non_ddl_string() {
         let src = r#"fn f() { let s = "this is just prose"; }"#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_query_builder_fragments_issue_1498() {
+        // diesel diff_schema.rs: DDL assembled incrementally via a query
+        // builder. Each literal is a keyword prefix with no target name and
+        // no standalone statement to attach a lock_timeout to.
+        let src = r#"
+            fn generate_add_column(query_builder: &mut QueryBuilder, table: &str) {
+                query_builder.push_sql("ALTER TABLE ");
+                query_builder.push_identifier(table);
+                query_builder.push_sql(" ADD COLUMN ");
+                query_builder.push_sql(";");
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_complete_alter_table_statement_in_string() {
+        // Negative-space guard: a genuine raw ALTER TABLE statement without a
+        // lock_timeout must STILL fire.
+        let src = r#"fn f() { let m = "ALTER TABLE orders ADD COLUMN total NUMERIC"; }"#;
+        assert_eq!(run(src).len(), 1);
     }
 }

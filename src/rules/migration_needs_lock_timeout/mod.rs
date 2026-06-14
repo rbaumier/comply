@@ -2,9 +2,10 @@
 //!
 //! Scoped to migration files only (`**/migrations/**`). For `.sql` files
 //! the raw content is checked directly; for TS/Rust files, string literals
-//! containing DDL are checked. The path filter is the primary guard —
-//! `contains_ddl` only needs to identify DDL statements, not distinguish
-//! SQL from prose.
+//! containing a complete DDL statement are checked. `contains_ddl`
+//! requires a `verb object target` shape so query-builder fragments
+//! (`push_sql("ALTER TABLE ")`) — which have nowhere to attach a lock
+//! timeout — are not flagged.
 
 mod oxc_typescript;
 mod rust;
@@ -17,7 +18,7 @@ use crate::files::Language;
 use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
-use crate::rules::sql_helpers::contains_word;
+use crate::rules::sql_helpers::{contains_complete_ddl_statement, contains_word};
 
 pub const META: RuleMeta = RuleMeta {
     id: "migration-needs-lock-timeout",
@@ -44,12 +45,13 @@ pub fn register() -> RuleDef {
     }
 }
 
+/// True when `text` holds a *complete* DDL statement that warrants a
+/// `SET lock_timeout`. Requires a `verb object target …` shape so
+/// query-builder fragments (`push_sql("ALTER TABLE ")`), which carry
+/// only the keyword prefix and have nowhere to attach a lock timeout,
+/// are not flagged.
 pub(super) fn contains_ddl(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    (contains_word(&lower, "alter") && contains_word(&lower, "table"))
-        || (contains_word(&lower, "create") && contains_word(&lower, "index"))
-        || (contains_word(&lower, "drop") && contains_word(&lower, "index"))
-        || (contains_word(&lower, "add") && contains_word(&lower, "constraint"))
+    contains_complete_ddl_statement(text)
 }
 
 pub(super) fn declares_lock_timeout(text: &str) -> bool {
