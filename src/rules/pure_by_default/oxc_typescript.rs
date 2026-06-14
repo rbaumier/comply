@@ -9,7 +9,10 @@
 use std::collections::HashSet;
 
 use oxc_ast::AstKind;
-use oxc_ast::ast::{Expression, VariableDeclarationKind};
+use oxc_ast::ast::{
+    AssignmentOperator, AssignmentTarget, Expression, Statement,
+    VariableDeclarationKind,
+};
 use oxc_semantic::NodeId;
 use oxc_span::GetSpan;
 
@@ -55,6 +58,9 @@ impl OxcCheck for Check {
                 else {
                     continue;
                 };
+                if is_pure_setter_for(nodes, func_id, func_name, &var_name) {
+                    continue;
+                }
                 if !flagged.insert(func_id) {
                     continue;
                 }
@@ -177,6 +183,81 @@ fn enclosing_top_level_function<'a>(
         }
     }
     None
+}
+
+/// True when `func_id` is a deliberate public setter for `var_name`: its body
+/// does nothing but assign to that module-level binding, and its name follows
+/// the setter convention. Such a function is impure by design — mutating the
+/// config is its sole stated purpose — so it is not a violation.
+///
+/// Both signals are required for precision:
+/// - structural: the body is a single `var_name = <expr>` assignment, optionally
+///   followed by a bare `return;` (void return);
+/// - naming: the name starts with `set`, or `var_name` appears within the name.
+///
+/// A function that also reads the binding for a computation, returns a value, or
+/// runs any other statement fails the structural check and stays flagged.
+fn is_pure_setter_for(
+    nodes: &oxc_semantic::AstNodes,
+    func_id: NodeId,
+    func_name: &str,
+    var_name: &str,
+) -> bool {
+    let AstKind::Function(func) = nodes.kind(func_id) else {
+        return false;
+    };
+    let Some(body) = func.body.as_ref() else {
+        return false;
+    };
+    if !body_is_sole_assignment_to(&body.statements, var_name) {
+        return false;
+    }
+    name_follows_setter_convention(func_name, var_name)
+}
+
+/// True when `statements` is exactly a single assignment `var_name = <expr>`
+/// (plain `=`, never a compound op), optionally followed by a bare `return;`.
+fn body_is_sole_assignment_to(statements: &[Statement], var_name: &str) -> bool {
+    let mut iter = statements.iter();
+    let Some(first) = iter.next() else {
+        return false;
+    };
+    if !is_plain_assignment_to(first, var_name) {
+        return false;
+    }
+    match iter.next() {
+        None => true,
+        Some(second) => is_bare_return(second) && iter.next().is_none(),
+    }
+}
+
+/// True if `stmt` is `var_name = <expr>;` with the plain `=` operator.
+fn is_plain_assignment_to(stmt: &Statement, var_name: &str) -> bool {
+    let Statement::ExpressionStatement(expr_stmt) = stmt else {
+        return false;
+    };
+    let Expression::AssignmentExpression(assign) = &expr_stmt.expression else {
+        return false;
+    };
+    if assign.operator != AssignmentOperator::Assign {
+        return false;
+    }
+    let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left else {
+        return false;
+    };
+    target.name.as_str() == var_name
+}
+
+/// True if `stmt` is `return;` with no returned value.
+fn is_bare_return(stmt: &Statement) -> bool {
+    matches!(stmt, Statement::ReturnStatement(ret) if ret.argument.is_none())
+}
+
+/// True if the function name follows the setter convention for `var_name`:
+/// it starts with `set`, or `var_name` appears within it (case-insensitive).
+fn name_follows_setter_convention(func_name: &str, var_name: &str) -> bool {
+    func_name.starts_with("set")
+        || func_name.to_ascii_lowercase().contains(&var_name.to_ascii_lowercase())
 }
 
 #[cfg(test)]
@@ -314,5 +395,115 @@ export function bump() {
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("bump"));
         assert!(d[0].message.contains("counter"));
+    }
+
+    // Regression for #2241 — a deliberate public config setter whose entire
+    // body is a single assignment to the module-level `let` is impure by
+    // design, not an accidental side effect.
+    #[test]
+    fn no_fp_on_public_config_setter() {
+        let src = r#"
+export let mapStoreSuffix = 'Store'
+export function setMapStoreSuffix(suffix: string): void {
+    mapStoreSuffix = suffix
+}
+"#;
+        assert!(
+            run(src).is_empty(),
+            "a pure setter (single module-let assignment) must not be flagged"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_setter_with_trailing_void_return() {
+        // A trailing bare `return;` is still a void setter.
+        let src = r#"
+let theme = 'light'
+export function setTheme(next: string): void {
+    theme = next
+    return
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_setter_named_after_the_variable() {
+        // Name does not start with `set` but contains the variable name.
+        let src = r#"
+let locale = 'en'
+export function updateLocale(next: string) {
+    locale = next
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_setter_that_does_extra_work() {
+        // Body is more than the assignment: it also reads/computes, so it is
+        // not a pure setter and stays flagged.
+        let src = r#"
+let count = 0
+export function setCount(n: number) {
+    count = n
+    console.log(count)
+}
+"#;
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("setCount"));
+    }
+
+    #[test]
+    fn flags_setter_with_compound_assignment() {
+        // A compound `+=` reads the previous value, so it is not a plain
+        // setter even with a setter-style name.
+        let src = r#"
+let total = 0
+export function setTotal(n: number) {
+    total += n
+}
+"#;
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("setTotal"));
+    }
+
+    #[test]
+    fn flags_function_that_only_reads_mutable_state() {
+        // Reads a mutable top-level `let` for a computation — no assignment at
+        // all, so it is not a setter and must stay flagged.
+        let src = r#"
+let counter = 1
+export function setCounter(n: number) {
+    counter = n
+}
+export function compute() {
+    return counter * 2
+}
+"#;
+        let d = run(src);
+        // `setCounter` is a pure setter (exempt); `compute` reads the mutable
+        // state for a computation and must stay flagged.
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("compute"));
+        assert!(d[0].message.contains("counter"));
+    }
+
+    #[test]
+    fn flags_single_assignment_without_setter_name() {
+        // Body is a single assignment but the name neither starts with `set`
+        // nor mentions the variable — the naming signal is missing, so the
+        // structural-only match is rejected.
+        let src = r#"
+let flag = false
+export function toggle(v: boolean) {
+    flag = v
+}
+"#;
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("toggle"));
     }
 }
