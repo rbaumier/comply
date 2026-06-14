@@ -395,6 +395,8 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
             || crate::rules::path_utils::has_test_suite_factory_suffix(path)
             || lower.contains("/dtslint/")
             || lower.starts_with("dtslint/")
+            || lower.contains("/__tests_dts__/")
+            || lower.starts_with("__tests_dts__/")
             || lower.contains("/__tests__/")
             || lower.starts_with("__tests__/")
             || lower.contains("/fixtures/")
@@ -562,6 +564,14 @@ mod tests {
         assert!(scan_path(&PathBuf::from("src/test-d/types.ts")).in_test_dir);
         // dtslint type-testing convention (issue #1006).
         assert!(scan_path(&PathBuf::from("dtslint/Array.ts")).in_test_dir);
+        // dtslint-style `__tests_dts__/` type-test directory (issue #1660).
+        assert!(
+            scan_path(&PathBuf::from("packages/vite/src/node/__tests_dts__/config.ts"))
+                .in_test_dir
+        );
+        assert!(scan_path(&PathBuf::from("__tests_dts__/config.ts")).in_test_dir);
+        // Segment match — a substring like `my__tests_dts__data/` is not a dir.
+        assert!(!scan_path(&PathBuf::from("src/my__tests_dts__data/index.ts")).in_test_dir);
         // PascalCase `Tests`/`Spec` test-suite-factory convention (issue #1661).
         assert!(
             scan_path(&PathBuf::from(
