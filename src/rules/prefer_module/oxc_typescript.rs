@@ -91,6 +91,15 @@ impl OxcCheck for Check {
                 if !semantic.is_reference_to_global_variable(ident) {
                     return;
                 }
+                // Vitest injects `__dirname`/`__filename` as globals into ESM
+                // test files for backwards compatibility, so a test file in a
+                // Vitest project legitimately relies on the shim — rewriting to
+                // `import.meta.dirname` would drop that reliance. Skip the check
+                // only when both signals hold: the file is a test file and the
+                // project uses Vitest.
+                if ctx.file.path_segments.in_test_dir && ctx.project.uses_vitest(ctx.path) {
+                    return;
+                }
                 let (line, column) =
                     byte_offset_to_line_col(ctx.source, ident.span.start as usize);
                 diagnostics.push(Diagnostic {
@@ -217,6 +226,88 @@ mod tests {
         assert!(
             d.is_empty(),
             "a user-defined `const __dirname` binding must not be flagged: {d:?}"
+        );
+    }
+
+    /// Run the rule against `source` written to `rel_path` inside a temp project
+    /// whose `package.json` is `pkg_json` (or no manifest when `None`). Builds a
+    /// real `FileCtx` so `in_test_dir` reflects the path.
+    fn run_in_project(pkg_json: Option<&str>, rel_path: &str, source: &str) -> Vec<Diagnostic> {
+        use crate::config::Config;
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        if let Some(pkg) = pkg_json {
+            fs::write(dir.path().join("package.json"), pkg).unwrap();
+        }
+        let src_path = dir.path().join(rel_path);
+        fs::create_dir_all(src_path.parent().unwrap()).unwrap();
+        fs::write(&src_path, source).unwrap();
+        let src_path = fs::canonicalize(&src_path).unwrap();
+
+        let source_file = SourceFile {
+            path: src_path.clone(),
+            language: Language::TypeScript,
+        };
+        let refs: Vec<&SourceFile> = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let file = crate::rules::file_ctx::FileCtx::build(
+            &src_path,
+            source,
+            Language::TypeScript,
+            &project,
+        );
+
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &src_path, &project, &file)
+    }
+
+    const VITEST_PKG: &str =
+        r#"{"name":"app","version":"1.0.0","type":"module","devDependencies":{"vitest":"^2.0.0"}}"#;
+
+    #[test]
+    fn allows_dirname_in_vitest_test_file() {
+        let d = run_in_project(
+            Some(VITEST_PKG),
+            "test/fixtures.test.ts",
+            r#"
+            import { resolve } from 'node:path'
+            const root = resolve(__dirname, 'fixtures/vite')
+            "#,
+        );
+        assert!(
+            d.is_empty(),
+            "implicit `__dirname` in a Vitest test file is the injected shim, not CJS: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_dirname_in_non_test_file_of_vitest_project() {
+        let d = run_in_project(
+            Some(VITEST_PKG),
+            "src/paths.ts",
+            "const BENCH_DIR = path.resolve(__dirname, '..');",
+        );
+        assert!(
+            d.iter().any(|d| d.message.contains("import.meta.dirname")),
+            "`__dirname` outside a test file must still be flagged even in a Vitest project: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_dirname_in_test_file_without_vitest() {
+        let pkg = r#"{"name":"app","version":"1.0.0","type":"module"}"#;
+        let d = run_in_project(
+            Some(pkg),
+            "test/fixtures.test.ts",
+            "const root = path.resolve(__dirname, 'fixtures/vite');",
+        );
+        assert!(
+            d.iter().any(|d| d.message.contains("import.meta.dirname")),
+            "`__dirname` in a test file without Vitest has no shim and must still be flagged: {d:?}"
         );
     }
 }
