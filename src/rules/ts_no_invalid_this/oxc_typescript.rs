@@ -338,6 +338,13 @@ fn is_valid_this_context(
             AstKind::Class(_) => return true,
             AstKind::ArrowFunctionExpression(_) => continue,
             AstKind::Function(func) => {
+                // Explicit TypeScript `this` parameter: a function declaring a
+                // formal `this` parameter (`function f(this: T, …) {…}`) types
+                // its `this` context as part of the signature, so `this` in the
+                // body is the declared binding and is valid.
+                if func.this_param.is_some() {
+                    return true;
+                }
                 // Prototype-patching idiom: a function assigned to a member
                 // of a `*.prototype` object is a method — `this` is the
                 // instance at call time, so it's valid.
@@ -719,6 +726,33 @@ mod tests {
         // Negative: a `function` callback passed to a plain Promise `.then()`
         // (no `cy` chain root) gets no bound `this` — must still fire.
         let diags = run_on("fetch('/x').then(function () {\n  return this.value;\n});");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_function_with_explicit_this_param_returning_this() {
+        // Regression for #1342: a fluent function declaring an explicit
+        // TypeScript `this` parameter (`function use(this: unknown, …)`) types
+        // its `this` context, so returning `this` from the body is valid.
+        let src = "function use(this: unknown, url: string | null) {\n  return this;\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_typed_constructor_function_with_this_param() {
+        // Regression for #1342: an old-style constructor function with an
+        // explicit `this` parameter (`function Holder(this: HolderInstance)`)
+        // declares the type of `this`, so assigning `this.*` is valid.
+        let src = "function Holder(this: HolderInstance) {\n  this.req = null;\n  this.res = null;\n  this.url = null;\n  this.context = null;\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_function_without_explicit_this_param() {
+        // Negative-space guard for #1342: a plain standalone function with no
+        // explicit `this` parameter (and outside any class/object method) still
+        // has an unbound `this` and must fire.
+        let diags = run_on("function f(url: string) {\n  return this.x;\n}");
         assert_eq!(diags.len(), 1);
     }
 }
