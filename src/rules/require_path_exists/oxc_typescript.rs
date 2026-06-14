@@ -83,18 +83,25 @@ fn resolve_and_check(base_dir: &Path, import_spec: &str) -> bool {
     let resolved = base_dir.join(import_spec);
 
     for ext in EXTENSIONS {
-        let candidate = if ext.is_empty() {
-            resolved.clone()
+        if ext.is_empty() {
+            if resolved.exists() {
+                return true;
+            }
         } else if let Some(dir_ext) = ext.strip_prefix('/') {
-            resolved.join(dir_ext)
+            if resolved.join(dir_ext).exists() {
+                return true;
+            }
         } else if let Some(file_ext) = ext.strip_prefix('.') {
-            resolved.with_extension(file_ext)
-        } else {
-            continue;
-        };
-
-        if candidate.exists() {
-            return true;
+            // Node appends the extension (`./help.spec` → `help.spec.js`), so a
+            // specifier whose final segment already contains a dot keeps that
+            // dot. `with_extension` instead replaces the trailing component,
+            // which TypeScript ESM relies on to map an emitted JS specifier back
+            // to its source (`./foo.mjs` → `foo.mts`). Both are valid resolution
+            // targets, so probe each.
+            let appended = format!("{}.{}", resolved.display(), file_ext);
+            if Path::new(&appended).exists() || resolved.with_extension(file_ext).exists() {
+                return true;
+            }
         }
     }
 
@@ -416,6 +423,36 @@ mod tests {
         let diags = run_in_dir("app.ts", source, &[]);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("does-not-exist"));
+    }
+
+    #[test]
+    fn no_fp_for_multi_dot_extension_specifier_issue_2336() {
+        // knex reproducer: a CommonJS suite `require`s spec files by a multi-part
+        // extension convention. `require('./cli/help.spec')` must resolve to
+        // `cli/help.spec.js` by appending the extension, not replacing `.spec`.
+        let source = "require('./cli/help.spec');";
+        let diags = run_in_dir("test/suite.js", source, &["test/cli/help.spec.js"]);
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn resolves_extensionless_specifier_to_appended_extension() {
+        // A plain extensionless specifier still resolves by appending the source
+        // extension (`./foo` → `foo.js`).
+        let source = "import { x } from './foo';";
+        let diags = run_in_dir("app.ts", source, &["foo.js"]);
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_missing_multi_dot_extension_specifier() {
+        // A multi-part specifier with no matching file on disk stays a real
+        // error: appending the extension yields `cli/help.spec.js`, which is
+        // absent, so the import must still fire.
+        let source = "require('./cli/help.spec');";
+        let diags = run_in_dir("test/suite.js", source, &[]);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("cli/help.spec"));
     }
 
     #[test]
