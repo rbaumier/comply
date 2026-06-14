@@ -504,6 +504,49 @@ pub fn is_build_output_specifier(spec: &str) -> bool {
     })
 }
 
+/// Collapse `.`/`..` segments in `path` without touching the filesystem. `..`
+/// pops the last normal segment; a `..` with nothing left to pop is preserved so
+/// a path escaping its base stays observable. Used to compare a resolved import
+/// target against a directory that may be absent in a clean checkout (so
+/// canonicalizing would fail).
+fn normalize_lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// True when `specifier`, resolved relative to `importer`, lands inside a
+/// directory Prisma's client generator emits to (`generator { output = … }` in
+/// the nearest `schema.prisma`). That directory is created by `prisma generate`,
+/// gitignored, and absent in a clean checkout, so an import into it is expected
+/// to be unresolved at lint time. Covers custom output dirs (`./client`,
+/// `../custom`) that carry no build-output path segment; the default
+/// `node_modules/.prisma/client` is already handled by [`is_build_output_specifier`].
+/// Lexical comparison only — the output dir is absent, so canonicalizing fails.
+pub fn resolves_into_prisma_output(importer: &Path, specifier: &str, project: &ProjectCtx) -> bool {
+    let output_dirs = project.prisma_client_output_dirs(importer);
+    if output_dirs.is_empty() {
+        return false;
+    }
+    let Some(base_dir) = importer.parent() else {
+        return false;
+    };
+    let resolved = normalize_lexical(&base_dir.join(specifier));
+    output_dirs
+        .iter()
+        .any(|dir| resolved.starts_with(normalize_lexical(dir)))
+}
+
 /// True for an import specifier pointing at a build-time generated file: a
 /// final segment ending in `.gen` (e.g. `./routeTree.gen`), a `.gen.` extension
 /// stem (e.g. `./routeTree.gen.ts`), or a `.prebuilt.` extension stem (e.g.

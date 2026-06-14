@@ -186,6 +186,14 @@ fn check_specifier(
     if is_directory_import(spec) {
         return;
     }
+    // A relative import resolving into a Prisma `generator { output = … }`
+    // directory (a custom output dir such as `./client`) targets the generated
+    // client. Prisma emits ESM with explicit extensions internally; the user's
+    // import of the generated entry is resolved by the generated package's own
+    // exports map, so requiring an extension here is a false positive.
+    if crate::rules::path_utils::resolves_into_prisma_output(ctx.path, spec, ctx.project) {
+        return;
+    }
     let (line, column) = byte_offset_to_line_col(ctx.source, span_start as usize);
     diagnostics.push(Diagnostic {
         path: Arc::clone(&ctx.path_arc),
@@ -345,5 +353,100 @@ mod tests {
             1,
             "nested extensionless file import must still be flagged: {diags:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod prisma_output_tests {
+    use super::Check;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use std::fs;
+    use tempfile::TempDir;
+
+    const SCHEMA_CUSTOM_OUTPUT: &str = "generator client {\n  \
+        provider = \"prisma-client-js\"\n  \
+        output   = \"./client\"\n}\n\n\
+        datasource db {\n  provider = \"postgresql\"\n}\n";
+
+    /// Build a temp Node-ESM tree (no bundler, so the rule is active) with the
+    /// importer and an optional sibling `schema.prisma`, run the rule, and return
+    /// its diagnostics. The generator `output` directory is never created.
+    fn run_with_schema(
+        importer_rel: &str,
+        source: &str,
+        schema_rel: &str,
+        schema: Option<&str>,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"type":"module"}"#).unwrap();
+        if let Some(schema) = schema {
+            let schema_path = dir.path().join(schema_rel);
+            fs::create_dir_all(schema_path.parent().unwrap()).unwrap();
+            fs::write(&schema_path, schema).unwrap();
+        }
+        let importer = dir.path().join(importer_rel);
+        fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        fs::write(&importer, source).unwrap();
+        let canon = fs::canonicalize(&importer).unwrap();
+        let source_file = SourceFile {
+            path: canon.clone(),
+            language: Language::from_path(&canon).unwrap(),
+        };
+        let project = ProjectCtx::load(&[&source_file], &Config::default());
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    #[test]
+    fn no_fp_for_custom_prisma_output_import_issue_2293() {
+        // prisma/prisma reproducer: the extensionless import of the generated
+        // client at `./client/edge` (the `generator { output = "./client" }`
+        // directory) is resolved by the generated package's exports map, so the
+        // missing-extension warning is a false positive.
+        let source = "import { PrismaClient } from './client/edge';";
+        let diags = run_with_schema(
+            "packages/bundle-size/da-workers-pg/index.js",
+            source,
+            "packages/bundle-size/da-workers-pg/schema.prisma",
+            Some(SCHEMA_CUSTOM_OUTPUT),
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_extensionless_non_prisma_import_with_schema_present() {
+        // Negative space: with the Prisma signal present, an extensionless import
+        // outside the generator output dir still needs an explicit extension.
+        let source = "import { makeData } from './makeData';";
+        let diags = run_with_schema(
+            "packages/bundle-size/da-workers-pg/index.js",
+            source,
+            "packages/bundle-size/da-workers-pg/schema.prisma",
+            Some(SCHEMA_CUSTOM_OUTPUT),
+        );
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("makeData"));
+    }
+
+    #[test]
+    fn still_flags_prisma_shaped_import_without_schema() {
+        // No `schema.prisma` = no Prisma signal: `./client/edge` is an ordinary
+        // extensionless import and must still be flagged.
+        let source = "import { PrismaClient } from './client/edge';";
+        let diags = run_with_schema(
+            "packages/bundle-size/da-workers-pg/index.js",
+            source,
+            "packages/bundle-size/da-workers-pg/schema.prisma",
+            None,
+        );
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("client/edge"));
     }
 }

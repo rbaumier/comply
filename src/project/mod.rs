@@ -1628,6 +1628,16 @@ pub struct ProjectCtx {
     // identical for every file under the same `ng-package.json`. `None` caches a
     // missing/malformed file or an absent `lib.entryFile` so it is not re-read.
     ng_package_entry_cache: Mutex<HashMap<PathBuf, Option<String>>>,
+
+    // Absolute directories declared as a Prisma `generator { output = … }` in
+    // each `schema.prisma`, keyed by that schema's directory. The generated
+    // client lands here at `prisma generate` time; the directory is gitignored
+    // and absent in a clean checkout, so imports resolving into it are expected
+    // to be unresolved at lint time. Resolved lazily on first miss and memoized
+    // by schema dir — every importer under the same schema shares the answer. An
+    // empty `Vec` caches a missing schema or one with no `output` (default
+    // `node_modules/.prisma/client`, already covered by the build-output match).
+    prisma_output_dirs_cache: Mutex<HashMap<PathBuf, Arc<Vec<PathBuf>>>>,
 }
 
 impl ProjectCtx {
@@ -2845,6 +2855,52 @@ impl ProjectCtx {
         let _ = ctx.prisma_soft_delete_models.set(Some(set));
         ctx
     }
+
+    /// Absolute directories where Prisma's client generator emits its output,
+    /// as declared by `generator { output = … }` in the nearest `schema.prisma`
+    /// above `path`. The generated client lands in these directories at
+    /// `prisma generate` time; they are gitignored and absent in a clean
+    /// checkout, so imports resolving into them are expected to be unresolved at
+    /// lint time. Returns an empty slice when no `schema.prisma` is found above
+    /// `path` or none of its generators declare an `output` (the default
+    /// `node_modules/.prisma/client`, already covered by the build-output match).
+    /// Walks up per importer — monorepos declare a `schema.prisma` per package —
+    /// and memoizes by schema directory, shared by every importer beneath it.
+    pub fn prisma_client_output_dirs(&self, path: &Path) -> Arc<Vec<PathBuf>> {
+        let empty = || Arc::new(Vec::new());
+        let Some(start_dir) = path.parent() else {
+            return empty();
+        };
+        let Some(schema_dir) =
+            walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "schema.prisma")
+        else {
+            return empty();
+        };
+
+        if let Some(hit) = self
+            .prisma_output_dirs_cache
+            .lock()
+            .ok()
+            .and_then(|c| c.get(&schema_dir).cloned())
+        {
+            return hit;
+        }
+
+        let dirs = std::fs::read_to_string(schema_dir.join("schema.prisma"))
+            .ok()
+            .map(|schema| {
+                parse_prisma_generator_outputs(&schema)
+                    .into_iter()
+                    .map(|out| schema_dir.join(out))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let arc = Arc::new(dirs);
+        if let Ok(mut map) = self.prisma_output_dirs_cache.lock() {
+            map.entry(schema_dir).or_insert_with(|| Arc::clone(&arc));
+        }
+        arc
+    }
 }
 
 /// Scan the project tree downward from `root` for every `schema.prisma` file
@@ -2942,6 +2998,60 @@ fn parse_prisma_soft_delete_models(schema: &str) -> HashSet<String> {
         }
     }
     result
+}
+
+/// Parse a `schema.prisma` text and return the literal `output` paths declared
+/// by each `generator { … }` block. Line-based scan mirroring
+/// [`parse_prisma_soft_delete_models`] — Prisma's grammar puts each assignment
+/// on its own line, so an `output = "./client"` inside a `generator` block is
+/// captured by matching the `output` key and extracting the first quoted string.
+/// Non-literal values (`output = env("X")`, no quotes) yield nothing.
+fn parse_prisma_generator_outputs(schema: &str) -> Vec<String> {
+    let mut outputs = Vec::new();
+    let mut in_generator = false;
+    let mut depth: i32 = 0;
+
+    for line in schema.lines() {
+        let trimmed = line.trim();
+
+        if in_generator {
+            for c in trimmed.chars() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+            }
+            if let Some(rest) = trimmed.strip_prefix("output")
+                && rest.trim_start().starts_with('=')
+                && let Some(path) = first_quoted_literal(rest)
+            {
+                outputs.push(path);
+            }
+            if depth <= 0 {
+                in_generator = false;
+            }
+        } else if trimmed.starts_with("generator ") {
+            in_generator = true;
+            depth = 0;
+            for c in trimmed.chars() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+    outputs
+}
+
+/// Extract the first double-quoted string literal from `s`, returning its inner
+/// text. `None` when no closing quote follows the opening one.
+fn first_quoted_literal(s: &str) -> Option<String> {
+    let start = s.find('"')? + 1;
+    let end = s[start..].find('"')? + start;
+    Some(s[start..end].to_string())
 }
 
 /// Resolve workspace glob patterns to actual package directories.
@@ -4549,6 +4659,51 @@ model Envelope {
         let models = parse_prisma_soft_delete_models(SCHEMA_WITH_ENVELOPE);
         assert!(models.contains("envelope"));
         assert!(!models.contains("account"));
+    }
+
+    #[test]
+    fn parse_generator_outputs_extracts_literal_output_paths() {
+        // Issue #2293: collect the literal `output` of every generator block, so
+        // the import-resolution rules can treat imports into a custom Prisma
+        // client output dir as expected-to-exist.
+        let schema = r#"
+generator client {
+  provider = "prisma-client-js"
+  output   = "./client"
+}
+
+generator edge {
+  provider = "prisma-client-js"
+  output   = "../generated/edge"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id Int @id
+}
+"#;
+        let outputs = parse_prisma_generator_outputs(schema);
+        assert_eq!(outputs, vec!["./client".to_string(), "../generated/edge".to_string()]);
+    }
+
+    #[test]
+    fn parse_generator_outputs_ignores_blocks_without_output() {
+        // A generator that declares no `output` uses Prisma's default
+        // `node_modules/.prisma/client` (covered by the build-output match), and
+        // an `output` assignment outside a generator block is not a client output.
+        let schema = r#"
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  output Int
+}
+"#;
+        assert!(parse_prisma_generator_outputs(schema).is_empty());
     }
 
     // Regression for #1281: Prisma schemas live in a `prisma/` subdirectory, not
