@@ -3,8 +3,9 @@
 //!
 //! Detection: walk `call_expression` nodes whose function is a
 //! `member_expression` with property `delete` and whose receiver is
-//! plausibly a database client (`db`, `database`, `tx`, `trx`, or any
-//! identifier containing `db` / `database`). From that call, walk
+//! plausibly a database client (`db`, `database`, `tx`, `trx`,
+//! `transaction`, any identifier containing `db` / `database`, or one
+//! ending with `Tx` / `Db`). From that call, walk
 //! outward through chained `.method(...)` ancestors collecting method
 //! names. If the chain contains no `.where`, emit one diagnostic
 //! anchored on the outer call.
@@ -45,8 +46,9 @@ crate::ast_check! { on ["call_expression"] prefilter = [".delete("] => |node, so
 
 /// Decide whether the receiver of `.delete(..)` looks like a database
 /// client. We accept identifiers whose lowercased name is `db`,
-/// `database`, `tx`, `trx`, `conn`, `client`, `drizzle` or contains
-/// `db` / `database` as a substring (e.g. `userDb`, `myDatabase`).
+/// `database`, `tx`, `trx`, `conn`, `client`, `drizzle`, `transaction`,
+/// contains `db` / `database` as a substring (e.g. `userDb`,
+/// `myDatabase`), or ends with `Tx` / `Db` (e.g. `userTx`).
 /// For member expressions, we inspect the leftmost identifier (e.g.
 /// `this.db` → `db`).
 fn receiver_looks_like_db(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
@@ -55,9 +57,11 @@ fn receiver_looks_like_db(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     let lower = name.to_lowercase();
     matches!(
         lower.as_str(),
-        "db" | "database" | "tx" | "trx" | "conn" | "client" | "drizzle"
+        "db" | "database" | "tx" | "trx" | "conn" | "client" | "drizzle" | "transaction"
     ) || lower.contains("db")
         || lower.contains("database")
+        || name.ends_with("Tx")
+        || name.ends_with("Db")
 }
 
 fn leftmost_identifier(mut node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
