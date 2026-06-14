@@ -1,5 +1,5 @@
 //! ts-triple-slash-reference backend — flag `/// <reference path="..." />`
-//! and `/// <reference types="..." />` directives.
+//! directives.
 //!
 //! Detection: scan top-level comment nodes for the triple-slash pattern.
 
@@ -16,15 +16,17 @@ crate::ast_check! { on ["comment"] prefilter = ["///"] => |node, source, ctx, di
         return;
     }
 
-    // Check for path= or types= (not lib= which is generally fine)
-    if text.contains("path=") || text.contains("types=") {
+    // Only `path=` references import a file and have a clean ES `import`
+    // replacement. `types=` (ambient `@types` / global augmentations) and
+    // `lib=` (built-in libs) pull in declarations with no ESM equivalent.
+    if text.contains("path=") {
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "ts-triple-slash-reference".into(),
-            message: "Triple-slash reference directive is legacy — \
+            message: "Triple-slash `path` reference directive is legacy — \
                       use ES `import` instead."
                 .into(),
             severity: Severity::Warning,
@@ -64,14 +66,23 @@ mod tests {
     }
 
     #[test]
-    fn flags_types_reference() {
-        let diags = run_on("/// <reference types=\"node\" />\nconst x = 1;");
-        assert_eq!(diags.len(), 1);
+    fn allows_types_reference() {
+        // `types=` pulls in ambient `@types` declarations — no ESM equivalent.
+        assert!(run_on("/// <reference types=\"node\" />\nconst x = 1;").is_empty());
     }
 
     #[test]
     fn allows_lib_reference() {
         assert!(run_on("/// <reference lib=\"es2015\" />\nconst x = 1;").is_empty());
+    }
+
+    #[test]
+    fn allows_vitest_type_augmentation() {
+        // Regression #2261: vite/vitest config type-augmentation directives.
+        let src = "/// <reference types=\"vitest\" />\n\
+                   /// <reference types=\"vite/client\" />\n\
+                   import { defineConfig } from \"vite\";";
+        assert!(run_on(src).is_empty());
     }
 
     #[test]

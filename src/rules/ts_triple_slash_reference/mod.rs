@@ -12,8 +12,8 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "ts-triple-slash-reference",
-    description: "Triple-slash reference directives are legacy — use ES `import` instead.",
-    remediation: "Replace `/// <reference path=\"...\" />` or `/// <reference types=\"...\" />` with an ES `import` declaration.",
+    description: "Triple-slash `path` reference directives are legacy — use ES `import` instead.",
+    remediation: "Replace `/// <reference path=\"...\" />` with an ES `import` declaration. (`types`/`lib` references have no ESM equivalent and are not flagged.)",
     severity: Severity::Warning,
     doc_url: Some("https://typescript-eslint.io/rules/triple-slash-reference"),
     categories: &["typescript"],

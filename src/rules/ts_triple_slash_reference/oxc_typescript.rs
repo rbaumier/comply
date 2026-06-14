@@ -25,7 +25,10 @@ impl OxcCheck for Check {
             if !trimmed.starts_with("/// <reference") && !trimmed.starts_with("///<reference") {
                 continue;
             }
-            if !trimmed.contains("path=") && !trimmed.contains("types=") {
+            // Only `path=` references import a file and have a clean ES `import`
+            // replacement. `types=` (ambient `@types` / global augmentations) and
+            // `lib=` (built-in libs) pull in declarations with no ESM equivalent.
+            if !trimmed.contains("path=") {
                 continue;
             }
             let byte_offset = line_text.as_ptr() as usize - ctx.source.as_ptr() as usize;
@@ -35,7 +38,7 @@ impl OxcCheck for Check {
                 line,
                 column,
                 rule_id: super::META.id.into(),
-                message: "Triple-slash reference directive is legacy — \
+                message: "Triple-slash `path` reference directive is legacy — \
                           use ES `import` instead."
                     .into(),
                 severity: Severity::Warning,
