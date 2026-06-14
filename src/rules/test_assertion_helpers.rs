@@ -47,6 +47,46 @@ pub(crate) fn has_render_assertion_call(text: &str) -> bool {
     false
 }
 
+/// True when `call` is a Cypress assertion: a `.should(...)` or `.and(...)`
+/// member call whose receiver chain is rooted at the global `cy` identifier.
+/// Cypress expresses assertions by chaining `should`/`and` onto a command
+/// rooted at `cy` (`cy.get(x).should(...)`, `cy.get(x).find(y).should(...)`,
+/// `cy.get(x).should(...).and(...)`), so reaching such a call means the test
+/// does assert. The chain is walked down its `object` links — through both
+/// member accesses (`cy.get`) and the calls between them (`cy.get(x)`) — to the
+/// left-most object, which must be the identifier `cy`. A bare `.should(...)` on
+/// any other receiver is deliberately not matched.
+pub(crate) fn is_cypress_assertion_call(call: &CallExpression) -> bool {
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    if !matches!(member.property.name.as_str(), "should" | "and") {
+        return false;
+    }
+    member_chain_root_is_cy(&member.object)
+}
+
+/// Follow the `object` links of a member/call chain down to its left-most
+/// object expression and return true when that root is the identifier `cy`.
+fn member_chain_root_is_cy(expr: &Expression) -> bool {
+    let mut current = expr.get_inner_expression();
+    loop {
+        match current {
+            Expression::Identifier(id) => return id.name.as_str() == "cy",
+            Expression::StaticMemberExpression(member) => {
+                current = member.object.get_inner_expression();
+            }
+            Expression::ComputedMemberExpression(member) => {
+                current = member.object.get_inner_expression();
+            }
+            Expression::CallExpression(call) => {
+                current = call.callee.get_inner_expression();
+            }
+            _ => return false,
+        }
+    }
+}
+
 /// True when a `throw` statement lies within `body_span`. A `throw` is a valid
 /// assertion mechanism: timing/property/fuzzing tests fail by throwing on a
 /// violated condition (`if (after - before > 10) throw new Error(...)`), which
@@ -365,10 +405,12 @@ fn span_has_direct_assertion(span: Span, semantic: &oxc_semantic::Semantic) -> b
     semantic.nodes().iter().any(|n| {
         let in_span = |s: Span| s.start >= span.start && s.end <= span.end;
         match n.kind() {
-            AstKind::CallExpression(call) if in_span(call.span) => call_is_assertion(call),
+            AstKind::CallExpression(call) if in_span(call.span) => {
+                call_is_assertion(call) || is_cypress_assertion_call(call)
+            }
             AstKind::StaticMemberExpression(member) if in_span(member.span) => matches!(
                 member.property.name.as_str(),
-                "should" | "toBe" | "toEqual" | "toMatch" | "toThrow"
+                "toBe" | "toEqual" | "toMatch" | "toThrow"
             ),
             AstKind::ThrowStatement(throw) if in_span(throw.span) => true,
             AstKind::TSSatisfiesExpression(sat) if in_span(sat.span) => true,
