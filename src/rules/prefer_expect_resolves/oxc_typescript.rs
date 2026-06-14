@@ -26,6 +26,45 @@ fn imports_chai(program: &oxc_ast::ast::Program<'_>) -> bool {
     })
 }
 
+/// Matchers attached to the `expect()` return value rather than the `.resolves`
+/// proxy. These are snapshot/screenshot assertions (Playwright, jest-image-snapshot)
+/// that read the already-resolved value synchronously; the `.resolves` proxy does
+/// not forward them, so rewriting `expect(await p).toMatchSnapshot()` to
+/// `await expect(p).resolves.toMatchSnapshot()` breaks at runtime. The core
+/// vitest/jest value matchers that ARE proxied (`toMatchObject`, `toEqual`,
+/// `toHaveLength`, `toHaveProperty`, …) are deliberately absent — those stay flagged.
+const NON_RESOLVES_MATCHERS: &[&str] = &[
+    "toMatchSnapshot",
+    "toMatchInlineSnapshot",
+    "toMatchAriaSnapshot",
+    "toHaveScreenshot",
+    "toMatchImageSnapshot",
+];
+
+/// The matcher name chained directly after `expect(...)`, i.e. the `m` in
+/// `expect(await p).m(...)`. `None` when `expect(...)` is not the object of a
+/// static member access. A leading `.not` modifier is transparent:
+/// `expect(...).not.m()` resolves to `m`.
+fn chained_matcher_name<'a>(
+    call_id: oxc_semantic::NodeId,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a str> {
+    let nodes = semantic.nodes();
+    let parent = nodes.parent_node(call_id);
+    let AstKind::StaticMemberExpression(member) = parent.kind() else {
+        return None;
+    };
+    let name = member.property.name.as_str();
+    if name != "not" {
+        return Some(name);
+    }
+    // `expect(...).not.m()` — step over the `.not` modifier to the real matcher.
+    let AstKind::StaticMemberExpression(inner) = nodes.parent_node(parent.id()).kind() else {
+        return None;
+    };
+    Some(inner.property.name.as_str())
+}
+
 /// True when the awaited expression is a React-Testing-Library `findBy*` /
 /// `findAllBy*` query. Those reject (throw) on not-found with RTL's own
 /// diagnostic message, so `expect(await screen.findByText(...))` already fails
@@ -81,6 +120,14 @@ impl OxcCheck for Check {
         // chai's `expect()` has no `.resolves` API — the suggested rewrite is
         // jest/vitest-only and would throw at runtime in a chai file.
         if imports_chai(semantic.nodes().program()) {
+            return;
+        }
+
+        // Snapshot/screenshot matchers live on the `expect()` return value, not
+        // the `.resolves` proxy — the rewrite would call an undefined method.
+        if chained_matcher_name(node.id(), semantic)
+            .is_some_and(|m| NON_RESOLVES_MATCHERS.contains(&m))
+        {
             return;
         }
 
@@ -175,5 +222,42 @@ import { expect } from 'vitest';
 expect(await getValue()).toEqual(1);
 "#;
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #2264: Playwright snapshot/screenshot matchers attach to the
+    // `expect()` return value, not the `.resolves` proxy, so the rewrite breaks.
+    #[test]
+    fn skips_to_match_snapshot() {
+        let src = r#"expect(await page.screenshot()).toMatchSnapshot("screenshot-iframe.png");"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn skips_to_match_aria_snapshot() {
+        let src = r#"expect(await page.locator("body")).toMatchAriaSnapshot();"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn skips_non_resolves_matcher_behind_not() {
+        let src = r#"expect(await page.screenshot()).not.toMatchSnapshot("x.png");"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative space: core matchers ARE forwarded by the `.resolves` proxy, so
+    // `expect(await p)` must STILL be flagged for them — the allowlist is exact.
+    #[test]
+    fn flags_to_be() {
+        assert_eq!(run("expect(await p()).toBe(1);").len(), 1);
+    }
+
+    #[test]
+    fn flags_to_match_object() {
+        assert_eq!(run("expect(await p()).toMatchObject({ a: 1 });").len(), 1);
+    }
+
+    #[test]
+    fn flags_to_equal() {
+        assert_eq!(run("expect(await p()).toEqual({ a: 1 });").len(), 1);
     }
 }
