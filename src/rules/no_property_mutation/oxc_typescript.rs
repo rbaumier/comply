@@ -2,8 +2,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
-    byte_offset_to_line_col, is_local_object_builder_binding, is_react_display_name_assignment,
-    is_reduce_accumulator_param,
+    byte_offset_to_line_col, is_get_context_call_binding, is_local_object_builder_binding,
+    is_react_display_name_assignment, is_reduce_accumulator_param,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
@@ -244,7 +244,8 @@ impl OxcCheck for Check {
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
                                 || is_local_object_builder_binding(id, semantic)
-                                || is_reduce_accumulator_param(id, semantic)) { return; }
+                                || is_reduce_accumulator_param(id, semantic)
+                                || is_get_context_call_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
 
                         let (line, column) = byte_offset_to_line_col(ctx.source, assign.span.start as usize);
@@ -270,7 +271,8 @@ impl OxcCheck for Check {
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
                                 || is_local_object_builder_binding(id, semantic)
-                                || is_reduce_accumulator_param(id, semantic)) { return; }
+                                || is_reduce_accumulator_param(id, semantic)
+                                || is_get_context_call_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
 
                         let (line, column) = byte_offset_to_line_col(ctx.source, assign.span.start as usize);
@@ -294,7 +296,8 @@ impl OxcCheck for Check {
                     SimpleAssignmentTarget::StaticMemberExpression(m) => {
                         if is_inside_sentry_hook(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
-                            && is_created_dom_element(id, semantic) { return; }
+                            && (is_created_dom_element(id, semantic)
+                                || is_get_context_call_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                         let (line, column) = byte_offset_to_line_col(ctx.source, update.span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -310,7 +313,8 @@ impl OxcCheck for Check {
                     SimpleAssignmentTarget::ComputedMemberExpression(m) => {
                         if is_inside_sentry_hook(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
-                            && is_created_dom_element(id, semantic) { return; }
+                            && (is_created_dom_element(id, semantic)
+                                || is_get_context_call_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                         let (line, column) = byte_offset_to_line_col(ctx.source, update.span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -336,7 +340,8 @@ impl OxcCheck for Check {
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
                                 || is_local_object_builder_binding(id, semantic)
-                                || is_reduce_accumulator_param(id, semantic)) { return; }
+                                || is_reduce_accumulator_param(id, semantic)
+                                || is_get_context_call_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                     }
                     Expression::ComputedMemberExpression(m) => {
@@ -344,7 +349,8 @@ impl OxcCheck for Check {
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
                                 || is_local_object_builder_binding(id, semantic)
-                                || is_reduce_accumulator_param(id, semantic)) { return; }
+                                || is_reduce_accumulator_param(id, semantic)
+                                || is_get_context_call_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                     }
                     _ => return,
@@ -605,6 +611,44 @@ mod tests {
                 const anchor = getAnchorFromDom();
                 anchor.href = objectUrl;
             }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Canvas rendering-context property assignment — issue #2277
+
+    #[test]
+    fn allows_property_assignment_on_get_context_binding_issue_2277() {
+        // Regression for rbaumier/comply#2277 — a CanvasRenderingContext2D from
+        // `canvas.getContext('2d')` is an imperative stateful API; setting
+        // `fillStyle`/`lineWidth`/etc. is the only way to use it, no immutable
+        // alternative exists.
+        let src = r#"
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = 'red';
+            ctx.lineWidth = 2;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_property_assignment_on_non_null_get_context_binding() {
+        // The issue's exact shape uses a non-null assertion on the call.
+        let src = r#"
+            const context = canvas.getContext('2d')!;
+            context.fillStyle = gradient;
+            context.globalAlpha = 0.5;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_property_mutation_on_ordinary_object_2277() {
+        // Negative space: a const not derived from getContext references
+        // external state — mutating it stays flagged.
+        let src = r#"
+            const o = makeThing();
+            o.value = 5;
         "#;
         assert_eq!(run(src).len(), 1);
     }
