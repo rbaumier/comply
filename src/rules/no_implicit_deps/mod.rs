@@ -90,6 +90,7 @@ const VIRTUAL_PREFIXES: &[&str] = &[
     "@theme/",
     "@theme-original/",
     "@docusaurus/",
+    "@site/",
     "@internal/",
     "~react-pages",
 ];
@@ -104,8 +105,8 @@ const NON_VIRTUAL_SCHEMES: &[&str] = &["node", "http", "https"];
 /// True if `spec` is a build-time virtual module rather than an npm package.
 ///
 /// Two forms are recognized:
-///   - a known framework virtual-namespace prefix (Docusaurus theme aliases,
-///     Vite Pages), or
+///   - a known framework virtual-namespace prefix (Docusaurus theme aliases
+///     and the `@site/` project-root alias, Vite Pages), or
 ///   - a root package segment containing a `:`. npm package names cannot
 ///     contain `:`, so a colon marks a plugin-provided virtual namespace —
 ///     Vite's `virtual:` convention (`virtual:vitest-custom-virtual-file-1`)
