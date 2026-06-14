@@ -110,8 +110,13 @@ pub fn result_error_type<'a>(node: Node<'a>, source: &[u8]) -> Option<Node<'a>> 
 /// True if `node` is inside any form of Rust test context:
 ///
 /// - inside a `#[test]` function
-/// - inside a `#[cfg(test)]` / `#[cfg_attr(test, …)]` module
+/// - inside a function, module, or impl block whose `cfg` predicate activates
+///   `test` — `#[cfg(test)]`, `#[cfg(all(test, …))]`, `#[cfg(any(test, …))]`,
+///   `#[cfg_attr(test, …)]`, and nested combinations
 /// - inside a file marked with `#![cfg(test)]`
+///
+/// A negated predicate such as `#[cfg(not(test))]` is production-only and does
+/// not count as a test context.
 ///
 /// Rules that want to relax their discipline for test code (allow
 /// `unwrap`, `panic!`, `let _ = fallible()`, etc.) call this helper
@@ -128,16 +133,17 @@ pub fn is_in_test_context(node: Node, source: &[u8]) -> bool {
             continue;
         }
         if let Ok(text) = child.utf8_text(source)
-            && text.contains("cfg(test)")
+            && cfg_predicate_activates_test(text)
         {
             return true;
         }
     }
 
-    // Outer `#[test]` / `#[cfg(test)]` on an enclosing function or module.
+    // Outer `#[test]` / `#[cfg(test)]` on an enclosing function, module, or
+    // impl block (a cfg-gated `impl Trait for T` is a common test-only shape).
     let mut cur = node;
     while let Some(parent) = cur.parent() {
-        if (parent.kind() == "function_item" || parent.kind() == "mod_item")
+        if matches!(parent.kind(), "function_item" | "mod_item" | "impl_item")
             && has_test_attribute(parent, source)
         {
             return true;
@@ -157,10 +163,21 @@ pub fn is_under_tests_dir(path: &std::path::Path) -> bool {
     path.components().any(|c| c.as_os_str() == "tests")
 }
 
-/// True if the item has `#[test]`, `#[cfg(test)]`, or `#[cfg_attr(test, …)]`
-/// as a preceding `attribute_item` sibling. In tree-sitter-rust, outer
-/// attributes on an item appear as `attribute_item` nodes immediately
-/// before the item they decorate.
+/// True if the item has a test-marking attribute as a preceding
+/// `attribute_item` sibling. In tree-sitter-rust, outer attributes on an item
+/// appear as `attribute_item` nodes immediately before the item they decorate.
+///
+/// Recognized forms:
+///
+/// - `#[test]`
+/// - path test macros: `#[tokio::test]`, `#[actix_rt::test(…)]`, …
+/// - `cfg` / `cfg_attr` predicates where `test` is an active configuration
+///   predicate: `#[cfg(test)]`, `#[cfg(all(test, …))]`, `#[cfg(any(test, …))]`,
+///   `#[cfg_attr(test, …)]`, and arbitrary nesting such as
+///   `#[cfg(all(feature = "std", any(test, fuzzing)))]`.
+///
+/// A `test` predicate negated by `not(…)` (e.g. `#[cfg(not(test))]`) is
+/// production-only and is *not* treated as a test attribute.
 pub fn has_test_attribute(item: Node, source: &[u8]) -> bool {
     let mut sibling = item.prev_named_sibling();
     while let Some(s) = sibling {
@@ -168,17 +185,108 @@ pub fn has_test_attribute(item: Node, source: &[u8]) -> bool {
             break;
         }
         if let Ok(text) = s.utf8_text(source)
-            && (text.contains("#[test]")
-                || text.contains("cfg(test)")
-                || text.contains("cfg_attr(test")
-                || text.contains("::test]")   // #[tokio::test], #[actix_rt::test], …
-                || text.contains("::test("))  // #[tokio::test(flavor = "multi_thread")], …
+            && attr_marks_test(text)
         {
             return true;
         }
         sibling = s.prev_named_sibling();
     }
     false
+}
+
+/// True if a single attribute's source text marks test code: a `#[test]` /
+/// path test macro, or a `cfg`/`cfg_attr` whose predicate activates `test`
+/// (positively, outside any `not(…)`). See `has_test_attribute`.
+fn attr_marks_test(text: &str) -> bool {
+    text.contains("#[test]")
+        || text.contains("::test]")   // #[tokio::test], #[actix_rt::test], …
+        || text.contains("::test(")   // #[tokio::test(flavor = "multi_thread")], …
+        || cfg_predicate_activates_test(text)
+}
+
+/// True if `text` contains a `cfg(…)` / `cfg_attr(…)` predicate in which the
+/// `test` configuration option appears as a positive standalone predicate.
+///
+/// `test` is "positive" when it is not lexically inside a `not(…)` group, so
+/// `all(test, …)` / `any(test, …)` (any depth) count, while `not(test)` and
+/// `all(not(test), …)` do not.
+fn cfg_predicate_activates_test(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Find the start of a `cfg(` or `cfg_attr(` predicate.
+        if let Some(open) = cfg_arg_open(text, &mut i) {
+            if test_active_in_group(bytes, open) {
+                return true;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
+/// If a `cfg(` / `cfg_attr(` token begins at or after the byte cursor `*i`,
+/// advance `*i` past the keyword and opening paren and return the index of the
+/// first byte inside the parentheses. Otherwise advance `*i` by one and return
+/// `None`.
+fn cfg_arg_open(text: &str, i: &mut usize) -> Option<usize> {
+    for keyword in ["cfg_attr(", "cfg("] {
+        if text[*i..].starts_with(keyword) {
+            *i += keyword.len();
+            return Some(*i);
+        }
+    }
+    None
+}
+
+/// Scan a parenthesized cfg predicate group starting at byte `start` (the first
+/// byte inside the opening paren) up to its matching close paren, returning true
+/// if a positive `test` identifier appears outside any `not(…)`.
+fn test_active_in_group(bytes: &[u8], start: usize) -> bool {
+    // One entry per currently-open paren: true if that group is a `not(…)`.
+    // Pushed for the implicit `cfg(`/`cfg_attr(` paren we are already inside.
+    let mut negation_stack = vec![false];
+    let mut pending_not = false;
+    let mut i = start;
+    while i < bytes.len() && !negation_stack.is_empty() {
+        let b = bytes[i];
+        if is_ident_byte(b) {
+            let word_start = i;
+            while i < bytes.len() && is_ident_byte(bytes[i]) {
+                i += 1;
+            }
+            let word = &bytes[word_start..i];
+            if word == b"not" {
+                pending_not = true;
+            } else {
+                if word == b"test" && !negation_stack.iter().any(|negated| *negated) {
+                    return true;
+                }
+                pending_not = false;
+            }
+            continue;
+        }
+        match b {
+            b'(' => {
+                negation_stack.push(pending_not);
+                pending_not = false;
+            }
+            b')' => {
+                negation_stack.pop();
+            }
+            b if b.is_ascii_whitespace() => {}
+            _ => {
+                pending_not = false;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
 }
 
 /// True if `node` sits inside a trait implementation (`impl Trait for Type`).
@@ -374,6 +482,87 @@ mod tests {
                 is_in_trait_impl(func),
                 expected,
                 "is_in_trait_impl mismatch for `{src}`"
+            );
+        }
+    }
+
+    /// Find the first node of `kind` anywhere in the tree.
+    fn first_of_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
+        if node.kind() == kind {
+            return Some(node);
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(found) = first_of_kind(child, kind) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn is_in_test_context_recognizes_compound_cfg() {
+        // A `macro_invocation` (e.g. `eprintln!`) is what the affected rules
+        // anchor on; reproduce the jiff FP from #1324 with one.
+        let test_cases = [
+            ("#[cfg(test)]\nmod m { fn f() { eprintln!(\"x\"); } }", true),
+            ("#[cfg(all(test, not(loom)))]\nmod m { fn f() { eprintln!(\"x\"); } }", true),
+            ("#[cfg(any(test, fuzzing))]\nmod m { fn f() { eprintln!(\"x\"); } }", true),
+            (
+                "#[cfg(all(test, feature = \"std\", feature = \"logging\"))]\nimpl T { fn f(&self) { eprintln!(\"x\"); } }",
+                true,
+            ),
+            (
+                "#[cfg(all(feature = \"std\", any(test, fuzzing)))]\nfn f() { eprintln!(\"x\"); }",
+                true,
+            ),
+            // Negative space: `not(test)` is production-only, not test context.
+            ("#[cfg(not(test))]\nmod m { fn f() { eprintln!(\"x\"); } }", false),
+            ("#[cfg(all(not(test), unix))]\nfn f() { eprintln!(\"x\"); }", false),
+            ("#[cfg(feature = \"std\")]\nfn f() { eprintln!(\"x\"); }", false),
+            ("fn f() { eprintln!(\"x\"); }", false),
+        ];
+        for (src, expected) in test_cases {
+            let tree = parse(src);
+            let node = first_of_kind(tree.root_node(), "macro_invocation")
+                .expect("snippet should contain a macro_invocation");
+            assert_eq!(
+                is_in_test_context(node, src.as_bytes()),
+                expected,
+                "is_in_test_context mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn has_test_attribute_recognizes_known_and_compound_forms() {
+        let test_cases = [
+            ("#[test]\nfn f() {}", true),
+            ("#[cfg(test)]\nmod m {}", true),
+            ("#[cfg_attr(test, derive(Debug))]\nstruct S;", true),
+            ("#[tokio::test]\nasync fn f() {}", true),
+            ("#[tokio::test(flavor = \"multi_thread\")]\nasync fn f() {}", true),
+            ("#[cfg(all(test, not(loom)))]\nmod m {}", true),
+            ("#[cfg(any(test, fuzzing))]\nmod m {}", true),
+            ("#[cfg(all(test, feature = \"std\"))]\nmod m {}", true),
+            // Negative space.
+            ("#[cfg(not(test))]\nmod m {}", false),
+            ("#[cfg(feature = \"std\")]\nfn f() {}", false),
+            ("#[derive(Debug)]\nstruct S;", false),
+            ("fn f() {}", false),
+        ];
+        for (src, expected) in test_cases {
+            let tree = parse(src);
+            // The decorated item is the last named child of the source file;
+            // attributes precede it as `attribute_item` siblings.
+            let root = tree.root_node();
+            let item = root
+                .named_child(root.named_child_count().saturating_sub(1))
+                .expect("snippet should contain an item");
+            assert_eq!(
+                has_test_attribute(item, src.as_bytes()),
+                expected,
+                "has_test_attribute mismatch for `{src}`"
             );
         }
     }
