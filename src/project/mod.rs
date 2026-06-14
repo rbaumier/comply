@@ -854,6 +854,157 @@ fn imports_from_k6_runtime(node: tree_sitter::Node, source: &[u8]) -> bool {
         .is_some_and(|spec| spec == "k6" || spec.starts_with("k6/"))
 }
 
+/// Module specifiers that mark a file as Convex backend code: the public
+/// `convex/server` API and the per-project generated `convex/_generated/server`
+/// re-export. A file is only recognized as a Convex function module when its
+/// wrapper bindings come from one of these, so an unrelated local `query` /
+/// `mutation` never matches the shape.
+const CONVEX_SERVER_MODULES: &[&str] = &["convex/server", "convex/_generated/server"];
+
+/// Convex wrapper functions whose call result a backend module exports. The
+/// Convex deployment registers each export as a backend function and the
+/// generated `api.*` types call them by path, never through a static import, so
+/// `export const foo = query({...})` (and the internal variants) has no importer
+/// yet is live.
+const CONVEX_FUNCTION_WRAPPERS: &[&str] = &[
+    "query",
+    "mutation",
+    "action",
+    "internalQuery",
+    "internalMutation",
+    "internalAction",
+];
+
+/// Convex schema factory whose call a backend module exports as `default`.
+/// `convex/schema.ts` exports `defineSchema(...)`, consumed by Convex's code
+/// generator, never through a static import.
+const CONVEX_DEFINE_SCHEMA: &str = "defineSchema";
+
+/// Names of the exports a Convex backend module exposes to the Convex
+/// deployment runtime, or an empty set when `source` is not a Convex backend
+/// module. The Convex CLI deploys these and the generated `api.*`/`internal.*`
+/// types reference them by path, never through a static import, so each has no
+/// importer yet is live.
+///
+/// Two signals are required for the module to count: it must import from
+/// `convex/server` (or `convex/_generated/server`) *and* expose at least one
+/// Convex-shaped export — a `default` export of `defineSchema(...)` or a named
+/// `export const X = query(...)/mutation(...)/action(...)` (or the internal
+/// variants). The import gate keeps an unrelated local `query`/`mutation` from
+/// matching. The returned set is scoped tightly to those wrapper-call exports
+/// plus the `defineSchema` default, so a plain `export const helper = 5` in a
+/// Convex module is not exempted.
+///
+/// Keying on the export *shape* rather than the `convex/` directory name is
+/// deliberate: the directory is configurable and the wrapper-call shape
+/// identifies the convention on its own.
+#[must_use]
+pub fn convex_magic_exports_for_source(
+    source: &str,
+    lang: crate::files::Language,
+) -> HashSet<String> {
+    let mut names = HashSet::new();
+    let Some(grammar) = crate::parsing::ts_language_for(lang) else {
+        return names;
+    };
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&grammar).is_err() {
+        return names;
+    }
+    let Some(tree) = parser.parse(source, None) else {
+        return names;
+    };
+    let bytes = source.as_bytes();
+    let mut imports_convex_server = false;
+    crate::rules::walker::walk_tree(&tree, |node| match node.kind() {
+        "import_statement" if imports_from_convex_server(node, bytes) => {
+            imports_convex_server = true;
+        }
+        "export_statement" => {
+            collect_convex_wrapper_exports(node, bytes, &mut names);
+        }
+        _ => {}
+    });
+    if imports_convex_server {
+        names
+    } else {
+        HashSet::new()
+    }
+}
+
+/// True when `node` (an `import_statement`) imports from a Convex server module.
+/// Keys on the module specifier alone — the wrapper bindings are matched on the
+/// export side — so any import from `convex/server` or `convex/_generated/server`
+/// satisfies the source gate.
+fn imports_from_convex_server(node: tree_sitter::Node, source: &[u8]) -> bool {
+    node.child_by_field_name("source")
+        .and_then(|src| src.utf8_text(source).ok())
+        .map(|spec| spec.trim_matches(|c| c == '\'' || c == '"' || c == '`'))
+        .is_some_and(|spec| CONVEX_SERVER_MODULES.contains(&spec))
+}
+
+/// Push the names of any Convex-shaped exports declared by `node` (an
+/// `export_statement`) into `out`: `default` when its value is a
+/// `defineSchema(...)` call, and any named `export const X = <wrapper>(...)`
+/// whose initializer calls one of `CONVEX_FUNCTION_WRAPPERS`.
+fn collect_convex_wrapper_exports(
+    node: tree_sitter::Node,
+    source: &[u8],
+    out: &mut HashSet<String>,
+) {
+    let is_default = node.children(&mut node.walk()).any(|c| c.kind() == "default");
+    if is_default {
+        let calls_define_schema = node
+            .named_children(&mut node.walk())
+            .filter(|c| c.kind() == "call_expression")
+            .any(|call| call_callee_is(call, source, &|name| name == CONVEX_DEFINE_SCHEMA));
+        if calls_define_schema {
+            out.insert("default".to_string());
+        }
+        return;
+    }
+    let Some(decl) = node
+        .named_children(&mut node.walk())
+        .find(|c| c.kind() == "lexical_declaration" || c.kind() == "variable_declaration")
+    else {
+        return;
+    };
+    for declarator in decl
+        .named_children(&mut decl.walk())
+        .filter(|c| c.kind() == "variable_declarator")
+    {
+        let Some(value) = declarator.child_by_field_name("value") else {
+            continue;
+        };
+        if value.kind() != "call_expression"
+            || !call_callee_is(value, source, &|name| CONVEX_FUNCTION_WRAPPERS.contains(&name))
+        {
+            continue;
+        }
+        if let Some(name) = declarator
+            .child_by_field_name("name")
+            .filter(|n| n.kind() == "identifier")
+            .and_then(|n| n.utf8_text(source).ok())
+        {
+            out.insert(name.to_string());
+        }
+    }
+}
+
+/// True when `call` (a `call_expression`) has a plain-identifier callee whose
+/// text satisfies `pred`. A member-expression callee (`obj.query(...)`) does not
+/// match, so only the bare Convex wrapper calls are recognized.
+fn call_callee_is(
+    call: tree_sitter::Node,
+    source: &[u8],
+    pred: &dyn Fn(&str) -> bool,
+) -> bool {
+    call.child_by_field_name("function")
+        .filter(|f| f.kind() == "identifier")
+        .and_then(|f| f.utf8_text(source).ok())
+        .is_some_and(pred)
+}
+
 /// True when the `globalSetup` option in a Vitest/Vite config's `raw` text
 /// references `target`. `config_dir` is the directory holding the config, used
 /// to resolve the relative specifiers the option carries.
