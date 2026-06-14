@@ -84,6 +84,14 @@
 //!   Storybook manager bundle loads these entry files to run the registrations,
 //!   so the top-level calls are intentional side effects, not tree-shakeable
 //!   library code;
+//! - MCP server modules by content shape: a module that imports from
+//!   `@modelcontextprotocol/sdk` and registers a request handler at the top level
+//!   (`server.setRequestHandler(Schema, handler)`). The MCP SDK requires handlers
+//!   to be registered at module scope on the exported server instance (consumed
+//!   by the transport layer), so the registrations are intentional initialization
+//!   of the exported server's API, not tree-shakeable library code. The MCP SDK
+//!   import is required so a stray `.setRequestHandler` on an unrelated object in
+//!   a non-MCP module is still flagged;
 //! - code-generation utility scripts by content shape: a module that imports a
 //!   Node filesystem module (`fs`, `node:fs`, `fs/promises`, …) and whose every
 //!   top-level expression statement is a bare-identifier call to the *same*
@@ -783,6 +791,48 @@ fn is_storybook_addon_file(program: &Program) -> bool {
     })
 }
 
+/// True when the program imports from the MCP SDK package
+/// (`@modelcontextprotocol/sdk` or any `@modelcontextprotocol/sdk/` sub-path
+/// such as `@modelcontextprotocol/sdk/server/index.js`).
+fn has_mcp_sdk_import(program: &Program) -> bool {
+    fn is_mcp_specifier(src: &str) -> bool {
+        src == "@modelcontextprotocol/sdk" || src.starts_with("@modelcontextprotocol/sdk/")
+    }
+    program.body.iter().any(|stmt| {
+        let Statement::ImportDeclaration(import) = stmt else { return false };
+        is_mcp_specifier(import.source.value.as_str())
+    })
+}
+
+/// True when `call` registers an MCP request handler:
+/// `<receiver>.setRequestHandler(...)` (a `.setRequestHandler` member call).
+fn is_set_request_handler_call(call: &oxc_ast::ast::CallExpression) -> bool {
+    matches!(
+        &call.callee,
+        Expression::StaticMemberExpression(m) if m.property.name == "setRequestHandler"
+    )
+}
+
+/// True when the program is an MCP (Model Context Protocol) server module: it
+/// imports from `@modelcontextprotocol/sdk` and registers a request handler at
+/// the top level (`server.setRequestHandler(Schema, handler)`). The MCP SDK
+/// requires handlers to be registered at module scope on the server instance,
+/// which is exported and consumed by the transport layer — like the `listen()`
+/// server-entry shape, the registrations are intentional initialization of the
+/// exported server's API, not tree-shakeable library code. The MCP SDK import is
+/// required so a stray `.setRequestHandler` on an unrelated object in a non-MCP
+/// module is still flagged.
+fn is_mcp_server_file(program: &Program) -> bool {
+    if !has_mcp_sdk_import(program) {
+        return false;
+    }
+    program.body.iter().any(|stmt| {
+        let Statement::ExpressionStatement(es) = stmt else { return false };
+        let Expression::CallExpression(call) = &es.expression else { return false };
+        is_set_request_handler_call(call)
+    })
+}
+
 /// True when the program imports a Node filesystem module at the top level, in
 /// any form: an ESM `import` from `fs` / `node:fs` / `fs/promises` /
 /// `node:fs/promises`, or a `require("fs")` / `require("node:fs")` /
@@ -1436,6 +1486,7 @@ impl OxcCheck for Check {
             || is_angular_entry_shape(program)
             || is_gulp_task_file(program)
             || is_storybook_addon_file(program)
+            || is_mcp_server_file(program)
             || is_data_generation_script(program)
         {
             return Vec::new();
@@ -2566,6 +2617,69 @@ mod tests {
             diags.len(),
             2,
             "non-Storybook module with top-level side effects must still be flagged, got {diags:?}"
+        );
+    }
+
+    // --- MCP server request-handler registration (Closes #1634) -----------
+
+    // Regression for #1634: an MCP server module imports `Server` from
+    // `@modelcontextprotocol/sdk`, constructs and exports the instance, and
+    // registers request handlers at module scope via
+    // `server.setRequestHandler(Schema, handler)`. The SDK requires this at
+    // module init on the exported server, so the registrations are intentional
+    // initialization, not tree-shakeable library code.
+    #[test]
+    fn allows_mcp_set_request_handler_registration() {
+        let src = "\
+            import { Server } from '@modelcontextprotocol/sdk/server/index.js';\n\
+            import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';\n\
+            export const server = new Server(\n\
+              { name: 'shadcn', version: '1.0.0' },\n\
+              { capabilities: { resources: {}, tools: {} } },\n\
+            );\n\
+            server.setRequestHandler(ListToolsRequestSchema, async () => {\n\
+              return { tools: [] };\n\
+            });\n\
+            server.setRequestHandler(CallToolRequestSchema, async (request) => {\n\
+              return { content: [] };\n\
+            });\n";
+        let diags =
+            crate::rules::test_helpers::run_rule(&Check, src, "packages/shadcn/src/mcp/index.ts");
+        assert!(
+            diags.is_empty(),
+            "MCP server handler registration should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_set_request_handler_without_mcp_import() {
+        // No `@modelcontextprotocol/sdk` import — a stray `.setRequestHandler`
+        // on an unrelated object is an ordinary top-level side effect.
+        let src = "\
+            import { emitter } from './bus';\n\
+            emitter.setRequestHandler('x', () => {});\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "non-MCP module with a top-level side effect must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_unrelated_side_effect_in_mcp_file() {
+        // The MCP exemption gates on the `setRequestHandler` shape, but an MCP
+        // module with only an unrelated top-level side effect (no handler
+        // registration) is not an MCP server entry and stays flagged.
+        let src = "\
+            import { Server } from '@modelcontextprotocol/sdk/server/index.js';\n\
+            doSideEffect();\n";
+        let diags =
+            crate::rules::test_helpers::run_rule(&Check, src, "packages/shadcn/src/mcp/index.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "unrelated top-level side effect must still be flagged, got {diags:?}"
         );
     }
 
