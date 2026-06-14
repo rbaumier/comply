@@ -443,6 +443,16 @@ impl TextCheck for Check {
         // check pays for the per-barrel scan.
         let mut ng_reexported: Option<HashSet<String>> = None;
 
+        // Whether this module is a Cloudflare Worker module-format entry point —
+        // an `export default` object carrying a `fetch`/`scheduled`/… lifecycle
+        // handler. The Workers runtime resolves the entry from `wrangler.toml`
+        // and invokes the default export's handlers by name, never through a
+        // static import, so the `default` export (and any separately-exported
+        // handler) is live despite having no importer. Computed lazily: only an
+        // export named like a handler that survived every cheap check pays for
+        // the parse.
+        let mut cloudflare_worker_entry: Option<bool> = None;
+
         let mut diagnostics = Vec::new();
         for export in exports {
             if matches!(export.kind, ExportKind::StarReExport) {
@@ -459,6 +469,19 @@ impl TextCheck for Check {
             }
             if !index.get_usages(&canon, &export.name).is_empty() {
                 continue;
+            }
+            // Cloudflare Worker entry: the `default` export (and any
+            // separately-exported lifecycle handler) of a module whose
+            // `export default` object carries a `fetch`/`scheduled`/… handler is
+            // invoked by the Workers runtime by name, never imported. Gated on
+            // the export being a handler name so an ordinary module pays nothing.
+            if crate::project::CLOUDFLARE_WORKER_HANDLER_EXPORTS.contains(&export.name.as_str()) {
+                let is_worker_entry = *cloudflare_worker_entry.get_or_insert_with(|| {
+                    crate::project::is_cloudflare_worker_entry_source(ctx.source, ctx.lang)
+                });
+                if is_worker_entry {
+                    continue;
+                }
             }
             let structurally_consumed = structurally_consumed
                 .get_or_insert_with(|| collect_structurally_consumed_types(ctx.source, ctx.lang));
@@ -1263,6 +1286,106 @@ mod tests {
             "a `setup` export in a non-globalSetup module must still be flagged: {diags:?}"
         );
         assert!(diags[0].message.contains("setup"));
+    }
+
+    #[test]
+    fn ignores_cloudflare_worker_default_fetch_handler_issue_1561() {
+        // Regression for #1561 (prisma bundle-size workers) — a Cloudflare Worker
+        // module-format entry exports `default` an object with a `fetch` handler.
+        // The Workers runtime resolves the entry from `wrangler.toml` and invokes
+        // `fetch` by name; no JavaScript file imports it, so the default export
+        // looks dead. It is a framework magic export — never flag it. The file is
+        // a nested `index.js` (not at project root), so the root-entry bail-out
+        // does not apply; the export-shape detection is what protects it.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "packages/da-workers-pg/index.js",
+                "import { PrismaPg } from '@prisma/adapter-pg';\n\
+                 import { PrismaClient } from './client/edge';\n\
+                 export default {\n\
+                   async fetch(request, env) {\n\
+                     const adapter = new PrismaPg({ connectionString: env.DATABASE_URL });\n\
+                     const prisma = new PrismaClient({ adapter });\n\
+                     const users = await prisma.user.findMany();\n\
+                     return new Response(JSON.stringify(users));\n\
+                   },\n\
+                 };\n",
+            ),
+            ("packages/util.js", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "packages/da-workers-pg/index.js");
+        assert!(
+            diags.is_empty(),
+            "Cloudflare Worker default-object fetch handler is runtime-consumed: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_cloudflare_worker_scheduled_and_separately_exported_handler_issue_1561() {
+        // #1561 coverage — the shape also matches a default object with shorthand
+        // lifecycle handlers (`{ fetch, scheduled }`), and once a module is
+        // recognized as a Worker entry its separately-exported handler functions
+        // (`export async function scheduled`) are exempt too: the runtime may
+        // invoke those by name as well.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "workers/cron.ts",
+                "export default { fetch, scheduled };\n\
+                 export async function fetch(req) { return new Response('ok'); }\n\
+                 export async function scheduled(event, env, ctx) {}\n",
+            ),
+            ("workers/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "workers/cron.ts");
+        assert!(
+            diags.is_empty(),
+            "Worker entry default object + separately-exported handlers are live: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_ordinary_default_object_without_worker_handler_issue_1561() {
+        // Negative-space guard for #1561 — the exemption is keyed on the Worker
+        // export *shape* (default object with a lifecycle handler). An ordinary
+        // `export default {}` with no `fetch`/`scheduled`/… handler, never
+        // imported, is genuinely dead and must still be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/config.ts",
+                "export default { name: 'app', version: 1 };\n",
+            ),
+            ("src/other.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/config.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "an ordinary unused default object with no handler must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("default"));
+    }
+
+    #[test]
+    fn still_flags_named_export_in_cloudflare_worker_entry_issue_1561() {
+        // Negative-space guard for #1561 — only the `default` export and the
+        // lifecycle-handler names are runtime-consumed. An ordinary named export
+        // in a Worker entry module, with no importer, is genuinely dead and must
+        // still be flagged: the exemption is scoped to the handler names.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "workers/api.ts",
+                "export default { async fetch(req) { return new Response('ok'); } };\n\
+                 export const unusedHelper = () => 1;\n",
+            ),
+            ("workers/other.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "workers/api.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "an ordinary named export in a Worker entry must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("unusedHelper"));
     }
 
     #[test]
