@@ -37,6 +37,17 @@ impl OxcCheck for Check {
         if pkg.is_private {
             return;
         }
+        // A VSCode extension (signalled by `engines.vscode`) bundles ALL its
+        // dependencies into the published `.vsix` via `vsce`/`esbuild` at build
+        // time — there is no runtime `npm install`, so by convention every
+        // dependency is declared in `devDependencies`. The
+        // dependencies/devDependencies distinction is therefore meaningless for
+        // an extension, and importing a devDependency from its source is correct
+        // (issue #2086). Uses the same `engines.vscode` signal `prefer-global-this`
+        // reads, resolved against the file's nearest `package.json`.
+        if pkg.engines.contains_key("vscode") {
+            return;
+        }
         // Dual-read: the unit-test harness injects an empty default FileCtx, so
         // the path-segment fields are false in tests — fall back to the pure
         // path predicate, which reads `ctx.path` directly.
@@ -1637,6 +1648,56 @@ export default autoRoutes({
         let src = r#"import { describe } from "vitest";"#;
         let d = run_with_pkg_at_path(pkg, "app/routes.ts", src);
         assert_eq!(d.len(), 1, "routes.ts without RR dev import should still flag: {d:?}");
+        assert!(d[0].message.contains("vitest"));
+    }
+
+    #[test]
+    fn allows_dev_dep_in_vscode_extension_package() {
+        // Issue #2086: unocss's `packages-integrations/vscode/` is a VSCode
+        // extension. By convention all of an extension's dependencies go in
+        // `devDependencies` because the extension is bundled into the `.vsix` by
+        // `vsce`/`esbuild` at publish time — there is no runtime `npm install`, so
+        // the dependencies/devDependencies distinction is meaningless. A package
+        // declaring `engines.vscode` is an extension, so importing a devDependency
+        // (here `vscode-languageclient`) from its source is correct.
+        let pkg = r#"{
+            "engines": {"vscode": "^1.96.0"},
+            "devDependencies": {"vscode-languageclient": "^9.0.1"}
+        }"#;
+        let src = r#"import { LanguageClient } from 'vscode-languageclient/node';"#;
+        let d = run_with_pkg_at_path(pkg, "src/client.ts", src);
+        assert!(d.is_empty(), "vscode extension should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_same_dev_dep_in_package_without_vscode_engine() {
+        // Negative-space guard for #2086: the exemption is tied to the
+        // `engines.vscode` signal, not to the package name or the import name. The
+        // SAME devDependency import in a package WITHOUT `engines.vscode` must
+        // still flag — a non-extension package's production code importing a
+        // devDependency is a genuine install-time break for consumers.
+        let pkg = r#"{
+            "devDependencies": {"vscode-languageclient": "^9.0.1"}
+        }"#;
+        let src = r#"import { LanguageClient } from 'vscode-languageclient/node';"#;
+        let d = run_with_pkg_at_path(pkg, "src/client.ts", src);
+        assert_eq!(d.len(), 1, "non-extension package should still flag: {d:?}");
+        assert!(d[0].message.contains("vscode-languageclient"));
+    }
+
+    #[test]
+    fn still_flags_dev_dep_in_package_with_non_vscode_engine() {
+        // Negative-space guard for #2086: the exemption is specific to the
+        // `vscode` engine key. A package declaring only a `node` engine is an
+        // ordinary published package, not a bundled extension, so a devDependency
+        // import from its production code must still flag.
+        let pkg = r#"{
+            "engines": {"node": ">=18"},
+            "devDependencies": {"vitest": "^1"}
+        }"#;
+        let src = r#"import { describe } from "vitest";"#;
+        let d = run_with_pkg_at_path(pkg, "src/index.ts", src);
+        assert_eq!(d.len(), 1, "node-engine package should still flag: {d:?}");
         assert!(d[0].message.contains("vitest"));
     }
 }
