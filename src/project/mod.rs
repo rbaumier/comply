@@ -1416,6 +1416,34 @@ impl ProjectCtx {
             .any(|entry| manifest_dir.join(entry) == path)
     }
 
+    /// True when `path` lives in a subdirectory that houses a `package.json`
+    /// `scripts` entry file (e.g. `omnidoc/generateApiDoc.ts` is run by
+    /// `"omnidoc": "tsx ./omnidoc/generateApiDoc.ts"`, marking the whole
+    /// `omnidoc/` directory as build tooling). Such a directory is a one-shot
+    /// codegen/doc-generation toolchain run at build time, never published, so
+    /// its sibling helper modules — which the entry imports but no script names
+    /// directly — are dev tooling too. Generalizes the script-entry signal from
+    /// the named file to its directory.
+    ///
+    /// Scoped to subdirectories of the manifest: a script entry sitting directly
+    /// at the manifest root (e.g. `build.ts`) does not mark the root — where
+    /// published source also lives — as a tooling directory.
+    pub fn is_in_script_entry_dir(&self, path: &Path) -> bool {
+        let Some(manifest_dir) = self.nearest_package_json_dir(path) else {
+            return false;
+        };
+        let Some(pkg) = self.nearest_package_json(path) else {
+            return false;
+        };
+        let Some(parent) = path.parent() else {
+            return false;
+        };
+        pkg.script_entry_files.iter().any(|entry| {
+            let entry_path = manifest_dir.join(entry);
+            entry_path.parent() == Some(parent) && parent != manifest_dir
+        })
+    }
+
     /// True when `path`'s file stem matches one of the published entry-point
     /// stems its nearest `package.json` declares (any `exports` subpath, plus
     /// `main`/`module`). A multi-entry package ships built artifacts under
@@ -2756,6 +2784,40 @@ mod tests {
         assert!(ctx.is_script_entry_file(&dir.path().join("build.ts")));
         // A sibling library module the scripts never invoke is not.
         assert!(!ctx.is_script_entry_file(&dir.path().join("src/load.ts")));
+    }
+
+    #[test]
+    fn is_in_script_entry_dir_covers_sibling_helpers_of_a_script_entry() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"recharts","scripts":{"omnidoc":"tsx ./omnidoc/generateApiDoc.ts"},"main":"./lib/index.js","files":["lib"]}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx::empty();
+        // The script entry itself is in a script-entry directory.
+        assert!(ctx.is_in_script_entry_dir(&dir.path().join("omnidoc/generateApiDoc.ts")));
+        // A sibling helper the entry imports but no script names directly is too.
+        assert!(ctx.is_in_script_entry_dir(&dir.path().join("omnidoc/readProject.ts")));
+        // Published source in src/ is not in the toolchain directory.
+        assert!(!ctx.is_in_script_entry_dir(&dir.path().join("src/index.ts")));
+    }
+
+    #[test]
+    fn is_in_script_entry_dir_does_not_mark_the_manifest_root() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"pkg","scripts":{"build":"tsx ./build.ts"},"main":"./index.js"}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx::empty();
+        // A root-level script entry must not turn the manifest root — where
+        // published source also lives — into a tooling directory.
+        assert!(!ctx.is_in_script_entry_dir(&dir.path().join("index.ts")));
+        assert!(!ctx.is_in_script_entry_dir(&dir.path().join("build.ts")));
     }
 
     #[test]
