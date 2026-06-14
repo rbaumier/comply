@@ -35,6 +35,11 @@
 //!   to `fmt::Write` (distinct from `io::Write`'s `write`/`write_all`), so this
 //!   is exempt by method name without type inference — a plain
 //!   `let _ = file.write_all(..)` still fires.
+//! - `let _ = expr.map_err(|e| ...)` / `expr.inspect_err(|e| ...)`: the error is
+//!   explicitly observed/handled (e.g. logged) inside the closure before the
+//!   resulting `Result` is intentionally discarded. The closure argument is
+//!   required, so a `map_err(some_fn)` taking a bare function (which may swallow
+//!   the error) still fires. The method may sit anywhere in the call chain.
 //!
 //! NOTE: This rule uses a heuristic (call-like pattern matching) rather than
 //! type awareness. It may flag `let _ = infallible_fn()` where the function
@@ -104,6 +109,13 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
     // Skip the `core::fmt::Write` idiom `let _ = expr.write_str/write_char(..)`:
     // on an in-memory buffer the `fmt::Result` is always `Ok(())`.
     if is_fmt_write_method(value, source) {
+        return;
+    }
+
+    // Skip the handled-then-discarded idiom `let _ = expr.map_err(|e| ...)`:
+    // the error is observed inside the `map_err`/`inspect_err` closure before
+    // the now-trivial `Result` is intentionally dropped.
+    if chain_has_error_handling_closure(value, source) {
         return;
     }
 
@@ -194,6 +206,71 @@ fn is_fmt_write_method(value: Node, source: &[u8]) -> bool {
         return false;
     };
     matches!(field.utf8_text(source), Ok("write_str" | "write_char"))
+}
+
+/// True if any method in the `value` call chain is `.map_err(<closure>)` or
+/// `.inspect_err(<closure>)` — the error has been explicitly observed/handled
+/// (e.g. logged) inside the closure before the resulting `Result` is discarded.
+/// `let _ = expr.map_err(|e| log::error!(..))` is therefore not an ignored
+/// exception: it drops an already-handled result.
+///
+/// The closure argument is required so that a `map_err`/`inspect_err` taking a
+/// bare function reference (which may itself silently swallow the error) is not
+/// exempted. The chain is walked through `await`/method links so the method can
+/// sit anywhere in the chain (e.g. `x().await.map_err(..)`), not just outermost.
+fn chain_has_error_handling_closure(value: Node, source: &[u8]) -> bool {
+    let mut node = value;
+    loop {
+        match node.kind() {
+            "await_expression" => {
+                let Some(inner) = node.named_child(0) else {
+                    return false;
+                };
+                node = inner;
+            }
+            "call_expression" => {
+                let Some(function) = node.child_by_field_name("function") else {
+                    return false;
+                };
+                if function.kind() == "field_expression"
+                    && let Some(field) = function.child_by_field_name("field")
+                    && matches!(field.utf8_text(source), Ok("map_err" | "inspect_err"))
+                    && call_has_closure_argument(node)
+                {
+                    return true;
+                }
+                // Descend into the receiver of this call/method.
+                node = match function.kind() {
+                    "field_expression" => {
+                        let Some(receiver) = function.child_by_field_name("value") else {
+                            return false;
+                        };
+                        receiver
+                    }
+                    _ => return false,
+                };
+            }
+            "field_expression" => {
+                let Some(receiver) = node.child_by_field_name("value") else {
+                    return false;
+                };
+                node = receiver;
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// True if the `call_expression`'s argument list contains a closure — the
+/// signal that the error is observed inside the handler rather than discarded.
+fn call_has_closure_argument(call: Node) -> bool {
+    let Some(arguments) = call.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut cursor = arguments.walk();
+    arguments
+        .named_children(&mut cursor)
+        .any(|arg| arg.kind() == "closure_expression")
 }
 
 /// True if `value` is a write method call (`write_all`/`write`/`write_fmt`/
@@ -455,6 +532,33 @@ mod tests {
         // discarded result on an ordinary writer must still fire.
         let write_all = "fn f(mut file: File) { let _ = file.write_all(buf); }";
         assert_eq!(run_on(write_all).len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_map_err_handling_closure() {
+        // Regression for #1457: the error is logged inside the `map_err`/
+        // `inspect_err` closure, then the now-trivial Result is discarded.
+        // The issue's exact helix `document.rs` examples.
+        let remove = "async fn w() { let _ = tokio::fs::remove_file(backup).await.map_err(|e| log::error!(\"Failed to remove backup file on write: {e}\")); }";
+        let rename = "async fn w() { let _ = tokio::fs::rename(&backup, &write_path).await.map_err(|e| log::error!(\"Failed to restore backup on write failure: {e}\")); }";
+        let block = "async fn w() { let _ = tokio::fs::copy(&backup, &write_path).await.map_err(|e| { delete = false; log::error!(\"Failed to restore backup on write failure: {e}\") }); }";
+        let inspect = "async fn w() { let _ = do_io().await.inspect_err(|e| log::error!(\"io failed: {e}\")); }";
+        assert!(run_on(remove).is_empty());
+        assert!(run_on(rename).is_empty());
+        assert!(run_on(block).is_empty());
+        assert!(run_on(inspect).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_without_error_handling_closure() {
+        // Negative space for #1457: a discarded fallible call with no
+        // `map_err`/`inspect_err` closure still genuinely swallows the error.
+        // Also: `map_err` taking a bare function (not a closure) may itself
+        // swallow the error, so it must still fire.
+        let bare = "fn f() { let _ = fallible(); }";
+        let map_fn = "async fn w() { let _ = do_io().await.map_err(handle); }";
+        assert_eq!(run_on(bare).len(), 1);
+        assert_eq!(run_on(map_fn).len(), 1);
     }
 
     #[test]
