@@ -2,11 +2,31 @@
 //! Flag static `import Foo from './pages/...'` (or routes/views/) patterns.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::files::Language;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 pub struct Check;
+
+/// The remediation is `React.lazy(() => import(...))`, so the rule only applies
+/// to React code: `.tsx`/`.jsx` files (JSX implies React) or a `.ts`/`.js`
+/// module that imports React. Vue Router (and other frameworks) use a `views/`
+/// convention too but split routes via `component: () => import(...)`, so they
+/// are out of scope.
+fn in_react_context(ctx: &CheckCtx) -> bool {
+    matches!(ctx.lang, Language::Tsx) || imports_react(ctx.source)
+}
+
+fn imports_react(source: &str) -> bool {
+    use crate::oxc_helpers::source_contains;
+    source_contains(source, "from \"react\"")
+        || source_contains(source, "from 'react'")
+        || source_contains(source, "from \"react/")
+        || source_contains(source, "from 'react/")
+        || source_contains(source, "require(\"react\")")
+        || source_contains(source, "require('react')")
+}
 
 fn looks_like_route_module(spec: &str) -> bool {
     spec.contains("/pages/")
@@ -48,6 +68,10 @@ impl OxcCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::ImportDeclaration(import) = node.kind() else { return };
+
+        if !in_react_context(ctx) {
+            return;
+        }
 
         if is_test_or_e2e(ctx.path) {
             return;
@@ -104,7 +128,8 @@ mod tests {
     use super::*;
 
     fn run(s: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, s, "t.ts")
+        // `.tsx` => JSX implies React, so the React-context gate is satisfied.
+        crate::rules::test_helpers::run_rule(&Check, s, "t.tsx")
     }
 
     #[test]
@@ -123,6 +148,16 @@ mod tests {
     }
 
     #[test]
+    fn flags_route_import_in_ts_file_that_imports_react() {
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "import React from 'react';\nimport Home from './pages/Home';",
+            "t.ts",
+        );
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
     fn allows_type_only_route_import() {
         assert!(run("import type { Props } from './pages/Home';").is_empty());
     }
@@ -130,6 +165,20 @@ mod tests {
     #[test]
     fn allows_non_route_import() {
         assert!(run("import { clsx } from 'clsx';").is_empty());
+    }
+
+    #[test]
+    fn skips_vue_router_views_imports() {
+        // Vue Router playground router.ts: static `./views/*.vue` imports with no
+        // React anywhere — splits routes via `component: () => import(...)`, not
+        // `React.lazy`, so the rule must not fire.
+        let src = "import Home from './views/Home.vue'\n\
+                   import Nested from './views/Nested.vue'\n\
+                   import NestedWithId from './views/NestedWithId.vue'\n\
+                   import Dynamic from './views/Dynamic.vue'\n\
+                   import User from './views/User.vue'\n";
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "router.ts");
+        assert!(d.is_empty());
     }
 
     #[test]
