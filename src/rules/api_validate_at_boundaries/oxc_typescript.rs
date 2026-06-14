@@ -63,6 +63,14 @@ impl OxcCheck for Check {
             return;
         }
 
+        // The "validate once at the boundary, trust internally" principle only
+        // holds for HTTP API servers. In CLI tools and libraries, `.parse(...)`
+        // validates external input (config files, runtime args) at the point of
+        // reading — that IS the boundary — so the rule must stay silent.
+        if !ctx.project.is_http_api_server() {
+            return;
+        }
+
         // Callee must be `.parse` or `.safeParse`
         let Expression::StaticMemberExpression(member) = &call.callee else {
             return;
@@ -291,8 +299,16 @@ impl crate::rules::test_helpers::RunRule for Check {
 mod tests {
     use super::*;
 
+    /// Run against a project where an HTTP API server framework is detected
+    /// (Next.js) — the only context in which this rule fires.
     fn run(src: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            src,
+            "t.ts",
+            &crate::project::ProjectCtx::for_test_with_framework("nextjs"),
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
     }
 
     #[test]
@@ -300,6 +316,30 @@ mod tests {
         let d = run("function computeTotal(input: unknown) { return Schema.parse(input); }");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("computeTotal"));
+    }
+
+    #[test]
+    fn silent_in_non_http_server_project() {
+        // Issue #1637: `shadcn` is a CLI tool that validates its `components.json`
+        // config at the point of reading — that IS the boundary. With no HTTP API
+        // framework detected, the rule must stay silent even for `schema.parse`.
+        let src = "async function getRawConfig(cwd: string): Promise<RawConfig | null> { \
+            const json = JSON.parse(await fs.readFile(configPath, 'utf-8')); \
+            return rawConfigSchema.parse(json); }";
+        let diagnostics = crate::rules::test_helpers::run_rule(&Check, src, "src/utils/get-config.ts");
+        assert!(
+            diagnostics.is_empty(),
+            "CLI/library zod.parse must not fire without an HTTP API framework"
+        );
+    }
+
+    #[test]
+    fn fires_at_unvalidated_http_boundary_internal_helper() {
+        // Negative-space guard: in a genuine HTTP API server project, a schema
+        // `.parse(...)` buried in an internal helper still warns.
+        let d = run("function getRawConfig(json: unknown) { return rawConfigSchema.parse(json); }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("getRawConfig"));
     }
 
     #[test]

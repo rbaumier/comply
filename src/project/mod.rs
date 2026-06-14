@@ -1189,6 +1189,21 @@ impl ProjectCtx {
         self.detected_frameworks.iter().any(|f| f.name == name)
     }
 
+    /// True when the project exposes HTTP API server boundaries — i.e. a
+    /// dedicated HTTP server framework (Express, Hono, Elysia, NestJS) or a
+    /// full-stack framework with server route handlers (Next.js, Remix, Nuxt,
+    /// SvelteKit) is detected. Used by boundary-validation rules whose "parse
+    /// once at the HTTP boundary, trust internally" principle only holds for
+    /// API servers; CLI tools and pure libraries have no such boundary.
+    pub fn is_http_api_server(&self) -> bool {
+        const HTTP_SERVER_FRAMEWORKS: &[&str] = &[
+            "express", "hono", "elysia", "nestjs", "nextjs", "remix", "nuxt", "svelte",
+        ];
+        self.detected_frameworks
+            .iter()
+            .any(|f| HTTP_SERVER_FRAMEWORKS.contains(&f.name.as_str()))
+    }
+
     /// True when the project root contains a Cloudflare marker file —
     /// `wrangler.toml`, `wrangler.jsonc`, `wrangler.json`, `.dev.vars`,
     /// or `_routes.json`. Used by Cloudflare-specific rules to skip
