@@ -31,9 +31,12 @@
 //!   harness's intended payload. A `profile-*`/`bench-*` *prefix* is required, so
 //!   an ordinary `profileService.ts` library module is still flagged;
 //! - server application entry points by content shape: any module with a
-//!   top-level `listen(...)` / `*.listen(...)` call (Fastify/Express/Node HTTP
-//!   servers start the server this way, so the surrounding route/hook/
-//!   middleware registrations are mandatory side effects, not library code);
+//!   `listen(...)` / `*.listen(...)` call either at the top level or inside the
+//!   consequent/alternate of a top-level `if` statement (the socket-activation
+//!   pattern, where the listen target is chosen between a socket fd and a port).
+//!   Fastify/Express/Node HTTP servers start the server this way, so the
+//!   surrounding route/hook/middleware/signal-handler registrations are mandatory
+//!   side effects, not library code;
 //! - Node.js CLI script entry points by content shape: a module that defines a
 //!   `main` function at module scope (`async function main() { … }` /
 //!   `const main = …`) and invokes it at the top level (`main()` or the
@@ -442,16 +445,46 @@ fn call_chain_starts_with_listen(call: &oxc_ast::ast::CallExpression) -> bool {
     call_chain_starts_with_listen(inner)
 }
 
-/// True when the program has a top-level `listen(...)` call statement. Such a
-/// module is a server application entry point: it starts an HTTP server, so
-/// the route/hook/middleware registrations around it are mandatory, intentional
-/// side effects, not tree-shakeable library code. A `listen` call chained with a
-/// `.catch(...)`/`.then(...)` continuation counts the same.
+/// True when `stmt` is an expression statement whose expression is a
+/// `listen(...)` call (or a `.catch(...)`/`.then(...)` continuation chained onto
+/// one — see `call_chain_starts_with_listen`).
+fn is_listen_call_statement(stmt: &Statement) -> bool {
+    let Statement::ExpressionStatement(es) = stmt else { return false };
+    let Expression::CallExpression(call) = &es.expression else { return false };
+    call_chain_starts_with_listen(call)
+}
+
+/// True when an `if` branch (consequent or alternate) contains a `listen(...)`
+/// call statement (see `is_listen_call_statement`): either the braced form
+/// (`{ server.listen({ fd }) }`) or the braceless single-statement form
+/// (`if (x) server.listen(fd)`). Used to look one level into a top-level `if` for
+/// the socket-activation pattern.
+fn branch_contains_listen_call(branch: &Statement) -> bool {
+    match branch {
+        Statement::BlockStatement(block) => block.body.iter().any(is_listen_call_statement),
+        other => is_listen_call_statement(other),
+    }
+}
+
+/// True when the program is a server application entry point by content shape: it
+/// has a `listen(...)` call statement either at the top level
+/// (`fastify.listen({ port })`) or inside the consequent/alternate of a top-level
+/// `if` statement (the socket-activation pattern: `if (socketActivation) {
+/// server.listen({ fd }) } else { server.listen({ port }) }`). Starting an HTTP
+/// server this way makes the surrounding route/hook/middleware/signal-handler
+/// registrations mandatory, intentional side effects, not tree-shakeable library
+/// code. A `listen` call chained with a `.catch(...)`/`.then(...)` continuation
+/// counts the same. Only the top level and the first level of `if` branches are
+/// inspected, so a `listen()` buried inside an unrelated function body does not
+/// grant the exemption.
 fn is_server_entry_shape(program: &Program) -> bool {
     program.body.iter().any(|stmt| {
-        let Statement::ExpressionStatement(es) = stmt else { return false };
-        let Expression::CallExpression(call) = &es.expression else { return false };
-        call_chain_starts_with_listen(call)
+        if is_listen_call_statement(stmt) {
+            return true;
+        }
+        let Statement::IfStatement(if_stmt) = stmt else { return false };
+        branch_contains_listen_call(&if_stmt.consequent)
+            || if_stmt.alternate.as_ref().is_some_and(branch_contains_listen_call)
     })
 }
 
@@ -2230,6 +2263,50 @@ mod tests {
             diags.len(),
             3,
             "library module without listen() must still be flagged, got {diags:?}"
+        );
+    }
+
+    // Regression for #1592: real-world server entry points branch their listen
+    // call on configuration (socket activation vs. normal startup), so the
+    // `listen()` lives inside a top-level `if`/`else`. The server-entry detection
+    // must look one level into the branches; the surrounding request- and
+    // signal-handler registrations are mandatory side effects, not library code.
+    #[test]
+    fn allows_socket_activation_conditional_server_entry_point() {
+        let src = "\
+            const socket_activation = listen_pid === process.pid && listen_fds === 1;\n\
+            const server = polka({ server: httpServer }).use(handler);\n\
+            if (socket_activation) {\n\
+                server.listen({ fd: SD_LISTEN_FDS_START }, () => {});\n\
+            } else {\n\
+                server.listen({ path, host, port }, () => {});\n\
+            }\n\
+            httpServer.on('request', (req) => {});\n\
+            process.on('SIGTERM', graceful_shutdown);\n\
+            process.on('SIGINT', graceful_shutdown);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/index.js");
+        assert!(
+            diags.is_empty(),
+            "a server entry whose listen() is inside an if/else must be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_non_listen_side_effect_inside_conditional() {
+        // Negative space: a genuine top-level side effect inside an `if` block is
+        // NOT a server `listen()`, so the module is not a server entry and the
+        // surrounding effects must still be flagged. Only the recognized listen
+        // shape grants the exemption.
+        let src = "\
+            if (featureEnabled) {\n\
+                registerWidget('toolbar');\n\
+            }\n\
+            doSideEffect();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a non-listen side effect outside a server entry must still flag, got {diags:?}"
         );
     }
 
