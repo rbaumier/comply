@@ -241,6 +241,11 @@ impl OxcCheck for Check {
                     | AstKind::TSInterfaceDeclaration(_)
                     | AstKind::TSMappedType(_)
             );
+            // Parameters of a type-level function signature — a call, construct,
+            // method, or index signature, or a function/constructor type — are
+            // documentation-only labels: the signature has no body, so the names
+            // are never bound and can never be referenced. They are reported only
+            // by their enclosing type construct, not as variables.
             let in_type_decl = nodes.ancestor_kinds(decl_node).any(|k| {
                 matches!(
                     k,
@@ -249,6 +254,11 @@ impl OxcCheck for Check {
                         | AstKind::TSModuleDeclaration(_)
                         | AstKind::TSGlobalDeclaration(_)
                         | AstKind::TSFunctionType(_)
+                        | AstKind::TSConstructorType(_)
+                        | AstKind::TSCallSignatureDeclaration(_)
+                        | AstKind::TSConstructSignatureDeclaration(_)
+                        | AstKind::TSMethodSignature(_)
+                        | AstKind::TSIndexSignature(_)
                         | AstKind::TSMappedType(_)
                 ) || matches!(k, AstKind::Function(f) if f.body.is_none())
             });
@@ -623,6 +633,67 @@ export {};
         assert!(
             diags.iter().any(|d| d.message.contains("UnusedSealed")),
             "expected `UnusedSealed` (unrelated decorator) to be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_call_signature_param_labels() {
+        // Parameter names in type-level call signatures (`(foo: number): string`
+        // inside a type literal / interface) are documentation-only labels, not
+        // variable bindings — they can never be referenced. (Closes #1302)
+        let src = r#"
+declare type WritableNamespace = {
+    (foo: number): string;
+};
+declare const variation11: {
+    (a1: string, a2: number): boolean;
+    p1?: string;
+    readonly p2: number;
+};
+export {};
+"#;
+        let diags = run(src);
+        for name in ["foo", "a1", "a2"] {
+            assert!(
+                !diags.iter().any(|d| d.message.contains(&format!("`{name}`"))),
+                "FP on call-signature parameter label `{name}`: {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_fp_on_method_and_construct_signature_param_labels() {
+        // Method signatures (`m(x: number): void`), construct signatures
+        // (`new (y: string): T`), and index signatures (`[key: string]: V`) in a
+        // type literal / interface carry documentation-only parameter labels.
+        // (Closes #1302)
+        let src = r#"
+interface Shape {
+    draw(width: number, height: number): void;
+    new (label: string): Shape;
+    [index: string]: unknown;
+}
+export {};
+"#;
+        let diags = run(src);
+        for name in ["width", "height", "label", "index"] {
+            assert!(
+                !diags.iter().any(|d| d.message.contains(&format!("`{name}`"))),
+                "FP on signature parameter label `{name}`: {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_unused_param_in_function_implementation() {
+        // Negative-space guard for #1302 — a genuinely unused parameter in an
+        // actual function implementation (with a body) is a real binding and
+        // stays reportable.
+        let src = "function f(used: number, unusedParam: number) {\n  return used;\n}\nexport { f };";
+        let diags = run(src);
+        assert!(
+            diags.iter().any(|d| d.message.contains("`unusedParam`")),
+            "expected unused implementation parameter `unusedParam` to be flagged: {diags:?}"
         );
     }
 
