@@ -28,6 +28,14 @@ impl OxcCheck for Check {
                 continue;
             };
             let name = scoping.symbol_name(symbol_id);
+            // A lone underscore is the universal throwaway/ignored-binding
+            // convention: the programmer chose `_` *because* it is never read,
+            // so a nested `_` shadowing an outer `_` carries no identity to
+            // confuse and is deliberate. Matches `@typescript-eslint/no-shadow`,
+            // which excludes single-underscore names by default.
+            if name == "_" {
+                continue;
+            }
             let decl_node = scoping.symbol_declaration(symbol_id);
             // Enum members are scoped inside the enum object and are only
             // reachable as `Enum.Member`, so they never shadow a module binding.
@@ -756,6 +764,36 @@ mod tests {
             "const state = { x: 1 };\n\
              function m() { return fn((state) => state.x); }",
         );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_underscore_param_shadowing_outer_underscore() {
+        // Issue #2129 reproduction: nested iterator callbacks each take `_` as
+        // the conventional throwaway/ignored first parameter. The inner `_`
+        // shadowing the outer `_` is the deliberate unused-binding convention,
+        // not an accidental shadow.
+        let d = run_on(
+            "[1].forEach((_) => { [2].forEach((_) => { doThing(); }); });",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_named_param_shadowing_outer_named_binding() {
+        // Negative space: a genuinely named inner binding (`x`) shadowing an
+        // outer `x` is a real shadow and must still fire — the underscore
+        // exemption is scoped to the lone `_` only.
+        let d = run_on("const x = 1; [2].forEach((x) => x);");
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_underscore_prefixed_param_shadowing_outer_binding() {
+        // Negative space: `_foo` is a real identifier a reader could confuse,
+        // not the lone-underscore throwaway. The exemption is the exact name
+        // `_`, so an underscore-*prefixed* shadow still fires.
+        let d = run_on("const _foo = 1; [2].forEach((_foo) => _foo);");
         assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
     }
 
