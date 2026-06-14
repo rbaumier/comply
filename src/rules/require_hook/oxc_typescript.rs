@@ -516,13 +516,37 @@ fn declaration_is_pure(decl: &VariableDeclaration, node_test_mode: bool) -> bool
     })
 }
 
+/// Is `init` a `require('node:test')` call expression — the CommonJS form of
+/// importing the runner (`const { test } = require('node:test')`,
+/// `const test = require('node:test')`)? The binding pattern is irrelevant;
+/// only the `require` callee and the `node:test` string argument matter.
+fn is_require_of_node_test(init: &Expression) -> bool {
+    let Expression::CallExpression(call) = init else {
+        return false;
+    };
+    let Expression::Identifier(callee) = &call.callee else {
+        return false;
+    };
+    if callee.name.as_str() != "require" {
+        return false;
+    }
+    matches!(
+        call.arguments.first(),
+        Some(Argument::StringLiteral(lit)) if lit.value.as_str() == "node:test"
+    )
+}
+
+/// Does the file import the `node:test` runner — either via an ES
+/// `import ... from 'node:test'` or the CommonJS `require('node:test')` form?
 fn imports_node_test(program: &Program<'_>) -> bool {
-    program.body.iter().any(|stmt| {
-        if let Statement::ImportDeclaration(import) = stmt {
-            import.source.value.as_str() == "node:test"
-        } else {
-            false
-        }
+    program.body.iter().any(|stmt| match stmt {
+        Statement::ImportDeclaration(import) => import.source.value.as_str() == "node:test",
+        Statement::VariableDeclaration(decl) => decl
+            .declarations
+            .iter()
+            .filter_map(|d| d.init.as_ref())
+            .any(is_require_of_node_test),
+        _ => false,
     })
 }
 
@@ -722,6 +746,43 @@ describe("x", () => { it("works", () => {}); });
             d.len(),
             1,
             "a bare side-effect call statement must still be flagged in node:test mode: {d:?}"
+        );
+    }
+
+    #[test]
+    fn cjs_require_node_test_activates_node_test_mode() {
+        let src = r#"
+'use strict'
+
+const { test } = require('node:test')
+
+const schema = buildSchema(`type Query { field: String }`)
+
+test('hooks', async t => {})
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "hooks.test.js");
+        assert!(
+            d.is_empty(),
+            "CJS `require('node:test')` must activate node:test mode like the ES import, allowing a module-scope fixture-builder const: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_bare_setup_call_in_cjs_node_test_mode() {
+        let src = r#"
+'use strict'
+
+const { test } = require('node:test')
+
+setup()
+
+test('hooks', async t => {})
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "hooks.test.js");
+        assert_eq!(
+            d.len(),
+            1,
+            "a genuine bare side-effect call must still be flagged in CJS node:test mode: {d:?}"
         );
     }
 
