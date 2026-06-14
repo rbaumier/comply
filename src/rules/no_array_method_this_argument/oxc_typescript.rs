@@ -51,6 +51,20 @@ impl OxcCheck for Check {
             return;
         }
 
+        // The `Array#method(callback, thisArg)` shape requires the first
+        // argument to be the callback function. Non-Array APIs reuse these
+        // method names with a 2-argument form where the first argument is a
+        // value (e.g. `Effect.flatMap(effect, fn)`) or a node type
+        // (e.g. jscodeshift `root.find(j.Type, filter)`); those are not
+        // `thisArg` calls and must not be flagged.
+        use oxc_ast::ast::Argument;
+        if !matches!(
+            call.arguments[0],
+            Argument::ArrowFunctionExpression(_) | Argument::FunctionExpression(_)
+        ) {
+            return;
+        }
+
         let this_arg = &call.arguments[1];
         let span = this_arg.span();
         let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
@@ -66,5 +80,59 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod oxc_tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    #[test]
+    fn flags_map_with_arrow_callback_and_this_arg() {
+        assert_eq!(run("arr.map((x) => x, thisObj);").len(), 1);
+    }
+
+    #[test]
+    fn flags_map_with_function_callback_and_this_arg() {
+        assert_eq!(run("arr.map(function (x) { return x; }, thisObj);").len(), 1);
+    }
+
+    #[test]
+    fn allows_map_without_this_arg() {
+        assert!(run("arr.map((x) => x);").is_empty());
+    }
+
+    #[test]
+    fn allows_effect_flatmap_with_value_first_arg() {
+        // Effect.flatMap(effect, fn): arg0 is an Effect value (a call
+        // expression), not a callback — not the Array#flatMap shape.
+        assert!(run("Effect.flatMap(Scope.make(), (s) => s);").is_empty());
+    }
+
+    #[test]
+    fn allows_jscodeshift_find_with_node_type_first_arg() {
+        // jscodeshift Collection.find(NodeType, filter): arg0 is a node
+        // type, arg1 is a filter object — not the Array#find shape.
+        assert!(run("root.find(j.ExportNamedDeclaration, { x: 1 });").is_empty());
     }
 }
