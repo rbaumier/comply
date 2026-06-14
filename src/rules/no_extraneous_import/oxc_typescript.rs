@@ -94,6 +94,21 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Workspace-internal package: the import resolves to another member of
+        // the monorepo workspace, not an external dependency. Internal docs and
+        // testing-utility members (e.g. `@docs/demos`, `@mantine-tests/*`) list
+        // the library packages they document or test as devDependencies because
+        // they are never published to npm, so importing such a member is correct
+        // — there is no install-time break for downstream consumers (issue #1968).
+        if ctx
+            .project
+            .workspace_package_names()
+            .iter()
+            .any(|name| name == root)
+        {
+            return;
+        }
+
         if pkg.dev_dependencies.contains_key(root) {
             let (line, column) = byte_offset_to_line_col(ctx.source, import.span.start as usize);
             diagnostics.push(Diagnostic {
@@ -846,6 +861,137 @@ import { List } from "immutable";
         let src = r#"import { Project } from 'ts-morph';"#;
         let d = run_with_pkg_at_path(pkg, "omnidoc/readProject.ts", src);
         assert!(d.is_empty(), "script-entry toolchain dir should not flag devDeps: {d:?}");
+    }
+
+    /// Stage a monorepo on disk: a root `package.json` declaring `workspaces`,
+    /// plus one `package.json` per member (the importing member's own manifest
+    /// must be among them so its `devDependencies` are read), then lint
+    /// `importer_member/src_rel` against the whole tree so
+    /// `workspace_package_names()` is populated from the real workspace roots.
+    /// Returns the diagnostics for that single file.
+    fn run_in_workspace(
+        root_pkg: &str,
+        members: &[(&str, &str)],
+        importer_member: &str,
+        src_rel: &str,
+        source: &str,
+    ) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), root_pkg).unwrap();
+        for (member_dir, member_pkg) in members {
+            let member_path = dir.path().join(member_dir);
+            fs::create_dir_all(&member_path).unwrap();
+            fs::write(member_path.join("package.json"), member_pkg).unwrap();
+        }
+        let file_path = dir.path().join(importer_member).join(src_rel);
+        fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        fs::write(&file_path, source).unwrap();
+
+        // A second input directly under the repo root pulls the common ancestor
+        // up to the root, so `detect_project_root` resolves the workspaces-root
+        // manifest (not the member's), mirroring a real whole-repo run.
+        let anchor_path = dir.path().join("eslint.config.ts");
+        fs::write(&anchor_path, "export default [];").unwrap();
+
+        let lang = Language::from_path(&file_path).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: lang,
+        };
+        let anchor_file = SourceFile {
+            path: anchor_path,
+            language: Language::TypeScript,
+        };
+        let refs = vec![&source_file, &anchor_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = fs::canonicalize(&file_path).unwrap();
+
+        let source_type = match lang {
+            Language::Tsx => SourceType::tsx(),
+            Language::JavaScript => SourceType::cjs(),
+            _ => SourceType::ts(),
+        };
+        let allocator = Allocator::default();
+        let parse_ret = OxcParser::new(&allocator, source, source_type).parse();
+        let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+        let file_ctx = crate::rules::file_ctx::FileCtx::build(&canon, source, lang, &project);
+        let ctx = CheckCtx::for_test_full(&canon, source, &project, &file_ctx);
+
+        let mut diagnostics = Vec::new();
+        let kinds = Check.interested_kinds();
+        for node in semantic.nodes().iter() {
+            if kinds.contains(&node.kind().ty()) {
+                Check.run(node, &ctx, &semantic, &mut diagnostics);
+            }
+        }
+        diagnostics
+    }
+
+    #[test]
+    fn allows_workspace_member_import_from_internal_docs_package() {
+        // Issue #1968: mantine's `@docs/demos` is an internal, never-published
+        // documentation package that lists the library members it demonstrates
+        // (`@mantine/schedule`, `@mantinex/demo`) as devDependencies. A demo file
+        // importing those workspace members must not flag — the import resolves to
+        // a workspace-internal package, not an external dependency.
+        let root_pkg = r#"{
+            "name": "mantine-root",
+            "private": true,
+            "workspaces": ["packages/*/*"]
+        }"#;
+        let demos_pkg = r#"{
+            "name": "@docs/demos",
+            "devDependencies": {
+                "@mantine/schedule": "workspace:*",
+                "@mantinex/demo": "workspace:*"
+            }
+        }"#;
+        let schedule_pkg = r#"{"name": "@mantine/schedule"}"#;
+        let demo_pkg = r#"{"name": "@mantinex/demo"}"#;
+        let src = r#"
+import { Schedule } from '@mantine/schedule';
+import { Demo } from '@mantinex/demo';
+"#;
+        let d = run_in_workspace(
+            root_pkg,
+            &[
+                ("packages/@docs/demos", demos_pkg),
+                ("packages/@mantine/schedule", schedule_pkg),
+                ("packages/@mantinex/demo", demo_pkg),
+            ],
+            "packages/@docs/demos",
+            "src/demos/schedule/Schedule.demo.tsx",
+            src,
+        );
+        assert!(d.is_empty(), "workspace-internal imports should not flag: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_external_dev_dep_in_workspace_member() {
+        // Guard against over-relaxing: inside the same monorepo, importing a
+        // genuinely external devDependency (not a workspace member) from a
+        // production file must still flag — the workspace exemption is scoped to
+        // members of the workspace, not every devDependency.
+        let root_pkg = r#"{
+            "name": "mantine-root",
+            "private": true,
+            "workspaces": ["packages/*/*"]
+        }"#;
+        let core_pkg = r#"{
+            "name": "@mantine/core",
+            "devDependencies": {"vitest": "^1"}
+        }"#;
+        let src = r#"import { describe } from 'vitest';"#;
+        let d = run_in_workspace(
+            root_pkg,
+            &[("packages/@mantine/core", core_pkg)],
+            "packages/@mantine/core",
+            "src/index.ts",
+            src,
+        );
+        assert_eq!(d.len(), 1, "external devDep should still flag: {d:?}");
+        assert!(d[0].message.contains("vitest"));
     }
 
     #[test]

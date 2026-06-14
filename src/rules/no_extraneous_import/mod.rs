@@ -11,6 +11,11 @@
 //! rule only fires when a package IS declared, but in the wrong section for
 //! the importing file's role.
 //!
+//! An import that resolves to another member of the monorepo workspace is never
+//! flagged: workspace-internal docs and testing-utility packages list the
+//! library members they document or test as `devDependencies` because they are
+//! never published, so importing them is correct.
+//!
 //! A file is considered a test file (and therefore allowed to consume
 //! `devDependencies`) when its path contains any of `__tests__/`,
 //! `__testUtils__/`, `__mocks__/`, `testing/`, `.test.`, `.spec.`, `.stories.`,
