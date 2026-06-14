@@ -761,4 +761,66 @@ mod tests {
         let src = r#"it("x", () => { const y = 1 + 1; });"#;
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
+
+    // Regression for #1713 — vuejs/router's `errors.spec.ts` pattern: a
+    // module-level `async function` helper holds the assertions
+    // (`await expect(...).rejects.toEqual(...)`, `expect(...).toHaveBeenCalledTimes(...)`),
+    // and the test body is only `await testError(...)`.
+    #[test]
+    fn allows_test_calling_module_async_helper_with_rejects_assertion() {
+        let src = r#"
+            async function testError(nextArgument, expectedError = undefined, to = "/foo") {
+                const { router } = createRouter();
+                if (expectedError !== undefined) {
+                    await expect(router.push(to)).rejects.toEqual(expectedError);
+                }
+                expect(afterEach).toHaveBeenCalledTimes(0);
+                expect(onError).toHaveBeenCalledTimes(1);
+            }
+            it("lazy loading reject", async () => {
+                await testError(true, "failed", "/async");
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #1713 — the second vuejs/router shape: a module-level
+    // helper called with an inline arrow argument. The assertion still lives in
+    // the helper body, not in the inline arrow.
+    #[test]
+    fn allows_test_calling_module_helper_with_inline_arrow_argument() {
+        let src = r#"
+            async function testNavigation(guard, expectedError) {
+                const { router } = createRouter();
+                router.beforeEach(guard);
+                await expect(router.push("/location")).rejects.toEqual(expectedError);
+            }
+            it('next("/location") triggers afterEach', async () => {
+                await testNavigation(
+                    ((to, _from) => {
+                        if (to.path === "/location") return;
+                        else return "/location";
+                    }),
+                    undefined
+                );
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative-space guard for #1713: a module-level helper that contains NO
+    // assertion does not launder an empty test — it must still fire.
+    #[test]
+    fn still_flags_test_calling_module_async_helper_without_assertion() {
+        let src = r#"
+            async function setupRouter(to) {
+                const { router } = createRouter();
+                await router.push(to);
+            }
+            it("navigates", async () => {
+                await setupRouter("/async");
+            });
+        "#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
 }
