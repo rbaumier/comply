@@ -1247,6 +1247,48 @@ mod tests {
     }
 
     #[test]
+    fn no_fp_for_sveltekit_lib_alias_consumer_issue_2112() {
+        // Regression for #2112 — a SvelteKit `src/lib` export consumed only via
+        // the `$lib/*` alias (declared in the gitignored, absent
+        // `.svelte-kit/tsconfig.json`). The index synthesizes `$lib` → `src/lib`
+        // on the SvelteKit signal, so the importer links to the exporter and the
+        // export is not dead.
+        let (_dir, diags) = run_on_project_with_pkg(
+            Some(r#"{"name":"app","devDependencies":{"@sveltejs/kit":"^2.0.0"}}"#),
+            &[
+                ("src/lib/stores.svelte.ts", "export const staleTime = 5000;\n"),
+                (
+                    "src/routes/App.ts",
+                    "import { staleTime } from '$lib/stores.svelte';\nexport const used = staleTime;\n",
+                ),
+            ],
+            "src/lib/stores.svelte.ts",
+        );
+        assert!(
+            diags.is_empty(),
+            "staleTime consumed via $lib/* must not be dead: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn dead_export_in_sveltekit_lib_unimported_still_flagged_issue_2112() {
+        // Negative-space guard for #2112 — the `$lib` resolution does not blanket-
+        // exempt `src/lib`. A `src/lib` export that no file imports stays dead.
+        let (_dir, diags) = run_on_project_with_pkg(
+            Some(r#"{"name":"app","devDependencies":{"@sveltejs/kit":"^2.0.0"}}"#),
+            &[
+                ("src/lib/unused.ts", "export const orphan = 1;\n"),
+                ("src/routes/App.ts", "export const x = 1;\n"),
+            ],
+            "src/lib/unused.ts",
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("orphan")),
+            "an unimported src/lib export must still be flagged dead: {diags:?}"
+        );
+    }
+
+    #[test]
     fn no_fp_for_bazel_ng_package_reexported_symbol_issue_2299() {
         // Regression for #2299 (angular/angular) — in the monorepo a `@angular/*`
         // source package under `packages/<pkg>/` is built by Bazel's `ng_package`

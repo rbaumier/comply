@@ -2895,6 +2895,25 @@ pub(crate) fn ts_counterpart_exts(ext: &str) -> &'static [&'static str] {
     }
 }
 
+/// True when `dir` is the root of a SvelteKit project. Signals (any one
+/// suffices): `@sveltejs/kit` in the dir's `package.json`, a `svelte.config.*`
+/// file, or a generated `.svelte-kit/` directory. Gating the synthetic `$lib`
+/// alias on this keeps a `$lib` import in a non-SvelteKit project unresolved.
+fn is_sveltekit_dir(dir: &Path) -> bool {
+    if let Ok(raw) = std::fs::read_to_string(dir.join("package.json"))
+        && let Some(pkg) = crate::project::PackageJson::parse(&raw)
+        && pkg.has_dep_or_engine("@sveltejs/kit")
+    {
+        return true;
+    }
+    if dir.join(".svelte-kit").is_dir() {
+        return true;
+    }
+    ["svelte.config.js", "svelte.config.ts", "svelte.config.mjs"]
+        .iter()
+        .any(|f| dir.join(f).is_file())
+}
+
 /// Read the `name` field of a `package.json`, or `None` when the file is
 /// absent, unparseable, or declares no `name`.
 fn read_package_name(manifest: &Path) -> Option<String> {
@@ -3097,6 +3116,10 @@ impl OxcPathResolver {
     fn discover(known_paths: &std::collections::HashSet<PathBuf>) -> Self {
         let mut seen_dirs: HashSet<PathBuf> = HashSet::new();
         let mut tsconfig_dirs: HashMap<PathBuf, PathBuf> = HashMap::new();
+        // Directories that are the root of a SvelteKit project. Their `$lib`
+        // alias is synthesized below, independent of whether the dir has a
+        // checked-in `tsconfig.json`.
+        let mut sveltekit_dirs: HashSet<PathBuf> = HashSet::new();
         // Workspace member name → its manifest directory. Built from every
         // named `package.json` reachable above an indexed file.
         let mut workspace_packages: HashMap<String, PathBuf> = HashMap::new();
@@ -3117,6 +3140,9 @@ impl OxcPathResolver {
                 if let Some(name) = read_package_name(&dir.join("package.json")) {
                     workspace_packages.entry(name).or_insert_with(|| dir.to_path_buf());
                 }
+                if is_sveltekit_dir(dir) {
+                    sveltekit_dirs.insert(dir.to_path_buf());
+                }
                 let Some(parent) = dir.parent() else { break };
                 dir = parent;
             }
@@ -3131,11 +3157,26 @@ impl OxcPathResolver {
         let mut resolvers: Vec<TsconfigResolver> = tsconfig_dirs
             .into_iter()
             .map(|(dir, tsconfig_path)| {
-                let aliases = Self::read_path_aliases(&dir, &tsconfig_path);
+                let aliases =
+                    Self::aliases_for_dir(&dir, Some(&tsconfig_path), &sveltekit_dirs);
                 let oxc = Self::make_oxc(Some(tsconfig_path));
                 TsconfigResolver { dir, aliases, oxc }
             })
             .collect();
+
+        // SvelteKit project roots without a checked-in `tsconfig.json` still need
+        // a resolver entry so the synthetic `$lib` alias applies. (A real
+        // SvelteKit app always ships a `tsconfig.json`, but the dir-walk keeps the
+        // `$lib` synthesis robust to its absence and decoupled from tsconfig
+        // discovery.)
+        for dir in &sveltekit_dirs {
+            if resolvers.iter().any(|r| &r.dir == dir) {
+                continue;
+            }
+            let aliases = Self::aliases_for_dir(dir, None, &sveltekit_dirs);
+            let oxc = Self::make_oxc(None);
+            resolvers.push(TsconfigResolver { dir: dir.clone(), aliases, oxc });
+        }
 
         resolvers.sort_by(|a, b| b.dir.as_os_str().len().cmp(&a.dir.as_os_str().len()));
 
@@ -3146,6 +3187,28 @@ impl OxcPathResolver {
             fallback,
             workspace_packages,
         }
+    }
+
+    /// Path aliases active for `dir`: the tsconfig `paths` (when `tsconfig_path`
+    /// is present) plus, for a SvelteKit project root, the framework's synthetic
+    /// `$lib` → `src/lib` mapping. `$lib` is declared only in the generated
+    /// `.svelte-kit/tsconfig.json` (gitignored, absent in a fresh clone) which the
+    /// checked-in `tsconfig.json` `extends`; since alias reading does not follow
+    /// `extends`, the mapping is reconstructed here. `$app`/`$env`/`$service-worker`
+    /// are virtual modules with no on-disk file, so they are not synthesized.
+    fn aliases_for_dir(
+        dir: &Path,
+        tsconfig_path: Option<&Path>,
+        sveltekit_dirs: &HashSet<PathBuf>,
+    ) -> Vec<(String, Vec<PathBuf>)> {
+        let mut aliases = tsconfig_path
+            .map(|p| Self::read_path_aliases(dir, p))
+            .unwrap_or_default();
+        if sveltekit_dirs.contains(dir) {
+            aliases.push(("$lib/*".to_string(), vec![dir.join("src/lib").join("*")]));
+            aliases.push(("$lib".to_string(), vec![dir.join("src/lib")]));
+        }
+        aliases
     }
 
     fn read_path_aliases(tsconfig_dir: &Path, tsconfig_path: &Path) -> Vec<(String, Vec<PathBuf>)> {
@@ -4703,6 +4766,151 @@ mod tests {
         let imports = index.get_imports(&app_canon);
         assert_eq!(imports.len(), 1, "imports: {imports:?}");
         assert_eq!(imports[0].source_path.as_ref(), Some(&utils_canon));
+    }
+
+    /// Build a SvelteKit-shaped project: the given `package.json`, a root
+    /// `tsconfig.json` that `extends` the generated `.svelte-kit/tsconfig.json`
+    /// (absent, so it defines no `$lib` alias), `src/lib/utils.ts` exporting `foo`,
+    /// and `src/routes/x.ts` importing it via the `$lib/*` alias plus `$app/stores`.
+    #[cfg(test)]
+    fn build_sveltekit_index(pkg_json: &str) -> (TempDir, ImportIndex, PathBuf, PathBuf) {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), pkg_json).unwrap();
+        // Root tsconfig extends the generated SvelteKit config (absent here, as
+        // in a fresh clone), so it carries no `$lib` `paths` entry of its own.
+        fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{ "extends": "./.svelte-kit/tsconfig.json" }"#,
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join("src/lib")).unwrap();
+        fs::create_dir_all(dir.path().join("src/routes")).unwrap();
+        let lib = dir.path().join("src/lib/utils.ts");
+        fs::write(&lib, "export const foo = 1;\n").unwrap();
+        let route = dir.path().join("src/routes/x.ts");
+        fs::write(
+            &route,
+            "import { foo } from '$lib/utils';\nimport { page } from '$app/stores';\nexport const used = foo;\n",
+        )
+        .unwrap();
+
+        let sources = [
+            SourceFile { path: lib.clone(), language: Language::TypeScript },
+            SourceFile { path: route.clone(), language: Language::TypeScript },
+        ];
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let index = ImportIndex::build(&refs);
+        let lib_canon = fs::canonicalize(&lib).unwrap();
+        let route_canon = fs::canonicalize(&route).unwrap();
+        (dir, index, lib_canon, route_canon)
+    }
+
+    // Regression for #2112: in a SvelteKit project the `$lib/*` alias is defined
+    // only in the generated `.svelte-kit/tsconfig.json` (gitignored, absent in a
+    // fresh clone). The index synthesizes `$lib` → `src/lib` on the SvelteKit
+    // signal so `import { foo } from '$lib/utils'` resolves to `src/lib/utils.ts`
+    // — keeping `foo` cross-file used (not dead) and linking the importer.
+    #[test]
+    fn sveltekit_lib_alias_resolves_without_generated_tsconfig() {
+        let (_dir, index, lib_canon, route_canon) =
+            build_sveltekit_index(r#"{"name":"app","devDependencies":{"@sveltejs/kit":"^2.0.0"}}"#);
+
+        let imp = index
+            .get_imports(&route_canon)
+            .iter()
+            .find(|i| i.specifier == "$lib/utils")
+            .expect("$lib/utils import must be indexed");
+        assert_eq!(
+            imp.source_path.as_ref(),
+            Some(&lib_canon),
+            "$lib/* must resolve to src/lib/* in a SvelteKit project"
+        );
+        // `foo` is reachable from the route importer, so it is not dead.
+        assert!(
+            !index.get_usages(&lib_canon, "foo").is_empty(),
+            "foo must record a cross-file usage via the $lib alias"
+        );
+        // `$app/stores` is a virtual module: no physical file, so it stays
+        // unresolved (no spurious source_path) and is left to no-implicit-deps.
+        let app = index
+            .get_imports(&route_canon)
+            .iter()
+            .find(|i| i.specifier == "$app/stores")
+            .expect("$app/stores import must be indexed");
+        assert!(
+            app.source_path.is_none(),
+            "$app/* is a virtual module and must not resolve to a file"
+        );
+    }
+
+    // #2112: `$lib/stores.svelte` (a Svelte 5 `.svelte.ts` runes module, written
+    // without the `.ts`) must resolve through the synthetic alias to
+    // `src/lib/stores.svelte.ts`.
+    #[test]
+    fn sveltekit_lib_alias_resolves_svelte_dot_ts_module() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","devDependencies":{"@sveltejs/kit":"^2.0.0"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{ "extends": "./.svelte-kit/tsconfig.json" }"#,
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join("src/lib")).unwrap();
+        fs::create_dir_all(dir.path().join("src/routes")).unwrap();
+        let store = dir.path().join("src/lib/stores.svelte.ts");
+        fs::write(&store, "export const staleTime = 5000;\n").unwrap();
+        let route = dir.path().join("src/routes/App.ts");
+        fs::write(
+            &route,
+            "import { staleTime } from '$lib/stores.svelte';\nexport const used = staleTime;\n",
+        )
+        .unwrap();
+        let sources = [
+            SourceFile { path: store.clone(), language: Language::TypeScript },
+            SourceFile { path: route.clone(), language: Language::TypeScript },
+        ];
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let index = ImportIndex::build(&refs);
+        let store_canon = fs::canonicalize(&store).unwrap();
+        let route_canon = fs::canonicalize(&route).unwrap();
+        let imp = index
+            .get_imports(&route_canon)
+            .iter()
+            .find(|i| i.specifier == "$lib/stores.svelte")
+            .expect("$lib/stores.svelte import must be indexed");
+        assert_eq!(
+            imp.source_path.as_ref(),
+            Some(&store_canon),
+            "$lib/stores.svelte must resolve to src/lib/stores.svelte.ts"
+        );
+        assert!(
+            !index.get_usages(&store_canon, "staleTime").is_empty(),
+            "staleTime must record a cross-file usage via the $lib alias"
+        );
+    }
+
+    // Negative-space guard for #2112: the `$lib` synthesis is gated on the
+    // SvelteKit signal. In a project without `@sveltejs/kit` (and no SvelteKit
+    // detection file), `$lib/*` must stay unresolved — the same `src/lib`
+    // layout must not opportunistically resolve a `$lib` import.
+    #[test]
+    fn lib_alias_not_resolved_without_sveltekit_signal() {
+        let (_dir, index, _lib_canon, route_canon) =
+            build_sveltekit_index(r#"{"name":"app","dependencies":{"react":"^18.0.0"}}"#);
+
+        let imp = index
+            .get_imports(&route_canon)
+            .iter()
+            .find(|i| i.specifier == "$lib/utils")
+            .expect("$lib/utils import must be indexed");
+        assert!(
+            imp.source_path.is_none(),
+            "$lib/* must not resolve in a non-SvelteKit project"
+        );
     }
 
     // =======================================================================
