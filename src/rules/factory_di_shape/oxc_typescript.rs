@@ -1,9 +1,13 @@
 //! factory-di-shape — oxc backend.
 //!
-//! The original rule was text-based (line scanning). The oxc backend uses
-//! `run_on_semantic` with the same line-scanning approach since this rule
-//! doesn't match a specific AST node type — it matches exported function
-//! declarations by line text.
+//! Flags exported `create*` functions that take 3+ separate dependency
+//! parameters instead of a single deps object. The dependency-injection
+//! smell is multiple *service* dependencies, so only non-primitive
+//! (interface/class/type-reference/object/function) params count toward the
+//! threshold. Params with primitive types (`string`/`number`/`boolean`/...,
+//! and optionals/unions of only those) are configuration values, not
+//! injected services, and a `create*` function whose params are all
+//! primitives is a value/DOM factory rather than a DI factory.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, OxcCheck};
@@ -39,19 +43,20 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            let param_count = params_str
+            let dep_count = params_str
                 .split(',')
                 .filter(|p| !p.trim().is_empty())
+                .filter(|p| !param_is_primitive(p))
                 .count();
 
-            if param_count >= 3 {
+            if dep_count >= 3 {
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),
                     line: idx + 1,
                     column: 1,
                     rule_id: super::META.id.into(),
                     message: format!(
-                        "`create*` factory with {param_count} separate params \u{2014} \
+                        "`create*` factory with {dep_count} separate dependency params \u{2014} \
                          use a single deps object: \
                          `createService({{ db, cache, logger }})`."
                     ),
@@ -61,5 +66,145 @@ impl OxcCheck for Check {
             }
         }
         diagnostics
+    }
+}
+
+/// Whether a single param segment (e.g. `nonce?: string`) is typed with only
+/// primitive types. An unannotated param is treated as non-primitive: it
+/// cannot be proven to be a configuration value.
+pub(super) fn param_is_primitive(param: &str) -> bool {
+    let annotation = match param.split_once(':') {
+        Some((_name, ty)) => ty.trim(),
+        None => return false,
+    };
+    if annotation.is_empty() {
+        return false;
+    }
+    // A union (`string | number`) is primitive iff every member is.
+    annotation.split('|').all(|member| type_atom_is_primitive(member.trim()))
+}
+
+/// Whether a single type atom (no top-level `|`) is primitive.
+fn type_atom_is_primitive(ty: &str) -> bool {
+    let ty = ty.trim();
+    if ty.is_empty() {
+        return false;
+    }
+    if matches!(
+        ty,
+        "string"
+            | "number"
+            | "boolean"
+            | "bigint"
+            | "symbol"
+            | "null"
+            | "undefined"
+            | "void"
+            | "true"
+            | "false"
+    ) {
+        return true;
+    }
+    // String literal type: `'foo'` or `"foo"`.
+    if (ty.starts_with('\'') && ty.ends_with('\'') && ty.len() >= 2)
+        || (ty.starts_with('"') && ty.ends_with('"') && ty.len() >= 2)
+    {
+        return true;
+    }
+    // Numeric literal type: `42`, `3.14`, `-1`.
+    if ty.parse::<f64>().is_ok() {
+        return true;
+    }
+    false
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn flags_create_with_three_service_deps() {
+        let src = "export function createService(db: DB, cache: Cache, logger: Logger) {}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_create_with_deps_object() {
+        let src = "export function createService({ db, cache, logger }: Deps) {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_create_with_two_service_deps() {
+        let src = "export function createService(db: DB, logger: Logger) {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// #2257: a DOM/value factory whose params are all primitives is not a
+    /// DI factory — grouping config values adds no benefit.
+    #[test]
+    fn ignores_all_primitive_params() {
+        let src =
+            "export function createStyleTag(style: string, nonce?: string, suffix?: string): HTMLStyleElement {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Negative-space guard: a real DI factory with 3 interface-typed deps
+    /// is still flagged.
+    #[test]
+    fn still_flags_real_di_factory() {
+        let src =
+            "export function createUserService(db: Database, cache: Cache, logger: Logger) {}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// Mixed shape: 1 service + 2 config primitives is not a DI smell.
+    #[test]
+    fn ignores_one_service_with_primitive_config() {
+        let src = "export function createClient(db: Database, retries: number, verbose: boolean) {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Unions of only primitives count as primitive.
+    #[test]
+    fn primitive_unions_are_config() {
+        let src =
+            "export function createBox(a: string | number, b: 'x' | 'y', c: boolean | undefined) {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn param_is_primitive_classification() {
+        assert!(param_is_primitive("style: string"));
+        assert!(param_is_primitive("nonce?: string"));
+        assert!(param_is_primitive("count: number"));
+        assert!(param_is_primitive("flag: boolean"));
+        assert!(param_is_primitive("mode: 'fast' | 'slow'"));
+        assert!(param_is_primitive("n: 42"));
+        assert!(!param_is_primitive("db: Database"));
+        assert!(!param_is_primitive("cb: () => void"));
+        assert!(!param_is_primitive("opts: { a: number }"));
+        assert!(!param_is_primitive("db")); // unannotated → non-primitive
+        assert!(!param_is_primitive("mixed: string | Logger"));
     }
 }
