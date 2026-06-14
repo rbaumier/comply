@@ -33,6 +33,12 @@
 //!     names never reach importers flat. Two such barrels that happen to share a
 //!     short name (`Bar`) under different wrappers (`X.Bar`, `Y.Bar`) are not an
 //!     ambiguous flat import path and are excluded from the count.
+//!   - Build-output re-exporters — a barrel re-exporting a name from a compiled
+//!     `dist/`/`build/` artifact (`export { RouterLink } from '../dist/foo.js'`)
+//!     is re-exporting build output to simulate a consumer, not a source module.
+//!     This is the bundle-size measurement / consumer-script shape (e.g.
+//!     `size-checks/` entry files), structurally distinct from a source barrel,
+//!     so it adds no ambiguous source-import path and is excluded from the count.
 //!
 //! Runs once per project, anchored on the lexicographically smallest indexed
 //! path so that a single pass emits all diagnostics deterministically. Barrel
@@ -70,6 +76,11 @@ impl TextCheck for Check {
         // independent packages from being compared against each other; barrels
         // outside any package share a `None` key and compare among themselves.
         let mut reexports: ReExportMap = HashMap::new();
+        // `(barrel, name)` pairs whose re-export pulls the name out of a compiled
+        // `dist/`/`build/` artifact. These barrels re-export build output to
+        // simulate a consumer (the bundle-size measurement shape), so they add no
+        // ambiguous source-import path and are dropped before counting.
+        let mut build_output_reexports: HashSet<(PathBuf, String)> = HashSet::new();
         for (path, exports) in index.iter_exports() {
             for export in exports {
                 if !matches!(export.kind, ExportKind::ReExport) {
@@ -79,6 +90,13 @@ impl TextCheck for Check {
                     continue;
                 }
                 let package_dir = ctx.project.package_boundary_dir(path);
+                if export
+                    .reexport_source
+                    .as_deref()
+                    .is_some_and(specifier_targets_build_output)
+                {
+                    build_output_reexports.insert((path.to_path_buf(), export.name.clone()));
+                }
                 reexports
                     .entry((package_dir, export.name.clone()))
                     .or_default()
@@ -137,6 +155,17 @@ impl TextCheck for Check {
             let independent: Vec<&Path> = independent
                 .into_iter()
                 .filter(|barrel| !namespace_wrapped.contains(*barrel))
+                .collect();
+            // A barrel re-exporting this name from a compiled `dist/`/`build/`
+            // artifact is re-exporting build output to simulate a consumer (the
+            // bundle-size measurement shape), not adding a source-import path.
+            // Drop it before counting so it can never be one of the two barrels
+            // that make a name look ambiguous.
+            let independent: Vec<&Path> = independent
+                .into_iter()
+                .filter(|barrel| {
+                    !build_output_reexports.contains(&(barrel.to_path_buf(), name.clone()))
+                })
                 .collect();
             // A package may publish several barrels as distinct `exports`
             // subpath entry points (e.g. `.` → `index.ts`, `./dom` → `dom.ts`)
@@ -282,6 +311,18 @@ fn resolve_relative_specifier(
         }
     }
     None
+}
+
+/// Whether a re-export specifier reaches into a compiled build-output directory
+/// (`dist/` or `build/`). Matches by exact path segment so siblings like
+/// `dist-utils/` or `./distance` are not caught. Used to recognize barrels that
+/// re-export compiled artifacts to simulate a consumer (bundle-size measurement
+/// scripts) rather than re-exporting a source module.
+fn specifier_targets_build_output(specifier: &str) -> bool {
+    const BUILD_OUTPUT_DIRS: [&str; 2] = ["dist", "build"];
+    specifier
+        .split('/')
+        .any(|segment| BUILD_OUTPUT_DIRS.contains(&segment))
 }
 
 /// Resolve `.`/`..` components lexically — no filesystem access. Indexed paths
@@ -716,5 +757,58 @@ mod tests {
             "message should list package-relative barrel paths, got: {}",
             msg
         );
+    }
+
+    /// #1715: a `size-checks/` entry file re-exports public symbols from the
+    /// compiled `dist/` output for bundle-size measurement in CI. It shares those
+    /// names with the source barrel `src/index.ts`, but it re-exports build
+    /// output to simulate a consumer — not a source module — so it is not an
+    /// ambiguous source-import path and must not be flagged.
+    #[test]
+    fn allows_size_check_barrel_reexporting_from_dist() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"vue-router"}"#),
+            (
+                "src/RouterLink.ts",
+                "export function RouterLink() {}\nexport function RouterView() {}",
+            ),
+            (
+                "src/index.ts",
+                "export { RouterLink, RouterView } from './RouterLink';",
+            ),
+            (
+                "size-checks/webRouter_experimental.js",
+                "export { RouterLink, RouterView } from '../dist/vue-router.js';",
+            ),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert!(
+            diags.is_empty(),
+            "a size-check barrel re-exporting from dist/ is a consumer simulation, not an ambiguous barrel, got: {:?}",
+            diags
+        );
+    }
+
+    /// Negative space: two source barrels re-exporting the same name straight
+    /// from a source module remain a genuine ambiguous import path. Dropping
+    /// `dist/`-sourced re-exporters must not silence real duplicates.
+    #[test]
+    fn flags_two_source_barrels_despite_dist_exemption() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"vue-router"}"#),
+            ("src/RouterLink.ts", "export function RouterLink() {}"),
+            ("src/index.ts", "export { RouterLink } from './RouterLink';"),
+            ("src/legacy.ts", "export { RouterLink } from './RouterLink';"),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert_eq!(
+            diags.len(),
+            1,
+            "two source barrels re-exporting `RouterLink` remain ambiguous, got: {:?}",
+            diags
+        );
+        assert!(diags[0].message.contains("RouterLink"));
     }
 }
