@@ -6,6 +6,7 @@ use crate::oxc_helpers::{
 };
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
+use oxc_ast::ast::BindingPattern;
 use oxc_semantic::{AstNodes, NodeId};
 use std::sync::Arc;
 
@@ -63,6 +64,17 @@ impl OxcCheck for Check {
                 {
                     continue;
                 }
+                // A named function expression passed as a call argument whose
+                // name matches the enclosing `const`/`let`/`var` binding is the
+                // self-reference display-name idiom (`const Foo = wrap(function
+                // Foo() {})`), used by `forwardRef`, `memo`, `observer`,
+                // `styled(...)`, and custom HOCs to give the wrapped component a
+                // stable name for stack traces. The function-expression's own
+                // name binding lives only in its own scope (ECMA-262 §15.2.4),
+                // so it shadows nothing observable to outside callers.
+                if is_named_fn_expr_self_reference(nodes, decl_node, name) {
+                    continue;
+                }
                 let span = scoping.symbol_span(symbol_id);
                 let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
                 diagnostics.push(Diagnostic {
@@ -99,6 +111,39 @@ fn is_type_param_on_static_method(nodes: &AstNodes, decl: NodeId) -> bool {
 fn is_class_type_param(nodes: &AstNodes, decl: NodeId) -> bool {
     matches!(nodes.kind(decl), AstKind::TSTypeParameter(_))
         && matches!(nodes.parent_kind(nodes.parent_id(decl)), AstKind::Class(_))
+}
+
+/// True when `decl` is the self-binding of a named function expression passed as
+/// a call argument whose own name (`symbol_name`) matches the name of the
+/// `const`/`let`/`var` declarator the call initializes
+/// (`const Foo = wrap(function Foo() {})`).
+fn is_named_fn_expr_self_reference(nodes: &AstNodes, decl: NodeId, symbol_name: &str) -> bool {
+    // The shadowing symbol must be declared by a named function expression
+    // whose own identifier equals the symbol name.
+    let AstKind::Function(func) = nodes.kind(decl) else {
+        return false;
+    };
+    if func.id.as_ref().is_none_or(|id| id.name.as_str() != symbol_name) {
+        return false;
+    }
+    // It must be a direct argument of a call expression (a function
+    // *declaration* can never be a child of a `CallExpression`, so this also
+    // confirms it is an expression rather than a declaration).
+    if !matches!(nodes.parent_kind(decl), AstKind::CallExpression(_)) {
+        return false;
+    }
+    // The call initializes a `const`/`let`/`var` declarator whose bound name
+    // matches the function-expression name.
+    nodes
+        .ancestor_kinds(decl)
+        .find_map(|kind| match kind {
+            AstKind::VariableDeclarator(declarator) => Some(declarator),
+            _ => None,
+        })
+        .is_some_and(|declarator| match &declarator.id {
+            BindingPattern::BindingIdentifier(id) => id.name.as_str() == symbol_name,
+            _ => false,
+        })
 }
 
 #[cfg(test)]
@@ -274,6 +319,54 @@ mod tests {
              class Factory {\n\
              static create(source: number) { return source; }\n\
              }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_forward_ref_named_function_expression() {
+        // The named function expression reuses the outer const name only for
+        // display/debugging; it is the self-reference idiom, not a shadow.
+        let d = run_on("const Foo = forwardRef(function Foo(props, ref) { return null; });");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_memo_named_function_expression() {
+        let d = run_on("const Foo = memo(function Foo() { return null; });");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_arbitrary_hoc_named_function_expression() {
+        // Issue #1697 reproduction: any higher-order wrapper, not just
+        // forwardRef. The named function expression is an argument in any
+        // position of the call.
+        let d = run_on(
+            "export const PromptButton = clientEntry(\n\
+             import.meta.url,\n\
+             function PromptButton(handle) { return () => {}; });",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_function_declaration_shadowing_outer_const() {
+        // A function *declaration* (not an expression passed to a call) named
+        // like the outer const is a genuine shadow and must still fire.
+        let d = run_on("const Foo = 1; function outer() { function Foo() {} return Foo; }");
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_named_fn_expr_with_name_differing_from_outer_const() {
+        // The exemption keys off the self-reference relationship (inner name ==
+        // enclosing const name). A named function expression whose name differs
+        // from the const but collides with a different outer binding is a real
+        // shadow.
+        let d = run_on(
+            "const handler = 1;\n\
+             const Component = memo(function handler() { return null; });",
         );
         assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
     }
