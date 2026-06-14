@@ -2,8 +2,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
-    byte_offset_to_line_col, is_as_unknown_double_cast, name_is_generic_type_param_in_scope,
-    peel_parens,
+    byte_offset_to_line_col, is_as_unknown_double_cast, is_inside_type_predicate_fn,
+    name_is_generic_type_param_in_scope, peel_parens,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Expression, TSArrayType, TSType, TSTypeName};
@@ -120,6 +120,15 @@ impl OxcCheck for Check {
         let type_span = as_expr.type_annotation.span();
         let type_text = &ctx.source[type_span.start as usize..type_span.end as usize];
         if type_text == "const" {
+            return;
+        }
+
+        // Allow `as` casts inside the body of a type-predicate function
+        // (`node is NodeString`). That function IS the hand-written type guard
+        // this rule recommends; the cast is needed to read a discriminant
+        // property off the loosely-typed input (`'t' in (node as NodeString)`)
+        // before returning the narrowing, so flagging it is circular advice.
+        if is_inside_type_predicate_fn(node.id(), semantic) {
             return;
         }
 
@@ -249,6 +258,26 @@ mod tests {
         assert!(run_in_test_file("const e = vi.fn() as UseFormSetError<FieldValues>;").is_empty());
         // Regression for issue #793: tsd literal tuple assertions in test-d/ fixtures.
         assert!(run_in_test_file("const literal = ['foo'] as ['foo'];").is_empty());
+    }
+
+    #[test]
+    fn allows_as_inside_type_predicate_fn() {
+        // Regression for #1266: the `as` inside a `node is NodeString` predicate
+        // IS the guard — needed to read the discriminant before `in`. No
+        // alternative exists, so it must not be flagged (hono render.ts:113).
+        let src = "const isNodeString = (node: Node): node is NodeString =>\n\
+                   't' in (node as NodeString);";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_as_outside_type_predicate() {
+        // Negative-space guard for #1266: a casual `as` in an ordinary function
+        // (not a type predicate) is still flagged.
+        let src = "function f(foo: unknown) { const x = foo as Bar; return x; }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "expected 1 diag, got: {:?}", diags);
     }
 
     #[test]

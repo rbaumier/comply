@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
-    byte_offset_to_line_col, is_outer_as_unknown_double_cast, name_is_generic_type_param_in_scope,
+    byte_offset_to_line_col, is_inside_type_predicate_fn, is_outer_as_unknown_double_cast,
+    name_is_generic_type_param_in_scope,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{TSType, TSTypeName};
@@ -54,26 +55,6 @@ fn target_is_narrowing(ty: &TSType, _source: &str) -> bool {
         }
         _ => false,
     }
-}
-
-/// `true` when any enclosing function/arrow of `node_id` has a type-predicate
-/// (`value is T`) return-type annotation. Such a function IS the user-defined
-/// type guard this rule recommends; the `as` casts in its body are needed to
-/// read properties off the loosely-typed input, so flagging them is circular.
-fn is_inside_type_predicate_fn(node_id: oxc_semantic::NodeId, nodes: &oxc_semantic::AstNodes) -> bool {
-    for ancestor in nodes.ancestors(node_id) {
-        let return_type = match ancestor.kind() {
-            AstKind::Function(f) => f.return_type.as_deref(),
-            AstKind::ArrowFunctionExpression(a) => a.return_type.as_deref(),
-            _ => None,
-        };
-        if let Some(rt) = return_type
-            && matches!(rt.type_annotation, TSType::TSTypePredicate(_))
-        {
-            return true;
-        }
-    }
-    false
 }
 
 impl OxcCheck for Check {
@@ -139,7 +120,7 @@ impl OxcCheck for Check {
         // (`value is T`). That function IS the custom type guard this rule
         // recommends; the cast is needed to read properties off the
         // loosely-typed input, so flagging it would be circular advice.
-        if is_inside_type_predicate_fn(node.id(), semantic.nodes()) {
+        if is_inside_type_predicate_fn(node.id(), semantic) {
             return;
         }
 
