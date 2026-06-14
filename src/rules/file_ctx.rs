@@ -199,8 +199,9 @@ fn skip_ws_comments(bytes: &[u8], mut cursor: usize) -> usize {
 }
 
 /// True when the head of `source` carries a blanket codegen marker: a bare
-/// whole-file `eslint-disable` (no rule list) or a `@generated` / `do not edit`
-/// / `automatically generated` / `code generated` banner. The shared content
+/// whole-file `eslint-disable` (no rule list), a `@generated` / `do not edit`
+/// / `automatically generated` / `code generated` banner, or an AutoRest-style
+/// `contains only generated` self-declaration. The shared content
 /// predicate behind both the engine gate (via [`FileCtx::is_generated`]) and
 /// `clone_detection`, so a content-marked file is exempt from every rule even
 /// when its name and directory carry no codegen signal.
@@ -224,6 +225,10 @@ pub(crate) fn is_generated_content(source: &str) -> bool {
             || lower.contains("do not make direct changes")
             || lower.contains("automatically generated")
             || lower.contains("code generated")
+            // AutoRest / TypeSpec emit a file-level self-declaration banner
+            // (e.g. "This file contains only generated model types and their
+            // (de)serializers.") with no `@generated` / `do not edit` marker.
+            || lower.contains("contains only generated")
         {
             return true;
         }
@@ -1014,6 +1019,23 @@ mod tests {
         // A hand-written targeted disable without `no-prototype-builtins` stays
         // non-generated.
         assert!(!is_generated_content("/* eslint-disable no-console, no-shadow */\nconst x = 1;\n"));
+    }
+
+    #[test]
+    fn autorest_self_declaration_header_is_generated_issue1135() {
+        // Issue #1135: AutoRest/TypeSpec model files declare themselves as
+        // generated without a `@generated` / `do not edit` marker.
+        let src = "// Copyright (c) Microsoft Corporation.\n// Licensed under the MIT License.\n\n/**\n * This file contains only generated model types and their (de)serializers.\n * Disable the following rules for internal models with '_' prefix.\n */\n/* eslint-disable @typescript-eslint/naming-convention */\nexport interface LinkedResource { uniqueName: string; id: string; }\n";
+        assert!(is_generated_content(src));
+    }
+
+    #[test]
+    fn incidental_generated_mention_is_not_generated_issue1135() {
+        // A hand-written comment that merely mentions the word "generated"
+        // (not a whole-file self-declaration) must stay non-generated.
+        assert!(!is_generated_content(
+            "// The token below was generated manually for local testing.\nexport const token = \"abc\";\n"
+        ));
     }
 
     #[test]
