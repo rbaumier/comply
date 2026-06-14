@@ -30,6 +30,11 @@
 //! impossible/error case, not a catch-all standing in for unenumerated
 //! variants, so it is not flagged.
 //!
+//! A `_ => None` arm paired with at least one `Variant(v) => Some(v)` arm
+//! is the variant-accessor idiom ("extract this variant, else nothing").
+//! A later variant should still yield `None` here, so exhaustive listing
+//! adds noise without safety, and the wildcard is not flagged.
+//!
 //! We do not descend into nested `match`es here — the walker visits
 //! every `match_expression` independently, so each match is classified
 //! on its own arms.
@@ -65,6 +70,10 @@ impl AstCheck for Check {
         // patterns of arms that look enum-like.
         let mut wildcard_arms: Vec<tree_sitter::Node> = Vec::new();
         let mut enum_like_arms: Vec<tree_sitter::Node> = Vec::new();
+        // Tracks the `match self { Variant(v) => Some(v), _ => None }`
+        // accessor idiom: at least one enum-like arm wraps its value in
+        // `Some(...)`.
+        let mut has_some_extracting_arm = false;
         let mut cursor = match_block.walk();
         for child in match_block.named_children(&mut cursor) {
             if child.kind() != "match_arm" {
@@ -77,6 +86,9 @@ impl AstCheck for Check {
                 wildcard_arms.push(child);
             } else if pattern_is_enum_like(pattern, source_bytes) {
                 enum_like_arms.push(pattern);
+                if arm_body_is_some_call(child, source_bytes) {
+                    has_some_extracting_arm = true;
+                }
             }
         }
 
@@ -101,6 +113,13 @@ impl AstCheck for Check {
         // lazy catch-all to be replaced with enumerated variants — skip it.
         for arm in wildcard_arms {
             if arm_body_is_diverging(arm, source_bytes) {
+                continue;
+            }
+            // Variant-accessor idiom (issue #1252): a `_ => None` arm paired
+            // with a `Variant(v) => Some(v)` arm is "extract this variant,
+            // else nothing". A new variant should still yield `None` here, so
+            // exhaustive listing adds noise without safety.
+            if has_some_extracting_arm && arm_body_is_none(arm, source_bytes) {
                 continue;
             }
             let pos = arm.start_position();
@@ -228,6 +247,40 @@ fn references_stdlib_closed_enum(pattern: tree_sitter::Node, source: &[u8]) -> b
     }
     // `std::io::ErrorKind` is #[non_exhaustive]: a `_` arm is mandatory.
     head.contains("ErrorKind::")
+}
+
+/// True if the `match_arm`'s body is a `Some(...)` constructor call — the
+/// "present" half of a variant-accessor (`Variant(v) => Some(v)`).
+fn arm_body_is_some_call(arm: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(value) = arm.child_by_field_name("value") else {
+        return false;
+    };
+    if value.kind() != "call_expression" {
+        return false;
+    }
+    let Some(callee) = value.child_by_field_name("function") else {
+        return false;
+    };
+    let Ok(text) = callee.utf8_text(source) else {
+        return false;
+    };
+    text.rsplit("::").next().unwrap_or(text).trim() == "Some"
+}
+
+/// True if the `match_arm`'s body is the bare `None` literal (optionally
+/// path-qualified as `Option::None`) — the "absent" half of a
+/// variant-accessor (`_ => None`).
+fn arm_body_is_none(arm: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(value) = arm.child_by_field_name("value") else {
+        return false;
+    };
+    if !matches!(value.kind(), "identifier" | "scoped_identifier") {
+        return false;
+    }
+    let Ok(text) = value.utf8_text(source) else {
+        return false;
+    };
+    text.rsplit("::").next().unwrap_or(text).trim() == "None"
 }
 
 #[cfg(test)]
@@ -446,6 +499,34 @@ mod tests {
         // bailing is a real catch-all, not a bare guard.
         let src = "fn f(x: Foo) -> Result<i32, E> { match x { \
                    Foo::A => Ok(1), _ => { log(\"hit\"); bail!(\"unexpected\"); } } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_variant_accessor_returning_none() {
+        // Issue #1252: the idiomatic `match self { Variant(v) => Some(v),
+        // _ => None }` accessor extracts one variant; the `_ => None` arm
+        // is the intentional fallthrough and must not be flagged.
+        let src = "fn import(self) -> Option<ImportId> { match self { \
+                   ImportOrExternCrate::Import(it) => Some(it), _ => None } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_wildcard_arm_doing_real_work() {
+        // Issue #1252 negative space (a): a `_` arm that calls a method is
+        // a real catch-all, not a trivial accessor fallthrough.
+        let src = "fn f(x: Foo) -> i32 { match x { \
+                   Foo::A(v) => v, _ => self.compute() } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_wildcard_arm_returning_nontrivial_value() {
+        // Issue #1252 negative space (b): a `_` arm returning a non-trivial
+        // constructed value over an enum still needs explicit variants.
+        let src = "fn f(x: Foo) -> Bar { match x { \
+                   Foo::A => Bar::One, _ => Bar::build(x, 7) } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
