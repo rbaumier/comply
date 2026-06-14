@@ -155,15 +155,7 @@ impl PackageJson {
                 || json.get("exports").is_some()
                 || json.get("module").is_some(),
             has_bin: json.get("bin").is_some(),
-            workspaces: json
-                .get("workspaces")
-                .and_then(|node| node.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|node| node.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default(),
+            workspaces: parse_workspaces(&json),
             script_entry_files: json
                 .get("scripts")
                 .and_then(|node| node.as_object())
@@ -586,6 +578,29 @@ fn parse_dep_map(json: &Value, section: &str) -> BTreeMap<String, String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Workspace package globs from the `workspaces` field, supporting both
+/// declaration shapes: the npm/Yarn-classic array (`"workspaces": ["packages/*"]`)
+/// and the Yarn Berry / pnpm nested object (`"workspaces": {"packages": [...]}`),
+/// whose `packages` array carries the same globs. Any other shape yields no globs.
+fn parse_workspaces(json: &Value) -> Vec<String> {
+    let node = match json.get("workspaces") {
+        Some(node) => node,
+        None => return Vec::new(),
+    };
+    let globs = match node {
+        Value::Array(arr) => arr,
+        Value::Object(obj) => match obj.get("packages").and_then(Value::as_array) {
+            Some(arr) => arr,
+            None => return Vec::new(),
+        },
+        _ => return Vec::new(),
+    };
+    globs
+        .iter()
+        .filter_map(|node| node.as_str().map(String::from))
+        .collect()
 }
 
 /// Smallest major version a semver range string can match, or `None` when the
@@ -3109,6 +3124,34 @@ mod tests {
             !ctx.dep_declared_in_workspace_siblings(&importer, "totally-undeclared-pkg"),
             "a dep in no member must not resolve"
         );
+    }
+
+    #[test]
+    fn resolves_workspace_packages_object_form_issue_1601() {
+        // Yarn Berry / pnpm nested-object form: `"workspaces": {"packages": [...]}`.
+        let dir = TempDir::new().unwrap();
+        let manifest = r#"{"name":"xstate-monorepo","workspaces":{"packages":["packages/*","scripts/*"]}}"#;
+        std::fs::write(dir.path().join("package.json"), manifest).unwrap();
+        let core = dir.path().join("packages").join("core");
+        std::fs::create_dir_all(&core).unwrap();
+        std::fs::write(core.join("package.json"), r#"{"name":"xstate"}"#).unwrap();
+
+        let pkg = PackageJson::parse(manifest).unwrap();
+        assert_eq!(
+            pkg.workspaces,
+            vec!["packages/*".to_string(), "scripts/*".to_string()]
+        );
+        let roots = resolve_workspace_roots(Some(dir.path()), &pkg);
+        assert_eq!(roots, vec![core]);
+    }
+
+    #[test]
+    fn workspaces_object_without_packages_key_returns_empty() {
+        // The object form may carry only `nohoist`; with no `packages` array
+        // there are no globs to discover.
+        let pkg = PackageJson::parse(r#"{"name":"root","workspaces":{"nohoist":["**/foo"]}}"#)
+            .unwrap();
+        assert!(pkg.workspaces.is_empty());
     }
 
     #[test]
