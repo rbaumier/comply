@@ -66,6 +66,16 @@ impl OxcCheck for Check {
         let Some(ref expr) = ret.argument else { return };
         let Expression::CallExpression(call) = expr else { return };
 
+        // The delegation must target a bare `this.<other>(...)`. When the
+        // receiver is itself a call or member chain (e.g. knex's
+        // `this._bool('or').whereRaw(...)`), the intervening call mutates state
+        // before delegating, so the method is behaviourally distinct from a
+        // direct call — not a shallow pass-through.
+        let Expression::StaticMemberExpression(member) = &call.callee else { return };
+        if !matches!(&member.object, Expression::ThisExpression(_)) {
+            return;
+        }
+
         let Some(arg_names) = argument_names(&call.arguments) else { return };
         let params = param_names(&method.value.params);
         if params.is_empty() {
@@ -131,5 +141,18 @@ mod tests {
         // cannot be inlined or removed.
         let src = "class NatsController { @MessagePattern('streaming.*') streaming(data) { return from(data); } }";
         assert!(run(src).is_empty(), "expected no diagnostics, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_mutate_then_delegate_chain() {
+        // Regression for #2337: knex query builder `or*` / `not*` variants first
+        // mutate boolean state via `this._bool('or')` / `this._not(true)`, then
+        // delegate. The receiver of the delegation is the result of that state-
+        // mutating call, not a bare `this`, so it is not a shallow pass-through.
+        let bool_chain = "class QB { orWhereRaw(sql, bindings) { return this._bool('or').whereRaw(sql, bindings); } }";
+        assert!(run(bool_chain).is_empty(), "expected no diagnostics, got: {:?}", run(bool_chain));
+
+        let not_chain = "class QB { whereNotExists(callback) { return this._not(true).whereExists(callback); } }";
+        assert!(run(not_chain).is_empty(), "expected no diagnostics, got: {:?}", run(not_chain));
     }
 }
