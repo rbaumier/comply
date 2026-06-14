@@ -288,6 +288,29 @@ impl PackageJson {
     pub fn is_self_name(&self, name: &str) -> bool {
         self.name.as_deref() == Some(name)
     }
+
+    /// True when this manifest declares none of the fields that make a
+    /// `package.json` a real package boundary: no `name`, no dependency section
+    /// (`dependencies`/`devDependencies`/`peerDependencies`/`optionalDependencies`),
+    /// no published surface (`main`/`exports`/`module` via [`is_library`], or
+    /// `bin` via [`has_bin`]), and no `workspaces`. Such a file (typically just
+    /// `{"type":"module"}` in an ESM subtree) only configures Node's module
+    /// system; it neither declares dependencies nor a public API. Package
+    /// resolution treats it as transparent and continues up to the nearest
+    /// substantive manifest.
+    ///
+    /// [`is_library`]: PackageJson::is_library
+    /// [`has_bin`]: PackageJson::has_bin
+    pub fn is_marker_only(&self) -> bool {
+        self.name.is_none()
+            && self.dependencies.is_empty()
+            && self.dev_dependencies.is_empty()
+            && self.peer_dependencies.is_empty()
+            && self.optional_dependencies.is_empty()
+            && !self.is_library
+            && !self.has_bin
+            && self.workspaces.is_empty()
+    }
 }
 
 /// Parse the lower bound (`major`, `minor`) of a single semver range alternative.
@@ -1957,12 +1980,16 @@ impl ProjectCtx {
         ctx
     }
 
-    /// Walk up from `path` to the nearest `package.json` and return the
-    /// *directory* containing it. The walk result is cached by start directory —
-    /// the same invariant as `nearest_package_json`.
+    /// Walk up from `path` to the nearest *substantive* `package.json` and
+    /// return the *directory* containing it. Marker-only manifests (see
+    /// [`PackageJson::is_marker_only`]) are transparent — the walk continues
+    /// past them to the nearest real package boundary, the same as
+    /// [`nearest_package_json`]. The walk result is cached by start directory.
+    ///
+    /// [`nearest_package_json`]: ProjectCtx::nearest_package_json
     pub fn nearest_package_json_dir(&self, path: &Path) -> Option<PathBuf> {
-        let start_dir = path.parent()?;
-        walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "package.json")
+        self.nearest_substantive_package_json(path)
+            .map(|(dir, _)| dir)
     }
 
     /// Walk up from `path` to the nearest Deno config (`deno.json` or
@@ -1981,17 +2008,62 @@ impl ProjectCtx {
         }
     }
 
-    /// Walk up from `path` to the nearest `package.json`, cache the parsed
-    /// result by manifest directory. Returns the same `Arc` on repeated
-    /// lookups against any file under the same manifest.
+    /// Walk up from `path` to the nearest *substantive* `package.json`, caching
+    /// the parsed result by manifest directory. Marker-only manifests (see
+    /// [`PackageJson::is_marker_only`]) — typically `{"type":"module"}` files
+    /// that only flag an ESM subtree — are not package boundaries: the walk
+    /// skips them and continues up to the nearest manifest that declares a
+    /// `name`, dependencies, or a published surface. Returns the same `Arc` on
+    /// repeated lookups against any file under the same resolved manifest.
     pub fn nearest_package_json(&self, path: &Path) -> Option<Arc<PackageJson>> {
-        nearest(
-            &self.package_json_cache,
-            &self.manifest_dir_cache,
-            path,
-            "package.json",
-            PackageJson::parse,
-        )
+        self.nearest_substantive_package_json(path)
+            .map(|(_, pkg)| pkg)
+    }
+
+    /// Resolve the nearest *substantive* `package.json` for `path`, returning
+    /// its directory paired with the parsed manifest. Starting from the nearest
+    /// manifest on disk, marker-only manifests are skipped and the walk
+    /// continues to the next ancestor manifest. If every ancestor is
+    /// marker-only the nearest one is returned, so resolution never yields
+    /// `None` when a `package.json` exists above `path`.
+    ///
+    /// Both [`nearest_package_json`] and [`nearest_package_json_dir`] project
+    /// from this, so the directory and the parsed manifest always agree.
+    ///
+    /// [`nearest_package_json`]: ProjectCtx::nearest_package_json
+    /// [`nearest_package_json_dir`]: ProjectCtx::nearest_package_json_dir
+    fn nearest_substantive_package_json(
+        &self,
+        path: &Path,
+    ) -> Option<(PathBuf, Arc<PackageJson>)> {
+        let mut start_dir = path.parent()?.to_path_buf();
+        let mut fallback: Option<(PathBuf, Arc<PackageJson>)> = None;
+
+        // Bounded: deep ESM subtrees stack a handful of marker manifests at
+        // most. The cap mirrors the ancestor-walk bound in `no-implicit-deps`.
+        for _ in 0..8 {
+            // No further manifest above the last marker: fall back to the
+            // nearest one found rather than losing the boundary entirely.
+            let Some(dir) =
+                walk_up_finding_cached(&self.manifest_dir_cache, &start_dir, "package.json")
+            else {
+                break;
+            };
+            let Some(pkg) =
+                nearest_parsed_at(&self.package_json_cache, &dir, "package.json", PackageJson::parse)
+            else {
+                break;
+            };
+            if !pkg.is_marker_only() {
+                return Some((dir, pkg));
+            }
+            fallback.get_or_insert_with(|| (dir.clone(), Arc::clone(&pkg)));
+            // Step above this marker manifest's directory and keep walking.
+            let Some(parent) = dir.parent() else { break };
+            start_dir = parent.to_path_buf();
+        }
+
+        fallback
     }
 
     /// True when `path` is the entry point its own `package.json` declares —
@@ -2846,26 +2918,17 @@ fn collect_tree_dep_names(root: &Path) -> HashSet<String> {
     names
 }
 
-/// Walk up from `path` to the nearest `filename`, returning a cached parse.
-/// Cache miss: read + parse + insert at the manifest directory. Cache hit:
-/// clone the `Arc` under the lock.
-fn nearest<T>(
+/// Parse + cache the manifest `filename` located directly in `manifest_dir`.
+/// Cache hit: clone the `Arc` under the lock. Cache miss: read + parse + insert
+/// at the manifest directory. The directory is assumed already resolved (no
+/// upward walk), so callers that have stat-walked themselves do not redo it.
+fn nearest_parsed_at<T>(
     cache: &Mutex<HashMap<PathBuf, Arc<T>>>,
-    dir_cache: &Mutex<HashMap<&'static str, HashMap<PathBuf, Option<PathBuf>>>>,
-    path: &Path,
-    filename: &'static str,
+    manifest_dir: &Path,
+    filename: &str,
     parse: impl Fn(&str) -> Option<T>,
 ) -> Option<Arc<T>> {
-    let start_dir = path.parent()?;
-
-    // Resolve the *nearest* manifest on disk first, then cache keyed by that
-    // resolved dir. Caching by ancestor lookup instead would let a cached far
-    // ancestor shadow a closer, not-yet-parsed manifest — the monorepo case of
-    // a root tsconfig alongside per-package tsconfigs, where resolution order
-    // is arbitrary.
-    let manifest_dir = walk_up_finding_cached(dir_cache, start_dir, filename)?;
-
-    if let Some(hit) = cache.lock().ok()?.get(&manifest_dir) {
+    if let Some(hit) = cache.lock().ok()?.get(manifest_dir) {
         return Some(Arc::clone(hit));
     }
 
@@ -2880,7 +2943,8 @@ fn nearest<T>(
     };
     let arc = Arc::new(parsed);
     if let Ok(mut map) = cache.lock() {
-        map.entry(manifest_dir).or_insert_with(|| Arc::clone(&arc));
+        map.entry(manifest_dir.to_path_buf())
+            .or_insert_with(|| Arc::clone(&arc));
     }
     Some(arc)
 }
@@ -3501,6 +3565,91 @@ mod tests {
             "sibling files should share the same cached Arc"
         );
         assert_eq!(first.name.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn marker_only_package_json_is_transparent() {
+        // Regression for #1823 — a `{"type":"module"}` marker manifest in an ESM
+        // subtree is not a package boundary. Resolution skips it and uses the
+        // substantive root, so both dependency lookup and library detection see
+        // the real manifest.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"msw","main":"./lib/index.js","exports":{".":"./lib/index.js"},"devDependencies":{"vitest":"^1"}}"#,
+        )
+        .unwrap();
+        let sub = dir.path().join("test").join("memory");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(dir.path().join("test").join("package.json"), r#"{"type":"module"}"#).unwrap();
+
+        let ctx = ProjectCtx::empty();
+        let pkg = ctx.nearest_package_json(&sub.join("vitest.config.ts")).unwrap();
+        assert_eq!(pkg.name.as_deref(), Some("msw"), "skips the marker, resolves the root");
+        assert!(pkg.is_library, "library detection uses the substantive root");
+        assert!(pkg.has_dep_or_engine("vitest"), "dep lookup uses the substantive root");
+
+        // The directory projection agrees with the parsed manifest.
+        let resolved_dir = ctx
+            .nearest_package_json_dir(&sub.join("vitest.config.ts"))
+            .unwrap();
+        assert_eq!(resolved_dir, dir.path(), "dir resolves past the marker to the root");
+    }
+
+    #[test]
+    fn substantive_nearest_package_json_stays_the_boundary() {
+        // Negative space for #1823 — a sub-package that declares its own deps is
+        // a real boundary and must NOT be skipped, even when an ancestor exists.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"root","devDependencies":{"left-pad":"^1"}}"#,
+        )
+        .unwrap();
+        let sub = dir.path().join("packages").join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(
+            sub.join("package.json"),
+            r#"{"name":"@root/sub","dependencies":{"lodash":"^4"}}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx::empty();
+        let pkg = ctx.nearest_package_json(&sub.join("index.ts")).unwrap();
+        assert_eq!(pkg.name.as_deref(), Some("@root/sub"), "substantive sub stays the boundary");
+        assert!(pkg.has_dep_or_engine("lodash"));
+        assert!(!pkg.has_dep_or_engine("left-pad"), "root deps are not the sub's boundary");
+    }
+
+    #[test]
+    fn all_marker_ancestors_fall_back_to_nearest() {
+        // When every ancestor manifest is marker-only, resolution still yields
+        // the nearest one rather than `None` — it never loses the boundary.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"type":"module"}"#).unwrap();
+        let sub = dir.path().join("src");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("package.json"), r#"{"type":"module"}"#).unwrap();
+
+        let ctx = ProjectCtx::empty();
+        let resolved = ctx.nearest_package_json_dir(&sub.join("t.ts"));
+        assert_eq!(resolved, Some(sub), "falls back to the nearest marker manifest");
+    }
+
+    #[test]
+    fn is_marker_only_classifies_fields() {
+        let marker = PackageJson::parse(r#"{"type":"module"}"#).unwrap();
+        assert!(marker.is_marker_only());
+        assert!(PackageJson::parse("{}").unwrap().is_marker_only());
+
+        assert!(!PackageJson::parse(r#"{"name":"x"}"#).unwrap().is_marker_only());
+        assert!(!PackageJson::parse(r#"{"main":"./i.js"}"#).unwrap().is_marker_only());
+        assert!(!PackageJson::parse(r#"{"exports":{}}"#).unwrap().is_marker_only());
+        assert!(!PackageJson::parse(r#"{"module":"./i.mjs"}"#).unwrap().is_marker_only());
+        assert!(!PackageJson::parse(r#"{"bin":{"x":"./x.js"}}"#).unwrap().is_marker_only());
+        assert!(!PackageJson::parse(r#"{"dependencies":{"a":"1"}}"#).unwrap().is_marker_only());
+        assert!(!PackageJson::parse(r#"{"devDependencies":{"a":"1"}}"#).unwrap().is_marker_only());
+        assert!(!PackageJson::parse(r#"{"workspaces":["packages/*"]}"#).unwrap().is_marker_only());
     }
 
     #[test]
