@@ -211,6 +211,20 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `word[0]` / `word[word.length - 1]` where `word` is a `string`-typed
+        // binding guarded by a preceding `if (!word) return/throw`. A string is
+        // falsy exactly when empty, so the truthiness early-exit proves the string
+        // is non-empty at the access — both the first and last reads are in-bounds.
+        // Scoped to a `string` annotation: an array's truthiness says nothing about
+        // its length (`[]` is truthy), so the same guard would not bound an array.
+        if (is_first || is_last)
+            && let Expression::Identifier(obj_ident) = &member.object
+            && binding_has_string_type(obj_ident, semantic)
+            && has_preceding_nullish_exit_guard(node, obj_ident.name.as_str(), semantic)
+        {
+            return;
+        }
+
         let which = if is_first { "first" } else { "last" };
         let at_arg = if is_first { "0" } else { "-1" };
         // Report at the opening `[` of this access, not at `member.span().start`.
@@ -1117,6 +1131,58 @@ fn ts_type_is_nonempty_tuple(ty: &TSType) -> bool {
         {
             ts_type_is_nonempty_tuple(&op.type_annotation)
         }
+        _ => false,
+    }
+}
+
+/// Returns true when `ident`'s binding has a type annotation denoting a `string`:
+/// the bare `string` keyword or a union that includes it (`string | undefined`).
+/// Mirrors [`resolves_to_nonempty_tuple_type`]: resolves the reference to its
+/// declaration and reads the `type_annotation` on the enclosing `FormalParameter`
+/// (`word: string`) or `VariableDeclarator` (`const word: string`). A string is
+/// falsy exactly when empty, so this is the receiver-type signal that lets a
+/// truthiness early-exit (`if (!word) return`) prove non-emptiness — array types,
+/// whose `[]` is truthy, never qualify.
+fn binding_has_string_type(
+    ident: &IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let nodes = semantic.nodes();
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    for kind in std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        let annotation = match kind {
+            AstKind::FormalParameter(param) => &param.type_annotation,
+            AstKind::VariableDeclarator(decl) => &decl.type_annotation,
+            // Leaving the binding's own declaration without finding an annotation.
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
+                return false;
+            }
+            _ => continue,
+        };
+        return annotation
+            .as_ref()
+            .is_some_and(|ann| ts_type_is_string(&ann.type_annotation));
+    }
+    false
+}
+
+/// Returns true when `ty` is the `string` keyword, or a union any of whose members
+/// is `string` (`string | undefined`, `string | null`). A non-string member such
+/// as a nullish type is harmless here: the truthiness guard discards every nullish
+/// value, leaving only the (non-empty) string branch at the access.
+fn ts_type_is_string(ty: &TSType) -> bool {
+    match ty {
+        TSType::TSStringKeyword(_) => true,
+        TSType::TSUnionType(union) => union.types.iter().any(ts_type_is_string),
         _ => false,
     }
 }
@@ -2560,6 +2626,37 @@ mod tests {
         // Negative space: the access is a bare expression statement, not a
         // `const`/`let` initializer, so the result-binding exemption never applies.
         let src = "function f(arr) { arr[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_string_last_char_after_truthy_exit_issue_1337() {
+        // The issue's exact shape: a `string | undefined` param guarded by
+        // `if (!word) return` is non-empty at `word[word.length - 1]`, since an
+        // empty string is falsy.
+        let src = "function withDefiniteArticle(word: string | undefined): string {\n  if (!word) return \"\";\n  const vowels = [\"a\"];\n  const lastChar = word[word.length - 1];\n  return word + (vowels.includes(lastChar) ? \"x\" : \"y\");\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_string_first_char_after_truthy_exit_issue_1337() {
+        // The first-element read is in-bounds under the same truthy-string guard.
+        let src = "function f(s: string) { if (!s) throw new Error(); const c = s[0]; return c; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_array_last_after_truthy_exit_issue_1337() {
+        // Negative space: an array is truthy even when empty (`[]`), so a
+        // truthiness guard does not prove non-emptiness — the read stays flagged.
+        let src = "function f(arr: number[]) { if (!arr) return; const x = arr[arr.length - 1]; return x; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_string_last_without_truthy_exit_issue_1337() {
+        // Negative space: no preceding `if (!s)` guard, so the string may be empty.
+        let src = "function f(s: string) { const c = s[s.length - 1]; return c; }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
