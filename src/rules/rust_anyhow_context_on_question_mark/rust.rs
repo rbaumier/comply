@@ -10,7 +10,13 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["try_expression"] => |node, source, ctx, diagnostics|
     let path_str = ctx.path.to_string_lossy();
-    if !path_str.contains("main.rs") && !path_str.contains("src/bin/") && !path_str.contains("src/cli") {
+    // `cli` must match as a real path segment — a `cli/` directory or a `cli.rs`
+    // file — so library files like `src/client.rs` aren't mistaken for CLI code.
+    let is_cli = ctx
+        .path
+        .components()
+        .any(|c| matches!(c.as_os_str().to_str(), Some("cli" | "cli.rs")));
+    if !path_str.contains("main.rs") && !path_str.contains("src/bin/") && !is_cli {
         return;
     }
 
@@ -124,5 +130,21 @@ mod tests {
     fn ignores_lib_files() {
         let src = r#"fn load() -> anyhow::Result<String> { let s = std::fs::read_to_string("x")?; Ok(s) }"#;
         assert!(run_lib(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_client_file_not_matched_as_cli() {
+        // `src/client.rs` is library code; "client" must not match the "cli" CLI segment.
+        let src = r#"fn load() -> anyhow::Result<String> { let s = std::fs::read_to_string("x")?; Ok(s) }"#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/client.rs");
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn flags_in_cli_module_file() {
+        // a genuine `cli` path segment is still treated as a CLI entry point.
+        let src = r#"fn load() -> anyhow::Result<String> { let s = std::fs::read_to_string("x")?; Ok(s) }"#;
+        assert!(!crate::rules::test_helpers::run_rule(&Check, src, "src/cli/mod.rs").is_empty());
+        assert!(!crate::rules::test_helpers::run_rule(&Check, src, "src/cli.rs").is_empty());
     }
 }
