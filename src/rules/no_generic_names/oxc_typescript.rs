@@ -216,6 +216,61 @@ fn is_destructuring<'a>(
     false
 }
 
+/// True when `expr` is (or unwraps to) a `.entries()` method call. Matched by the
+/// callee's member property name `entries`, covering `Object.entries(obj)`,
+/// `map.entries()`, and `arr.entries()` regardless of receiver. Computed/static
+/// member access on top of the call is unwrapped so the indexed pair form
+/// `Object.entries(obj)[0]` also matches.
+fn expr_is_entries_call(expr: &Expression) -> bool {
+    match expr {
+        Expression::CallExpression(call) => matches!(
+            &call.callee,
+            Expression::StaticMemberExpression(m) if m.property.name.as_str() == "entries"
+        ),
+        Expression::ComputedMemberExpression(m) => expr_is_entries_call(&m.object),
+        Expression::StaticMemberExpression(m) => expr_is_entries_call(&m.object),
+        Expression::ParenthesizedExpression(p) => expr_is_entries_call(&p.expression),
+        Expression::TSNonNullExpression(e) => expr_is_entries_call(&e.expression),
+        _ => false,
+    }
+}
+
+/// True when the identifier is bound as an element of an array-destructuring
+/// pattern (`[key, value]`) whose initializer is a `.entries()` call. `[key,
+/// value]` is the canonical, MDN-blessed destructuring for `Object.entries()` /
+/// `Map.entries()` / `Array.entries()` pair iteration, so the per-pair `key` and
+/// `value` bindings are self-documenting there. Covers both the for-of iterated
+/// expression (`for (const [k, v] of Object.entries(obj))`) and the right-hand
+/// side of a destructuring assignment (`const [k, v] = Object.entries(obj)[0]`).
+/// The walk stops at a function/program boundary so it only inspects the binding's
+/// own surroundings.
+fn is_in_entries_destructuring<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let mut in_array_pattern = false;
+    for kind in nodes.ancestor_kinds(node.id()) {
+        match kind {
+            AstKind::ArrayPattern(_) => in_array_pattern = true,
+            AstKind::ForOfStatement(stmt) if in_array_pattern => {
+                return expr_is_entries_call(&stmt.right);
+            }
+            AstKind::VariableDeclarator(d) if in_array_pattern => {
+                return d.init.as_ref().is_some_and(expr_is_entries_call);
+            }
+            AstKind::AssignmentExpression(a) if in_array_pattern => {
+                return expr_is_entries_call(&a.right);
+            }
+            AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Program(_) => return false,
+            _ => continue,
+        }
+    }
+    false
+}
+
 /// True when the identifier is a function/arrow parameter (inside a FormalParameter).
 fn is_function_param<'a>(
     node: &oxc_semantic::AstNode<'a>,
@@ -551,6 +606,12 @@ impl OxcCheck for Check {
                         && (is_function_param(node, semantic)
                             || is_for_of_or_in_binding(node, semantic))
                     {
+                        return;
+                    }
+                    // `[key, value]` destructured from a `.entries()` call is the
+                    // canonical pair-iteration idiom (Object/Map/Array.entries);
+                    // the per-pair `key`/`value` bindings are self-documenting.
+                    if is_in_entries_destructuring(node, semantic) {
                         return;
                     }
                     // A descriptive type annotation (`result: Result<…>`,
@@ -1191,6 +1252,43 @@ mod tests {
             items.filter((info) => info.ok);
         "#;
         assert_eq!(run(src).len(), 3);
+    }
+
+    #[test]
+    fn no_fp_key_value_destructured_from_entries_issue_1319() {
+        // Regression for #1319 — `[key, value]` is the canonical destructuring
+        // for `Object.entries()` / `Map.entries()` / `Array.entries()` pair
+        // iteration; renaming hurts readability. Covers the for-of iterated
+        // expression and the indexed destructuring-assignment form.
+        let src = r#"
+            for (const [key, value] of Object.entries(obj)) { use(key, value); }
+            for (const [name, value] of Object.entries(env)) { use(name, value); }
+            for (const [key, value] of m.entries()) { use(key, value); }
+            for (const [index, value] of arr.entries()) { use(index, value); }
+            const [k, value] = Object.entries(params)[0];
+            const [k2, value] = arr.entries()[i];
+        "#;
+        assert!(run(src).is_empty(), "entries destructuring must not flag");
+    }
+
+    #[test]
+    fn still_flags_value_destructured_from_non_entries_call_issue_1319() {
+        // Negative space: the exemption is scoped to `.entries()`. A `value`
+        // bound from an array-destructuring whose initializer is some other call
+        // is not the entries idiom and must still flag.
+        let src = r#"const [first, value] = getPair();"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_bare_value_const_and_data_param_issue_1319() {
+        // Negative space: plain generic names outside the entries context keep
+        // firing — a bare `const value = ...` and a `data` parameter.
+        let src = r#"
+            function g() { const value = getThing(); return value; }
+            function f(data) { return data; }
+        "#;
+        assert_eq!(run(src).len(), 2);
     }
 
     #[test]
