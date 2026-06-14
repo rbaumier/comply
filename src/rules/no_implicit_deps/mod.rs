@@ -39,6 +39,7 @@ pub fn register() -> RuleDef {
 
 const NODE_BUILTINS: &[&str] = &[
     "assert",
+    "async_hooks",
     "buffer",
     "child_process",
     "cluster",
@@ -46,6 +47,7 @@ const NODE_BUILTINS: &[&str] = &[
     "constants",
     "crypto",
     "dgram",
+    "diagnostics_channel",
     "dns",
     "domain",
     "events",
@@ -53,6 +55,7 @@ const NODE_BUILTINS: &[&str] = &[
     "http",
     "http2",
     "https",
+    "inspector",
     "module",
     "net",
     "os",
@@ -68,11 +71,13 @@ const NODE_BUILTINS: &[&str] = &[
     "sys",
     "timers",
     "tls",
+    "trace_events",
     "tty",
     "url",
     "util",
     "v8",
     "vm",
+    "wasi",
     "worker_threads",
     "zlib",
 ];
