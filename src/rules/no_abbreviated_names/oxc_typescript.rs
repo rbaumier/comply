@@ -18,11 +18,14 @@ const ALLOWED_METHOD_NAMES: &[&str] = &["err", "isErr"];
 // descriptor in virtualization/device-driver protocols (VirtIO/USB/PCIe
 // `Descriptor`) and the SQL `ORDER BY … DESC` keyword — it has multiple
 // canonical expansions, so suggesting 'description' is frequently wrong.
+// `pwd` is likewise exempt: in shell/filesystem/OS code it is the Unix
+// `pwd(1)` command and `$PWD` variable ("print working directory"), while
+// in URL/auth code it means "password" — two canonical expansions, so
+// suggesting either single full word is frequently wrong.
 const DEFAULT_BANNED: &[(&str, &str)] = &[
     ("acct", "account"),
     ("usr", "user"),
     ("btn", "button"),
-    ("pwd", "password"),
     ("cnt", "count"),
 ];
 
@@ -206,9 +209,19 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_pwd() {
-        let diags = run_on("const pwd = \"x\";");
-        assert!(diags.iter().any(|d| d.message.contains("pwd")));
+    fn allows_pwd_print_working_directory_term() {
+        // Regression for issue #1484: `pwd` means "print working directory"
+        // in shell/filesystem code and "password" in URL/auth code — two
+        // canonical expansions, so `pwd` is exempt entirely (like `desc`).
+        assert!(run_on("const filePwd = getCwd();").is_empty());
+        assert!(run_on("const pwd = process.cwd();").is_empty());
+    }
+
+    #[test]
+    fn still_flags_other_abbreviations_after_pwd_removal() {
+        // Removing `pwd` must not weaken detection of genuine abbreviations.
+        let diags = run_on("const usrId = 1;");
+        assert!(diags.iter().any(|d| d.message.contains("usr")));
     }
 
     #[test]

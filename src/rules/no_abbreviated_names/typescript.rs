@@ -27,7 +27,6 @@ const DEFAULT_BANNED: &[(&str, &str)] = &[
     ("acct", "account"),
     ("usr", "user"),
     ("btn", "button"),
-    ("pwd", "password"),
     ("cnt", "count"),
     ("desc", "description"),
     ("addr", "address"),
@@ -203,8 +202,10 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_pwd() {
-        let diags = run_on("const pwd = \"x\";");
-        assert!(diags.iter().any(|d| d.message.contains("pwd")));
+    fn allows_pwd_print_working_directory_term() {
+        // Regression for issue #1484: `pwd` means "print working directory"
+        // in shell/filesystem code and "password" in URL/auth code — two
+        // canonical expansions, so `pwd` is exempt entirely.
+        assert!(run_on("const filePwd = getCwd();").is_empty());
     }
 }
