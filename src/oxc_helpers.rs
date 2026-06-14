@@ -577,6 +577,82 @@ pub fn is_local_object_builder_binding(
     false
 }
 
+/// True when `ident` resolves to the **accumulator** parameter of an
+/// `Array.prototype.reduce` callback — the first parameter of an arrow or
+/// function expression passed as the first argument to a `.reduce(...)` call.
+///
+/// The seed (`reduce`'s second argument) is a fresh value created at the call
+/// site, so the accumulator is a local builder that never escapes until `reduce`
+/// returns. Mutating its properties (`acc[key] = v`) is the canonical
+/// reduce-to-object pattern and mutates no external state — the object analogue
+/// of `const items = []; items.push(x)`.
+///
+/// Resolves the binding via `reference_id` → symbol → declaration node, then
+/// confirms the declaration is the first formal parameter of a function/arrow
+/// whose parent is a `CallExpression` keyed by a `.reduce` member and that takes
+/// the function as its first argument. Any other parameter, or the accumulator
+/// of a non-`reduce` call, resolves to a different shape and stays flagged.
+#[must_use]
+pub fn is_reduce_accumulator_param(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+    use oxc_span::GetSpan;
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    let decl_span = nodes.kind(decl_node_id).span();
+
+    // Walk from the binding's declaration up to the function it parameterises.
+    // Require the binding to be that function's first formal parameter, and the
+    // function to be the first argument of a `.reduce(...)` call.
+    let mut is_first_param = false;
+    for ancestor in nodes.ancestors(decl_node_id) {
+        match ancestor.kind() {
+            AstKind::FormalParameters(params) => {
+                is_first_param = params
+                    .items
+                    .first()
+                    .is_some_and(|first| first.span.start <= decl_span.start && decl_span.end <= first.span.end);
+                if !is_first_param {
+                    return false;
+                }
+            }
+            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
+                if !is_first_param {
+                    return false;
+                }
+                let AstKind::CallExpression(call) = nodes.parent_node(ancestor.id()).kind() else {
+                    return false;
+                };
+                let Expression::StaticMemberExpression(member) = &call.callee else {
+                    return false;
+                };
+                if member.property.name.as_str() != "reduce" {
+                    return false;
+                }
+                let fn_span = ancestor.kind().span();
+                return call
+                    .arguments
+                    .first()
+                    .and_then(|arg| arg.as_expression())
+                    .is_some_and(|arg| arg.span() == fn_span);
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// True when `assign` sets a `displayName` property to a string literal
 /// (`Component.displayName = "Component"`). React reads `displayName` off the
 /// component function object to name anonymous `forwardRef`/`memo` results in
