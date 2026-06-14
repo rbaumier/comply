@@ -95,9 +95,10 @@ pub(super) fn function_name_is_sync(name: &str) -> bool {
     name.ends_with("Sync")
 }
 
-pub(super) fn allows_sync_node_api(path: &std::path::Path, source: &str) -> bool {
+pub(super) fn allows_sync_node_api(path: &std::path::Path, source: &str, in_cli_package: bool) -> bool {
     let lower = path.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
-    lower.starts_with("scripts/")
+    in_cli_package
+        || lower.starts_with("scripts/")
         || lower.contains("/scripts/")
         || lower.starts_with("bin/")
         || lower.contains("/bin/")
