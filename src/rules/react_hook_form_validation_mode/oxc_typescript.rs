@@ -305,4 +305,39 @@ mod tests {
         "#;
         assert_eq!(run(src).len(), 1);
     }
+
+    #[test]
+    fn skips_useform_in_test_file_issue1347() {
+        // Issue #1347: react-hook-form's own test suite exercises focused unit
+        // tests where validation mode is irrelevant. `skip_in_test_dir`
+        // suppresses the rule for files the central predicate classifies as
+        // tests (here, `__tests__/` + `.test.`).
+        let src = r#"
+            it('populates default values', () => {
+              const { control } = useForm({
+                defaultValues: { test: [{ test: '1' }] },
+              });
+            });
+        "#;
+        let d = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            src,
+            "src/__tests__/useFieldArray.test.tsx",
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn still_flags_useform_in_production_file_issue1347() {
+        // Negative space for #1347: the same pattern in a production file is
+        // still flagged — the gate only exempts test files.
+        let src = r#"
+            export function EditForm() {
+              const form = useForm({ resolver: zodResolver(schema) });
+              return <form />;
+            }
+        "#;
+        let d = crate::rules::test_helpers::run_rule_gated(&Check, src, "src/EditForm.tsx");
+        assert_eq!(d.len(), 1);
+    }
 }

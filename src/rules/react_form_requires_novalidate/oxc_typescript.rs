@@ -143,4 +143,28 @@ mod tests {
         "#;
         assert_eq!(run(src).len(), 1);
     }
+
+    #[test]
+    fn skips_form_in_test_file_issue1347() {
+        // Issue #1347: forms rendered in a test runner have no browser UI, so
+        // native validation never fires and `noValidate` is meaningless.
+        // `skip_in_test_dir` suppresses the rule for files the central
+        // predicate classifies as tests (here, `__tests__/` + `.test.`).
+        let src = r#"const x = <form onSubmit={handle}>body</form>;"#;
+        let d = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            src,
+            "src/__tests__/useFieldArray.test.tsx",
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn still_flags_form_in_production_file_issue1347() {
+        // Negative space for #1347: the same `<form>` in a production file is
+        // still flagged — the gate only exempts test files.
+        let src = r#"const x = <form onSubmit={handle}>body</form>;"#;
+        let d = crate::rules::test_helpers::run_rule_gated(&Check, src, "src/EditForm.tsx");
+        assert_eq!(d.len(), 1);
+    }
 }
