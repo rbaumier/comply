@@ -261,6 +261,118 @@ mod tests {
         )
     }
 
+    /// Build a project rooted at a tempdir with the given files (relative paths
+    /// from the root), then run the OXC backend against `target_rel`. Lets a test
+    /// stage a subtree (e.g. `tests/`) with its own tsconfig to exercise
+    /// nearest-config precedence.
+    fn run_with_files(
+        files: &[(&str, &str)],
+        target_rel: &str,
+        source: &str,
+    ) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        for (rel, contents) in files {
+            let p = dir.path().join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, contents).unwrap();
+        }
+        let file_path = dir.path().join(target_rel);
+        fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        fs::write(&file_path, source).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: Language::from_path(&file_path).unwrap(),
+        };
+        let refs = vec![&source_file];
+        let project = ProjectCtx::load(&refs, &Config::default());
+        let canon = fs::canonicalize(&file_path).unwrap();
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    // Regression for #1307: a `tests/` subtree with its own tsconfig selecting
+    // `moduleResolution:node` (classic resolution accepts extensionless imports)
+    // is governed by that closer tsconfig, even though the root package.json
+    // declares `"type":"module"`. The rule must stay silent there.
+    #[test]
+    fn skips_tests_subtree_with_classic_resolution_tsconfig_issue_1307() {
+        let diags = run_with_files(
+            &[
+                ("package.json", r#"{"type":"module"}"#),
+                (
+                    "tsconfig.json",
+                    r#"{"compilerOptions":{"moduleResolution":"bundler"},"exclude":["tests/"]}"#,
+                ),
+                (
+                    "tests/tsconfig.json",
+                    r#"{"compilerOptions":{"moduleResolution":"node"}}"#,
+                ),
+            ],
+            "tests/foo.test.ts",
+            "import { x } from './util';\n",
+        );
+        assert!(
+            diags.is_empty(),
+            "tests/ tsconfig with moduleResolution:node governs over root type:module: {diags:?}"
+        );
+    }
+
+    // Negative space for #1307 (a): the same extensionless import in a root-level
+    // ESM file — nearest tsconfig is ESM (`moduleResolution:bundler` excludes
+    // tests/, so root files have no classic signal) and package.json is
+    // type:module — must still be flagged.
+    #[test]
+    fn still_flags_root_esm_file_with_type_module_issue_1307() {
+        let diags = run_with_files(
+            &[
+                ("package.json", r#"{"type":"module"}"#),
+                (
+                    "tsconfig.json",
+                    r#"{"compilerOptions":{"moduleResolution":"nodenext"}}"#,
+                ),
+            ],
+            "src/app.ts",
+            "import { x } from './util';\n",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "root ESM file (type:module, nodenext) still requires extensions: {diags:?}"
+        );
+    }
+
+    // Negative space for #1307 (b): a `tests/` subtree whose own tsconfig selects
+    // `nodenext` (dual-mode, ESM-capable) is NOT a classic signal, so even with
+    // its closer tsconfig the rule keeps firing.
+    #[test]
+    fn still_flags_tests_subtree_with_nodenext_tsconfig_issue_1307() {
+        let diags = run_with_files(
+            &[
+                ("package.json", r#"{"type":"module"}"#),
+                (
+                    "tsconfig.json",
+                    r#"{"compilerOptions":{"moduleResolution":"bundler"},"exclude":["tests/"]}"#,
+                ),
+                (
+                    "tests/tsconfig.json",
+                    r#"{"compilerOptions":{"moduleResolution":"nodenext"}}"#,
+                ),
+            ],
+            "tests/foo.test.ts",
+            "import { x } from './util';\n",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "tests/ tsconfig with nodenext is ESM-capable — still flag: {diags:?}"
+        );
+    }
+
     // Regression for #1712: Angular's build toolchain resolves extensionless
     // relative imports, so the rule must stay silent when Angular is detected.
 

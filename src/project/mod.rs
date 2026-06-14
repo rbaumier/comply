@@ -2833,22 +2833,21 @@ impl ProjectCtx {
     /// True when the project governing `path` positively declares CommonJS as
     /// its module system, where the resolver supplies extensions and relative
     /// imports therefore need none. The positive signal is the nearest tsconfig
-    /// selecting CommonJS output or classic resolution
-    /// (`compilerOptions.module` is `commonjs`, or `compilerOptions.module` /
-    /// `moduleResolution` is one of `node`/`node10`/`classic`) *and* the nearest
-    /// `package.json` not declaring `"type":"module"`.
+    /// selecting CommonJS output or classic resolution: `compilerOptions.module`
+    /// is `commonjs`, or `compilerOptions.module` / `moduleResolution` is one of
+    /// `node`/`node10`/`classic`.
+    ///
+    /// The **nearest config wins**: a `package.json` declaring `"type":"module"`
+    /// vetoes the CommonJS signal *only* when no tsconfig opting into classic
+    /// resolution sits strictly closer to the file. A subtree (e.g. `tests/`)
+    /// with its own tsconfig selecting `moduleResolution:node` is governed by
+    /// that closer tsconfig even when a farther-up `package.json` is ESM.
     ///
     /// Conservative by construction: dual-mode signals (`node16`/`nodenext`)
     /// are ESM-capable and want explicit extensions, so they are not CommonJS
     /// here. Absent or ambiguous config returns false — callers keep their
     /// default (ESM) behavior rather than silently assuming CommonJS.
     pub fn is_commonjs_project(&self, path: &Path) -> bool {
-        if self
-            .nearest_package_json(path)
-            .is_some_and(|pkg| pkg.module_type == ModuleType::Module)
-        {
-            return false;
-        }
         let Some(tsc) = self.nearest_tsconfig(path) else {
             return false;
         };
@@ -2860,7 +2859,28 @@ impl ProjectCtx {
             .module_resolution
             .as_deref()
             .is_some_and(|m| CLASSIC.iter().any(|c| m.eq_ignore_ascii_case(c)));
-        module_is_cjs || resolution_is_classic
+        if !(module_is_cjs || resolution_is_classic) {
+            return false;
+        }
+
+        // The tsconfig positively selects CommonJS/classic resolution. An ESM
+        // `package.json` (`"type":"module"`) overrides it only when that manifest
+        // is at least as close to the file as the tsconfig — i.e. the tsconfig is
+        // not in a strictly deeper subtree (the `tests/` case in #1307).
+        let pkg_is_esm = self
+            .nearest_package_json(path)
+            .is_some_and(|pkg| pkg.module_type == ModuleType::Module);
+        if !pkg_is_esm {
+            return true;
+        }
+        let (Some(ts_dir), Some(pkg_dir)) = (
+            self.nearest_tsconfig_dir(path),
+            self.nearest_package_json_dir(path),
+        ) else {
+            return false;
+        };
+        // `ts_dir` strictly under `pkg_dir` ⇒ closer tsconfig governs ⇒ CommonJS.
+        ts_dir != pkg_dir && ts_dir.starts_with(&pkg_dir)
     }
 
     /// Walk up from `path` to the nearest `tsconfig.json` and return the
