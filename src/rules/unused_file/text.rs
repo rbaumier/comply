@@ -112,6 +112,7 @@ fn detect_entry_points<'a>(
                 || project.entrypoints_contains(p)
                 || project.is_package_entry_file(p)
                 || project.is_in_published_files_surface(p)
+                || project.is_declared_entry_barrel(p)
         })
         .collect()
 }
@@ -1635,6 +1636,93 @@ mod tests {
         assert!(
             diags[0].path.to_str().unwrap().contains("dead.rs"),
             "only the genuinely orphaned dead.rs (declared by no `mod`) is flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #2374 (typeorm): a monorepo's root package is a published
+    // library (`main`/`exports` → `is_library=true`), but the rule's anchor
+    // (lexicographically smallest path) falls in a non-library sub-package
+    // (`docs/`, no `main`/`exports`), so the per-anchor `is_library` short-circuit
+    // does not fire and the run proceeds. The library's source entry barrel
+    // (`src/index.ts`, whose stem matches the package's `main`/`exports` entry
+    // stem) is seeded as a BFS root, so every decorator file re-exported from it
+    // via `export *` stays reachable instead of being flagged.
+    #[test]
+    fn library_source_not_flagged_when_anchor_is_docs_subpackage() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"name":"typeorm","main":"./index.js","exports":{".":"./index.js"}}"#,
+            ),
+            // src/index.ts is the library's source entry barrel: its stem
+            // matches the package's `main`/`exports` entry stem, so it must be
+            // seeded as a BFS root even when the run anchors elsewhere.
+            (
+                "src/index.ts",
+                "export * from './decorator/columns/VirtualColumn';\n\
+                 export * from './decorator/listeners/AfterInsert';\n\
+                 export * from './decorator/ForeignKey';\n",
+            ),
+            (
+                "src/decorator/columns/VirtualColumn.ts",
+                "export function VirtualColumn(): unknown { return {}; }\n",
+            ),
+            (
+                "src/decorator/listeners/AfterInsert.ts",
+                "export function AfterInsert(): unknown { return {}; }\n",
+            ),
+            (
+                "src/decorator/ForeignKey.ts",
+                "export function ForeignKey(): unknown { return {}; }\n",
+            ),
+            // docs/ is a non-library sub-package; its sidebars.ts is the
+            // lexicographically smallest indexed path, so it becomes the anchor.
+            ("docs/package.json", r#"{"name":"docs","private":true}"#),
+            ("docs/sidebars.ts", "export default { sidebar: [] };\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        let flagged: Vec<&str> = diags.iter().filter_map(|d| d.path.to_str()).collect();
+        assert!(
+            !flagged.iter().any(|p| p.contains("/src/decorator/")),
+            "library decorator files re-exported from src/index.ts must not be \
+             flagged when the anchor is a non-library docs sub-package: {flagged:?}"
+        );
+    }
+
+    // Regression for #2374: the entry-barrel seeding is precise — it only makes
+    // files reachable *from* a declared entry barrel reachable. A genuinely
+    // unreferenced source file in a NON-library sub-package (no inbound import
+    // edge, not an entry, not reachable from any barrel) is still flagged, so
+    // real dead code is not blanketed by the docs-anchor fix.
+    #[test]
+    fn genuinely_unreferenced_file_in_non_library_package_still_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"name":"typeorm","main":"./index.js","exports":{".":"./index.js"}}"#,
+            ),
+            (
+                "src/index.ts",
+                "export * from './decorator/columns/VirtualColumn';\n",
+            ),
+            (
+                "src/decorator/columns/VirtualColumn.ts",
+                "export function VirtualColumn(): unknown { return {}; }\n",
+            ),
+            // app/ is a non-library sub-package (no main/exports). app/main.ts
+            // is its bootstrapper entry and imports used.ts; orphan.ts is
+            // imported by nothing and is not an entry — genuine dead code that
+            // must stay flagged because app declares no published surface.
+            ("app/package.json", r#"{"name":"app","private":true}"#),
+            ("app/main.ts", "import { used } from './used';\nused();\n"),
+            ("app/used.ts", "export const used = () => {};\n"),
+            ("app/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "the genuinely unreferenced non-library file must still be flagged: {diags:?}"
         );
     }
 
