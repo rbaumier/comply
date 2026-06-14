@@ -39,6 +39,14 @@
 //!     This is the bundle-size measurement / consumer-script shape (e.g.
 //!     `size-checks/` entry files), structurally distinct from a source barrel,
 //!     so it adds no ambiguous source-import path and is excluded from the count.
+//!   - JSX automatic-runtime entries — a `jsx-runtime`/`jsx-dev-runtime` barrel
+//!     is a special entry point mandated by the JSX automatic-runtime transform
+//!     (React/Preact/etc.). The transform imports `jsx`, `jsxs`, and `Fragment`
+//!     from it automatically, so the contract *requires* those symbols to live
+//!     there even when the library's main barrel re-exports the same names for
+//!     direct consumer use. The two paths serve different consumers (bundler
+//!     transform vs. explicit import), so a JSX-runtime barrel adds no ambiguous
+//!     flat import path and is excluded from the count.
 //!
 //! Runs once per project, anchored on the lexicographically smallest indexed
 //! path so that a single pass emits all diagnostics deterministically. Barrel
@@ -166,6 +174,16 @@ impl TextCheck for Check {
                 .filter(|barrel| {
                     !build_output_reexports.contains(&(barrel.to_path_buf(), name.clone()))
                 })
+                .collect();
+            // A `jsx-runtime`/`jsx-dev-runtime` barrel is a JSX automatic-runtime
+            // entry point: the transform imports `jsx`, `jsxs`, and `Fragment`
+            // from it automatically, so re-exporting those names there is a
+            // contract requirement, not an accidental duplicate of the main
+            // barrel. Drop it before counting so it can never be one of the two
+            // barrels that make a name look ambiguous.
+            let independent: Vec<&Path> = independent
+                .into_iter()
+                .filter(|barrel| !is_jsx_runtime_barrel(barrel))
                 .collect();
             // A package may publish several barrels as distinct `exports`
             // subpath entry points (e.g. `.` → `index.ts`, `./dom` → `dom.ts`)
@@ -323,6 +341,19 @@ fn specifier_targets_build_output(specifier: &str) -> bool {
     specifier
         .split('/')
         .any(|segment| BUILD_OUTPUT_DIRS.contains(&segment))
+}
+
+/// Whether `barrel` is a JSX automatic-runtime entry point — a file whose stem
+/// is `jsx-runtime` or `jsx-dev-runtime`. These are special entries mandated by
+/// the JSX transform spec: the compiler imports `jsx`, `jsxs`, and `Fragment`
+/// from them automatically, so a library re-exports those names there by
+/// contract, in parallel with its main barrel. The match is on the file stem so
+/// every extension (`.ts`, `.tsx`, `.js`, ...) is covered.
+fn is_jsx_runtime_barrel(barrel: &Path) -> bool {
+    barrel
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem == "jsx-runtime" || stem == "jsx-dev-runtime")
 }
 
 /// Resolve `.`/`..` components lexically — no filesystem access. Indexed paths
@@ -810,5 +841,103 @@ mod tests {
             diags
         );
         assert!(diags[0].message.contains("RouterLink"));
+    }
+
+    /// #1693: `jsx-runtime.ts` is a JSX automatic-runtime entry point. The JSX
+    /// transform imports `Fragment`, `jsx`, and `jsxs` from it automatically, so
+    /// the contract requires those symbols to be re-exported there even when the
+    /// library's main barrel re-exports the same names for direct consumer use.
+    /// Overlap between `jsx-runtime.ts` and `index.ts` is mandated by the spec,
+    /// not an accidental duplicate, and must not be flagged.
+    #[test]
+    fn allows_symbol_shared_by_jsx_runtime_and_main_barrel() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"@scope/ui"}"#),
+            (
+                "src/runtime/component.ts",
+                "export function Fragment() {}\nexport function Frame() {}",
+            ),
+            (
+                "src/runtime/jsx.ts",
+                "export function jsx() {}\nexport function jsxs() {}",
+            ),
+            (
+                "src/jsx-runtime.ts",
+                "export { Fragment } from './runtime/component';\n\
+                 export { jsx, jsxs } from './runtime/jsx';",
+            ),
+            (
+                "src/index.ts",
+                "export { Fragment, Frame } from './runtime/component';",
+            ),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert!(
+            diags.is_empty(),
+            "Fragment shared by jsx-runtime.ts and the main barrel is a JSX contract requirement, got: {:?}",
+            diags
+        );
+    }
+
+    /// `jsx-dev-runtime.ts` is the development-mode counterpart of the JSX
+    /// automatic-runtime entry and carries the same exemption.
+    #[test]
+    fn allows_symbol_shared_by_jsx_dev_runtime_and_main_barrel() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"@scope/ui"}"#),
+            (
+                "src/runtime/component.ts",
+                "export function Fragment() {}",
+            ),
+            (
+                "src/jsx-dev-runtime.ts",
+                "export { Fragment } from './runtime/component';",
+            ),
+            (
+                "src/index.ts",
+                "export { Fragment } from './runtime/component';",
+            ),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert!(
+            diags.is_empty(),
+            "Fragment shared by jsx-dev-runtime.ts and the main barrel is a JSX contract requirement, got: {:?}",
+            diags
+        );
+    }
+
+    /// Negative space: two ordinary source barrels re-exporting the same name
+    /// straight from a source module remain a genuine ambiguous import path. The
+    /// JSX-runtime exemption only covers the well-defined `jsx-runtime` /
+    /// `jsx-dev-runtime` filenames and must not silence real duplicates between
+    /// plain barrels.
+    #[test]
+    fn flags_two_plain_barrels_despite_jsx_runtime_exemption() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"@scope/ui"}"#),
+            (
+                "src/runtime/component.ts",
+                "export function Fragment() {}",
+            ),
+            (
+                "src/index.ts",
+                "export { Fragment } from './runtime/component';",
+            ),
+            (
+                "src/legacy.ts",
+                "export { Fragment } from './runtime/component';",
+            ),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert_eq!(
+            diags.len(),
+            1,
+            "two ordinary source barrels re-exporting `Fragment` remain ambiguous, got: {:?}",
+            diags
+        );
+        assert!(diags[0].message.contains("Fragment"));
     }
 }
