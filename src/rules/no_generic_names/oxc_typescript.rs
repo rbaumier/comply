@@ -482,6 +482,73 @@ fn ts_type_is_descriptive(ty: &TSType) -> bool {
     }
 }
 
+/// True when the binding's type annotation references a type whose name
+/// contains `Row` (e.g. `row: UnknownRow`, `rows: ReadonlyArray<DatabaseRow>`).
+/// A `Row`-typed binding is a database record — the precise domain term for a
+/// record returned from a SQL query — not a generic placeholder, so a `row`
+/// name is the idiomatic, self-documenting choice there. Scoped at the call
+/// site to the `row`/`rows` banned words. The walk stops at the binding's own
+/// FormalParameter / VariableDeclarator surroundings.
+fn binding_type_references_row<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    for kind in semantic.nodes().ancestor_kinds(node.id()) {
+        match kind {
+            AstKind::FormalParameter(p) => {
+                return p
+                    .type_annotation
+                    .as_ref()
+                    .is_some_and(|ann| ts_type_references_row(&ann.type_annotation));
+            }
+            AstKind::VariableDeclarator(d) => {
+                return d
+                    .type_annotation
+                    .as_ref()
+                    .is_some_and(|ann| ts_type_references_row(&ann.type_annotation));
+            }
+            AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Program(_) => return false,
+            _ => continue,
+        }
+    }
+    false
+}
+
+/// True when `ty` is (or wraps) a type reference whose identifier name contains
+/// `Row` (case-sensitive). Recurses through array types, `readonly` operators,
+/// unions, and single-argument generic wrappers (`Promise`/`Array`/`Readonly`/
+/// `ReadonlyArray`) so `UnknownRow[]`, `readonly DatabaseRow[]`, and
+/// `ReadonlyArray<PgRow>` all qualify.
+fn ts_type_references_row(ty: &TSType) -> bool {
+    match ty {
+        TSType::TSTypeReference(type_ref) => {
+            let name = match &type_ref.type_name {
+                TSTypeName::IdentifierReference(id) => Some(id.name.as_str()),
+                TSTypeName::QualifiedName(q) => Some(q.right.name.as_str()),
+                _ => None,
+            };
+            if name.is_some_and(|n| n.contains("Row")) {
+                return true;
+            }
+            if matches!(
+                name,
+                Some("Promise") | Some("Readonly") | Some("Array") | Some("ReadonlyArray")
+            ) && let Some(params) = &type_ref.type_arguments
+                && let Some(first) = params.params.first()
+            {
+                return ts_type_references_row(first);
+            }
+            false
+        }
+        TSType::TSArrayType(arr) => ts_type_references_row(&arr.element_type),
+        TSType::TSTypeOperatorType(op) => ts_type_references_row(&op.type_annotation),
+        TSType::TSUnionType(u) => u.types.iter().any(ts_type_references_row),
+        _ => false,
+    }
+}
+
 /// True when the identifier is a function parameter inside an arrow function
 /// or function expression that is used as an object property value.
 /// Covers TanStack Query callbacks like `useMutation({ onSuccess: (data) => {} })`
@@ -686,6 +753,15 @@ impl OxcCheck for Check {
                     // `rows: readonly TRow[]`) carries the domain info the
                     // identifier name would otherwise need to.
                     if type_annotation_is_descriptive(node, semantic) {
+                        return;
+                    }
+                    // A `row`/`rows` binding whose type references a `Row` type
+                    // (`row: UnknownRow`, `rows: ReadonlyArray<DatabaseRow>`) is
+                    // a database record — the precise SQL-domain term — not a
+                    // generic placeholder.
+                    if matches!(lower.as_str(), "row" | "rows")
+                        && binding_type_references_row(node, semantic)
+                    {
                         return;
                     }
                     // An explicit `unknown` annotation is a deliberate opacity
@@ -1390,6 +1466,37 @@ mod tests {
         let src = r#"
             function process(data) { return data; }
             element.addEventListener('click', (data) => { use(data); });
+        "#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn no_fp_row_typed_with_row_type_reference_issue_1233() {
+        // Regression for #1233 — a `row`/`rows` binding whose type annotation
+        // contains `Row` (e.g. `row: UnknownRow`) is a database-domain record,
+        // not a generic placeholder. The kysely camel-case plugin maps each
+        // queried row through `mapRow(row: UnknownRow): UnknownRow`.
+        let src = r#"
+            class CamelCasePlugin {
+                protected mapRow(row: UnknownRow): UnknownRow { return row; }
+            }
+            function mapAll(rows: UnknownRow[]): UnknownRow[] { return rows; }
+            const row: PgRow = fetchOne();
+            const rows: ReadonlyArray<DatabaseRow> = fetchMany();
+        "#;
+        assert!(run(src).is_empty(), "Row-typed `row`/`rows` must not flag");
+    }
+
+    #[test]
+    fn still_flags_untyped_row_and_non_row_typed_row_issue_1233() {
+        // Negative space: the `Row`-type exemption is anchored on a `Row`-bearing
+        // type reference. An untyped `row` and a `row` typed as a non-array
+        // scalar without `Row` stay flagged — the type is what proves the
+        // domain meaning. (`row[]` arrays are exempt via the separate,
+        // pre-existing generic-helper array path.)
+        let src = r#"
+            function f() { const row = fetchOne(); return row; }
+            const row: number = 0;
         "#;
         assert_eq!(run(src).len(), 2);
     }
