@@ -1459,6 +1459,16 @@ impl CargoManifest {
         self.has_bin_table || self.manifest_dir.join("src/main.rs").is_file()
     }
 
+    /// True when the crate builds a library target: a `[lib]` table is declared,
+    /// or `src/lib.rs` exists next to the manifest. The inverse of
+    /// [`is_binary_only`] — a crate is a library when it exposes a `[lib]`
+    /// target that downstream consumers depend on.
+    ///
+    /// [`is_binary_only`]: CargoManifest::is_binary_only
+    pub fn declares_library(&self) -> bool {
+        self.has_lib_table || self.manifest_dir.join("src/lib.rs").is_file()
+    }
+
     /// True when the crate depends on an async runtime.
     pub fn has_async_runtime(&self) -> bool {
         self.async_runtime
@@ -4638,6 +4648,10 @@ tokio = "1"
             "no [lib] table and no src/lib.rs on disk => binary-only"
         );
         assert!(first.declares_binary(), "[[bin]] table is present");
+        assert!(
+            !first.declares_library(),
+            "no [lib] table and no src/lib.rs on disk => not a library"
+        );
         assert!(first.has_async_runtime(), "tokio is declared");
         assert!(first.is_no_std(), "categories lists no-std");
     }
