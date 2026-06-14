@@ -290,6 +290,77 @@ pub fn byte_offset_to_line_col(source: &str, byte_offset: usize) -> (usize, usiz
     })
 }
 
+/// Return a copy of `source` with the *contents* of `//` line comments and
+/// `/* … */` (incl. `/** … */` JSDoc) block comments replaced by spaces, so a
+/// text needle that appears only in a comment is no longer found.
+///
+/// The mask is **offset-preserving**: every comment byte becomes a single
+/// space except `\n`, which is kept verbatim. The result has the same byte
+/// length and the same newline positions as `source`, so a byte offset into
+/// the masked string maps to the same `(line, column)` via
+/// [`byte_offset_to_line_col`] as it would in the original. Multibyte UTF-8
+/// inside a comment is replaced byte-for-byte with spaces, which stays valid
+/// ASCII and preserves length.
+///
+/// String and template literals are skipped so a `//` or `/*` *inside* a
+/// string is not mistaken for the start of a comment. This is the central
+/// remedy for the "needle matched inside a comment" false-positive class that
+/// affects `TextCheck` rules.
+#[must_use]
+pub fn mask_comments(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = bytes.to_vec();
+    let len = bytes.len();
+    let mut i = 0;
+    while i < len {
+        match bytes[i] {
+            b'"' | b'\'' | b'`' => {
+                let quote = bytes[i];
+                i += 1;
+                while i < len {
+                    match bytes[i] {
+                        b'\\' => i += 2,
+                        b if b == quote => {
+                            i += 1;
+                            break;
+                        }
+                        _ => i += 1,
+                    }
+                }
+            }
+            b'/' if i + 1 < len && bytes[i + 1] == b'/' => {
+                while i < len && bytes[i] != b'\n' {
+                    out[i] = b' ';
+                    i += 1;
+                }
+            }
+            b'/' if i + 1 < len && bytes[i + 1] == b'*' => {
+                out[i] = b' ';
+                out[i + 1] = b' ';
+                i += 2;
+                while i < len && !(bytes[i] == b'*' && i + 1 < len && bytes[i + 1] == b'/') {
+                    if bytes[i] != b'\n' {
+                        out[i] = b' ';
+                    }
+                    i += 1;
+                }
+                if i < len {
+                    out[i] = b' ';
+                    if i + 1 < len {
+                        out[i + 1] = b' ';
+                    }
+                    i += 2;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    // Every replacement writes an ASCII space over a byte that was already a
+    // standalone ASCII byte (`/`, `*`) or one byte of a fully-masked multibyte
+    // sequence, so char boundaries are never split and the buffer stays UTF-8.
+    String::from_utf8(out).expect("mask_comments only writes ASCII spaces, output stays valid UTF-8")
+}
+
 /// Parse `source` with oxc_parser using the source type inferred from `path`,
 /// build semantic analysis, then hand the `Semantic` to `f`. The allocator
 /// and AST are dropped after `f` returns.
@@ -1036,7 +1107,7 @@ pub fn file_imports_db_library(semantic: &oxc_semantic::Semantic<'_>) -> bool {
 
 #[cfg(test)]
 mod oxc_helpers_tests {
-    use super::{byte_offset_to_line_col, reset_file_caches, source_contains};
+    use super::{byte_offset_to_line_col, mask_comments, reset_file_caches, source_contains};
 
     /// Reference O(byte_offset) scan that `byte_offset_to_line_col` must agree
     /// with for every offset.
@@ -1322,5 +1393,45 @@ mod oxc_helpers_tests {
                 _ => None,
             })
             .expect("an `as unknown` expression")
+    }
+
+    #[test]
+    fn mask_comments_blanks_line_comment_keeps_code() {
+        let masked = mask_comments("let x = 1; // findMany(\nlet y = 2;");
+        assert!(!masked.contains("findMany("));
+        assert!(masked.contains("let x = 1;"));
+        assert!(masked.contains("let y = 2;"));
+    }
+
+    #[test]
+    fn mask_comments_blanks_jsdoc_block() {
+        let src = "/**\n * @example\n * prisma.user.findMany()\n */\nconst a = 1;";
+        let masked = mask_comments(src);
+        assert!(!masked.contains("findMany"));
+        assert!(masked.contains("const a = 1;"));
+    }
+
+    #[test]
+    fn mask_comments_preserves_length_and_newlines() {
+        let src = "/* a */\n// b\nlet z = 0;";
+        let masked = mask_comments(src);
+        assert_eq!(masked.len(), src.len());
+        assert_eq!(masked.matches('\n').count(), src.matches('\n').count());
+    }
+
+    #[test]
+    fn mask_comments_ignores_comment_markers_inside_strings() {
+        let src = r#"const url = "https://example.com/path"; const c = 1;"#;
+        let masked = mask_comments(src);
+        assert_eq!(masked, src);
+    }
+
+    #[test]
+    fn mask_comments_handles_multibyte_inside_comment() {
+        let src = "let x = 1; // café ☕\nlet y = 2;";
+        let masked = mask_comments(src);
+        assert_eq!(masked.len(), src.len());
+        assert!(masked.contains("let y = 2;"));
+        assert!(!masked.contains("café"));
     }
 }
