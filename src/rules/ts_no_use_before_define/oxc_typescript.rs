@@ -26,23 +26,29 @@
 //! callbacks lazily (on navigation), so any symbol declared after the factory
 //! call is already initialized when the callback runs.
 //!
-//! Also skips forward references to module-scoped bindings made from inside a
-//! callback passed to a test-runner registration call (`describe(...)`,
-//! `it(...)`, `test(...)`, `beforeEach(...)`, `afterEach(...)`,
-//! `beforeAll(...)`, `afterAll(...)`). Test runners register those callbacks
-//! during module evaluation and invoke them only afterwards, so a helper
-//! class/const declared later in the spec file is already initialized by the
-//! time the test body runs.
+//! Also skips forward references made from inside a callback passed to a
+//! test-runner registration call (`describe(...)`, `it(...)`, `test(...)`,
+//! `beforeEach(...)`, `afterEach(...)`, `beforeAll(...)`, `afterAll(...)`).
+//! Test runners register those callbacks during module evaluation and invoke
+//! them only afterwards, so a helper class/const declared later in the spec
+//! file is already initialized by the time the test body runs. The same applies
+//! to a binding declared inside the test body but captured by a nested closure
+//! (an event handler, a lifecycle hook, a `vi.fn(...)` mock): the test sets up
+//! the closure first and drives the framework that invokes it only later, after
+//! the binding's declaration line has run. A binding read directly in the test
+//! body before its own declaration line, or inside an IIFE, stays flagged.
 //!
-//! Also skips forward references to module-scoped bindings made from inside a
-//! deferred definition body — a function declaration (`function Foo() {...}`),
-//! a class method/getter/setter/constructor, or an instance field initializer.
-//! Those bodies run only on explicit invocation, after the module has finished
-//! evaluating, so the module-level `const`/`let` is already initialized. Static
-//! field initializers and static blocks run at class-definition time (during
-//! module evaluation) and stay flagged; function and arrow *expressions* stay
-//! flagged too, since the binding they initialize can be invoked during module
-//! evaluation.
+//! Also skips forward references made from inside a deferred definition body — a
+//! function declaration (`function Foo() {...}`), a class
+//! method/getter/setter/constructor, or an instance field initializer — when the
+//! binding is declared in a scope that encloses that definition. Those bodies
+//! run only on explicit invocation, after the enclosing scope has finished
+//! setting up, so the captured `const`/`let` is already initialized. A binding
+//! local to the body itself, used before its own declaration line, stays
+//! flagged. Static field initializers and static blocks run at class-definition
+//! time (during module evaluation) and stay flagged; function and arrow
+//! *expressions* stay flagged too, since the binding they initialize can be
+//! invoked synchronously before the declaration.
 //!
 //! Ambient `declare` declarations (`declare const`/`declare let`/`declare var`/
 //! `declare function`/`declare class`, or any binding inside a `declare global`
@@ -52,7 +58,7 @@
 
 use oxc_ast::AstKind;
 use oxc_ast::ast::Expression;
-use oxc_semantic::{NodeId, SymbolFlags};
+use oxc_semantic::{NodeId, ScopeId, Scoping, SymbolFlags};
 use oxc_span::GetSpan;
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -96,8 +102,7 @@ impl OxcCheck for Check {
 
             let decl_span = scoping.symbol_span(symbol_id);
             let name = scoping.symbol_name(symbol_id);
-            let decl_is_module_scoped =
-                scoping.symbol_scope_id(symbol_id) == scoping.root_scope_id();
+            let decl_scope_id = scoping.symbol_scope_id(symbol_id);
 
             for reference in scoping.get_resolved_references(symbol_id) {
                 // Type-only references (type annotations, type arguments,
@@ -117,14 +122,17 @@ impl OxcCheck for Check {
                     if is_inside_tanstack_route_factory_callback(nodes, ref_node_id) {
                         continue;
                     }
-                    if decl_is_module_scoped
-                        && is_inside_test_runner_callback(nodes, ref_node_id)
+                    if is_inside_test_runner_callback(nodes, ref_node_id)
+                        && (decl_scope_id == scoping.root_scope_id()
+                            || is_inside_deferred_closure(
+                                nodes, scoping, ref_node_id, decl_scope_id,
+                            ))
                     {
                         continue;
                     }
-                    if decl_is_module_scoped
-                        && is_inside_deferred_definition(nodes, ref_node_id)
-                    {
+                    if is_inside_deferred_definition(
+                        nodes, scoping, ref_node_id, decl_scope_id,
+                    ) {
                         continue;
                     }
                     let (line, column) =
@@ -384,33 +392,118 @@ fn call_is_tanstack_route_factory(call: &oxc_ast::ast::CallExpression) -> bool {
 }
 
 /// True when the reference sits inside a definition body that executes only
-/// after module evaluation completes, so a module-scoped binding declared later
-/// in the file is already initialized by the time that body actually runs:
+/// after its enclosing scope has finished setting up, so a binding declared
+/// later in an enclosing scope is already initialized by the time that body
+/// actually runs:
 ///
 /// - A function declaration (`function Foo() { ... }`): naming it does not call
 ///   it. Its body — including any closures nested inside it — runs only on
-///   explicit invocation by name, which cannot happen before the declaration
-///   line is reached during module evaluation.
+///   explicit invocation by name.
 /// - A class method/getter/setter/constructor, or an instance (non-static)
 ///   field initializer: those run on instance/method invocation.
+///
+/// The exemption applies only when the binding is declared in a scope that
+/// contains the definition (`decl_scope_id` is an ancestor of — or equal to —
+/// the scope the definition is declared in). A binding local to the definition
+/// body itself, used before its own declaration line, is a genuine
+/// intra-execution TDZ error and stays flagged.
 ///
 /// Static field initializers and static blocks run at class-definition time
 /// (during module evaluation), so they are NOT deferred and any forward
 /// reference inside them is a real TDZ hazard. Function/arrow *expressions*
 /// (`const f = () => x`) are likewise not treated as deferred here: the binding
-/// they initialize can be invoked during module evaluation (IIFE, or a `const`
-/// that is called at top level), so those forward references stay flagged.
+/// they initialize can be invoked synchronously (IIFE, or a `const` that is
+/// called before the declaration), so those forward references stay flagged.
 fn is_inside_deferred_definition<'a>(
     nodes: &'a oxc_semantic::AstNodes<'a>,
+    scoping: &Scoping,
     ref_node_id: NodeId,
+    decl_scope_id: ScopeId,
 ) -> bool {
     for ancestor_id in nodes.ancestor_ids(ref_node_id) {
-        match nodes.get_node(ancestor_id).kind() {
-            AstKind::Function(func) if func.is_function_declaration() => return true,
-            AstKind::MethodDefinition(_) => return true,
-            AstKind::PropertyDefinition(prop) => return !prop.r#static,
+        let node = nodes.get_node(ancestor_id);
+        match node.kind() {
+            AstKind::Function(func) if func.is_function_declaration() => {
+                return decl_scope_encloses(scoping, decl_scope_id, node.scope_id());
+            }
+            AstKind::MethodDefinition(_) => {
+                return decl_scope_encloses(scoping, decl_scope_id, node.scope_id());
+            }
+            AstKind::PropertyDefinition(prop) => {
+                return !prop.r#static
+                    && decl_scope_encloses(scoping, decl_scope_id, node.scope_id());
+            }
             AstKind::StaticBlock(_) | AstKind::Program(_) => return false,
             _ => {}
+        }
+    }
+    false
+}
+
+/// True when the reference sits inside a function/arrow *expression* nested
+/// within a test-runner callback (`it`/`describe`/`beforeEach`/...), where the
+/// expression is not invoked synchronously at its own definition site. A test
+/// body sets up such closures (event handlers, lifecycle hooks, `vi.fn(...)`
+/// mocks) first and only later drives the framework that invokes them, so a
+/// binding declared after the closure in an enclosing scope is already
+/// initialized by the time the closure runs.
+///
+/// The exemption requires (a) a closure boundary between the reference and the
+/// binding's scope — a binding read directly in the callback body before its own
+/// declaration line is a genuine TDZ error and stays flagged — and (b) the
+/// closure not being an IIFE, which runs immediately in the synchronous flow.
+fn is_inside_deferred_closure<'a>(
+    nodes: &'a oxc_semantic::AstNodes<'a>,
+    scoping: &Scoping,
+    ref_node_id: NodeId,
+    decl_scope_id: ScopeId,
+) -> bool {
+    for ancestor_id in nodes.ancestor_ids(ref_node_id) {
+        let node = nodes.get_node(ancestor_id);
+        match node.kind() {
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
+                if is_immediately_invoked(nodes, ancestor_id) {
+                    return false;
+                }
+                return decl_scope_encloses(scoping, decl_scope_id, node.scope_id());
+            }
+            AstKind::Program(_) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// True when `decl_scope_id` is the scope `node_scope_id` sits in, or an
+/// enclosing scope of it. Used to confirm a binding is declared outside the
+/// deferred body so it is already initialized when that body runs.
+fn decl_scope_encloses(
+    scoping: &Scoping,
+    decl_scope_id: ScopeId,
+    node_scope_id: ScopeId,
+) -> bool {
+    scoping
+        .scope_ancestors(node_scope_id)
+        .any(|scope_id| scope_id == decl_scope_id)
+}
+
+/// True when `func_id` is a function/arrow expression that is the direct callee
+/// of a call expression — an IIFE (`(() => ...)()`). Such a closure runs
+/// immediately in the synchronous flow, so a forward reference inside it is a
+/// real TDZ hazard. Parenthesized wrappers around the callee (`(() => ...)()`,
+/// kept in the AST) are transparent: the callee span is then the wrapper's, so
+/// the comparison tracks the span of the child node just below each ancestor.
+fn is_immediately_invoked<'a>(
+    nodes: &'a oxc_semantic::AstNodes<'a>,
+    func_id: NodeId,
+) -> bool {
+    let mut child_span = nodes.get_node(func_id).span();
+    for ancestor_id in nodes.ancestor_ids(func_id) {
+        let node = nodes.get_node(ancestor_id);
+        match node.kind() {
+            AstKind::ParenthesizedExpression(_) => child_span = node.span(),
+            AstKind::CallExpression(call) => return call.callee.span() == child_span,
+            _ => return false,
         }
     }
     false
@@ -618,9 +711,13 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_nested_function_inside_hook_callback() {
-        // A sync inner function declared inside a hook callback is not itself
-        // deferred — it captures `later` at call time, so the TDZ still applies.
+    fn no_fp_nested_function_inside_hook_callback_captures_enclosing_let() {
+        // `inner` reads `later`, which is declared in the enclosing component
+        // body. The whole `useEffect` callback — including the synchronous
+        // `inner()` call — runs after render, by which point `const later` has
+        // executed. The reference sits inside the function-declaration body
+        // `inner`, whose declaration scope (the callback) is enclosed by
+        // `later`'s scope (the component body), so it is a safe deferred capture.
         let source = "function Page() {\n\
                       useEffect(() => {\n\
                       function inner() { return later; }\n\
@@ -628,8 +725,11 @@ mod tests {
                       }, []);\n\
                       const later = 1;\n\
                       }";
-        let d = run_on(source);
-        assert_eq!(d.len(), 1, "inner sync function must still be flagged");
+        assert!(
+            run_on(source).is_empty(),
+            "function-declaration body capturing an enclosing-scope let should not be flagged: {:?}",
+            run_on(source)
+        );
     }
 
     #[test]
@@ -1052,6 +1152,70 @@ mod tests {
             "typeof query in a type alias before its declaration should not be flagged: {:?}",
             run_on(source)
         );
+    }
+
+    // Regression for #1552: inside an `it(...)` test body, a closure references a
+    // `let` declared later in the same test scope. The closure (a function
+    // declaration / a `vi.fn(...)` mock arrow) is set up first and invoked only
+    // later when the test drives the framework, after the `let` has been assigned
+    // — there is no real TDZ.
+    #[test]
+    fn no_fp_function_declaration_captures_later_let_in_test_scope_issue_1552() {
+        let source = "it('should work', () => {\n\
+                      function assertBindings() { return _instance && _instance.proxy; }\n\
+                      let _instance = null;\n\
+                      const Comp = { setup() { _instance = 1; } };\n\
+                      return assertBindings;\n\
+                      });";
+        assert!(
+            run_on(source).is_empty(),
+            "function declaration capturing a later let in the test scope should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_mock_arrow_captures_later_let_in_test_scope_issue_1552() {
+        let source = "it('should work', () => {\n\
+                      const beforeMount = vi.fn((vnode) => vnode === _vnode);\n\
+                      let _vnode = null;\n\
+                      _vnode = 1;\n\
+                      return beforeMount;\n\
+                      });";
+        assert!(
+            run_on(source).is_empty(),
+            "mock arrow capturing a later let in the test scope should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn still_flags_iife_use_before_define_in_test_scope_issue_1552() {
+        // Negative space: an arrow IIFE runs immediately in the synchronous flow
+        // of the test body, before `const later` — a genuine TDZ that must fire
+        // even inside an `it(...)` callback.
+        let d = run_on(
+            "it('x', () => {\n\
+             (() => use(later))();\n\
+             const later = 1;\n\
+             });",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "IIFE reading a not-yet-declared binding in a test body must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`later`"));
+    }
+
+    #[test]
+    fn still_flags_iife_use_before_define_at_module_level_issue_1552() {
+        // Negative space at module scope: the IIFE must keep firing there too.
+        let d = run_on(
+            "(() => use(later))();\n\
+             const later = 1;",
+        );
+        assert_eq!(d.len(), 1, "module-level IIFE must still be flagged: {d:?}");
     }
 
     #[test]
