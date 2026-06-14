@@ -50,34 +50,64 @@ const VALID_SUFFIXES: &[&str] = &["pk", "fk", "key", "chk", "exl", "idx", "pkey"
 /// identifier (e.g. `DROP CONSTRAINT IF EXISTS name`), and must be skipped.
 const CONSTRAINT_KEYWORDS: &[&str] = &["IF", "NOT", "EXISTS"];
 
+/// Reads the constraint identifier starting at `cursor`, skipping leading
+/// whitespace and any leading DDL keywords (`IF` / `NOT` / `EXISTS`). Returns
+/// the raw token (quotes kept) and the cursor positioned right after it.
+fn read_name_token(sql: &str, mut cursor: usize) -> (String, usize) {
+    loop {
+        // Skip leading whitespace before the token.
+        cursor += sql[cursor..].len() - sql[cursor..].trim_start().len();
+        let token: String = sql[cursor..]
+            .chars()
+            .take_while(|&ch| ch.is_alphanumeric() || ch == '_' || ch == '"')
+            .collect();
+        if token.is_empty() {
+            return (String::new(), cursor);
+        }
+        cursor += token.len();
+        // Skip DDL keywords (IF / NOT / EXISTS) and read the real name next.
+        if CONSTRAINT_KEYWORDS.contains(&token.to_ascii_uppercase().as_str()) {
+            continue;
+        }
+        return (token, cursor);
+    }
+}
+
+/// True when the `CONSTRAINT` keyword at `kw_start` is part of a
+/// `RENAME CONSTRAINT old TO new` clause, where the first name is being removed.
+fn is_rename_constraint(upper: &str, kw_start: usize) -> bool {
+    upper[..kw_start]
+        .trim_end()
+        .rsplit(|c: char| c.is_whitespace())
+        .next()
+        == Some("RENAME")
+}
+
 fn extract_constraint_names(sql: &str) -> Vec<String> {
     let upper = sql.to_ascii_uppercase();
     let mut out = Vec::new();
     let mut search_from = 0;
     while let Some(rel) = upper[search_from..].find("CONSTRAINT ") {
-        let mut cursor = search_from + rel + "CONSTRAINT ".len();
-        let mut name = String::new();
-        loop {
-            // Skip leading whitespace before the token.
-            cursor += sql[cursor..].len() - sql[cursor..].trim_start().len();
-            let token: String = sql[cursor..]
-                .chars()
-                .take_while(|&ch| ch.is_alphanumeric() || ch == '_' || ch == '"')
-                .collect();
-            if token.is_empty() {
-                break;
+        let kw_start = search_from + rel;
+        let (name, mut cursor) = read_name_token(sql, kw_start + "CONSTRAINT ".len());
+
+        if is_rename_constraint(&upper, kw_start) {
+            // `RENAME CONSTRAINT old TO new`: the first name (`old`) is being
+            // removed, so it is not validated; only the new name after `TO` is.
+            if let Some(rel_to) = upper[cursor..].find(" TO ") {
+                let after_to = cursor + rel_to + " TO ".len();
+                let (new_name, new_cursor) = read_name_token(sql, after_to);
+                cursor = new_cursor;
+                let cleaned = new_name.replace('"', "");
+                if !cleaned.is_empty() {
+                    out.push(cleaned);
+                }
             }
-            cursor += token.len();
-            // Skip DDL keywords (IF / NOT / EXISTS) and read the real name next.
-            if CONSTRAINT_KEYWORDS.contains(&token.to_ascii_uppercase().as_str()) {
-                continue;
+        } else {
+            let cleaned = name.replace('"', "");
+            if !cleaned.is_empty() {
+                out.push(cleaned);
             }
-            name = token;
-            break;
-        }
-        let cleaned = name.replace('"', "");
-        if !cleaned.is_empty() {
-            out.push(cleaned);
         }
         // Resume strictly after the consumed region so a name ending in
         // `constraint` (e.g. `dim_size_constraint`) is not re-matched.
