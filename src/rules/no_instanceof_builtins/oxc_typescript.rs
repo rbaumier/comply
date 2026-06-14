@@ -10,6 +10,10 @@ pub struct Check;
 
 /// Built-in constructors the rule keeps flagging.
 ///
+/// Each listed builtin has a cross-realm-safe alternative the remediation
+/// can point at (e.g. `Array.isArray(x)` for `Array`), so flagging
+/// `instanceof` is actionable.
+///
 /// `Error` and its subclasses (EvalError, RangeError, …) are *not*
 /// listed here. In server-side single-realm Node/Bun apps with no
 /// `vm.runInContext`, no `Worker` boundaries and no iframes, the
@@ -18,11 +22,16 @@ pub struct Check;
 /// way to narrow an `unknown` thrown value. Forcing every boundary
 /// mapper to rewrite the same pattern through a custom helper produces
 /// a flood of false positives.
+///
+/// `Promise` is also *not* listed: there is no `Promise.isPromise()`
+/// built-in, duck-typing `.then` accepts any thenable (semantically
+/// different), and converting to `async` is not always possible for
+/// mixed sync/async APIs. With no cross-realm-safe alternative, the
+/// warning would be unactionable.
 const BUILTINS: &[&str] = &[
     "Array",
     "ArrayBuffer",
     "RegExp",
-    "Promise",
     "Map",
     "Set",
     "WeakMap",
@@ -129,5 +138,28 @@ mod tests {
             let src = format!("const r = x instanceof {cls};");
             assert!(run(&src).is_empty(), "{cls} should be allowed");
         }
+    }
+
+    #[test]
+    fn ignores_instanceof_promise() {
+        // Regression for rbaumier/comply#1672 — no `Promise.isPromise()`
+        // built-in exists, so the warning would be unactionable.
+        let src = r#"
+            function unwrap(result: unknown) {
+                if (result instanceof Promise) {
+                    return result;
+                }
+                return result;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_array_after_promise_removed() {
+        // Negative-space guard for #1672: removing `Promise` must not stop
+        // `Array` (which has `Array.isArray`) from firing.
+        let src = "const r = x instanceof Array;";
+        assert_eq!(run(src).len(), 1);
     }
 }
