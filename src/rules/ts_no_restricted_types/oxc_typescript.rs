@@ -1,7 +1,10 @@
 //! ts-no-restricted-types OXC backend.
 //!
-//! Flags banned types (`Function`, `Object`) in type annotation positions
-//! by scanning all TSTypeReference nodes in the semantic tree.
+//! Flags banned types (`Function`) in type annotation positions by scanning
+//! all TSTypeReference nodes in the semantic tree. Wrapper object types
+//! (`Object`, `String`, `Number`, `Boolean`, `Symbol`, `BigInt`) are owned by
+//! `ts-no-wrapper-object-types` and intentionally excluded here to avoid
+//! duplicate diagnostics on the same type.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -10,16 +13,10 @@ use oxc_ast::AstKind;
 use std::sync::Arc;
 
 /// Banned type names and replacement messages.
-const BANNED_TYPES: &[(&str, &str)] = &[
-    (
-        "Function",
-        "Use a specific function type like `() => void` instead of `Function`.",
-    ),
-    (
-        "Object",
-        "Use `object` or `Record<string, unknown>` instead of `Object`.",
-    ),
-];
+const BANNED_TYPES: &[(&str, &str)] = &[(
+    "Function",
+    "Use a specific function type like `() => void` instead of `Function`.",
+)];
 
 pub struct Check;
 
@@ -60,5 +57,43 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn flags_function_type() {
+        let d = run_on("const f: Function = () => {};");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Function"));
+    }
+
+    #[test]
+    fn ignores_object_wrapper_type() {
+        // `Object` is owned by ts-no-wrapper-object-types; this rule must not
+        // also flag it (regression for #1222).
+        assert!(run_on("const o: Object = {};").is_empty());
     }
 }

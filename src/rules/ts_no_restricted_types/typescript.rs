@@ -1,10 +1,13 @@
 //! ts-no-restricted-types backend — flag commonly banned types in type
 //! annotation positions.
 //!
-//! Default banned types (mirrors typescript-eslint defaults):
+//! Banned types:
 //! - `{}` (empty object type) — use `object` or `Record<string, unknown>`
 //! - `Function` — use a specific function type like `() => void`
-//! - `Object` — use `object` or `Record<string, unknown>`
+//!
+//! Wrapper object types (`Object`, `String`, `Number`, `Boolean`, `Symbol`,
+//! `BigInt`) are owned by `ts-no-wrapper-object-types` and excluded here to
+//! avoid duplicate diagnostics on the same type.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -13,10 +16,6 @@ const BANNED_TYPES: &[(&str, &str)] = &[
     (
         "Function",
         "Use a specific function type like `() => void` instead of `Function`.",
-    ),
-    (
-        "Object",
-        "Use `object` or `Record<string, unknown>` instead of `Object`.",
     ),
     (
         "{}",
@@ -123,10 +122,10 @@ mod tests {
     }
 
     #[test]
-    fn flags_object_type() {
-        let d = run_on("const o: Object = {};");
-        assert_eq!(d.len(), 1);
-        assert!(d[0].message.contains("Object"));
+    fn ignores_object_wrapper_type() {
+        // `Object` is owned by ts-no-wrapper-object-types; this rule must not
+        // also flag it (regression for #1222).
+        assert!(run_on("const o: Object = {};").is_empty());
     }
 
     #[test]
