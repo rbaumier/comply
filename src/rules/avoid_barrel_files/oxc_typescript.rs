@@ -29,6 +29,14 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
+        // A non-`index` file whose stem matches a published `package.json`
+        // `exports` subpath (e.g. `src/production.ts` for `"./production"`) is a
+        // declared public API entry point, not an accidental internal barrel —
+        // re-exporting from it is the package's intended contract.
+        if ctx.project.is_declared_entry_barrel(ctx.path) {
+            return Vec::new();
+        }
+
         let program = semantic.nodes().program();
         let barrel_threshold = ctx.config.threshold("avoid-barrel-files", "min_reexports", ctx.lang);
 
@@ -132,5 +140,55 @@ export { Entities } from './entities.js';
 ";
         let diags = run_on("sdk/managementgroups/arm-managementgroups/src/operationsInterfaces/index.ts", src);
         assert!(diags.is_empty(), "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn allows_non_index_file_declared_as_exports_entry_issue_1707() {
+        // Regression for issue #1707: `src/production.ts` re-exports the package's
+        // public API and is declared as the `"./production"` exports subpath, so
+        // it is an intentional published entry point, not an accidental barrel.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"preact-table-devtools","exports":{".":"./dist/index.js","./production":"./dist/production.js"}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        let path = dir.path().join("src/production.ts");
+
+        let src = "\
+export { TableDevtoolsPanel } from './PreactTableDevtools';
+export { tableDevtoolsPlugin } from './plugin';
+export { useTanStackTableDevtools } from './useTanStackTableDevtools';
+";
+        let project = crate::project::ProjectCtx::empty();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, src, &path, &project, file);
+        assert!(diags.is_empty(), "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn flags_internal_barrel_not_declared_in_exports_issue_1707() {
+        // Negative-space guard for issue #1707: a sibling re-export hub that is
+        // NOT a declared `exports` entry remains an internal indirection and must
+        // still be flagged, even though the package declares other exports.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"preact-table-devtools","exports":{".":"./dist/index.js","./production":"./dist/production.js"}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        let path = dir.path().join("src/internal.ts");
+
+        let src = "\
+export { a } from './a';
+export { b } from './b';
+export { c } from './c';
+";
+        let project = crate::project::ProjectCtx::empty();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, src, &path, &project, file);
+        assert_eq!(diags.len(), 1, "expected internal barrel to be flagged: {diags:?}");
     }
 }
