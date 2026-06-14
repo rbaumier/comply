@@ -148,6 +148,30 @@ const HTML_SVG_TAGS: &[&str] = &[
     // SVG camelCase handled separately below
 ];
 
+/// Vue framework built-in components, which are intentionally used in
+/// lowercase or kebab-case (the Vue Style Guide allows it). Includes
+/// vue-router's `router-view`/`router-link`. Matched case-insensitively so
+/// both `<transition>` and `<Transition>` spellings are exempt.
+const VUE_BUILTIN_COMPONENTS: &[&str] = &[
+    "transition",
+    "transition-group",
+    "keep-alive",
+    "teleport",
+    "suspense",
+    "component",
+    "slot",
+    "template",
+    "router-view",
+    "router-link",
+];
+
+/// Returns `true` for Vue framework built-in components (case-insensitive).
+fn is_vue_builtin(tag: &str) -> bool {
+    VUE_BUILTIN_COMPONENTS
+        .iter()
+        .any(|builtin| builtin.eq_ignore_ascii_case(tag))
+}
+
 /// Returns `true` for HTML/SVG built-in elements and hyphenated web components.
 fn is_html_builtin(tag: &str) -> bool {
     // Hyphenated names are web components — always allowed.
@@ -173,8 +197,8 @@ impl TextCheck for Check {
         }
         let mut diagnostics = Vec::new();
         for elem in extract_elements(ctx.source) {
-            // Skip HTML built-in tags and web components.
-            if is_html_builtin(elem.tag) {
+            // Skip HTML built-in tags, web components, and Vue built-ins.
+            if is_html_builtin(elem.tag) || is_vue_builtin(elem.tag) {
                 continue;
             }
             // Non-HTML, non-PascalCase component name.
@@ -227,6 +251,28 @@ mod tests {
     fn allows_web_component_with_hyphen() {
         let src = "<template>\n  <my-component />\n</template>";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_vue_builtin_components() {
+        // Issue #1490: Vue built-in components are intentionally lowercase.
+        let src = "<template>\n  <transition name=\"page\" mode=\"out-in\">\n    <router-view></router-view>\n  </transition>\n  <keep-alive>\n    <component :is=\"view\" />\n  </keep-alive>\n  <teleport to=\"body\"><suspense></suspense></teleport>\n  <transition-group><router-link to=\"/\" /></transition-group>\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_pascal_case_vue_builtin() {
+        let src = "<template>\n  <Transition><KeepAlive /></Transition>\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_lowercase_custom_component_alongside_builtins() {
+        // Negative-space guard: a genuine lowercase custom component must still fire.
+        let src = "<template>\n  <transition>\n    <mycomponent />\n  </transition>\n</template>";
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("mycomponent"));
     }
 
     #[test]
