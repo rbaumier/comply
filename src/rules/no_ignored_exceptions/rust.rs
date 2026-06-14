@@ -40,6 +40,11 @@
 //!   resulting `Result` is intentionally discarded. The closure argument is
 //!   required, so a `map_err(some_fn)` taking a bare function (which may swallow
 //!   the error) still fires. The method may sit anywhere in the call chain.
+//! - `let _ = fallible()` inside the `fn drop` of an `impl Drop for ...` block:
+//!   `Drop::drop` returns `()`, so an error has no way to be propagated to the
+//!   caller (no `?`, no `Result` return). `let _ =` is the idiomatic best-effort
+//!   cleanup for an RAII destructor. Scoped to a `fn drop` directly inside a
+//!   `Drop` trait impl, so a `let _ =` in any other method still fires.
 //!
 //! NOTE: This rule uses a heuristic (call-like pattern matching) rather than
 //! type awareness. It may flag `let _ = infallible_fn()` where the function
@@ -119,6 +124,12 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    // Skip best-effort cleanup in a `Drop::drop` body: `drop` returns `()`, so
+    // the error has no way to be propagated — `let _ =` is the idiomatic form.
+    if is_in_drop_impl(node, source) {
+        return;
+    }
+
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -144,6 +155,50 @@ fn is_compile_fail_fixture(path: &std::path::Path) -> bool {
         } else if segment == "fail" && seen_tests {
             return true;
         }
+    }
+    false
+}
+
+/// True if `node` sits inside the `fn drop` of an `impl Drop for ...` block.
+///
+/// Walks ancestors to the nearest enclosing `function_item`; it must be named
+/// `drop`, and its nearest enclosing `impl_item` must have a `trait` field whose
+/// final path segment is `Drop` (so `impl std::ops::Drop for T` also matches).
+/// Both conditions are required: a method named `drop` in an inherent impl, or
+/// any other method in a `Drop` impl, does not qualify. In `Drop::drop` the
+/// return type is `()`, so a fallible result discarded with `let _ =` is the
+/// idiomatic best-effort cleanup — there is no channel to propagate the error.
+fn is_in_drop_impl(node: Node, source: &[u8]) -> bool {
+    let mut current = node.parent();
+    while let Some(ancestor) = current {
+        if ancestor.kind() == "function_item" {
+            let Some(name) = ancestor.child_by_field_name("name") else {
+                return false;
+            };
+            if name.utf8_text(source) != Ok("drop") {
+                return false;
+            }
+            return enclosing_impl_is_drop(ancestor, source);
+        }
+        current = ancestor.parent();
+    }
+    false
+}
+
+/// True if the nearest `impl_item` enclosing `func` is a `Drop` trait impl.
+fn enclosing_impl_is_drop(func: Node, source: &[u8]) -> bool {
+    let mut current = func.parent();
+    while let Some(ancestor) = current {
+        if ancestor.kind() == "impl_item" {
+            let Some(trait_node) = ancestor.child_by_field_name("trait") else {
+                return false;
+            };
+            let Ok(text) = trait_node.utf8_text(source) else {
+                return false;
+            };
+            return text.rsplit("::").next().unwrap_or(text).trim() == "Drop";
+        }
+        current = ancestor.parent();
     }
     false
 }
@@ -559,6 +614,52 @@ mod tests {
         let map_fn = "async fn w() { let _ = do_io().await.map_err(handle); }";
         assert_eq!(run_on(bare).len(), 1);
         assert_eq!(run_on(map_fn).len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_in_drop_impl() {
+        // Regression for #1459: `Drop::drop` returns `()`, so a fallible result
+        // can only be discarded best-effort — there is no way to propagate it.
+        // The issue's exact helix `termina.rs` example.
+        let src = r#"
+            impl Drop for Terminal {
+                fn drop(&mut self) {
+                    if !std::thread::panicking() {
+                        let _ = self.disable_extensions();
+                        let _ = self.disable_mouse_capture();
+                    }
+                }
+            }
+        "#;
+        let qualified = r#"
+            impl std::ops::Drop for Terminal {
+                fn drop(&mut self) {
+                    let _ = self.cleanup();
+                }
+            }
+        "#;
+        assert!(run_on(src).is_empty());
+        assert!(run_on(qualified).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_outside_drop_impl() {
+        // Negative space for #1459: the exemption is scoped to `fn drop` of a
+        // `Drop` impl. A `drop`-named method in an inherent impl, and any other
+        // method in a `Drop` impl, can still propagate errors — so a discarded
+        // fallible result there genuinely swallows the error and must fire.
+        let inherent_drop = r#"
+            impl Terminal {
+                fn drop(&mut self) { let _ = self.cleanup(); }
+            }
+        "#;
+        let other_method_in_drop_impl = r#"
+            impl Drop for Terminal {
+                fn helper(&mut self) -> Result<()> { let _ = self.cleanup(); Ok(()) }
+            }
+        "#;
+        assert_eq!(run_on(inherent_drop).len(), 1);
+        assert_eq!(run_on(other_method_in_drop_impl).len(), 1);
     }
 
     #[test]
