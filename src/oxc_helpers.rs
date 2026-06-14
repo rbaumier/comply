@@ -1105,6 +1105,50 @@ pub fn file_imports_db_library(semantic: &oxc_semantic::Semantic<'_>) -> bool {
     })
 }
 
+/// Packages whose `useForm` export is React Hook Form's. `react-hook-form`
+/// itself plus the `@hookform/*` resolver/devtools scope, which re-export it.
+fn is_react_hook_form_package(specifier: &str) -> bool {
+    let root = import_root_package(specifier);
+    root == "react-hook-form" || root.starts_with("@hookform/")
+}
+
+/// True when the local binding `local_name` (e.g. `useForm`) is imported from a
+/// package other than React Hook Form — most notably `@tanstack/react-form`,
+/// whose `useForm` shares the name but has a different API.
+///
+/// React-Hook-Form rules gate on this so they never fire on a same-named hook
+/// from another library. A file that imports `useForm` from React Hook Form, or
+/// uses a `useForm` it never imports, is *not* exempt: the binding is absent or
+/// genuinely React Hook Form's.
+#[must_use]
+pub fn local_binding_imported_from_foreign_package(
+    semantic: &oxc_semantic::Semantic<'_>,
+    local_name: &str,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::ImportDeclarationSpecifier;
+
+    semantic.nodes().iter().any(|node| {
+        let AstKind::ImportDeclaration(decl) = node.kind() else {
+            return false;
+        };
+        if is_react_hook_form_package(decl.source.value.as_str()) {
+            return false;
+        }
+        let Some(specifiers) = &decl.specifiers else {
+            return false;
+        };
+        specifiers.iter().any(|spec| {
+            let local = match spec {
+                ImportDeclarationSpecifier::ImportSpecifier(named) => &named.local,
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(def) => &def.local,
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) => &ns.local,
+            };
+            local.name.as_str() == local_name
+        })
+    })
+}
+
 #[cfg(test)]
 mod oxc_helpers_tests {
     use super::{byte_offset_to_line_col, mask_comments, reset_file_caches, source_contains};

@@ -59,7 +59,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else { return };
@@ -68,6 +68,13 @@ impl OxcCheck for Check {
         // `methods.useForm`) are intentionally not matched.
         let Expression::Identifier(callee) = &call.callee else { return };
         if callee.name.as_str() != "useForm" {
+            return;
+        }
+
+        // `mode`/`reValidateMode` are React-Hook-Form-specific options. A
+        // `useForm` imported from another library (e.g. `@tanstack/react-form`)
+        // has a different API, so this rule must not fire on it.
+        if crate::oxc_helpers::local_binding_imported_from_foreign_package(semantic, "useForm") {
             return;
         }
 
@@ -266,5 +273,36 @@ mod tests {
             }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_tanstack_react_form_useform() {
+        // Regression for rbaumier/comply#1594 — `@tanstack/react-form`'s
+        // `useForm` has no `mode`/`reValidateMode` options; this RHF rule must
+        // not fire on it.
+        let src = r#"
+            import { useForm } from '@tanstack/react-form';
+            export default function App() {
+              const form = useForm({
+                defaultValues: { firstName: '', lastName: '' },
+                onSubmit: async ({ value }) => { console.log(value); },
+              });
+              return <form />;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_react_hook_form_useform_with_import() {
+        // Negative space: a genuine react-hook-form `useForm` still fires.
+        let src = r#"
+            import { useForm } from 'react-hook-form';
+            export function EditForm() {
+              const form = useForm({ resolver: zodResolver(schema) });
+              return <form />;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 }
