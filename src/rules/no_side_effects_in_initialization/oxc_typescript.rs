@@ -162,6 +162,18 @@
 //!   bare `process` global, the method `on`, and the event a `SIG`-prefixed
 //!   string literal, so a `.on(...)` subscription on any other emitter or for a
 //!   non-signal event is still flagged;
+//! - library plugin registration: a top-level member call `recv.<name>(...)`
+//!   whose method is one of a narrow allowlist of unambiguous plugin-registration
+//!   idioms — `extend` (dayjs's `dayjs.extend(plugin)`) or `registerPlugin`
+//!   (gsap/FilePond's `gsap.registerPlugin(x)`). These are the documented,
+//!   required one-time configuration to enable a library feature: idempotent,
+//!   I/O-free, mutating only the library's own singleton, so they are intentional
+//!   module configuration, not a tree-shaking hazard. The allowlist is kept
+//!   deliberately narrow — common method names like `use`, `register`, and `add`
+//!   are excluded because they overwhelmingly denote genuine side effects
+//!   (`app.use(mw)`, arbitrary `x.register(...)`) and would over-exempt — so a
+//!   non-registration member call (`analytics.track(...)`, `db.connect()`,
+//!   `app.use(mw)`) is still flagged;
 //! - commander.js subcommand-registration builder chains: a top-level fluent
 //!   method chain that both registers a subcommand with `.command(...)` and
 //!   attaches its handler with `.action(...)`
@@ -1221,6 +1233,26 @@ fn is_process_signal_handler_call(call: &oxc_ast::ast::CallExpression) -> bool {
     )
 }
 
+/// True when `call` is a library plugin-registration call: a member call
+/// `recv.<name>(...)` whose method is one of a small curated set of unambiguous
+/// plugin-registration idioms — `extend` (dayjs's `dayjs.extend(plugin)`) or
+/// `registerPlugin` (gsap/FilePond's `gsap.registerPlugin(x)`). These are the
+/// documented, required one-time configuration to enable a library feature: the
+/// call is idempotent, performs no external I/O, and merely mutates the library's
+/// own singleton, so it is intentional module configuration, not a tree-shaking
+/// hazard. The receiver is not pinned to a specific library name, but the method
+/// allowlist is kept deliberately narrow: common method names like `use`,
+/// `register`, and `add` are excluded because they overwhelmingly denote genuine
+/// side effects (`app.use(mw)`, arbitrary `x.register(...)`) and would
+/// over-exempt. So a non-registration member call (`analytics.track(...)`,
+/// `db.connect()`, `app.use(mw)`) is still flagged.
+fn is_library_plugin_registration_call(call: &oxc_ast::ast::CallExpression) -> bool {
+    let Expression::StaticMemberExpression(m) = &call.callee else {
+        return false;
+    };
+    matches!(m.property.name.as_str(), "extend" | "registerPlugin")
+}
+
 /// True when `call` is a commander.js subcommand-registration builder chain:
 /// a fluent method chain that both registers a subcommand with `.command(...)`
 /// and attaches its handler with `.action(...)` (e.g.
@@ -1866,6 +1898,7 @@ impl OxcCheck for Check {
             if let Expression::CallExpression(call) = &expr_stmt.expression
                 && (is_start_transition_call(call, &start_transition_names)
                     || is_process_signal_handler_call(call)
+                    || is_library_plugin_registration_call(call)
                     || is_commander_subcommand_chain(call)
                     || is_data_init_foreach(call, &module_locals)
                     || is_local_const_config_call(call, &new_locals)
@@ -4343,5 +4376,43 @@ mod tests {
             2,
             "top-level calls in a normal source module must still be flagged, got {diags:?}"
         );
+    }
+
+    // Issue #2135: `dayjs.extend(plugin)` / `gsap.registerPlugin(x)` at module
+    // scope are one-time library plugin registrations — the documented, required
+    // configuration to enable a library feature, not a tree-shaking hazard.
+    #[test]
+    fn skips_library_plugin_registration() {
+        let dayjs = "\
+            import dayjs from 'dayjs';\n\
+            import duration from 'dayjs/plugin/duration';\n\
+            dayjs.extend(duration);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, dayjs, "src/utils.ts");
+        assert!(diags.is_empty(), "dayjs.extend(plugin) must be exempt, got {diags:?}");
+
+        let gsap = "\
+            import { gsap } from 'gsap';\n\
+            import { ScrollTrigger } from 'gsap/ScrollTrigger';\n\
+            gsap.registerPlugin(ScrollTrigger);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, gsap, "src/anim.ts");
+        assert!(diags.is_empty(), "gsap.registerPlugin(x) must be exempt, got {diags:?}");
+    }
+
+    // Negative-space guard for #2135: a genuine top-level side effect (network
+    // I/O, DOM mutation) is NOT a plugin registration and must still flag, even
+    // though it is also a member call on an imported binding. `app.use(mw)` is
+    // deliberately excluded from the registration set (`use` is far too common),
+    // so it must still flag too.
+    #[test]
+    fn still_flags_non_registration_member_calls() {
+        let analytics =
+            crate::rules::test_helpers::run_rule(&Check, "analytics.track('load');", "src/a.ts");
+        assert_eq!(analytics.len(), 1, "analytics.track must still flag, got {analytics:?}");
+
+        let db = crate::rules::test_helpers::run_rule(&Check, "db.connect();", "src/b.ts");
+        assert_eq!(db.len(), 1, "db.connect must still flag, got {db:?}");
+
+        let app = crate::rules::test_helpers::run_rule(&Check, "app.use(mw);", "src/c.ts");
+        assert_eq!(app.len(), 1, "app.use(mw) must still flag, got {app:?}");
     }
 }
