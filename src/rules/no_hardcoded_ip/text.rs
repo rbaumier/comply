@@ -123,6 +123,28 @@ fn is_cidr_notation(line: &str, ip_end: usize) -> bool {
         && bytes.get(ip_end + 1).is_some_and(|b| b.is_ascii_digit())
 }
 
+/// Names of string-introspection methods that consume a literal for its textual
+/// properties rather than treating it as a value. An IP literal here is a static
+/// fact about IPv4 formatting (e.g. `"101.102.103.104".len()` is the maximum
+/// IPv4 string length, used as a buffer-size constant), not a network endpoint.
+const INTROSPECTION_METHODS: &[&str] = &[".len()", ".as_bytes()", ".bytes()", ".chars()"];
+
+/// True when the IPv4 token ending at byte offset `ip_end` is the receiver of a
+/// string-introspection method call: the closing quote of its enclosing string
+/// literal is immediately followed by `.len()`/`.as_bytes()`/`.bytes()`/`.chars()`.
+fn is_string_introspection_receiver(line: &str, ip_end: usize) -> bool {
+    let bytes = line.as_bytes();
+    // The IP must reach the closing quote with no other content in between, so
+    // the literal is exactly the IP (e.g. `"101.102.103.104"`). Find that quote.
+    let after = match bytes.get(ip_end) {
+        Some(b'"' | b'\'' | b'`') => ip_end + 1,
+        _ => return false,
+    };
+    INTROSPECTION_METHODS
+        .iter()
+        .any(|method| line[after..].starts_with(method))
+}
+
 fn is_svg_path_data(line: &str) -> bool {
     let trimmed = line.trim();
     trimmed.starts_with("d=\"")
@@ -163,6 +185,9 @@ impl TextCheck for Check {
                     continue;
                 }
                 if is_cidr_notation(line, next) {
+                    continue;
+                }
+                if is_string_introspection_receiver(line, next) {
                     continue;
                 }
                 if ip_in_multiword_string(line, next, ip.len()) {
@@ -307,6 +332,25 @@ mod tests {
     fn allows_version_with_wildcard_suffix() {
         assert!(run(r#"let cases = ["3.9.0.0.*", "3.9.1.0.*"];"#).is_empty());
         assert!(run(r#"const version = "1.2.3.4.*";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_ip_literal_as_string_length_constant_issue_1295() {
+        // Issue #1295: the longest IPv4 string is used as a `.len()` constant to
+        // document a buffer size, not as a network endpoint.
+        assert!(run(r#"debug_assert_eq!(MAX_LEN, "101.102.103.104".len());"#).is_empty());
+        assert!(run(r#"let n = "101.102.103.104".as_bytes().len();"#).is_empty());
+        assert!(run(r#"for b in "101.102.103.104".bytes() {}"#).is_empty());
+        assert!(run(r#"let c = "101.102.103.104".chars().count();"#).is_empty());
+    }
+
+    #[test]
+    fn flags_ip_literal_not_used_for_introspection_issue_1295() {
+        // Negative space: a bare IP literal assigned or passed to a connection
+        // call must still flag — only the introspection-method receiver is exempt.
+        assert_eq!(run(r#"let addr = "192.168.1.1";"#).len(), 1);
+        assert_eq!(run(r#"conn.connect("10.0.0.5").await?;"#).len(), 1);
+        assert_eq!(run(r#"let s = "10.0.0.5".to_string();"#).len(), 1);
     }
 
     #[test]
