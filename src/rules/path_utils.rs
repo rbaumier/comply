@@ -333,7 +333,8 @@ pub fn is_test_infra_dir_path(path: &Path) -> bool {
 /// True for a test file that never ships in the published package: one under a
 /// `__tests__/`, `__testUtils__/`, `test/`, `tests/`, or `e2e/` directory, one
 /// carrying a `.test.`/`.spec.`/`.setup.`/`.tp.` infix, one whose whole stem is
-/// `test`/`spec` (a co-located `endOfWeek/test.ts`), or one whose name starts
+/// `test`/`spec` (a co-located `endOfWeek/test.ts`) or a test-runner setup-file
+/// name (`test-setup`, `setup-tests`, `setupTests`, …), or one whose name starts
 /// with a test-runner tooling prefix (`vitest-`/`jest-`, e.g.
 /// `vitest-custom-reporter.ts`). Consumed by `no-extraneous-import` to allow
 /// test-only devDependency imports.
@@ -349,8 +350,31 @@ pub fn is_extraneous_test_file(path: &Path) -> bool {
         || path_str.contains("/e2e/");
     is_marked
         || has_test_file_stem(path)
+        || has_test_setup_file_stem(path)
         || has_type_probe_infix(path)
         || has_test_framework_tooling_prefix(path)
+}
+
+/// Test-runner global setup files whose whole name (minus extension) matches a
+/// well-known setup-file convention — `test-setup`, `setup-tests`, `setup-test`,
+/// or `setupTests` (case-insensitive). Vitest/Jest reference these via
+/// `setupFiles`/`setupFilesAfterEach` in their config; they live at a package
+/// root rather than under a recognized test directory (e.g. TanStack Query's
+/// `packages/*/test-setup.ts`), so the directory- and infix-based checks miss
+/// them. They run only inside the test runner and never ship in the published
+/// package, so importing a test-only devDependency from them is correct
+/// (issue #2118). The `vitest.setup`/`jest.setup`/`*.setup.*` forms already
+/// match the `.setup.` infix; the `vitest-setup`/`jest-setup` forms already
+/// match the tooling prefix — this covers the remaining hyphen/camelCase names.
+fn has_test_setup_file_stem(path: &Path) -> bool {
+    const SETUP_FILE_STEMS: &[&str] = &["test-setup", "setup-tests", "setup-test", "setuptests"];
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs")
+    ) && SETUP_FILE_STEMS.contains(&stem.to_ascii_lowercase().as_str())
 }
 
 /// True when the file name starts with a known test-framework tooling prefix
@@ -1115,10 +1139,21 @@ mod aux_path_tests {
         // Issue #1891: root-level test-runner tooling named with a framework prefix.
         assert!(is_extraneous_test_file(&PathBuf::from("vitest-custom-reporter.ts")));
         assert!(is_extraneous_test_file(&PathBuf::from("jest-setup.ts")));
+        // Issue #2118: package-root global setup files named by the setup-file
+        // convention (no test directory, no `.setup.` infix).
+        assert!(is_extraneous_test_file(&PathBuf::from(
+            "packages/react-query/test-setup.ts"
+        )));
+        assert!(is_extraneous_test_file(&PathBuf::from("test-setup.mts")));
+        assert!(is_extraneous_test_file(&PathBuf::from("setup-tests.js")));
+        assert!(is_extraneous_test_file(&PathBuf::from("setupTests.ts")));
         assert!(!is_extraneous_test_file(&PathBuf::from("src/app/login.ts")));
         // Guard: the prefix must be a real `vitest-`/`jest-` name boundary, not a
         // substring of an unrelated production file name.
         assert!(!is_extraneous_test_file(&PathBuf::from("src/jester.ts")));
+        // Guard: a production file whose name merely contains "setup" as part of
+        // a larger word must not match the setup-file convention.
+        assert!(!is_extraneous_test_file(&PathBuf::from("src/setupStore.ts")));
     }
 
     #[test]
