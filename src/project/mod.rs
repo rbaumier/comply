@@ -2722,9 +2722,16 @@ impl ProjectCtx {
     }
 
     /// Lazily-loaded set of Prisma model names (lowercase) that declare a
-    /// `deletedAt` field in the project's `schema.prisma`. Returns `None` when
-    /// no `schema.prisma` is found — callers should fire on all models in that
-    /// case to preserve backward-compatible behaviour.
+    /// `deletedAt` field in the project's `schema.prisma` file(s). Returns `None`
+    /// when no `schema.prisma` exists anywhere under the project root — callers
+    /// should fire on all models in that case to preserve backward-compatible
+    /// behaviour. A `Some(set)` (possibly empty) means the schema was found and
+    /// only models present in `set` should be flagged.
+    ///
+    /// Prisma schemas conventionally live in a `prisma/` subdirectory (and in a
+    /// monorepo, deep under a `packages/*/prisma/` package), so this scans the
+    /// project tree downward rather than walking up from the root — an upward
+    /// walk never descends into the subdirectory holding the schema.
     pub fn prisma_soft_delete_models(&self) -> Option<&HashSet<String>> {
         self.prisma_soft_delete_models
             .get_or_init(|| {
@@ -2732,10 +2739,7 @@ impl ProjectCtx {
                     .project_root
                     .clone()
                     .or_else(|| std::env::current_dir().ok())?;
-                let schema_dir = walk_up_finding(&start, "schema.prisma")?;
-                let schema =
-                    std::fs::read_to_string(schema_dir.join("schema.prisma")).ok()?;
-                Some(parse_prisma_soft_delete_models(&schema))
+                collect_prisma_soft_delete_models(&start)
             })
             .as_ref()
     }
@@ -2748,6 +2752,50 @@ impl ProjectCtx {
         let _ = ctx.prisma_soft_delete_models.set(Some(set));
         ctx
     }
+}
+
+/// Scan the project tree downward from `root` for every `schema.prisma` file
+/// (excluding `node_modules` and dot-directories) and aggregate the lowercase
+/// names of models that declare a `deletedAt` field. Returns `None` when no
+/// `schema.prisma` is found anywhere — the soft-delete rule then falls back to
+/// firing on all models. A `Some(set)` (possibly empty) means at least one
+/// schema was found, so models absent from `set` provably have no soft-delete
+/// column and must not be flagged. Bounded by a depth limit so a pathologically
+/// deep tree can't blow the stack or stall.
+fn collect_prisma_soft_delete_models(root: &Path) -> Option<HashSet<String>> {
+    const MAX_DEPTH: u32 = 8;
+    let mut models = HashSet::new();
+    let mut found_schema = false;
+    let mut stack: Vec<(PathBuf, u32)> = vec![(root.to_path_buf(), 0)];
+
+    while let Some((dir, depth)) = stack.pop() {
+        if let Ok(schema) = std::fs::read_to_string(dir.join("schema.prisma")) {
+            found_schema = true;
+            models.extend(parse_prisma_soft_delete_models(&schema));
+        }
+        if depth >= MAX_DEPTH {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let skip = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_none_or(|n| n == "node_modules" || n.starts_with('.'));
+            if skip {
+                continue;
+            }
+            stack.push((path, depth + 1));
+        }
+    }
+
+    found_schema.then_some(models)
 }
 
 /// Parse a `schema.prisma` text and return the lowercase names of models that
@@ -4339,5 +4387,83 @@ tokio = "1"
         );
         assert!(first.has_async_runtime(), "tokio is declared");
         assert!(first.is_no_std(), "categories lists no-std");
+    }
+
+    const SCHEMA_WITH_ENVELOPE: &str = r#"
+model Account {
+  id        String   @id @default(cuid())
+  provider  String
+}
+
+model Envelope {
+  id        String    @id @default(cuid())
+  deletedAt DateTime?
+}
+"#;
+
+    #[test]
+    fn parse_collects_only_models_with_deleted_at() {
+        let models = parse_prisma_soft_delete_models(SCHEMA_WITH_ENVELOPE);
+        assert!(models.contains("envelope"));
+        assert!(!models.contains("account"));
+    }
+
+    // Regression for #1281: Prisma schemas live in a `prisma/` subdirectory, not
+    // at the project root, so an upward walk never finds them and the rule fired
+    // on every model. The discovery must descend the tree.
+    #[test]
+    fn collect_finds_schema_in_prisma_subdirectory() {
+        let dir = TempDir::new().unwrap();
+        let schema_dir = dir.path().join("prisma");
+        std::fs::create_dir_all(&schema_dir).unwrap();
+        std::fs::write(schema_dir.join("schema.prisma"), SCHEMA_WITH_ENVELOPE).unwrap();
+
+        let models = collect_prisma_soft_delete_models(dir.path()).unwrap();
+        assert!(models.contains("envelope"));
+        assert!(!models.contains("account"));
+    }
+
+    #[test]
+    fn collect_finds_schema_in_monorepo_package() {
+        let dir = TempDir::new().unwrap();
+        let schema_dir = dir.path().join("packages").join("prisma");
+        std::fs::create_dir_all(&schema_dir).unwrap();
+        std::fs::write(schema_dir.join("schema.prisma"), SCHEMA_WITH_ENVELOPE).unwrap();
+
+        let models = collect_prisma_soft_delete_models(dir.path()).unwrap();
+        assert!(models.contains("envelope"));
+        assert!(!models.contains("account"));
+    }
+
+    #[test]
+    fn collect_returns_none_when_no_schema_exists() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        assert!(collect_prisma_soft_delete_models(dir.path()).is_none());
+    }
+
+    #[test]
+    fn collect_skips_node_modules() {
+        let dir = TempDir::new().unwrap();
+        let vendored = dir.path().join("node_modules").join("@prisma");
+        std::fs::create_dir_all(&vendored).unwrap();
+        std::fs::write(vendored.join("schema.prisma"), SCHEMA_WITH_ENVELOPE).unwrap();
+        assert!(collect_prisma_soft_delete_models(dir.path()).is_none());
+    }
+
+    #[test]
+    fn collect_returns_empty_set_when_schema_has_no_soft_delete_model() {
+        let dir = TempDir::new().unwrap();
+        let schema_dir = dir.path().join("prisma");
+        std::fs::create_dir_all(&schema_dir).unwrap();
+        std::fs::write(
+            schema_dir.join("schema.prisma"),
+            "model Account {\n  id String @id\n}",
+        )
+        .unwrap();
+        // Found, but no model has a soft-delete column: Some(empty) so the rule
+        // skips every model rather than falling back to firing on all.
+        let models = collect_prisma_soft_delete_models(dir.path()).unwrap();
+        assert!(models.is_empty());
     }
 }
