@@ -18,7 +18,10 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["imports"],
 
-    skip_in_test_dir: false,
+    // Importing build output is only a smell in shippable source. Test files
+    // never ship, and runners like `node:test` (no TypeScript support) must
+    // import the compiled artifact from `dist/` to verify the published output.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 

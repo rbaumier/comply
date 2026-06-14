@@ -162,6 +162,32 @@ mod tests {
     }
 
     #[test]
+    fn allows_dist_import_in_test_file() {
+        // Issue #1538 — a `node:test` integration test that verifies the
+        // compiled package output must import from `dist/` because the runner
+        // does not support TypeScript. The central `skip_in_test_dir` gate
+        // exempts the whole file.
+        let src = r#"import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import { isParentDirectory } from '../dist/path.js';"#;
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            src,
+            "packages/internal-helpers/test/path.test.ts",
+        );
+        assert!(diags.is_empty(), "dist import in a test file must not fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_dist_import_in_production_source() {
+        // Negative space: a shippable source file importing from dist/ is the
+        // anti-pattern the rule targets and must still fire.
+        let src = r#"import { foo } from "./dist/foo";"#;
+        let diags = crate::rules::test_helpers::run_rule_gated(&Check, src, "src/foo.ts");
+        assert_eq!(diags.len(), 1, "dist import in production source must fire, got: {diags:?}");
+    }
+
+    #[test]
     fn allows_inline_type_import_from_dist() {
         // Issue #2074 exact example — AppType in the Next.js Pages Router is
         // only available via this internal dist/ path, as a type-only import.
