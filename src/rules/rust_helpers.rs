@@ -217,6 +217,78 @@ pub fn is_pub(item: Node, source: &[u8]) -> bool {
     false
 }
 
+/// True if the `match_arm`'s body is a single diverging or error
+/// expression — a `unreachable!`/`panic!`/`unimplemented!`/`todo!`/`bail!`
+/// macro invocation, or a `return Err(...)`. Such an arm is an explicit
+/// guard for the impossible/error case.
+///
+/// Two rules need this: `rust-explicit-enum-match-arms` exempts a
+/// wildcard arm that only diverges, and `no-empty-catch` treats an empty
+/// `Err(_) => {}` arm as a controlled assertion (not error-swallowing)
+/// when a sibling arm diverges.
+pub fn arm_body_is_diverging(arm: Node, source: &[u8]) -> bool {
+    let Some(value) = arm.child_by_field_name("value") else {
+        return false;
+    };
+    expr_is_diverging(value, source)
+}
+
+/// Classify a match-arm body expression as diverging/error. A `block`
+/// body with a single statement is unwrapped to its inner expression so
+/// `{ bail!("…"); }` is treated like `bail!("…")`.
+fn expr_is_diverging(expr: Node, source: &[u8]) -> bool {
+    match expr.kind() {
+        "block" => {
+            // Only an unconditional single-statement body is a guard:
+            // `{ bail!("…"); }` or `{ return Err(e); }`. A block doing
+            // other work before diverging is a real catch-all.
+            let mut cursor = expr.walk();
+            let mut children = expr.named_children(&mut cursor);
+            let (Some(only), None) = (children.next(), children.next()) else {
+                return false;
+            };
+            let inner = if only.kind() == "expression_statement" {
+                match only.named_child(0) {
+                    Some(node) => node,
+                    None => return false,
+                }
+            } else {
+                only
+            };
+            expr_is_diverging(inner, source)
+        }
+        "macro_invocation" => {
+            let Some(name_node) = expr.child_by_field_name("macro") else {
+                return false;
+            };
+            matches!(
+                name_node.utf8_text(source),
+                Ok("unreachable" | "panic" | "unimplemented" | "todo" | "bail")
+            )
+        }
+        "return_expression" => return_yields_err(expr, source),
+        _ => false,
+    }
+}
+
+/// True if a `return_expression` returns an `Err(...)` value — the head
+/// of the returned call expression is the `Err` constructor.
+fn return_yields_err(ret: Node, source: &[u8]) -> bool {
+    let Some(returned) = ret.named_child(0) else {
+        return false;
+    };
+    if returned.kind() != "call_expression" {
+        return false;
+    }
+    let Some(callee) = returned.child_by_field_name("function") else {
+        return false;
+    };
+    let Ok(text) = callee.utf8_text(source) else {
+        return false;
+    };
+    text.rsplit("::").next().unwrap_or(text).trim() == "Err"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
