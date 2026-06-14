@@ -110,6 +110,10 @@ const VIRTUAL_PREFIXES: &[&str] = &[
     // (Vite/Webpack/Nuxt); each `~icons/<collection>/<name>` resolves to a
     // generated icon component at build time, never an npm package.
     "~icons/",
+    // `@qwik-city-plan` is the build-time virtual module injected by the
+    // `@builder.io/qwik-city` Vite plugin, exposing the application's routing
+    // plan; it is never published to npm.
+    "@qwik-city-plan",
 ];
 
 /// Schemes that, despite carrying a `:`, are not virtual modules: `node:`

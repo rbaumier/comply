@@ -463,6 +463,25 @@ mod tests {
         );
     }
 
+    // Regression #1379: `@qwik-city-plan` is the build-time virtual module
+    // injected by the `@builder.io/qwik-city` Vite plugin (exposing the routing
+    // plan); it is never published to npm, so it must not be flagged.
+    #[test]
+    fn allows_qwik_city_plan_virtual_import_issue_1379() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"app"}"#).unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("entry.preview.tsx");
+        let source = "import qwikCityPlan from '@qwik-city-plan';\nimport { routes } from '@qwik-city-plan';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "@qwik-city-plan virtual import must not be flagged, got {diags:?}"
+        );
+    }
+
     // Negative-space guard: a genuinely-unlisted bare import that merely looks
     // similar must still fire — the `~icons/` exemption is prefix-scoped.
     #[test]
