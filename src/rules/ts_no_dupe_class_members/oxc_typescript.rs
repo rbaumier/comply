@@ -1,9 +1,21 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{ClassElement, PropertyKey};
+use oxc_ast::ast::{ClassElement, MethodDefinitionKind, PropertyKey};
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// What a bodied class member is, for duplicate detection.
+///
+/// A `get`/`set` pair of the same name and static-ness forms one logical
+/// property and is not a duplicate; every other same-name combination is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MemberKind {
+    Method,
+    Getter,
+    Setter,
+    Property,
+}
 
 pub struct Check;
 
@@ -21,36 +33,51 @@ impl OxcCheck for Check {
     ) {
         let AstKind::Class(class) = node.kind() else { return };
 
-        // Map: member name -> list of (span_start, has_body).
-        let mut seen: HashMap<&str, Vec<(u32, bool)>> = HashMap::new();
+        // Static and instance members live in separate namespaces, so a
+        // `static foo` never collides with an instance `foo`. Key duplicate
+        // groups on `(name, is_static)`; only bodied members participate
+        // (overload signatures have no body).
+        let mut seen: HashMap<(&str, bool), Vec<(u32, MemberKind)>> = HashMap::new();
 
         for element in &class.body.body {
-            let (name, span_start, has_body) = match element {
+            let (name, is_static, span_start, kind) = match element {
                 ClassElement::MethodDefinition(m) => {
+                    if m.value.body.is_none() {
+                        continue; // overload signature
+                    }
                     let name = match &m.key {
                         PropertyKey::StaticIdentifier(id) => id.name.as_str(),
                         _ => continue, // skip computed
                     };
-                    (name, m.span.start, m.value.body.is_some())
+                    let kind = match m.kind {
+                        MethodDefinitionKind::Get => MemberKind::Getter,
+                        MethodDefinitionKind::Set => MemberKind::Setter,
+                        _ => MemberKind::Method,
+                    };
+                    (name, m.r#static, m.span.start, kind)
                 }
                 ClassElement::PropertyDefinition(p) => {
                     let name = match &p.key {
                         PropertyKey::StaticIdentifier(id) => id.name.as_str(),
                         _ => continue,
                     };
-                    (name, p.span.start, true) // properties always count
+                    (name, p.r#static, p.span.start, MemberKind::Property)
                 }
                 _ => continue,
             };
-            seen.entry(name).or_default().push((span_start, has_body));
+            seen.entry((name, is_static)).or_default().push((span_start, kind));
         }
 
-        for (name, entries) in &seen {
-            let with_body: Vec<_> = entries.iter().filter(|(_, b)| *b).collect();
-            if with_body.len() < 2 {
+        for ((name, _), entries) in &seen {
+            if entries.len() < 2 {
                 continue;
             }
-            for &&(offset, _) in &with_body[1..] {
+            // A single `get`/`set` accessor pair forms one logical property and
+            // is allowed; any other same-name combination is a duplicate.
+            if is_accessor_pair(entries) {
+                continue;
+            }
+            for &(offset, _) in &entries[1..] {
                 let (line, column) = byte_offset_to_line_col(ctx.source, offset as usize);
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),
@@ -66,6 +93,18 @@ impl OxcCheck for Check {
             }
         }
     }
+}
+
+/// True for exactly one getter plus one setter of the same name — the standard
+/// accessor pattern, which is not a duplicate.
+fn is_accessor_pair(entries: &[(u32, MemberKind)]) -> bool {
+    let [(_, a), (_, b)] = entries else {
+        return false;
+    };
+    matches!(
+        (a, b),
+        (MemberKind::Getter, MemberKind::Setter) | (MemberKind::Setter, MemberKind::Getter)
+    )
 }
 
 #[cfg(test)]
@@ -107,5 +146,51 @@ mod tests {
     fn allows_overload_signatures() {
         let _ =
             run_on("class Foo {\n  bar(): void;\n  bar(x: string): void;\n  bar(x?: string) {}\n}");
+    }
+
+    #[test]
+    fn allows_getter_setter_pair() {
+        let src = "class Foo {\n  get level(): number { return this._level; }\n  set level(value: number) { this._setLevelInput(value); }\n  _level!: number;\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_static_getter_setter_pair() {
+        let src = "class Foo {\n  static get x() { return 1; }\n  static set x(v) {}\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_same_name_across_static_boundary() {
+        let src = "class Foo {\n  foo() {}\n  static foo() {}\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_duplicate_getters() {
+        let diags = run_on("class Foo {\n  get bar() { return 1; }\n  get bar() { return 2; }\n}");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("bar"));
+    }
+
+    #[test]
+    fn flags_duplicate_setters() {
+        let diags = run_on("class Foo {\n  set bar(v) {}\n  set bar(v) {}\n}");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_getter_and_method_same_name() {
+        let diags = run_on("class Foo {\n  get bar() { return 1; }\n  bar() {}\n}");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("bar"));
+    }
+
+    #[test]
+    fn flags_getter_setter_plus_third_member() {
+        let diags = run_on(
+            "class Foo {\n  get bar() { return 1; }\n  set bar(v) {}\n  bar() {}\n}",
+        );
+        assert_eq!(diags.len(), 2);
     }
 }
