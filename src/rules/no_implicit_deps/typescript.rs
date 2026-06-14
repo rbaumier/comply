@@ -192,6 +192,30 @@ mod tests {
     }
 
     #[test]
+    fn allows_bun_builtin_modules() {
+        // Issue #1656: `bun:test` and the rest of the `bun:` runtime namespace
+        // are Bun built-ins, never npm packages.
+        for spec in &["bun:test", "bun:sqlite", "bun:ffi", "bun:jsc"] {
+            let src = format!("import {{ describe, test, expect }} from '{spec}';");
+            let (_d, diags) =
+                run_in_project(Some(r#"{ "dependencies": {} }"#), None, &src);
+            assert!(diags.is_empty(), "bun builtin `{spec}` should be skipped, got {diags:?}");
+        }
+    }
+
+    #[test]
+    fn flags_bun_prefixed_npm_package_when_absent() {
+        // Negative space: a `bun:` prefix with no submodule is not a builtin,
+        // and a genuinely-missing npm dependency must still fire.
+        let (_d, diags) = run_in_project(
+            Some(r#"{ "dependencies": {} }"#),
+            None,
+            "import { something } from 'bun-plugin-tailwind';",
+        );
+        assert_eq!(diags.len(), 1, "missing npm dep must still be flagged, got {diags:?}");
+    }
+
+    #[test]
     fn ignores_declared_dependency() {
         let (_d, diags) = run_in_project(
             Some(r#"{ "dependencies": { "react": "^19.0.0" } }"#),
