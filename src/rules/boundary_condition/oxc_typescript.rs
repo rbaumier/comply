@@ -3,7 +3,10 @@
 //! Flags `arr[0]` or `arr[arr.length - 1]` reads without a length guard
 //! or nullish fallback. Optional-chained computed access (`arr?.[0]`) is
 //! exempt: it is a deliberate optional read that short-circuits to
-//! `undefined` when the base is nullish.
+//! `undefined` when the base is nullish. The same intent is exempted when the
+//! access result is immediately consumed by an optional member, computed, or
+//! call access (`arr[0]?.prop`, `arr[0]?.[i]`, `arr[0]?.()`): the `?.`
+//! acknowledges that `arr[0]` may be `undefined`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -33,6 +36,14 @@ impl OxcCheck for Check {
         // when the base is nullish) — the same intent signal as `.at(0)` or a
         // `?? fallback`, so it is not an accidental unchecked read.
         if member.optional {
+            return;
+        }
+
+        // `arr[0]?.prop` / `arr[0]?.[i]` / `arr[0]?.()` — the access result is
+        // immediately guarded by optional chaining, so the developer has already
+        // acknowledged that `arr[0]` may be `undefined`. Flagging the inner read
+        // would be redundant.
+        if result_consumed_by_optional_access(node, semantic) {
             return;
         }
         let source = ctx.source;
@@ -188,6 +199,37 @@ fn is_last_index(expr: &Expression, object_text: &str, source: &str) -> bool {
     }
     let left_obj_text = expr_text(&left_member.object, source);
     left_obj_text == object_text
+}
+
+/// Returns true when the index-access `node` is the base of an optional
+/// member, computed, or call access — `arr[0]?.prop`, `arr[0]?.[i]`, or
+/// `arr[0]?.()`. The `?.` on the consumer explicitly handles `arr[0]` being
+/// `undefined`, so the inner read is not an accidental unchecked access.
+///
+/// Only the access that uses `node` as its base counts: the parent must be an
+/// optional access whose own base span equals `node`'s span. An optional access
+/// elsewhere in an enclosing expression (e.g. `node` as a call argument) does
+/// not vouch the read safe.
+fn result_consumed_by_optional_access(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let parent_id = nodes.parent_id(node.id());
+    if parent_id == node.id() {
+        return false;
+    }
+    let node_span = node.kind().span();
+    match nodes.get_node(parent_id).kind() {
+        AstKind::StaticMemberExpression(member) => {
+            member.optional && member.object.span() == node_span
+        }
+        AstKind::ComputedMemberExpression(member) => {
+            member.optional && member.object.span() == node_span
+        }
+        AstKind::CallExpression(call) => call.optional && call.callee.span() == node_span,
+        _ => false,
+    }
 }
 
 fn is_assignment_target(
@@ -831,6 +873,31 @@ mod tests {
             "const f = (router: any, c: any) => !!router?.match(c)?.[0]?.[0]?.[0];"
         )
         .is_empty());
+    }
+
+    #[test]
+    fn no_fp_optional_member_on_index_result_issue_1645() {
+        // The issue's exact example: `methods[0]?.returns`. The `?.` on the
+        // static member access acknowledges that `methods[0]` may be `undefined`.
+        let src = "function f(methods) { let returns = methods[0]?.returns; return returns; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_optional_computed_on_index_result_issue_1645() {
+        assert!(run_on("const f = (arr) => arr[0]?.[1];").is_empty());
+    }
+
+    #[test]
+    fn no_fp_optional_call_on_index_result_issue_1645() {
+        assert!(run_on("const f = (arr) => arr[0]?.();").is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_optional_member_on_index_result_issue_1645() {
+        // Negative space: a plain (non-optional) `arr[0].prop` does not signal the
+        // developer expects `undefined`, so the boundary read still flags.
+        assert_eq!(run_on("const f = (arr) => arr[0].prop;").len(), 1);
     }
 
     #[test]
