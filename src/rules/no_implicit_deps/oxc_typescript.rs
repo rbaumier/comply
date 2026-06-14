@@ -8,8 +8,8 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 use super::{
-    is_bare_specifier, is_node_builtin, is_subpath_import, is_virtual_module, matches_alias,
-    module_federation, root_package_name,
+    is_bare_specifier, is_node_builtin, is_subpath_import, is_virtual_module, jest_module_roots,
+    matches_alias, module_federation, root_package_name,
 };
 
 pub struct Check;
@@ -89,6 +89,17 @@ impl OxcCheck for Check {
             .project
             .resolves_via_tsconfig_base_url(ctx.path, spec)
         {
+            return;
+        }
+        // Jest `modulePaths`/`moduleDirectories` add in-repo resolution roots, so
+        // a bare specifier whose first segments resolve to local source under one
+        // of those roots (e.g. `app/core/foo` → `<rootDir>/public/app/core/foo`)
+        // is a project file, not an npm package.
+        if jest_module_roots::resolves_via_jest_module_roots(
+            ctx.path,
+            spec,
+            ctx.project.project_root.as_deref(),
+        ) {
             return;
         }
         let root = root_package_name(spec);
@@ -1095,6 +1106,114 @@ export default {
             diags.len(),
             1,
             "a specifier declared in no manifest must still fire, got {diags:?}"
+        );
+    }
+
+    // Regression #1529: Jest `modulePaths` adds in-repo resolution roots, so a
+    // bare specifier resolving under one of them (`app/core/...` →
+    // `<rootDir>/public/app/core/...`, `test/...` → `<rootDir>/public/test/...`)
+    // is a project file, not an npm package. `package.json` correctly lists
+    // neither `app` nor `test` as a dependency.
+    #[test]
+    fn allows_jest_module_paths_root_import_issue_1529() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"grafana"}"#).unwrap();
+        fs::write(
+            dir.path().join("jest.config.js"),
+            "module.exports = { modulePaths: ['public', 'node_modules'] };\n",
+        )
+        .unwrap();
+        // On-disk source that the configured root resolves to.
+        let svc = dir.path().join("public").join("app").join("core").join("services");
+        fs::create_dir_all(&svc).unwrap();
+        fs::write(svc.join("context_srv.ts"), "export class ContextSrv {}\n").unwrap();
+        let helpers = dir.path().join("public").join("test");
+        fs::create_dir_all(&helpers).unwrap();
+        fs::write(helpers.join("test-utils.ts"), "export const setupStore = () => {};\n").unwrap();
+
+        let feature = dir.path().join("public").join("app").join("features");
+        fs::create_dir_all(&feature).unwrap();
+        let file = feature.join("dashboard.test.ts");
+        let source = "import { ContextSrv } from 'app/core/services/context_srv';\nimport { setupStore } from 'test/test-utils';\n";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "imports resolving via Jest modulePaths must not be flagged, got {diags:?}"
+        );
+    }
+
+    // `moduleDirectories` written with a `<rootDir>` token resolves the same way.
+    #[test]
+    fn allows_jest_module_directories_root_import_issue_1529() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"grafana"}"#).unwrap();
+        fs::write(
+            dir.path().join("jest.config.ts"),
+            "export default { moduleDirectories: ['<rootDir>/public/app', 'node_modules'] };\n",
+        )
+        .unwrap();
+        let svc = dir.path().join("public").join("app").join("core");
+        fs::create_dir_all(&svc).unwrap();
+        fs::write(svc.join("utils.ts"), "export const x = 1;\n").unwrap();
+
+        let file = dir.path().join("public").join("app").join("page.test.ts");
+        let source = "import { x } from 'core/utils';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "import resolving via Jest moduleDirectories must not be flagged, got {diags:?}"
+        );
+    }
+
+    // The `"jest"` key inside `package.json` declares the roots just as a
+    // standalone `jest.config.*` file does.
+    #[test]
+    fn allows_jest_config_in_package_json_issue_1529() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","jest":{"modulePaths":["src"]}}"#,
+        )
+        .unwrap();
+        let lib = dir.path().join("src").join("lib");
+        fs::create_dir_all(&lib).unwrap();
+        fs::write(lib.join("helper.ts"), "export const h = 1;\n").unwrap();
+
+        let file = dir.path().join("src").join("a.test.ts");
+        let source = "import { h } from 'lib/helper';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "import resolving via package.json jest.modulePaths must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #1529: a genuinely undeclared package must still
+    // fire even when Jest `modulePaths` is configured — its name does not resolve
+    // to any source file under a configured root.
+    #[test]
+    fn flags_unlisted_dep_alongside_jest_module_paths_issue_1529() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"grafana"}"#).unwrap();
+        fs::write(
+            dir.path().join("jest.config.js"),
+            "module.exports = { modulePaths: ['public', 'node_modules'] };\n",
+        )
+        .unwrap();
+        let feature = dir.path().join("public").join("app").join("features");
+        fs::create_dir_all(&feature).unwrap();
+        let file = feature.join("dashboard.test.ts");
+        // `lodash` does not exist under `public/` — must still fire.
+        let source = "import _ from 'lodash';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "an undeclared package not under any Jest root must still fire, got {diags:?}"
         );
     }
 }
