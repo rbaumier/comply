@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use super::{
     is_bare_specifier, is_node_builtin, is_subpath_import, is_sveltekit_adapter_virtual_module,
-    is_virtual_module, jest_module_roots, matches_alias, module_federation, root_package_name,
+    is_sveltekit_app_alias, is_virtual_module, jest_module_roots, matches_alias, module_federation,
+    root_package_name,
 };
 
 pub struct Check;
@@ -79,19 +80,24 @@ impl OxcCheck for Check {
         if is_virtual_module(spec) {
             return;
         }
-        // SvelteKit adapters inject bare uppercase virtual module specifiers
-        // (`HANDLER`, `ENV`, `SERVER`, `SHIMS`, `MANIFEST`) that their Rollup
-        // plugin resolves at bundle time, never installed from npm. Gate on
-        // SvelteKit being detected for this file's package so the same name
-        // still fires as an implicit dependency in a non-SvelteKit project.
-        if is_sveltekit_adapter_virtual_module(spec)
-            && ctx
+        // SvelteKit virtual specifiers that the framework's own Vite/Rollup
+        // plugins resolve at build time, never installed from npm:
+        //   - adapter virtual modules: bare uppercase names (`HANDLER`, `ENV`,
+        //     `SERVER`, `SHIMS`, `MANIFEST`), and
+        //   - reserved app aliases: `$lib`/`$lib/…` (→ `src/lib`), `$app/…`,
+        //     `$env/…`, `$service-worker`.
+        // Gate on SvelteKit being detected for this file's package so the same
+        // specifiers still fire as implicit dependencies in a non-SvelteKit
+        // project.
+        if is_sveltekit_adapter_virtual_module(spec) || is_sveltekit_app_alias(spec) {
+            let is_sveltekit = ctx
                 .project
                 .frameworks_for_path(ctx.path)
                 .iter()
-                .any(|f| f.name == "svelte")
-        {
-            return;
+                .any(|f| f.name == "svelte");
+            if is_sveltekit {
+                return;
+            }
         }
         if matches_alias(spec, &alias_prefixes) {
             return;
@@ -1316,6 +1322,93 @@ export default {
             diags.len(),
             1,
             "an undeclared package in a SvelteKit project must still fire, got {diags:?}"
+        );
+    }
+
+    // Regression #1366: SvelteKit reserves `$`-prefixed application aliases
+    // (`$lib`/`$lib/…` → `src/lib`, `$app/…`, `$env/…`, `$service-worker`) that
+    // its Vite plugin resolves to project source or generated code at build
+    // time. They are never npm packages and are intentionally absent from
+    // `package.json`, so they must not be flagged when SvelteKit is detected for
+    // the importing file's package.
+    #[test]
+    fn allows_sveltekit_app_aliases_issue_1366() {
+        for spec in &[
+            "$lib",
+            "$lib/utils/i18n",
+            "$lib/managers/event-manager.svelte",
+            "$app/navigation",
+            "$app/stores",
+            "$app/environment",
+            "$env/static/private",
+            "$env/dynamic/public",
+            "$service-worker",
+        ] {
+            let dir = TempDir::new().unwrap();
+            fs::write(
+                dir.path().join("package.json"),
+                r#"{"name":"web","devDependencies":{"@sveltejs/kit":"^2.4.0"}}"#,
+            )
+            .unwrap();
+            let src = dir.path().join("src").join("lib");
+            fs::create_dir_all(&src).unwrap();
+            let file = src.join("a.ts");
+            let source = format!("import {{ x }} from '{spec}';");
+            fs::write(&file, &source).unwrap();
+            let diags = run_oxc_in_project(&file, &source);
+            assert!(
+                diags.is_empty(),
+                "SvelteKit app alias `{spec}` must not be flagged, got {diags:?}"
+            );
+        }
+    }
+
+    // Negative-space guard for #1366: in a NON-SvelteKit project the `$`-aliases
+    // are genuine implicit dependencies and must still fire — the exemption is
+    // gated on SvelteKit being detected.
+    #[test]
+    fn flags_app_alias_without_sveltekit_issue_1366() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"plain-app","dependencies":{}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("index.ts");
+        let source = "import { t } from '$lib/utils/i18n';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "a `$`-alias in a non-SvelteKit project must still fire, got {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #1366: a genuinely undeclared package must still
+    // fire in a SvelteKit project — the exemption is scoped to the reserved
+    // `$`-aliases only, not to arbitrary `$`-prefixed or bare specifiers.
+    #[test]
+    fn flags_unlisted_dep_alongside_sveltekit_aliases_issue_1366() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"web","devDependencies":{"@sveltejs/kit":"^2.4.0"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("index.ts");
+        // `$custom` is not a reserved SvelteKit alias; `lodash` is undeclared.
+        let source = "import a from '$custom/thing';\nimport b from 'lodash';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            2,
+            "non-reserved `$`-specifier and undeclared package must still fire, got {diags:?}"
         );
     }
 
