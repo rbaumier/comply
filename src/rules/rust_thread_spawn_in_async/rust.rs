@@ -118,4 +118,19 @@ mod tests {
         let source = "#[tokio::test]\nasync fn f() { std::thread::spawn(|| {}); }";
         assert!(run_on(source).is_empty());
     }
+
+    #[test]
+    fn allows_thread_spawn_in_raw_identifier_async_fn() {
+        // `fn r#async` is a sync fn named with a raw identifier, not an
+        // `async fn` — `std::thread::spawn` inside it is legitimate.
+        let source = "impl S { fn r#async(s: T) -> S { \
+                      let h = std::thread::spawn(move || work(s)); S(h) } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_thread_spawn_in_genuine_async_fn() {
+        let source = "async fn run() { std::thread::spawn(|| work()); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
 }
