@@ -1,7 +1,7 @@
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Expression, ImportDeclarationSpecifier};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -20,6 +20,38 @@ const FAKE_TIMER_MARKERS: &[&str] = &[
     "runAllTimers",
 ];
 
+/// True when the `fireEvent` binding in this file is imported from a relative
+/// module specifier (starts with `.` / `..`), i.e. the file tests a *local*
+/// `fireEvent` implementation rather than the published package. The source
+/// repository of a library that exports `fireEvent` (e.g. `@testing-library/react`)
+/// imports it from `'../'` / `'./fire-event'` to test its own behavior — there
+/// `userEvent` cannot replace `fireEvent`, which is the code under test.
+///
+/// A `fireEvent` imported from a bare package specifier (`@testing-library/react`,
+/// `@testing-library/dom`) is the rule's genuine target and returns `false`.
+fn fire_event_imported_from_relative(semantic: &oxc_semantic::Semantic<'_>) -> bool {
+    semantic.nodes().iter().any(|node| {
+        let AstKind::ImportDeclaration(decl) = node.kind() else {
+            return false;
+        };
+        let spec = decl.source.value.as_str();
+        if !(spec.starts_with("./") || spec.starts_with("../") || spec == "." || spec == "..") {
+            return false;
+        }
+        let Some(specifiers) = &decl.specifiers else {
+            return false;
+        };
+        specifiers.iter().any(|s| {
+            let local = match s {
+                ImportDeclarationSpecifier::ImportSpecifier(named) => &named.local,
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(def) => &def.local,
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) => &ns.local,
+            };
+            local.name.as_str() == "fireEvent"
+        })
+    })
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -31,7 +63,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else {
@@ -60,6 +92,12 @@ impl OxcCheck for Check {
             .iter()
             .any(|m| ctx.source_contains(m))
         {
+            return;
+        }
+        // The source repository of a library that exports `fireEvent` imports it
+        // from a relative path to test its own implementation; `userEvent` cannot
+        // replace the code under test, so leave those files alone.
+        if fire_event_imported_from_relative(semantic) {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, member.span().start as usize);
@@ -230,5 +268,34 @@ mod tests {
             run_on("components/__tests__/button.test.tsx", src).len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_fire_event_imported_from_parent_relative() {
+        // Regression #2173: the source repo of a library that exports `fireEvent`
+        // imports it from a relative path to test its own implementation; the test
+        // asserts on `fireEvent` behavior, so `userEvent` cannot replace it.
+        let src = "\
+            import { render, fireEvent } from '../'\n\
+            test('hydrate', () => { fireEvent.click(container.querySelector('button')) })\n";
+        assert!(run_on("src/__tests__/render.js", src).is_empty());
+    }
+
+    #[test]
+    fn allows_fire_event_imported_from_sibling_module() {
+        let src = "\
+            import { fireEvent } from './fire-event'\n\
+            fireEvent.click(getByTestId('button'))\n";
+        assert!(run_on("src/__tests__/act.js", src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_fire_event_imported_from_published_package() {
+        // Negative-space guard: an application importing `fireEvent` from the
+        // published package is the rule's genuine target — keep flagging.
+        let src = "\
+            import { render, fireEvent } from '@testing-library/react'\n\
+            it('clicks', () => { fireEvent.click(button) })\n";
+        assert_eq!(run_on("components/__tests__/button.test.tsx", src).len(), 1);
     }
 }
