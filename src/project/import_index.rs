@@ -1631,9 +1631,12 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
 
     let line = node.start_position().row + 1;
 
-    // `export * from './m'` / `export * as ns from './m'` — `export_clause`
-    // may be absent; the wildcard is a `*` token child of export_statement.
-    let has_star = node.children(&mut node.walk()).any(|c| c.kind() == "*");
+    // `export * from './m'` is a bare `*` token child of export_statement.
+    // `export * as ns from './m'` nests the `*` inside a `namespace_export`
+    // node, so the wildcard is detected via either shape.
+    let has_star = node
+        .children(&mut node.walk())
+        .any(|c| c.kind() == "*" || c.kind() == "namespace_export");
     let source_str = find_specifier_string(node, source);
 
     if let Some(src) = &source_str
@@ -2398,19 +2401,34 @@ fn oxc_extract_export_all(
     export: &oxc_ast::ast::ExportAllDeclaration,
     out: &mut Vec<ExportedSymbol>,
 ) {
-    // `export * as ns from '...'` is emitted as a `namespace_export` node in
-    // tree-sitter, where the `*` is NOT a direct child of `export_statement`,
-    // so tree-sitter's `extract_export` (`has_star` + `export_clause` checks)
-    // matches NOTHING and drops it. Replicate that: only bare `export * from`
-    // (no `as ns`) becomes a `StarReExport`.
-    if export.exported.is_some() {
+    let line = oxc_line_at(lines, export.span.start as usize);
+    let reexport_source = export.source.value.as_str().to_string();
+
+    // `export * as ns from '...'` (namespace re-export) creates a single named
+    // export `ns`, not a wildcard. Only bare `export * from '...'` (no `as ns`)
+    // re-exports every name and becomes a `StarReExport`.
+    if let Some(exported) = export.exported.as_ref() {
+        if let Some(name) = exported.identifier_name() {
+            out.push(ExportedSymbol {
+                name: name.as_str().to_string(),
+                kind: ExportKind::ReExport,
+                line,
+                reexport_source: Some(reexport_source),
+                params: Vec::new(),
+                is_type_only: false,
+                local_name: None,
+            });
+        }
+        // A string-literal namespace name (`export * as "ns"`) has no
+        // `identifier_name`; it is unreachable as an identifier import, so it
+        // contributes no enumerable named export.
         return;
     }
     out.push(ExportedSymbol {
         name: "*".into(),
         kind: ExportKind::StarReExport,
-        line: oxc_line_at(lines, export.span.start as usize),
-        reexport_source: Some(export.source.value.as_str().to_string()),
+        line,
+        reexport_source: Some(reexport_source),
         params: Vec::new(),
         is_type_only: false,
         local_name: None,
