@@ -33,6 +33,11 @@
 //! variants) and compiler-mandated on `#[non_exhaustive]` enums like
 //! `ErrorKind`. Project-defined enums still require explicit arms.
 //!
+//! Variant-accessor exemption: a `_ => None` arm paired with at least one
+//! `Variant(v) => Some(v)` arm is the idiomatic "extract this variant, else
+//! nothing" accessor. A new variant should still return `None` here, so
+//! exhaustive listing adds noise without safety — the wildcard is not flagged.
+//!
 //! Test contexts are exempted for consistency with `rust-no-unwrap`:
 //! test code routinely writes compact wildcard matches for setup
 //! without losing much safety if a variant is later added.
