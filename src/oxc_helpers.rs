@@ -182,6 +182,25 @@ pub fn source_contains(source: &str, needle: &str) -> bool {
     })
 }
 
+/// True if the file imports anything from `react`, `react-dom`, or a `react/*`
+/// subpath (ESM `import ... from` or CommonJS `require(...)`). React-specific
+/// rules (render-reference equality, hook semantics) use this to skip files that
+/// use JSX with a non-React framework (remix/ui, SolidJS, Preact, Vue JSX).
+/// Memoized per file via [`source_contains`].
+#[must_use]
+pub fn imports_react(source: &str) -> bool {
+    source_contains(source, "from \"react\"")
+        || source_contains(source, "from 'react'")
+        || source_contains(source, "from \"react-dom")
+        || source_contains(source, "from 'react-dom")
+        || source_contains(source, "from \"react/")
+        || source_contains(source, "from 'react/")
+        || source_contains(source, "require(\"react\")")
+        || source_contains(source, "require('react')")
+        || source_contains(source, "require(\"react-dom")
+        || source_contains(source, "require('react-dom")
+}
+
 /// Pick the right `SourceType` based on file extension. Defaults to `tsx()`
 /// for unknown extensions — it's the most permissive (accepts JSX +
 /// TypeScript syntax).
