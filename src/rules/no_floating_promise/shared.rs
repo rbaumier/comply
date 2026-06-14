@@ -14,7 +14,12 @@
 /// `delete` is likewise excluded: `Map`/`Set`/`WeakMap`/`WeakSet` `.delete(...)`
 /// all return `boolean`, and no idiomatic JS/TS API exposes a Promise-returning
 /// `.delete(...)` method.
+///
+/// `update` is likewise excluded: it is dominated by synchronous mutation APIs —
+/// Angular's `WritableSignal.update(fn)` returns `void`, Immutable.js `.update()`
+/// returns the collection, and store/Map-like `.update(...)` are synchronous. The
+/// name alone is too weak an async signal to flag.
 pub(super) const ASYNC_LOOKING_METHODS: &[&str] = &[
-    "save", "load", "fetch", "query", "publish", "insert", "update", "connect", "dispatch",
-    "sync", "flush", "commit", "rollback", "run", "exec", "execute", "process", "handle",
+    "save", "load", "fetch", "query", "publish", "insert", "connect", "dispatch", "sync",
+    "flush", "commit", "rollback", "run", "exec", "execute", "process", "handle",
 ];
