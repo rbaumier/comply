@@ -19,8 +19,11 @@ impl OxcCheck for Check {
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
-        // (module source, is_type_import) -> first line number
-        let mut seen: HashMap<(&str, bool), usize> = HashMap::new();
+        // (module source, is_type_import) -> (first line number, end byte
+        // offset of the most recent same-module import). The byte offset lets
+        // us inspect the text gap between consecutive same-module imports to
+        // honor doc-tooling region markers (see `gap_has_docregion_marker`).
+        let mut seen: HashMap<(&str, bool), (usize, usize)> = HashMap::new();
 
         for node in semantic.nodes().iter() {
             let AstKind::ImportDeclaration(import) = node.kind() else {
@@ -34,7 +37,16 @@ impl OxcCheck for Check {
             let key = (module, is_type);
             let (line, column) =
                 byte_offset_to_line_col(ctx.source, import.span.start as usize);
-            if let Some(&first_line) = seen.get(&key) {
+            if let Some(&(first_line, prev_end)) = seen.get(&key) {
+                // Angular doc examples split same-module imports across
+                // `// #docregion` / `// #enddocregion` markers so each named
+                // region is a self-contained snippet. When such a marker sits
+                // between the previous and current same-module import, the
+                // split is intentional doc structure, not a duplicate.
+                if gap_has_docregion_marker(ctx.source, prev_end, import.span.start as usize) {
+                    seen.insert(key, (first_line, import.span.end as usize));
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),
                     line,
@@ -48,11 +60,22 @@ impl OxcCheck for Check {
                     span: None,
                 });
             } else {
-                seen.insert(key, line);
+                seen.insert(key, (line, import.span.end as usize));
             }
         }
         diagnostics
     }
+}
+
+/// True when the source text between two consecutive same-module imports
+/// (byte range `prev_end..cur_start`) contains an Angular doc-tooling region
+/// marker. The gap between top-level `import` statements holds only whitespace
+/// and comments, so a plain substring match cannot be fooled by a string
+/// literal. Matching `#docregion` also covers `#enddocregion`.
+fn gap_has_docregion_marker(source: &str, prev_end: usize, cur_start: usize) -> bool {
+    source
+        .get(prev_end..cur_start)
+        .is_some_and(|gap| gap.contains("#docregion"))
 }
 
 #[cfg(test)]
@@ -101,6 +124,38 @@ import { foo } from './a';
 import { bar } from './b';
 ";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_same_module_imports_split_by_docregion_issue_2296() {
+        // Regression for rbaumier/comply#2296 — Angular doc examples split
+        // same-module imports across `// #docregion` / `// #enddocregion`
+        // markers so each region extracts as a self-contained snippet. The
+        // intentional split must not be flagged as a duplicate.
+        let src = "\
+import {JsonPipe, NgClass} from '@angular/common';
+// #docregion import-ng-if
+import {NgIf} from '@angular/common';
+// #enddocregion import-ng-if
+// #docregion import-ng-for
+import {NgFor} from '@angular/common';
+// #enddocregion import-ng-for
+";
+        let diags = run(src);
+        assert!(diags.is_empty(), "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_same_module_imports_without_docregion_issue_2296() {
+        // Negative space — two same-module imports with no docregion marker
+        // between them are still ordinary duplicates and stay flagged.
+        let src = "\
+import { foo } from '@angular/common';
+import { bar } from '@angular/common';
+";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "unexpected: {diags:?}");
+        assert_eq!(diags[0].line, 2);
     }
 
     #[test]
