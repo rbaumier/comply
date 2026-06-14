@@ -203,6 +203,37 @@ pub fn imports_react(source: &str) -> bool {
         || source_contains(source, "require('react-dom")
 }
 
+/// True when `path`'s nearest `package.json` declares a non-React JSX framework
+/// (`vue` or `solid-js`) and does **not** declare `react`. React-only render-churn
+/// rules (`react-jsx-no-bind`, `jsx-no-new-function-as-prop`) use this to skip
+/// files that belong to a Vue or Solid package: those frameworks have their own
+/// reactivity (Vue) or fine-grained reactivity (Solid), so a fresh inline
+/// function reference per render is not a re-render hazard there.
+///
+/// Resolution is per-file via [`ProjectCtx::nearest_package_json`], so in a
+/// monorepo a `vue`-declaring `examples/vue/package.json` is detected even when
+/// the repo root declares `react`. A file that declares both `react` and a
+/// non-React framework keeps firing (ambiguous — default to the React intent); a
+/// file whose nearest manifest resolves nothing keeps firing (default-on).
+///
+/// [`ProjectCtx::nearest_package_json`]: crate::project::ProjectCtx::nearest_package_json
+#[must_use]
+pub fn in_non_react_framework_package(
+    project: &crate::project::ProjectCtx,
+    path: &Path,
+) -> bool {
+    let Some(pkg) = project.nearest_package_json(path) else {
+        return false;
+    };
+    let declares = |name: &str| {
+        pkg.dependencies.contains_key(name)
+            || pkg.dev_dependencies.contains_key(name)
+            || pkg.peer_dependencies.contains_key(name)
+            || pkg.optional_dependencies.contains_key(name)
+    };
+    (declares("vue") || declares("solid-js")) && !declares("react")
+}
+
 /// True if the file is a Web Worker script, where `self` resolves to the
 /// `DedicatedWorkerGlobalScope` (the canonical worker global, equivalent to
 /// `globalThis` in that realm) rather than `window`. Detected by the
