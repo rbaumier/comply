@@ -7,7 +7,16 @@ files = ["entry.client.tsx", "entry.server.tsx", "root.tsx"]
 root_files = ["remix.config"]
 
 [magic_exports]
-names = [
+names = []
+
+# Remix (React Router v7) reserves a fixed set of named exports that its
+# file-system router consumes by exact name at run time, never through a static
+# import. These are scoped to route modules (under `app/routes/`) so a
+# same-named export (`loader`, `meta`, `default`, …) in an ordinary module stays
+# flaggable. `root.tsx` and `entry.{client,server}.tsx` already bail out
+# whole-file via `entry_points.files`.
+[route_magic_exports]
+route_files = [
     "default", "loader", "action", "meta", "links", "headers",
     "ErrorBoundary", "CatchBoundary", "handle", "shouldRevalidate",
     "clientLoader", "clientAction", "HydrateFallback",

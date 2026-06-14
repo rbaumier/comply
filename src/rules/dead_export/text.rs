@@ -1208,6 +1208,83 @@ mod tests {
     }
 
     #[test]
+    fn ignores_remix_route_magic_exports_issue_1547() {
+        // Regression for #1547 (triggerdotdev/trigger.dev) — Remix's reserved
+        // route exports (`loader`, `action`, `meta`) in an `app/routes/*` module
+        // are consumed by the file-system router by exact name, never through a
+        // static import. With entrypoint globs configured (as trigger.dev has),
+        // the framework-entry-dir bailout is skipped, so these would look dead.
+        let pkg = r#"{ "dependencies": { "@remix-run/node": "2.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "app/routes/api.v1.projects.$projectRef.ts",
+                "export async function loader() { return {}; }\n\
+                 export async function action() { return {}; }\n\
+                 export function meta() { return [{ title: \"x\" }]; }\n",
+            ),
+            ("app/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg_and_entrypoints(
+            pkg,
+            vec!["app/util.ts".to_string()],
+            &files,
+            "app/routes/api.v1.projects.$projectRef.ts",
+        );
+        assert!(
+            diags.is_empty(),
+            "Remix route magic exports are framework-consumed: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_ordinary_export_in_remix_route_file_issue_1547() {
+        // Negative-space guard for #1547 — the exemption is scoped to Remix's
+        // reserved names. An ordinary `helper` export in the same route module,
+        // with no importer, is genuinely dead and must still be flagged.
+        let pkg = r#"{ "dependencies": { "@remix-run/node": "2.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "app/routes/dashboard.tsx",
+                "export async function loader() { return {}; }\n\
+                 export const helper = () => 1;\n",
+            ),
+            ("app/util.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg_and_entrypoints(
+            pkg,
+            vec!["app/util.ts".to_string()],
+            &files,
+            "app/routes/dashboard.tsx",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "an ordinary unused export in a route module must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("helper"));
+    }
+
+    #[test]
+    fn still_flags_loader_export_in_non_route_remix_module_issue_1547() {
+        // Negative-space guard for #1547 — `loader`/`meta`/`action` are common
+        // generic names. A `loader` export from an ordinary module (not under
+        // `app/routes/`), with no importer, is genuinely dead and must still
+        // fire: the Remix exemption is scoped to route modules, not project-wide.
+        let pkg = r#"{ "dependencies": { "@remix-run/node": "2.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            ("app/lib/data.ts", "export function loader() { return {}; }\n"),
+            ("app/lib/other.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "app/lib/data.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a `loader` export in a non-route module must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("loader"));
+    }
+
+    #[test]
     fn ignores_gatsby_node_api_exports_issue_1700() {
         // Regression for #1700 — `gatsby-node.js` named exports (`createPages`,
         // `onCreateNode`) are Gatsby Node APIs invoked by the build, not imported.
