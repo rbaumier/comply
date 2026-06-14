@@ -620,6 +620,85 @@ fn min_major_version(range: &str) -> Option<u32> {
 /// accepts as the setup function). None of them has a static importer.
 const VITEST_GLOBAL_SETUP_EXPORTS: &[&str] = &["setup", "teardown", "default"];
 
+/// Exports a Cloudflare Worker module-format entry point exposes to the Workers
+/// runtime: the `default` export object plus the lifecycle handlers the runtime
+/// invokes on it (`fetch`, `scheduled`, `queue`, `email`, `tail`). The runtime
+/// resolves the entry module from `wrangler.toml` and calls these by name, so
+/// none of them ever has a static importer.
+pub const CLOUDFLARE_WORKER_HANDLER_EXPORTS: &[&str] =
+    &["default", "fetch", "scheduled", "queue", "email", "tail"];
+
+/// Lifecycle-handler names whose presence on the `export default` object
+/// identifies a Cloudflare Worker entry module. `fetch` is the canonical HTTP
+/// handler; the others cover the cron, queue-consumer, email, and tail-worker
+/// triggers. One match is enough to recognize the shape.
+const CLOUDFLARE_WORKER_HANDLER_TRIGGERS: &[&str] =
+    &["fetch", "scheduled", "queue", "email", "tail"];
+
+/// True when `source` is a Cloudflare Worker module-format entry point: it has an
+/// `export default` whose value is an object literal carrying at least one of the
+/// Workers lifecycle handlers (`fetch`/`scheduled`/`queue`/`email`/`tail`). The
+/// Cloudflare runtime consumes this default export by resolving the entry from
+/// `wrangler.toml` and calling the handlers by name, never through a static
+/// import, so dead-export must not flag it.
+///
+/// Keying on the export *shape* rather than a filename is deliberate: worker
+/// entry files are not conventionally named, and the default-object-with-`fetch`
+/// shape is specific enough to identify the convention on its own — an ordinary
+/// `export default {}` with no lifecycle handler stays subject to the rule.
+#[must_use]
+pub fn is_cloudflare_worker_entry_source(source: &str, lang: crate::files::Language) -> bool {
+    let Some(grammar) = crate::parsing::ts_language_for(lang) else {
+        return false;
+    };
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&grammar).is_err() {
+        return false;
+    }
+    let Some(tree) = parser.parse(source, None) else {
+        return false;
+    };
+    let bytes = source.as_bytes();
+    let mut found = false;
+    crate::rules::walker::walk_tree(&tree, |node| {
+        if found || node.kind() != "export_statement" {
+            return;
+        }
+        let is_default = node.children(&mut node.walk()).any(|c| c.kind() == "default");
+        if !is_default {
+            return;
+        }
+        let Some(object) = node
+            .named_children(&mut node.walk())
+            .find(|c| c.kind() == "object")
+        else {
+            return;
+        };
+        if object_has_cloudflare_worker_handler(object, bytes) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// True when `object` (a tree-sitter `object` node) declares a property named
+/// after a Cloudflare Worker lifecycle handler, in any of the forms an entry
+/// module uses: a method (`async fetch(req, env) {}`), a `key: value` pair
+/// (`fetch: handler`), or a shorthand (`{ fetch }`).
+fn object_has_cloudflare_worker_handler(object: tree_sitter::Node, source: &[u8]) -> bool {
+    object.named_children(&mut object.walk()).any(|member| {
+        let name = match member.kind() {
+            "method_definition" | "pair" => member
+                .named_children(&mut member.walk())
+                .find(|c| c.kind() == "property_identifier")
+                .and_then(|n| n.utf8_text(source).ok()),
+            "shorthand_property_identifier" => member.utf8_text(source).ok(),
+            _ => None,
+        };
+        name.is_some_and(|n| CLOUDFLARE_WORKER_HANDLER_TRIGGERS.contains(&n))
+    })
+}
+
 /// True when the `globalSetup` option in a Vitest/Vite config's `raw` text
 /// references `target`. `config_dir` is the directory holding the config, used
 /// to resolve the relative specifiers the option carries.
