@@ -5,7 +5,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::project::Framework;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    Declaration, ExportDefaultDeclarationKind, ExportNamedDeclaration, Statement,
+    Declaration, Expression, ExportDefaultDeclarationKind, ExportNamedDeclaration, Statement,
 };
 use std::sync::Arc;
 
@@ -13,6 +13,43 @@ pub struct Check;
 
 fn is_pascal_case(name: &str) -> bool {
     name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+}
+
+/// True when `init` is a pure constant-data value: a literal primitive, a plain
+/// object/array literal, or a template/unary/binary expression over those (after
+/// peeling `as const`, `satisfies`, `as T`, `!`, and parentheses).
+///
+/// React Fast Refresh is only disrupted by exports that *could* be a component
+/// or hook — i.e. function- or class-shaped values the HMR runtime might treat
+/// as a component boundary. A string, number, boolean, plain object, or array is
+/// inert data: it cannot be a component, so co-locating it with a component
+/// export breaks nothing. Anything else (arrow/function/class expressions, calls
+/// that may return a component or HOC) is left subject to the rule.
+fn is_constant_data_initializer(init: &Expression) -> bool {
+    match init {
+        Expression::StringLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::BigIntLiteral(_)
+        | Expression::NullLiteral(_)
+        | Expression::RegExpLiteral(_)
+        | Expression::TemplateLiteral(_)
+        | Expression::ObjectExpression(_)
+        | Expression::ArrayExpression(_) => true,
+        // `-1`, `!flag`, `24 * 60`, `'a' + 'b'` — constant when their operands are.
+        Expression::UnaryExpression(u) => is_constant_data_initializer(&u.argument),
+        Expression::BinaryExpression(b) => {
+            is_constant_data_initializer(&b.left) && is_constant_data_initializer(&b.right)
+        }
+        // Wrappers that don't change the runtime value: `x as const`, `x satisfies
+        // T`, `x as T`, `<T>x`, `x!`, `(x)`.
+        Expression::TSAsExpression(e) => is_constant_data_initializer(&e.expression),
+        Expression::TSSatisfiesExpression(e) => is_constant_data_initializer(&e.expression),
+        Expression::TSTypeAssertion(e) => is_constant_data_initializer(&e.expression),
+        Expression::TSNonNullExpression(e) => is_constant_data_initializer(&e.expression),
+        Expression::ParenthesizedExpression(p) => is_constant_data_initializer(&p.expression),
+        _ => false,
+    }
 }
 
 /// Next.js Pages Router data-fetching exports. The framework requires these to
@@ -208,6 +245,12 @@ fn extract_named_export_name(decl: &ExportNamedDeclaration, source: &str) -> Opt
         Declaration::VariableDeclaration(var_decl) => {
             var_decl.declarations.first().and_then(|d| {
                 if let oxc_ast::ast::BindingPattern::BindingIdentifier(ident) = &d.id {
+                    // A constant-data export (string/number/object/array literal,
+                    // etc.) cannot be a component or hook and so cannot disrupt
+                    // React Fast Refresh — exempt it from the rule.
+                    if d.init.as_ref().is_some_and(is_constant_data_initializer) {
+                        return None;
+                    }
                     Some(ident.name.to_string())
                 } else {
                     None
@@ -731,6 +774,90 @@ export default function Page() { return <div /> }
             "app/page.tsx",
             source,
         );
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("helper"));
+    }
+
+    // Regression tests for issue #2229 — plain module-level constant exports
+    // (string/number/boolean literals, plain objects, arrays, `as const`) are
+    // inert data: they cannot be a component or hook, so co-locating them with a
+    // component export breaks nothing under React Fast Refresh. Only
+    // function/component/hook-shaped exports are relevant to Fast Refresh.
+
+    #[test]
+    fn no_fp_constant_string_exports_with_component() {
+        // app/routes/_auth/verify.tsx (issue #2229): route-specific query-param
+        // name constants co-located with the form component.
+        let source = r#"
+import React from 'react';
+export const codeQueryParam = 'code';
+export const targetQueryParam = 'target';
+export function VerifyForm() { return <div />; }
+"#;
+        assert!(run(source).is_empty(), "expected no diagnostics, got {:?}", run(source));
+    }
+
+    #[test]
+    fn no_fp_constant_object_and_array_exports_with_component() {
+        // app/utils/connections.tsx (issue #2229): lookup maps and `as const`
+        // arrays co-located with a component.
+        let source = r#"
+import React from 'react';
+export const providerLabels = { github: 'GitHub', google: 'Google' };
+export const providerNames = ['github'] as const;
+export function ProviderConnectionForm() { return <div />; }
+"#;
+        assert!(run(source).is_empty(), "expected no diagnostics, got {:?}", run(source));
+    }
+
+    #[test]
+    fn no_fp_constant_default_string_export_with_component() {
+        // app/routes/_auth/onboarding/index.tsx (issue #2229): a session-key
+        // string constant co-located with the default page component.
+        let source = r#"
+import React from 'react';
+export const onboardingEmailSessionKey = 'onboardingEmail';
+export default function Onboarding() { return <div />; }
+"#;
+        assert!(run(source).is_empty(), "expected no diagnostics, got {:?}", run(source));
+    }
+
+    #[test]
+    fn no_fp_numeric_and_boolean_constant_exports_with_component() {
+        let source = r#"
+import React from 'react';
+export const maxItems = 24 * 60;
+export const isEnabled = true;
+export const label = `prefix-${SOME}`;
+export function Widget() { return <div />; }
+"#;
+        assert!(run(source).is_empty(), "expected no diagnostics, got {:?}", run(source));
+    }
+
+    #[test]
+    fn flags_arrow_function_export_with_component() {
+        // Negative-space guard: a function-shaped const export (a potential hook
+        // or component) is the real Fast Refresh risk and is still flagged.
+        let source = r#"
+import React from 'react';
+export const useThing = () => { return 1; };
+export function Widget() { return <div />; }
+"#;
+        let d = run(source);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("useThing"));
+    }
+
+    #[test]
+    fn flags_call_expression_export_with_component() {
+        // Negative-space guard: a call may return a component or HOC, so it stays
+        // subject to the rule — only inert data values are exempt.
+        let source = r#"
+import React from 'react';
+export const helper = makeHelper();
+export function Widget() { return <div />; }
+"#;
+        let d = run(source);
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("helper"));
     }
