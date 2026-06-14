@@ -69,7 +69,8 @@ pub const SLOT_ES_MODULE: usize = 1;
 pub const SLOT_TESTING_MSW: usize = 2;
 pub const SLOT_PLAYWRIGHT: usize = 3;
 pub const SLOT_DELETED_AT_COLUMN: usize = 4;
-const FILE_BOOL_SLOTS: usize = 5;
+pub const SLOT_TYPE_ONLY_FILE: usize = 5;
+const FILE_BOOL_SLOTS: usize = 6;
 
 /// Per-file memo backing [`file_typeof_guards`]: the set of global identifiers
 /// (`window`/`self`/`global`) the current file feature-detects with a `typeof`
