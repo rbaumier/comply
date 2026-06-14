@@ -58,6 +58,14 @@ impl OxcCheck for Check {
             {
                 continue;
             }
+            // React Router v7 code-generates a per-route type module under a
+            // `+types/` directory (emitted to `.react-router/types/`, resolved via
+            // tsconfig `rootDirs`). The file never lives in the source tree, so an
+            // import of `./+types/<route>.ts` is expected to be unresolved at lint
+            // time.
+            if crate::rules::path_utils::is_react_router_types_specifier(&imp.specifier) {
+                continue;
+            }
             // A relative import resolving into a Prisma `generator { output = … }`
             // directory (a custom output dir such as `./client`, carrying no
             // build-output path segment) targets the generated client, created by
@@ -932,6 +940,74 @@ mod directory_import_tests {
         );
         assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
         assert!(diags[0].message.contains("../utils"));
+    }
+}
+
+#[cfg(test)]
+mod react_router_types_tests {
+    use super::Check;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Build a temp tree with only the importer (the `+types/` target is never
+    /// written — it is code-generated at dev/build time and absent in a clean
+    /// checkout), run the rule, and return its diagnostics.
+    fn run_in_dir(importer_rel: &str, source: &str) -> Vec<crate::diagnostic::Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
+        let importer = dir.path().join(importer_rel);
+        fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        fs::write(&importer, source).unwrap();
+        let canon = fs::canonicalize(&importer).unwrap();
+        let source_file = SourceFile {
+            path: canon.clone(),
+            language: Language::from_path(&canon).unwrap(),
+        };
+        let project = ProjectCtx::load(&[&source_file], &Config::default());
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    #[test]
+    fn no_fp_for_react_router_v7_types_import_issue_2221() {
+        // epic-stack reproducer: a route file imports its code-generated `Route`
+        // type from `./+types/<route>.ts`. React Router v7 emits these under
+        // `.react-router/types/` at dev/build time, resolved via tsconfig
+        // `rootDirs`; the file is absent from the source tree, so the import must
+        // not be flagged.
+        let diags = run_in_dir(
+            "app/routes/_auth/login.tsx",
+            "import type { Route } from './+types/login.ts';",
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+
+        // The root route, imported through the same convention.
+        let diags = run_in_dir(
+            "app/root.tsx",
+            "import type { Route } from './+types/root.ts';",
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_genuinely_missing_import_without_types_segment_issue_2221() {
+        // Negative space: an ordinary missing relative import (no `+types`
+        // segment) is a real broken path and must still fire — the exemption
+        // stays scoped to the literal `+types` directory.
+        let diags = run_in_dir(
+            "app/root.tsx",
+            "import { x } from './does-not-exist.ts';",
+        );
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("does-not-exist.ts"));
     }
 }
 

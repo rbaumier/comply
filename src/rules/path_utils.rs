@@ -507,6 +507,18 @@ pub fn is_build_output_specifier(spec: &str) -> bool {
     })
 }
 
+/// True for an import specifier traversing into a `+types` directory (e.g.
+/// `./+types/root.ts`, `../+types/login.ts`). React Router v7 code-generates a
+/// per-route type module here, emitted to `.react-router/types/` at dev/build
+/// time and resolved through the tsconfig `rootDirs` remap; the file never lives
+/// in the source tree. The leading `+` is distinctive — ordinary source
+/// directories don't start with `+` — so a literal `+types` segment match won't
+/// over-reach. Segment match over the `/`-split specifier (so a hypothetical
+/// `./my+types` is NOT a match).
+pub fn is_react_router_types_specifier(spec: &str) -> bool {
+    spec.split('/').any(|seg| seg == "+types")
+}
+
 /// Collapse `.`/`..` segments in `path` without touching the filesystem. `..`
 /// pops the last normal segment; a `..` with nothing left to pop is preserved so
 /// a path escaping its base stays observable. Used to compare a resolved import
@@ -1157,6 +1169,18 @@ mod aux_path_tests {
         assert!(!is_build_output_specifier("./lib/util.js"));
         assert!(!is_build_output_specifier("./generated-things"));
         assert!(!is_build_output_specifier("./does-not-exist"));
+    }
+
+    #[test]
+    fn react_router_types_specifier_segments() {
+        // Issue #2221: React Router v7's code-generated `+types/` directory.
+        assert!(is_react_router_types_specifier("./+types/root.ts"));
+        assert!(is_react_router_types_specifier("./+types/login.ts"));
+        assert!(is_react_router_types_specifier("../+types/about"));
+        // Segment (not substring) match — a `+` elsewhere must not match.
+        assert!(!is_react_router_types_specifier("./my+types/x.ts"));
+        assert!(!is_react_router_types_specifier("./types/root.ts"));
+        assert!(!is_react_router_types_specifier("./does-not-exist.ts"));
     }
 
     #[test]
