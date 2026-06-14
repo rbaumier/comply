@@ -93,8 +93,9 @@
 //!   `render()` is still flagged;
 //! - Angular standalone application entry points by content shape: a module that
 //!   imports `bootstrapApplication` from `"@angular/platform-browser"` and calls
-//!   it at the top level (`bootstrapApplication(AppComponent, appConfig)`).
-//!   `bootstrapApplication` is Angular's standalone app bootstrap, so
+//!   it at the top level (`bootstrapApplication(AppComponent, appConfig)`,
+//!   optionally chained with `.catch(...)`/`.then(...)` to surface bootstrap
+//!   failures). `bootstrapApplication` is Angular's standalone app bootstrap, so
 //!   bootstrapping the app at module level is the entry file's purpose and the
 //!   top-level call is an intentional side effect. The `@angular/platform-browser`
 //!   import is required so an ordinary module that happens to call a local
@@ -861,15 +862,41 @@ fn has_angular_bootstrap_import(program: &Program) -> bool {
     })
 }
 
+/// True when `call` is a bare `bootstrapApplication(...)` call, or a
+/// `.catch(...)`/`.then(...)` continuation chained onto one. The canonical
+/// Angular standalone entry attaches error handling to the bootstrap promise —
+/// `bootstrapApplication(App, appConfig).catch(err => console.error(err))` — so
+/// the top-level expression is a `.catch` member call whose object is the
+/// `bootstrapApplication` call. Unwrapping the trailing continuation recovers the
+/// underlying call, matching both the bare and chained forms.
+fn call_chain_starts_with_bootstrap_application(
+    call: &oxc_ast::ast::CallExpression,
+) -> bool {
+    if matches!(&call.callee, Expression::Identifier(id) if id.name == "bootstrapApplication") {
+        return true;
+    }
+    let Expression::StaticMemberExpression(m) = &call.callee else {
+        return false;
+    };
+    if !matches!(m.property.name.as_str(), "catch" | "then") {
+        return false;
+    }
+    let Expression::CallExpression(inner) = &m.object else {
+        return false;
+    };
+    call_chain_starts_with_bootstrap_application(inner)
+}
+
 /// True when the program is an Angular standalone application entry point
 /// (`main.ts`): it imports `bootstrapApplication` from
 /// `"@angular/platform-browser"` and calls it at the top level
-/// (`bootstrapApplication(AppComponent, appConfig)`). `bootstrapApplication` is
-/// Angular's standalone app bootstrap (analogous to React's
-/// `createRoot().render()` / Vue's `createApp().mount()`): bootstrapping the app
-/// at module level is the entry file's whole purpose, and entry points are never
-/// imported by other modules, so the top-level call is an intentional side
-/// effect, not tree-shakeable library code. The `@angular/platform-browser`
+/// (`bootstrapApplication(AppComponent, appConfig)`, optionally chained with
+/// `.catch(...)`/`.then(...)` to surface bootstrap failures).
+/// `bootstrapApplication` is Angular's standalone app bootstrap (analogous to
+/// React's `createRoot().render()` / Vue's `createApp().mount()`): bootstrapping
+/// the app at module level is the entry file's whole purpose, and entry points
+/// are never imported by other modules, so the top-level call is an intentional
+/// side effect, not tree-shakeable library code. The `@angular/platform-browser`
 /// import is required so an ordinary module that happens to call a local
 /// `bootstrapApplication()` is still flagged.
 fn is_angular_entry_shape(program: &Program) -> bool {
@@ -879,7 +906,7 @@ fn is_angular_entry_shape(program: &Program) -> bool {
     program.body.iter().any(|stmt| {
         let Statement::ExpressionStatement(es) = stmt else { return false };
         let Expression::CallExpression(call) = &es.expression else { return false };
-        matches!(&call.callee, Expression::Identifier(id) if id.name == "bootstrapApplication")
+        call_chain_starts_with_bootstrap_application(call)
     })
 }
 
@@ -2818,6 +2845,61 @@ mod tests {
             diags.len(),
             1,
             "local bootstrapApplication() without @angular/platform-browser import must still be flagged, got {diags:?}"
+        );
+    }
+
+    // Regression for #2184: the canonical Angular standalone entry chains
+    // `.catch(...)` onto the bootstrap promise to surface bootstrap failures —
+    // `bootstrapApplication(App, appConfig).catch(err => console.error(err))`.
+    // The top-level expression is a `.catch()` member call whose object is the
+    // `bootstrapApplication` call, so the entry detection must unwrap the
+    // continuation just like the `listen().catch()` server-entry shape.
+    #[test]
+    fn allows_angular_bootstrap_application_catch_chained_entry_point() {
+        let src = "\
+            import { bootstrapApplication } from '@angular/platform-browser';\n\
+            import { appConfig } from './app/app.config';\n\
+            import { App } from './app/app';\n\
+            bootstrapApplication(App, appConfig).catch((err) => console.error(err));\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "examples/angular/filters/src/main.ts");
+        assert!(
+            diags.is_empty(),
+            "bootstrapApplication().catch() is an Angular entry point startup pattern, got {diags:?}"
+        );
+    }
+
+    // Regression for #2184: the canonical React 18 entry mounts the app with
+    // `ReactDOM.createRoot(rootElement).render(<App />)` where `ReactDOM` is the
+    // default import from `react-dom/client`. This is the issue's exact example
+    // and must not be flagged.
+    #[test]
+    fn allows_react_dom_default_import_create_root_entry_point() {
+        let src = "\
+            import ReactDOM from 'react-dom/client';\n\
+            import App from './App';\n\
+            const rootElement = document.getElementById('root');\n\
+            ReactDOM.createRoot(rootElement).render(<App />);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "examples/react/column-dnd/src/main.tsx");
+        assert!(
+            diags.is_empty(),
+            "ReactDOM.createRoot().render() entry point is exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_bootstrap_application_catch_chain_without_angular_import() {
+        // Negative space: the `.catch()` continuation only grants the exemption
+        // when `bootstrapApplication` is imported from `@angular/platform-browser`.
+        // A local `bootstrapApplication(...).catch(...)` is an ordinary top-level
+        // side effect and is still flagged.
+        let src = "\
+            import { bootstrapApplication } from './bootstrap';\n\
+            bootstrapApplication(config).catch((err) => console.error(err));\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "local bootstrapApplication().catch() without @angular/platform-browser import must still flag, got {diags:?}"
         );
     }
 
