@@ -1256,6 +1256,41 @@ describe("x", () => { it("works", () => {}); });
     }
 
     #[test]
+    fn allows_module_scope_static_global_property_capture() {
+        let src = r#"
+import { afterEach, it } from 'vitest'
+
+const consoleError = console.error
+
+afterEach(() => {
+  console.error = consoleError
+})
+
+it('temporarily overrides console.error', () => {})
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "basic.test.tsx");
+        assert!(
+            d.is_empty(),
+            "module-scope capture of a static global property read (const orig = console.error) must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_const_computed_member_access_initializer() {
+        let src = r#"
+const x = obj[key]
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "computed member access (obj[key]) must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
     fn flags_non_tester_package_call_at_top_level() {
         let src = r#"
 import setup from 'some-pkg'
