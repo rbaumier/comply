@@ -2,9 +2,9 @@
 //!
 //! Walks `binary_expression` nodes whose operator is `===` / `!==` /
 //! `==` / `!=` and flags the comparison if either operand is an
-//! identifier or member-access whose normalized last name ends with a
-//! sensitive word (`password`, `token`, `signature`, `hash`, …).
-//! String literals and call expressions are ignored.
+//! identifier or member-access whose normalized last name is sensitive
+//! (see `is_sensitive_identifier`). String literals and call expressions
+//! are ignored.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -42,7 +42,7 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     }
     // Skip confirmation-pattern comparisons: both operands are sensitive
     // identifiers and one contains a confirmation prefix/suffix (e.g.
-    // `password === confirmPassword`, `token === retypeToken`).
+    // `password === confirmPassword`).
     if left_hit && right_hit
         && left.kind() == "identifier"
         && right.kind() == "identifier"
@@ -133,8 +133,16 @@ mod tests {
     }
 
     #[test]
-    fn flags_user_token_comparison() {
-        assert_eq!(run_on("if (userToken == expectedToken) {}").len(), 1);
+    fn flags_auth_token_comparison() {
+        assert_eq!(run_on("if (authToken == expectedAuthToken) {}").len(), 1);
+    }
+
+    /// `token` / `signature` without a secret indicator are non-security
+    /// role words (lexer tokens, LSP signatures), not credentials.
+    #[test]
+    fn allows_comment_token_and_lsp_signature() {
+        assert!(run_on("if (commentToken !== currentCommentToken) {}").is_empty());
+        assert!(run_on("if (oldLspSig !== lspSignature) {}").is_empty());
     }
 
     #[test]

@@ -1,7 +1,8 @@
 //! no-timing-attack — flag direct `==` / `!=` / `===` / `!==` comparison
 //! of a value whose identifier name ends with a sensitive word
-//! (`password`, `passwd`, `secret`, `token`, `apikey`, `auth`, `hash`,
-//! `digest`, `signature`, `hmac`, `credential`, `otp`, `pin`).
+//! (`password`, `passwd`, `secret`, `apikey`, `auth`, `hash`, `digest`,
+//! `hmac`, `credential`, `otp`, `pin`), or with an ambiguous role word
+//! (`token`, `signature`) when the name also carries a secret indicator.
 //!
 //! ## Why
 //!
@@ -21,13 +22,13 @@
 //! - Any other kind (string literal, call expression, block, index
 //!   expression, scoped path, …) is ignored.
 //!
-//! If either inspected name has a sensitive suffix after normalization
-//! (lowercase + strip `_` so snake_case / camelCase / UPPER_SNAKE
-//! collapse to the same form), the comparison is flagged. The previous
-//! line-based scanner searched for sensitive words anywhere on the
-//! line, which false-positived on string literals containing node-kind
-//! names (e.g. `"index_signature"`) and on identifiers whose suffix is
-//! neutral (`token_type`, `hash_map_size`, `auth_flow`).
+//! A name is sensitive when, after normalization (lowercase + strip `_`
+//! so snake_case / camelCase / UPPER_SNAKE collapse to the same form),
+//! it ends with a secret word. `token` and `signature` also name
+//! non-security concepts (lexer / comment-syntax tokens, LSP
+//! function-call signatures), so a name ending with one of those is only
+//! sensitive when it also contains a secret indicator (`auth`, `access`,
+//! `api`, …): `auth_token` is flagged, `comment_token` is not.
 //!
 //! ## Known gap
 //!
