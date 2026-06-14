@@ -38,6 +38,21 @@ fn is_pascal_case(name: &str) -> bool {
     true
 }
 
+/// Component names sometimes carry an underscore-delimited namespace/visibility
+/// marker after a PascalCase base — the shadcn-ui re-export convention
+/// (`Input_Shadcn_`, `SelectItem_Shadcn_`) disambiguates a wrapped component
+/// from an identically-named local one. The base is PascalCase; the underscore
+/// suffix is the discriminator. Accept the whole name when the segment before
+/// the first `_` is genuine mixed-case PascalCase. Requiring a lowercase letter
+/// in the base keeps `SCREAMING_SNAKE_CASE` names (`MY_COMPONENT`) flagged while
+/// admitting real component bases (`Input`, `SelectItem`).
+fn has_pascal_case_base_with_underscore_suffix(name: &str) -> bool {
+    let Some((base, _suffix)) = name.split_once('_') else {
+        return false;
+    };
+    is_pascal_case(base) && base.chars().any(|c| c.is_ascii_lowercase())
+}
+
 fn is_intrinsic(name: &str) -> bool {
     let first = name.chars().next().unwrap_or('a');
     first.is_ascii_lowercase()
@@ -117,7 +132,7 @@ impl OxcCheck for Check {
             _ => return,
         };
 
-        if !is_pascal_case(&tag) {
+        if !is_pascal_case(&tag) && !has_pascal_case_base_with_underscore_suffix(&tag) {
             let (line, column) =
                 byte_offset_to_line_col(ctx.source, opening.name.span().start as usize);
 
@@ -262,5 +277,46 @@ mod tests {
     #[test]
     fn flags_camel_root_member_expression() {
         assert_eq!(run("const x = <myObj.Bar>x</myObj.Bar>;").len(), 1);
+    }
+
+    // Issue #1352: the shadcn-ui re-export convention appends an
+    // underscore-delimited namespace marker (`_Shadcn_`) to a PascalCase base to
+    // disambiguate a wrapped component from an identically-named local one. The
+    // base is PascalCase, so these must not be flagged.
+    #[test]
+    fn allows_underscore_suffix_self_closing() {
+        assert!(run("const x = <Input_Shadcn_ className=\"y\" />;").is_empty());
+    }
+
+    #[test]
+    fn allows_underscore_suffix_with_children() {
+        assert!(run("const x = <SelectItem_Shadcn_>x</SelectItem_Shadcn_>;").is_empty());
+    }
+
+    // Negative space: a name whose base (before the first `_`) is not valid
+    // PascalCase is not a namespace-marker convention and still fires. A leading
+    // underscore leaves an empty base (`_DataTable`), so the relaxation does not
+    // apply. (`is_intrinsic` already exempts lowercase-first names like
+    // `foo_Bar`/`myComponent` as host elements before this point — the helper's
+    // lowercase-base rejection is covered directly in the unit test below.)
+    #[test]
+    fn flags_leading_underscore_empty_base() {
+        assert_eq!(run("const x = <_DataTable />;").len(), 1);
+    }
+
+    #[test]
+    fn has_pascal_case_base_with_underscore_suffix_decisions() {
+        // PascalCase base + underscore marker → accepted.
+        assert!(has_pascal_case_base_with_underscore_suffix("Input_Shadcn_"));
+        assert!(has_pascal_case_base_with_underscore_suffix("SelectItem_Shadcn_"));
+        assert!(has_pascal_case_base_with_underscore_suffix("Alert_Shadcn_"));
+        // Lowercase base → rejected.
+        assert!(!has_pascal_case_base_with_underscore_suffix("foo_Bar"));
+        // SCREAMING_SNAKE_CASE base (no lowercase) → rejected.
+        assert!(!has_pascal_case_base_with_underscore_suffix("MY_COMPONENT"));
+        // Leading underscore (empty base) → rejected.
+        assert!(!has_pascal_case_base_with_underscore_suffix("_DataTable"));
+        // No underscore → not this convention (handled by `is_pascal_case`).
+        assert!(!has_pascal_case_base_with_underscore_suffix("Input"));
     }
 }
