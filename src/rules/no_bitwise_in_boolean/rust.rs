@@ -1,10 +1,15 @@
 //! no-bitwise-in-boolean Rust backend.
 //!
-//! Flag bitwise ops (`&`, `|`, `^`) in boolean contexts (if/while conditions).
+//! Flag bitwise ops (`&`, `|`) in boolean contexts (if/while conditions). `^` is
+//! not flagged: it is the only way to express logical XOR on `bool` in Rust.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const BITWISE_OPS: &[&str] = &["&", "|", "^"];
+// `^` is excluded: `bool ^ bool` is the only way to express logical XOR in Rust
+// (there is no `^^`), and a `^` reached in a boolean condition is always that
+// idiom — `int ^ int` yields an int, which is not a valid condition. `&`/`|`
+// keep their short-circuit analogues (`&&`/`||`), so the typo warning applies.
+const BITWISE_OPS: &[&str] = &["&", "|"];
 
 const COMPARISON_OPS: &[&str] = &["==", "!=", "<", ">", "<=", ">="];
 
@@ -101,5 +106,36 @@ mod tests {
     #[test]
     fn flags_bare_bitwise_without_comparison() {
         assert_eq!(run_on("fn f(a: bool, b: bool) { if a | b {} }").len(), 1);
+    }
+
+    #[test]
+    fn allows_xor_as_logical_in_if() {
+        // `bool ^ bool` is the only way to express logical XOR in Rust; `^`
+        // consumed directly as a boolean condition is always intentional.
+        assert!(run_on("fn f(a: bool, b: bool) { if a ^ b {} }").is_empty());
+        assert!(
+            run_on("fn f(flag: bool) { let x: Result<(), ()> = Ok(()); if x.is_ok() ^ flag {} }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_xor_under_logical_operators() {
+        // `^` nested under `&&`/`||`/`!` is still consumed as a boolean.
+        assert!(run_on("fn f(a: bool, b: bool, c: bool) { if (a ^ b) && c {} }").is_empty());
+        assert!(run_on("fn f(a: bool, b: bool) { if !(a ^ b) {} }").is_empty());
+    }
+
+    #[test]
+    fn still_flags_xor_feeding_comparison() {
+        // `(a ^ b) == 0` is integer XOR feeding a comparison: already out of
+        // scope for this boolean-typo rule.
+        assert!(run_on("fn f(a: u32, b: u32) { if a ^ b == 0 {} }").is_empty());
+    }
+
+    #[test]
+    fn still_flags_and_or_nested_under_xor() {
+        // `^` is exempt, but a `&`/`|` typo nested inside it must still fire.
+        assert_eq!(run_on("fn f(a: bool, b: bool, c: bool) { if (a & b) ^ c {} }").len(), 1);
     }
 }
