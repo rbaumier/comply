@@ -152,6 +152,24 @@ fn has_throwing_query_call(text: &str) -> bool {
     false
 }
 
+/// True when a Cypress assertion call — a `.should(...)`/`.and(...)` member
+/// call rooted at the global `cy` identifier — lies within `body_span`. Cypress
+/// tests assert by chaining `should`/`and` onto a `cy` command rather than
+/// calling `expect(...)`, so a body containing one is not assertion-less.
+fn body_contains_cypress_assertion(
+    semantic: &oxc_semantic::Semantic<'_>,
+    body_span: oxc_span::Span,
+) -> bool {
+    semantic.nodes().iter().any(|n| {
+        let AstKind::CallExpression(call) = n.kind() else {
+            return false;
+        };
+        call.span.start >= body_span.start
+            && call.span.end <= body_span.end
+            && crate::rules::test_assertion_helpers::is_cypress_assertion_call(call)
+    })
+}
+
 /// True when a TS `satisfies` expression lies within `body_span`.
 fn body_contains_satisfies(
     semantic: &oxc_semantic::Semantic<'_>,
@@ -250,6 +268,13 @@ impl OxcCheck for Check {
         // expected. AST-based so the word "satisfies" inside a string
         // literal doesn't count.
         if body_contains_satisfies(semantic, body_span) {
+            return;
+        }
+        // Cypress tests assert by chaining `.should(...)`/`.and(...)` onto a `cy`
+        // command (`cy.get(x).should(...)`) instead of calling `expect(...)`.
+        // AST-based and rooted at the `cy` identifier so a bare `.should(` on an
+        // arbitrary object is not mistaken for an assertion.
+        if body_contains_cypress_assertion(semantic, body_span) {
             return;
         }
         // A `throw` in the body is a valid assertion mechanism — timing/
@@ -841,5 +866,54 @@ mod tests {
             });
         "#;
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #1380 — Cypress assertions chain `.should(...)` onto a `cy`
+    // command instead of calling `expect(...)`. A test ending in such a chain
+    // does assert and must not be flagged.
+    #[test]
+    fn allows_cypress_should_contain_assertion() {
+        let src = r#"it("underlines text", () => { cy.get("button:first").click(); cy.get(".tiptap").find("u").should("contain", "Example Text"); });"#;
+        assert!(
+            run_at(src, "/tmp/index.spec.js").is_empty(),
+            "{:?}",
+            run_at(src, "/tmp/index.spec.js")
+        );
+    }
+
+    #[test]
+    fn allows_cypress_should_not_exist_assertion() {
+        let src = r#"it("toggles", () => { cy.get(".tiptap").find("u").should("not.exist"); });"#;
+        assert!(
+            run_at(src, "/tmp/index.spec.js").is_empty(),
+            "{:?}",
+            run_at(src, "/tmp/index.spec.js")
+        );
+    }
+
+    // Negative-space guard for #1380: a Cypress test with only commands and no
+    // `.should()`/`.and()` assertion still passes silently — keep flagging it.
+    #[test]
+    fn still_flags_cypress_test_without_should() {
+        let src = r#"it("clicks", () => { cy.get("button").click(); });"#;
+        assert_eq!(
+            run_at(src, "/tmp/index.spec.js").len(),
+            1,
+            "{:?}",
+            run_at(src, "/tmp/index.spec.js")
+        );
+    }
+
+    // A bare `.should(...)` on a non-`cy` receiver is not a Cypress assertion —
+    // the chain root must be the `cy` identifier.
+    #[test]
+    fn still_flags_should_on_non_cy_receiver() {
+        let src = r#"it("x", () => { wrapper.find("u").should("contain", "x"); });"#;
+        assert_eq!(
+            run_at(src, "/tmp/index.spec.js").len(),
+            1,
+            "{:?}",
+            run_at(src, "/tmp/index.spec.js")
+        );
     }
 }
