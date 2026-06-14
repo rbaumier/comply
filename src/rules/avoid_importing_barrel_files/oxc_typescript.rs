@@ -25,6 +25,11 @@
 //! Skipped when the importing file lives under a `routes/` directory: that's
 //! the TanStack Router file-system convention where `index.tsx` is the leaf
 //! route module for a segment, not a re-export hub.
+//!
+//! Skipped in test files: the rule's concern is production tree-shaking and
+//! startup cost, which test files never ship into. Importing a component's
+//! barrel from its `__tests__/` directory is the idiomatic way to exercise the
+//! public API surface, not a barrel-file anti-pattern.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -73,6 +78,16 @@ fn target_is_genuine_barrel(exports: &[ExportedSymbol]) -> bool {
 fn is_tanstack_route_file(path: &Path) -> bool {
     path.components()
         .any(|c| c.as_os_str() == "routes")
+}
+
+/// Test files import a component's barrel to exercise its public API surface —
+/// the idiomatic pattern in any component library test suite. The barrel cost
+/// the rule guards against is a production-bundle concern; test files never
+/// ship. Delegates to the shared path classifier so the exemption stays in sync
+/// with every other rule's test-directory handling (`__tests__/`, `test/`,
+/// `tests/`, `e2e/`, `.test.`/`.spec.` markers).
+fn is_test_file(path: &Path) -> bool {
+    crate::rules::file_ctx::scan_path(path).in_test_dir
 }
 
 /// `true` when the import has zero runtime impact: either a top-level
@@ -131,6 +146,9 @@ impl OxcCheck for Check {
             return;
         }
         if is_tanstack_route_file(ctx.path) {
+            return;
+        }
+        if is_test_file(ctx.path) {
             return;
         }
 
@@ -288,6 +306,33 @@ mod tests {
         // Negative space: a genuine value import from a barrel is still flagged.
         let d = run_on("import { X } from '.';");
         assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("barrel file"));
+    }
+
+    #[test]
+    fn allows_parent_barrel_import_from_test_file() {
+        // Regression for #1537: a component's `__tests__/` file imports the
+        // parent directory barrel (`..`) to exercise the public API surface —
+        // the idiomatic component-library test pattern, not a barrel anti-pattern.
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "import Tabs from '..';",
+            "components/tabs/__tests__/index.test.tsx",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn still_flags_barrel_import_from_production_source() {
+        // Negative space for #1537: a production source file importing from a
+        // barrel must still fire — the exemption is keyed on the test-directory
+        // convention, not relaxed for every file.
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "import Tabs from '..';",
+            "components/tabs/index.tsx",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got {d:?}");
         assert!(d[0].message.contains("barrel file"));
     }
 
