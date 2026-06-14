@@ -6,9 +6,16 @@
 //! `false` literal: the operation ran but its failure reason is
 //! collapsed into a bare bool the caller can't act on.
 //!
-//! Three shapes are exempted because the bool is legitimate:
+//! Several shapes are exempted because the bool is legitimate:
 //! - Pure predicates (`is_empty`, `has_x`, `contains`): a bool is the
 //!   right answer to a question about state.
+//! - Atomic fetch/bitwise ops (`fetch_and`, `fetch_or`, `fetch_xor`,
+//!   `fetch_nand`, …): the bool is the *previous* atomic value, not a
+//!   success flag — these always succeed.
+//! - Functions with a leading doc comment phrased as a boolean
+//!   question/answer ("Returns `true` if …", "Checks whether …"): the
+//!   doc marks a predicate even when the name carries an action prefix
+//!   (e.g. seqlock `validate_read`).
 //! - Trait-impl methods (`impl Trait for Type`): the signature is fixed
 //!   by the trait contract, the implementor can't return `Result`.
 //! - Functions whose body tail expression *computes* the bool from a
@@ -91,6 +98,20 @@ impl AstCheck for Check {
         if looks_like_predicate(name) {
             return;
         }
+        // Atomic fetch/bitwise ops (`fetch_and`, `fetch_or`, `fetch_xor`,
+        // `fetch_nand`, …) return the *previous* atomic value, not a
+        // success flag — they always succeed. Mirrors
+        // `std::sync::atomic::AtomicBool::fetch_*`.
+        if is_atomic_fetch_op(name) {
+            return;
+        }
+        // A leading doc comment phrased as a boolean question/answer
+        // ("Returns `true` if …", "Checks whether …") marks the function
+        // as a predicate even when its name carries an action prefix
+        // (e.g. seqlock `validate_read`).
+        if has_predicate_doc_comment(node, source_bytes) {
+            return;
+        }
         let Some(ret_type) = node.child_by_field_name("return_type") else {
             return;
         };
@@ -166,6 +187,57 @@ fn looks_like_action(name: &str) -> bool {
 fn looks_like_predicate(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     EXEMPT_PREFIXES.iter().any(|p| lower.starts_with(p))
+}
+
+/// True if `name` is an atomic fetch/bitwise op whose `bool` return is the
+/// prior atomic value (`fetch`, `fetch_and`, `fetch_or`, `fetch_xor`,
+/// `fetch_nand`, …). These mirror `std::sync::atomic::AtomicBool::fetch_*`
+/// and always succeed, so the `bool` payload is correct.
+fn is_atomic_fetch_op(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == "fetch" || lower.starts_with("fetch_")
+}
+
+/// True if a doc comment immediately preceding the function reads as a
+/// boolean question/answer — i.e. the function is a predicate, not a
+/// fallible action, even though its name carries an action prefix.
+///
+/// In tree-sitter-rust, doc comments (`///`, `/** */`) are `line_comment`
+/// / `block_comment` siblings preceding the item, possibly interleaved
+/// with `attribute_item`s. The match is on the leading phrase only, so an
+/// action that merely mentions "validate" in prose still fires.
+fn has_predicate_doc_comment(func: tree_sitter::Node, source: &[u8]) -> bool {
+    const PREDICATE_DOC_LEADS: &[&str] = &[
+        "returns `true`",
+        "returns true",
+        "returns whether",
+        "checks whether",
+        "returns `false`",
+        "returns false",
+    ];
+    let mut sibling = func.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "attribute_item" => {}
+            "line_comment" | "block_comment" => {
+                if let Ok(text) = s.utf8_text(source) {
+                    let normalized = text
+                        .trim_start_matches(['/', '*', '!'])
+                        .trim()
+                        .to_ascii_lowercase();
+                    if PREDICATE_DOC_LEADS
+                        .iter()
+                        .any(|lead| normalized.starts_with(lead))
+                    {
+                        return true;
+                    }
+                }
+            }
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
 }
 
 #[cfg(test)]
@@ -284,6 +356,98 @@ mod tests {
     #[test]
     fn flags_genuine_action_with_literal_branches() {
         let src = "fn save_user(u: &User) -> bool { if ok { true } else { false } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // --- #1479: atomic `fetch_*` ops return the previous value, not success ---
+
+    #[test]
+    fn allows_atomic_fetch_and() {
+        // crossbeam-utils AtomicCell<bool>::fetch_and — the bool is the
+        // previous atomic value (the body tail is a macro invocation, so
+        // `returns_computed_bool` cannot see through it).
+        let src = "\
+            pub fn fetch_and(&self, val: bool) -> bool {\n\
+                atomic! {\n\
+                    bool, _a,\n\
+                    { a.fetch_and(val, Ordering::AcqRel) },\n\
+                    { let old = *value; *value &= val; old }\n\
+                }\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_atomic_fetch_or() {
+        // Literal tail so the exemption comes from the name class, not
+        // from `returns_computed_bool`.
+        let src = "pub fn fetch_or(&self, val: bool) -> bool { side_effect(); true }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_atomic_fetch_xor() {
+        let src = "pub fn fetch_xor(&self, val: bool) -> bool { side_effect(); true }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_atomic_fetch_nand() {
+        let src = "pub fn fetch_nand(&self, val: bool) -> bool { side_effect(); true }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_fetch_returning_prior_bool() {
+        let src = "pub fn fetch(&self, val: bool) -> bool { side_effect(); true }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // --- #1479: predicate functions whose doc says "Returns `true`" ---
+
+    #[test]
+    fn allows_validate_read_with_returns_true_doc() {
+        // crossbeam-utils SeqLock::validate_read — a pure predicate
+        // ("Returns `true` if the current stamp is equal to `stamp`.").
+        let src = "\
+            /// Returns `true` if the current stamp is equal to `stamp`.\n\
+            pub(crate) fn validate_read(&self, stamp: (usize, usize)) -> bool {\n\
+                some_side_effect();\n\
+                true\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_check_prefix_with_returns_whether_doc() {
+        let src = "\
+            /// Returns whether the cache is consistent.\n\
+            fn check_consistency(&self) -> bool { do_thing(); true }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_validate_prefix_with_checks_whether_doc() {
+        let src = "\
+            /// Checks whether the signature is well-formed.\n\
+            fn validate_signature(&self) -> bool { do_thing(); true }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // --- #1479: negative space — `validate_`/`check_` without a predicate
+    // doc comment is still a genuine fallible action and must fire ---
+
+    #[test]
+    fn flags_validate_action_without_predicate_doc() {
+        let src = "fn validate_config(&self) -> bool { do_thing(); true }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_validate_action_with_unrelated_doc() {
+        let src = "\
+            /// Validates the config and persists the result.\n\
+            fn validate_config(&self) -> bool { do_thing(); true }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
