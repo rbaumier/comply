@@ -412,6 +412,48 @@ import { fixImportsPlugin } from 'esbuild-fix-imports-plugin'
     }
 
     #[test]
+    fn allows_dev_dep_in_component_demo_dir() {
+        // Issue #1563: ant-design's `components/tabs/demo/style-class.tsx` is a
+        // documentation example that imports `antd-style` and `@dnd-kit/core`
+        // from devDependencies to showcase integration with other libraries.
+        // Files under a `demo/` directory are documentation examples that never
+        // ship in the published package, so the import is correct.
+        let pkg = r#"{
+            "devDependencies": {
+                "antd-style": "^3",
+                "@dnd-kit/core": "^6"
+            }
+        }"#;
+        let src = r#"
+import { css } from 'antd-style';
+import { DndContext } from '@dnd-kit/core';
+"#;
+        let d = run_with_pkg_at_path(pkg, "components/tabs/demo/style-class.tsx", src);
+        assert!(d.is_empty(), "demo/ file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_demos_dir() {
+        // Issue #1563: the plural `demos/` convention is exempt for the same
+        // reason as `demo/`.
+        let pkg = r#"{"devDependencies":{"antd-style":"^3"}}"#;
+        let src = r#"import { css } from 'antd-style';"#;
+        let d = run_with_pkg_at_path(pkg, "packages/foo/demos/basic.tsx", src);
+        assert!(d.is_empty(), "demos/ file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_outside_demo_dirs() {
+        // Guard against over-relaxing: a path where "demo" is a substring of
+        // another segment (not its own directory) must still flag.
+        let pkg = r#"{"devDependencies":{"antd-style":"^3"}}"#;
+        let src = r#"import { css } from 'antd-style';"#;
+        let d = run_with_pkg_at_path(pkg, "src/demonstration/index.ts", src);
+        assert_eq!(d.len(), 1, "non-demo dir should still flag: {d:?}");
+        assert!(d[0].message.contains("antd-style"));
+    }
+
+    #[test]
     fn allows_dev_dep_in_co_located_test_ts_file() {
         // Issue #1390: date-fns `src/endOfWeek/test.ts` is a co-located test
         // file whose whole name is `test.ts` (no `.test.` infix). It imports
