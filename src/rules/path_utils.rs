@@ -678,6 +678,18 @@ pub fn is_docusaurus_plugin_entry(path: &Path) -> bool {
     grandparent.file_name().and_then(|n| n.to_str()) == Some("plugins")
 }
 
+/// True when `path` is an Astro file-system-routed module: a file under a
+/// `pages/` or `content/` directory. Astro's router consumes a route module's
+/// reserved exports (`default`, the `GET`/`POST`/… HTTP method handlers,
+/// `getStaticPaths`, `prerender`, `partial`) by exact name, never through a
+/// static import, so they have no importer but are live. The `pages/`/`content/`
+/// ancestor scopes the exemption to route modules, keeping a same-named export
+/// in an ordinary module flaggable. Detection-gated by the caller.
+pub fn is_astro_routed_page(path: &Path) -> bool {
+    path.components()
+        .any(|c| matches!(c.as_os_str().to_str(), Some("pages" | "content")))
+}
+
 /// True when `path` is a SvelteKit route file (`+page.svelte`,
 /// `+page.server.ts`, `+server.ts`, …) located under a `routes/` directory in
 /// a project where SvelteKit is detected. SvelteKit's file-system router

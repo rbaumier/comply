@@ -1894,11 +1894,13 @@ impl ProjectCtx {
         let is_remix_route = crate::rules::path_utils::is_remix_route_file(path);
         let is_rr_root = crate::rules::path_utils::is_react_router_root_module(path);
         let is_rr_config = crate::rules::path_utils::is_react_router_routes_config(path);
+        let is_astro_page = crate::rules::path_utils::is_astro_routed_page(path);
         if !is_sveltekit_route
             && !is_param_matcher
             && !is_remix_route
             && !is_rr_root
             && !is_rr_config
+            && !is_astro_page
         {
             return;
         }
@@ -1916,6 +1918,7 @@ impl ProjectCtx {
             let route_file_match = match fw.name.as_str() {
                 "svelte" => is_sveltekit_route,
                 "remix" => is_remix_route || is_rr_root,
+                "astro" => is_astro_page,
                 _ => false,
             };
             if route_file_match {
