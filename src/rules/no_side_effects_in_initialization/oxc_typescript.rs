@@ -56,6 +56,21 @@
 //!   `app.provide` registrations are intentional side effects. Both `createApp`
 //!   and `.mount` are required, so an ordinary module that merely calls a local
 //!   `createApp()` helper or some unrelated `.mount()` is still flagged;
+//! - Preact application entry points by content shape: a module that imports the
+//!   `render` binding from `"preact"` and calls it at the top level
+//!   (`render(<App />, document.getElementById('app')!)`). `render` is Preact's
+//!   app bootstrap, so mounting the app at module level is the entry file's
+//!   purpose and the top-level call is an intentional side effect. The `preact`
+//!   import is required so an ordinary module that happens to call a local
+//!   `render()` is still flagged;
+//! - Angular standalone application entry points by content shape: a module that
+//!   imports `bootstrapApplication` from `"@angular/platform-browser"` and calls
+//!   it at the top level (`bootstrapApplication(AppComponent, appConfig)`).
+//!   `bootstrapApplication` is Angular's standalone app bootstrap, so
+//!   bootstrapping the app at module level is the entry file's purpose and the
+//!   top-level call is an intentional side effect. The `@angular/platform-browser`
+//!   import is required so an ordinary module that happens to call a local
+//!   `bootstrapApplication()` is still flagged;
 //! - Gulp task-registration files by content shape: a module that imports
 //!   `gulp` and registers tasks at the top level (`task(...)`, `gulp.task(...)`,
 //!   `series(...)`, `parallel(...)`, …). The registrations are the file's whole
@@ -544,6 +559,89 @@ fn is_vue_entry_shape(program: &Program) -> bool {
     program.body.iter().any(|stmt| {
         let Statement::ExpressionStatement(es) = stmt else { return false };
         chain_contains_mount_call(&es.expression)
+    })
+}
+
+/// True when the program imports the `render` binding from `"preact"` at the top
+/// level (`import { render } from "preact"`). The imported symbol name must be
+/// `render`; an alias (`import { render as r }`) still counts.
+fn has_preact_render_import(program: &Program) -> bool {
+    program.body.iter().any(|stmt| {
+        let Statement::ImportDeclaration(import) = stmt else { return false };
+        if import.source.value.as_str() != "preact" {
+            return false;
+        }
+        let Some(specifiers) = &import.specifiers else { return false };
+        specifiers.iter().any(|spec| {
+            matches!(
+                spec,
+                ImportDeclarationSpecifier::ImportSpecifier(named)
+                    if named.imported.name() == "render"
+            )
+        })
+    })
+}
+
+/// True when the program is a Preact application entry point: it imports the
+/// `render` binding from `"preact"` and calls it at the top level
+/// (`render(<App />, document.getElementById('app')!)`). `render` is Preact's app
+/// bootstrap (analogous to React's `createRoot().render()` / Vue's
+/// `createApp().mount()`): mounting the app at module level is the entry file's
+/// whole purpose, and entry points are never imported by other modules, so the
+/// top-level call is an intentional side effect, not tree-shakeable library code.
+/// The `preact` import is required so an ordinary module that happens to call a
+/// local `render()` is still flagged.
+fn is_preact_entry_shape(program: &Program) -> bool {
+    if !has_preact_render_import(program) {
+        return false;
+    }
+    program.body.iter().any(|stmt| {
+        let Statement::ExpressionStatement(es) = stmt else { return false };
+        let Expression::CallExpression(call) = &es.expression else { return false };
+        matches!(&call.callee, Expression::Identifier(id) if id.name == "render")
+    })
+}
+
+/// True when the program imports the `bootstrapApplication` binding from
+/// `"@angular/platform-browser"` at the top level
+/// (`import { bootstrapApplication } from "@angular/platform-browser"`). The
+/// imported symbol name must be `bootstrapApplication`; an alias still counts.
+fn has_angular_bootstrap_import(program: &Program) -> bool {
+    program.body.iter().any(|stmt| {
+        let Statement::ImportDeclaration(import) = stmt else { return false };
+        if import.source.value.as_str() != "@angular/platform-browser" {
+            return false;
+        }
+        let Some(specifiers) = &import.specifiers else { return false };
+        specifiers.iter().any(|spec| {
+            matches!(
+                spec,
+                ImportDeclarationSpecifier::ImportSpecifier(named)
+                    if named.imported.name() == "bootstrapApplication"
+            )
+        })
+    })
+}
+
+/// True when the program is an Angular standalone application entry point
+/// (`main.ts`): it imports `bootstrapApplication` from
+/// `"@angular/platform-browser"` and calls it at the top level
+/// (`bootstrapApplication(AppComponent, appConfig)`). `bootstrapApplication` is
+/// Angular's standalone app bootstrap (analogous to React's
+/// `createRoot().render()` / Vue's `createApp().mount()`): bootstrapping the app
+/// at module level is the entry file's whole purpose, and entry points are never
+/// imported by other modules, so the top-level call is an intentional side
+/// effect, not tree-shakeable library code. The `@angular/platform-browser`
+/// import is required so an ordinary module that happens to call a local
+/// `bootstrapApplication()` is still flagged.
+fn is_angular_entry_shape(program: &Program) -> bool {
+    if !has_angular_bootstrap_import(program) {
+        return false;
+    }
+    program.body.iter().any(|stmt| {
+        let Statement::ExpressionStatement(es) = stmt else { return false };
+        let Expression::CallExpression(call) = &es.expression else { return false };
+        matches!(&call.callee, Expression::Identifier(id) if id.name == "bootstrapApplication")
     })
 }
 
@@ -1334,6 +1432,8 @@ impl OxcCheck for Check {
             || is_react_entry_shape(program)
             || is_solid_entry_shape(program)
             || is_vue_entry_shape(program)
+            || is_preact_entry_shape(program)
+            || is_angular_entry_shape(program)
             || is_gulp_task_file(program)
             || is_storybook_addon_file(program)
             || is_data_generation_script(program)
@@ -2069,6 +2169,103 @@ mod tests {
             diags.len(),
             2,
             "top-level side effects without a createApp().mount() chain must still be flagged, got {diags:?}"
+        );
+    }
+
+    // --- (g) Preact / Angular application entry points (Closes #1714) -------
+
+    // Regression for #1714: the canonical Preact entry point mounts the app at
+    // module level with `render(<App />, root)` imported from `preact`. That is
+    // the entry file's whole purpose and it is never imported, so it must not be
+    // flagged.
+    #[test]
+    fn allows_preact_render_entry_point() {
+        let src = "\
+            import { render } from 'preact';\n\
+            import App from './App';\n\
+            render(<App />, document.getElementById('app')!);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "examples/preact/basic/src/main.tsx");
+        assert!(
+            diags.is_empty(),
+            "Preact render() entry point is exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_local_render_call_without_preact_import() {
+        // A bare top-level `render(...)` with no `preact` import is an ordinary
+        // local call; its module-level side effect still blocks tree-shaking.
+        let src = "\
+            import { render } from './template';\n\
+            render(somethingElse);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "local render() without preact import must still be flagged, got {diags:?}"
+        );
+    }
+
+    // Regression for #1714: the canonical Angular standalone entry point
+    // bootstraps the app at module level with
+    // `bootstrapApplication(AppComponent, appConfig)` imported from
+    // `@angular/platform-browser`. That is the entry file's whole purpose and it
+    // is never imported, so it must not be flagged.
+    #[test]
+    fn allows_angular_bootstrap_application_entry_point() {
+        let src = "\
+            import { bootstrapApplication } from '@angular/platform-browser';\n\
+            import { AppComponent } from './app/app.component';\n\
+            import { appConfig } from './app/app.config';\n\
+            bootstrapApplication(AppComponent, appConfig);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/main.ts");
+        assert!(
+            diags.is_empty(),
+            "Angular bootstrapApplication() entry point is exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_local_bootstrap_application_call_without_angular_import() {
+        // A bare top-level `bootstrapApplication(...)` with no
+        // `@angular/platform-browser` import is an ordinary local call; its
+        // module-level side effect still blocks tree-shaking.
+        let src = "\
+            import { bootstrapApplication } from './bootstrap';\n\
+            bootstrapApplication(config);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "local bootstrapApplication() without @angular/platform-browser import must still be flagged, got {diags:?}"
+        );
+    }
+
+    // Regression-lock for #1709: the Vue createApp().mount() exemption added by
+    // an earlier PR must keep suppressing the canonical Vue entry point.
+    #[test]
+    fn allows_vue_chained_create_app_entry_point_regression_lock() {
+        let src = "\
+            import { createApp } from 'vue';\n\
+            import App from './App.vue';\n\
+            import './index.css';\n\
+            createApp(App).mount('#app');\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "examples/vue/filters/src/main.ts");
+        assert!(
+            diags.is_empty(),
+            "Vue createApp().mount() entry point must remain exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_unrelated_top_level_side_effect_call() {
+        // A genuine top-level side-effect call unrelated to any framework
+        // bootstrap must still be flagged, regardless of file name.
+        let diags = crate::rules::test_helpers::run_rule(&Check, "registerGlobals();", "src/main.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "an unrelated top-level side-effect call must still be flagged, got {diags:?}"
         );
     }
 
