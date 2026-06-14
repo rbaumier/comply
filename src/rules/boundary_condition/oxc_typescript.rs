@@ -355,13 +355,21 @@ fn has_nullish_or_logical_fallback(
     false
 }
 
-/// Returns true when an ancestor `if` condition proves this access is in-bounds.
-/// Recognized guards:
-///   1. any `.length` check in the condition (covers both first and last reads);
+/// Returns true when an ancestor `if` or ternary condition proves this access is
+/// in-bounds. Recognized guards:
+///   1. any `.length` check in an enclosing `if` condition (covers first and last
+///      reads);
 ///   2. for a first-element read (`is_first`), a truthy `arr[0]` / `arr?.[0]`
 ///      check on the same array (`obj_text`) — the truthiness equivalent of
 ///      `if (arr.length)`. This also exempts the guard condition's own `[0]`
 ///      access, which sits inside its enclosing `if.test`.
+///   3. a `<obj_text>.length` check in the condition of a ternary
+///      (`cond ? <access> : ...`), but only when the access is in the truthy
+///      branch (`consequent`) — that branch runs only when `cond` held. The
+///      check is scoped to `obj_text` because an unrelated `.length` mention in
+///      the condition would not bound this array. `Array.isArray(obj_text)`
+///      alone is NOT a guard: it proves array-ness, not non-emptiness, and the
+///      empty array still yields `undefined` at index 0.
 fn has_length_guard_ancestor(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -370,6 +378,7 @@ fn has_length_guard_ancestor(
     source: &str,
 ) -> bool {
     let nodes = semantic.nodes();
+    let node_span = node.kind().span();
     let mut current_id = node.id();
     loop {
         let parent_id = nodes.parent_id(current_id);
@@ -377,14 +386,29 @@ fn has_length_guard_ancestor(
             return false;
         }
         let parent = nodes.get_node(parent_id);
-        if let AstKind::IfStatement(if_stmt) = parent.kind() {
-            let cond_text = &source[if_stmt.test.span().start as usize..if_stmt.test.span().end as usize];
-            if cond_text.contains(".length") {
-                return true;
+        match parent.kind() {
+            AstKind::IfStatement(if_stmt) => {
+                let cond_text = &source
+                    [if_stmt.test.span().start as usize..if_stmt.test.span().end as usize];
+                if cond_text.contains(".length") {
+                    return true;
+                }
+                if is_first && condition_guards_index0(&if_stmt.test, obj_text, source) {
+                    return true;
+                }
             }
-            if is_first && condition_guards_index0(&if_stmt.test, obj_text, source) {
-                return true;
+            AstKind::ConditionalExpression(cond) => {
+                let in_consequent = cond.consequent.span().start <= node_span.start
+                    && node_span.end <= cond.consequent.span().end;
+                if in_consequent {
+                    let cond_text = &source
+                        [cond.test.span().start as usize..cond.test.span().end as usize];
+                    if cond_text.contains(&format!("{obj_text}.length")) {
+                        return true;
+                    }
+                }
             }
+            _ => {}
         }
         current_id = parent_id;
     }
@@ -1505,6 +1529,43 @@ mod tests {
     fn still_flags_calls_not_under_mock_issue_2386() {
         // Negative space: `calls` not hung off `.mock` is an ordinary array.
         let src = "const x = obj.calls[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_ternary_length_guard_consequent_issue_2276() {
+        // The issue's Pattern 2: `Array.isArray(scale) && scale.length === 2`
+        // bounds the element count, so `scale[0]` / `scale[1]` in the truthy
+        // branch are in-bounds — the ternary equivalent of the `if`-condition
+        // `.length` guard.
+        let src = "function f(scale) { return Array.isArray(scale) && scale.length === 2 ? [scale[0], scale[1], 1] : scale; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_array_isarray_ternary_without_length_issue_2276() {
+        // Negative space: the issue's Pattern 1. `Array.isArray(anchor)` proves
+        // `anchor` is an array but NOT that it is non-empty — an empty array
+        // passes the guard and `anchor[0]` is still `undefined`, so the
+        // first-element read stays flagged.
+        let src = "function f(anchor) { return Array.isArray(anchor) ? anchor[0] : anchor.x; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_ternary_length_guard_on_other_array_issue_2276() {
+        // Negative space: the ternary condition bounds `other`, not `arr`, so
+        // `arr` may still be empty.
+        let src = "function f(arr, other) { return other.length === 2 ? arr[0] : null; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_ternary_length_guard_in_alternate_issue_2276() {
+        // Negative space: the `.length` guard holds only in the truthy branch.
+        // An access in the `alternate` (falsy) branch runs when the guard failed,
+        // so it stays flagged.
+        let src = "function f(arr) { return arr.length === 2 ? null : arr[0]; }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
