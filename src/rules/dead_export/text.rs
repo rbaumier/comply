@@ -362,6 +362,13 @@ impl TextCheck for Check {
             return Vec::new();
         }
 
+        // A file under a template-literal dynamic-import directory
+        // (`import(\`./locales/${lang}\`)`) is loaded by a computed path: every
+        // export is reachable at runtime, but no static import names it.
+        if index.is_under_dynamic_import_dir(&canon) {
+            return Vec::new();
+        }
+
         let magic: std::collections::HashSet<&str> =
             ctx.project.framework_magic_exports().collect();
 
@@ -742,6 +749,34 @@ mod tests {
             diags[0].message.contains("computeTax"),
             "message should name the dead export, got: {}",
             diags[0].message
+        );
+    }
+
+    #[test]
+    fn allows_exports_under_template_literal_dynamic_import_dir_issue_1789() {
+        // Regression for #1789 (chakra-ui): `steps.tsx` lives under
+        // `apps/compositions/src/`, loaded only via the template-literal dynamic
+        // import in `example.tsx`. Its exports are live, never flagged dead.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "apps/www/components/example.tsx",
+                "import dynamic from 'next/dynamic';\n\
+                 export const ExamplePreview = (props) => {\n\
+                   const { name, scope = 'examples' } = props;\n\
+                   return dynamic(() =>\n\
+                     import(`../../compositions/src/${scope}/${name}`),\n\
+                   );\n\
+                 };\n",
+            ),
+            (
+                "apps/compositions/src/ui/steps.tsx",
+                "export const StepsRoot = 1;\nexport const StepsList = 2;\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "apps/compositions/src/ui/steps.tsx");
+        assert!(
+            diags.is_empty(),
+            "exports under a dynamic-import dir are live: {diags:?}"
         );
     }
 
