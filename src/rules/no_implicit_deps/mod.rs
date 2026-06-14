@@ -106,6 +106,10 @@ const VIRTUAL_PREFIXES: &[&str] = &[
     "@site/",
     "@internal/",
     "~react-pages",
+    // `~icons/` is the virtual-module namespace injected by `unplugin-icons`
+    // (Vite/Webpack/Nuxt); each `~icons/<collection>/<name>` resolves to a
+    // generated icon component at build time, never an npm package.
+    "~icons/",
 ];
 
 /// Schemes that, despite carrying a `:`, are not virtual modules: `node:`

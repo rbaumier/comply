@@ -421,6 +421,45 @@ mod tests {
         );
     }
 
+    // Regression #1378: `unplugin-icons` exposes icon components under the
+    // `~icons/<collection>/<name>` virtual namespace (resolved by the plugin at
+    // build time, never an npm package), so these imports must not be flagged.
+    #[test]
+    fn allows_unplugin_icons_virtual_import_issue_1378() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"app"}"#).unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("lens-actions.ts");
+        let source =
+            "import IconAdd from '~icons/carbon/add';\nimport Logos from '~icons/logos/vue';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "~icons/ virtual imports must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Negative-space guard: a genuinely-unlisted bare import that merely looks
+    // similar must still fire — the `~icons/` exemption is prefix-scoped.
+    #[test]
+    fn flags_unlisted_bare_import_alongside_icons_issue_1378() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"app"}"#).unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("t.ts");
+        let source = "import x from 'some-unlisted-pkg';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "genuinely-unlisted bare import must still fire, got {diags:?}"
+        );
+    }
+
     // Regression #2042: a dep declared in a root `package.json` that has NO
     // `workspaces` field must still satisfy an import from a sub-package whose
     // nearest `package.json` neither lists the dep nor declares `workspaces`
