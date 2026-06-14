@@ -321,6 +321,24 @@ impl PackageJson {
             && !self.has_bin
             && self.workspaces.is_empty()
     }
+
+    /// True when this manifest is a private test/harness overlay rather than a
+    /// standalone package boundary: `"private": true` with no `workspaces`
+    /// field. Such a manifest (e.g. a `test/package.json` declaring only its
+    /// extra fixtures' deps) is never published and is not a workspace root; its
+    /// file set belongs to the surrounding package, whose runtime dependencies
+    /// the overlay's files may import. Dependency resolution therefore unions the
+    /// parent manifest's declared deps on top of the overlay's own (see
+    /// [`ProjectCtx::effective_package_jsons`]).
+    ///
+    /// A non-private manifest is a real, publishable package whose files do not
+    /// inherit parent deps; a private manifest *with* `workspaces` is itself a
+    /// workspace root, not an overlay — both return `false`.
+    ///
+    /// [`ProjectCtx::effective_package_jsons`]: crate::project::ProjectCtx::effective_package_jsons
+    pub fn is_private_overlay(&self) -> bool {
+        self.is_private && self.workspaces.is_empty()
+    }
 }
 
 /// Parse the lower bound (`major`, `minor`) of a single semver range alternative.
@@ -2312,6 +2330,51 @@ impl ProjectCtx {
         }
 
         fallback
+    }
+
+    /// The chain of `package.json` manifests whose declared dependencies are
+    /// available to `path`, nearest first. Normally this is just the nearest
+    /// substantive manifest. When that manifest is a private test/harness
+    /// overlay (see [`PackageJson::is_private_overlay`]) the chain continues up
+    /// to the parent package(s): the overlay's files belong to the surrounding
+    /// package and may import its runtime dependencies, which the overlay's own
+    /// thin `package.json` does not re-declare. The walk stops at the first
+    /// substantive non-overlay manifest, so a real (non-private) package or a
+    /// workspace root (`private` + `workspaces`) does not inherit parent deps.
+    ///
+    /// Dependency-membership rules (`unlisted-dependency`, `no-implicit-deps`)
+    /// consult this chain instead of only the nearest manifest, so a parent
+    /// dependency imported from a nested overlay is correctly resolved.
+    ///
+    /// [`PackageJson::is_private_overlay`]: PackageJson::is_private_overlay
+    pub fn effective_package_jsons(&self, path: &Path) -> Vec<Arc<PackageJson>> {
+        let mut chain = Vec::new();
+        let Some((mut dir, mut pkg)) = self.nearest_substantive_package_json(path) else {
+            return chain;
+        };
+        // Bounded: nested overlays are at most a couple deep. The cap mirrors
+        // the ancestor-walk bound in `no-implicit-deps`.
+        for _ in 0..8 {
+            let is_overlay = pkg.is_private_overlay();
+            chain.push(pkg);
+            if !is_overlay {
+                break;
+            }
+            // Resolve the parent package: the nearest substantive manifest above
+            // this overlay's directory.
+            let Some(parent) = dir.parent() else { break };
+            let Some((parent_dir, parent_pkg)) =
+                self.nearest_substantive_package_json(&parent.join("_"))
+            else {
+                break;
+            };
+            if parent_dir == dir {
+                break;
+            }
+            dir = parent_dir;
+            pkg = parent_pkg;
+        }
+        chain
     }
 
     /// True when `path` is the entry point its own `package.json` declares —
@@ -5150,5 +5213,79 @@ model User {
         // skips every model rather than falling back to firing on all.
         let models = collect_prisma_soft_delete_models(dir.path()).unwrap();
         assert!(models.is_empty());
+    }
+
+    /// Helper: load a `ProjectCtx` from explicit `(relative-path, contents)`
+    /// pairs under a fresh tempdir and return both, keeping the dir alive.
+    fn load_with_files(files: &[(&str, &str)]) -> (TempDir, ProjectCtx) {
+        use crate::files::Language;
+        let dir = TempDir::new().unwrap();
+        let mut sources: Vec<SourceFile> = Vec::new();
+        for (rel, body) in files {
+            let p = dir.path().join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, body).unwrap();
+            if let Some(lang) = Language::from_path(&p) {
+                sources.push(SourceFile { path: p, language: lang });
+            }
+        }
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let ctx = ProjectCtx::load(&refs, &Config::default());
+        (dir, ctx)
+    }
+
+    // Issue #2080: a private test/harness overlay (`private: true`, no
+    // `workspaces`) is not a standalone package — dependency resolution unions
+    // the surrounding package's declared deps for files under the overlay.
+    #[test]
+    fn effective_package_jsons_unions_parent_for_private_overlay() {
+        let (dir, ctx) = load_with_files(&[
+            ("packages/ls/package.json", r#"{"name":"ls","dependencies":{"vscode-languageserver-protocol":"^3"}}"#),
+            ("packages/ls/test/package.json", r#"{"name":"ls-tests","private":true,"dependencies":{"svelte":"^5"}}"#),
+            ("packages/ls/test/server.ts", "export const x = 1;"),
+        ]);
+        let importer = dir.path().join("packages/ls/test/server.ts");
+        let chain = ctx.effective_package_jsons(&importer);
+        assert!(
+            chain.iter().any(|p| p.has_dep_or_engine("vscode-languageserver-protocol")),
+            "parent dep must be unioned for a private overlay, chain={:?}",
+            chain.iter().map(|p| p.name.clone()).collect::<Vec<_>>()
+        );
+        // The overlay's own dep is still present.
+        assert!(chain.iter().any(|p| p.has_dep_or_engine("svelte")));
+    }
+
+    // Negative space for #2080: a non-private nested package is a real,
+    // standalone package — its files do NOT inherit the parent's deps.
+    #[test]
+    fn effective_package_jsons_excludes_parent_for_non_private_nested() {
+        let (dir, ctx) = load_with_files(&[
+            ("packages/ls/package.json", r#"{"name":"ls","dependencies":{"parent-only":"^1"}}"#),
+            ("packages/ls/sub/package.json", r#"{"name":"sub","dependencies":{"svelte":"^5"}}"#),
+            ("packages/ls/sub/server.ts", "export const x = 1;"),
+        ]);
+        let importer = dir.path().join("packages/ls/sub/server.ts");
+        let chain = ctx.effective_package_jsons(&importer);
+        assert!(
+            !chain.iter().any(|p| p.has_dep_or_engine("parent-only")),
+            "a non-private nested package must not inherit parent deps"
+        );
+    }
+
+    // Negative space for #2080: a private nested package that ALSO declares
+    // `workspaces` is a workspace root, not an overlay — it does not walk up.
+    #[test]
+    fn effective_package_jsons_excludes_parent_for_private_workspace_root() {
+        let (dir, ctx) = load_with_files(&[
+            ("package.json", r#"{"name":"outer","dependencies":{"parent-only":"^1"}}"#),
+            ("inner/package.json", r#"{"name":"inner","private":true,"workspaces":["pkgs/*"],"dependencies":{"svelte":"^5"}}"#),
+            ("inner/server.ts", "export const x = 1;"),
+        ]);
+        let importer = dir.path().join("inner/server.ts");
+        let chain = ctx.effective_package_jsons(&importer);
+        assert!(
+            !chain.iter().any(|p| p.has_dep_or_engine("parent-only")),
+            "a private workspace root must not inherit parent deps"
+        );
     }
 }

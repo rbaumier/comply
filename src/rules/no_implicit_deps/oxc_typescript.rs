@@ -161,7 +161,16 @@ impl OxcCheck for Check {
         // `json-schema`). The aliased name is consulted alongside `root` at
         // every dependency-resolution layer below.
         let types_root = types_package_name(root);
-        if pkg.has_dep_or_engine(root) || pkg.has_dep_or_engine(&types_root) {
+        // Consult the effective manifest chain: normally just the nearest
+        // manifest, but when that manifest is a private test/harness overlay the
+        // chain also includes the surrounding package, whose runtime deps the
+        // overlay's files may import without re-declaring them.
+        if ctx
+            .project
+            .effective_package_jsons(ctx.path)
+            .iter()
+            .any(|p| p.has_dep_or_engine(root) || p.has_dep_or_engine(&types_root))
+        {
             return;
         }
         // Node.js self-reference: a package may import from itself by its own
@@ -406,6 +415,57 @@ mod tests {
             1,
             "undeclared dep must still fire past a marker manifest, got {diags:?}"
         );
+    }
+
+    /// Build a 3-level layout (root with `workspaces`, an intermediate parent
+    /// package declaring `vscode-languageserver-protocol`, a nested package whose
+    /// manifest is `nested_manifest`) where the nested file imports
+    /// `import_spec`, then run the check. Used by the #2080 overlay tests.
+    fn run_nested_overlay_no_implicit(nested_manifest: &str, import_spec: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"astro-monorepo","private":true,"workspaces":["packages/*"]}"#,
+        )
+        .unwrap();
+        let pkg = dir.path().join("packages").join("language-server");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(
+            pkg.join("package.json"),
+            r#"{"name":"@astrojs/language-server","dependencies":{"vscode-languageserver-protocol":"^3"}}"#,
+        )
+        .unwrap();
+        let nested = pkg.join("test");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("package.json"), nested_manifest).unwrap();
+        let file = nested.join("server.ts");
+        let source = format!("import x from '{import_spec}';");
+        fs::write(&file, &source).unwrap();
+        run_oxc_in_project(&file, &source)
+    }
+
+    const PRIVATE_OVERLAY: &str =
+        r#"{"name":"language-server-tests","private":true,"dependencies":{"astro":"workspace:*","svelte":"^5"}}"#;
+
+    #[test]
+    fn allows_parent_dep_imported_from_private_overlay_issue_2080() {
+        // Regression #2080 — a `test/package.json` overlay (`private:true`, no
+        // `workspaces`) declaring only test-extras. A test file importing the
+        // parent package's declared runtime dep must not be flagged.
+        let diags = run_nested_overlay_no_implicit(PRIVATE_OVERLAY, "vscode-languageserver-protocol");
+        assert!(diags.is_empty(), "parent dep from overlay must not fire: {diags:?}");
+    }
+
+    #[test]
+    fn flags_dep_in_neither_overlay_nor_parent_issue_2080() {
+        // Negative space for #2080: a dep declared by NEITHER the overlay nor the
+        // parent still fires — the union only adds the parent's real deps.
+        // (The non-private-nested and private-workspace-root structural negatives
+        // are exercised against the central lever in `project::tests`; here every
+        // ancestor's deps are reachable via this rule's generic ancestor walk, so
+        // those cases would not distinguish overlay from non-overlay.)
+        let diags = run_nested_overlay_no_implicit(PRIVATE_OVERLAY, "totally-undeclared-pkg");
+        assert_eq!(diags.len(), 1, "undeclared dep must still fire: {diags:?}");
     }
 
     // Regression #1365: `~/` path alias (Vite/webpack `resolve.alias`) used
