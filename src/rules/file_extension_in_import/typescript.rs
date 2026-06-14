@@ -69,7 +69,16 @@ fn has_known_extension(spec: &str) -> bool {
 }
 
 fn is_directory_import(spec: &str) -> bool {
-    spec.ends_with('/') || spec.ends_with("/index")
+    spec.ends_with('/')
+        || spec.ends_with("/index")
+        // A specifier whose final segment is `.` or `..` (e.g. `../../../..`,
+        // `..`, `./sub/.`) navigates to a directory and resolves via that
+        // directory's `index.js` / package.json `main` — it is not a file
+        // missing an extension.
+        || spec == ".."
+        || spec == "."
+        || spec.ends_with("/..")
+        || spec.ends_with("/.")
 }
 
 fn is_relative(spec: &str) -> bool {
