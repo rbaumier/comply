@@ -125,6 +125,23 @@
 //!   `src/app/…`) when the `tanstack-router` framework is detected;
 //! - `startTransition(...)` calls whose callee resolves to an import from
 //!   `"react"` (React 18 top-level hydration pattern);
+//! - Node.js process signal-handler registration: a top-level
+//!   `process.on("SIG...", handler)` call (`process.on("SIGINT", …)`,
+//!   `process.on("SIGTERM", …)`). CLI entry points register these so the program
+//!   shuts down gracefully on interruption — the registration is the program's
+//!   intended setup, not a tree-shakeable side effect. The receiver must be the
+//!   bare `process` global, the method `on`, and the event a `SIG`-prefixed
+//!   string literal, so a `.on(...)` subscription on any other emitter or for a
+//!   non-signal event is still flagged;
+//! - commander.js subcommand-registration builder chains: a top-level fluent
+//!   method chain that both registers a subcommand with `.command(...)` and
+//!   attaches its handler with `.action(...)`
+//!   (`mcp.command("init").description(...).option(...).action(handler)`).
+//!   commander requires subcommands to be assembled at module scope on a
+//!   `Command` instance, so the chain is the program's intended setup observed
+//!   only through the configured command object, not a tree-shakeable side
+//!   effect. Requiring both `.command` and `.action` keeps the shape precise: an
+//!   unrelated fluent chain with only one of them is still flagged;
 //! - data-initialization `forEach`: a top-level
 //!   `localArray.forEach(item => localLookup.set(...))` whose receiver is a
 //!   module-scoped `const` and whose callback only populates another
@@ -955,6 +972,76 @@ fn is_start_transition_call(
     bindings.contains(id.name.as_str())
 }
 
+/// True when `call` registers a Node.js process signal handler at the top level:
+/// `process.on("SIG...", handler)` (`process.on("SIGINT", …)`,
+/// `process.on("SIGTERM", …)`, …). CLI entry points register these so the
+/// program can shut down gracefully on interruption — the registration is the
+/// program's intended setup, not a tree-shakeable side effect. The receiver must
+/// be the bare `process` global, the method must be `on`, and the first argument
+/// must be a string literal whose name starts with `SIG`, so a `.on(...)`
+/// subscription on any other emitter, or a non-signal event, is still flagged.
+fn is_process_signal_handler_call(call: &oxc_ast::ast::CallExpression) -> bool {
+    let Expression::StaticMemberExpression(m) = &call.callee else {
+        return false;
+    };
+    if m.property.name != "on" {
+        return false;
+    }
+    let Expression::Identifier(obj) = &m.object else {
+        return false;
+    };
+    if obj.name != "process" {
+        return false;
+    }
+    matches!(
+        call.arguments.first().and_then(Argument::as_expression),
+        Some(Expression::StringLiteral(s)) if s.value.as_str().starts_with("SIG")
+    )
+}
+
+/// True when `call` is a commander.js subcommand-registration builder chain:
+/// a fluent method chain that both registers a subcommand with `.command(...)`
+/// and attaches its handler with `.action(...)` (e.g.
+/// `mcp.command("init").description(...).option(...).action(handler)`).
+/// commander requires subcommands to be assembled at module scope on a
+/// `Command` instance, so the chain is the program's intended setup, observed
+/// only through the configured command object, not a tree-shakeable side effect.
+/// Requiring both `.command` and `.action` keeps the shape precise: an unrelated
+/// fluent chain that merely has a `.command(...)` or `.action(...)` method (but
+/// not both) is still flagged.
+fn is_commander_subcommand_chain(call: &oxc_ast::ast::CallExpression) -> bool {
+    let mut saw_command = false;
+    let mut saw_action = false;
+    let mut current: &Expression = &call.callee;
+    // Record the method of the outermost call, then walk the receiver chain
+    // recording each subsequent `.method(...)` call.
+    if let Expression::StaticMemberExpression(m) = &call.callee {
+        match m.property.name.as_str() {
+            "command" => saw_command = true,
+            "action" => saw_action = true,
+            _ => {}
+        }
+    }
+    loop {
+        match current {
+            Expression::CallExpression(inner) => {
+                if let Expression::StaticMemberExpression(m) = &inner.callee {
+                    match m.property.name.as_str() {
+                        "command" => saw_command = true,
+                        "action" => saw_action = true,
+                        _ => {}
+                    }
+                }
+                current = &inner.callee;
+            }
+            Expression::StaticMemberExpression(m) => current = &m.object,
+            Expression::ComputedMemberExpression(m) => current = &m.object,
+            _ => break,
+        }
+    }
+    saw_command && saw_action
+}
+
 /// True when `path` is a TanStack Start entry file: `app/client.{ts,tsx}`,
 /// `app/router.{ts,tsx}`, or `app/server.{ts,tsx}` (also under `src/app/`).
 /// Requires the project to have the `tanstack-router` framework detected.
@@ -1553,6 +1640,8 @@ impl OxcCheck for Check {
 
             if let Expression::CallExpression(call) = &expr_stmt.expression
                 && (is_start_transition_call(call, &start_transition_names)
+                    || is_process_signal_handler_call(call)
+                    || is_commander_subcommand_chain(call)
                     || is_data_init_foreach(call, &module_locals)
                     || is_local_const_config_call(call, &new_locals)
                     || is_export_object_assign(call, &exported_locals)
@@ -3445,6 +3534,143 @@ mod tests {
             diags.len(),
             1,
             "a nested src/scripts/ library module must still be flagged, got {diags:?}"
+        );
+    }
+
+    // --- (i) Node.js CLI entry-point setup (Closes #1631) -----------------
+
+    // Regression for #1631: a CLI entry point registers process signal handlers
+    // at module scope so the program shuts down gracefully on interruption.
+    // `process.on("SIGINT"/"SIGTERM", …)` is the program's intended setup, not a
+    // tree-shakeable side effect.
+    #[test]
+    fn allows_process_signal_handler_registration() {
+        let src = "\
+            process.on('SIGINT', () => process.exit(0));\n\
+            process.on('SIGTERM', () => process.exit(0));\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/server.ts");
+        assert!(
+            diags.is_empty(),
+            "process.on('SIG...') signal-handler registration should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_non_signal_process_on_subscription() {
+        // A `process.on(...)` for a non-signal event (`'exit'`, `'message'`, …)
+        // is not a graceful-shutdown signal handler; its top-level registration
+        // remains a side effect.
+        let diags = crate::rules::test_helpers::run_rule(
+            &Check,
+            "process.on('exit', () => flush());",
+            "src/index.ts",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "process.on('exit', …) is not a signal handler and must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_emitter_on_subscription() {
+        // A `.on('SIGINT', …)` on any other emitter is an ordinary top-level
+        // subscription; only the bare `process` global is the CLI signal-handler
+        // shape.
+        let diags = crate::rules::test_helpers::run_rule(
+            &Check,
+            "emitter.on('SIGINT', () => shutdown());",
+            "src/index.ts",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "a .on() subscription on a non-process emitter must still be flagged, got {diags:?}"
+        );
+    }
+
+    // Regression for #1631: commander.js subcommands are registered at module
+    // scope by chaining `.command(...).description(...).option(...).action(...)`
+    // on a `Command` instance. The chain is the program's intended setup
+    // observed only through the command object, not a tree-shakeable side effect.
+    #[test]
+    fn allows_commander_subcommand_chain() {
+        let src = "\
+            import { Command } from 'commander';\n\
+            export const mcp = new Command().name('mcp');\n\
+            mcp\n\
+              .command('init')\n\
+              .description('Initialize MCP configuration for your client')\n\
+              .option('--client <client>', 'MCP client')\n\
+              .action(async (opts, command) => { await runInit(opts); });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/commands/mcp.ts");
+        assert!(
+            diags.is_empty(),
+            "commander .command().action() subcommand chain should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_commander_subcommand_chain_rooted_at_program() {
+        let src = "\
+            import { program } from 'commander';\n\
+            program\n\
+              .command('build')\n\
+              .action(() => build());\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/cli.ts");
+        assert!(
+            diags.is_empty(),
+            "commander chain rooted at a Command instance should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_fluent_chain_without_action() {
+        // A fluent chain with `.command(...)` but no `.action(...)` is not the
+        // commander subcommand-registration shape; requiring both keeps the
+        // exemption precise.
+        let diags = crate::rules::test_helpers::run_rule(
+            &Check,
+            "registry.command('install').describe('x');",
+            "src/index.ts",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "a fluent chain missing .action() must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_fluent_chain_without_command() {
+        // A fluent chain with `.action(...)` but no `.command(...)` is not the
+        // commander subcommand-registration shape.
+        let diags = crate::rules::test_helpers::run_rule(
+            &Check,
+            "queue.enqueue(job).action(() => run());",
+            "src/index.ts",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "a fluent chain missing .command() must still be flagged, got {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #1631: a genuine top-level side effect (a
+    // mutating call on an imported singleton) in the same kind of CLI file is
+    // not a signal handler or a commander chain and must still fire.
+    #[test]
+    fn still_flags_genuine_side_effect_in_cli_file() {
+        let src = "\
+            import { Command } from 'commander';\n\
+            import { globalCache } from './cache';\n\
+            globalCache.warmUp();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/cli.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a genuine top-level mutating call must still be flagged, got {diags:?}"
         );
     }
 }
