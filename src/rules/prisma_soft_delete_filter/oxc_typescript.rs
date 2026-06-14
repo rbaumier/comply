@@ -100,6 +100,10 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
     }
 
+    fn run_gated(src: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_gated(&Check, src, path)
+    }
+
     fn run_with_project(src: &str, project: &ProjectCtx) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.ts", project, crate::rules::file_ctx::default_static_file_ctx())
     }
@@ -139,5 +143,25 @@ mod tests {
         let src =
             r#"const e = await prisma.envelope.findFirst({ where: { id: "1" } });"#;
         assert_eq!(run_with_project(src, &project).len(), 1);
+    }
+
+    // Regression for issue #1358: schemas defined via TypeScript template strings
+    // (no static `.prisma` file) leave the rule with no model list, so the
+    // schema-less fallback fired on every query in the test suite. Soft-delete
+    // enforcement is a production data-integrity concern, so the rule is gated
+    // out of test directories.
+
+    #[test]
+    fn ignores_find_many_in_test_dir_without_schema() {
+        let src = r#"const r = await prisma.user.findMany({ where: { active: true } });"#;
+        assert!(
+            run_gated(src, "packages/client/tests/functional/tests_m-to-n.ts").is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_find_many_in_production_dir_without_schema() {
+        let src = r#"const r = await prisma.user.findMany({ where: { active: true } });"#;
+        assert_eq!(run_gated(src, "src/repositories/user.ts").len(), 1);
     }
 }
