@@ -597,3 +597,59 @@ mod generated_target_tests {
         assert!(diags[0].message.contains("does-not-exist.js"));
     }
 }
+
+#[cfg(test)]
+mod fixture_dir_tests {
+    use super::Check;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use crate::rules::file_ctx::FileCtx;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Run through the production applicability gate: build a real `FileCtx`
+    /// from the importer path (so `is_relaxed_dir` reflects fixture dirs) and
+    /// honour `applies_to_file` exactly as the engine does.
+    fn run_gated(importer_rel: &str, source: &str) -> Vec<crate::diagnostic::Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
+        let importer = dir.path().join(importer_rel);
+        fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        fs::write(&importer, source).unwrap();
+        let canon = fs::canonicalize(&importer).unwrap();
+        let language = Language::from_path(&canon).unwrap();
+        let source_file = SourceFile { path: canon.clone(), language };
+        let project = ProjectCtx::load(&[&source_file], &Config::default());
+        let file = FileCtx::build(&canon, source, language, &project);
+        if !super::super::META.applies_to_file(&file) {
+            return vec![];
+        }
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &canon, &project, &file)
+    }
+
+    #[test]
+    fn no_fp_for_eslint_config_fixture_issue_1650() {
+        // expo reproducer: an eslint-config test fixture under
+        // `__tests__/fixtures/` deliberately imports a non-existent module as
+        // test input. The `fixtures/` segment marks a relaxed dir, so the rule
+        // is skipped there.
+        let source = "import e from './e';\nexport default e;";
+        let diags = run_gated(
+            "packages/eslint-config-expo/__tests__/fixtures/baseline/all-01.ts",
+            source,
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_missing_import_in_non_fixture_source_issue_1650() {
+        // The same intentionally-missing import in ordinary (non-fixture)
+        // source is a real broken path and must still fire — the exemption
+        // stays scoped to relaxed dirs.
+        let source = "import e from './e';\nexport default e;";
+        let diags = run_gated("src/app/index.ts", source);
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("./e"));
+    }
+}

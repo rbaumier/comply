@@ -19,7 +19,11 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["imports"],
 
     skip_in_test_dir: false,
-    skip_in_relaxed_dir: false,
+    // Fixture/sample directories (`fixtures/`, `__fixtures__/`, `samples/`, …)
+    // hold linter/parser test-input files that intentionally contain imports to
+    // non-existent modules as test data, never resolved as real modules, so the
+    // rule does not apply there.
+    skip_in_relaxed_dir: true,
 };
 
 pub fn register() -> RuleDef {
