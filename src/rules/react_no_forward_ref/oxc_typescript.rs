@@ -3,22 +3,64 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Expression, ImportDeclarationSpecifier, Program};
 use std::sync::Arc;
 
 pub struct Check;
 
-/// True if `expr` resolves to `forwardRef` — accepts both
-/// `forwardRef(...)` (named import) and `React.forwardRef(...)` /
-/// `*.forwardRef(...)` (namespace import).
-fn callee_is_forward_ref(expr: &Expression) -> bool {
-    match expr {
-        Expression::Identifier(id) => id.name.as_str() == "forwardRef",
-        Expression::StaticMemberExpression(member) => {
-            member.property.name.as_str() == "forwardRef"
+/// React's `forwardRef` is exported from `react`; `react-dom` re-exports the
+/// React namespace, so both are in-scope. Other packages — notably
+/// `@angular/core`, whose `forwardRef(() => Token)` resolves circular DI — are
+/// unrelated APIs and must not be flagged.
+fn is_react_source(source: &str) -> bool {
+    source == "react" || source == "react-dom"
+}
+
+/// The local binding `callee` of a `forwardRef(...)` / `<ns>.forwardRef(...)`
+/// call. For a bare call this is the named binding `forwardRef`; for a member
+/// call it is the namespace/default object (e.g. `React` in `React.forwardRef`).
+/// Returns `None` for shapes this rule does not recognise.
+fn forward_ref_binding<'a>(callee: &Expression<'a>) -> Option<&'a str> {
+    match callee {
+        Expression::Identifier(id) if id.name.as_str() == "forwardRef" => Some("forwardRef"),
+        Expression::StaticMemberExpression(member)
+            if member.property.name.as_str() == "forwardRef" =>
+        {
+            match &member.object {
+                Expression::Identifier(obj) => Some(obj.name.as_str()),
+                _ => None,
+            }
         }
-        _ => false,
+        _ => None,
     }
+}
+
+/// True when `binding` is introduced by an `import` from React. A named call
+/// (`binding == "forwardRef"`) must resolve to a named/default specifier whose
+/// `local` name matches; a member call resolves to the namespace/default object
+/// binding. Keying on the binding's import provenance — not the literal name —
+/// lets a file import both React's and Angular's `forwardRef` and only flag the
+/// React one.
+fn binding_imported_from_react(program: &Program<'_>, binding: &str) -> bool {
+    program.body.iter().any(|stmt| {
+        let oxc_ast::ast::Statement::ImportDeclaration(import) = stmt else {
+            return false;
+        };
+        if !is_react_source(import.source.value.as_str()) {
+            return false;
+        }
+        let Some(specifiers) = &import.specifiers else {
+            return false;
+        };
+        specifiers.iter().any(|spec| {
+            let local = match spec {
+                ImportDeclarationSpecifier::ImportSpecifier(s) => s.local.name.as_str(),
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => s.local.name.as_str(),
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => s.local.name.as_str(),
+            };
+            local == binding
+        })
+    })
 }
 
 impl OxcCheck for Check {
@@ -34,7 +76,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         // A project whose React range still admits React 18 must keep
@@ -46,7 +88,12 @@ impl OxcCheck for Check {
         let AstKind::CallExpression(call) = node.kind() else {
             return;
         };
-        if !callee_is_forward_ref(&call.callee) {
+        let Some(binding) = forward_ref_binding(&call.callee) else {
+            return;
+        };
+        // Only React's `forwardRef` is deprecated; `@angular/core`'s same-named
+        // DI helper is a different API. Gate on the binding's import source.
+        if !binding_imported_from_react(semantic.nodes().program(), binding) {
             return;
         }
 
@@ -117,8 +164,10 @@ mod tests {
         diagnostics
     }
 
-    const FORWARD_REF_SRC: &str =
-        r#"const Btn = forwardRef((props, ref) => <button ref={ref} />);"#;
+    const FORWARD_REF_SRC: &str = r#"
+        import { forwardRef } from "react";
+        const Btn = forwardRef((props, ref) => <button ref={ref} />);
+    "#;
 
     // Issue #2000: a library whose peerDependencies admit React 18 must keep
     // `forwardRef`; the rule must stay silent there.
@@ -168,5 +217,38 @@ mod tests {
     fn ignores_unrelated_calls() {
         let src = r#"const x = doStuff();"#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression for #1612: Angular's `forwardRef` from `@angular/core` resolves
+    // circular DI references — an unrelated API that must not be flagged.
+    #[test]
+    fn ignores_angular_forward_ref() {
+        let src = r#"
+            import { Component, forwardRef } from "@angular/core";
+            @Component({ imports: [forwardRef(() => DocViewer)] })
+            export class CodeSnippet {}
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // A bare `forwardRef(...)` with no import cannot be proven to be React's, so
+    // it must not be flagged.
+    #[test]
+    fn ignores_forward_ref_without_import() {
+        let src = r#"const Btn = forwardRef((props, ref) => <button ref={ref} />);"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative space: a file importing BOTH React's and Angular's `forwardRef`
+    // under different names must still flag the React one.
+    #[test]
+    fn flags_react_forward_ref_alongside_angular_import() {
+        let src = r#"
+            import { forwardRef } from "react";
+            import { forwardRef as ngForwardRef } from "@angular/core";
+            const Btn = forwardRef((props, ref) => <button ref={ref} />);
+            const token = ngForwardRef(() => DocViewer);
+        "#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
