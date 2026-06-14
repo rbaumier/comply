@@ -110,10 +110,32 @@ fn collect_preceding_attrs(item: tree_sitter::Node, source: &[u8]) -> Vec<String
 }
 
 fn derives_deserialize(attr_text: &str) -> bool {
-    // Match `#[derive(..., Deserialize, ...)]` — we don't enforce
-    // word boundaries because `MyDeserialize` would be a very strange
-    // name to invent.
-    attr_text.contains("derive(") && attr_text.contains("Deserialize")
+    // Match `#[derive(..., Deserialize, ...)]` only when a derive entry's
+    // final path segment is exactly `Deserialize` (so `serde::Deserialize`
+    // counts). A custom derive that merely *contains* the substring, such
+    // as `ConfigDeserialize`, is a different trait and must not trigger
+    // the requirement.
+    derive_paths(attr_text).any(|path| final_segment(path) == "Deserialize")
+}
+
+/// Yield each derive entry inside `#[derive(...)]` as a trimmed path
+/// string (e.g. `Deserialize`, `serde::Deserialize`). Returns nothing
+/// when the text is not a derive attribute.
+fn derive_paths(attr_text: &str) -> impl Iterator<Item = &str> {
+    attr_text
+        .split_once("derive(")
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .map(|(inside, _)| inside)
+        .into_iter()
+        .flat_map(|inside| inside.split(','))
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+}
+
+/// The last `::`-separated segment of a path token (`serde::Deserialize`
+/// -> `Deserialize`, `Deserialize` -> `Deserialize`).
+fn final_segment(path: &str) -> &str {
+    path.rsplit("::").next().unwrap_or(path).trim()
 }
 
 fn has_deny_unknown_fields(attr_text: &str) -> bool {
@@ -275,6 +297,29 @@ mod tests {
     fn allows_versioned_protocol_with_marker() {
         let source = "// versioned protocol — accepts future fields\n#[derive(Deserialize)]\nstruct DapMessage { seq: i32 }";
         assert!(run_on(source).is_empty(), "FP: versioned protocol flagged");
+    }
+
+    #[test]
+    fn allows_custom_derive_containing_deserialize_substring() {
+        // `ConfigDeserialize` (alacritty's own proc-macro) is NOT serde's
+        // `Deserialize` — it must not trigger the requirement even though
+        // its name contains the substring "Deserialize". (Closes #1476)
+        let source = "#[derive(ConfigDeserialize, Serialize, Debug, Clone, PartialEq, Eq)]\n\
+                      pub struct Font {\n\
+                          pub use_thin_strokes: bool,\n\
+                      }";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: custom derive `ConfigDeserialize` flagged as serde Deserialize"
+        );
+    }
+
+    #[test]
+    fn flags_fully_qualified_serde_deserialize() {
+        // `serde::Deserialize` — final path segment is exactly
+        // `Deserialize`, so it must still fire without deny_unknown_fields.
+        let source = "#[derive(serde::Deserialize)]\nstruct Config { rate: u32 }";
+        assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
