@@ -1881,7 +1881,12 @@ fn parse_prisma_soft_delete_models(schema: &str) -> HashSet<String> {
 }
 
 /// Resolve workspace glob patterns to actual package directories.
-/// Returns the list of workspace root directories found on disk.
+/// Returns the list of workspace root directories that contain a `package.json`.
+///
+/// Each `/`-separated segment is expanded against the filesystem: a literal
+/// segment is joined directly, a `*` segment fans out to every subdirectory at
+/// that level. Multi-level globs (e.g. `packages/auth-providers/*/*`) are fully
+/// expanded so packages nested several directories deep are still discovered.
 fn resolve_workspace_roots(project_root: Option<&Path>, pkg: &PackageJson) -> Vec<PathBuf> {
     let Some(root) = project_root else {
         return Vec::new();
@@ -1892,25 +1897,46 @@ fn resolve_workspace_roots(project_root: Option<&Path>, pkg: &PackageJson) -> Ve
 
     let mut roots = Vec::new();
     for pattern in &pkg.workspaces {
-        // Simple glob: "packages/*" -> list directories matching the pattern
-        let base = root.join(pattern.trim_end_matches('*').trim_end_matches('/'));
-        if let Ok(entries) = std::fs::read_dir(&base) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() && path.join("package.json").exists() {
-                    roots.push(path);
-                }
-            }
-        }
-        // Also handle exact paths (no glob)
-        if !pattern.contains('*') {
-            let exact = root.join(pattern);
-            if exact.is_dir() && exact.join("package.json").exists() {
-                roots.push(exact);
+        for dir in expand_workspace_glob(root, pattern) {
+            if dir.join("package.json").exists() {
+                roots.push(dir);
             }
         }
     }
     roots
+}
+
+/// Expand a single workspace glob pattern into the directories it matches on
+/// disk, descending one filesystem level per `*` segment.
+fn expand_workspace_glob(root: &Path, pattern: &str) -> Vec<PathBuf> {
+    let mut current = vec![root.to_path_buf()];
+    for segment in pattern.split('/').filter(|s| !s.is_empty()) {
+        let mut next = Vec::new();
+        if segment.contains('*') {
+            for base in &current {
+                if let Ok(entries) = std::fs::read_dir(base) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            next.push(path);
+                        }
+                    }
+                }
+            }
+        } else {
+            for base in &current {
+                let path = base.join(segment);
+                if path.is_dir() {
+                    next.push(path);
+                }
+            }
+        }
+        current = next;
+        if current.is_empty() {
+            break;
+        }
+    }
+    current
 }
 
 /// Collect the union of every dependency name declared in every `package.json`
@@ -2713,6 +2739,59 @@ mod tests {
         assert_eq!(
             names,
             vec!["@scope/bar".to_string(), "@scope/foo".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolves_multi_level_workspace_glob() {
+        // Regression for #1685: redwood-style root manifest with a two-level
+        // glob (`packages/auth-providers/*/*`). The real packages live two
+        // directories below `auth-providers`, so a single-level expansion misses
+        // them and their entry points get flagged as unused.
+        let dir = TempDir::new().unwrap();
+        let manifest =
+            r#"{"name":"root","workspaces":["packages/*","packages/auth-providers/*/*"]}"#;
+        std::fs::write(dir.path().join("package.json"), manifest).unwrap();
+
+        // Single-level package under packages/*.
+        let cli = dir.path().join("packages").join("cli");
+        std::fs::create_dir_all(&cli).unwrap();
+        std::fs::write(cli.join("package.json"), r#"{"name":"@redwoodjs/cli"}"#).unwrap();
+
+        // Two-level packages under packages/auth-providers/*/*.
+        let web = dir
+            .path()
+            .join("packages")
+            .join("auth-providers")
+            .join("azureActiveDirectory")
+            .join("web");
+        let setup = dir
+            .path()
+            .join("packages")
+            .join("auth-providers")
+            .join("azureActiveDirectory")
+            .join("setup");
+        std::fs::create_dir_all(&web).unwrap();
+        std::fs::create_dir_all(&setup).unwrap();
+        std::fs::write(web.join("package.json"), r#"{"name":"@rw/azure-web"}"#).unwrap();
+        std::fs::write(setup.join("package.json"), r#"{"name":"@rw/azure-setup"}"#).unwrap();
+
+        let pkg = PackageJson::parse(manifest).unwrap();
+        let roots = resolve_workspace_roots(Some(dir.path()), &pkg);
+
+        let ctx = ProjectCtx {
+            workspace_roots: roots,
+            ..ProjectCtx::default()
+        };
+        let mut names = ctx.workspace_package_names().to_vec();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "@redwoodjs/cli".to_string(),
+                "@rw/azure-setup".to_string(),
+                "@rw/azure-web".to_string(),
+            ]
         );
     }
 

@@ -515,6 +515,47 @@ mod tests {
         );
     }
 
+    // Regression for #1685: multi-level workspace globs (e.g. redwood's
+    // `packages/auth-providers/*/*`) must seed the entry points of packages
+    // nested several directories deep. A genuinely orphaned file outside any
+    // workspace package is still flagged.
+    #[test]
+    fn multi_level_workspace_package_files_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"name":"root","workspaces":["packages/*","packages/auth-providers/*/*"]}"#,
+            ),
+            ("index.ts", "export const root = 1;\n"),
+            // Two-level nested package: packages/auth-providers/azure/web.
+            (
+                "packages/auth-providers/azure/web/package.json",
+                r#"{"name":"@rw/azure-web","version":"0.0.1"}"#,
+            ),
+            (
+                "packages/auth-providers/azure/web/src/index.ts",
+                "import { azure } from './azure';\nexport { azure };\n",
+            ),
+            (
+                "packages/auth-providers/azure/web/src/azure.ts",
+                "export const azure = 1;\n",
+            ),
+            // Genuinely orphaned source: not under any workspace package, not
+            // imported by anything — must still be flagged.
+            ("src/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(
+            diags.len(),
+            1,
+            "only the orphan must be flagged, nested package files must be seeded: {diags:?}"
+        );
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "the flagged file must be the orphan, not a nested package file: {diags:?}"
+        );
+    }
+
     // Regression for #776: files under top-level `examples/` are entry points.
     #[test]
     fn examples_dir_files_are_not_flagged() {
