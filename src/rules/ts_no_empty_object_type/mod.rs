@@ -1,8 +1,10 @@
 //! ts-no-empty-object-type — flag `{}` used as a type.
 //!
 //! Exempts the type-system idioms where `{}` is deliberate: a generic
-//! constraint/default (`T extends {}`) and an intersection identity
-//! (`T & {}`) whose other operand is a non-empty type.
+//! constraint/default (`T extends {}`, `T = {}`) and an intersection identity
+//! (`T & {}`) whose other operand is a non-empty type. Skipped entirely in test
+//! directories, where `{}` is the expected type under type-level assertions
+//! (`expectType<{}>(...)`) rather than a value annotation.
 
 mod oxc_typescript;
 #[cfg(test)]
@@ -23,7 +25,7 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["typescript"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 

@@ -174,4 +174,45 @@ mod tests {
     fn still_flags_empty_object_function_param() {
         assert_eq!(run_on("function f(x: {}) {}").len(), 1);
     }
+
+    // ── #1301 ─────────────────────────────────────────────────────────────
+
+    /// type-fest type-test files use `{}` as the *expected type* under test;
+    /// `skip_in_test_dir` suppresses the rule there via the central gate.
+    #[test]
+    fn skips_expect_type_assertion_in_test_d() {
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            "expectType<{}>({} as Schema<{}, number>);",
+            "type-fest/test-d/schema.ts",
+        );
+        assert!(diags.is_empty());
+    }
+
+    /// A `{}` default type parameter (`<T = {}>`) means "any non-nullish value"
+    /// and is valid in production — the `TSTypeParameter` exemption covers it.
+    #[test]
+    fn allows_empty_object_default_type_param_in_production() {
+        let diags = crate::rules::test_helpers::run_rule(
+            &Check,
+            "function mergeDeep<Options extends MergeDeepOptions = {}>() {}",
+            "src/utils.ts",
+        );
+        assert!(diags.is_empty());
+    }
+
+    /// Negative space: a bare `{}` alias in production is still flagged.
+    #[test]
+    fn still_flags_empty_object_alias_in_production() {
+        let diags = crate::rules::test_helpers::run_rule(&Check, "type Foo = {};", "src/utils.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+    /// Negative space: a `{}` value annotation in production is still flagged.
+    #[test]
+    fn still_flags_empty_object_annotation_in_production() {
+        let diags =
+            crate::rules::test_helpers::run_rule(&Check, "const x: {} = foo;", "src/utils.ts");
+        assert_eq!(diags.len(), 1);
+    }
 }
