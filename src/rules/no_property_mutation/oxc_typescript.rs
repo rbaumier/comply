@@ -80,6 +80,18 @@ fn root_object_name<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
     }
 }
 
+/// True when the member-access chain is rooted at `this` (e.g. `this.x`,
+/// `this.ctx.counter`). Inside a constructor or setter body these writes are
+/// initialisation / intercepted-assignment, not mutation of a stable object.
+fn is_rooted_at_this(expr: &Expression) -> bool {
+    match expr {
+        Expression::ThisExpression(_) => true,
+        Expression::StaticMemberExpression(m) => is_rooted_at_this(&m.object),
+        Expression::ComputedMemberExpression(m) => is_rooted_at_this(&m.object),
+        _ => false,
+    }
+}
+
 /// Get the root `IdentifierReference` from a member-access chain. Used to resolve
 /// the binding via semantic and inspect its declaration.
 fn root_identifier_of_expr<'a>(expr: &'a Expression<'a>) -> Option<&'a IdentifierReference<'a>> {
@@ -140,10 +152,13 @@ fn is_create_element_call(expr: &Expression) -> bool {
     method == "createElement" || method == "createElementNS"
 }
 
-/// True when `node` sits inside a `constructor()` body. Assigning `this.x = value`
-/// while the object is being constructed is initialisation, not mutation of an
-/// already-stable object — TypeScript even allows setting `readonly` fields here.
-fn is_inside_constructor<'a>(
+/// True when `node` sits inside a `constructor()` body or a property `set`
+/// accessor body. Assigning `this.x = value` while the object is being
+/// constructed is initialisation, not mutation of an already-stable object —
+/// TypeScript even allows setting `readonly` fields here. A `set x(v)` accessor
+/// exists precisely to intercept assignment, so its body must mutate state and
+/// has no immutable alternative.
+fn is_inside_constructor_or_setter<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
@@ -156,14 +171,20 @@ fn is_inside_constructor<'a>(
         }
         match ancestor.kind() {
             AstKind::MethodDefinition(method) => {
-                return method.kind == MethodDefinitionKind::Constructor;
+                return matches!(
+                    method.kind,
+                    MethodDefinitionKind::Constructor | MethodDefinitionKind::Set
+                );
             }
             AstKind::Function(_) => {
-                // The constructor body is wrapped in a Function node in OXC's AST.
+                // The constructor/accessor body is wrapped in a Function node in OXC's AST.
                 if let Some(next) = ancestors.peek()
                     && let AstKind::MethodDefinition(method) = next.kind()
                 {
-                    return method.kind == MethodDefinitionKind::Constructor;
+                    return matches!(
+                        method.kind,
+                        MethodDefinitionKind::Constructor | MethodDefinitionKind::Set
+                    );
                 }
                 return false;
             }
@@ -215,8 +236,8 @@ impl OxcCheck for Check {
                         if obj_text == "module" || obj_text == "exports" { return; }
                         if prop_text == "current" { return; }
                         if obj_text == "document" && prop_text == "cookie" { return; }
-                        if matches!(&m.object, Expression::ThisExpression(_))
-                            && is_inside_constructor(node, semantic) { return; }
+                        if is_rooted_at_this(&m.object)
+                            && is_inside_constructor_or_setter(node, semantic) { return; }
                         if is_inside_sentry_hook(node, semantic) { return; }
                         if root_object_name(&m.object) == Some("set") { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
@@ -240,8 +261,8 @@ impl OxcCheck for Check {
                             [m.object.span().start as usize..m.object.span().end as usize];
 
                         if obj_text == "module" || obj_text == "exports" { return; }
-                        if matches!(&m.object, Expression::ThisExpression(_))
-                            && is_inside_constructor(node, semantic) { return; }
+                        if is_rooted_at_this(&m.object)
+                            && is_inside_constructor_or_setter(node, semantic) { return; }
                         if is_inside_sentry_hook(node, semantic) { return; }
                         if root_object_name(&m.object) == Some("set") { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
@@ -520,6 +541,51 @@ mod tests {
         let src = r#"
             class Foo {
                 update() { this.value = 1; }
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_this_assignment_in_setter_issue_1335() {
+        // Regression for issue #1335: a `set x(v)` accessor exists to intercept
+        // assignment; its body must mutate state and has no immutable
+        // alternative.
+        let src = r#"
+            class JSONSchemaGenerator {
+                get counter() {
+                    return this.ctx.counter;
+                }
+                set counter(value: number) {
+                    this.ctx.counter = value;
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_direct_this_field_assignment_in_setter() {
+        let src = r#"
+            class Foo {
+                set name(value: string) {
+                    this._name = value;
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_this_assignment_in_getter() {
+        // A getter should not mutate state; `this._x = 1` inside `get x()` is a
+        // genuine mutation and stays flagged.
+        let src = r#"
+            class Foo {
+                get x() {
+                    this._x = 1;
+                    return this._x;
+                }
             }
         "#;
         assert_eq!(run(src).len(), 1);
