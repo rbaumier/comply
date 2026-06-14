@@ -994,6 +994,15 @@ pub struct ProjectCtx {
     // manifest. Built lazily on first miss and reused for the rest of the run.
     tree_dep_names_cache: Mutex<HashMap<PathBuf, Arc<HashSet<String>>>>,
 
+    // Union of every dependency name declared across all member packages of an
+    // npm-workspaces root, keyed by that root's directory. npm hoists every
+    // member's deps to the shared root `node_modules`, so any member may import a
+    // specifier declared only in a sibling member; this lets `no-implicit-deps`
+    // recognize such an import. Resolved from the `workspaces` globs (not a full
+    // tree walk), so it covers the workspaces root even when `project_root` is
+    // scoped to one member. Built lazily on first miss and reused for the run.
+    workspace_sibling_deps_cache: Mutex<HashMap<PathBuf, Arc<HashSet<String>>>>,
+
     // Files the engine read and found to contain no `comply-ignore` substring.
     // The post-filter (`ignore_comments::apply_to_all`) otherwise re-reads every
     // discovered file from disk just to run that one substring check; for files
@@ -1830,6 +1839,54 @@ impl ProjectCtx {
         found
     }
 
+    /// True if `name` is declared as a dependency in any *member* package of the
+    /// npm-workspaces root nearest to `importer`.
+    ///
+    /// npm hoists every workspace member's dependencies to the shared root
+    /// `node_modules`, so a member may import a specifier declared only in a
+    /// sibling member (e.g. `@jest/globals` declared in
+    /// `packages/integration-testsuite` and imported from `packages/server`).
+    /// Member directories are resolved from the root manifest's `workspaces`
+    /// globs, so the check holds even when `project_root` is scoped to a single
+    /// member (where the tree walk in [`dep_declared_in_tree`] never reaches the
+    /// siblings). The aggregated dep set is built once per workspaces root and
+    /// memoized; a specifier declared in no member is absent and still fires.
+    pub fn dep_declared_in_workspace_siblings(&self, importer: &Path, name: &str) -> bool {
+        let Some(root) = self.workspaces_root(importer) else {
+            return false;
+        };
+        if let Some(hit) = self.workspace_sibling_deps_cache.lock().unwrap().get(&root) {
+            return hit.contains(name);
+        }
+        let names = Arc::new(collect_workspace_member_deps(&root));
+        let found = names.contains(name);
+        self.workspace_sibling_deps_cache
+            .lock()
+            .unwrap()
+            .insert(root, names);
+        found
+    }
+
+    /// Directory of the nearest ancestor `package.json` (starting at `importer`)
+    /// that declares a non-empty `workspaces` field — the npm-workspaces root.
+    /// Walks the chain of ancestor manifests, jumping to each manifest's parent
+    /// directory, so a member manifest without `workspaces` does not stop the
+    /// search. Bounded to 8 manifest hops to defend against a pathological tree.
+    /// `None` when no ancestor manifest declares `workspaces`.
+    fn workspaces_root(&self, importer: &Path) -> Option<PathBuf> {
+        let mut probe = importer.join("_");
+        for _ in 0..8 {
+            let manifest_dir = self.nearest_package_json_dir(&probe)?;
+            if let Some(pkg) = self.nearest_package_json(&probe)
+                && !pkg.workspaces.is_empty()
+            {
+                return Some(manifest_dir);
+            }
+            probe = manifest_dir.parent()?.join("_");
+        }
+        None
+    }
+
     /// Resolve the project root used to scope [`dep_declared_in_tree`]: the
     /// explicit `project_root` when known, else the topmost ancestor directory
     /// of `importer` that owns a `package.json`.
@@ -1987,6 +2044,31 @@ fn expand_workspace_glob(root: &Path, pattern: &str) -> Vec<PathBuf> {
         }
     }
     current
+}
+
+/// Collect the union of every dependency name declared across all member
+/// packages of the npm-workspaces root at `root`. The root manifest's
+/// `workspaces` globs are expanded (via [`resolve_workspace_roots`]) to the
+/// member directories, and each member's declared deps (plus `engines` keys) are
+/// unioned. Only the members listed under `workspaces` are read — no full tree
+/// walk — so the cost is bounded by the number of workspace packages.
+fn collect_workspace_member_deps(root: &Path) -> HashSet<String> {
+    let mut names = HashSet::new();
+    let Some(pkg) = std::fs::read_to_string(root.join("package.json"))
+        .ok()
+        .and_then(|raw| PackageJson::parse(&raw))
+    else {
+        return names;
+    };
+    for member in resolve_workspace_roots(Some(root), &pkg) {
+        if let Ok(raw) = std::fs::read_to_string(member.join("package.json"))
+            && let Some(member_pkg) = PackageJson::parse(&raw)
+        {
+            names.extend(member_pkg.all_deps().map(str::to_string));
+            names.extend(member_pkg.engines.keys().cloned());
+        }
+    }
+    names
 }
 
 /// Collect the union of every dependency name declared in every `package.json`
@@ -2868,6 +2950,52 @@ mod tests {
                 "@rw/azure-setup".to_string(),
                 "@rw/azure-web".to_string(),
             ]
+        );
+    }
+
+    // Regression #1671: when `project_root` is scoped to one workspace member
+    // (e.g. comply run on `packages/server`), the tree walk in
+    // `dep_declared_in_tree` never reaches sibling members, but
+    // `dep_declared_in_workspace_siblings` resolves them from the root
+    // `workspaces` globs and recognizes a dep declared only in a sibling.
+    #[test]
+    fn workspace_sibling_dep_found_when_root_scoped_to_member() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"root","workspaces":["packages/*"]}"#,
+        )
+        .unwrap();
+        let testsuite = dir.path().join("packages").join("integration-testsuite");
+        std::fs::create_dir_all(&testsuite).unwrap();
+        std::fs::write(
+            testsuite.join("package.json"),
+            r#"{"name":"@scope/testsuite","peerDependencies":{"@jest/globals":"29.x || 30.x"}}"#,
+        )
+        .unwrap();
+        let server = dir.path().join("packages").join("server");
+        let tests = server.join("src").join("__tests__");
+        std::fs::create_dir_all(&tests).unwrap();
+        std::fs::write(server.join("package.json"), r#"{"name":"@scope/server"}"#).unwrap();
+        let importer = tests.join("errors.test.ts");
+        std::fs::write(&importer, "import { it } from '@jest/globals';").unwrap();
+
+        // Load with only the member file so `project_root` resolves to the member
+        // package — the configuration that drove the real apollo-server FP.
+        use crate::files::Language;
+        let source_file = SourceFile {
+            path: importer.clone(),
+            language: Language::TypeScript,
+        };
+        let ctx = ProjectCtx::load(&[&source_file], &Config::default());
+        assert_eq!(ctx.project_root.as_deref(), Some(server.as_path()));
+        assert!(
+            ctx.dep_declared_in_workspace_siblings(&importer, "@jest/globals"),
+            "sibling-member dep must resolve via the root workspaces globs"
+        );
+        assert!(
+            !ctx.dep_declared_in_workspace_siblings(&importer, "totally-undeclared-pkg"),
+            "a dep in no member must not resolve"
         );
     }
 

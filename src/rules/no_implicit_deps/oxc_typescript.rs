@@ -137,6 +137,15 @@ impl OxcCheck for Check {
             }
         }
 
+        // npm-workspaces siblings: in a workspaces monorepo npm hoists every
+        // member's deps to the shared root `node_modules`, so a member may import
+        // a specifier declared only in a sibling member (declared in neither the
+        // importing package nor any ancestor). Resolve the members from the root
+        // `workspaces` globs and consult the union of their declared deps.
+        if ctx.project.dep_declared_in_workspace_siblings(ctx.path, root) {
+            return;
+        }
+
         // Sibling manifests: a file in a directory with no `package.json` of its
         // own (a monorepo `integration/` test tree) imports packages declared in
         // sibling `packages/*/package.json` manifests, hoisted at runtime. When
@@ -860,6 +869,77 @@ export default {
             diags.len(),
             1,
             "value import of an unlisted package must still fire, got {diags:?}"
+        );
+    }
+
+    // Regression #1671: in an npm-workspaces monorepo (root `package.json` has a
+    // `workspaces` glob) a package may import a specifier declared only in a
+    // SIBLING workspace package, not the root and not the importing package. npm
+    // hoists every member's deps to the shared root `node_modules`, so the import
+    // resolves at runtime. `@jest/globals` is declared only in
+    // `packages/integration-testsuite/package.json` yet imported from
+    // `packages/server/`.
+    #[test]
+    fn allows_sibling_workspace_package_dep_issue_1671() {
+        let dir = TempDir::new().unwrap();
+        // Root manifest: declares `workspaces` but NOT @jest/globals.
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"apollo-server-monorepo","workspaces":["packages/*"]}"#,
+        )
+        .unwrap();
+        // Sibling workspace package that DOES declare @jest/globals.
+        let testsuite = dir.path().join("packages").join("integration-testsuite");
+        fs::create_dir_all(&testsuite).unwrap();
+        fs::write(
+            testsuite.join("package.json"),
+            r#"{"name":"@apollo/server-integration-testsuite","devDependencies":{"@jest/globals":"^29.0.0"}}"#,
+        )
+        .unwrap();
+        // Importing workspace package: its own manifest does NOT declare it.
+        let server = dir.path().join("packages").join("server");
+        let tests = server.join("src").join("__tests__");
+        fs::create_dir_all(&tests).unwrap();
+        fs::write(server.join("package.json"), r#"{"name":"@apollo/server"}"#).unwrap();
+        let file = tests.join("errors.test.ts");
+        let source = "import { describe, it } from '@jest/globals';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "dep declared in a sibling workspace package must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #1671: a specifier declared in NO workspace
+    // package (and nowhere in the tree) must still fire from a workspace package.
+    #[test]
+    fn flags_dep_in_no_workspace_package_issue_1671() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"apollo-server-monorepo","workspaces":["packages/*"]}"#,
+        )
+        .unwrap();
+        let testsuite = dir.path().join("packages").join("integration-testsuite");
+        fs::create_dir_all(&testsuite).unwrap();
+        fs::write(
+            testsuite.join("package.json"),
+            r#"{"name":"@apollo/server-integration-testsuite","devDependencies":{"@jest/globals":"^29.0.0"}}"#,
+        )
+        .unwrap();
+        let server = dir.path().join("packages").join("server");
+        let tests = server.join("src").join("__tests__");
+        fs::create_dir_all(&tests).unwrap();
+        fs::write(server.join("package.json"), r#"{"name":"@apollo/server"}"#).unwrap();
+        let file = tests.join("errors.test.ts");
+        let source = "import x from 'totally-undeclared-pkg';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "a specifier declared in no workspace package must still fire, got {diags:?}"
         );
     }
 
