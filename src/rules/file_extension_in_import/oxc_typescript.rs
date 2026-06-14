@@ -93,6 +93,17 @@ fn tsconfig_uses_bundler_resolution(ctx: &CheckCtx) -> bool {
         .is_some_and(|m| m.eq_ignore_ascii_case("bundler"))
 }
 
+/// Angular's build toolchain (`@angular/build`/Angular CLI) resolves TypeScript
+/// modules without explicit file extensions, so extensionless relative imports
+/// are correct there. Detection walks up to the nearest package.json, so a
+/// nested Angular example inside a non-Angular monorepo is recognised.
+fn project_is_angular(ctx: &CheckCtx) -> bool {
+    ctx.project
+        .frameworks_for_path(ctx.path)
+        .iter()
+        .any(|fw| fw.name == "angular")
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -110,7 +121,9 @@ impl OxcCheck for Check {
         // `has_bundler_config` stat-walks the ancestor tree, which is otherwise
         // re-run for every file in a deep monorepo.
         let skip_for_bundler = ctx.project.cached_bundler(ctx.path, || {
-            project_uses_bundler(ctx) || tsconfig_uses_bundler_resolution(ctx)
+            project_uses_bundler(ctx)
+                || tsconfig_uses_bundler_resolution(ctx)
+                || project_is_angular(ctx)
         });
         if skip_for_bundler {
             return Vec::new();
@@ -170,4 +183,104 @@ fn check_specifier(
         severity: Severity::Warning,
         span: None,
     });
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Build a project rooted at a tempdir with the given root-level files, then
+    /// run the OXC backend against `src/app.ts`. Returns the diagnostics so a
+    /// test can assert whether the extensionless import was flagged.
+    fn run_in_project(root_files: &[(&str, &str)], source: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        for (name, contents) in root_files {
+            fs::write(dir.path().join(name), contents).unwrap();
+        }
+        let file_path = dir.path().join("src/app.ts");
+        fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        fs::write(&file_path, source).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: Language::from_path(&file_path).unwrap(),
+        };
+        let refs = vec![&source_file];
+        let project = ProjectCtx::load(&refs, &Config::default());
+        let canon = fs::canonicalize(&file_path).unwrap();
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    // Regression for #1712: Angular's build toolchain resolves extensionless
+    // relative imports, so the rule must stay silent when Angular is detected.
+
+    #[test]
+    fn skips_angular_project_detected_via_angular_json() {
+        // examples/angular/filters carries angular.json but only @angular/build
+        // in devDependencies (no @angular/core), matching the issue's repro.
+        let pkg = r#"{"devDependencies":{"@angular/build":"^20.0.0","@angular/cli":"^20.0.0"}}"#;
+        let diags = run_in_project(
+            &[("package.json", pkg), ("angular.json", "{}")],
+            "import { columnHelper, columns } from './makeData';\nimport TableFilter from './table-filter/table-filter';\n",
+        );
+        assert!(
+            diags.is_empty(),
+            "Angular project (angular.json) must not require file extensions: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn skips_angular_project_detected_via_angular_build_dep() {
+        let pkg = r#"{"devDependencies":{"@angular/build":"^20.0.0"}}"#;
+        let diags = run_in_project(
+            &[("package.json", pkg)],
+            "import { columns } from './makeData';\n",
+        );
+        assert!(
+            diags.is_empty(),
+            "@angular/build dependency must suppress the rule: {diags:?}"
+        );
+    }
+
+    // Negative space: a plain Node ESM project (no bundler, no Angular) still
+    // needs explicit extensions, so the rule must keep firing.
+    #[test]
+    fn still_flags_non_angular_node_esm_project() {
+        let pkg = r#"{"type":"module","dependencies":{}}"#;
+        let diags = run_in_project(
+            &[("package.json", pkg)],
+            "import { columns } from './makeData';\n",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "non-Angular ESM project must still require extensions: {diags:?}"
+        );
+    }
 }

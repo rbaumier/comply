@@ -1,5 +1,6 @@
 [detection]
-dependencies = ["@angular/core"]
+dependencies = ["@angular/core", "@angular/build"]
+files = ["angular.json"]
 
 [entry_points]
 dirs = []
