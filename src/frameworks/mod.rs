@@ -19,6 +19,8 @@ pub struct FrameworkDef {
     #[serde(default)]
     pub magic_exports: MagicExports,
     #[serde(default)]
+    pub route_magic_exports: RouteMagicExports,
+    #[serde(default)]
     pub tooling_deps: ToolingDeps,
 }
 
@@ -46,6 +48,21 @@ pub struct EntryPoints {
 pub struct MagicExports {
     #[serde(default)]
     pub names: Vec<String>,
+}
+
+/// Magic exports that a framework consumes only in specific file conventions,
+/// not project-wide. Unlike `MagicExports`, these are scoped by the consuming
+/// rule to the matching file so a same-named export elsewhere stays flaggable.
+#[derive(Debug, Default, Deserialize)]
+pub struct RouteMagicExports {
+    /// Names consumed in file-system-routed route files (SvelteKit
+    /// `+page`/`+layout`/`+server`).
+    #[serde(default)]
+    pub route_files: Vec<String>,
+    /// Names consumed in route-parameter matcher files (SvelteKit
+    /// `src/params/*`).
+    #[serde(default)]
+    pub param_matchers: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]

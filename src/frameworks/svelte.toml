@@ -8,5 +8,20 @@ files = []
 [magic_exports]
 names = []
 
+# SvelteKit reserves a fixed set of named exports that its file-system router
+# consumes by exact name at build/run time, never through a static import. These
+# are scoped to the file convention that owns them so a same-named export in an
+# ordinary module stays flaggable.
+[route_magic_exports]
+# `+page.{js,ts}`, `+page.server.{js,ts}`, `+layout.{js,ts}`,
+# `+layout.server.{js,ts}`, `+server.{js,ts}`.
+route_files = [
+    "load", "ssr", "csr", "prerender", "trailingSlash", "config",
+    "actions", "entries",
+    "GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD", "fallback",
+]
+# `src/params/*.{js,ts}` route-parameter matchers.
+param_matchers = ["match"]
+
 [tooling_deps]
 names = []

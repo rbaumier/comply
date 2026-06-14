@@ -1123,6 +1123,91 @@ mod tests {
     }
 
     #[test]
+    fn ignores_sveltekit_route_magic_exports_issue_1540() {
+        // Regression for #1540 (immich-app/immich) — SvelteKit's reserved route
+        // exports (`load`, `ssr`, `csr`) in a `+page.ts`/`+layout.ts` are consumed
+        // by the file-system router by exact name, never through a static import,
+        // so they have no importer yet are live framework entry points.
+        let pkg = r#"{ "dependencies": { "@sveltejs/kit": "2.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/routes/+layout.ts",
+                "export const ssr = false;\n\
+                 export const csr = false;\n\
+                 export async function load({ data }) { return data; }\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/routes/+layout.ts");
+        assert!(
+            diags.is_empty(),
+            "SvelteKit route magic exports are framework-consumed: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_sveltekit_param_matcher_export_issue_1540() {
+        // Regression for #1540 — `match` in `src/params/*.ts` is the route
+        // parameter matcher invoked by SvelteKit's router by convention.
+        let pkg = r#"{ "dependencies": { "@sveltejs/kit": "2.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/params/integer.ts",
+                "export function match(value) { return /^\\d+$/.test(value); }\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/params/integer.ts");
+        assert!(
+            diags.is_empty(),
+            "SvelteKit param matcher `match` is framework-consumed: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_ordinary_export_in_sveltekit_route_file_issue_1540() {
+        // Negative-space guard for #1540 — the exemption is scoped to SvelteKit's
+        // reserved names. An ordinary `helper` export in the same route file, with
+        // no importer, is genuinely dead and must still be flagged.
+        let pkg = r#"{ "dependencies": { "@sveltejs/kit": "2.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/routes/+page.ts",
+                "export async function load() { return {}; }\n\
+                 export const helper = () => 1;\n",
+            ),
+            ("src/util.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/routes/+page.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "an ordinary unused export in a route file must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("helper"));
+    }
+
+    #[test]
+    fn still_flags_load_export_in_non_route_module_issue_1540() {
+        // Negative-space guard for #1540 — `load` is a common generic name. A
+        // `load` export from an ordinary module (not a `+page`/`+layout`/`+server`
+        // route file), with no importer, is genuinely dead and must still fire:
+        // the SvelteKit exemption is scoped to route files, not project-wide.
+        let pkg = r#"{ "dependencies": { "@sveltejs/kit": "2.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            ("src/lib/data.ts", "export function load() { return {}; }\n"),
+            ("src/lib/other.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/lib/data.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a `load` export in a non-route module must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("load"));
+    }
+
+    #[test]
     fn ignores_gatsby_node_api_exports_issue_1700() {
         // Regression for #1700 — `gatsby-node.js` named exports (`createPages`,
         // `onCreateNode`) are Gatsby Node APIs invoked by the build, not imported.

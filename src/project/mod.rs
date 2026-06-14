@@ -1360,7 +1360,39 @@ impl ProjectCtx {
         for fw in self.frameworks_for_path(path) {
             names.extend(fw.magic_exports.names.iter().map(String::as_str));
         }
+        self.extend_route_magic_exports(path, &mut names);
         names
+    }
+
+    /// Add a framework's route-scoped magic exports when `path` matches the file
+    /// convention that consumes them. SvelteKit reserves `load`/`ssr`/`csr`/… in
+    /// `+page`/`+layout`/`+server` route files and `match` in `src/params/*`; the
+    /// router calls each by exact name, so they have no importer but are live.
+    /// Scoping by file convention keeps a same-named export in an ordinary module
+    /// flaggable.
+    fn extend_route_magic_exports<'a>(&'a self, path: &Path, names: &mut HashSet<&'a str>) {
+        let basename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let is_route_file = crate::rules::path_utils::is_sveltekit_route_file(basename);
+        let is_param_matcher = crate::rules::path_utils::is_sveltekit_param_matcher_file(path);
+        if !is_route_file && !is_param_matcher {
+            return;
+        }
+        // Only frameworks detected for this path (root manifest + nearest
+        // package.json) contribute, so a non-SvelteKit `+page.ts` stays
+        // unaffected. SvelteKit is the only framework declaring these today.
+        let owning = self
+            .detected_frameworks
+            .iter()
+            .copied()
+            .chain(self.frameworks_for_path(path));
+        for fw in owning {
+            if is_route_file {
+                names.extend(fw.route_magic_exports.route_files.iter().map(String::as_str));
+            }
+            if is_param_matcher {
+                names.extend(fw.route_magic_exports.param_matchers.iter().map(String::as_str));
+            }
+        }
     }
 
     #[cfg(test)]
