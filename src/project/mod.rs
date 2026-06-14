@@ -86,6 +86,12 @@ pub struct PackageJson {
     /// the tool's own command framework wires up internal modules dynamically, so
     /// their exports have no static importer.
     pub has_bin: bool,
+    /// True if the package declares `"private": true` — it is never published to
+    /// npm. The `dependencies`/`devDependencies` distinction only matters for
+    /// published packages whose consumers `npm install` them and need runtime
+    /// deps in `dependencies`; for a private package everything is bundled at
+    /// build time, so importing from `devDependencies` is correct.
+    pub is_private: bool,
     /// Relative paths of source files that appear as CLI entry points in the
     /// `scripts` field (e.g. `"seed:dev": "bun run src/db/seed/dev.ts"`).
     /// Stored with forward slashes and without a leading `./`.
@@ -155,6 +161,7 @@ impl PackageJson {
                 || json.get("exports").is_some()
                 || json.get("module").is_some(),
             has_bin: json.get("bin").is_some(),
+            is_private: parse_private(&json),
             workspaces: parse_workspaces(&json),
             script_entry_files: json
                 .get("scripts")
@@ -596,6 +603,17 @@ fn parse_workspaces(json: &Value) -> Vec<String> {
         .iter()
         .filter_map(|node| node.as_str().map(String::from))
         .collect()
+}
+
+/// True when `package.json` declares `"private": true`. npm honours the boolean
+/// form; the stringified `"true"` some tooling writes is accepted too. Any other
+/// shape (absent, `false`, an object) reads as publishable.
+fn parse_private(json: &Value) -> bool {
+    match json.get("private") {
+        Some(Value::Bool(b)) => *b,
+        Some(Value::String(s)) => s == "true",
+        _ => false,
+    }
 }
 
 /// Smallest major version a semver range string can match, or `None` when the

@@ -28,6 +28,15 @@ impl OxcCheck for Check {
         let Some(pkg) = ctx.project.nearest_package_json(ctx.path) else {
             return;
         };
+        // A `"private": true` package is never published to npm, so the
+        // dependencies/devDependencies distinction the rule enforces is
+        // irrelevant: nothing is `npm install`ed by a downstream consumer, and
+        // everything is bundled at build time. Importing a devDependency from a
+        // private app/dashboard/internal tool is correct and idiomatic
+        // (issue #1373).
+        if pkg.is_private {
+            return;
+        }
         // Dual-read: the unit-test harness injects an empty default FileCtx, so
         // the path-segment fields are false in tests — fall back to the pure
         // path predicate, which reads `ctx.path` directly.
@@ -1164,5 +1173,38 @@ import type { AppConfig } from '@nuxt/schema';
         let d = run_with_pkg_at_path(pkg, "src/runtime/setup.ts", src);
         assert_eq!(d.len(), 1, "side-effect import should still flag: {d:?}");
         assert!(d[0].message.contains("some-polyfill"));
+    }
+
+    #[test]
+    fn allows_dev_dep_in_private_package() {
+        // Issue #1373: directus' `@directus/app` dashboard is a bundled Vue SPA
+        // marked `"private": true` and never published to npm. It lists all its
+        // runtime deps (vue, vue-router, …) in devDependencies by design. Since
+        // nothing is npm-installed by a consumer, the deps/devDeps distinction is
+        // irrelevant and a production `import { ref } from 'vue'` must not flag.
+        let pkg = r#"{
+            "name": "@directus/app",
+            "private": true,
+            "devDependencies": {"vue": "^3"}
+        }"#;
+        let src = r#"import { ref } from 'vue';"#;
+        let d = run_with_pkg_at_path(pkg, "src/components/app.ts", src);
+        assert!(d.is_empty(), "private package should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_in_publishable_package() {
+        // Negative-space guard: a publishable package (no `"private": true`) with
+        // `vue` in devDependencies and a production value import of `vue` must
+        // still flag — the exemption is scoped to private packages, and the rule
+        // keeps working for genuinely-published packages.
+        let pkg = r#"{
+            "name": "publishable-lib",
+            "devDependencies": {"vue": "^3"}
+        }"#;
+        let src = r#"import { ref } from 'vue';"#;
+        let d = run_with_pkg_at_path(pkg, "src/components/app.ts", src);
+        assert_eq!(d.len(), 1, "publishable package should still flag: {d:?}");
+        assert!(d[0].message.contains("vue"));
     }
 }
