@@ -61,6 +61,14 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A type predicate (`x is T`) narrows a parameter, so it is impossible
+        // without one. Zero-parameter `isX(): boolean` functions are runtime
+        // environment/feature detection (e.g. `isSafari` guarding `typeof
+        // navigator` for SSR safety), not parameter narrowing — never flag them.
+        if func.params.items.is_empty() && func.params.rest.is_none() {
+            return;
+        }
+
         // Return type must be `: boolean` (not a type predicate).
         let Some(ret) = &func.return_type else { return };
         let rt_span = ret.span;
@@ -146,6 +154,34 @@ mod tests {
         assert!(
             run("function isString(x: unknown): x is string { return typeof x === \"string\"; }")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_zero_param_env_detection() {
+        // Regression for issue #2251: environment/feature-detection functions take
+        // no parameter, so a type predicate (`x is T`) is impossible — `typeof`
+        // guards a global (`navigator`) for SSR safety, not parameter narrowing.
+        let safari = "function isSafari(): boolean {\n\
+                      return typeof navigator !== 'undefined'\n\
+                      ? /^((?!chrome|android).)*safari/i.test(navigator.userAgent)\n\
+                      : false;\n\
+                      }";
+        assert!(run(safari).is_empty());
+
+        let macos = "function isMacOS(): boolean {\n\
+                     return typeof navigator !== 'undefined' ? /Mac/.test(navigator.platform) : false;\n\
+                     }";
+        assert!(run(macos).is_empty());
+    }
+
+    #[test]
+    fn still_flags_param_typeof() {
+        // Negative-space guard: a genuine type guard whose parameter IS the
+        // `typeof` operand must still be flagged (should be `x is string`).
+        assert_eq!(
+            run("function isString(x: unknown): boolean { return typeof x === \"string\"; }").len(),
+            1
         );
     }
 }
