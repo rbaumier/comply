@@ -205,6 +205,32 @@ fn is_fixture_runner_call(expr: &Expression, package_bindings: &FxHashSet<&str>)
     name.ends_with("Tester") && package_bindings.contains(name)
 }
 
+/// `vi.*` / `jest.*` setup methods that *must* live at module scope because the
+/// test runner hoists them above all imports (`mock`/`unmock` and friends) or
+/// otherwise binds them to file-level evaluation (timer faking, runner config).
+/// Moving any of these into a `beforeEach`/`beforeAll` hook changes the
+/// semantics, so the side-effect check exempts them.
+const HOISTED_TEST_API_METHODS: &[(&str, &str)] = &[
+    ("vi", "mock"),
+    ("vi", "unmock"),
+    ("vi", "doMock"),
+    ("vi", "doUnmock"),
+    ("vi", "hoisted"),
+    ("vi", "stubEnv"),
+    ("vi", "stubGlobal"),
+    ("vi", "defineHelper"),
+    ("vi", "useFakeTimers"),
+    ("vi", "useRealTimers"),
+    ("vi", "setConfig"),
+    ("jest", "mock"),
+    ("jest", "unmock"),
+    ("jest", "doMock"),
+    ("jest", "dontMock"),
+    ("jest", "useFakeTimers"),
+    ("jest", "useRealTimers"),
+    ("jest", "setTimeout"),
+];
+
 /// Calls that *must* live at module scope because the test runner hoists
 /// or otherwise binds them to file-level evaluation.
 fn is_hoisted_test_api(expr: &Expression) -> bool {
@@ -219,21 +245,7 @@ fn is_hoisted_test_api(expr: &Expression) -> bool {
     };
     let obj_name = obj.name.as_str();
     let prop_name = mem.property.name.as_str();
-    matches!(
-        (obj_name, prop_name),
-        ("vi", "mock")
-            | ("vi", "unmock")
-            | ("vi", "doMock")
-            | ("vi", "doUnmock")
-            | ("vi", "hoisted")
-            | ("vi", "stubEnv")
-            | ("vi", "stubGlobal")
-            | ("vi", "defineHelper")
-            | ("jest", "mock")
-            | ("jest", "unmock")
-            | ("jest", "doMock")
-            | ("jest", "dontMock")
-    )
+    HOISTED_TEST_API_METHODS.contains(&(obj_name, prop_name))
 }
 
 fn is_commonjs_import(expr: &Expression) -> bool {
@@ -1596,6 +1608,109 @@ describe("x", () => { it("works", () => {}); });
             d.len(),
             1,
             "a describe-prefixed call lacking a string title + callback must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_top_level_vi_mock_with_dynamic_import_arg() {
+        let src = r#"
+import { vi, describe, it } from 'vitest'
+
+vi.mock(
+  import('../src/utils/dependencyConstraints.js'),
+  async importOriginal => {
+    const dependencyConstraints = await importOriginal();
+    return { ...dependencyConstraints, __esModule: true };
+  },
+);
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "RuleTester.test.ts");
+        assert!(
+            d.is_empty(),
+            "top-level vi.mock(import(...), cb) is hoisted by Vitest and must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_top_level_jest_mock() {
+        let src = r#"
+jest.mock('./foo');
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert!(
+            d.is_empty(),
+            "top-level jest.mock('./foo') is hoisted by Jest and must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_top_level_vi_use_fake_timers() {
+        let src = r#"
+import { vi } from 'vitest'
+
+vi.useFakeTimers();
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "timers.test.ts");
+        assert!(
+            d.is_empty(),
+            "top-level vi.useFakeTimers() is a framework setup call and must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_top_level_jest_use_fake_timers_and_set_timeout() {
+        let src = r#"
+jest.useFakeTimers();
+jest.setTimeout(30000);
+vi.useRealTimers();
+vi.setConfig({ testTimeout: 1000 });
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "config.test.ts");
+        assert!(
+            d.is_empty(),
+            "top-level jest/vi timer & config setup calls must all be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_top_level_genuine_side_effect_call() {
+        let src = r#"
+import { vi } from 'vitest'
+
+fetch('https://example.com');
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a genuine top-level side effect (fetch) must still be flagged — the exemption must not weaken the true-positive path: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_top_level_unknown_vi_method_call() {
+        let src = r#"
+import { vi } from 'vitest'
+
+vi.advanceTimersByTime(1000);
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a vi.* method outside the hoisted-setup set must still be flagged: {d:?}"
         );
     }
 
