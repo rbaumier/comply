@@ -18,27 +18,33 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 #[derive(Debug)]
 pub struct Check;
 
+impl Check {
+    /// Literal substrings that gate the rule — shared by the text backend and
+    /// the Rust tree-sitter backend so both prefilter on the same token set.
+    pub(crate) const PREFILTER: &'static [&'static str] = &[
+        "ACCESS_TOKEN",
+        "AKIA",
+        "API_KEY",
+        "APIKEY",
+        "gho_",
+        "ghp_",
+        "ghr_",
+        "ghs_",
+        "ghu_",
+        "github_pat_",
+        "PASSWORD",
+        "rk_live_",
+        "rk_test_",
+        "SECRET",
+        "service_account",
+        "sk_live_",
+        "sk_test_",
+    ];
+}
+
 impl TextCheck for Check {
     fn prefilter(&self) -> Option<&'static [&'static str]> {
-        Some(&[
-            "ACCESS_TOKEN",
-            "AKIA",
-            "API_KEY",
-            "APIKEY",
-            "gho_",
-            "ghp_",
-            "ghr_",
-            "ghs_",
-            "ghu_",
-            "github_pat_",
-            "PASSWORD",
-            "rk_live_",
-            "rk_test_",
-            "SECRET",
-            "service_account",
-            "sk_live_",
-            "sk_test_",
-        ])
+        Some(Self::PREFILTER)
     }
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
@@ -69,7 +75,7 @@ impl TextCheck for Check {
 
 /// Scan one line for known secret shapes. Returns a short label describing
 /// what was found, or None when nothing matched.
-fn scan_line(line: &str) -> Option<&'static str> {
+pub(crate) fn scan_line(line: &str) -> Option<&'static str> {
     // AWS access key: AKIA followed by 16 uppercase alphanum.
     if contains_aws_access_key(line) {
         return Some("AWS access key");
@@ -235,7 +241,11 @@ fn contains_password_in_url(line: &str) -> bool {
     if let Some(colon) = after.find(':') {
         let rest = &after[colon + 1..];
         if let Some(at) = rest.find('@')
-            && at > 0 && !after[..colon].contains('/') {
+            && at > 0 && !after[..colon].contains('/')
+            // A bracketed token in the userinfo (`[[user]:[password]@]`) marks a
+            // URL-format template in documentation, not a real credential —
+            // a real userinfo component would percent-encode `[`/`]`.
+            && !after[..colon + 1 + at].contains('[') {
                 let credentials_and_host = &after[..colon
                     + 1
                     + at
@@ -255,7 +265,7 @@ fn contains_password_in_url(line: &str) -> bool {
     false
 }
 
-fn is_doc_or_comment_line(line: &str) -> bool {
+pub(crate) fn is_doc_or_comment_line(line: &str) -> bool {
     let trimmed = line.trim_start();
     trimmed.starts_with("///")
         || trimmed.starts_with("//!")
@@ -625,6 +635,16 @@ mod tests {
         assert_eq!(
             run(r#"const db = "mysql://admin:s3cretProd@db.prod.example.com:3306/app";"#).len(),
             1
+        );
+    }
+
+    // Regression test for #1495 (pattern 1) — a bracketed URL-format template
+    // placeholder in an error/documentation string is not a real credential.
+    #[test]
+    fn allows_bracketed_url_template_placeholder() {
+        assert!(
+            run(r#"let msg = "URLs must be in the form `mysql://[[user]:[password]@]host[:port][/database]`";"#)
+                .is_empty()
         );
     }
 }
