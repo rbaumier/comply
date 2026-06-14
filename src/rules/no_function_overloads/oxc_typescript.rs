@@ -120,6 +120,9 @@ impl OxcCheck for Check {
                     if preserves_non_terminal_optional(&sigs) {
                         continue;
                     }
+                    if preserves_concrete_param_discrimination(&sigs) {
+                        continue;
+                    }
                     for sig in sigs {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, sig.span_start as usize);
@@ -272,6 +275,43 @@ fn extra_param_is_non_terminal(shorter: &[String], longer: &[String]) -> bool {
     false
 }
 
+/// True when the overloads discriminate on the concrete type of a single
+/// same-position parameter to narrow the return type per call site — every
+/// signature has the same arity and the same fixed-parameter types except in one
+/// position, AND the signatures carry at least two distinct return-type
+/// annotations. Each overload returns the specific type produced for its specific
+/// input type (e.g. graphql-js `typeFromAST(schema, NamedTypeNode)` →
+/// `GraphQLNamedType | undefined` vs `(schema, ListTypeNode)` →
+/// `GraphQLList<any> | undefined`). Collapsing the discriminating parameter into
+/// a union would widen the return to the union of all branches for ALL callers,
+/// erasing the per-input narrowing that is the entire point of the overloads.
+///
+/// A group that varies its parameter type at a shared position but returns the
+/// SAME type (e.g. `f(a: string): X; f(a: number): X;`) is NOT exempted here — it
+/// collapses cleanly into `f(a: string | number): X` and must still be flagged.
+fn preserves_concrete_param_discrimination(sigs: &[OverloadSig]) -> bool {
+    if !has_distinct_return_types(sigs) {
+        return false;
+    }
+    let arity = sigs[0].param_types.len();
+    if arity == 0 || sigs.iter().any(|s| s.param_types.len() != arity) {
+        return false;
+    }
+    if sigs.iter().any(|s| s.first_param_is_rest) {
+        return false;
+    }
+    // Exactly one parameter position varies across the group; all others are
+    // identical in every signature. That single varying position is the
+    // discriminant whose concrete type selects the return type.
+    let varying_positions = (0..arity)
+        .filter(|&i| {
+            let first = sigs[0].param_types[i].as_str();
+            sigs.iter().any(|s| s.param_types[i] != first)
+        })
+        .count();
+    varying_positions == 1
+}
+
 /// Extract overload signature info if `stmt` is a function declaration without a body.
 fn extract_overload_sig(source: &str, stmt: &Statement) -> Option<OverloadSig> {
     match stmt {
@@ -336,10 +376,12 @@ mod tests {
 
     #[test]
     fn flags_overloaded_function() {
+        // One parameter's type differs but the return type is identical, so the
+        // pair collapses cleanly into `foo(x: number | string): string`.
         let source = "
 function foo(x: number): string;
-function foo(x: string): number;
-function foo(x: number | string): string | number { return x as any; }
+function foo(x: string): string;
+function foo(x: number | string): string { return String(x); }
 ";
         assert_eq!(run_on(source).len(), 2);
     }
@@ -452,11 +494,13 @@ export function isUnexpected(response: AllResponses): response is AllResponses {
     #[test]
     fn flags_overloads_when_only_some_return_predicate() {
         // One overload returns a type predicate, the other returns a plain type
-        // — the group is not uniformly predicate-narrowing, so it still fires.
+        // — the group is not uniformly predicate-narrowing. Both params vary, so
+        // it is not single-parameter concrete discrimination either; it collapses
+        // into one union signature and still fires.
         let source = "
-function foo(x: number): x is number;
-function foo(x: string): string;
-function foo(x: number | string): boolean { return true; }
+function foo(x: number, y: string): x is number;
+function foo(x: string, y: number): string;
+function foo(x: number | string, y: string | number): boolean { return true; }
 ";
         assert_eq!(run_on(source).len(), 2);
     }
@@ -529,16 +573,19 @@ function foo(...args: Array<any>): void {}
     }
 
     #[test]
-    fn flags_distinct_return_types_at_same_arity() {
-        // Same arity (one param each) with different return types is collapsible
-        // into `foo(x: number | string): string | number` — not call-context
-        // selected, so it still fires.
+    fn allows_distinct_return_types_at_same_arity() {
+        // Regression for #2400: same arity (one param each) where the single
+        // parameter's concrete type selects a distinct return type per call site
+        // is genuine discrimination — `foo(number)` infers `string` and
+        // `foo(string)` infers `number`. Collapsing to
+        // `foo(x: number | string): string | number` would hand every caller the
+        // widened return union, erasing the per-input narrowing.
         let source = "
 function foo(x: number): string;
 function foo(x: string): number;
 function foo(x: number | string): string | number { return x as any; }
 ";
-        assert_eq!(run_on(source).len(), 2);
+        assert!(run_on(source).is_empty());
     }
 
     #[test]
@@ -624,12 +671,44 @@ function foo(a: string, b?: number): void {}
     #[test]
     fn flags_same_position_type_difference_overloads() {
         // A pair differing only by one parameter's type at the same position
-        // collapses into `foo(a: string | number): void`. Still flagged.
+        // but with the SAME return type collapses into
+        // `foo(a: string | number): void`. Still flagged.
         let source = "
 function foo(a: string): void;
 function foo(a: number): void;
 function foo(a: string | number): void {}
 ";
         assert_eq!(run_on(source).len(), 2);
+    }
+
+    #[test]
+    fn allows_concrete_param_discrimination_with_distinct_return_types() {
+        // Regression for #2400: graphql-js `typeFromAST` discriminates on the
+        // concrete type of one same-position parameter to narrow the return type
+        // per call site. Each overload returns the specific type produced for its
+        // specific input type; collapsing the parameter into a union would widen
+        // the return to `GraphQLNamedType | GraphQLList<any> | ... | undefined`
+        // for ALL callers, erasing the per-input narrowing that is the point.
+        let source = r#"
+export function typeFromAST(
+  schema: GraphQLSchema,
+  typeNode: NamedTypeNode,
+): GraphQLNamedType | undefined;
+export function typeFromAST(
+  schema: GraphQLSchema,
+  typeNode: ListTypeNode,
+): GraphQLList<any> | undefined;
+export function typeFromAST(
+  schema: GraphQLSchema,
+  typeNode: NonNullTypeNode,
+): GraphQLNonNull<any> | undefined;
+export function typeFromAST(
+  schema: GraphQLSchema,
+  typeNode: TypeNode,
+): GraphQLNamedType | GraphQLList<any> | GraphQLNonNull<any> | undefined {
+  return undefined;
+}
+"#;
+        assert!(run_on(source).is_empty());
     }
 }
