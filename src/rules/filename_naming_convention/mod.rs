@@ -35,19 +35,6 @@ fn is_tanstack_pathless_route(path: &std::path::Path, file_name: &str) -> bool {
         .any(|c| c.as_os_str() == std::ffi::OsStr::new("routes"))
 }
 
-/// Returns `true` for TanStack Router dynamic/splat routes: a file whose
-/// name starts with `$` living under any `routes/` ancestor directory.
-/// `$.tsx` is the catch-all splat route and `$param.tsx` is a path
-/// parameter — both filenames are dictated by the framework's file router.
-/// See https://tanstack.com/router/latest/docs/framework/react/routing/file-based-routing.
-fn is_tanstack_dynamic_route(path: &std::path::Path, file_name: &str) -> bool {
-    if !file_name.starts_with('$') {
-        return false;
-    }
-    path.components()
-        .any(|c| c.as_os_str() == std::ffi::OsStr::new("routes"))
-}
-
 /// Returns `true` for Next.js Pages Router file-router names that the framework
 /// mandates, living under any `pages/` ancestor directory:
 /// - a bracket-wrapped dynamic segment (`[id].tsx`, `[...slug].tsx`,

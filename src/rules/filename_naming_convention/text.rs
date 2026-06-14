@@ -79,13 +79,16 @@ fn is_camel_case(stem: &str) -> bool {
     bytes.iter().all(|&b| b.is_ascii_alphanumeric())
 }
 
-/// Strips a leading run of underscores from `stem`, returning the remaining
-/// name. A leading `_` or `__` is the JS/TS "private/internal module" signal
-/// (e.g. `_utils`, `__database`), so the convention is validated against the
-/// name after the prefix. Returns an empty string for an all-underscore stem,
-/// which then fails every convention check and is still flagged.
+/// Strips a leading run of convention-prefix sigils (`_` and `$`) from `stem`,
+/// returning the remaining name. A leading `_`/`__` is the JS/TS
+/// "private/internal module" signal (e.g. `_utils`, `__database`) and a leading
+/// `$` is the framework-internal / reactive-value convention (e.g. Prisma's
+/// `$extends`, jQuery, RxJS, SvelteKit `$lib`), so the convention is validated
+/// against the name after the prefix. Returns an empty string for an
+/// all-sigil stem; the bare-`$` case is allowed earlier, and an all-underscore
+/// stem then fails every convention check and is still flagged.
 fn strip_private_prefix(stem: &str) -> &str {
-    stem.trim_start_matches('_')
+    stem.trim_start_matches(['_', '$'])
 }
 
 /// Returns `true` when `path` is an Angular public-API barrel: a `.ts` file
@@ -135,17 +138,21 @@ impl TextCheck for Check {
         if super::is_tanstack_pathless_route(ctx.path, file_name) {
             return Vec::new();
         }
-        if super::is_tanstack_dynamic_route(ctx.path, file_name) {
-            return Vec::new();
-        }
         if super::is_nextjs_pages_router_file(ctx.path, file_name, stem) {
             return Vec::new();
         }
         if is_public_api_barrel_file(ctx.path) {
             return Vec::new();
         }
-        // A leading `_`/`__` marks a private/internal module; validate the
-        // convention against the name after the prefix.
+        // A lone `$` stem is the framework-internal entry-point convention
+        // (e.g. Prisma's `$.ts`, TanStack Router's splat `$.tsx`); it has no
+        // remainder to validate, so allow it outright.
+        if stem == "$" {
+            return Vec::new();
+        }
+        // A leading `_`/`__` marks a private/internal module and a leading `$`
+        // marks a framework-internal/reactive value; validate the convention
+        // against the name after the prefix.
         let convention_stem = strip_private_prefix(stem);
         if is_kebab_case(convention_stem) {
             return Vec::new();
@@ -290,9 +297,30 @@ mod tests {
         assert!(run("src/app/routes/posts/$postId.tsx").is_empty());
     }
 
+    // Regression for #1618: a leading `$` is the framework-internal / reactive
+    // value convention (Prisma `$extends`, jQuery, RxJS, SvelteKit `$lib`);
+    // `$`-prefixed JS/TS files are allowed anywhere, not only under `routes/`.
     #[test]
-    fn flags_dollar_prefix_outside_routes() {
-        assert_eq!(run("src/app/$.tsx").len(), 1);
+    fn allows_dollar_stem_anywhere_issue_1618() {
+        assert!(run("packages/cli/src/platform/$.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_dollar_prefix_camel_remainder_issue_1618() {
+        assert!(run("packages/client/src/runtime/core/extensions/$extends.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_dollar_prefix_pascal_remainder_issue_1618() {
+        // `$BadName` strips to `BadName`, valid PascalCase for a .ts file.
+        assert!(run("src/$BadName.ts").is_empty());
+    }
+
+    // Guard: stripping the `$` does not exempt an invalid remainder — a
+    // snake_cased remainder after the sigil still fires.
+    #[test]
+    fn flags_dollar_prefix_snake_case_remainder_issue_1618() {
+        assert_eq!(run("src/$bad_name.ts").len(), 1);
     }
 
     // Regression for #1399: TypeScript 4.7+ ESM/CJS extensions (.mts/.cts)
