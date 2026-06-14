@@ -2914,6 +2914,21 @@ fn is_sveltekit_dir(dir: &Path) -> bool {
         .any(|f| dir.join(f).is_file())
 }
 
+/// True when `dir` is the root of a Cypress project. Signals (either suffices):
+/// a `cypress.config.*` file in `dir`, or a `cypress/` subdirectory of `dir`.
+/// Gating the synthetic `cypress/*` alias on this keeps a `cypress/...` import
+/// in a non-Cypress project unresolved, so it cannot hijack a real npm package
+/// named `cypress`.
+fn is_cypress_dir(dir: &Path) -> bool {
+    if ["cypress.config.ts", "cypress.config.js", "cypress.config.mjs"]
+        .iter()
+        .any(|f| dir.join(f).is_file())
+    {
+        return true;
+    }
+    dir.join("cypress").is_dir()
+}
+
 /// Read the `name` field of a `package.json`, or `None` when the file is
 /// absent, unparseable, or declares no `name`.
 fn read_package_name(manifest: &Path) -> Option<String> {
@@ -3120,6 +3135,9 @@ impl OxcPathResolver {
         // alias is synthesized below, independent of whether the dir has a
         // checked-in `tsconfig.json`.
         let mut sveltekit_dirs: HashSet<PathBuf> = HashSet::new();
+        // Directories that are the root of a Cypress project. Their `cypress/*`
+        // alias is synthesized below, independent of a checked-in `tsconfig.json`.
+        let mut cypress_dirs: HashSet<PathBuf> = HashSet::new();
         // Workspace member name → its manifest directory. Built from every
         // named `package.json` reachable above an indexed file.
         let mut workspace_packages: HashMap<String, PathBuf> = HashMap::new();
@@ -3143,6 +3161,9 @@ impl OxcPathResolver {
                 if is_sveltekit_dir(dir) {
                     sveltekit_dirs.insert(dir.to_path_buf());
                 }
+                if is_cypress_dir(dir) {
+                    cypress_dirs.insert(dir.to_path_buf());
+                }
                 let Some(parent) = dir.parent() else { break };
                 dir = parent;
             }
@@ -3157,23 +3178,27 @@ impl OxcPathResolver {
         let mut resolvers: Vec<TsconfigResolver> = tsconfig_dirs
             .into_iter()
             .map(|(dir, tsconfig_path)| {
-                let aliases =
-                    Self::aliases_for_dir(&dir, Some(&tsconfig_path), &sveltekit_dirs);
+                let aliases = Self::aliases_for_dir(
+                    &dir,
+                    Some(&tsconfig_path),
+                    &sveltekit_dirs,
+                    &cypress_dirs,
+                );
                 let oxc = Self::make_oxc(Some(tsconfig_path));
                 TsconfigResolver { dir, aliases, oxc }
             })
             .collect();
 
-        // SvelteKit project roots without a checked-in `tsconfig.json` still need
-        // a resolver entry so the synthetic `$lib` alias applies. (A real
-        // SvelteKit app always ships a `tsconfig.json`, but the dir-walk keeps the
-        // `$lib` synthesis robust to its absence and decoupled from tsconfig
-        // discovery.)
-        for dir in &sveltekit_dirs {
+        // Framework project roots without a checked-in `tsconfig.json` still need
+        // a resolver entry so the synthetic alias applies (`$lib` for SvelteKit,
+        // `cypress/*` for Cypress). A Cypress base dir, in particular, typically
+        // ships only `cypress.config.*` and no `tsconfig.json`, so the alias must
+        // be synthesized off the framework signal alone.
+        for dir in sveltekit_dirs.union(&cypress_dirs) {
             if resolvers.iter().any(|r| &r.dir == dir) {
                 continue;
             }
-            let aliases = Self::aliases_for_dir(dir, None, &sveltekit_dirs);
+            let aliases = Self::aliases_for_dir(dir, None, &sveltekit_dirs, &cypress_dirs);
             let oxc = Self::make_oxc(None);
             resolvers.push(TsconfigResolver { dir: dir.clone(), aliases, oxc });
         }
@@ -3190,16 +3215,24 @@ impl OxcPathResolver {
     }
 
     /// Path aliases active for `dir`: the tsconfig `paths` (when `tsconfig_path`
-    /// is present) plus, for a SvelteKit project root, the framework's synthetic
-    /// `$lib` → `src/lib` mapping. `$lib` is declared only in the generated
-    /// `.svelte-kit/tsconfig.json` (gitignored, absent in a fresh clone) which the
-    /// checked-in `tsconfig.json` `extends`; since alias reading does not follow
-    /// `extends`, the mapping is reconstructed here. `$app`/`$env`/`$service-worker`
-    /// are virtual modules with no on-disk file, so they are not synthesized.
+    /// is present) plus framework-synthetic mappings:
+    ///
+    /// - SvelteKit root: `$lib` → `src/lib`. `$lib` is declared only in the
+    ///   generated `.svelte-kit/tsconfig.json` (gitignored, absent in a fresh
+    ///   clone) which the checked-in `tsconfig.json` `extends`; since alias
+    ///   reading does not follow `extends`, the mapping is reconstructed here.
+    ///   `$app`/`$env`/`$service-worker` are virtual modules with no on-disk
+    ///   file, so they are not synthesized.
+    /// - Cypress root: `cypress/*` → `<dir>/cypress/*`. Cypress resolves a
+    ///   `cypress/...` import from the project root, so `cypress/utils/urls`
+    ///   maps to `<dir>/cypress/utils/urls`. The alias only wins when the
+    ///   expanded path is an indexed source file; a real npm `cypress` subpath
+    ///   import (no matching project file) falls through to oxc resolution.
     fn aliases_for_dir(
         dir: &Path,
         tsconfig_path: Option<&Path>,
         sveltekit_dirs: &HashSet<PathBuf>,
+        cypress_dirs: &HashSet<PathBuf>,
     ) -> Vec<(String, Vec<PathBuf>)> {
         let mut aliases = tsconfig_path
             .map(|p| Self::read_path_aliases(dir, p))
@@ -3207,6 +3240,9 @@ impl OxcPathResolver {
         if sveltekit_dirs.contains(dir) {
             aliases.push(("$lib/*".to_string(), vec![dir.join("src/lib").join("*")]));
             aliases.push(("$lib".to_string(), vec![dir.join("src/lib")]));
+        }
+        if cypress_dirs.contains(dir) {
+            aliases.push(("cypress/*".to_string(), vec![dir.join("cypress").join("*")]));
         }
         aliases
     }
@@ -4910,6 +4946,117 @@ mod tests {
         assert!(
             imp.source_path.is_none(),
             "$lib/* must not resolve in a non-SvelteKit project"
+        );
+    }
+
+    /// Build a Cypress-shaped project: a `cypress.config.ts` at the root, a
+    /// `cypress/utils/urls.ts` exporting `used_export` (and `dead_export`), and a
+    /// `cypress/e2e/x.test.ts` importing `used_export` via the `cypress/utils/...`
+    /// alias.
+    #[cfg(test)]
+    fn build_cypress_index() -> (TempDir, ImportIndex, PathBuf, PathBuf) {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("cypress.config.ts"), "export default {};\n").unwrap();
+        fs::create_dir_all(dir.path().join("cypress/utils")).unwrap();
+        fs::create_dir_all(dir.path().join("cypress/e2e")).unwrap();
+        let utils = dir.path().join("cypress/utils/urls.ts");
+        fs::write(
+            &utils,
+            "export const used_export = '/dashboard/list';\nexport const dead_export = '/chart/list';\n",
+        )
+        .unwrap();
+        let test = dir.path().join("cypress/e2e/x.test.ts");
+        fs::write(
+            &test,
+            "import { used_export } from 'cypress/utils/urls';\nexport const used = used_export;\n",
+        )
+        .unwrap();
+        let sources = [
+            SourceFile { path: utils.clone(), language: Language::TypeScript },
+            SourceFile { path: test.clone(), language: Language::TypeScript },
+        ];
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let index = ImportIndex::build(&refs);
+        let utils_canon = fs::canonicalize(&utils).unwrap();
+        let test_canon = fs::canonicalize(&test).unwrap();
+        (dir, index, utils_canon, test_canon)
+    }
+
+    // Regression for #1562: in a Cypress project, `cypress/<path>` resolves from
+    // the project root, so `import { used_export } from 'cypress/utils/urls'`
+    // resolves to `cypress/utils/urls.ts`. The synthesized `cypress/*` alias must
+    // link the importer and keep `used_export` cross-file used (not a dead export).
+    #[test]
+    fn cypress_alias_resolves_when_cypress_detected() {
+        let (_dir, index, utils_canon, test_canon) = build_cypress_index();
+
+        let imp = index
+            .get_imports(&test_canon)
+            .iter()
+            .find(|i| i.specifier == "cypress/utils/urls")
+            .expect("cypress/utils/urls import must be indexed");
+        assert_eq!(
+            imp.source_path.as_ref(),
+            Some(&utils_canon),
+            "cypress/* must resolve to <root>/cypress/* in a Cypress project"
+        );
+        // `used_export` is reachable from the test importer, so it is not dead.
+        assert!(
+            !index.get_usages(&utils_canon, "used_export").is_empty(),
+            "used_export must record a cross-file usage via the cypress alias"
+        );
+    }
+
+    // Negative-space guard for #1562: an export that nothing imports stays dead
+    // even when the Cypress alias is active. The alias must not blanket-resolve
+    // every export in the cypress dir as used.
+    #[test]
+    fn cypress_alias_keeps_genuinely_unused_export_dead() {
+        let (_dir, index, utils_canon, _test_canon) = build_cypress_index();
+
+        assert!(
+            index.get_usages(&utils_canon, "dead_export").is_empty(),
+            "an export imported by nobody must stay dead under the cypress alias"
+        );
+    }
+
+    // Negative-space guard for #1562: the `cypress/*` synthesis is gated on the
+    // Cypress signal (a `cypress.config.*` file or a `cypress/` directory). A
+    // project with neither must not synthesize the alias, so a `cypress/...`
+    // specifier stays unresolved here — leaving a real npm `cypress` package
+    // submodule import to oxc rather than mis-mapping it to a project file.
+    #[test]
+    fn cypress_alias_not_resolved_without_cypress_signal() {
+        let dir = TempDir::new().unwrap();
+        // No cypress.config.* and no `cypress/` directory: not a Cypress project.
+        fs::create_dir_all(dir.path().join("utils")).unwrap();
+        let utils = dir.path().join("utils/urls.ts");
+        fs::write(&utils, "export const used_export = '/x';\n").unwrap();
+        let consumer = dir.path().join("consumer.ts");
+        // A `cypress/...` specifier that happens to match a relative source path
+        // shape must NOT be alias-resolved: this is a real npm `cypress` package
+        // submodule import in a non-Cypress project.
+        fs::write(
+            &consumer,
+            "import mount from 'cypress/utils/urls';\nexport const used = mount;\n",
+        )
+        .unwrap();
+        let sources = [
+            SourceFile { path: utils.clone(), language: Language::TypeScript },
+            SourceFile { path: consumer.clone(), language: Language::TypeScript },
+        ];
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let index = ImportIndex::build(&refs);
+        let consumer_canon = fs::canonicalize(&consumer).unwrap();
+
+        let imp = index
+            .get_imports(&consumer_canon)
+            .iter()
+            .find(|i| i.specifier == "cypress/utils/urls")
+            .expect("cypress/utils/urls import must be indexed");
+        assert!(
+            imp.source_path.is_none(),
+            "cypress/* must not alias-resolve in a non-Cypress project"
         );
     }
 
