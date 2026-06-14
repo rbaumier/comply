@@ -55,6 +55,17 @@ impl OxcCheck for Check {
             .and_then(|n| n.to_str())
             .is_some_and(crate::rules::path_utils::is_sveltekit_route_file);
 
+        // Mock and fixture files (under `mock/`, `mocks/`, `__mocks__/`,
+        // `fixtures/`, `__fixtures__/`) hold value-level mocks of runtime config
+        // objects and scenario fixture data. A boolean mock flag mirrors the
+        // camelCase property name of the config interface it simulates
+        // (`hasPluginDependencies`); renaming it to SCREAMING_SNAKE_CASE breaks
+        // that structural correspondence. These are not application-wide
+        // compile-time invariants, so the convention does not apply (issue #1591).
+        if crate::rules::path_utils::is_mock_or_fixture_dir_path(ctx.path) {
+            return;
+        }
+
         for declarator in &decl.declarations {
             let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &declarator.id else {
                 continue;

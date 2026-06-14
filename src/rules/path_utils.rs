@@ -237,6 +237,18 @@ pub fn is_auto_mock_dir_path(path: &Path) -> bool {
     has_path_segment(path, &["__mocks__"])
 }
 
+/// True when `path` lives under a `mock`, `mocks`, `__mocks__`, `fixtures`, or
+/// `__fixtures__` directory: the conventional homes for test mock objects and
+/// fixture data. Value-level mocks of a runtime config object mirror that
+/// object's camelCase property names (`hasPluginDependencies`), and fixture
+/// constants are scenario data, not application-wide compile-time invariants —
+/// so naming conventions that require SCREAMING_SNAKE_CASE for top-level
+/// constants do not apply (issue #1591). Segment match keeps an unrelated
+/// `src/mockingbird/` or `src/fixturesHelper.ts` from matching.
+pub fn is_mock_or_fixture_dir_path(path: &Path) -> bool {
+    has_path_segment(path, &["mock", "mocks", "__mocks__", "fixtures", "__fixtures__"])
+}
+
 /// True when `path` lives under a `testing/` directory, the test-infrastructure
 /// convention (popularised by bulletproof-react) for housing test utilities,
 /// mock handlers, test setup files, and test-data generators co-located with
@@ -713,6 +725,21 @@ mod aux_path_tests {
         // Segment (not substring) match.
         assert!(!is_auto_mock_dir_path(&PathBuf::from("src/my__mocks__data/index.ts")));
         assert!(!is_auto_mock_dir_path(&PathBuf::from("src/app/login.ts")));
+    }
+
+    #[test]
+    fn mock_or_fixture_dir_path_segments() {
+        // Issue #1591: mock config-flag and fixture constants under a
+        // mock/fixture directory.
+        assert!(is_mock_or_fixture_dir_path(&PathBuf::from("test/mocks/nuxt-config.ts")));
+        assert!(is_mock_or_fixture_dir_path(&PathBuf::from("src/mock/config.ts")));
+        assert!(is_mock_or_fixture_dir_path(&PathBuf::from("__mocks__/fs.js")));
+        assert!(is_mock_or_fixture_dir_path(&PathBuf::from("test/fixtures/data.ts")));
+        assert!(is_mock_or_fixture_dir_path(&PathBuf::from("__fixtures__/sample.ts")));
+        // Segment (not substring) match.
+        assert!(!is_mock_or_fixture_dir_path(&PathBuf::from("src/mockingbird/index.ts")));
+        assert!(!is_mock_or_fixture_dir_path(&PathBuf::from("src/fixturesHelper.ts")));
+        assert!(!is_mock_or_fixture_dir_path(&PathBuf::from("src/app/login.ts")));
     }
 
     #[test]
