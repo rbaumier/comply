@@ -1,8 +1,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// Validate a key against `^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)+$`:
+/// Validate a key against `^[a-z][a-zA-Z0-9-]*(\.[a-z][a-zA-Z0-9-]*)+$`:
 /// - at least 2 segments separated by `.`,
-/// - each segment starts with lowercase + only ASCII alphanumerics,
+/// - each segment starts with lowercase + only ASCII alphanumerics or hyphens,
 /// - no consecutive dots, no slashes, no other separators.
 fn is_valid_namespaced(key: &str) -> bool {
     if key.is_empty() {
@@ -22,7 +22,7 @@ fn is_valid_namespaced(key: &str) -> bool {
             return false;
         }
         for c in chars {
-            if !c.is_ascii_alphanumeric() {
+            if !c.is_ascii_alphanumeric() && c != '-' {
                 return false;
             }
         }
@@ -87,6 +87,11 @@ mod tests {
     #[test]
     fn allows_domain_key() {
         assert!(run("t('auth.title')").is_empty());
+    }
+
+    #[test]
+    fn allows_hyphenated_domain() {
+        assert!(run("t('grafana-data.some.key')").is_empty());
     }
 
     #[test]
