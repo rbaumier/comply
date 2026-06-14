@@ -43,6 +43,9 @@ impl OxcCheck for Check {
         if name == "fill" && is_non_array_fill(member, call, ctx) {
             return;
         }
+        if name == "push" && is_router_navigation(member, semantic) {
+            return;
+        }
 
         // Bounded local accumulator inside a `for` / `for-of` / `for-in`
         // loop: `const items = []; for (...) items.push(yield* fn());`.
@@ -104,6 +107,80 @@ fn is_non_array_fill(
                 | Expression::ComputedMemberExpression(_)
         )
         || ctx.file.path_segments.in_test_dir
+}
+
+/// True when a `.push(...)` call is a router/history navigation, not an
+/// `Array.prototype.push` mutation.
+///
+/// `router.push(url)` (Next.js `useRouter`, Vue Router) and `history.push(url)`
+/// (React Router v5, Reach Router) navigate to a URL; they share the name
+/// `push` with `Array.prototype.push` but are unrelated. The receiver is
+/// recognised by two complementary signals:
+/// - binding shape: the receiver identifier resolves to a `const`/`let` whose
+///   initialiser is a navigation factory (`useRouter()`, `useNavigate()`,
+///   `useHistory()`, `createBrowserHistory()`, …) — this holds regardless of
+///   the variable's name;
+/// - name convention: the receiver is named `router`, `history`, `navigate`, or
+///   `navigation`, covering receivers that cannot be traced to a factory
+///   (function parameters, props, destructured values).
+fn is_router_navigation(
+    member: &oxc_ast::ast::StaticMemberExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Expression::Identifier(receiver) = &member.object else {
+        return false;
+    };
+    if is_navigation_identifier(receiver.name.as_str()) {
+        return true;
+    }
+    receiver_initializer(receiver, semantic).is_some_and(is_navigation_factory_call)
+}
+
+/// `true` for the conventional names given to router/history objects.
+fn is_navigation_identifier(name: &str) -> bool {
+    matches!(name, "router" | "history" | "navigate" | "navigation")
+}
+
+/// Resolve a receiver identifier to the initialiser of its declaring
+/// `const`/`let`, when it is declared by a `VariableDeclarator` in scope.
+fn receiver_initializer<'a>(
+    receiver: &oxc_ast::ast::IdentifierReference,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a Expression<'a>> {
+    let scoping = semantic.scoping();
+    let ref_id = receiver.reference_id.get()?;
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
+    let decl_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    std::iter::once(nodes.kind(decl_id))
+        .chain(nodes.ancestor_kinds(decl_id))
+        .find_map(|kind| match kind {
+            AstKind::VariableDeclarator(decl) => Some(decl.init.as_ref()),
+            _ => None,
+        })
+        .flatten()
+}
+
+/// `true` when `expr` is a call to a router/history factory hook, e.g.
+/// `useRouter()`, `useNavigate()`, `createBrowserHistory()`.
+fn is_navigation_factory_call(expr: &Expression) -> bool {
+    let callee_name = match expr {
+        Expression::CallExpression(call) => match &call.callee {
+            Expression::Identifier(id) => id.name.as_str(),
+            Expression::StaticMemberExpression(member) => member.property.name.as_str(),
+            _ => return false,
+        },
+        _ => return false,
+    };
+    matches!(
+        callee_name,
+        "useRouter"
+            | "useNavigate"
+            | "useHistory"
+            | "createBrowserHistory"
+            | "createHashHistory"
+            | "createMemoryHistory"
+    )
 }
 
 fn is_inside_loop_body(
@@ -237,6 +314,65 @@ mod tests {
     #[test]
     fn flags_push_outside_loop() {
         let src = r#"const xs = []; xs.push(1);"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_next_router_push_bound_to_use_router() {
+        // Regression for rbaumier/comply#1692 — `router.push(url)` where
+        // `router` is bound to `useRouter()` is Next.js navigation, not an
+        // Array.prototype.push mutation.
+        let src = r#"
+            import { useRouter } from 'next/navigation';
+            export const Default = {
+                play: async () => {
+                    const router = useRouter();
+                    router.push('/push-html', { forceOptimisticNavigation: true });
+                },
+            };
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_history_push_bound_to_factory() {
+        // Regression for rbaumier/comply#1692 — `history.push(url)` where the
+        // receiver is bound to a history factory (React Router v5) is
+        // navigation, not an array mutation. The local is named `nav` so only
+        // the binding shape can recognise it.
+        let src = r#"
+            function go() {
+                const nav = createBrowserHistory();
+                nav.push('/dashboard');
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_router_push_on_named_receiver() {
+        // Regression for rbaumier/comply#1692 — a `router` receiver that
+        // cannot be traced to a factory (a prop / parameter) is exempt by the
+        // conventional identifier name.
+        let src = r#"
+            function navigate(router) {
+                router.push('/home');
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_array_push_on_non_router_identifier() {
+        // Negative space for rbaumier/comply#1692 — a genuine `arr.push(x)`
+        // array mutation outside any loop, on an identifier that is neither a
+        // conventional navigation name nor bound to a navigation factory, must
+        // still be flagged.
+        let src = r#"
+            function collect(arr) {
+                arr.push(1);
+            }
+        "#;
         assert_eq!(run(src).len(), 1);
     }
 
