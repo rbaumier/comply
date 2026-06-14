@@ -100,6 +100,104 @@ fn is_generic_param_default(
     false
 }
 
+// `void` as a member of a union type at the top level of a type alias or
+// conditional type (`type X = ... | void`, `T extends U ? A : B | void`) is
+// valid TypeScript: it marks the resolved value as discardable in a type-level
+// computation. Scoped to those two contexts — a `void` union inside a parameter
+// or return annotation is left to `is_return_type_context`, so crossing a
+// function/parameter boundary disqualifies the exemption.
+fn is_union_member_in_type_level_alias(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let mut saw_union = false;
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::TSUnionType(_) => saw_union = true,
+            AstKind::TSConditionalType(_) | AstKind::TSTypeAliasDeclaration(_) => {
+                return saw_union;
+            }
+            // A function/parameter boundary means the union sits in a
+            // parameter or return position, not a top-level type-level union.
+            AstKind::FormalParameter(_)
+            | AstKind::TSFunctionType(_)
+            | AstKind::TSConstructorType(_)
+            | AstKind::TSMethodSignature(_)
+            | AstKind::TSCallSignatureDeclaration(_)
+            | AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Class(_)
+            | AstKind::TSInterfaceDeclaration(_) => return false,
+            _ => continue,
+        }
+    }
+    false
+}
+
+// The rightmost identifier of a heritage reference (`PromiseLike`,
+// `ns.PromiseLike`). Returns `None` for non-identifier expressions.
+fn heritage_head_name<'a>(expr: &'a oxc_ast::ast::Expression<'a>) -> Option<&'a str> {
+    use oxc_ast::ast::Expression;
+    match expr {
+        Expression::Identifier(id) => Some(id.name.as_str()),
+        Expression::StaticMemberExpression(member) => Some(member.property.name.as_str()),
+        _ => None,
+    }
+}
+
+fn ts_type_name_head<'a>(name: &'a oxc_ast::ast::TSTypeName<'a>) -> &'a str {
+    use oxc_ast::ast::TSTypeName;
+    match name {
+        TSTypeName::IdentifierReference(id) => id.name.as_str(),
+        TSTypeName::QualifiedName(q) => q.right.name.as_str(),
+        TSTypeName::ThisExpression(_) => "",
+    }
+}
+
+fn is_promise_like(name: &str) -> bool {
+    name == "PromiseLike" || name == "Promise"
+}
+
+// `(value: void) => ...` is structurally required when the enclosing
+// class/interface implements (or extends) `PromiseLike<...>` / `Promise<...>`:
+// the callback parameter must type the resolved value as `void`. Detected via
+// the heritage clause (`implements`/`extends`), never the method name. The
+// `void` must be in a parameter position (a `FormalParameter` is crossed on the
+// way up), so a plain `let x: void` inside such a class still fires.
+fn is_promise_like_callback_param(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let mut in_parameter = false;
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::FormalParameter(_) => in_parameter = true,
+            AstKind::Class(class) if in_parameter => {
+                let super_match = class
+                    .super_class
+                    .as_ref()
+                    .and_then(heritage_head_name)
+                    .is_some_and(is_promise_like);
+                let implements_match = class
+                    .implements
+                    .iter()
+                    .any(|clause| is_promise_like(ts_type_name_head(&clause.expression)));
+                return super_match || implements_match;
+            }
+            AstKind::TSInterfaceDeclaration(iface) if in_parameter => {
+                return iface
+                    .extends
+                    .iter()
+                    .filter_map(|heritage| heritage_head_name(&heritage.expression))
+                    .any(is_promise_like);
+            }
+            AstKind::Class(_) | AstKind::TSInterfaceDeclaration(_) => return false,
+            _ => continue,
+        }
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::TSVoidKeyword]
@@ -123,6 +221,12 @@ impl OxcCheck for Check {
             return;
         }
         if is_generic_param_default(node, semantic, kw.span.start) {
+            return;
+        }
+        if is_union_member_in_type_level_alias(node, semantic) {
+            return;
+        }
+        if is_promise_like_callback_param(node, semantic) {
             return;
         }
 
@@ -247,6 +351,58 @@ mod tests {
         // Negative space: `void` in a union outside the return type (here a
         // parameter annotation of a call signature) is still invalid.
         let src = "interface F { (ctx: string | void): number }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_void_union_in_conditional_type_alias() {
+        // Regression for rbaumier/comply#1675 — elysiajs/elysia ResolveHandler:
+        // `void` as a union member in a conditional type's branch.
+        let src = "type ResolveHandler<A> = A extends Record<string, unknown> \
+                   ? A : unknown | void;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_void_union_in_type_alias() {
+        let src = "type Discardable = string | void;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_void_param_in_promise_like_class() {
+        // Regression for rbaumier/comply#1675 — elysiajs/elysia PromiseGroup:
+        // `(value: void)` callback param required by `implements PromiseLike<void>`.
+        let src = "class PromiseGroup implements PromiseLike<void> {\
+                   then<R = void>(onfulfilled?: ((value: void) => R) | null): PromiseLike<R> {\
+                   return this as any; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_void_param_in_promise_like_interface() {
+        let src = "interface Thenable extends PromiseLike<void> {\
+                   then(onfulfilled?: (value: void) => unknown): void }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_void_param_in_non_promise_class() {
+        // Negative space: `(value: void)` is only exempt when the enclosing
+        // class implements PromiseLike/Promise — a plain class still fires.
+        let src = "class Plain {\
+                   then(onfulfilled?: (value: void) => unknown): void {} }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_void_variable_in_promise_like_class() {
+        // Negative space: the PromiseLike exemption is parameter-scoped — a
+        // plain `let x: void` inside the class body still fires.
+        let src = "class PromiseGroup implements PromiseLike<void> {\
+                   run() { let x: void; } }";
         let diags = run_on(src);
         assert_eq!(diags.len(), 1);
     }
