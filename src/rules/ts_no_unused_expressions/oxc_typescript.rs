@@ -2,6 +2,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::{ChainElement, Expression};
+use std::path::Path;
 use std::sync::Arc;
 
 /// SolidJS reactive primitives that re-run their callback whenever a tracked
@@ -86,6 +87,17 @@ impl OxcCheck for Check {
             // error, so removing the expression would make the directive itself
             // an unused-directive error. The expression is intentional.
             if preceded_by_ts_expect_error(stmt.span.start, semantic, ctx.source) {
+                continue;
+            }
+
+            // In a TypeScript type-test file, a bare member-access statement
+            // (`a.b`, `fn().prop`, `a?.b`) is a compile-time existence check:
+            // writing the access forces `tsc` to verify the property exists on
+            // the receiver's type, erroring if it is removed or renamed. The
+            // statement IS the assertion ("this property exists"), never
+            // accidental dead code. Gated on the type-test path convention so
+            // the same shape stays flagged in ordinary source files.
+            if is_bare_member_access(expr) && is_type_test_file(ctx.path) {
                 continue;
             }
 
@@ -175,6 +187,52 @@ fn preceded_by_ts_expect_error(
         let text = &source[comment.span.start as usize..end];
         text.contains("@ts-expect-error")
     })
+}
+
+/// True when `expr` is a bare member access used as a statement: `a.b`,
+/// `fn().prop`, computed `a[k]`, or their optional-chained forms (`a?.b`). In a
+/// type-test file these are compile-time existence assertions. A trailing call
+/// is excluded — `fn();` is a real call, handled by `has_side_effects`.
+fn is_bare_member_access(expr: &Expression) -> bool {
+    match expr {
+        Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_) => true,
+        Expression::ChainExpression(chain) => matches!(
+            &chain.expression,
+            ChainElement::StaticMemberExpression(_) | ChainElement::ComputedMemberExpression(_)
+        ),
+        _ => false,
+    }
+}
+
+/// True when `path` is a TypeScript type-test file, where a bare member-access
+/// statement is a compile-time existence assertion rather than dead code.
+/// Conventions: files under a `test-d/`, `dtslint/`, or `__tests_dts__/`
+/// directory; a `types/test.{ts,tsx}` file (a `test` file directly inside a
+/// `types/` directory); or the `*.test-d.{ts,tsx}` / `*.spec-d.{ts,tsx}` /
+/// `*.types-test.{ts,tsx}` suffixes.
+fn is_type_test_file(path: &Path) -> bool {
+    if path
+        .components()
+        .any(|c| matches!(c.as_os_str().to_str(), Some("test-d" | "dtslint" | "__tests_dts__")))
+    {
+        return true;
+    }
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if matches!(name, "test.ts" | "test.tsx")
+        && path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            == Some("types")
+    {
+        return true;
+    }
+    name.ends_with(".test-d.ts")
+        || name.ends_with(".test-d.tsx")
+        || name.ends_with(".spec-d.ts")
+        || name.ends_with(".spec-d.tsx")
+        || name.ends_with(".types-test.ts")
+        || name.ends_with(".types-test.tsx")
 }
 
 fn has_side_effects(expr: &Expression) -> bool {
@@ -325,6 +383,10 @@ mod tests {
 
     fn run_on_tsx(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
+    }
+
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, path)
     }
 
     #[test]
@@ -585,5 +647,42 @@ mod tests {
         let src = "// @ts-expect-error\nderived.actions;\nother.value;";
         let d = run_on(src);
         assert_eq!(d.len(), 1, "{:?}", d);
+    }
+
+    // Regression #2170: in a TypeScript type-test file, a bare member-access
+    // statement is a compile-time existence check — `fn().prop` asserts (at the
+    // type level) that `.prop` exists on the return type. It must not be flagged.
+    #[test]
+    fn allows_member_access_existence_check_in_type_test_file_issue_2170() {
+        let src = "export function testGetConfig() {\n  pure.getConfig().testIdAttribute\n  pure.getConfig().reactStrictMode\n}";
+        assert!(
+            run_on_path(src, "types/test.tsx").is_empty(),
+            "{:?}",
+            run_on_path(src, "types/test.tsx")
+        );
+        // Plain `obj.prop`, computed access, and optional chaining are all
+        // existence assertions in a type-test file.
+        assert!(run_on_path("obj.prop;", "src/foo.test-d.ts").is_empty());
+        assert!(run_on_path("obj['prop'];", "src/foo.test-d.ts").is_empty());
+        assert!(run_on_path("obj?.prop;", "src/foo.test-d.ts").is_empty());
+        assert!(run_on_path("fn().prop;", "test-d/index.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_member_access_in_ordinary_file_issue_2170() {
+        // The SAME bare member-access statement in a normal source file is a
+        // genuine unused expression and must still be flagged.
+        assert_eq!(run_on_path("fn().prop;", "src/foo.ts").len(), 1);
+        assert_eq!(run_on_path("obj.prop;", "src/foo.tsx").len(), 1);
+        assert_eq!(run_on_path("obj?.prop;", "src/foo.ts").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_genuine_dead_expression_in_type_test_file_issue_2170() {
+        // The exemption is scoped to member-access shapes; other genuinely dead
+        // expressions must keep flagging even inside a type-test file.
+        assert_eq!(run_on_path("1 + 1;", "types/test.tsx").len(), 1);
+        assert_eq!(run_on_path("a === b;", "src/foo.test-d.ts").len(), 1);
+        assert_eq!(run_on_path("let x = 1; x;", "types/test.tsx").len(), 1);
     }
 }
