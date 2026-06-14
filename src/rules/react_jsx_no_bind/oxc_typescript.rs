@@ -1,6 +1,8 @@
-//! react-jsx-no-bind OxcCheck backend. Files importing from `solid-js` are
-//! exempt: SolidJS components do not re-render, so inline JSX functions never
-//! cause extra renders and `useCallback` does not apply.
+//! react-jsx-no-bind OxcCheck backend. Files in a non-React JSX framework
+//! package — the nearest `package.json` declares `vue` or `solid-js` and not
+//! `react` — are exempt, as are files importing from `solid-js`: Vue's own
+//! reactivity and Solid's fine-grained reactivity mean a fresh inline function
+//! per render is not a re-render hazard and `useCallback` does not apply.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -40,6 +42,14 @@ impl OxcCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         if ctx.source_contains("solid-js") {
+            return;
+        }
+        // A file belonging to a Vue or Solid package (nearest `package.json`
+        // declares `vue`/`solid-js` and not `react`) writes JSX/TSX for a
+        // framework with its own reactivity, where a fresh inline function per
+        // render is not a re-render hazard. React-named rules stay on when the
+        // package declares `react` (or both) or has no resolvable framework dep.
+        if crate::oxc_helpers::in_non_react_framework_package(ctx.project, ctx.path) {
             return;
         }
         let AstKind::JSXOpeningElement(opening) = node.kind() else {
@@ -195,5 +205,98 @@ mod tests {
     fn flags_bind_on_non_ref_attr_issue_1965() {
         let src = "function App() { return <button onClick={this.f.bind(this)} />; }";
         assert_eq!(run(src).len(), 1);
+    }
+
+    /// Stage a `.tsx` file at `rel_path` under a package whose `package.json` is
+    /// `pkg_json`, then lint it so `nearest_package_json` resolves the manifest.
+    fn run_with_pkg_at_path(pkg_json: &str, rel_path: &str, source: &str) -> Vec<Diagnostic> {
+        use crate::config::Config;
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        use oxc_allocator::Allocator;
+        use oxc_parser::Parser as OxcParser;
+        use oxc_semantic::SemanticBuilder;
+        use oxc_span::SourceType;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), pkg_json).unwrap();
+        let file_path = dir.path().join(rel_path);
+        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        std::fs::write(&file_path, source).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: Language::Tsx,
+        };
+        let refs = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = std::fs::canonicalize(&file_path).unwrap();
+
+        crate::oxc_helpers::reset_file_caches();
+        let allocator = Allocator::default();
+        let parse_ret = OxcParser::new(&allocator, source, SourceType::tsx()).parse();
+        let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+        let file_ctx = crate::rules::file_ctx::FileCtx::build(&canon, source, Language::Tsx, &project);
+        let ctx = CheckCtx::for_test_full(&canon, source, &project, &file_ctx);
+
+        let mut diagnostics = Vec::new();
+        let kinds = Check.interested_kinds();
+        for node in semantic.nodes().iter() {
+            if kinds.contains(&node.kind().ty()) {
+                Check.run(node, &ctx, &semantic, &mut diagnostics);
+            }
+        }
+        diagnostics
+    }
+
+    #[test]
+    fn allows_arrow_in_vue_package_tsx_issue_2180() {
+        // Issue #2180: a `.tsx` file whose nearest package.json declares `vue`
+        // (and not `react`) is Vue JSX. Vue has its own reactivity, so an inline
+        // arrow in a JSX prop is not a re-render hazard and must not flag.
+        let pkg = r#"{"dependencies":{"vue":"^3"}}"#;
+        let src = "import { defineComponent } from 'vue';\nfunction App() { return <input onInput={(e) => setFilter(e.target.value)} />; }";
+        let d = run_with_pkg_at_path(pkg, "examples/vue/expanding/src/App.tsx", src);
+        assert!(d.is_empty(), "vue package tsx should not flag: {d:?}");
+    }
+
+    #[test]
+    fn allows_arrow_in_solid_package_tsx_issue_2180() {
+        // Issue #2180: same exemption for a `solid-js` package (no `solid-js`
+        // import text in the source — the package dependency is the signal).
+        let pkg = r#"{"dependencies":{"solid-js":"^1"}}"#;
+        let src = "function App() { return <input onInput={(e) => setFilter(e.target.value)} />; }";
+        let d = run_with_pkg_at_path(pkg, "examples/solid/src/App.tsx", src);
+        assert!(d.is_empty(), "solid package tsx should not flag: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_arrow_in_react_package_tsx_issue_2180() {
+        // Negative-space guard: a `react` package keeps firing — the React
+        // re-render concern applies.
+        let pkg = r#"{"dependencies":{"react":"^19"}}"#;
+        let src = "function App() { return <input onInput={(e) => setFilter(e.target.value)} />; }";
+        let d = run_with_pkg_at_path(pkg, "examples/react/src/App.tsx", src);
+        assert_eq!(d.len(), 1, "react package tsx should still flag: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_arrow_with_no_framework_dep_issue_2180() {
+        // Negative-space guard: a package with no resolvable framework dep keeps
+        // firing — these React-named rules default on.
+        let pkg = r#"{"dependencies":{}}"#;
+        let src = "function App() { return <input onInput={(e) => setFilter(e.target.value)} />; }";
+        let d = run_with_pkg_at_path(pkg, "src/App.tsx", src);
+        assert_eq!(d.len(), 1, "no-framework package should still flag: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_arrow_when_both_react_and_vue_issue_2180() {
+        // Ambiguity guard: a package declaring both `react` and `vue` keeps
+        // firing — default to the rule's React intent.
+        let pkg = r#"{"dependencies":{"react":"^19","vue":"^3"}}"#;
+        let src = "function App() { return <input onInput={(e) => setFilter(e.target.value)} />; }";
+        let d = run_with_pkg_at_path(pkg, "src/App.tsx", src);
+        assert_eq!(d.len(), 1, "react+vue package should still flag: {d:?}");
     }
 }
