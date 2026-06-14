@@ -1639,6 +1639,16 @@ pub struct ProjectCtx {
     // missing/malformed file or an absent `lib.entryFile` so it is not re-read.
     ng_package_entry_cache: Mutex<HashMap<PathBuf, Option<String>>>,
 
+    // "Does this package directory declare a Bazel `ng_package` target?", keyed
+    // by the manifest directory. Angular's source packages carry a placeholder
+    // `package.json` with no `main`/`exports`/`module` (those fields are emitted
+    // by Bazel's `ng_package` rule into the build output), so content-only
+    // library detection misclassifies them as apps. The sibling `BUILD.bazel`
+    // declaring `ng_package(...)` is the source-tree library marker. Read lazily
+    // on first miss and memoized — the answer is identical for every file under
+    // the same package directory.
+    bazel_ng_package_cache: Mutex<HashMap<PathBuf, bool>>,
+
     // Absolute directories declared as a Prisma `generator { output = … }` in
     // each `schema.prisma`, keyed by that schema's directory. The generated
     // client lands here at `prisma generate` time; the directory is gitignored
@@ -2267,22 +2277,25 @@ impl ProjectCtx {
         pkg.export_entry_stems.contains(stem)
     }
 
-    /// True when `path` is the public-API entry file an ng-packagr Angular
-    /// library declares — the `lib.entryFile` of the nearest `ng-package.json`.
-    /// ng-packagr libraries publish their entry through the build output's
-    /// `package.json` (`main`/`exports`), not the source `package.json`, so the
-    /// source entry and everything it re-exports look unimported. Rules about
-    /// "this symbol has no importer" (e.g. `dead-export`) treat this file as a
-    /// package entry point. `path` must be absolute; the comparison joins the
-    /// manifest-relative `entryFile` onto the `ng-package.json`'s directory.
+    /// True when `path` is the public-API entry file of an Angular library —
+    /// either the `lib.entryFile` of the nearest `ng-package.json` (ng-packagr)
+    /// or the entry barrel of a Bazel `ng_package` package
+    /// ([`is_bazel_ng_package_entry_barrel`]). Both build systems publish the
+    /// entry through the build output's `package.json` (`main`/`exports`), not the
+    /// source `package.json`, so the source entry and everything it re-exports
+    /// look unimported. Rules about "this symbol has no importer" (e.g.
+    /// `dead-export`) and "this file is unreachable" (`unused-file`) treat this
+    /// file as a package entry point. `path` must be absolute.
+    ///
+    /// [`is_bazel_ng_package_entry_barrel`]: ProjectCtx::is_bazel_ng_package_entry_barrel
     pub fn is_ng_package_entry_file(&self, path: &Path) -> bool {
-        let Some(manifest_dir) = self.nearest_ng_package_dir(path) else {
-            return false;
-        };
-        let Some(entry_file) = self.ng_package_entry_file(&manifest_dir) else {
-            return false;
-        };
-        manifest_dir.join(entry_file) == path
+        if let Some(manifest_dir) = self.nearest_ng_package_dir(path)
+            && let Some(entry_file) = self.ng_package_entry_file(&manifest_dir)
+            && manifest_dir.join(entry_file) == path
+        {
+            return true;
+        }
+        self.is_bazel_ng_package_entry_barrel(path)
     }
 
     /// Walk up from `path` to the directory of the nearest `ng-package.json`.
@@ -2320,6 +2333,48 @@ impl ProjectCtx {
                 .or_insert_with(|| entry.clone());
         }
         entry
+    }
+
+    /// True when `manifest_dir` contains a `BUILD.bazel` whose contents reference
+    /// an `ng_package` rule — Angular's Bazel-built library marker. Read lazily
+    /// on first miss and memoized by directory. A bare `BUILD.bazel` without an
+    /// `ng_package` target is deliberately NOT a marker: a `BUILD.bazel` can
+    /// describe an app or binary just as well as a library.
+    fn dir_declares_bazel_ng_package(&self, manifest_dir: &Path) -> bool {
+        if let Some(&hit) = self.bazel_ng_package_cache.lock().unwrap().get(manifest_dir) {
+            return hit;
+        }
+        let declares = std::fs::read_to_string(manifest_dir.join("BUILD.bazel"))
+            .ok()
+            .is_some_and(|raw| build_bazel_declares_ng_package(&raw));
+        self.bazel_ng_package_cache
+            .lock()
+            .unwrap()
+            .entry(manifest_dir.to_path_buf())
+            .or_insert(declares);
+        declares
+    }
+
+    /// True when `path` is the public-API entry barrel of a Bazel-built Angular
+    /// library: `path` is `index.ts`/`public_api.ts`/`public-api.ts` sitting
+    /// directly in a package directory whose `package.json` carries a sibling
+    /// `BUILD.bazel` declaring an `ng_package` target. Such a package publishes
+    /// its `main`/`exports` from Bazel's build output, not the source
+    /// `package.json`, so the barrel and the symbols it re-exports have no in-repo
+    /// importer even though they form the package's published surface.
+    fn is_bazel_ng_package_entry_barrel(&self, path: &Path) -> bool {
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if !matches!(stem, "index" | "public_api" | "public-api") {
+            return false;
+        }
+        let Some(dir) = path.parent() else {
+            return false;
+        };
+        let Some(manifest_dir) = self.nearest_package_json_dir(path) else {
+            return false;
+        };
+        // The barrel must sit at the package root, not in a nested subdir.
+        dir == manifest_dir && self.dir_declares_bazel_ng_package(&manifest_dir)
     }
 
     /// True when `path` is a build-input source file: it sits under the nearest
@@ -3407,6 +3462,41 @@ fn parse_ng_package_entry_file(raw: &str) -> Option<String> {
     Some(rel.replace('\\', "/"))
 }
 
+/// True when a `BUILD.bazel`'s raw text invokes the `ng_package` rule —
+/// `ng_package(...)`. Matched as a call site (the identifier immediately
+/// followed by `(`, allowing whitespace) at a word boundary so neither a longer
+/// identifier (`ng_package_test`) nor a bare mention in a comment/load string
+/// counts. `ng_package` builds and publishes an Angular npm package, so its
+/// presence marks the directory as a library source tree.
+fn build_bazel_declares_ng_package(raw: &str) -> bool {
+    const RULE: &str = "ng_package";
+    let bytes = raw.as_bytes();
+    let mut search_from = 0;
+    while let Some(rel) = raw[search_from..].find(RULE) {
+        let start = search_from + rel;
+        let end = start + RULE.len();
+        let preceded_by_ident = start
+            .checked_sub(1)
+            .is_some_and(|i| is_bazel_ident_byte(bytes[i]));
+        // The call must read `ng_package(` — skip any whitespace between the
+        // identifier and the opening paren.
+        let followed_by_call = raw[end..]
+            .trim_start()
+            .starts_with('(');
+        if !preceded_by_ident && followed_by_call {
+            return true;
+        }
+        search_from = end;
+    }
+    false
+}
+
+/// True for bytes that may appear inside a Starlark/Bazel identifier — used to
+/// reject a longer identifier that merely ends in `ng_package`.
+fn is_bazel_ident_byte(b: u8) -> bool {
+    b == b'_' || b.is_ascii_alphanumeric()
+}
+
 fn detect_framework(pkg: &PackageJson) -> Framework {
     let has = |name: &str| pkg.all_deps().any(|k| k == name);
     if has("nuxt") {
@@ -3729,6 +3819,67 @@ mod tests {
         );
         assert_eq!(parse_ng_package_entry_file(r#"{ "lib": {} }"#), None);
         assert_eq!(parse_ng_package_entry_file("not json"), None);
+    }
+
+    #[test]
+    fn build_bazel_declares_ng_package_matches_rule_call() {
+        assert!(build_bazel_declares_ng_package(
+            "load(\"//tools:ng_package.bzl\", \"ng_package\")\nng_package(\n    name = \"npm_package\",\n)\n"
+        ));
+        // Whitespace/newline between the identifier and `(` still counts.
+        assert!(build_bazel_declares_ng_package("ng_package\n(name = \"x\")"));
+    }
+
+    #[test]
+    fn build_bazel_declares_ng_package_rejects_non_calls() {
+        // A longer identifier ending in `ng_package` is not the rule.
+        assert!(!build_bazel_declares_ng_package("my_ng_package(name = \"x\")"));
+        // A bare mention without a call (load string, comment) is not enough.
+        assert!(!build_bazel_declares_ng_package(
+            "# uses ng_package elsewhere\nts_library(name = \"x\")"
+        ));
+        // An app/binary BUILD.bazel with no ng_package target.
+        assert!(!build_bazel_declares_ng_package(
+            "ts_project(name = \"app\")\nng_application(name = \"app\")"
+        ));
+    }
+
+    #[test]
+    fn is_ng_package_entry_file_true_for_bazel_barrel_issue_2299() {
+        // Angular source package: placeholder package.json with no
+        // main/exports/module, plus a sibling BUILD.bazel declaring ng_package.
+        // The package-root `index.ts` is its Bazel-built public-API barrel.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"@angular/animations","version":"0.0.0-PLACEHOLDER","dependencies":{"tslib":"^2.3.0"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("BUILD.bazel"),
+            "load(\"//tools:defaults.bzl\", \"ng_package\")\nng_package(\n    name = \"npm_package\",\n)\n",
+        )
+        .unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.is_ng_package_entry_file(&dir.path().join("index.ts")));
+        assert!(ctx.is_ng_package_entry_file(&dir.path().join("public_api.ts")));
+        // A non-barrel file in the package is not an entry — only the barrel.
+        assert!(!ctx.is_ng_package_entry_file(&dir.path().join("src/animation.ts")));
+    }
+
+    #[test]
+    fn is_ng_package_entry_file_false_for_app_with_bare_build_bazel_issue_2299() {
+        // Negative-space guard: an app package whose BUILD.bazel declares no
+        // ng_package target is NOT a library; its index.ts is not a barrel.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"my-app","dependencies":{"x":"1"}}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("BUILD.bazel"), "ts_project(name = \"app\")\n").unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(!ctx.is_ng_package_entry_file(&dir.path().join("index.ts")));
     }
 
     fn min_node(node_spec: &str) -> Option<(u32, u32)> {

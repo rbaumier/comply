@@ -117,6 +117,7 @@ fn detect_entry_points<'a>(
                 || project.is_package_entry_file(p)
                 || project.is_in_published_files_surface(p)
                 || project.is_declared_entry_barrel(p)
+                || project.is_ng_package_entry_file(p)
         })
         .collect()
 }
@@ -571,6 +572,104 @@ mod tests {
         assert!(
             diags[0].path.to_str().unwrap().contains("orphan"),
             "diagnostic should target orphan.ts"
+        );
+    }
+
+    /// Stage an arbitrary set of files (any extension — manifests, BUILD.bazel,
+    /// source) at `(rel, content)` paths under a temp root, build a `ProjectCtx`
+    /// over the `.ts` files, run the check at the anchor, and return its
+    /// diagnostics. Lets a test reproduce a monorepo where the project root is
+    /// not the package directory.
+    fn run_on_files(files: &[(&str, &str)]) -> (TempDir, Vec<Diagnostic>) {
+        let dir = TempDir::new().unwrap();
+        let mut staged: Vec<SourceFile> = Vec::new();
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&p, content).unwrap();
+            if let Some(lang) = Language::from_path(&p) {
+                staged.push(SourceFile { path: p, language: lang });
+            }
+        }
+        let refs: Vec<&SourceFile> = staged.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        let target_path: PathBuf = project
+            .import_index()
+            .indexed_paths()
+            .min()
+            .expect("at least one indexed file")
+            .to_path_buf();
+        let source = fs::read_to_string(&target_path).unwrap();
+        let file_ctx = FileCtx::build(&target_path, &source, Language::TypeScript, &project);
+        let ctx = CheckCtx {
+            path: &target_path,
+            path_arc: Arc::from(target_path.as_path()),
+            source: &source,
+            config: &config,
+            project: &project,
+            file: &file_ctx,
+            lang: Language::TypeScript,
+        };
+        let diags = Check.check(&ctx);
+        (dir, diags)
+    }
+
+    #[test]
+    fn no_fp_for_bazel_ng_package_source_files_issue_2299() {
+        // Regression for #2299 (angular/angular) — in the monorepo, a `@angular/*`
+        // source package under `packages/<pkg>/` is built by Bazel's `ng_package`
+        // rule, so its placeholder `package.json` declares no main/exports/module
+        // and its `index.ts` is not at the repo root (so not an entry-point seed).
+        // The sibling `BUILD.bazel` declaring `ng_package(...)` marks it a library;
+        // its source files are consumed by Bazel, never via in-repo imports, so
+        // none of them are unreachable dead code.
+        let (_dir, diags) = run_on_files(&[
+            ("package.json", r#"{"name":"angular-srcs","private":true}"#),
+            ("index.ts", "export const root = 1;\n"),
+            (
+                "packages/animations/package.json",
+                r#"{"name":"@angular/animations","version":"0.0.0-PLACEHOLDER","dependencies":{"tslib":"^2.3.0"}}"#,
+            ),
+            (
+                "packages/animations/BUILD.bazel",
+                "load(\"//tools:defaults.bzl\", \"ng_package\")\nng_package(\n    name = \"npm_package\",\n)\n",
+            ),
+            (
+                "packages/animations/index.ts",
+                "export { thing } from './src/thing';\n",
+            ),
+            ("packages/animations/src/thing.ts", "export const thing = 1;\n"),
+        ]);
+        assert!(
+            !diags.iter().any(|d| d.path.to_str().unwrap().contains("animations")),
+            "Bazel ng_package library source files must not be flagged unused, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_unreachable_in_app_with_bare_build_bazel_issue_2299() {
+        // Negative-space guard for #2299 — a package under `packages/<pkg>/`
+        // whose BUILD.bazel declares no `ng_package` target is NOT a library; an
+        // unreachable source file in it must still be flagged.
+        let (_dir, diags) = run_on_files(&[
+            ("package.json", r#"{"name":"monorepo","private":true}"#),
+            ("index.ts", "export const root = 1;\n"),
+            (
+                "packages/app/package.json",
+                r#"{"name":"my-app","dependencies":{"x":"1"}}"#,
+            ),
+            ("packages/app/BUILD.bazel", "ts_project(name = \"app\")\n"),
+            ("packages/app/index.ts", "import { a } from './a';\n"),
+            ("packages/app/a.ts", "export const a = 1;\n"),
+            ("packages/app/orphan.ts", "export const orphan = 1;\n"),
+        ]);
+        assert!(
+            diags.iter().any(|d| d.path.to_str().unwrap().contains("orphan")),
+            "unreachable file in a non-library app must still be flagged, got: {diags:?}"
         );
     }
 
