@@ -80,8 +80,11 @@ impl OxcCheck for Check {
             if referenced_as_base.contains(name) {
                 continue;
             }
-            // Interfaces inside `declare module` are for augmentation / merging.
-            if is_inside_declare_module(semantic, node) {
+            // Interfaces inside an ambient context (`declare global { ... }` for
+            // global augmentation, `declare module "..." { ... }` for module
+            // augmentation) exist only to merge into / augment existing types,
+            // which TypeScript supports for `interface` but not `type`.
+            if crate::oxc_helpers::is_in_ambient_declaration(node.id(), semantic) {
                 continue;
             }
             // Interfaces describing only callable/constructable shapes (`(...): T`
@@ -124,18 +127,6 @@ fn is_callable_or_constructable_only(iface: &oxc_ast::ast::TSInterfaceDeclaratio
                     | oxc_ast::ast::TSSignature::TSConstructSignatureDeclaration(_)
             )
         })
-}
-
-fn is_inside_declare_module<'a>(
-    semantic: &'a oxc_semantic::Semantic<'a>,
-    node: &oxc_semantic::AstNode<'a>,
-) -> bool {
-    for ancestor in semantic.nodes().ancestors(node.id()).skip(1) {
-        if matches!(ancestor.kind(), AstKind::TSModuleDeclaration(_)) {
-            return true;
-        }
-    }
-    false
 }
 
 /// Base interface name in an `extends` heritage expression. For `extends Foo`
@@ -295,6 +286,36 @@ mod tests {
             }
         "#;
         assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn allows_interface_in_declare_global() {
+        // https://github.com/rbaumier/comply/issues/1596
+        // `declare global { interface HTMLElementTagNameMap { ... } }` is the
+        // canonical Lit/Web-Components pattern: augmenting a global interface
+        // via declaration merging, which only `interface` (not `type`) allows.
+        let code = r#"
+            export class EmergencyContactFields extends LitElement {}
+            declare global {
+              interface HTMLElementTagNameMap {
+                'emergency-contact-fields': EmergencyContactFields
+              }
+            }
+        "#;
+        assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn flags_top_level_interface_outside_declare_global() {
+        // Negative space: a plain top-level interface that is not inside any
+        // ambient augmentation block is still flagged.
+        let code = r#"
+            export class EmergencyContactFields extends LitElement {}
+            interface HTMLElementTagNameMap {
+              'emergency-contact-fields': EmergencyContactFields
+            }
+        "#;
+        assert_eq!(run_on(code).len(), 1);
     }
 
     #[test]
