@@ -2,10 +2,12 @@
 //!
 //! Flags `jsx_attribute` nodes whose value is an inline object literal.
 //!
-//! Skipped when the project is configured with `babel-plugin-react-compiler`
-//! (auto-memoising inline objects/arrays), detected via a dep entry in
-//! `package.json` or a reference inside `vite.config.*`, `next.config.*`,
-//! or `babel.config.*` walking up from the file.
+//! Skipped when the file does not import React (the new-reference-per-render
+//! rationale is React-specific; non-React JSX frameworks have different
+//! reconciliation models), or when the project is configured with
+//! `babel-plugin-react-compiler` (auto-memoising inline objects/arrays),
+//! detected via a dep entry in `package.json` or a reference inside
+//! `vite.config.*`, `next.config.*`, or `babel.config.*` walking up from the file.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -42,6 +44,13 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // The new-reference-per-render concern is React-specific. A file that
+        // uses JSX without importing React targets a non-React framework
+        // (remix/ui, SolidJS, Preact, Vue JSX) with a different reconciliation
+        // model, so the rule does not apply.
+        if !crate::oxc_helpers::imports_react(ctx.source) {
+            return;
+        }
         if project_uses_react_compiler(ctx) {
             return;
         }
@@ -130,9 +139,35 @@ mod tests {
         let d = run_in_project(
             dir.path(),
             "src/comp.tsx",
-            "const x = <Comp style={{ color: 'red' }} />;",
+            "import React from 'react';\nconst x = <Comp style={{ color: 'red' }} />;",
         );
         assert_eq!(d.len(), 1, "baseline: should flag inline object: {d:?}");
+    }
+
+    #[test]
+    fn skips_non_react_jsx_framework() {
+        // Issue #1669: a .tsx file using a non-React JSX framework (remix/ui)
+        // must not be flagged — the new-reference-per-render rationale is
+        // React-specific.
+        let dir = TempDir::new().unwrap();
+        let d = run_in_project(
+            dir.path(),
+            "src/time.tsx",
+            "import { Frame } from 'remix/ui';\nconst x = <Frame style={{ display: 'flex' }} />;",
+        );
+        assert!(d.is_empty(), "non-React JSX framework must not be flagged: {d:?}");
+    }
+
+    #[test]
+    fn flags_when_file_imports_react() {
+        // Negative-space guard: a file that does import React still fires.
+        let dir = TempDir::new().unwrap();
+        let d = run_in_project(
+            dir.path(),
+            "src/time.tsx",
+            "import React from 'react';\nconst x = <Frame style={{ display: 'flex' }} />;",
+        );
+        assert_eq!(d.len(), 1, "React file with inline object still flags: {d:?}");
     }
 
     #[test]
@@ -146,7 +181,7 @@ mod tests {
         let d = run_in_project(
             dir.path(),
             "src/comp.tsx",
-            "const x = <Comp style={{ color: 'red' }} />;",
+            "import React from 'react';\nconst x = <Comp style={{ color: 'red' }} />;",
         );
         assert!(
             d.is_empty(),
@@ -165,7 +200,7 @@ mod tests {
         let d = run_in_project(
             dir.path(),
             "src/comp.tsx",
-            "const x = <Comp config={{ a: 1 }} />;",
+            "import React from 'react';\nconst x = <Comp config={{ a: 1 }} />;",
         );
         assert!(d.is_empty(), "next.config with react-compiler: {d:?}");
     }
@@ -181,7 +216,7 @@ mod tests {
         let d = run_in_project(
             dir.path(),
             "src/comp.tsx",
-            "const x = <Comp style={{ color: 'red' }} />;",
+            "import React from 'react';\nconst x = <Comp style={{ color: 'red' }} />;",
         );
         assert!(d.is_empty(), "react-compiler dep declared: {d:?}");
     }
@@ -197,7 +232,7 @@ mod tests {
         let d = run_in_project(
             dir.path(),
             "src/comp.tsx",
-            "const x = <Comp style={{ color: 'red' }} />;",
+            "import React from 'react';\nconst x = <Comp style={{ color: 'red' }} />;",
         );
         assert_eq!(
             d.len(),

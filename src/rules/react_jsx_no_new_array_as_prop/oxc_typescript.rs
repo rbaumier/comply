@@ -1,4 +1,8 @@
 //! react-jsx-no-new-array-as-prop oxc backend.
+//!
+//! Skipped when the file does not import React (the new-reference-per-render
+//! rationale is React-specific; non-React JSX frameworks have different
+//! reconciliation models).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -39,6 +43,14 @@ impl OxcCheck for Check {
         // so the "new reference every render" cost does not apply.
         // Storybook stories are also single-render by nature.
         if ctx.file.path_segments.in_test_dir || ctx.file.path_segments.in_storybook {
+            return;
+        }
+
+        // The new-reference-per-render concern is React-specific. A file that
+        // uses JSX without importing React targets a non-React framework
+        // (remix/ui, SolidJS, Preact, Vue JSX) with a different reconciliation
+        // model, so the rule does not apply.
+        if !crate::oxc_helpers::imports_react(ctx.source) {
             return;
         }
 
@@ -162,8 +174,17 @@ mod tests {
 
     #[test]
     fn flags_array_literal_in_prod_file() {
-        let src = "const x = <DataTable data={[row1, row2]} />;";
+        let src = "import React from 'react';\nconst x = <DataTable data={[row1, row2]} />;";
         assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").len(), 1);
+    }
+
+    #[test]
+    fn skips_non_react_jsx_framework() {
+        // Issue #1669: a .tsx file using a non-React JSX framework (remix/ui)
+        // must not be flagged — the new-reference-per-render rationale is
+        // React-specific.
+        let src = "import { Frame } from 'remix/ui';\nconst x = <Frame data={[row1, row2]} />;";
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty());
     }
 
     #[test]
@@ -193,7 +214,7 @@ mod tests {
 
     #[test]
     fn allows_identifier_in_prod_file() {
-        let src = "const x = <Comp items={items} />;";
+        let src = "import React from 'react';\nconst x = <Comp items={items} />;";
         assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty());
     }
 
@@ -203,9 +224,22 @@ mod tests {
         let d = run_in_project(
             dir.path(),
             "src/comp.tsx",
-            "const x = <DataTable data={[row1, row2]} />;",
+            "import React from 'react';\nconst x = <DataTable data={[row1, row2]} />;",
         );
         assert_eq!(d.len(), 1, "baseline: should flag inline array: {d:?}");
+    }
+
+    #[test]
+    fn flags_when_file_imports_react() {
+        // Negative-space guard for issue #1669: a file that imports React still
+        // fires on an inline array prop.
+        let dir = TempDir::new().unwrap();
+        let d = run_in_project(
+            dir.path(),
+            "src/comp.tsx",
+            "import React from 'react';\nconst x = <DataTable data={[row1, row2]} />;",
+        );
+        assert_eq!(d.len(), 1, "React file with inline array still flags: {d:?}");
     }
 
     #[test]
@@ -220,7 +254,7 @@ mod tests {
         let d = run_in_project(
             dir.path(),
             "src/comp.tsx",
-            "const x = <AsyncMultiSelect options={[{ value: 'a', label: 'A' }]} />;",
+            "import React from 'react';\nconst x = <AsyncMultiSelect options={[{ value: 'a', label: 'A' }]} />;",
         );
         assert!(d.is_empty(), "react-compiler dep declared: {d:?}");
     }
@@ -236,7 +270,7 @@ mod tests {
         let d = run_in_project(
             dir.path(),
             "src/comp.tsx",
-            "const x = <DataTable data={[row1, row2]} />;",
+            "import React from 'react';\nconst x = <DataTable data={[row1, row2]} />;",
         );
         assert!(
             d.is_empty(),
@@ -255,7 +289,7 @@ mod tests {
         let d = run_in_project(
             dir.path(),
             "src/comp.tsx",
-            "const x = <DataTable data={[row1, row2]} />;",
+            "import React from 'react';\nconst x = <DataTable data={[row1, row2]} />;",
         );
         assert_eq!(
             d.len(),

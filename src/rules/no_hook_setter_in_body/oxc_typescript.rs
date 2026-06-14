@@ -16,17 +16,7 @@ pub struct Check;
 /// the file is actually React: a `.tsx`/`.jsx` file (JSX implies React) or a
 /// `.ts`/`.js` module that imports React. Plain TypeScript is out of scope.
 fn in_react_context(ctx: &CheckCtx) -> bool {
-    matches!(ctx.lang, Language::Tsx) || imports_react(ctx.source)
-}
-
-fn imports_react(source: &str) -> bool {
-    use crate::oxc_helpers::source_contains;
-    source_contains(source, "from \"react\"")
-        || source_contains(source, "from 'react'")
-        || source_contains(source, "from \"react/")
-        || source_contains(source, "from 'react/")
-        || source_contains(source, "require(\"react\")")
-        || source_contains(source, "require('react')")
+    matches!(ctx.lang, Language::Tsx) || crate::oxc_helpers::imports_react(ctx.source)
 }
 
 impl OxcCheck for Check {
