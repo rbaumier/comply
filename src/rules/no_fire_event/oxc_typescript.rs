@@ -7,6 +7,19 @@ use std::sync::Arc;
 
 const TEST_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test."];
 
+/// Substrings that signal the file drives fake timers. When present,
+/// `fireEvent` (synchronous) is the correct tool — `userEvent` is async and
+/// flushes microtasks/pointer events, which breaks deterministic interleaving
+/// with `vi.advanceTimersByTimeAsync(...)` and friends. `advanceTimersByTime`
+/// also matches its `...Async` variant.
+const FAKE_TIMER_MARKERS: &[&str] = &[
+    "useFakeTimers",
+    "advanceTimersByTime",
+    "advanceTimersToNextTimer",
+    "runOnlyPendingTimers",
+    "runAllTimers",
+];
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -38,6 +51,15 @@ impl OxcCheck for Check {
         }
         let path_str = ctx.path.to_string_lossy();
         if !TEST_MARKERS.iter().any(|m| path_str.contains(m)) {
+            return;
+        }
+        // Files driving fake timers rely on `fireEvent` being synchronous to
+        // interleave precisely with timer advancement; `userEvent` would break
+        // that, so leave them alone.
+        if FAKE_TIMER_MARKERS
+            .iter()
+            .any(|m| ctx.source_contains(m))
+        {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, member.span().start as usize);
@@ -173,6 +195,40 @@ mod tests {
                 "const handler = fireEvent.click;",
             )
             .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_fire_event_when_fake_timers_advanced() {
+        // Regression #1278: fireEvent (sync) is the right tool when the file
+        // interleaves clicks with fake-timer advancement; userEvent (async)
+        // would break the deterministic timing.
+        let src = "\
+            fireEvent.click(rendered.getByRole('button', { name: /mutate1/i }))\n\
+            await vi.advanceTimersByTimeAsync(10)\n\
+            fireEvent.click(rendered.getByRole('button', { name: /mutate2/i }))\n";
+        assert!(
+            run_on("preact-query/src/__tests__/useMutationState.test.tsx", src).is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_fire_event_when_use_fake_timers() {
+        let src = "\
+            beforeEach(() => { vi.useFakeTimers(); });\n\
+            fireEvent.click(button)\n";
+        assert!(run_on("components/__tests__/button.test.tsx", src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_fire_event_without_fake_timers() {
+        // Negative-space guard: no fake-timer usage → userEvent is genuinely
+        // preferred, keep flagging.
+        let src = "\
+            it('clicks', () => { fireEvent.click(button) })\n";
+        assert_eq!(
+            run_on("components/__tests__/button.test.tsx", src).len(),
+            1
         );
     }
 }
