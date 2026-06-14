@@ -106,6 +106,13 @@ impl OxcCheck for Check {
         if !first_param_is_done(params) {
             return;
         }
+        // The `done` callback is a deprecation that is specific to Vitest; under
+        // Mocha, Jasmine, or `node:test` it is the canonical async API. Fire only
+        // where Vitest is the governing runner, and stay silent when the runner
+        // is something else or cannot be determined.
+        if !ctx.project.uses_vitest(ctx.path) {
+            return;
+        }
         if runs_under_karma(ctx, ctx.path) {
             return;
         }
@@ -148,12 +155,24 @@ mod tests {
     use oxc_span::SourceType;
     use tempfile::TempDir;
 
+    const VITEST_PKG: &str =
+        r#"{"name":"app","devDependencies":{"vitest":"^1.0.0"}}"#;
+
+    /// Run the check against a `.test.ts` file in a temp project that declares
+    /// Vitest, so the Vitest gate sees a real manifest on disk. Use for tests
+    /// that exercise the AST logic itself (the runner must be Vitest for the
+    /// rule to fire at all).
     fn run(src: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), VITEST_PKG).unwrap();
+        let file = dir.path().join("app.test.ts");
+        std::fs::write(&file, src).unwrap();
+        run_on_disk(&file, src)
     }
 
-    /// Run the check against an on-disk `path` so the Karma-config walk can see
-    /// sibling files. Mirrors the production per-node dispatch.
+    /// Run the check against an on-disk `path` so the Karma-config walk and the
+    /// Vitest gate can see sibling files. Mirrors the production per-node
+    /// dispatch.
     fn run_on_disk(path: &Path, src: &str) -> Vec<Diagnostic> {
         crate::oxc_helpers::reset_file_caches();
         let allocator = Allocator::default();
@@ -214,6 +233,9 @@ mod tests {
     #[test]
     fn allows_done_in_karma_jasmine_subtree_issue_1747() {
         let dir = TempDir::new().unwrap();
+        // Vitest is declared at the root, so the carve-out under test is the
+        // Karma subtree exemption — not the absence of a Vitest runner.
+        std::fs::write(dir.path().join("package.json"), VITEST_PKG).unwrap();
         let test_dir = dir.path().join("test").join("transition");
         std::fs::create_dir_all(&test_dir).unwrap();
         std::fs::write(
@@ -246,15 +268,66 @@ afterEach(done => {
         );
     }
 
-    // A `done` callback in a file with no Karma config in any ancestor is a
-    // genuine Vitest anti-pattern and must still fire.
+    // A `done` callback in a Vitest project with no Karma config in any
+    // ancestor is a genuine Vitest anti-pattern and must still fire.
     #[test]
     fn flags_done_without_karma_config() {
         let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), VITEST_PKG).unwrap();
         let file = dir.path().join("helpers.test.ts");
         let source = r#"afterEach(done => { done() })"#;
         std::fs::write(&file, source).unwrap();
         assert_eq!(run_on_disk(&file, source).len(), 1);
+    }
+
+    // Regression #2343: a Mocha project (only `mocha` in devDependencies, no
+    // Vitest dependency or config) uses `done` callbacks as its canonical async
+    // API. The rule encodes a Vitest-specific deprecation and must stay silent.
+    #[test]
+    fn allows_done_in_mocha_project_issue_2343() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","devDependencies":{"mocha":"^10.0.0","@types/mocha":"^10.0.0"}}"#,
+        )
+        .unwrap();
+        let test_dir = dir.path().join("test");
+        std::fs::create_dir_all(&test_dir).unwrap();
+        let file = test_dir.join("todo.tests.ts");
+        let source = r#"
+describe("todo management", () => {
+  beforeEach((done) => { done(); });
+  it("creates a todo", (done) => { done(); });
+});
+"#;
+        std::fs::write(&file, source).unwrap();
+        let diags = run_on_disk(&file, source);
+        assert!(
+            diags.is_empty(),
+            "Mocha `done` callbacks must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Negative-space guard: a `done` callback in a project that DOES use Vitest
+    // (vitest in devDependencies) is the genuine anti-pattern and must fire.
+    #[test]
+    fn flags_done_in_vitest_project_issue_2343() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","devDependencies":{"vitest":"^1.0.0"}}"#,
+        )
+        .unwrap();
+        let test_dir = dir.path().join("test");
+        std::fs::create_dir_all(&test_dir).unwrap();
+        let file = test_dir.join("todo.test.ts");
+        let source = r#"it("creates a todo", (done) => { done(); });"#;
+        std::fs::write(&file, source).unwrap();
+        assert_eq!(
+            run_on_disk(&file, source).len(),
+            1,
+            "Vitest `done` callback must still be flagged"
+        );
     }
 
     // The exemption applies to the whole subtree: a `karma.conf.js` in a parent
@@ -262,6 +335,7 @@ afterEach(done => {
     #[test]
     fn allows_done_in_nested_karma_subtree() {
         let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), VITEST_PKG).unwrap();
         let karma_root = dir.path().join("test");
         let nested = karma_root.join("transition").join("nested");
         std::fs::create_dir_all(&nested).unwrap();
