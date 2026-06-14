@@ -10,7 +10,11 @@ use std::sync::Arc;
 
 const DIRECT_FN_NAMES: &[&str] = &["fetch", "got", "request", "ky"];
 
-const AXIOS_METHODS: &[&str] = &["get", "post", "put", "delete", "patch", "head", "request"];
+/// Methods on an HTTP client/module that issue an OUTBOUND request. Server and
+/// listener constructors (`createServer`, `Server`, `createSecureServer`, …) are
+/// deliberately absent: they create inbound listeners, never an SSRF sink.
+const OUTBOUND_REQUEST_METHODS: &[&str] =
+    &["get", "post", "put", "delete", "patch", "head", "request"];
 
 const HTTP_MODULE_ROOTS: &[&str] = &["axios", "http", "https", "got", "ky", "needle"];
 
@@ -39,15 +43,11 @@ fn is_outbound_http_call(name: &str) -> bool {
     if DIRECT_FN_NAMES.contains(&name) {
         return true;
     }
-    if let Some((receiver, method)) = name.rsplit_once('.') {
-        if HTTP_MODULE_ROOTS.contains(&receiver) {
-            return true;
-        }
-        if AXIOS_METHODS.contains(&method)
-            && HTTP_MODULE_ROOTS.iter().any(|r| receiver.ends_with(r))
-        {
-            return true;
-        }
+    if let Some((receiver, method)) = name.rsplit_once('.')
+        && OUTBOUND_REQUEST_METHODS.contains(&method)
+        && HTTP_MODULE_ROOTS.iter().any(|r| receiver.ends_with(r))
+    {
+        return true;
     }
     false
 }
@@ -141,5 +141,31 @@ mod tests {
     #[test]
     fn allows_fetch_with_internal_variable() {
         assert!(run_on("fetch(safeUrl)").is_empty());
+    }
+
+    #[test]
+    fn allows_http_create_server_with_request_handler() {
+        // http.createServer creates an inbound listener, not an outbound request,
+        // so it can never be an SSRF sink even when the handler touches req data.
+        let src = r#"const httpServer = http.createServer((req, res) => {
+            const _req = req;
+            _req.query = opts.query;
+        });"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_https_create_secure_server() {
+        assert!(run_on("https.createSecureServer((req, res) => { res.end(req.url); })").is_empty());
+    }
+
+    #[test]
+    fn flags_http_get_with_user_url() {
+        assert_eq!(run_on("http.get(req.query.target)").len(), 1);
+    }
+
+    #[test]
+    fn flags_https_request_with_user_url() {
+        assert_eq!(run_on("https.request(req.body.url)").len(), 1);
     }
 }
