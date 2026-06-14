@@ -386,6 +386,23 @@ fn is_framework_hook_file(path: &Path) -> bool {
     FRAMEWORK_HOOK_STEMS.contains(&stem.as_str())
 }
 
+/// True for a file in an integration-test fixture application: an `integration/`
+/// directory segment followed (at any later depth) by a `src/` segment, i.e. the
+/// `integration/<app>/src/...` shape. Monorepos (NestJS, Angular, TypeORM) keep
+/// full mini-applications there that exist solely to be spun up by sibling
+/// `e2e/*.spec.ts` integration-test runners; they are test scaffolding, never
+/// published, so devDependency imports from them are correct. The trailing `src/`
+/// requirement keeps a production `src/integration/` module (an "integration with
+/// service X", where `src` precedes `integration` and no nested `src` follows)
+/// from matching.
+fn has_integration_fixture_app_shape(normalized: &str) -> bool {
+    let segments: Vec<&str> = normalized.split('/').collect();
+    let Some(integration_idx) = segments.iter().position(|seg| *seg == "integration") else {
+        return false;
+    };
+    segments[integration_idx + 1..].iter().any(|seg| *seg == "src")
+}
+
 /// Test-root directory names that pair with an `internal/` child to form the
 /// `test/internal/` convention — matched as exact path segments.
 const TEST_ROOT_SEGMENTS: &[&str] = &["test", "tests", "__tests__", "_tests_"];
@@ -450,6 +467,7 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
             || lower.contains("/__tests__/")
             || lower.starts_with("__tests__/")
             || lower.contains("/fixtures/")
+            || has_integration_fixture_app_shape(&lower)
             || lower.contains("/__mocks__/")
             || lower.contains("/mocks/")
             || lower.starts_with("mocks/")
@@ -659,6 +677,22 @@ mod tests {
         // Ordinary modules — including a leading-`actual` word — are not fixtures.
         assert!(!scan_path(&PathBuf::from("foo.js")).in_test_dir);
         assert!(!scan_path(&PathBuf::from("src/factual.ts")).in_test_dir);
+        // Integration-test fixture-app convention `integration/<app>/src/`
+        // (issue #2378): NestJS/Angular/TypeORM mini-apps run by sibling e2e
+        // suites, never published.
+        assert!(
+            scan_path(&PathBuf::from(
+                "integration/microservices/src/nats/nats.controller.ts"
+            ))
+            .in_test_dir
+        );
+        assert!(
+            scan_path(&PathBuf::from("packages/foo/integration/graphql/src/cats/cats.resolver.ts"))
+                .in_test_dir
+        );
+        // A production `src/integration/` module (no nested `src/` after the
+        // `integration/` segment) is not the fixture-app shape.
+        assert!(!scan_path(&PathBuf::from("src/integration/payment-gateway.ts")).in_test_dir);
     }
 
     #[test]
