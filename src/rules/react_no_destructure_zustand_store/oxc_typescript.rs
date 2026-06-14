@@ -77,3 +77,42 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_gated(&Check, source, path)
+    }
+
+    #[test]
+    fn flags_destructure_store_in_production() {
+        let src = r#"const { count, inc } = useCounterStore();"#;
+        let d = run_on_path(src, "src/Counter.tsx");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn skips_destructure_store_in_test_file() {
+        // Pattern from zustand's own test suite (issue #1346).
+        let src = r#"const { count, name } = useBoundStore();"#;
+        assert!(run_on_path(src, "tests/persistAsync.test.tsx").is_empty());
+    }
+}
