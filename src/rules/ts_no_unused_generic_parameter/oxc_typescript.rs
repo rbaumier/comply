@@ -39,6 +39,12 @@ fn returned_fn_expr_span(expr: &Expression) -> Option<(usize, usize)> {
     }
 }
 
+/// A function body with no statements and no directives — the compile-time-only
+/// shape of the type-level assertion idiom (`function Expect<_ extends true>() {}`).
+fn body_is_empty(body: &FunctionBody) -> bool {
+    body.statements.is_empty() && body.directives.is_empty()
+}
+
 pub struct Check;
 
 /// Check if `needle` identifier name appears anywhere in the source range.
@@ -77,23 +83,26 @@ impl OxcCheck for Check {
         let mut diagnostics = Vec::new();
 
         for node in semantic.nodes().iter() {
-            let (type_params, params, return_type, ret_fn_span, body_span) = match node.kind() {
-                AstKind::Function(f) => (
-                    f.type_parameters.as_deref(),
-                    f.params.span,
-                    f.return_type.as_ref().map(|r| r.span),
-                    f.body.as_ref().and_then(|b| returned_function_span(b, false)),
-                    f.body.as_ref().map(|b| b.span),
-                ),
-                AstKind::ArrowFunctionExpression(f) => (
-                    f.type_parameters.as_deref(),
-                    f.params.span,
-                    f.return_type.as_ref().map(|r| r.span),
-                    returned_function_span(&f.body, f.expression),
-                    Some(f.body.span),
-                ),
-                _ => continue,
-            };
+            let (type_params, params, return_type, ret_fn_span, body_span, body_is_empty) =
+                match node.kind() {
+                    AstKind::Function(f) => (
+                        f.type_parameters.as_deref(),
+                        f.params.span,
+                        f.return_type.as_ref().map(|r| r.span),
+                        f.body.as_ref().and_then(|b| returned_function_span(b, false)),
+                        f.body.as_ref().map(|b| b.span),
+                        f.body.as_ref().is_some_and(|b| body_is_empty(b)),
+                    ),
+                    AstKind::ArrowFunctionExpression(f) => (
+                        f.type_parameters.as_deref(),
+                        f.params.span,
+                        f.return_type.as_ref().map(|r| r.span),
+                        returned_function_span(&f.body, f.expression),
+                        Some(f.body.span),
+                        !f.expression && body_is_empty(&f.body),
+                    ),
+                    _ => continue,
+                };
 
             let Some(type_params) = type_params else {
                 continue;
@@ -142,7 +151,15 @@ impl OxcCheck for Check {
                     source_contains_ident(ctx.source, b.start, b.end, name)
                 });
 
-                if !used_in_params
+                // Type-level assertion idiom: a constrained type parameter on a
+                // function with an empty body carries no runtime use — it exists
+                // only to force a compile-time check at the call site, e.g.
+                // `function Expect<_ extends true>() {}` called as
+                // `Expect<IsEqual<A, B>>()`. The constraint *is* the assertion.
+                let is_phantom_assertion = tp.constraint.is_some() && body_is_empty;
+
+                if !is_phantom_assertion
+                    && !used_in_params
                     && !used_in_return
                     && !used_in_other_tp
                     && !used_in_returned_fn
@@ -254,6 +271,30 @@ mod tests {
     #[test]
     fn still_flags_generic_unused_in_params_return_and_body_issue_1981() {
         let src = "function f<Unused>(x: number): number {\n  return x + 1;\n}";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_phantom_type_assertion_parameter_issue_1206() {
+        let src = "export function Expect<_ extends true>() {}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_phantom_assertion_arrow_issue_1206() {
+        let src = "export const Assert = <_ extends true>() => {};";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_unconstrained_empty_body_generic_issue_1206() {
+        // No constraint: not the assertion idiom — a genuinely dead type param.
+        assert_eq!(run("function f<T>() {}").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_constrained_generic_with_real_body_issue_1206() {
+        let src = "function f<T extends true>(x: number): number {\n  return x + 1;\n}";
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
