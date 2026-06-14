@@ -22,6 +22,11 @@ const EXTENSIONS: &[&str] = &[
     "/index.mjs",
 ];
 
+/// Declaration-file extensions appended to a bare specifier (`./types` →
+/// `./types.d.ts`), matching TypeScript's resolution of an extensionless import
+/// to a declaration-only sibling.
+const DECL_EXTS: &[&str] = &[".d.ts", ".d.mts", ".d.cts"];
+
 fn is_relative_path(spec: &str) -> bool {
     spec.starts_with("./") || spec.starts_with("../")
 }
@@ -89,7 +94,15 @@ fn resolve_and_check(base_dir: &Path, import_spec: &str) -> bool {
 
     let with_ts = format!("{}.ts", resolved.display());
     let with_tsx = format!("{}.tsx", resolved.display());
-    Path::new(&with_ts).exists() || Path::new(&with_tsx).exists()
+    if Path::new(&with_ts).exists() || Path::new(&with_tsx).exists() {
+        return true;
+    }
+
+    // Declaration-file sibling: `./types` resolves to `./types.d.ts` (or
+    // `.d.mts`/`.d.cts`) when no source file exists, matching TypeScript's
+    // resolution. Appended to the full path so a bare specifier keeps its name.
+    let base = resolved.display().to_string();
+    DECL_EXTS.iter().any(|decl| Path::new(&format!("{base}{decl}")).exists())
 }
 
 fn extract_spec_from_string(source: &str, span: oxc_span::Span) -> &str {
@@ -390,6 +403,30 @@ mod tests {
         let diags = run_in_dir("app.ts", source, &[]);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("does-not-exist"));
+    }
+
+    #[test]
+    fn no_fp_for_bare_specifier_resolving_to_dts_issue_1638() {
+        // playwright reproducer: `import './types'` where the only file on disk
+        // is `types.d.ts`. TypeScript resolves the bare extensionless specifier
+        // to its declaration-only sibling, so the import must not be flagged.
+        let source = "import type { HTMLReport } from './types';";
+        let diags = run_in_dir(
+            "packages/html-reporter/src/index.tsx",
+            source,
+            &["packages/html-reporter/src/types.d.ts"],
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_missing_bare_specifier_without_dts() {
+        // A bare extensionless specifier with no source OR declaration sibling on
+        // disk is a genuine broken import and must still fire.
+        let source = "import type { T } from './nope';";
+        let diags = run_in_dir("src/index.ts", source, &[]);
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("./nope"));
     }
 
     #[test]
