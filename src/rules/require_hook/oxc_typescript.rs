@@ -114,6 +114,42 @@ fn is_suite_factory_call(expr: &Expression) -> bool {
     has_title && call.arguments.iter().any(is_callback_arg)
 }
 
+/// Does `name` follow the `describe`-family naming convention — a bare
+/// `describe` or a userland wrapper around it (`describeScenario`,
+/// `describeEach`, `describeWithServer`)? Matched case-insensitively on the
+/// `describe` prefix, the convention test-utility wrappers follow.
+fn is_describe_like_name(name: &str) -> bool {
+    name.len() >= "describe".len() && name[.."describe".len()].eq_ignore_ascii_case("describe")
+}
+
+/// Is `expr` a top-level call to a `describe`-family suite wrapper of the shape
+/// `describeScenario('contacts', (getScenario) => { ... })`?
+///
+/// The callee is a bare identifier following the `describe`-family naming
+/// convention, and the call carries a string-literal title plus a function
+/// callback — the exact `describe(name, fn)` registration signature. Such a
+/// wrapper registers a test suite declaratively (it wraps `describe`), so it
+/// belongs at module scope and cannot be moved into a hook. Requiring both the
+/// title and the callback keeps genuine side-effecting calls whose name merely
+/// starts with `describe` (`describeUser()`, `describeState(value)`) flagged.
+fn is_describe_like_suite_call(expr: &Expression) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    let Expression::Identifier(callee) = &call.callee else {
+        return false;
+    };
+    if !is_describe_like_name(callee.name.as_str()) {
+        return false;
+    }
+    let has_title = call
+        .arguments
+        .first()
+        .and_then(Argument::as_expression)
+        .is_some_and(|e| matches!(e, Expression::StringLiteral(_)));
+    has_title && call.arguments.iter().any(is_callback_arg)
+}
+
 /// Is `spec` a bare package specifier (`babel-tester`, `@scope/pkg`) rather than a
 /// relative or absolute path import? Fixture-runner helpers ship as packages, so a
 /// relative `./helpers` binding is never treated as one.
@@ -482,6 +518,9 @@ fn top_level_is_allowed(
                 return true;
             }
             if is_suite_factory_call(expr) {
+                return true;
+            }
+            if is_describe_like_suite_call(expr) {
                 return true;
             }
             if is_fixture_runner_call(expr, package_bindings) {
@@ -1234,6 +1273,48 @@ describe("x", () => { it("works", () => {}); });
             d.len(),
             1,
             "a ternary with a call in one branch must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_describe_scenario_wrapper_at_top_level() {
+        let src = r#"
+import { db } from 'src/lib/db'
+import { contact, contacts, createContact } from './contacts'
+import type { StandardScenario } from './contacts.scenarios'
+
+describeScenario<StandardScenario>('contacts', (getScenario) => {
+  let scenario: StandardScenario
+
+  beforeEach(() => {
+    scenario = getScenario()
+  })
+
+  it('returns all contacts', async () => {
+    const result = await contacts()
+    expect(result.length).toEqual(Object.keys(scenario.contact).length)
+  })
+})
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "describeContacts.test.ts");
+        assert!(
+            d.is_empty(),
+            "a describe-family suite wrapper (describeScenario) must be allowed at top level: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_describe_prefixed_call_without_suite_shape() {
+        let src = r#"
+describeUser(currentUser);
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a describe-prefixed call lacking a string title + callback must still be flagged: {d:?}"
         );
     }
 
