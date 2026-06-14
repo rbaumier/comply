@@ -94,3 +94,52 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_rule_gated;
+
+    #[test]
+    fn skips_direct_cast_in_test_file() {
+        // Issue #1350 — pnpm test fixtures cast fake strings to branded types
+        // (`PkgIdWithPatchHash`, `PkgResolutionId`) to avoid running production
+        // validation. The central skip_in_test_dir gate exempts the whole file.
+        let src = r#"const fooPkg = {
+  name: 'foo',
+  pkgIdWithPatchHash: 'foo/1.0.0' as PkgIdWithPatchHash,
+  id: '' as PkgResolutionId,
+};"#;
+        let diags = run_rule_gated(
+            &Check,
+            src,
+            "installing/deps-resolver/test/resolvePeers.ts",
+        );
+        assert!(diags.is_empty(), "branded cast in a test file must not fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_direct_cast_in_production_source() {
+        // Negative space: the same pattern in shippable source is the
+        // type-safety anti-pattern the rule targets and must still fire.
+        let src = "const id = '' as PkgResolutionId;";
+        let diags = run_rule_gated(&Check, src, "src/installing/deps-resolver/resolvePeers.ts");
+        assert_eq!(diags.len(), 1, "branded cast in production source must fire, got: {diags:?}");
+    }
+}
