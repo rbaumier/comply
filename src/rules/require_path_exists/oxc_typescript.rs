@@ -6,6 +6,10 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
+// `.mts`/`.cts` are probed because TypeScript ESM (`"module": "NodeNext"` /
+// `"ESNext"`) requires writing the emitted `.mjs`/`.cjs` extension in specifiers
+// even when the on-disk source is `.mts`/`.cts`; `with_extension` rewrites the
+// specifier's JS extension to the source extension (`./foo.mjs` → `foo.mts`).
 const EXTENSIONS: &[&str] = &[
     "",
     ".ts",
@@ -14,6 +18,8 @@ const EXTENSIONS: &[&str] = &[
     ".jsx",
     ".mjs",
     ".cjs",
+    ".mts",
+    ".cts",
     ".json",
     "/index.ts",
     "/index.tsx",
@@ -427,6 +433,39 @@ mod tests {
         let diags = run_in_dir("src/index.ts", source, &[]);
         assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
         assert!(diags[0].message.contains("./nope"));
+    }
+
+    #[test]
+    fn no_fp_for_mjs_specifier_resolving_to_mts_source_issue_1615() {
+        // angular/components reproducer: a `.mts` source imports a sibling via the
+        // `.mjs` output extension (`./docs-marked-renderer.mjs`), which TypeScript
+        // ESM (`moduleResolution: NodeNext`) mandates even though the on-disk
+        // source is `.mts`. The rule must resolve `.mjs` → `.mts` and not flag it.
+        let source = "import {DocsMarkdownRenderer} from './docs-marked-renderer.mjs';";
+        let diags = run_in_dir(
+            "tools/markdown-to-html/transform-markdown.mts",
+            source,
+            &["tools/markdown-to-html/docs-marked-renderer.mts"],
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn no_fp_for_cjs_specifier_resolving_to_cts_source() {
+        // CommonJS analog: a `.cjs` specifier resolves to its `.cts` source.
+        let source = "const dep = require('./dep.cjs');";
+        let diags = run_in_dir("src/loader.mts", source, &["src/dep.cts"]);
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_missing_mjs_specifier_without_mts_source() {
+        // A `.mjs` specifier with no `.mjs` AND no `.mts` sibling on disk is a
+        // genuine broken import and must still fire — the mapping stays precise.
+        let source = "import {x} from './does-not-exist.mjs';";
+        let diags = run_in_dir("src/index.mts", source, &[]);
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("does-not-exist.mjs"));
     }
 
     #[test]
