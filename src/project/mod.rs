@@ -620,6 +620,121 @@ fn min_major_version(range: &str) -> Option<u32> {
         .min()
 }
 
+/// Named exports the Vitest runtime invokes on a `globalSetup` module by
+/// convention — `setup`/`teardown` (and the default export, which Vitest also
+/// accepts as the setup function). None of them has a static importer.
+const VITEST_GLOBAL_SETUP_EXPORTS: &[&str] = &["setup", "teardown", "default"];
+
+/// True when the `globalSetup` option in a Vitest/Vite config's `raw` text
+/// references `target`. `config_dir` is the directory holding the config, used
+/// to resolve the relative specifiers the option carries.
+///
+/// `globalSetup` accepts a single path or an array of paths; both are quoted
+/// string literals. The scan collects the quoted specifiers that follow the
+/// `globalSetup:` key on its declaration span (up to the line's end or the
+/// closing `]` of an array), resolves each relative to `config_dir`, and reports
+/// a match when one resolves to `target`. Specifier resolution tolerates an
+/// omitted extension and an `index` file, mirroring module resolution.
+fn config_global_setup_references(raw: &str, config_dir: &Path, target: &Path) -> bool {
+    global_setup_value_spans(raw).any(|span| {
+        quoted_string_literals(span).any(|spec| specifier_resolves_to(config_dir, spec, target))
+    })
+}
+
+/// Each value span of a `globalSetup` option in `raw`: from just after a
+/// `globalSetup:` key to the end of its line, extended through a closing `]`
+/// when the value opens an array literal. A `globalSetup` substring not
+/// immediately followed by `:` (e.g. `globalSetupReady`) is skipped, so a
+/// look-alike key never shadows a real one later in the file.
+fn global_setup_value_spans(raw: &str) -> impl Iterator<Item = &str> {
+    const KEY: &str = "globalSetup";
+    let mut search_from = 0usize;
+    std::iter::from_fn(move || {
+        while let Some(rel) = raw[search_from..].find(KEY) {
+            let key_at = search_from + rel;
+            let after_key = &raw[key_at + KEY.len()..];
+            search_from = key_at + KEY.len();
+            // Require `:` directly after the key (only whitespace between),
+            // ruling out an incidental substring such as `globalSetupReady`.
+            let Some(colon) = after_key.find(':') else {
+                continue;
+            };
+            if after_key[..colon].chars().any(|c| !c.is_whitespace()) {
+                continue;
+            }
+            let value = &after_key[colon + 1..];
+            let line_end = value.find('\n').unwrap_or(value.len());
+            // An array value can span lines; extend the span to its closing `]`.
+            let end = match value[..line_end].find('[') {
+                Some(_) => value.find(']').map_or(line_end, |b| b + 1),
+                None => line_end,
+            };
+            return Some(&value[..end]);
+        }
+        None
+    })
+}
+
+/// Iterator over the contents of single-, double-, or backtick-quoted string
+/// literals in `text`. Quote characters must match to close; escapes inside are
+/// not interpreted (config path specifiers contain none).
+fn quoted_string_literals(text: &str) -> impl Iterator<Item = &str> {
+    let mut rest = text;
+    std::iter::from_fn(move || {
+        let open = rest.find(['\'', '"', '`'])?;
+        let quote = rest.as_bytes()[open] as char;
+        let after_open = &rest[open + 1..];
+        let close = after_open.find(quote)?;
+        let literal = &after_open[..close];
+        rest = &after_open[close + 1..];
+        Some(literal)
+    })
+}
+
+/// True when the module specifier `spec`, resolved relative to `config_dir`,
+/// refers to `target`. Compares with `target`'s extension stripped so a
+/// `'./global-setup'` (no extension) or `'./global-setup.ts'` both match a
+/// `global-setup.ts` target; also handles a directory specifier resolving to its
+/// `index` file.
+fn specifier_resolves_to(config_dir: &Path, spec: &str, target: &Path) -> bool {
+    let resolved = lexical_normalize(&config_dir.join(spec));
+    let target = lexical_normalize(target);
+    let resolved_stem = strip_module_extension(&resolved);
+    let target_stem = strip_module_extension(&target);
+    resolved == target
+        || resolved_stem == target_stem
+        || resolved_stem.join("index") == target_stem
+}
+
+/// `path` with `.` components dropped and `..` components collapsed against the
+/// preceding segment, without touching the filesystem. Lets a config specifier
+/// (`'./global-setup.ts'`) compare equal to the target's stored path
+/// (`<dir>/global-setup.ts`), whose components carry no `.`/`..`.
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// `path` with a single trailing JS/TS module extension removed, if present.
+fn strip_module_extension(path: &Path) -> PathBuf {
+    const MODULE_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mts", "cts", "mjs", "cjs"];
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) if MODULE_EXTENSIONS.contains(&ext) => path.with_extension(""),
+        _ => path.to_path_buf(),
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Tsconfig {
     pub paths: BTreeMap<String, Vec<String>>,
@@ -1361,6 +1476,9 @@ impl ProjectCtx {
             names.extend(fw.magic_exports.names.iter().map(String::as_str));
         }
         self.extend_route_magic_exports(path, &mut names);
+        if self.is_vitest_global_setup_file(path) {
+            names.extend(VITEST_GLOBAL_SETUP_EXPORTS.iter().copied());
+        }
         names
     }
 
@@ -1702,6 +1820,64 @@ impl ProjectCtx {
         while let Some(d) = dir {
             if VITEST_CONFIG_FILES.iter().any(|name| d.join(name).is_file()) {
                 return true;
+            }
+            if stop_at.as_deref() == Some(d) {
+                break;
+            }
+            dir = d.parent();
+        }
+        false
+    }
+
+    /// True when `path` is a module referenced as Vitest's `globalSetup`, whose
+    /// `setup`/`teardown` (or default) exports the Vitest runtime calls by name
+    /// at run time, never through a static import. Evidence: a `vitest.config.*`
+    /// or `vite.config.*` between `path`'s directory and the project root carries
+    /// a `globalSetup` option whose referenced path resolves to `path`.
+    ///
+    /// Gated on the config reference (not the filename) so a `setup` export in an
+    /// ordinary module — one no config names as `globalSetup` — stays flaggable.
+    fn is_vitest_global_setup_file(&self, path: &Path) -> bool {
+        const TEST_CONFIG_FILES: &[&str] = &[
+            "vitest.config.ts",
+            "vitest.config.js",
+            "vitest.config.mts",
+            "vitest.config.mjs",
+            "vitest.config.cts",
+            "vitest.config.cjs",
+            "vite.config.ts",
+            "vite.config.js",
+            "vite.config.mts",
+            "vite.config.mjs",
+            "vite.config.cts",
+            "vite.config.cjs",
+        ];
+
+        // Upper bound for the config-file walk: the explicit project root, else
+        // the first ancestor that owns a `package.json`. Never escapes upward.
+        let stop_at: Option<PathBuf> = self.project_root.clone().or_else(|| {
+            let mut d = path.parent();
+            loop {
+                let Some(dir) = d else { break None };
+                if dir.join("package.json").is_file() {
+                    break Some(dir.to_path_buf());
+                }
+                d = dir.parent();
+            }
+        });
+
+        let mut dir = path.parent();
+        while let Some(d) = dir {
+            for name in TEST_CONFIG_FILES {
+                let cfg = d.join(name);
+                if !cfg.is_file() {
+                    continue;
+                }
+                if let Ok(raw) = std::fs::read_to_string(&cfg)
+                    && config_global_setup_references(&raw, d, path)
+                {
+                    return true;
+                }
             }
             if stop_at.as_deref() == Some(d) {
                 break;
@@ -2541,6 +2717,60 @@ mod tests {
         assert_eq!(min_major_version(">=19.0.0"), Some(19));
         assert_eq!(min_major_version("^19"), Some(19));
         assert_eq!(min_major_version("workspace:*"), None);
+    }
+
+    #[test]
+    fn global_setup_reference_matches_single_and_array_specifiers() {
+        let dir = Path::new("/proj");
+        let target = Path::new("/proj/global-setup.ts");
+        // Single string value.
+        assert!(config_global_setup_references(
+            "export default { test: { globalSetup: './global-setup.ts' } };",
+            dir,
+            target,
+        ));
+        // Array value across lines.
+        assert!(config_global_setup_references(
+            "globalSetup: [\n  './other.ts',\n  './global-setup.ts',\n]",
+            dir,
+            target,
+        ));
+        // Extension-less specifier resolves to the `.ts` target.
+        assert!(config_global_setup_references(
+            "globalSetup: './global-setup'",
+            dir,
+            target,
+        ));
+        // Directory specifier resolving to its index file.
+        assert!(config_global_setup_references(
+            "globalSetup: './setup'",
+            dir,
+            Path::new("/proj/setup/index.ts"),
+        ));
+    }
+
+    #[test]
+    fn global_setup_reference_rejects_unrelated_paths() {
+        let dir = Path::new("/proj");
+        let target = Path::new("/proj/global-setup.ts");
+        // No `globalSetup` key at all.
+        assert!(!config_global_setup_references(
+            "export default { test: { setupFiles: './global-setup.ts' } };",
+            dir,
+            target,
+        ));
+        // `globalSetup` names a different module.
+        assert!(!config_global_setup_references(
+            "globalSetup: './other-setup.ts'",
+            dir,
+            target,
+        ));
+        // A look-alike key (`globalSetupReady`) is not the option.
+        assert!(!config_global_setup_references(
+            "globalSetupReady: './global-setup.ts'",
+            dir,
+            target,
+        ));
     }
 
     #[test]

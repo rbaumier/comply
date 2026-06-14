@@ -1216,6 +1216,56 @@ mod tests {
     }
 
     #[test]
+    fn ignores_vitest_global_setup_exports_issue_1550() {
+        // Regression for #1550 — a Vitest `globalSetup` module's `setup`/`teardown`
+        // exports are invoked by the Vitest runtime by name (configured via
+        // `test.globalSetup`), never through a static import, so they have no
+        // importer yet are live framework entry points.
+        let pkg = r#"{ "devDependencies": { "vitest": "^1.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "vitest.config.ts",
+                "export default { test: { globalSetup: './global-setup.ts' } };\n",
+            ),
+            (
+                "global-setup.ts",
+                "export function setup() {}\nexport function teardown() {}\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "global-setup.ts");
+        assert!(
+            diags.is_empty(),
+            "Vitest globalSetup `setup`/`teardown` are runtime-consumed: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_setup_export_in_non_global_setup_module_issue_1550() {
+        // Negative-space guard for #1550 — `setup` is a common generic name. A
+        // `setup` export from an ordinary module that no Vitest config references
+        // as `globalSetup`, with no importer, is genuinely dead and must still
+        // fire: the exemption is scoped to config-referenced globalSetup modules.
+        let pkg = r#"{ "devDependencies": { "vitest": "^1.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "vitest.config.ts",
+                "export default { test: { globalSetup: './global-setup.ts' } };\n",
+            ),
+            ("global-setup.ts", "export function setup() {}\n"),
+            ("src/lib/helpers.ts", "export function setup() {}\n"),
+            ("src/lib/other.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/lib/helpers.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a `setup` export in a non-globalSetup module must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("setup"));
+    }
+
+    #[test]
     fn ignores_remix_route_magic_exports_issue_1547() {
         // Regression for #1547 (triggerdotdev/trigger.dev) — Remix's reserved
         // route exports (`loader`, `action`, `meta`) in an `app/routes/*` module
