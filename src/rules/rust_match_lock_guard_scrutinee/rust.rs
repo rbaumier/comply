@@ -1,10 +1,13 @@
 //! rust-match-lock-guard-scrutinee backend.
 //!
 //! Walk every `match_expression` and inspect its `value` (scrutinee).
-//! If the scrutinee's outermost call is `.lock()`, `.read()`, or `.write()`
-//! — the standard `Mutex` / `RwLock` API — flag the match. We also walk
-//! through a single `?` (try_expression) so `match mtx.lock()?` is still
-//! caught.
+//! If the scrutinee's outermost call is a no-argument `.lock()`, `.read()`,
+//! or `.write()` — the standard `Mutex::lock` / `RwLock::read`/`write` guard
+//! acquisition, all of which take no arguments — flag the match. The empty
+//! argument list is what distinguishes a guard acquisition from `io::Read::read`
+//! / `io::Write::write` and other custom `.read(buf)`/`.write(buf)` methods,
+//! which take a buffer argument and are not lock guards. We also walk through
+//! a single `?` (try_expression) so `match mtx.lock()?` is still caught.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -32,7 +35,7 @@ impl AstCheck for Check {
         let Some(value) = node.child_by_field_name("value") else {
             return;
         };
-        let inner = unwrap_try(value);
+        let inner = peel_guard_wrappers(value, source);
         let Some(method) = outermost_method_call(inner, source) else {
             return;
         };
@@ -54,23 +57,67 @@ impl AstCheck for Check {
     }
 }
 
-fn unwrap_try(node: tree_sitter::Node<'_>) -> tree_sitter::Node<'_> {
-    if node.kind() == "try_expression"
-        && let Some(inner) = node.named_child(0)
-    {
-        return inner;
+/// Peel the wrappers a guard acquisition is typically wrapped in so the
+/// scrutinee's underlying `.lock()`/`.read()`/`.write()` is reached:
+/// `?` (try), `.await`, and `.unwrap()` / `.expect(...)`. So `match
+/// mtx.lock()?`, `match lock.read().unwrap()`, and `match m.lock().await`
+/// all resolve to the lock call underneath.
+fn peel_guard_wrappers<'a>(node: tree_sitter::Node<'a>, source: &[u8]) -> tree_sitter::Node<'a> {
+    let mut current = node;
+    loop {
+        match current.kind() {
+            "try_expression" | "await_expression" => {
+                let Some(inner) = current.named_child(0) else {
+                    return current;
+                };
+                current = inner;
+            }
+            "call_expression" => {
+                let Some(receiver) = unwrap_or_expect_receiver(current, source) else {
+                    return current;
+                };
+                current = receiver;
+            }
+            _ => return current,
+        }
     }
-    node
 }
 
-/// If `node` is `expr.method()`, return `method`. Used to identify
-/// `.lock()` / `.read()` / `.write()` at the top of an expression.
+/// If `node` is `<receiver>.unwrap()` or `<receiver>.expect(..)`, return the
+/// receiver expression. These are the idiomatic ways to discard the
+/// `LockResult`/`PoisonError` wrapper around a guard.
+fn unwrap_or_expect_receiver<'a>(
+    node: tree_sitter::Node<'a>,
+    source: &[u8],
+) -> Option<tree_sitter::Node<'a>> {
+    let function = node.child_by_field_name("function")?;
+    if function.kind() != "field_expression" {
+        return None;
+    }
+    let field = function.child_by_field_name("field")?;
+    let name = field.utf8_text(source).ok()?;
+    if name != "unwrap" && name != "expect" {
+        return None;
+    }
+    function.child_by_field_name("value")
+}
+
+/// If `node` is a no-argument `expr.method()`, return `method`. Used to
+/// identify guard acquisitions `.lock()` / `.read()` / `.write()` at the top
+/// of an expression. The empty argument list is required: `Mutex::lock` and
+/// `RwLock::read`/`write` take no arguments, whereas `io::Read::read(&mut buf)`,
+/// `io::Write::write(&data)`, and custom `.read(buf)`/`.write(buf)` methods
+/// pass a buffer — those are not lock guards and must not match.
 fn outermost_method_call(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     if node.kind() != "call_expression" {
         return None;
     }
     let function = node.child_by_field_name("function")?;
     if function.kind() != "field_expression" {
+        return None;
+    }
+    let arguments = node.child_by_field_name("arguments")?;
+    if arguments.named_child_count() != 0 {
         return None;
     }
     let field = function.child_by_field_name("field")?;
@@ -134,5 +181,29 @@ mod tests {
     fn allows_match_on_unrelated_method() {
         let src = "fn f() { match v.first() { Some(_) => (), None => () } }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_io_read_with_buffer_arg() {
+        let src = "fn f() { match reader.read(&mut buf) { Ok(0) => (), _ => () } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_io_write_with_buffer_arg() {
+        let src = "fn f() { match w.write(&data) { Ok(_) => (), Err(_) => () } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_rwlock_read_guard() {
+        let src = "fn f() { match lock.read().unwrap() { _ => () } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_mutex_lock_guard() {
+        let src = "fn f() { match m.lock().unwrap() { _ => () } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
