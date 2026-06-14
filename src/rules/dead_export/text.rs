@@ -63,6 +63,15 @@
 //!     through a static TS import. The exemption is gated on BOTH the
 //!     `functions/` directory and the `handler` name, so a lone `handler`
 //!     export elsewhere stays subject to the rule.
+//!   - Node.js ESM customization-hook exports (`resolve`/`load`/`globalPreload`)
+//!     in an `.mjs`/`.mts` module declared with the canonical chained-hook
+//!     signature — Node loads the module through the `--loader`/`--import` (or
+//!     `register(...)`) machinery and invokes those exports by name, never
+//!     through a static import. Gated on BOTH the ESM file convention AND the
+//!     hook shape (`resolve`/`load`'s last parameter is the `nextResolve`/
+//!     `nextLoad` continuation; `globalPreload` rides on a shape-valid sibling),
+//!     so an ordinary `export const resolve = …` in a `.ts`/`.js` file, or one
+//!     without the chained-hook signature, stays subject to the rule.
 //!   - Framework file-system-routing entry points (`is_framework_route_export`) —
 //!     a file matching a well-known routing convention exposes reserved exports
 //!     that the framework's router consumes by name, never through a static
@@ -162,6 +171,20 @@ fn is_in_serverless_functions_dir(path: &Path) -> bool {
     path.components().any(|c| {
         matches!(c, std::path::Component::Normal(s) if s.to_str() == Some("functions"))
     })
+}
+
+/// True when `path` is an explicit-ESM `.mjs`/`.mts` module — the file
+/// convention a Node.js customization-hooks module follows (the hooks API is
+/// ESM-only). Node loads such a module through the `--loader`/`--import` (or
+/// `register(...)`) machinery, so its `resolve`/`load`/`globalPreload` exports
+/// have no static importer. Requiring this extension keeps an ordinary
+/// `resolve`/`load` export in a `.ts`/`.js` file subject to the rule; it is the
+/// first half of the signal, paired with the stronger chained-hook shape gate.
+fn is_node_loader_hook_file(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("mjs" | "mts")
+    )
 }
 
 /// TS/JS source extensions a file-system-routed framework module can carry.
@@ -600,6 +623,15 @@ impl TextCheck for Check {
         // is still flagged. Hoisted out of the loop — one path-segment scan.
         let in_serverless_functions_dir = is_in_serverless_functions_dir(&canon);
 
+        // Node.js ESM customization-hooks module: a `.mjs`/`.mts` module loaded
+        // by the Node runtime through `--loader`/`--import` (or `register(...)`),
+        // which invokes its `resolve`/`load`/`globalPreload` exports by name,
+        // never through a static import. Gated on the ESM file convention so an
+        // ordinary `resolve`/`load` export in a `.ts`/`.js` file is not exempted;
+        // the per-export shape gate below is the second, stronger half. Hoisted
+        // out of the loop — one extension check.
+        let is_node_loader_hook_file = is_node_loader_hook_file(&canon);
+
         // The two source scans below each tree-sitter-parse the whole file, so
         // they are computed lazily: only an export that already survived the
         // cheap index checks (almost none, in a healthy project) pays for them.
@@ -675,6 +707,17 @@ impl TextCheck for Check {
         // Computed lazily: only a surviving export pays for the parse, and the set
         // is scoped to the wrapper-call exports so a plain export stays flagged.
         let mut convex_magic_exports: Option<HashSet<String>> = None;
+
+        // Names of this module's Node.js ESM loader-hook exports — the
+        // `resolve`/`load`/`globalPreload` hooks declared with the canonical
+        // chained-hook signature (`resolve`/`load`'s last parameter is the
+        // `nextResolve`/`nextLoad` continuation). The Node runtime invokes them by
+        // name through the `--loader`/`--import` machinery, never through a static
+        // import, so they are live despite having no importer. Computed lazily and
+        // only when the file already matched the ESM hooks convention, so a
+        // non-`.mjs`/`.mts` module pays nothing and the set is scoped to the
+        // shape-valid hook names so a plain `export const resolve` stays flagged.
+        let mut node_loader_hook_exports: Option<HashSet<String>> = None;
 
         let mut diagnostics = Vec::new();
         for export in exports {
@@ -752,6 +795,22 @@ impl TextCheck for Check {
             });
             if convex_magic.contains(export.name.as_str()) {
                 continue;
+            }
+            // Node.js ESM loader hook: a `resolve`/`load`/`globalPreload` export
+            // in an `.mjs`/`.mts` module whose declaration carries the canonical
+            // chained-hook signature is invoked by the Node runtime through the
+            // `--loader`/`--import` machinery, never imported. Gated on the ESM
+            // file convention AND the shape-confirming scan, so an ordinary
+            // `resolve`/`load` export does not match.
+            if is_node_loader_hook_file
+                && crate::project::NODE_LOADER_HOOK_EXPORTS.contains(&export.name.as_str())
+            {
+                let hooks = node_loader_hook_exports.get_or_insert_with(|| {
+                    crate::project::node_loader_hook_exports_for_source(ctx.source, ctx.lang)
+                });
+                if hooks.contains(export.name.as_str()) {
+                    continue;
+                }
             }
             let structurally_consumed = structurally_consumed
                 .get_or_insert_with(|| collect_structurally_consumed_types(ctx.source, ctx.lang));
@@ -3185,6 +3244,91 @@ mod tests {
             "handler export outside functions/ must still be flagged, got: {diags:?}"
         );
         assert!(diags[0].message.contains("handler"));
+    }
+
+    #[test]
+    fn no_fp_for_node_esm_loader_hooks_issue_2301() {
+        // Regression for #2301 (angular/angular) — a Node.js ESM customization-
+        // hooks module exports `resolve`/`load`/`globalPreload`, which the Node
+        // runtime invokes through the `--loader`/`--import` CLI flag, never
+        // through a static TS import. The file is a `.mjs` module and the hooks
+        // carry the canonical chained-hook signature, so dead-export must treat
+        // all three as live.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "tools/bazel/node_loader/hooks.mjs",
+                "export const resolve = async (specifier, context, nextResolve) => {\n\
+                   return nextResolve(specifier, context);\n\
+                 };\n\
+                 export const load = async (url, context, nextLoad) => {\n\
+                   return nextLoad(url, context);\n\
+                 };\n\
+                 export const globalPreload = () => '';\n",
+            ),
+            ("tools/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "tools/bazel/node_loader/hooks.mjs");
+        assert!(
+            diags.is_empty(),
+            "Node ESM loader hooks (resolve/load/globalPreload) must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_ordinary_resolve_export_in_ts_file() {
+        // Sibling guard for #2301 — `resolve`/`load` are extremely common export
+        // names. An ordinary `export const resolve = (x) => x` in a `.ts` file
+        // (no `.mjs`/`.mts` convention, wrong signature) that nothing imports
+        // must still be flagged: exempting it would be a false negative.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/utils.ts", "export const resolve = (x: number) => x;\n"),
+            ("src/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/utils.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "ordinary resolve export in a .ts file must still be flagged, got: {diags:?}"
+        );
+        assert!(diags[0].message.contains("resolve"));
+    }
+
+    #[test]
+    fn still_flags_resolve_in_mjs_without_chained_hook_signature() {
+        // Sibling guard for #2301 — the ESM extension alone is not enough; the
+        // chained-hook shape is the second, stronger half of the signal. A
+        // `resolve` export in a `.mjs` module whose last parameter is NOT the
+        // `nextResolve` continuation is an ordinary export and must still fire.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/paths.mjs", "export const resolve = (a, b) => a + b;\n"),
+            ("src/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/paths.mjs");
+        assert_eq!(
+            diags.len(),
+            1,
+            "resolve in .mjs without the chained-hook signature must still be flagged, got: {diags:?}"
+        );
+        assert!(diags[0].message.contains("resolve"));
+    }
+
+    #[test]
+    fn still_flags_lone_global_preload_in_mjs() {
+        // Sibling guard for #2301 — `globalPreload` has too generic a signature
+        // to identify the convention on its own. Without a shape-valid sibling
+        // `resolve`/`load` in the same module, a lone `globalPreload` export
+        // stays subject to the rule.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/preload.mjs", "export const globalPreload = () => '';\n"),
+            ("src/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/preload.mjs");
+        assert_eq!(
+            diags.len(),
+            1,
+            "lone globalPreload without a sibling hook must still be flagged, got: {diags:?}"
+        );
+        assert!(diags[0].message.contains("globalPreload"));
     }
 
     #[test]

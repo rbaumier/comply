@@ -1069,6 +1069,145 @@ fn call_callee_is(
         .is_some_and(pred)
 }
 
+/// Export names a Node.js ESM customization-hook module exposes to the Node
+/// runtime: the `resolve`/`load` chained hooks and the `globalPreload` hook.
+/// Node loads the module via the `--loader`/`--import` (or `register(...)`) CLI
+/// machinery and invokes these by name, never through a static import, so each
+/// has no importer yet is live. Used as the cheap name gate before the
+/// shape-confirming source scan runs.
+pub const NODE_LOADER_HOOK_EXPORTS: &[&str] = &["resolve", "load", "globalPreload"];
+/// Canonical last-parameter name of the chained `resolve` hook — the
+/// `nextResolve` continuation Node passes so a hook can defer to the next one in
+/// the chain. Its presence as the final parameter is the loader-hook fingerprint.
+const NODE_RESOLVE_NEXT_PARAM: &str = "nextResolve";
+/// Canonical last-parameter name of the chained `load` hook — the `nextLoad`
+/// continuation, the `load` counterpart of `nextResolve`.
+const NODE_LOAD_NEXT_PARAM: &str = "nextLoad";
+
+/// Names of the Node.js ESM loader hooks `source` exposes with the canonical
+/// chained-hook signature, or an empty set when `source` declares none. Node
+/// loads a customization-hooks module through `--loader`/`--import` (or a
+/// `register(...)` call) and invokes `resolve`/`load`/`globalPreload` by name,
+/// never through a static import, so each has no importer yet is live.
+///
+/// The shape gate is deliberately strict because `resolve`/`load` are extremely
+/// common export names: a `resolve` or `load` export only counts when its value
+/// is a function whose *last* parameter is the chained-hook continuation
+/// (`nextResolve` / `nextLoad`). `globalPreload` is included only when the module
+/// also declares a shape-valid `resolve` or `load`, so a lone `globalPreload`
+/// elsewhere is not exempted. The caller additionally gates on a loader-hook file
+/// convention, so an ordinary `export const resolve = (x) => x` stays flagged.
+#[must_use]
+pub fn node_loader_hook_exports_for_source(
+    source: &str,
+    lang: crate::files::Language,
+) -> HashSet<String> {
+    let mut names = HashSet::new();
+    let Some(grammar) = crate::parsing::ts_language_for(lang) else {
+        return names;
+    };
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&grammar).is_err() {
+        return names;
+    }
+    let Some(tree) = parser.parse(source, None) else {
+        return names;
+    };
+    let bytes = source.as_bytes();
+    let mut has_global_preload = false;
+    crate::rules::walker::walk_tree(&tree, |node| {
+        if node.kind() != "export_statement" {
+            return;
+        }
+        for (name, last_param) in exported_function_signatures(node, bytes) {
+            match name.as_str() {
+                "resolve" if last_param.as_deref() == Some(NODE_RESOLVE_NEXT_PARAM) => {
+                    names.insert(name);
+                }
+                "load" if last_param.as_deref() == Some(NODE_LOAD_NEXT_PARAM) => {
+                    names.insert(name);
+                }
+                "globalPreload" => has_global_preload = true,
+                _ => {}
+            }
+        }
+    });
+    // `globalPreload` rides on a shape-valid `resolve`/`load` in the same module:
+    // its own signature is too generic to identify the convention alone.
+    if has_global_preload && (names.contains("resolve") || names.contains("load")) {
+        names.insert("globalPreload".to_string());
+    }
+    names
+}
+
+/// `(exported name, last-parameter name)` for each named function-valued export
+/// `node` (an `export_statement`) declares. Covers `export const f = (…) => {}` /
+/// `= function (…) {}` and `export function f(…) {}`. The last-parameter name is
+/// the final `required_parameter` / `optional_parameter` / `identifier` in the
+/// function's `formal_parameters`, or `None` when it takes no parameters. Loader
+/// hooks are always named exports, so the default-export form is not handled.
+fn exported_function_signatures(
+    node: tree_sitter::Node,
+    source: &[u8],
+) -> Vec<(String, Option<String>)> {
+    let mut out = Vec::new();
+    // `export function f(…) {}` — the declaration carries both name and params.
+    if let Some(func) = node
+        .named_children(&mut node.walk())
+        .find(|c| c.kind() == "function_declaration" || c.kind() == "generator_function_declaration")
+    {
+        if let Some(name) = func
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+        {
+            out.push((name.to_string(), last_param_name(func, source)));
+        }
+        return out;
+    }
+    // `export const f = (…) => {}` / `= function (…) {}` — name on the
+    // declarator, params on its function-valued initializer.
+    if let Some(decl) = node
+        .named_children(&mut node.walk())
+        .find(|c| c.kind() == "lexical_declaration" || c.kind() == "variable_declaration")
+    {
+        for declarator in decl
+            .named_children(&mut decl.walk())
+            .filter(|c| c.kind() == "variable_declarator")
+        {
+            let (Some(name), Some(value)) = (
+                declarator
+                    .child_by_field_name("name")
+                    .filter(|n| n.kind() == "identifier")
+                    .and_then(|n| n.utf8_text(source).ok()),
+                declarator.child_by_field_name("value"),
+            ) else {
+                continue;
+            };
+            if matches!(value.kind(), "arrow_function" | "function_expression") {
+                out.push((name.to_string(), last_param_name(value, source)));
+            }
+        }
+    }
+    out
+}
+
+/// Name of the last formal parameter of `func` (a function-shaped node), or
+/// `None` when it declares no parameters. Reads the final named child of the
+/// `formal_parameters` list, unwrapping a `required_parameter`/`optional_parameter`
+/// to its inner pattern identifier.
+fn last_param_name(func: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let params = func.child_by_field_name("parameters")?;
+    let last = params.named_children(&mut params.walk()).last()?;
+    let ident = match last.kind() {
+        "required_parameter" | "optional_parameter" => last
+            .child_by_field_name("pattern")
+            .filter(|p| p.kind() == "identifier")?,
+        "identifier" => last,
+        _ => return None,
+    };
+    ident.utf8_text(source).ok().map(str::to_string)
+}
+
 /// True when the `globalSetup` option in a Vitest/Vite config's `raw` text
 /// references `target`. `config_dir` is the directory holding the config, used
 /// to resolve the relative specifiers the option carries.
