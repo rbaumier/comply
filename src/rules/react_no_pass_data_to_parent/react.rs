@@ -126,4 +126,30 @@ mod tests {
         assert!(run("useEffect(() => { on(x) }, [x])").is_empty());
         assert!(run("useEffect(() => { onclick(x) }, [x])").is_empty());
     }
+
+    /// Regression #2253: test-harness components expose state to the outer test via
+    /// `useEffect(() => onReady(data), [])`. With `skip_in_test_dir`, the rule must
+    /// not fire inside a `.test.tsx` file.
+    #[test]
+    fn skips_test_harness_files() {
+        use crate::rules::test_helpers::run_rule_gated;
+        let src = "useEffect(() => { onReady({ setProps, ref }) }, [])";
+        assert!(
+            run_rule_gated(&Check, src, "tests/mutability.test.tsx").is_empty(),
+            "the onReady effect in a .test.tsx fixture must not be flagged"
+        );
+    }
+
+    /// Negative-space guard: the same pattern in a production `.tsx` file is still
+    /// the lift-via-effect anti-pattern and must remain flagged.
+    #[test]
+    fn still_flags_in_production_files() {
+        use crate::rules::test_helpers::run_rule_gated;
+        let src = "useEffect(() => { onReady({ setProps, ref }) }, [])";
+        assert_eq!(
+            run_rule_gated(&Check, src, "src/RigidBody.tsx").len(),
+            1,
+            "the lift-via-effect pattern must still be flagged in production code"
+        );
+    }
 }
