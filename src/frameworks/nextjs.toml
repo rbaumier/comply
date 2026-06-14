@@ -3,7 +3,10 @@ dependencies = ["next"]
 
 [entry_points]
 dirs = ["/pages/", "/app/"]
-files = ["middleware.ts", "middleware.js", "instrumentation.ts", "instrumentation.js"]
+files = [
+    "middleware.ts", "middleware.js", "instrumentation.ts", "instrumentation.js",
+    "route.ts", "route.js", "route.tsx", "route.jsx",
+]
 root_files = ["next.config"]
 
 [magic_exports]

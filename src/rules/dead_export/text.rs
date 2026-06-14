@@ -778,6 +778,20 @@ mod tests {
         )
     }
 
+    fn run_on_project_with_pkg_and_entrypoints(
+        package_json: &str,
+        entrypoints: Vec<String>,
+        files: &[(&str, &str)],
+        target_rel: &str,
+    ) -> (TempDir, Vec<Diagnostic>) {
+        run_on_project_inner(
+            Some(package_json),
+            Config::with_entrypoints(entrypoints),
+            files,
+            target_rel,
+        )
+    }
+
     fn run_on_project_inner(
         package_json: Option<&str>,
         config: Config,
@@ -1050,6 +1064,62 @@ mod tests {
             diags.is_empty(),
             "gatsby-ssr.js is a framework lifecycle entry; dead-export must not fire, got: {diags:?}"
         );
+    }
+
+    #[test]
+    fn ignores_nextjs_app_router_route_handler_exports_issue_1627() {
+        // Regression for #1627 (shadcn-ui/ui) — a Next.js App Router `route.ts`
+        // is a file-system-routed entry: its HTTP-method handlers (`GET`/`POST`/…)
+        // are invoked by the Next.js runtime per request, and its segment-config
+        // exports (`revalidate`, `dynamic`) plus `generateStaticParams` are read by
+        // the build, never through a static import. The route-file match must bail
+        // out the whole file.
+        //
+        // Configured entrypoints disable the `/app/` directory bail-out (the user
+        // opted into checking backend-dir files), so only the per-file route match
+        // protects this handler — the exact condition that surfaced the FP.
+        let pkg = r#"{ "dependencies": { "next": "14.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "app/(app)/llm/[[...slug]]/route.ts",
+                "import { NextResponse } from 'next/server';\n\
+                 export const revalidate = false;\n\
+                 export const dynamic = 'force-static';\n\
+                 export async function GET() { return new NextResponse('x'); }\n\
+                 export function generateStaticParams() { return []; }\n",
+            ),
+            ("app/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg_and_entrypoints(
+            pkg,
+            vec!["src/server.ts".to_string()],
+            &files,
+            "app/(app)/llm/[[...slug]]/route.ts",
+        );
+        assert!(
+            diags.is_empty(),
+            "Next.js App Router route.ts is a framework entry; dead-export must not fire, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_get_export_in_non_route_file_issue_1627() {
+        // Negative-space guard for #1627 — the route-handler exemption is scoped to
+        // the `route.ts` filename. A function named `GET` exported from an ordinary
+        // module in the same Next.js project, with no importer, is genuinely dead
+        // and must still fire: `GET` is not blanket-magic project-wide.
+        let pkg = r#"{ "dependencies": { "next": "14.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            ("src/lib/http.ts", "export function GET() { return 0; }\n"),
+            ("src/lib/other.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/lib/http.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a `GET` export in a non-route file must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("GET"));
     }
 
     #[test]
