@@ -137,7 +137,19 @@ impl OxcCheck for Check {
             return;
         }
 
-        if pkg.dev_dependencies.contains_key(root) {
+        // A devDependency declared with the pnpm `workspace:` protocol
+        // (`workspace:*`, `workspace:^x.y.z`, `workspace:~`, `workspace:<path>`)
+        // is a local monorepo sibling, not external dev tooling. The protocol
+        // value itself is the signal — workspace siblings are inlined at build
+        // time and never `npm install`ed independently, so importing one from
+        // production code is correct and creates no install-time break for
+        // downstream consumers (issue #2384). This complements the
+        // `workspace_package_names()` check above for monorepos where the
+        // sibling member's manifest is not resolved.
+        if let Some(version) = pkg.dev_dependencies.get(root) {
+            if is_workspace_protocol(version) {
+                return;
+            }
             let (line, column) = byte_offset_to_line_col(ctx.source, import.span.start as usize);
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
@@ -233,6 +245,13 @@ fn is_bare_specifier(spec: &str) -> bool {
         && !spec.starts_with('.')
         && !spec.starts_with('/')
         && !spec.starts_with("node:")
+}
+
+/// True when a dependency version value uses the pnpm `workspace:` protocol
+/// (`workspace:*`, `workspace:^1.2.3`, `workspace:~`, `workspace:../pkg`), which
+/// resolves the dependency to a local monorepo sibling rather than the registry.
+fn is_workspace_protocol(version: &str) -> bool {
+    version.starts_with("workspace:")
 }
 
 #[cfg(test)]
@@ -1372,5 +1391,48 @@ import { expectAssignable } from 'expect-type';
         let d = run_with_pkg_at_path(pkg, "src/components/app.ts", src);
         assert_eq!(d.len(), 1, "publishable package should still flag: {d:?}");
         assert!(d[0].message.contains("vue"));
+    }
+
+    #[test]
+    fn allows_dev_dep_declared_with_workspace_protocol() {
+        // Issue #2384: in pnpm monorepos, workspace sibling packages are listed
+        // in `devDependencies` with the `workspace:*` protocol (e.g. prisma's
+        // `"@prisma/internals": "workspace:*"`). The protocol value itself marks
+        // the entry as a local workspace sibling — an internal package bundled at
+        // build time, never an external dev tool — so importing it from
+        // production code is correct and must not flag.
+        let pkg = r#"{
+            "name": "@prisma/cli",
+            "devDependencies": {
+                "@prisma/internals": "workspace:*",
+                "@prisma/debug": "workspace:^1.2.3",
+                "@prisma/client": "workspace:~"
+            }
+        }"#;
+        let src = r#"
+import { arg } from '@prisma/internals';
+import { Debug } from '@prisma/debug';
+import { PrismaClient } from '@prisma/client';
+"#;
+        let d = run_with_pkg_at_path(pkg, "src/Status.ts", src);
+        assert!(d.is_empty(), "workspace: protocol deps should not flag: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_undeclared_external_dev_dep() {
+        // Negative-space guard: an external devDependency declared with a normal
+        // semver range (not the `workspace:` protocol) in a publishable package
+        // must still flag — the exemption is scoped to workspace-protocol deps.
+        let pkg = r#"{
+            "name": "@prisma/cli",
+            "devDependencies": {
+                "@prisma/internals": "workspace:*",
+                "typescript": "^5"
+            }
+        }"#;
+        let src = r#"import ts from 'typescript';"#;
+        let d = run_with_pkg_at_path(pkg, "src/Status.ts", src);
+        assert_eq!(d.len(), 1, "external semver devDep should still flag: {d:?}");
+        assert!(d[0].message.contains("typescript"));
     }
 }
