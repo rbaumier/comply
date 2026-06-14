@@ -61,3 +61,64 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    fn setup_project(files: &[(&str, &str)]) -> (TempDir, ProjectCtx, Vec<PathBuf>) {
+        let dir = TempDir::new().unwrap();
+        let mut source_files = Vec::new();
+        let mut paths = Vec::new();
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&p, content).unwrap();
+            let lang = Language::from_path(&p).unwrap();
+            source_files.push(SourceFile { path: p.clone(), language: lang });
+            paths.push(fs::canonicalize(&p).unwrap());
+        }
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        (dir, project, paths)
+    }
+
+    fn run(src: &str, path: &std::path::Path, project: &ProjectCtx) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(
+            &Check,
+            src,
+            path,
+            project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    #[test]
+    fn allows_same_name_in_distinct_namespaces() {
+        // openai-node pattern: `ClientSecret` exported inside two sibling
+        // namespaces is two distinct types, not a module-level duplicate.
+        let source = "export namespace TranscriptionSession {\n  export interface ClientSecret { expires_at: number; }\n}\nexport namespace TranscriptionSessionCreateParams {\n  export interface ClientSecret { client_secret?: string; }\n}\n";
+        let (_dir, project, paths) = setup_project(&[("m.ts", source)]);
+        let diags = run(source, &paths[0], &project);
+        assert!(diags.is_empty(), "expected no duplicate-export diagnostics, got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_two_value_exports_same_name() {
+        // Genuine duplicate: two module-level value exports of `x`.
+        let source = "export const x = 1;\nexport { y as x };\nconst y = 2;\n";
+        let (_dir, project, paths) = setup_project(&[("m.ts", source)]);
+        let diags = run(source, &paths[0], &project);
+        assert_eq!(diags.len(), 1, "expected one duplicate, got: {diags:?}");
+        assert!(diags[0].message.contains('x'));
+    }
+}

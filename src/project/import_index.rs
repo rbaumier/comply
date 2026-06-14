@@ -1491,6 +1491,15 @@ fn import_specifier_names(spec: Node, source: &[u8]) -> (String, String) {
 }
 
 fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
+    // Exports nested inside a `namespace Foo { … }` / `module Foo { … }` body are
+    // scoped to that namespace — reachable only as `Foo.X`, never as a
+    // module-level binding. The namespace itself is recorded as the module-level
+    // export by its enclosing `export_statement`; its members are skipped, so two
+    // namespaces may each export an `X` without it being a module-level duplicate.
+    if is_in_ts_namespace_body(node) {
+        return;
+    }
+
     let line = node.start_position().row + 1;
 
     // `export * from './m'` / `export * as ns from './m'` — `export_clause`
@@ -1632,6 +1641,20 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
         }
         extract_declaration_export(child, source, line, out);
     }
+}
+
+/// True when `node` sits inside a TypeScript namespace/module body — some
+/// ancestor is an `internal_module` (`namespace Foo`) or `module` (`module Foo`)
+/// node. tree-sitter analogue of `oxc_helpers::is_in_ts_namespace`.
+fn is_in_ts_namespace_body(node: Node) -> bool {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if matches!(parent.kind(), "internal_module" | "module") {
+            return true;
+        }
+        current = parent.parent();
+    }
+    false
 }
 
 /// Extract exported name(s) from a declaration node directly under an
@@ -1930,18 +1953,28 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
             // block are TypeScript module augmentations: the compiler merges them
             // into another module's types, so they are never imported by name and
             // must not be counted as project exports (else dead-export flags them).
+            //
+            // Exports nested inside a `namespace Foo { … }` / `module Foo { … }`
+            // body are scoped to that namespace: `export interface X` there is
+            // reachable only as `Foo.X`, never as a module-level binding. The
+            // namespace itself (`export namespace Foo`) is recorded as the
+            // module-level export; its members are not, so two namespaces may each
+            // export an `X` without it being a module-level duplicate.
             AstKind::ExportNamedDeclaration(export)
-                if !crate::oxc_helpers::is_in_ambient_declaration(node.id(), &semantic) =>
+                if !crate::oxc_helpers::is_in_ambient_declaration(node.id(), &semantic)
+                    && !crate::oxc_helpers::is_in_ts_namespace(node.id(), &semantic) =>
             {
                 oxc_extract_export_named(&lines, export, &mut exports);
             }
             AstKind::ExportAllDeclaration(export)
-                if !crate::oxc_helpers::is_in_ambient_declaration(node.id(), &semantic) =>
+                if !crate::oxc_helpers::is_in_ambient_declaration(node.id(), &semantic)
+                    && !crate::oxc_helpers::is_in_ts_namespace(node.id(), &semantic) =>
             {
                 oxc_extract_export_all(&lines, export, &mut exports);
             }
             AstKind::ExportDefaultDeclaration(export)
-                if !crate::oxc_helpers::is_in_ambient_declaration(node.id(), &semantic) =>
+                if !crate::oxc_helpers::is_in_ambient_declaration(node.id(), &semantic)
+                    && !crate::oxc_helpers::is_in_ts_namespace(node.id(), &semantic) =>
             {
                 exports.push(ExportedSymbol {
                     name: "default".into(),
@@ -4325,6 +4358,13 @@ mod tests {
         "export declare class AmbientClass {}",
         "export declare enum AmbientEnum { A, B }",
         "export declare namespace AmbientNs { const x: number; }",
+        // namespace-scoped members are reachable only as `Ns.X`, never as a
+        // module-level binding: both extractors record only the namespace name,
+        // not its nested `export interface` / `export const` members. Two sibling
+        // namespaces may each export an `X` without a module-level duplicate.
+        "export namespace Ns { export interface X { a: number; } export const y = 1; }",
+        "export namespace Outer { export interface X { a: number; }\n\
+         export namespace Inner { export interface X { b: number; } } }",
         // overload signatures: body-less + implementation must yield ONE export
         "export function overloaded(a: string): void;\n\
          export function overloaded(a: number): void;\n\

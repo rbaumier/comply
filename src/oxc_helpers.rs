@@ -803,6 +803,24 @@ pub fn is_in_ambient_declaration(
     })
 }
 
+/// True when `node_id` sits inside a TypeScript namespace/module body
+/// (`namespace Foo { … }` or `module Foo { … }`) — i.e. some strict ancestor is
+/// a `TSModuleDeclaration`. A namespace is its own scope: `export interface X`
+/// inside it is reachable only as `Foo.X`, never as a module-level binding, so
+/// two namespaces may each export an `X` without clashing. Callers that reason
+/// about module-level exports use this to exclude namespace-scoped members.
+#[must_use]
+pub fn is_in_ts_namespace(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    semantic
+        .nodes()
+        .ancestors(node_id)
+        .any(|ancestor| matches!(ancestor.kind(), AstKind::TSModuleDeclaration(_)))
+}
+
 /// Walk up from `node_id` to its nearest enclosing `Class`, returning the class
 /// AST node. Stops at the first `Class` ancestor (a method's own class), or
 /// `None` if the node has no enclosing class.
