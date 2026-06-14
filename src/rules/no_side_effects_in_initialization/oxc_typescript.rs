@@ -1893,6 +1893,58 @@ mod tests {
         );
     }
 
+    // Regression-lock for #1695: a Redwood binary entry under `src/bins/` opens
+    // with a `#!/usr/bin/env node` shebang and bootstraps the real CLI via a
+    // top-level computed-member call (`requireFromRwJobs(bins['rw-jobs-worker'])`).
+    // The leading shebang marks it as a directly-executed script, never imported,
+    // so the top-level call is intentional and not tree-shakeable.
+    #[test]
+    fn allows_node_shebang_bin_with_computed_member_call() {
+        let src = "\
+            #!/usr/bin/env node\n\
+            import { createRequire } from 'node:module';\n\
+            const require = createRequire(import.meta.url);\n\
+            const requireFromRwJobs = createRequire(\n\
+              require.resolve('@redwoodjs/jobs/package.json'),\n\
+            );\n\
+            const bins = requireFromRwJobs('./package.json')['bin'];\n\
+            requireFromRwJobs(bins['rw-jobs-worker']);\n";
+        let diags = crate::rules::test_helpers::run_rule(
+            &Check,
+            src,
+            "packages/core/src/bins/rw-jobs-worker.ts",
+        );
+        assert!(
+            diags.is_empty(),
+            "node shebang bin entry should be exempt, got {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #1695: the same top-level call shape in an
+    // ordinary, non-shebang `src/` module is still a tree-shaking hazard and
+    // must be flagged. The shebang is the only thing that grants the exemption.
+    #[test]
+    fn still_flags_non_shebang_module_with_computed_member_call() {
+        let src = "\
+            import { createRequire } from 'node:module';\n\
+            const require = createRequire(import.meta.url);\n\
+            const requireFromRwJobs = createRequire(\n\
+              require.resolve('@redwoodjs/jobs/package.json'),\n\
+            );\n\
+            const bins = requireFromRwJobs('./package.json')['bin'];\n\
+            requireFromRwJobs(bins['rw-jobs-worker']);\n";
+        let diags = crate::rules::test_helpers::run_rule(
+            &Check,
+            src,
+            "packages/core/src/loadBins.ts",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "ordinary non-shebang module must still be flagged, got {diags:?}"
+        );
+    }
+
     #[test]
     fn still_flags_non_bin_module_with_side_effect() {
         // `binary.ts` merely contains "bin" — not the `bin` convention — and has
