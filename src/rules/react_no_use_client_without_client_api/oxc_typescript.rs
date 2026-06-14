@@ -117,13 +117,27 @@ impl OxcCheck for Check {
                     }
                 }
                 AstKind::ExportNamedDeclaration(export) => {
-                    if export.source.is_none() {
+                    let Some(source) = &export.source else {
                         continue;
+                    };
+                    // A barrel re-exporting from a relative sibling
+                    // (`export { Accordion } from './accordion'`) propagates the
+                    // sibling's client-ness; the `"use client"` marks the package
+                    // entry point for bundlers even though the barrel calls no
+                    // hooks itself. The sibling is invisible to single-file
+                    // analysis, so the relative re-export is the signal.
+                    if is_relative_specifier(source.value.as_str()) {
+                        return Vec::new();
                     }
                     for spec in &export.specifiers {
                         if is_hook_name(spec.local.name().as_str()) {
                             return Vec::new();
                         }
+                    }
+                }
+                AstKind::ExportAllDeclaration(export) => {
+                    if is_relative_specifier(export.source.value.as_str()) {
+                        return Vec::new();
                     }
                 }
                 _ => {}
@@ -273,6 +287,12 @@ fn has_use_client_directive(source: &str) -> bool {
         }
     }
     false
+}
+
+/// True for a relative module specifier (`./accordion`, `../shared`), i.e. a
+/// sibling file inside the same package rather than an npm dependency.
+fn is_relative_specifier(spec: &str) -> bool {
+    spec.starts_with("./") || spec.starts_with("../")
 }
 
 /// True for React-hook-shaped names: `use` followed by an uppercase letter
@@ -618,6 +638,47 @@ export const Badge = withContext<HTMLSpanElement, BadgeProps>("span")
 import { chunk } from "lodash";
 
 export const parts = chunk([1, 2, 3], 2);
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression tests for #1795 — a `"use client"` barrel `index.ts` that only
+    // re-exports from a relative sibling file (`./accordion`) carrying the
+    // actual hooks. The directive marks the package entry point for bundlers.
+    #[test]
+    fn no_fp_for_relative_named_reexport_barrel_oxc() {
+        let src = r#"'use client';
+export {
+  Accordion,
+  AccordionItem,
+  AccordionHeader,
+  AccordionTrigger,
+  AccordionContent,
+} from './accordion';
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_relative_export_all_barrel_oxc() {
+        let src = r#"'use client';
+export * from './accordion';
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_parent_relative_reexport_barrel_oxc() {
+        let src = r#"'use client';
+export { Button } from '../button';
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_package_named_reexport_without_client_api_oxc() {
+        let src = r#"'use client';
+export { isEqual } from 'lodash';
 "#;
         assert_eq!(run(src).len(), 1);
     }
