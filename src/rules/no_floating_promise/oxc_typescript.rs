@@ -148,6 +148,9 @@ fn is_async_looking_member_call(call: &CallExpression, ctx: &CheckCtx) -> bool {
     if is_better_sqlite3_sync_method(member, ctx) {
         return false;
     }
+    if is_express_route_dispatch(call, member) {
+        return false;
+    }
     let method = member.property.name.as_str();
     ASYNC_LOOKING_METHODS.contains(&method)
 }
@@ -319,6 +322,48 @@ fn is_editor_view_dispatch(member: &StaticMemberExpression) -> bool {
         }
         _ => false,
     }
+}
+
+/// Express's `Route.prototype.dispatch(req, res, done)` (and the equivalent
+/// `Router`/`Layer` dispatch) is continuation-passing: it threads the request
+/// through the middleware stack and delivers its outcome via the trailing `done`
+/// callback — it returns `void`, never a Promise.
+/// Matches a `.dispatch(...)` call with the Express dispatch shape: exactly three
+/// arguments, whose first argument reads as a request (`req`/`request`) and whose
+/// last argument is a callback (a function/arrow expression, or a bare identifier
+/// reading as a continuation), e.g. `route.dispatch(req, {}, done)` /
+/// `route.dispatch(req, {}, (err) => {})`. The request-shaped head plus a trailing
+/// callback rules out a Promise return, so the call must not be flagged.
+fn is_express_route_dispatch(call: &CallExpression, member: &StaticMemberExpression) -> bool {
+    if member.property.name.as_str() != "dispatch" || call.arguments.len() != 3 {
+        return false;
+    }
+    let Some(first) = call.arguments.first().and_then(Argument::as_expression) else {
+        return false;
+    };
+    if !matches!(peel_parens(first), Expression::Identifier(id) if name_reads_as_request(id.name.as_str()))
+    {
+        return false;
+    }
+    let Some(last) = call.arguments.last().and_then(Argument::as_expression) else {
+        return false;
+    };
+    matches!(
+        peel_parens(last),
+        Expression::FunctionExpression(_) | Expression::ArrowFunctionExpression(_)
+    ) || matches!(peel_parens(last), Expression::Identifier(id) if name_reads_as_callback(id.name.as_str()))
+}
+
+/// Does an identifier name (case-insensitive) read as an HTTP request handle?
+fn name_reads_as_request(name: &str) -> bool {
+    let name = name.to_lowercase();
+    name == "req" || name == "request"
+}
+
+/// Does an identifier name (case-insensitive) read as a continuation callback?
+fn name_reads_as_callback(name: &str) -> bool {
+    let name = name.to_lowercase();
+    matches!(name.as_str(), "done" | "cb" | "callback" | "next")
 }
 
 /// `node:diagnostics_channel` `Channel.prototype.publish(message)` returns `void`
@@ -886,5 +931,69 @@ repo.save(entity);
 ";
         let d = run_on(src);
         assert_eq!(d.len(), 1);
+    }
+
+    // Regression tests for issue #2364: Express's `Route.dispatch(req, res, done)`
+    // is continuation-passing — it delivers its outcome through the trailing `done`
+    // callback and returns void, never a Promise. A `.dispatch(...)` call with the
+    // Express dispatch shape (three args, trailing callback) must not be flagged.
+    // (`res.send()` / `res.json()` were already exempt — `send`/`json` are not in
+    // the heuristic list.)
+
+    #[test]
+    fn allows_express_route_dispatch_identifier_callback() {
+        // The issue's exact example: `route.dispatch(req, {}, done)`.
+        assert!(run_on("route.dispatch(req, {}, done);").is_empty());
+    }
+
+    #[test]
+    fn allows_express_route_dispatch_arrow_callback() {
+        assert!(run_on("route.dispatch(req, {}, (err) => { if (err) throw err; });").is_empty());
+    }
+
+    #[test]
+    fn allows_express_route_dispatch_function_callback() {
+        let src = "\
+route.dispatch(req, {}, function (err) {
+  assert.ifError(err);
+});
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_dispatch_without_trailing_callback() {
+        // Negative-space guard: a `.dispatch(...)` with three non-callback args is
+        // not the Express dispatch shape and stays flagged.
+        let d = run_on("worker.dispatch(a, b, c);");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_single_arg_dispatch() {
+        // Negative-space guard: a genuine Promise-returning `.dispatch(job)` on a
+        // non-store, non-view receiver stays flagged.
+        let d = run_on("worker.dispatch(job);");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression tests for issue #2364: synchronous Express `ServerResponse`
+    // methods (`res.send` / `res.json`) return the response for chaining, not a
+    // Promise. These names are not in the heuristic list, so they are not flagged.
+
+    #[test]
+    fn allows_express_res_send() {
+        let src = "app.get('/', (req, res) => { res.send('ok'); });";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_express_res_status_send() {
+        assert!(run_on("res.status(500).send('got error');").is_empty());
+    }
+
+    #[test]
+    fn allows_express_res_json() {
+        assert!(run_on("res.json(data);").is_empty());
     }
 }
