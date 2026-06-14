@@ -241,6 +241,7 @@ fn is_test_file(path: &Path) -> bool {
         || name.contains(".setup.")
         || path_str.contains("/__tests__/")
         || path_str.contains("/tests/")
+        || path_str.contains("/test/")
 }
 
 fn is_in_ui_library(path: &Path) -> bool {
@@ -426,6 +427,43 @@ mod tests {
         ];
         let (_dir, diags) = run_on_project(&files);
         assert!(diags.is_empty(), "test files are exempt");
+    }
+
+    // Regression for #1177: many projects (payloadcms/payload) place test
+    // infrastructure — seeds, fixture collections, test-only Payload configs —
+    // under a singular `test/` directory. These files are exclusively used during
+    // testing and are unreachable from production entry points, but they are not
+    // dead code. They must not be flagged.
+    #[test]
+    fn skips_files_under_singular_test_dir() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/index.ts", "export const app = 1;\n"),
+            ("test/plugin-redirects/seed/index.ts", "export const seed = () => {};\n"),
+            ("test/storage-r2/shared.ts", "export const shared = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "files under a singular test/ directory are test infrastructure, not dead code: {diags:?}"
+        );
+    }
+
+    // Regression for #1177: the `test/` exemption is precise — an ordinary
+    // orphaned source file under `src/` (no test path segment) is still a true
+    // positive. Guards against the exemption blanketing genuine dead code.
+    #[test]
+    fn orphan_file_beside_test_dir_still_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/index.ts", "export const app = 1;\n"),
+            ("test/plugin-redirects/seed/index.ts", "export const seed = () => {};\n"),
+            ("src/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "only the genuine orphan must be flagged; test/ files are test infrastructure: {diags:?}"
+        );
     }
 
     // Regression for #277: `src/main.ts` is an entry point, so its transitive
