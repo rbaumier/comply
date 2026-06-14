@@ -462,6 +462,68 @@ mod tests {
     }
 
     #[test]
+    fn no_fp_on_star_as_namespace_reexport_issue_1218() {
+        // Regression for #1218 — effect-ts barrel: `index.ts` re-exports each
+        // submodule under a namespace via `export * as Effect from './Effect.js'`.
+        // A named import of those namespaces must not be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/Effect.ts", "export const succeed = 1;\n"),
+            ("src/Option.ts", "export const some = 1;\n"),
+            (
+                "src/index.ts",
+                "export * as Effect from './Effect.js';\nexport * as Option from './Option.js';\n",
+            ),
+            (
+                "src/app.ts",
+                "import { Effect, Option } from './index.js';\nconst a = Effect;\nconst b = Option;\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/app.ts");
+        assert!(
+            diags.is_empty(),
+            "named import of an `export * as Name` namespace re-export must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_missing_name_from_star_as_namespace_reexport_issue_1218() {
+        // True positive preserved: a name the barrel does not re-export (only
+        // `export * as Effect` exists) is still reported.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/Effect.ts", "export const succeed = 1;\n"),
+            ("src/index.ts", "export * as Effect from './Effect.js';\n"),
+            (
+                "src/app.ts",
+                "import { Effect, Missing } from './index.js';\nconst a = Effect;\nconst b = Missing;\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/app.ts");
+        assert_eq!(diags.len(), 1, "absent name must still be flagged: {diags:?}");
+        assert!(diags[0].message.contains("Missing"));
+    }
+
+    #[test]
+    fn still_skips_verification_on_bare_star_reexport() {
+        // Guard: a bare `export * from './x.js'` (no `as`) stays a wildcard
+        // StarReExport — the barrel's full export set is unenumerable from a
+        // single-file parse, so import-named skips verification entirely. A name
+        // not directly declared in the barrel must NOT be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/inner.ts", "export const fromInner = 1;\n"),
+            ("src/index.ts", "export * from './inner.js';\n"),
+            (
+                "src/app.ts",
+                "import { fromInner } from './index.js';\nconst a = fromInner;\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/app.ts");
+        assert!(
+            diags.is_empty(),
+            "bare `export *` re-export must keep skipping verification: {diags:?}"
+        );
+    }
+
+    #[test]
     fn still_flags_bad_import_from_regular_file() {
         // Guard: import-named still fires on a misspelled import from a
         // normal (non-generated, non-framework) source file.
