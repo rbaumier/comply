@@ -23,9 +23,14 @@ impl Shape {
     }
 }
 
+/// Map a binding name's suffix to its claimed shape.
+///
+/// `list` is a general collection term (`allow_list`, `deny_list`) that does
+/// not promise a `Vec`, so it claims no shape. Only suffixes naming a specific
+/// backing type make a contract: `array`/`vec`, `set`, `map`/`dict`.
 fn name_suffix_shape(name: &str) -> Option<Shape> {
     let lower = name.to_ascii_lowercase();
-    if lower.ends_with("list") || lower.ends_with("array") || lower.ends_with("vec") {
+    if lower.ends_with("array") || lower.ends_with("vec") {
         Some(Shape::Vec)
     } else if lower.ends_with("set") {
         Some(Shape::Set)
@@ -126,14 +131,21 @@ mod tests {
     }
 
     #[test]
-    fn flags_list_holding_set() {
-        let src = "fn f() { let user_list = HashSet::new(); }";
+    fn flags_vec_holding_set() {
+        let src = "fn f() { let user_vec = HashSet::new(); }";
         assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
     fn allows_matching_name() {
         let src = "fn f() { let user_set = HashSet::new(); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // `list` is a general collection term, not a Vec contract.
+    #[test]
+    fn allows_list_holding_set() {
+        let src = "fn f() { let allow_list = HashSet::new(); }";
         assert!(run_on(src).is_empty());
     }
 }

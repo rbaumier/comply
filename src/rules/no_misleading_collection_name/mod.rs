@@ -1,4 +1,6 @@
-//! no-misleading-collection-name — flag `*List` named as `Set`/`Map`/etc.
+//! no-misleading-collection-name — flag a binding whose name asserts a
+//! specific collection type (`*Array`/`*Set`/`*Map`) but is initialized with a
+//! different one.
 
 mod oxc_typescript;
 mod rust;
@@ -14,9 +16,9 @@ use crate::rules::meta::RuleMeta;
 pub const META: RuleMeta = RuleMeta {
     id: "no-misleading-collection-name",
     description: "Variable name lies about the underlying collection type.",
-    remediation: "Rename the binding to match the actual type — `userList` holding \
+    remediation: "Rename the binding to match the actual type — `userArray` holding \
                   a `Set` becomes `userSet`, `nameMap` holding an `Array` becomes \
-                  `nameList`. The name and the type must agree.",
+                  `nameArray`. The name and the type must agree.",
     severity: Severity::Error,
     doc_url: None,
     categories: &["naming"],
@@ -53,8 +55,14 @@ pub(super) fn article(label: &str) -> &'static str {
 }
 
 /// Map a binding name's suffix to its claimed shape.
+///
+/// Only suffixes that name a specific backing type make a contract: `Array`
+/// asserts an Array, `Set` a `Set`, `Map` a `Map`. The `List` suffix is a
+/// general English collection term (`allowList`, `denyList`, `blockList`) that
+/// does not promise an Array, so it claims no shape and never conflicts with a
+/// `Set`/`Map` initializer.
 pub(super) fn name_suffix_shape(name: &str) -> Option<Shape> {
-    if name.ends_with("List") || name.ends_with("Array") {
+    if name.ends_with("Array") {
         Some(Shape::Array)
     } else if name.ends_with("Set") {
         Some(Shape::Set)

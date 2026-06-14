@@ -101,8 +101,8 @@ mod tests {
     }
 
     #[test]
-    fn flags_list_holding_set() {
-        let d = run("const userList = new Set();");
+    fn flags_array_holding_set() {
+        let d = run("const userArray = new Set();");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("an Array"));
     }
@@ -114,8 +114,15 @@ mod tests {
     }
 
     #[test]
-    fn allows_matching_list_array() {
-        assert!(run("const userList = [];").is_empty());
+    fn flags_map_holding_array() {
+        let d = run("const userMap = [];");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("a Map"));
+    }
+
+    #[test]
+    fn allows_matching_array() {
+        assert!(run("const userArray = [];").is_empty());
     }
 
     #[test]
@@ -131,5 +138,20 @@ mod tests {
     #[test]
     fn ignores_unsuffixed_name() {
         assert!(run("const cache = new Set();").is_empty());
+    }
+
+    // `List` is a general collection term, not an Array contract:
+    // `allowList`/`denyList`/`blockList` backed by a Set are not misleading.
+    #[test]
+    fn allows_list_holding_set() {
+        assert!(run("const allowList = new Set(['a', 'b']);").is_empty());
+        assert!(run("const denyList = new Set(['a', 'b']);").is_empty());
+        assert!(run("const blockList = new Set(['a', 'b']);").is_empty());
+    }
+
+    #[test]
+    fn allows_list_holding_array_or_map() {
+        assert!(run("const userList = [];").is_empty());
+        assert!(run("const userList = new Map();").is_empty());
     }
 }

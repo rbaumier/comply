@@ -1,7 +1,7 @@
 //! no-misleading-collection-name backend — name suffix vs. type mismatch.
 //!
 //! For each `variable_declarator`, look at:
-//! - the binding name's suffix (`*List`, `*Set`, `*Map`, `*Array`)
+//! - the binding name's suffix (`*Array`, `*Set`, `*Map`)
 //! - the initializer's type (`new Set(...)`, `new Map(...)`, array literal,
 //!   `[]`, etc.)
 //!
@@ -103,8 +103,8 @@ mod tests {
     }
 
     #[test]
-    fn flags_list_holding_set() {
-        let diags = run("const userList = new Set();");
+    fn flags_array_holding_set() {
+        let diags = run("const userArray = new Set();");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("an Array"));
         assert!(diags[0].message.contains("a Set"));
@@ -123,8 +123,14 @@ mod tests {
     }
 
     #[test]
-    fn allows_matching_list_array() {
-        assert!(run("const userList = [];").is_empty());
+    fn allows_matching_array() {
+        assert!(run("const userArray = [];").is_empty());
+    }
+
+    // `List` is a general collection term and asserts no specific type.
+    #[test]
+    fn allows_list_holding_set() {
+        assert!(run("const allowList = new Set();").is_empty());
     }
 
     #[test]
