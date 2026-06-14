@@ -21,6 +21,13 @@ crate::ast_check! { on ["type_identifier"] prefilter = ["Mutex"] => |node, sourc
     let Some(parent) = node.parent() else { return };
     if parent.kind() != "generic_type" { return; }
 
+    // A `Mutex` paired with a `Condvar` sibling field is the condition-variable
+    // latch pattern: `Condvar::wait` takes a `MutexGuard`, so the `Mutex` is
+    // structurally required and has no atomic equivalent. Skip it.
+    if has_condvar_sibling_field(parent, source) {
+        return;
+    }
+
     let Ok(full) = parent.utf8_text(source) else { return };
 
     for &(prim, atomic) in ATOMIC_TYPES {
@@ -38,6 +45,45 @@ crate::ast_check! { on ["type_identifier"] prefilter = ["Mutex"] => |node, sourc
     }
 }
 
+/// True if the `Mutex` at `mutex_type` is a field of a struct that also declares
+/// a sibling field whose type contains `Condvar` (e.g. `Condvar`,
+/// `std::sync::Condvar`, `Arc<Condvar>`). Such a pair is a condition-variable
+/// latch where the `Mutex` is required and cannot be replaced by an atomic.
+fn has_condvar_sibling_field(mutex_type: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut current = mutex_type;
+    while let Some(parent) = current.parent() {
+        if parent.kind() == "field_declaration_list" {
+            return field_list_has_condvar(parent, source);
+        }
+        current = parent;
+    }
+    false
+}
+
+fn field_list_has_condvar(list: tree_sitter::Node, source: &[u8]) -> bool {
+    let field_count = list.named_child_count();
+    for i in 0..field_count {
+        if let Some(field) = list.named_child(i)
+            && field.kind() == "field_declaration"
+            && let Some(ty) = field.child_by_field_name("type")
+            && type_contains_condvar(ty, source)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn type_contains_condvar(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() == "type_identifier"
+        && node.utf8_text(source) == Ok("Condvar")
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| type_contains_condvar(child, source))
+}
 
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
@@ -97,5 +143,45 @@ mod tests {
     #[test]
     fn allows_atomic_bool() {
         assert!(run("static ERRORED: AtomicBool = AtomicBool::new(false);").is_empty());
+    }
+
+    #[test]
+    fn allows_mutex_bool_with_condvar_sibling() {
+        let src = "struct LockLatch {\n    m: Mutex<bool>,\n    v: Condvar,\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_named_mutex_bool_with_condvar_sibling() {
+        let src = "struct Worker {\n    is_blocked: Mutex<bool>,\n    condvar: Condvar,\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mutex_with_arc_condvar_sibling() {
+        let src = "struct Latch {\n    state: Mutex<usize>,\n    notify: Arc<Condvar>,\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mutex_with_qualified_condvar_sibling() {
+        let src = "struct Latch {\n    state: Mutex<bool>,\n    cv: std::sync::Condvar,\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_mutex_bool_without_condvar_sibling() {
+        let src = "struct State {\n    flag: Mutex<bool>,\n    name: String,\n}";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("AtomicBool"));
+    }
+
+    #[test]
+    fn flags_lone_mutex_usize_field() {
+        let src = "struct Counter {\n    count: Mutex<usize>,\n}";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("AtomicUsize"));
     }
 }
