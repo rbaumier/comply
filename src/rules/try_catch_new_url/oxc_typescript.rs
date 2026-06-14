@@ -88,6 +88,11 @@ fn arg_is_trusted(new_expr: &oxc_ast::ast::NewExpression) -> bool {
         Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_) => {
             expr_roots_in_trusted_config(arg)
         }
+        // Playwright's `Request.url()` method returns the same well-formed
+        // absolute URL as the WHATWG `Request.url` property. Covers
+        // `request.url()`, `req.url()`, `res.request().url()`, and
+        // `event.request().url()`.
+        Expression::CallExpression(call) if is_request_url_call(call) => true,
         _ => false,
     }
 }
@@ -106,6 +111,41 @@ fn is_request_url_access(member: &oxc_ast::ast::StaticMemberExpression) -> bool 
         }
         _ => false,
     }
+}
+
+/// True for a zero-arg `.url()` method call on a request-like receiver:
+/// a `request`/`req` identifier (`request.url()`, `req.url()`) or a zero-arg
+/// `.request()` call (`res.request().url()`, `event.request().url()`). The
+/// gate stays tight so an arbitrary `foo.url()` still flags.
+fn is_request_url_call(call: &oxc_ast::ast::CallExpression) -> bool {
+    use oxc_ast::ast::Expression;
+    if !call.arguments.is_empty() {
+        return false;
+    }
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    if member.property.name != "url" {
+        return false;
+    }
+    match &member.object {
+        Expression::Identifier(id) => matches!(id.name.as_str(), "request" | "req"),
+        Expression::CallExpression(inner) => receiver_is_request_call(inner),
+        _ => false,
+    }
+}
+
+/// True for a zero-arg `.request()` method call, the receiver shape of
+/// `res.request().url()` / `event.request().url()`.
+fn receiver_is_request_call(call: &oxc_ast::ast::CallExpression) -> bool {
+    use oxc_ast::ast::Expression;
+    if !call.arguments.is_empty() {
+        return false;
+    }
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    member.property.name == "request"
 }
 
 /// True when `expr` is a (possibly nested) member access rooted at an
@@ -332,5 +372,27 @@ mod tests {
     #[test]
     fn still_flags_arbitrary_member_url() {
         assert_eq!(run_on("const u = new URL(config2.url);").len(), 1);
+    }
+
+    // Regression for #1828: Playwright's `res.request().url()` returns the same
+    // well-formed absolute URL as the WHATWG `Request.url` property, so the
+    // constructor cannot throw.
+    #[test]
+    fn allows_request_url_method_call() {
+        assert!(run_on("const u = new URL(res.request().url());").is_empty());
+        assert!(run_on("const u = new URL(event.request().url());").is_empty());
+        assert!(run_on("const u = new URL(request.url());").is_empty());
+        assert!(run_on("const u = new URL(req.url());").is_empty());
+    }
+
+    #[test]
+    fn still_flags_arbitrary_url_method_call() {
+        // `foo` is neither `request`/`req` nor a `.request()` call.
+        assert_eq!(run_on("const u = new URL(foo.url());").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_plain_variable() {
+        assert_eq!(run_on("const u = new URL(someString);").len(), 1);
     }
 }
