@@ -47,7 +47,22 @@ impl OxcCheck for Check {
             }
 
             // Skip abstract methods (no body)
-            if method_def.value.body.is_none() {
+            let Some(body) = &method_def.value.body else {
+                continue;
+            };
+
+            // Skip `override` methods: they fulfill a base-class contract, so
+            // making them `static` would break the override even when the body
+            // happens not to reference `this`.
+            if method_def.r#override {
+                continue;
+            }
+
+            // Skip no-op / not-implemented stubs: an empty body, or a body whose
+            // only statement is a `throw` (e.g. `throw new Error('not
+            // implemented')`). These exist to satisfy a signature so subclasses
+            // or interface implementors can override them; `static` is wrong.
+            if is_stub_body(body) {
                 continue;
             }
 
@@ -95,6 +110,18 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+/// Whether a method body is a no-op / not-implemented stub: either empty or a
+/// single `throw` statement. Such bodies exist only to satisfy a signature so
+/// subclasses or interface implementors can override them, so the absence of
+/// `this` is not a smell.
+fn is_stub_body(body: &oxc_ast::ast::FunctionBody) -> bool {
+    match body.statements.as_slice() {
+        [] => true,
+        [stmt] => matches!(stmt, oxc_ast::ast::Statement::ThrowStatement(_)),
+        _ => false,
     }
 }
 
@@ -269,5 +296,50 @@ mod tests {
         // that never uses `this` is still a smell.
         let diags = run_on("class Foo { get bar() { return 1; } }");
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_interface_implementation_noop() {
+        // Issue #1228: `init` is a no-op required by the `Driver` interface; it
+        // must match the interface signature and cannot be made static.
+        let src = "class DummyDriver implements Driver {\n\
+                   async init(): Promise<void> {}\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_override_method_directly() {
+        // Issue #1228: an `override` method extends a base-class contract; making
+        // it static breaks the override.
+        let src = "class Foo extends Bar { override baz(): void { doWork(); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_empty_method_body() {
+        // Issue #1228: an empty body is a no-op stub, not a missing-`this` smell.
+        let diags = run_on("class Foo { noop() {} }");
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_throw_only_stub() {
+        // Issue #1228: a not-implemented stub whose body only throws must keep its
+        // instance-method shape so subclasses/implementors can override it.
+        let src = "class Foo {\n\
+                   notImplemented() { throw new Error('not implemented'); }\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_plain_class_method_with_real_body() {
+        // Negative space: a method in a plain class (no `implements`, not
+        // `override`, with a real non-empty/non-throw body) that ignores `this`
+        // is still flagged.
+        let diags = run_on("class Foo { compute(): number { return 1 + 2; } }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("compute"));
     }
 }
