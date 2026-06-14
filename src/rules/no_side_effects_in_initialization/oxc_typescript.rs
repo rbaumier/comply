@@ -142,7 +142,7 @@ pub struct Check;
 
 fn is_test_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
-    [".test.", ".test-d.", ".spec.", "_spec.", "__tests__", "_test.", ".e2e.", ".cy."]
+    [".test.", ".test-d.", ".spec.", "_spec.", "__tests__", "_test.", ".e2e.", ".cy.", ".mock."]
         .iter()
         .any(|m| s.contains(m))
         || s.contains("/dtslint/")
@@ -1398,6 +1398,34 @@ mod tests {
         // call in a genuine production module still flags.
         let prod = crate::rules::test_helpers::run_rule(&Check, "describe('x', () => {});", "src/index.ts");
         assert_eq!(prod.len(), 1, "production src/index.ts must still flag");
+    }
+
+    #[test]
+    fn skips_nock_mock_fixture_file() {
+        // Issue #1698: `*.mock.ts` files are HTTP mocking fixtures loaded by the
+        // test runner. Their whole purpose is to register `nock(...)` HTTP
+        // interceptors at module scope, so their top-level side effects are
+        // mandatory and deliberate — never bundled for production.
+        let src = "\
+            import nock from 'nock';\n\
+            nock('http://localhost:1337', { encodedQueryParams: true })\n\
+                .post('/api/posts', { data: { title: 'foo' } })\n\
+                .reply(200, { id: 1 });\n\
+            nock('http://localhost:1337', { encodedQueryParams: true })\n\
+                .get('/api/posts')\n\
+                .reply(200, []);\n";
+        for path in [
+            "packages/rest/src/data-providers/strapi-v4/specs/index.mock.ts",
+            "src/handlers/posts.mock.js",
+            "src/handlers/posts.mock.tsx",
+        ] {
+            let diags = crate::rules::test_helpers::run_rule(&Check, src, path);
+            assert!(diags.is_empty(), "{path} should be exempt, got {diags:?}");
+        }
+        // The `.mock.` infix is what grants the exemption: the same top-level
+        // calls in a genuine production module are still flagged.
+        let prod = crate::rules::test_helpers::run_rule(&Check, src, "src/data-providers/strapi-v4/index.ts");
+        assert_eq!(prod.len(), 2, "production src/*.ts must still flag both nock calls");
     }
 
     // --- (a) Vitest setup file exemption ----------------------------------
