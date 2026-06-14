@@ -7,9 +7,18 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::call_expression::call_function_name;
 use crate::rules::rust_helpers::is_inside_async_fn;
 
 const KINDS: &[&str] = &["call_expression"];
+
+/// Final path segments of the blocking-offload combinators that run a
+/// closure off the async runtime worker. `spawn_blocking` and
+/// `block_in_place` are tokio public API; `asyncify` is tokio's
+/// documented `spawn_blocking(f).await` wrapper used throughout
+/// `tokio::fs`. A blocking syscall inside a closure handed to one of
+/// these never parks the executor, so it is not a finding.
+const OFFLOAD_COMBINATORS: &[&str] = &["spawn_blocking", "block_in_place", "asyncify"];
 
 /// Function suffixes that indicate a blocking std::fs / std::net call.
 /// We match by `ends_with` so any qualified path (`std::fs::read_to_string`,
@@ -63,6 +72,9 @@ impl AstCheck for Check {
         if !is_inside_async_fn(node, source_bytes) {
             return;
         }
+        if is_inside_offload_closure(node, source_bytes) {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -89,6 +101,44 @@ impl AstCheck for Check {
 /// the side of false negatives keeps the rule trustworthy.
 fn matched_sync_api(text: &str) -> Option<&'static str> {
     SYNC_IO_SUFFIXES.iter().copied().find(|full| text == *full)
+}
+
+/// True if `node` sits inside a `closure_expression` that is itself an
+/// argument to a call whose callee's final path segment is one of
+/// `OFFLOAD_COMBINATORS`. Such a closure runs on the blocking thread
+/// pool, so the sync syscall does not park the async worker.
+///
+/// Walks the ancestor chain, stopping at the enclosing `function_item`
+/// so a closure in an outer scope can't exempt a call in the async fn
+/// body. Closures handed to non-offload combinators (`map`, `filter`,
+/// …) are not exempted.
+fn is_inside_offload_closure(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "function_item" {
+            return false;
+        }
+        if parent.kind() == "closure_expression"
+            && let Some(args) = parent.parent()
+            && args.kind() == "arguments"
+            && let Some(call) = args.parent()
+            && call.kind() == "call_expression"
+            && let Some(fn_text) = call_function_name(call, source)
+            && is_offload_combinator(fn_text)
+        {
+            return true;
+        }
+        cur = parent;
+    }
+    false
+}
+
+/// True if `text` (a call's `function` text, e.g. `tokio::task::spawn_blocking`,
+/// `spawn_blocking`, or `asyncify`) has a final path segment in
+/// `OFFLOAD_COMBINATORS`.
+fn is_offload_combinator(text: &str) -> bool {
+    let segment = text.rsplit("::").next().unwrap_or(text);
+    OFFLOAD_COMBINATORS.contains(&segment)
 }
 
 #[cfg(test)]
@@ -136,5 +186,35 @@ mod tests {
     fn allows_tokio_fs_in_async_fn() {
         let source = r#"async fn f() { let _ = tokio::fs::read_to_string("a.txt").await; }"#;
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_std_fs_inside_asyncify_closure() {
+        let source = r#"async fn f() { asyncify(|| std::fs::copy(a, b)).await; }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_std_fs_inside_spawn_blocking_closure() {
+        let source = r#"async fn f() { spawn_blocking(move || std::fs::write(p, c)).await; }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_std_fs_inside_block_in_place_closure() {
+        let source = r#"async fn f() { tokio::task::block_in_place(|| std::fs::read(p)); }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_std_fs_directly_in_async_body() {
+        let source = r#"async fn f() { std::fs::read(p); }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_std_fs_in_non_offload_closure() {
+        let source = r#"async fn f() { items.iter().map(|x| std::fs::read(x)); }"#;
+        assert_eq!(run_on(source).len(), 1);
     }
 }
