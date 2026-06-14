@@ -62,6 +62,19 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Published-library packages (package.json declares `main`/`module`/
+        // `exports`) ship SDK/library infrastructure, not application business
+        // logic — e.g. an Azure SDK's `src/core/` holds AMQP/HTTP/auth protocol
+        // handlers where `@azure/logger` telemetry is the intended mechanism.
+        // The rule targets application code, so it does not apply here.
+        if ctx
+            .project
+            .nearest_package_json(ctx.path)
+            .is_some_and(|pkg| pkg.is_library)
+        {
+            return;
+        }
+
         let oxc_ast::AstKind::CallExpression(call) = node.kind() else {
             return;
         };
@@ -117,7 +130,51 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
     use crate::rules::test_helpers::run_rule_gated;
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser as OxcParser;
+    use oxc_semantic::SemanticBuilder;
+    use oxc_span::SourceType;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Run the check on `source` placed at `rel_path` inside a temp project whose
+    /// root `package.json` is `pkg_json`, so `nearest_package_json` resolves the
+    /// real manifest (the static default ctx has none).
+    fn run_with_pkg_at_path(pkg_json: &str, rel_path: &str, source: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), pkg_json).unwrap();
+        let file_path = dir.path().join(rel_path);
+        fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        fs::write(&file_path, source).unwrap();
+        let lang = Language::from_path(&file_path).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: lang,
+        };
+        let refs = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = fs::canonicalize(&file_path).unwrap();
+
+        let allocator = Allocator::default();
+        let parse_ret = OxcParser::new(&allocator, source, SourceType::ts()).parse();
+        let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+        let file_ctx = crate::rules::file_ctx::FileCtx::build(&canon, source, lang, &project);
+        let ctx = CheckCtx::for_test_full(&canon, source, &project, &file_ctx);
+
+        let mut diagnostics = Vec::new();
+        let kinds = Check.interested_kinds();
+        for node in semantic.nodes().iter() {
+            if kinds.contains(&node.kind().ty()) {
+                Check.run(node, &ctx, &semantic, &mut diagnostics);
+            }
+        }
+        diagnostics
+    }
 
     #[test]
     fn flags_logger_in_core() {
@@ -155,5 +212,38 @@ mod tests {
     fn skips_spec_file_in_business_dir() {
         let diags = run_rule_gated(&Check, "logger.info('x');", "src/domain/order.spec.ts");
         assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn skips_logger_in_published_library_core() {
+        // Issue #1132: an Azure SDK AMQP error-event handler under `src/core/`
+        // calls `@azure/logger` — SDK telemetry, not application business logic.
+        // The package is published (declares `main`/`module`/`exports`), so the
+        // rule does not apply.
+        let pkg = r#"{
+            "name": "@azure/service-bus",
+            "main": "./dist/commonjs/index.js",
+            "module": "./dist/esm/index.js",
+            "exports": { ".": "./dist/esm/index.js" }
+        }"#;
+        let src = r#"
+            this._onAmqpError = (context) => {
+                const senderError = context.sender && context.sender.error;
+                logger.logError(senderError, "%s sender_error", this.logPrefix);
+            };
+        "#;
+        let diags = run_with_pkg_at_path(pkg, "src/core/messageSender.ts", src);
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_logger_in_non_library_application_core() {
+        // Negative-space guard: the same `/core/` path in an application package
+        // (no `main`/`module`/`exports`) is the rule's legitimate target — the
+        // smell still fires there.
+        let pkg = r#"{ "name": "my-app", "private": true }"#;
+        let src = "logger.info('order placed');";
+        let diags = run_with_pkg_at_path(pkg, "src/core/order.ts", src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
     }
 }
