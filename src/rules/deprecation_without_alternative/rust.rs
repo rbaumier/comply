@@ -5,11 +5,16 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    let text = node.utf8_text(source).unwrap_or("");
-
-    if !text.contains("deprecated") {
+    // Only the `#[deprecated]` *declaration* attribute is in scope. A lint
+    // attribute such as `#[allow(deprecated)]` / `#[expect(deprecated)]` is a
+    // suppression *usage*, not a deprecation declaration: its path identifier is
+    // `allow`/`expect`, and `deprecated` only appears inside its argument list.
+    // Discriminate on the attribute path rather than on substring presence.
+    if attribute_path(node, source) != Some("deprecated") {
         return;
     }
+
+    let text = node.utf8_text(source).unwrap_or("");
 
     // #[deprecated] without arguments — always flag.
     // #[deprecated(...)] — flag if no `note` key.
@@ -32,6 +37,24 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
             .into(),
         Severity::Warning,
     ));
+}
+
+/// Returns the path identifier of an `attribute_item` node, i.e. `deprecated`
+/// for `#[deprecated(...)]` and `allow` for `#[allow(deprecated)]`. In
+/// tree-sitter-rust the `attribute_item` wraps an `attribute` node whose first
+/// `identifier` child is the attribute name; any arguments live in a following
+/// `token_tree`. Returns `None` for path-qualified attributes (e.g.
+/// `#[some::path]`) since the leading segment is a `scoped_identifier`.
+fn attribute_path<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    let mut cursor = node.walk();
+    let attribute = node
+        .children(&mut cursor)
+        .find(|c| c.kind() == "attribute")?;
+    let mut attr_cursor = attribute.walk();
+    let path = attribute
+        .children(&mut attr_cursor)
+        .find(|c| c.kind() == "identifier")?;
+    path.utf8_text(source).ok()
 }
 
 
@@ -103,5 +126,30 @@ mod tests {
     #[test]
     fn flags_deprecated_on_struct() {
         assert_eq!(run("#[deprecated]\npub struct Old;").len(), 1);
+    }
+
+    #[test]
+    fn ignores_allow_deprecated_suppression() {
+        // From leptos reactive_graph/src/wrappers.rs — `#[allow(deprecated)]` is
+        // a lint suppression, not a deprecation declaration (Closes #1483).
+        let src = "#[allow(deprecated)]\nimpl<T> From<MaybeSignal<T>> for Signal<T>\n\
+                   where T: Send + Sync + 'static {\n\
+                   fn from(value: MaybeSignal<T>) -> Self {\n\
+                   match value {\n\
+                   MaybeSignal::Static(value) => Signal::stored(value),\n\
+                   MaybeSignal::Dynamic(signal) => signal,\n\
+                   }\n}\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_expect_deprecated_suppression() {
+        assert!(run("#[expect(deprecated)]\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn ignores_warn_and_deny_deprecated() {
+        assert!(run("#[warn(deprecated)]\nfn f() {}").is_empty());
+        assert!(run("#[deny(deprecated)]\nfn f() {}").is_empty());
     }
 }
