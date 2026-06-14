@@ -47,6 +47,10 @@ impl OxcCheck for Check {
             return;
         }
 
+        if is_test_scheduler_flush(node, call, semantic) {
+            return;
+        }
+
         let is_flag = is_promise_combinator(call) || is_async_looking_member_call(call);
         if !is_flag {
             return;
@@ -155,6 +159,45 @@ fn is_async_looking_member_call(call: &CallExpression) -> bool {
     }
     let method = member.property.name.as_str();
     ASYNC_LOOKING_METHODS.contains(&method)
+}
+
+/// RxJS `TestScheduler.prototype.flush()` runs all scheduled virtual-time
+/// actions synchronously and returns `void` per `rxjs/testing` — there is no
+/// Promise to await. Matches an argument-less `.flush()` (the `flush(): void`
+/// signature) by either type-free syntactic signal:
+///   - the receiver is a bare identifier whose name (case-insensitive) reads as
+///     a test scheduler, e.g. `scheduler.flush()`, `testScheduler.flush()`; or
+///   - the call is lexically inside a jasmine-marbles `marbles(...)` callback,
+///     where the receiver is the callback's marble helper, e.g.
+///     `marbles((m) => { …; m.flush(); })`.
+fn is_test_scheduler_flush(
+    node: &oxc_semantic::AstNode,
+    call: &CallExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    if member.property.name.as_str() != "flush" || !call.arguments.is_empty() {
+        return false;
+    }
+    if matches!(&member.object, Expression::Identifier(id) if id.name.as_str().to_lowercase().contains("scheduler"))
+    {
+        return true;
+    }
+    is_inside_marbles_callback(node, semantic)
+}
+
+/// True when `node` is nested inside a call to `marbles(...)` — the jasmine-marbles
+/// helper that supplies the RxJS marble-test scheduler to its callback.
+fn is_inside_marbles_callback(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    semantic.nodes().ancestors(node.id()).any(|ancestor| {
+        matches!(ancestor.kind(), AstKind::CallExpression(call)
+            if matches!(&call.callee, Expression::Identifier(id) if id.name.as_str() == "marbles"))
+    })
 }
 
 /// Web Audio's `AudioNode.prototype.connect(destination)` returns the destination
@@ -823,6 +866,54 @@ noise.connect(band).connect(noiseGain).connect(masterGain);
     fn still_flags_floating_async_call() {
         // Negative-space guard: a discarded async-function result still fires.
         let d = run_on("repo.save(entity);");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression tests for issue #1605: RxJS `TestScheduler.flush()` runs all
+    // scheduled virtual-time actions synchronously and returns void — there is
+    // no Promise to await — so an argument-less `.flush()` on a scheduler-named
+    // receiver, or inside a jasmine-marbles `marbles(...)` callback, must not be
+    // flagged.
+
+    #[test]
+    fn allows_marbles_callback_flush() {
+        // The issue's exact example: `m.flush()` inside a `marbles((m) => {...})`
+        // callback, where `m` is the marble-test scheduler helper.
+        let src = "\
+it('(Marbles) should complete the effect', marbles((m) => {
+  updater(UPDATED);
+  m.flush();
+  updater(UPDATE_VALUE);
+  m.flush();
+}));
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_named_test_scheduler_flush() {
+        let src = "\
+const testScheduler = new TestScheduler(assertDeepEqual);
+testScheduler.flush();
+scheduler.flush();
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_scheduler_flush() {
+        // Negative-space guard: a genuine Promise-returning `.flush()` (e.g. a
+        // buffered DB/IO writer) on a plain receiver outside any marbles callback
+        // stays flagged.
+        let d = run_on("writer.flush();");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_flush_with_argument() {
+        // Negative-space guard: `.flush(...)` with an argument is not the
+        // `flush(): void` scheduler signature, so it stays flagged.
+        let d = run_on("buffer.flush(chunk);");
         assert_eq!(d.len(), 1);
     }
 }
