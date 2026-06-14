@@ -130,15 +130,6 @@ fn is_async_looking_member_call(call: &CallExpression) -> bool {
     if receiver_is_cast(member) {
         return false;
     }
-    if is_process_std_stream_write(member) {
-        return false;
-    }
-    if is_stream_controller_close(member) {
-        return false;
-    }
-    if is_xml_http_request_send(member) {
-        return false;
-    }
     if is_redux_store_dispatch(member) {
         return false;
     }
@@ -149,9 +140,6 @@ fn is_async_looking_member_call(call: &CallExpression) -> bool {
         return false;
     }
     if is_fluent_builder_run(member) {
-        return false;
-    }
-    if is_event_emitter_emit(member) {
         return false;
     }
     if is_audio_node_connect(call, member) {
@@ -257,26 +245,6 @@ fn chain_is_rooted_in_chain_call(expr: &Expression) -> bool {
     }
 }
 
-/// Node's `EventEmitter.prototype.emit(event, ...args)` returns `boolean`
-/// (whether any listener fired), not a Promise — there is nothing to await.
-/// Matches `.emit(...)` whose receiver is `this` (a class extending
-/// `EventEmitter`, e.g. tiptap's `Editor.emit(...)`) or a bare identifier whose
-/// name (case-insensitive) reads as an event emitter, e.g. `emitter`,
-/// `eventEmitter`, `eventBus`, `bus`.
-fn is_event_emitter_emit(member: &StaticMemberExpression) -> bool {
-    if member.property.name.as_str() != "emit" {
-        return false;
-    }
-    match &member.object {
-        Expression::ThisExpression(_) => true,
-        Expression::Identifier(id) => {
-            let name = id.name.as_str().to_lowercase();
-            name.contains("emitter") || name == "eventbus" || name == "bus"
-        }
-        _ => false,
-    }
-}
-
 /// True when the call receiver is a type assertion, e.g. `(api as any).dispatch(...)`.
 /// A cast erases any type basis the heuristic could rely on, so the purely
 /// speculative async-looking-method match must not fire — `(foo as Bar).dispatch(x)`
@@ -292,22 +260,6 @@ fn peel_parens<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
         current = &p.expression;
     }
     current
-}
-
-/// `XMLHttpRequest.prototype.send(...)` returns `void` per `lib.dom.d.ts` — the
-/// legacy XHR API delivers its result through the `onreadystatechange` callback,
-/// not a Promise, so there is nothing to await.
-/// Matches when the receiver is a bare identifier whose name (case-insensitive)
-/// reads as an XHR handle, e.g. `xmlHttp`, `xhr`, `xmlHttpRequest`.
-fn is_xml_http_request_send(member: &StaticMemberExpression) -> bool {
-    if member.property.name.as_str() != "send" {
-        return false;
-    }
-    let Expression::Identifier(id) = &member.object else {
-        return false;
-    };
-    let name = id.name.as_str().to_lowercase();
-    name.contains("xhr") || name.contains("xmlhttp")
 }
 
 /// Redux's `Store.dispatch(action)` and NgRx's `Store#dispatch(action)` both
@@ -356,16 +308,6 @@ fn is_editor_view_dispatch(member: &StaticMemberExpression) -> bool {
     }
 }
 
-/// `ReadableStreamDefaultController.close()` / `WritableStreamDefaultController.close()` etc.
-/// return `void` per the WHATWG Streams spec — nothing to await.
-/// Matches when the receiver is a bare identifier whose name contains "controller".
-fn is_stream_controller_close(member: &StaticMemberExpression) -> bool {
-    if member.property.name.as_str() != "close" {
-        return false;
-    }
-    matches!(&member.object, Expression::Identifier(id) if id.name.as_str().to_lowercase().contains("controller"))
-}
-
 /// `node:diagnostics_channel` `Channel.prototype.publish(message)` returns `void`
 /// — it fires subscribers synchronously, so there is nothing to await.
 /// Matches when the `.publish(...)` receiver is, or hangs off, a bare identifier
@@ -384,21 +326,6 @@ fn is_diagnostics_channel_publish(member: &StaticMemberExpression) -> bool {
         _ => return false,
     };
     root.to_lowercase().contains("channel")
-}
-
-/// `process.stdout.write(...)` / `process.stderr.write(...)` return `boolean`
-/// (the backpressure signal), not a Promise — there is nothing to await.
-fn is_process_std_stream_write(member: &StaticMemberExpression) -> bool {
-    if member.property.name.as_str() != "write" {
-        return false;
-    }
-    let Expression::StaticMemberExpression(stream) = &member.object else {
-        return false;
-    };
-    if !matches!(stream.property.name.as_str(), "stdout" | "stderr") {
-        return false;
-    }
-    matches!(&stream.object, Expression::Identifier(id) if id.name.as_str() == "process")
 }
 
 #[cfg(test)]
@@ -517,18 +444,6 @@ params.sort();
         assert!(run_on(src).is_empty());
     }
 
-    // Regression for #291: process.stdout/stderr.write() return `boolean`
-    // (backpressure), not a Promise — nothing to await.
-    #[test]
-    fn allows_process_stderr_write() {
-        assert!(run_on("process.stderr.write(\"oops\\n\");").is_empty());
-    }
-
-    #[test]
-    fn allows_process_stdout_write() {
-        assert!(run_on("process.stdout.write(`${label} done\\n`);").is_empty());
-    }
-
     #[test]
     fn allows_url_searchparams_chain_delete() {
         // Real-world pattern from the issue's repro file: parsed.searchParams.delete(key).
@@ -539,56 +454,46 @@ parsed.searchParams.delete(\"a\");
         assert!(run_on(src).is_empty());
     }
 
-    // Regression tests for issue #758: ReadableStreamDefaultController.close() returns void,
-    // not a Promise — it must not be flagged.
+    // Regression tests for issue #1190: `close`, `write`, `emit`, and `send` are
+    // dominated by synchronous, callback-based Node.js APIs that return
+    // non-Promise values — flagging them on name alone produces more false
+    // positives than true positives, so they are not part of the heuristic.
 
     #[test]
-    fn allows_stream_controller_close() {
+    fn allows_server_close() {
+        // The issue's exact example: `http.Server.close([cb])` returns the
+        // `Server`, not a Promise.
         let src = "\
-async function pull(controller) {
-  const next = await someGenerator.next();
-  if (next.done) {
-    controller.close();
-  }
-}
+afterAll(() => {
+  externalServer.close();
+});
 ";
         assert!(run_on(src).is_empty());
     }
 
     #[test]
-    fn still_flags_non_controller_close() {
-        let d = run_on("db.close();");
-        assert_eq!(d.len(), 1);
-    }
-
-    // Regression tests for issue #1104: XMLHttpRequest.send() returns void per
-    // lib.dom.d.ts — the legacy XHR callback API, not a Promise — so it must not
-    // be flagged.
-
-    #[test]
-    fn allows_xml_http_request_send() {
-        let src = "\
-function httpGetAsync(targetUrl, callback) {
-  var xmlHttp = new XMLHttpRequest();
-  xmlHttp.onreadystatechange = function () {
-    if (xmlHttp.readyState == 4 && xmlHttp.status == 200)
-      callback(xmlHttp.responseText);
-  }
-  xmlHttp.open(\"GET\", targetUrl, true);
-  xmlHttp.send(null);
-}
-";
-        assert!(run_on(src).is_empty());
+    fn allows_stream_write() {
+        // `stream.write(chunk)` returns `boolean` (the backpressure signal).
+        assert!(run_on("stream.write(chunk);").is_empty());
     }
 
     #[test]
-    fn allows_xhr_send() {
-        assert!(run_on("xhr.send(body);").is_empty());
+    fn allows_emitter_emit() {
+        // `EventEmitter.emit(event)` returns `boolean` (whether a listener fired).
+        assert!(run_on("emitter.emit(event);").is_empty());
     }
 
     #[test]
-    fn still_flags_non_xhr_send() {
-        let d = run_on("producer.send(message);");
+    fn allows_websocket_send() {
+        // `WebSocket.send(data)` returns `void`.
+        assert!(run_on("ws.send(data);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_genuine_floating_async_method() {
+        // Negative-space guard: an async-dominant method name still fires exactly
+        // one diagnostic.
+        let d = run_on("db.save(user);");
         assert_eq!(d.len(), 1);
     }
 
@@ -761,45 +666,6 @@ editor
         assert_eq!(d.len(), 1);
     }
 
-    // Regression tests for issue #1819: Node's `EventEmitter.prototype.emit(...)`
-    // returns `boolean`, not a Promise — tiptap's `Editor` extends an EventEmitter
-    // and calls `this.emit(...)` for lifecycle hooks, so a `.emit(...)` on `this`
-    // or an emitter-named receiver must not be flagged.
-
-    #[test]
-    fn allows_this_emit() {
-        let src = "\
-this.emit('beforeCreate', { editor: this })
-this.emit('mount', { editor: this })
-this.emit('create', { editor: this })
-this.emit('unmount', { editor: this })
-this.emit('update', { editor: this, transaction: this.state.tr, appendedTransactions: [] })
-this.emit('selectionUpdate', { editor: this, transaction: this.state.tr })
-this.emit('transaction', { editor: this, transaction: this.state.tr, appendedTransactions: [] })
-this.emit('focus', { editor: this, event: view.dom, transaction })
-this.emit('blur', { editor: this, event: view.dom, transaction })
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_named_emitter_emit() {
-        let src = "\
-emitter.emit('done', payload);
-eventBus.emit('change', value);
-bus.emit('tick');
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_non_emitter_emit() {
-        // Control: `.emit(...)` on a non-emitter receiver stays flagged —
-        // e.g. a producer that returns a Promise.
-        let d = run_on("producer.emit(record);");
-        assert_eq!(d.len(), 1);
-    }
-
     // Regression tests for issue #1825: `*.test-d.{ts,tsx}` are tsd /
     // `expect-type` type-declaration tests. Their call statements are type
     // assertions checked by `tsc --noEmit`, never executed, so a "floating"
@@ -848,10 +714,10 @@ it('infers the result type', () => {
 
     #[test]
     fn allows_member_call_in_arrow_concise_body() {
-        // `browser.close()` is the concise body of the `.map` callback — its
+        // `repo.save(item)` is the concise body of the `.map` callback — its
         // promise is collected by `map`, not floated.
         assert!(
-            run_on("await Promise.all(browsers.map(browser => browser.close()));").is_empty()
+            run_on("await Promise.all(items.map(item => repo.save(item)));").is_empty()
         );
     }
 
