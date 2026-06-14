@@ -558,6 +558,26 @@ mod tests {
     }
 
     #[test]
+    fn allows_dep_imported_via_import_equals_require() {
+        // Issue #2341: TypeScript's `import X = require("pkg")` (CommonJS
+        // interop) is a real import of `pkg`. The import index must record it so
+        // the package is not flagged unused.
+        let pkg = r#"{
+            "name": "demo",
+            "dependencies": { "denque": "^2.1.0" }
+        }"#;
+        let files: Vec<(&str, &str)> = vec![(
+            "lib/DataHandler.ts",
+            "import Deque = require(\"denque\");\nexport const q = new Deque();",
+        )];
+        let (_dir, diags) = run_on_project(&files, pkg, "lib/DataHandler.ts");
+        assert!(
+            diags.is_empty(),
+            "denque is imported via `import X = require(...)`, no diagnostic expected, got: {diags:?}"
+        );
+    }
+
+    #[test]
     fn skips_eslint_flat_config_plugin() {
         // Issue #2076 pattern 2: an ESLint flat config imports a plugin that no
         // app source file imports. The import inside `eslint.config.js` is the

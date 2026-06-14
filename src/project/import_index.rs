@@ -2107,6 +2107,14 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
             AstKind::ImportDeclaration(import) => {
                 oxc_extract_import(&lines, import, &mut imports);
             }
+            // `import X = require("pkg")` (TypeScript CommonJS interop): a real
+            // import of `pkg`, semantically equivalent to `import X from "pkg"`
+            // for CJS modules. Only the external `require(...)` form names a
+            // module; `import X = Foo.Bar` aliases an in-scope namespace and is
+            // not an import edge.
+            AstKind::TSImportEqualsDeclaration(import_eq) => {
+                oxc_extract_import_equals(&lines, import_eq, &mut imports);
+            }
             // Exports nested inside a `declare module '...'` / `declare global`
             // block are TypeScript module augmentations: the compiler merges them
             // into another module's types, so they are never imported by name and
@@ -2643,6 +2651,34 @@ fn oxc_extract_require(
         source_path: None,
         line: oxc_line_at(lines, call.span.start as usize),
         is_type_only: false,
+    });
+}
+
+/// Capture `import X = require("pkg")` (TypeScript CommonJS interop) as an
+/// import edge for `pkg`. Skips the in-scope alias forms (`import X = Foo` /
+/// `import X = Foo.Bar`), which reference an existing binding rather than a
+/// module specifier.
+fn oxc_extract_import_equals(
+    lines: &[usize],
+    import_eq: &oxc_ast::ast::TSImportEqualsDeclaration,
+    out: &mut Vec<ImportedSymbol>,
+) {
+    use oxc_ast::ast::TSModuleReference;
+    let TSModuleReference::ExternalModuleReference(ext) = &import_eq.module_reference else {
+        return;
+    };
+    let specifier = ext.expression.value.as_str();
+    if specifier.is_empty() {
+        return;
+    }
+    out.push(ImportedSymbol {
+        local_name: import_eq.id.name.as_str().to_string(),
+        imported_name: "*".into(),
+        kind: ImportKind::Namespace,
+        specifier: specifier.to_string(),
+        source_path: None,
+        line: oxc_line_at(lines, import_eq.span.start as usize),
+        is_type_only: import_eq.import_kind.is_type(),
     });
 }
 
@@ -4118,6 +4154,26 @@ mod tests {
         let imports = index.get_imports(&paths[0]);
         assert_eq!(imports.len(), 1);
         assert!(imports[0].source_path.is_none());
+    }
+
+    #[test]
+    fn import_equals_require_records_bare_specifier() {
+        // `import X = require("pkg")` is a real import of `pkg`; the in-scope
+        // alias form `import Y = Foo` references an existing binding and is not
+        // an import edge.
+        let (_dir, index, paths) = build_index(&[(
+            "a.ts",
+            "import Deque = require(\"denque\");\nimport Y = Deque;\nexport const q = new Deque();",
+        )]);
+        let imports = index.get_imports(&paths[0]);
+        assert_eq!(
+            imports.len(),
+            1,
+            "only the require(...) form is an import edge: {imports:?}"
+        );
+        assert_eq!(imports[0].specifier, "denque");
+        assert!(imports[0].source_path.is_none());
+        assert!(index.bare_specifiers().contains_key("denque"));
     }
 
     #[test]
