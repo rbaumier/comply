@@ -1,8 +1,8 @@
 //! migration-needs-lock-timeout — TS / JS / TSX backend.
 //!
 //! Scoped to migration files. Walks string / template literals, uses
-//! `is_sql_ddl` to confirm the string is DDL before checking for
-//! `lock_timeout`.
+//! `contains_ddl` to confirm the string is a complete DDL statement
+//! before checking for `lock_timeout`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
