@@ -573,6 +573,8 @@ const LENGTH_MATCHERS: [&str; 5] = [
 ///   3. `expect(<obj_text>.length).<matcher>(N)` (equivalent length assertion,
 ///      where `<matcher>` is one of [`LENGTH_MATCHERS`])
 ///   4. chai length assertion on the same array (see [`stmt_has_chai_length_assertion`])
+///   5. Node/Deno throwing assertion proving non-emptiness on the same array
+///      (see [`stmt_is_assert_nonempty_length`])
 fn scan_preceding_stmts(
     stmts: &[Statement],
     node_span_start: u32,
@@ -614,8 +616,124 @@ fn scan_preceding_stmts(
         if stmt_has_chai_length_assertion(stmt_text, obj_text) {
             return true;
         }
+        if stmt_is_assert_nonempty_length(stmt, obj_text, source) {
+            return true;
+        }
     }
     false
+}
+
+/// Throwing-assertion callees that take a single boolean condition argument:
+/// Node's `assert(cond)` and `assert.ok(cond)`. Both throw an `AssertionError`
+/// unless the condition is truthy, so a length comparison passed to them
+/// establishes the array length the same way an `if`-guard does.
+fn is_assert_condition_callee(callee: &Expression) -> bool {
+    match callee {
+        Expression::Identifier(id) => id.name.as_str() == "assert",
+        Expression::StaticMemberExpression(member) => {
+            member.property.name.as_str() == "ok"
+                && matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == "assert")
+        }
+        _ => false,
+    }
+}
+
+/// Throwing-assertion callees that compare two values for equality:
+/// `assert.equal(a, b)` and `assert.strictEqual(a, b)`. They throw unless the
+/// two arguments are equal, so `assert.equal(arr.length, N)` with `N >= 1`
+/// proves the array is non-empty.
+fn is_assert_equal_callee(callee: &Expression) -> bool {
+    matches!(callee, Expression::StaticMemberExpression(member)
+        if matches!(member.property.name.as_str(), "equal" | "strictEqual")
+            && matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == "assert"))
+}
+
+/// Returns true when `stmt` is a throwing assertion that proves `<obj_text>` is
+/// non-empty (`length >= 1`), making a subsequent first/last read in-bounds.
+/// Recognized forms:
+///   - `assert(<obj>.length <cmp> N)` / `assert.ok(<obj>.length <cmp> N)` — the
+///     condition argument is a length comparison that bounds the length away
+///     from 0 (see [`length_comparison_proves_nonempty`]).
+///   - `assert.equal(<obj>.length, N)` / `assert.strictEqual(<obj>.length, N)`
+///     with `N >= 1`.
+///
+/// Scoped to the SAME receiver array; an assertion on a different array, a
+/// non-length condition, or one that proves `length === 0` does not qualify.
+fn stmt_is_assert_nonempty_length(stmt: &Statement, obj_text: &str, source: &str) -> bool {
+    let Statement::ExpressionStatement(expr_stmt) = stmt else {
+        return false;
+    };
+    let Expression::CallExpression(call) = &expr_stmt.expression else {
+        return false;
+    };
+    if is_assert_condition_callee(&call.callee) {
+        let Some(first_arg) = call.arguments.first().and_then(|a| a.as_expression()) else {
+            return false;
+        };
+        return length_comparison_proves_nonempty(first_arg, obj_text, source);
+    }
+    if is_assert_equal_callee(&call.callee) {
+        let (Some(actual), Some(expected)) = (
+            call.arguments.first().and_then(|a| a.as_expression()),
+            call.arguments.get(1).and_then(|a| a.as_expression()),
+        ) else {
+            return false;
+        };
+        return is_length_of(actual, obj_text, source)
+            && is_positive_numeric_literal(expected, source);
+    }
+    false
+}
+
+/// Returns true when `expr` is a comparison that proves `<obj_text>.length >= 1`.
+/// The `.length` member must be on the SAME receiver array. Recognized (with the
+/// `.length` side on either operand):
+///   - `length === N` / `length == N` with `N >= 1`
+///   - `length >= N` with `N >= 1`
+///   - `length > N` with `N >= 0`
+///
+/// `length === 0` (or any bound that admits 0) does NOT qualify — it proves the
+/// array may be empty, so the first/last read stays flagged.
+fn length_comparison_proves_nonempty(expr: &Expression, obj_text: &str, source: &str) -> bool {
+    let Expression::BinaryExpression(bin) = expr else {
+        return false;
+    };
+    let left_is_len = is_length_of(&bin.left, obj_text, source);
+    let right_is_len = is_length_of(&bin.right, obj_text, source);
+    if !left_is_len && !right_is_len {
+        return false;
+    }
+    // Normalize so `value` is the literal compared against `<obj>.length`, and
+    // `op` reads as `length <op> value`.
+    let (value_expr, op) = if left_is_len {
+        (&bin.right, bin.operator)
+    } else {
+        (&bin.left, flip_comparison(bin.operator))
+    };
+    let Expression::NumericLiteral(lit) = value_expr else {
+        return false;
+    };
+    let Ok(n) = source[lit.span.start as usize..lit.span.end as usize].parse::<u32>() else {
+        return false;
+    };
+    match op {
+        BinaryOperator::StrictEquality | BinaryOperator::Equality => n >= 1,
+        BinaryOperator::GreaterEqualThan => n >= 1,
+        BinaryOperator::GreaterThan => true, // length > 0 (or any N) proves >= 1
+        _ => false,
+    }
+}
+
+/// Mirrors a comparison operator across its operands so `N <op> length` can be
+/// read as `length <flipped> N`. Only the comparisons used by
+/// [`length_comparison_proves_nonempty`] are mapped; others pass through and are
+/// rejected by the caller.
+fn flip_comparison(op: BinaryOperator) -> BinaryOperator {
+    match op {
+        BinaryOperator::LessThan => BinaryOperator::GreaterThan,
+        BinaryOperator::LessEqualThan => BinaryOperator::GreaterEqualThan,
+        other => other,
+    }
 }
 
 /// Returns true when `stmt_text` is a chai BDD length assertion on `obj_text`
@@ -1566,6 +1684,75 @@ mod tests {
         // An access in the `alternate` (falsy) branch runs when the guard failed,
         // so it stays flagged.
         let src = "function f(arr) { return arr.length === 2 ? null : arr[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_assert_length_strict_equality_issue_2313() {
+        // The issue's exact pattern: `assert(authors.length === 1, ...)` throws
+        // unless the length is 1, so the subsequent `authors[0]` read is in-bounds.
+        let src = "const authors = await em.findAll(Author); assert(authors.length === 1, `got ${authors.length}`); assert(authors[0].name === 'John', 'bad');";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_assert_length_strict_equality_multiple_accesses_issue_2313() {
+        let src = "assert(arr.length === 2); arr[0]; arr[1];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_assert_length_greater_equal_one_issue_2313() {
+        let src = "assert(arr.length >= 1); const first = arr[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_assert_length_greater_than_zero_issue_2313() {
+        let src = "assert(arr.length > 0); const last = arr[arr.length - 1];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_assert_ok_length_issue_2313() {
+        let src = "assert.ok(rows.length === 2); rows[0].id;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_assert_equal_length_issue_2313() {
+        // `assert.equal(arr.length, N)` / `assert.strictEqual(arr.length, N)`.
+        let src = "assert.strictEqual(rows.length, 1); const first = rows[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_index0_without_preceding_assert_issue_2313() {
+        // Negative space: no preceding assertion, so the read stays flagged.
+        let src = "const x = arr[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_assert_length_on_other_array_issue_2313() {
+        // Negative space: the assertion is on `other`, not `arr`, so `arr` may
+        // still be empty.
+        let src = "assert(other.length === 2); const first = arr[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_assert_length_zero_issue_2313() {
+        // Negative space: `assert(arr.length === 0)` proves the array is EMPTY,
+        // so `arr[0]` is genuinely out of bounds and must stay flagged.
+        let src = "assert(arr.length === 0); const first = arr[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_non_length_assert_issue_2313() {
+        // Negative space: a non-length assertion says nothing about the size.
+        let src = "assert(arr.includes(2)); const first = arr[0];";
         assert_eq!(run_on(src).len(), 1);
     }
 }
