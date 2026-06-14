@@ -35,6 +35,12 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Tailwind prefixes like `bg-`/`border-` collide with BEM and custom
+        // design-system class names. Without Tailwind, a template literal that
+        // builds a CSS class string is not a purge hazard.
+        if !ctx.project.uses_tailwind() {
+            return;
+        }
         let AstKind::TemplateLiteral(tpl) = node.kind() else {
             return;
         };
@@ -87,6 +93,12 @@ mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
+        let project = crate::project::ProjectCtx::empty_with_tailwind();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, "t.ts", &project, file)
+    }
+
+    fn run_without_tailwind(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
@@ -108,5 +120,13 @@ mod tests {
     #[test]
     fn allows_non_tailwind_template_literal() {
         assert!(run_on("const c = `hello ${name}`;").is_empty());
+    }
+
+    // https://github.com/rbaumier/comply/issues/1613 — Angular CDK builds its
+    // own BEM-style CSS class names with `border-` segments; the project has no
+    // Tailwind, so this must stay silent.
+    #[test]
+    fn silent_when_project_has_no_tailwind() {
+        assert!(run_without_tailwind("const c = `${prefix}-border-elem-top`;").is_empty());
     }
 }
