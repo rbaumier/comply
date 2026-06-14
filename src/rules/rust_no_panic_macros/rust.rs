@@ -174,4 +174,59 @@ mod tests {
             1
         );
     }
+
+    #[test]
+    fn allows_panic_in_testing_rs() {
+        let source = r#"pub fn h() { panic!("boom"); }"#;
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, source, "crates/foo/src/testing.rs")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_panic_in_test_utils_rs() {
+        let source = r#"pub fn h() { panic!("boom"); }"#;
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, source, "crates/foo/src/test_utils.rs")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_panic_under_property_tests_dir() {
+        let source = r#"pub fn gen() { panic!("boom"); }"#;
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                source,
+                "crates/foo/src/types/property_tests/setup.rs"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_panic_in_non_exact_testing_name() {
+        let source = r#"pub fn m() { panic!("boom"); }"#;
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, source, "crates/foo/src/my_testing.rs")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_panic_in_non_exact_testing_dir() {
+        let source = r#"pub fn tg() { panic!("boom"); }"#;
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                source,
+                "crates/foo/src/testingground/k.rs"
+            )
+            .len(),
+            1
+        );
+    }
 }

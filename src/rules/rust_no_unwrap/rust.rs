@@ -22,7 +22,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
 
 const KINDS: &[&str] = &["call_expression"];
 
@@ -101,15 +101,6 @@ impl AstCheck for Check {
     }
 }
 
-/// True if `path` lives under Cargo's `tests/` integration-test
-/// directory. Cargo compiles every `tests/*.rs` (and any modules
-/// they import via `tests/common/mod.rs`) as `cfg(test)`, so the
-/// rule treats them as test code without requiring an explicit
-/// `#[cfg(test)]` annotation.
-fn is_under_tests_dir(path: &std::path::Path) -> bool {
-    path.components().any(|c| c.as_os_str() == "tests")
-}
-
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
     fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
@@ -181,5 +172,79 @@ mod tests {
     #[test]
     fn still_flags_non_lock_unwrap() {
         assert_eq!(run_on("fn f() { let x = y.unwrap(); }").len(), 1);
+    }
+
+    #[test]
+    fn allows_unwrap_in_tests_directory() {
+        let source = "pub fn helper() { let x = y.unwrap(); }";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, source, "tests/helpers.rs").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_unwrap_in_testing_rs() {
+        let source = "pub fn h() { let x = y.unwrap(); }";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, source, "crates/foo/src/testing.rs")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_unwrap_in_test_utils_rs() {
+        let source = "pub fn h() { let x = y.unwrap(); }";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, source, "crates/foo/src/test_utils.rs")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_unwrap_under_property_tests_dir() {
+        let source = "pub fn gen() { let x = y.unwrap(); }";
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                source,
+                "crates/foo/src/types/property_tests/gen.rs"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_unwrap_in_ordinary_src_file() {
+        let source = "pub fn z() { let x = y.unwrap(); }";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, source, "crates/foo/src/lib.rs").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_unwrap_in_non_exact_testing_name() {
+        // `my_testing.rs` is not an exact match for `testing.rs`.
+        let source = "pub fn m() { let x = y.unwrap(); }";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, source, "crates/foo/src/my_testing.rs")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_unwrap_in_non_exact_testing_dir() {
+        // `testingground/` is not an exact match for `testing`.
+        let source = "pub fn tg() { let x = y.unwrap(); }";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                source,
+                "crates/foo/src/testingground/k.rs"
+            )
+            .len(),
+            1
+        );
     }
 }
