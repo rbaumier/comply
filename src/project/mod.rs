@@ -1448,6 +1448,12 @@ pub struct ProjectCtx {
     tsconfig_cache: Mutex<HashMap<PathBuf, Arc<Tsconfig>>>,
     cargo_manifest_cache: Mutex<HashMap<PathBuf, Arc<CargoManifest>>>,
 
+    // "Does this crate's root declare `#![no_std]`?", keyed by crate (manifest)
+    // directory. The crate root (`src/lib.rs` / `src/main.rs`) is read once per
+    // crate rather than once per file, since every file in the crate shares the
+    // same answer.
+    crate_no_std_cache: Mutex<HashMap<PathBuf, bool>>,
+
     // Memoizes the upward `walk_up_finding` stat-walk that locates a marker
     // file (`package.json`, `tsconfig.json`). The resolved manifest directory
     // is identical for every file in the same directory, so the walk runs once
@@ -2540,6 +2546,41 @@ impl ProjectCtx {
         Some(arc)
     }
 
+    /// True when the crate owning `path` declares `#![no_std]` at its root.
+    ///
+    /// The `no_std` attribute is a crate-level inner attribute that lives in the
+    /// crate root (`src/lib.rs` / `src/main.rs`), which is usually *not* the same
+    /// file as a flagged item — so a per-file `source_contains` check misses it.
+    /// This walks up to the nearest `Cargo.toml` (reusing the shared manifest-dir
+    /// resolution) and reads that crate's root for a `#![no_std]` /
+    /// `#![cfg_attr(..., no_std)]` inner attribute. Cached per crate directory.
+    pub fn crate_root_is_no_std(&self, path: &Path) -> bool {
+        let Some(start_dir) = path.parent() else {
+            return false;
+        };
+        let Some(crate_dir) =
+            walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "Cargo.toml")
+        else {
+            return false;
+        };
+
+        if let Ok(cache) = self.crate_no_std_cache.lock()
+            && let Some(hit) = cache.get(&crate_dir)
+        {
+            return *hit;
+        }
+
+        let is_no_std = ["src/lib.rs", "src/main.rs"].iter().any(|root| {
+            std::fs::read_to_string(crate_dir.join(root))
+                .is_ok_and(|src| source_declares_no_std(&src))
+        });
+
+        if let Ok(mut cache) = self.crate_no_std_cache.lock() {
+            cache.entry(crate_dir).or_insert(is_no_std);
+        }
+        is_no_std
+    }
+
     /// True if a non-relative `spec` resolves to a local source file via the
     /// nearest tsconfig's `baseUrl` (e.g. `baseUrl: "."` turns `src/types/Foo`
     /// into `<tsconfig_dir>/src/types/Foo.ts`). Such imports are project files,
@@ -2982,6 +3023,17 @@ fn deeper_dir(a: PathBuf, b: PathBuf) -> PathBuf {
     } else {
         a
     }
+}
+
+/// True when `src` contains a crate-level `#![no_std]` inner attribute,
+/// including the conditional `#![cfg_attr(not(test), no_std)]` form. Matches on
+/// an inner-attribute line (`#![`) mentioning `no_std`, so an identifier or
+/// comment that merely contains the text `no_std` does not trigger it.
+fn source_declares_no_std(src: &str) -> bool {
+    src.lines().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("#![") && line.contains("no_std")
+    })
 }
 
 pub(crate) fn walk_up_finding(start: &Path, target: &str) -> Option<PathBuf> {
