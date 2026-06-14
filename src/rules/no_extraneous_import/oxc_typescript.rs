@@ -1471,4 +1471,45 @@ import { PrismaClient } from '@prisma/client';
         assert_eq!(d.len(), 1, "external semver devDep should still flag: {d:?}");
         assert!(d[0].message.contains("typescript"));
     }
+
+    #[test]
+    fn allows_dev_dep_in_tailwind_preset_file() {
+        // Issue #2226: solid-start's `apps/landing-page/ui.preset.ts` is a
+        // Tailwind preset — a build-time CSS-config artifact (the Tailwind
+        // equivalent of `tailwind.config.ts`), loaded by Tailwind/Vite at build
+        // time and never shipped as runtime code. It imports `tailwindcss` and
+        // `tailwindcss-animate` from devDependencies, which is correct. A
+        // `*.preset.*` file is build config like `*.config.*` and must not flag.
+        let pkg = r#"{
+            "devDependencies": {
+                "tailwindcss": "^3",
+                "tailwindcss-animate": "^1"
+            }
+        }"#;
+        let src = r#"
+import { type Config } from "tailwindcss";
+import animate from "tailwindcss-animate";
+import { fontFamily } from "tailwindcss/defaultTheme";
+
+export default {
+  darkMode: ["class"],
+  content: ["./src/**/*.{js,jsx,md,mdx,ts,tsx}"],
+  plugins: [animate],
+} satisfies Config;
+"#;
+        let d = run_with_pkg_at_path(pkg, "apps/landing-page/ui.preset.ts", src);
+        assert!(d.is_empty(), "tailwind preset file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_outside_preset_file() {
+        // Negative-space guard for #2226: a production file whose name merely
+        // contains "preset" without the `.preset.` infix (no build-config
+        // convention) must still flag a devDependency import.
+        let pkg = r#"{"devDependencies":{"tailwindcss":"^3"}}"#;
+        let src = r#"import tailwind from "tailwindcss";"#;
+        let d = run_with_pkg_at_path(pkg, "src/presets.ts", src);
+        assert_eq!(d.len(), 1, "non-preset file should still flag: {d:?}");
+        assert!(d[0].message.contains("tailwindcss"));
+    }
 }

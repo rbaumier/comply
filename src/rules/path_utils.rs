@@ -38,15 +38,18 @@ fn canonicalize_cached(p: &Path) -> PathBuf {
 /// True if `path` is a build/tooling config file. Matches `*.config.*`
 /// (e.g. `vite.config.ts`, `jest.config.js`), the Vitest `*.workspace.*`
 /// convention (e.g. `vitest.workspace.ts`, loaded by filename and never
-/// imported), dotfile-rc entries (e.g. `.eslintrc.js`, `.babelrc.ts`), and the
-/// extensionless Knip config name (`knip.ts`/`knip.js`) — the Knip tool reads
-/// its config by filename and never `import`s it, so its `default` export has
-/// no static importer. `knip.config.*` is already covered by the `*.config.*`
-/// branch.
+/// imported), the Tailwind `*.preset.*` convention (e.g. `ui.preset.ts`,
+/// `tailwind.preset.ts`) — a preset is the Tailwind equivalent of
+/// `tailwind.config.ts`, a build-time CSS-config artifact loaded by the
+/// toolchain and never shipped as runtime code — dotfile-rc entries (e.g.
+/// `.eslintrc.js`, `.babelrc.ts`), and the extensionless Knip config name
+/// (`knip.ts`/`knip.js`) — the Knip tool reads its config by filename and never
+/// `import`s it, so its `default` export has no static importer. `knip.config.*`
+/// is already covered by the `*.config.*` branch.
 pub fn is_config_file(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    if stem.ends_with(".config") || stem.ends_with(".workspace") {
+    if stem.ends_with(".config") || stem.ends_with(".workspace") || stem.ends_with(".preset") {
         return true;
     }
     if name.starts_with('.') && stem.ends_with("rc") {
