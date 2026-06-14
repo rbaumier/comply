@@ -54,7 +54,7 @@ impl OxcCheck for Check {
             if is_skipped_context(nodes, node_id) {
                 continue;
             }
-            if !is_arrow && references_this_directly(nodes, func_span) {
+            if references_this_directly(nodes, func_span) {
                 continue;
             }
 
@@ -161,7 +161,14 @@ fn references_this_directly(nodes: &oxc_semantic::AstNodes, func_span: Span) -> 
                     bound_by_candidate = false;
                     break;
                 }
-                AstKind::ArrowFunctionExpression(_) => {}
+                // Arrow functions inherit `this` lexically, so an arrow
+                // candidate binds a `this` in its body. Stop only at the
+                // candidate's own span; inner arrows keep walking outward.
+                AstKind::ArrowFunctionExpression(arrow) => {
+                    if arrow.span() == func_span {
+                        break;
+                    }
+                }
                 AstKind::Program(_) => {
                     bound_by_candidate = false;
                     break;
@@ -268,5 +275,50 @@ mod tests {
             }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_arrow_referencing_this() {
+        // Regression for rbaumier/comply#1635 — an arrow function captures
+        // `this` lexically from the enclosing scope, so it cannot be hoisted.
+        let src = r#"
+            class FrameTree {
+                _setupDragAndDrop(chromeEventHandler) {
+                    const emitInputEvent = (event) => this.emit("inputEvent", { type: event.type });
+                    helper.addEventListener(chromeEventHandler, "dragstart", emitInputEvent);
+                    helper.addEventListener(chromeEventHandler, "dragover", emitInputEvent);
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_arrow_capturing_nothing() {
+        // Negative-space guard: an arrow that uses only its own params and
+        // captures nothing from the parent scope can still be hoisted.
+        let src = r#"
+            function outer() {
+                const f = (x) => x + 1;
+                return f(2);
+            }
+        "#;
+        assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_arrow_whose_this_belongs_to_nested_function() {
+        // An arrow whose only `this` lives inside a nested non-arrow function
+        // does not itself capture `this`, so it stays flaggable.
+        let src = r#"
+            function outer() {
+                const f = () => {
+                    function g() { return this; }
+                    return g();
+                };
+                return f();
+            }
+        "#;
+        assert!(!run(src).is_empty());
     }
 }
