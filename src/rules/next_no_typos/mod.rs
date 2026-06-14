@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Use the exact Next.js export names: `getStaticProps`, `getStaticPaths`, `getServerSideProps`, `getInitialProps`. A typo (e.g. `getStaticPorps`) is silently ignored by Next.js.",
     severity: Severity::Error,
     doc_url: Some("https://nextjs.org/docs/messages/no-typos"),
-    categories: &["next"],
+    categories: &["nextjs"],
 
     skip_in_test_dir: false,
     skip_in_relaxed_dir: false,

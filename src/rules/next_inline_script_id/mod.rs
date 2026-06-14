@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Add a stable `id` prop to the `<Script>` element. Without it Next will re-inject the script on every navigation.",
     severity: Severity::Error,
     doc_url: Some("https://nextjs.org/docs/messages/inline-script-id"),
-    categories: &["next"],
+    categories: &["nextjs"],
 
     skip_in_test_dir: false,
     skip_in_relaxed_dir: false,

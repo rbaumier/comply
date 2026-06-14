@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Use a single `<Head>` per page. Compose its children via array spread or `<>...</>` if you need to assemble metadata conditionally.",
     severity: Severity::Error,
     doc_url: Some("https://nextjs.org/docs/messages/no-duplicate-head"),
-    categories: &["next"],
+    categories: &["nextjs"],
 
     skip_in_test_dir: false,
     skip_in_relaxed_dir: false,
