@@ -2,8 +2,10 @@
 //!
 //! Walks `function_item` nodes, collects the `return_expression` nodes
 //! belonging directly to the function body plus the function block's tail
-//! expression (Rust's implicit return), and flags the function when every
-//! resulting value is the same literal.
+//! expression (Rust's implicit return), and flags the function only when every
+//! return site is provably the same literal. A return site whose value is not a
+//! literal (a computed expression, or a control-flow tail such as `if`/`match`)
+//! makes invariance unprovable, so the function is left unflagged.
 //!
 //! Nested `function_item` and `closure_expression` subtrees are skipped so
 //! an inner closure's `return` is not attributed to the outer function.
@@ -50,22 +52,32 @@ fn return_value_literal<'a>(ret: tree_sitter::Node, source: &'a [u8]) -> Option<
     literal_text(value, source)
 }
 
-/// True if `block` is a `block` node whose final child is an expression
-/// (Rust's implicit return). Returns the expression node when it is.
+/// Return the block's trailing expression (Rust's implicit return), if any.
+///
+/// Bare-value tails (literals, identifiers like `None`) appear directly as the
+/// last named child. Block-like tails (`if`, `match`, `loop`, …) are wrapped in
+/// an `expression_statement` that — unlike a real statement — carries no
+/// trailing `;`; that wrapper is unwrapped to expose the actual tail
+/// expression. Statements (`let_declaration`, or an `expression_statement`
+/// terminated by `;`) are not tails and yield `None`.
 fn block_tail_expression<'t>(block: tree_sitter::Node<'t>) -> Option<tree_sitter::Node<'t>> {
     if block.kind() != "block" {
         return None;
     }
     let last = block.named_child(block.named_child_count().checked_sub(1)?)?;
-    // The block grammar tags the trailing expression node as the last named
-    // child; statements end with `;` and are nodes like `let_declaration`,
-    // `expression_statement`. An expression node is anything else with a
-    // value-producing kind.
-    let kind = last.kind();
-    if kind == "let_declaration" || kind == "expression_statement" {
-        return None;
+    match last.kind() {
+        "let_declaration" => None,
+        "expression_statement" => {
+            // A trailing `;` makes this a statement, not an implicit return.
+            let has_semicolon = last.child(last.child_count().checked_sub(1)?)?.kind() == ";";
+            if has_semicolon {
+                None
+            } else {
+                last.named_child(0)
+            }
+        }
+        _ => Some(last),
     }
-    Some(last)
 }
 
 crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
@@ -170,5 +182,62 @@ fn get_value() -> i32 {
 }
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    // Issue #1466 — guard `return None` early-exits plus a non-literal
+    // `Some(computed)` happy path in an `if/else` tail must not be flagged.
+    #[test]
+    fn allows_guard_none_with_some_if_else_tail() {
+        let src = r#"
+fn literal(&self) -> Option<String> {
+    if self.opts.case_insensitive {
+        return None;
+    }
+    let mut lit = String::new();
+    for t in &*self.tokens {
+        let Token::Literal(c) = *t else { return None };
+        lit.push(c);
+    }
+    if lit.is_empty() { None } else { Some(lit) }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Issue #1466 — guard `return None` plus a `Some(computed)` happy path in
+    // a `match` tail must not be flagged.
+    #[test]
+    fn allows_guard_none_with_some_match_tail() {
+        let src = r#"
+fn open(&self, file: &File) -> Option<Mmap> {
+    if !self.is_enabled() {
+        return None;
+    }
+    if cfg!(target_os = "macos") {
+        return None;
+    }
+    match unsafe { Mmap::map(file) } {
+        Ok(mmap) => Some(mmap),
+        Err(_) => None,
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Negative space: a genuinely invariant function whose explicit guard
+    // returns and bare implicit tail all yield the same literal must still fire.
+    #[test]
+    fn flags_invariant_none_across_returns_and_tail() {
+        let src = r#"
+fn always_none(x: i32) -> Option<i32> {
+    if x > 0 {
+        return None;
+    }
+    do_side_effect();
+    None
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
