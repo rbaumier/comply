@@ -3,7 +3,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::project::Framework;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
-use oxc_ast::ast::{TSType, TSTypeName};
+use oxc_ast::ast::{Expression, TSType, TSTypeName};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -93,6 +93,62 @@ fn is_global_typed_di_binding<'a>(
         }
     }
     false
+}
+
+/// Identifiers that name the global object itself. A binding initialized from
+/// one of these is capturing the global value, not masking it.
+const GLOBAL_OBJECT_NAMES: &[&str] = &["global", "globalThis", "window", "self"];
+
+/// True when the binding is initialized from the global object itself, i.e. it
+/// deliberately captures the global value rather than accidentally hiding it.
+/// This is the SSR save/restore idiom in browser-targeting test suites — the
+/// original global is held by reference before `globalThis.window` is deleted,
+/// then assigned back. Two shapes are recognised:
+///   - destructuring the global: `const { window, document } = globalThis`
+///     (the initializer IS a global-object identifier);
+///   - member access on the global: `const window = global.window`
+///     (the initializer's root object is a global-object identifier).
+fn is_captured_from_global<'a>(
+    symbol_id: oxc_semantic::SymbolId,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let scoping = semantic.scoping();
+    let decl_node_id = scoping.symbol_declaration(symbol_id);
+    let nodes = semantic.nodes();
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id)) {
+        match kind {
+            AstKind::VariableDeclarator(decl) => {
+                return decl
+                    .init
+                    .as_ref()
+                    .is_some_and(initializer_is_global_capture);
+            }
+            // A parameter or function/program boundary is not a captured-global
+            // binding — stop walking.
+            AstKind::FormalParameter(_)
+            | AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Program(_) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// True when `init` reads the global object: either it is directly a global
+/// identifier (`globalThis` in `const { window } = globalThis`) or a member
+/// access whose root object is a global identifier (`global.window`).
+fn initializer_is_global_capture(init: &Expression) -> bool {
+    match init {
+        Expression::Identifier(ident) => GLOBAL_OBJECT_NAMES.contains(&ident.name.as_str()),
+        Expression::StaticMemberExpression(member) => {
+            initializer_is_global_capture(&member.object)
+        }
+        Expression::ComputedMemberExpression(member) => {
+            initializer_is_global_capture(&member.object)
+        }
+        _ => false,
+    }
 }
 
 /// True when the symbol's declaration is a TypeScript ambient declaration:
@@ -208,6 +264,9 @@ impl OxcCheck for Check {
                 continue;
             }
             if is_global_typed_di_binding(name, symbol_id, semantic) {
+                continue;
+            }
+            if is_captured_from_global(symbol_id, semantic) {
                 continue;
             }
             let span = scoping.symbol_span(symbol_id);
@@ -475,6 +534,39 @@ mod tests {
     #[test]
     fn allows_namespace_import_global() {
         assert!(run_on("import * as globalThis from '@storybook/global';").is_empty());
+    }
+
+    #[test]
+    fn allows_destructured_capture_from_globalthis() {
+        // Issue #2349: SSR test save/restore idiom — the binding captures the
+        // real global by reference before `globalThis.window` is deleted, then
+        // assigns it back. It is deliberate aliasing, not confusing shadowing.
+        assert!(run_on_browser("const { window, document } = globalThis;").is_empty());
+    }
+
+    #[test]
+    fn allows_member_capture_from_global() {
+        // Issue #2349: `const window = global.window` captures the global value.
+        assert!(run_on_browser("const window = global.window;").is_empty());
+    }
+
+    #[test]
+    fn allows_universal_capture_from_globalthis() {
+        // The same idiom for universal globals (e.g. saving the original timer).
+        assert!(run_on("const { setTimeout } = globalThis;").is_empty());
+    }
+
+    #[test]
+    fn flags_destructure_from_unrelated_object() {
+        // Negative space: destructuring from an unrelated object is a genuine
+        // shadow — only the global object itself is a capture.
+        assert_eq!(run_on_browser("const { window } = makeFakeEnv();").len(), 1);
+    }
+
+    #[test]
+    fn flags_window_assigned_unrelated_initializer() {
+        // Negative space: `const window = makeFakeWindow()` masks the global.
+        assert_eq!(run_on_browser("const window = makeFakeWindow();").len(), 1);
     }
 
     #[test]
