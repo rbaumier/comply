@@ -6,6 +6,24 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// Walk up to the nearest enclosing function and report whether it is `async`.
+/// A `.then()` only swaps cleanly for `await` when an `async` host is already in
+/// scope; in a non-async function (or at module top level) switching to `await`
+/// would force the function signature to change, so the chain is the natural form.
+fn inside_async_function<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::Function(f) => return f.r#async,
+            AstKind::ArrowFunctionExpression(a) => return a.r#async,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// True when the receiver chain bottoms out at the literal identifier `z` (Zod).
 /// Syntactic only — does not resolve aliased imports (`z as zod`), variable-bound schemas (`const Schema = z.string()`), or nested `.pipe(z.x)`.
 fn receiver_is_zod_chain(expr: &Expression) -> bool {
@@ -98,6 +116,16 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A `.then()` only swaps cleanly for `await` when the nearest enclosing
+        // function is already `async`. In a non-async arrow/function (e.g. the
+        // Angular Router `loadComponent: () => import("...").then(m => m.X)`
+        // module-reshaping factory) or at module top level, `.then()` is the
+        // natural form — promoting `await` there would force a signature change.
+        // `.catch()` keeps its own dedicated exemptions above and is unaffected.
+        if method == "then" && !inside_async_function(node, semantic) {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -137,8 +165,18 @@ mod tests {
     }
 
     #[test]
-    fn flags_then_chain() {
-        assert_eq!(run("foo().then((x) => x + 1);").len(), 1);
+    fn flags_then_chain_in_async_fn() {
+        // Inside an async function `await` is a drop-in replacement for `.then`.
+        assert_eq!(run("async function f() { foo().then((x) => x + 1); }").len(), 1);
+    }
+
+    #[test]
+    fn allows_then_in_non_async_arrow() {
+        // Regression for #2292: a non-async arrow that reshapes a dynamic import
+        // via `.then()` (Angular Router `loadComponent`/`loadChildren` factory)
+        // has no async host — `.then()` is the natural form, not flagged.
+        let src = "const routes = [{ loadComponent: () => import('./x').then((c) => c.X) }];";
+        assert!(run(src).is_empty());
     }
 
     #[test]
