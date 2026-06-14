@@ -1,7 +1,10 @@
 //! db-no-n-plus-one OXC backend — flag `await db.query(...)` inside loops.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::{byte_offset_to_line_col, file_imports_db_library};
+use crate::oxc_helpers::{
+    byte_offset_to_line_col, callback_first_param_name, file_imports_db_library,
+    receiver_root_identifier,
+};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
@@ -88,6 +91,22 @@ impl OxcCheck for Check {
                     if let Expression::StaticMemberExpression(member) = &call.callee {
                         let prop = member.property.name.as_str();
                         if prop == "forEach" || prop == "map" {
+                            // When the awaited call's receiver root IS the
+                            // callback's iteration binding — e.g.
+                            // `dataSources.map((connection) => connection.manager…execute())`
+                            // — each iteration runs against a different
+                            // connection/client object, not the same dataset.
+                            // That is not the canonical N+1 (one connection,
+                            // query-per-record), so skip it.
+                            let receiver_root =
+                                receiver_root_identifier(&await_expr.argument);
+                            let iter_binding = callback_first_param_name(call);
+                            if let (Some(recv), Some(bind)) =
+                                (receiver_root.as_deref(), iter_binding.as_deref())
+                                && recv == bind
+                            {
+                                return;
+                            }
                             let (loop_line, _) =
                                 byte_offset_to_line_col(ctx.source, call.span.start as usize);
                             let (line, column) = byte_offset_to_line_col(
@@ -198,5 +217,31 @@ mod tests {
     fn ignores_db_call_shape_in_file_with_no_imports() {
         let s = "for (const u of users) {\n  await db.query('SELECT 1');\n}";
         assert!(run(s).is_empty());
+    }
+
+    // Regression for #2372: a multi-driver test harness iterates over a list of
+    // database connections; each `.map` iteration queries a *different*
+    // connection (the receiver root is the callback's iteration binding), not
+    // the same dataset — not the canonical N+1.
+    #[test]
+    fn ignores_connection_as_loop_var_in_map_issue_2372() {
+        let s = "import { DataSource } from 'typeorm';\ndataSources.map(async (connection) => {\n  await connection.manager.createQueryBuilder().insert().execute();\n});";
+        assert!(run(s).is_empty());
+    }
+
+    // Regression for #2372: same shape via `.forEach`.
+    #[test]
+    fn ignores_connection_as_loop_var_in_for_each_issue_2372() {
+        let s = "import { DataSource } from 'typeorm';\ndataSources.forEach(async (connection) => {\n  await connection.query('SELECT 1');\n});";
+        assert!(run(s).is_empty());
+    }
+
+    // Negative space for #2372: a genuine N+1 — the awaited call targets a fixed
+    // `db` receiver (not the iteration binding `u`), so it is one connection
+    // queried once per record and must STILL be flagged.
+    #[test]
+    fn still_flags_genuine_n_plus_one_in_map_issue_2372() {
+        let s = "import { db } from 'drizzle-orm';\nusers.map(async (u) => {\n  await db.query('SELECT * WHERE id = ' + u.id);\n});";
+        assert_eq!(run(s).len(), 1);
     }
 }
