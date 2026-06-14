@@ -54,6 +54,39 @@ fn return_type_text<'a>(call: &TSCallSignatureDeclaration<'a>, source: &'a str) 
     Some(&source[annotation.type_annotation.span().start as usize..annotation.type_annotation.span().end as usize])
 }
 
+/// The source text of a call signature's parameter list (including the
+/// parentheses), e.g. `(pinia: Pinia | undefined)`.
+fn params_text<'a>(call: &TSCallSignatureDeclaration<'a>, source: &'a str) -> &'a str {
+    &source[call.params.span.start as usize..call.params.span.end as usize]
+}
+
+/// Whether the call signatures form an "overloaded narrowing" group: every
+/// signature has a *distinct* parameter list *and* a *distinct* return type, so
+/// each parameter shape maps to its own narrowed return (the
+/// `(p: Pinia): Pinia` / `(p: undefined): undefined` / `(p: Pinia | undefined):
+/// Pinia | undefined` idiom). Unifying them into one union-parameter signature
+/// would collapse the per-variant return into the union and erase the
+/// narrowing, so such a group is not a smell.
+fn call_signatures_narrow_return_type<'a>(
+    calls: &[&'a TSCallSignatureDeclaration<'a>],
+    source: &'a str,
+) -> bool {
+    if calls.len() < 2 {
+        return false;
+    }
+    let mut params = FxHashSet::default();
+    let mut returns = FxHashSet::default();
+    for call in calls {
+        let Some(return_type) = return_type_text(call, source) else {
+            return false;
+        };
+        if !params.insert(params_text(call, source)) || !returns.insert(return_type) {
+            return false;
+        }
+    }
+    true
+}
+
 /// Whether a group of call signatures could be merged into one with a union or
 /// optional trailing parameter.
 ///
@@ -62,9 +95,10 @@ fn return_type_text<'a>(call: &TSCallSignatureDeclaration<'a>, source: &'a str) 
 /// * When the counts *do* differ, the unified form has to add an optional
 ///   trailing parameter, so the declared return types must be identical;
 ///   otherwise the merge would erase the per-overload return-type distinction
-///   (the curried zero-arg vs one-arg overload idiom). When the counts are equal
-///   the merge unions a single parameter's type and the return types need not
-///   match.
+///   (the curried zero-arg vs one-arg overload idiom).
+/// * When the counts are equal the merge unions a single parameter's type, which
+///   is safe only when the signatures are not an overloaded-narrowing group
+///   (distinct parameter lists each mapping to a distinct, narrower return).
 fn call_signatures_are_unifiable<'a>(
     calls: &[&'a TSCallSignatureDeclaration<'a>],
     source: &'a str,
@@ -82,7 +116,7 @@ fn call_signatures_are_unifiable<'a>(
         return false;
     }
     if min == max {
-        return true;
+        return !call_signatures_narrow_return_type(calls, source);
     }
 
     let first_return = return_type_text(calls[0], source);
@@ -257,6 +291,36 @@ mod tests {
             "interface Foo {\n  \
              (a: number): void;\n  \
              (a: number, b?: string): void;\n}",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+    // Regression #1721: pinia `_SetActivePinia` — each call signature maps a
+    // distinct parameter type to its own narrowed return type. Unifying them into
+    // `(pinia: Pinia | undefined): Pinia | undefined` would erase the per-variant
+    // return-type narrowing, so these are not unifiable.
+    #[test]
+    fn allows_overloaded_narrowing_return_types() {
+        assert!(
+            run_on(
+                "interface _SetActivePinia {\n  \
+                 (pinia: Pinia): Pinia\n  \
+                 (pinia: undefined): undefined\n  \
+                 (pinia: Pinia | undefined): Pinia | undefined\n}"
+            )
+            .is_empty()
+        );
+    }
+
+    // Guard: equal param counts with distinct parameter types but the *same*
+    // return type are genuinely unifiable into one union-parameter signature, so
+    // still fire — the narrowing exemption must not swallow this real smell.
+    #[test]
+    fn flags_distinct_params_with_shared_return_type() {
+        let diags = run_on(
+            "interface Foo {\n  \
+             (x: string): void;\n  \
+             (x: number): void;\n}",
         );
         assert_eq!(diags.len(), 1);
     }
