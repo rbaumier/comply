@@ -742,6 +742,107 @@ fn is_get_context_call(expr: &oxc_ast::ast::Expression) -> bool {
     }
 }
 
+/// Vue 3 reactive factories whose return value is a `Ref<T>` wrapper mutated
+/// through its `.value` property. `customRef` and (writable) `computed` follow
+/// the same `ref.value = x` contract.
+const VUE_REF_FACTORIES: &[&str] = &["ref", "shallowRef", "customRef", "computed"];
+
+/// True when `ident` resolves to a `const`/`let` binding initialised by a Vue
+/// reactive factory imported from `vue` — `ref(...)`, `shallowRef(...)`,
+/// `customRef(...)`, or `computed(...)`. Such a binding is a `Ref<T>` wrapper
+/// whose `.value` property is the *intended* mutation point: assigning
+/// `count.value = x` / `count.value++` is how Vue's reactivity is driven, not a
+/// mutation of a plain object. Callers gate the `.value` property specifically;
+/// any other property write on the ref stays flagged.
+///
+/// Resolves the binding via `reference_id` → symbol → declaration node, then
+/// confirms the declarator initializer is a call to one of the factory names and
+/// that the callee identifier is imported from `vue` (so a same-named local
+/// `ref()` is not mistaken for Vue's).
+#[must_use]
+pub fn is_vue_ref_binding(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            let Some(init) = &decl.init else {
+                return false;
+            };
+            let Expression::CallExpression(call) = init else {
+                return false;
+            };
+            let Expression::Identifier(callee) = &call.callee else {
+                return false;
+            };
+            let name = callee.name.as_str();
+            return VUE_REF_FACTORIES.contains(&name) && is_imported_from_vue(name, semantic);
+        }
+    }
+    false
+}
+
+/// True when `member` is a `<ref>.value` access where `<ref>` is a direct
+/// identifier bound to a Vue reactive factory (`ref`/`shallowRef`/`customRef`/
+/// `computed` imported from `vue`). This is the idiomatic Vue 3 reactive-update
+/// target: `count.value = x` / `count.value++`. Restricted to the `value`
+/// property and a direct-identifier base, so `ref.config = x` and `a.b.value = x`
+/// stay flagged.
+#[must_use]
+pub fn is_vue_ref_value_target(
+    member: &oxc_ast::ast::StaticMemberExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::Expression;
+
+    if member.property.name.as_str() != "value" {
+        return false;
+    }
+    let Expression::Identifier(base) = &member.object else {
+        return false;
+    };
+    is_vue_ref_binding(base, semantic)
+}
+
+/// True when `local_name` is the local binding of a named import from `vue`
+/// (`import { ref } from 'vue'`).
+fn is_imported_from_vue(local_name: &str, semantic: &oxc_semantic::Semantic) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::ImportDeclarationSpecifier;
+
+    semantic.nodes().iter().any(|node| {
+        let AstKind::ImportDeclaration(decl) = node.kind() else {
+            return false;
+        };
+        if decl.source.value.as_str() != "vue" {
+            return false;
+        }
+        let Some(specifiers) = &decl.specifiers else {
+            return false;
+        };
+        specifiers.iter().any(|spec| match spec {
+            ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                named.local.name.as_str() == local_name
+            }
+            _ => false,
+        })
+    })
+}
+
 /// True when `assign` sets a `displayName` property to a string literal
 /// (`Component.displayName = "Component"`). React reads `displayName` off the
 /// component function object to name anonymous `forwardRef`/`memo` results in

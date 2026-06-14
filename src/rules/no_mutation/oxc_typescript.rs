@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
     byte_offset_to_line_col, is_get_context_call_binding, is_local_object_builder_binding,
-    is_react_display_name_assignment,
+    is_react_display_name_assignment, is_vue_ref_value_target,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
@@ -80,6 +80,12 @@ impl OxcCheck for Check {
                 if is_react_display_name_assignment(assign) {
                     return;
                 }
+                // Vue 3 reactive ref: `count.value = x` drives reactivity.
+                if let AssignmentTarget::StaticMemberExpression(member) = &assign.left
+                    && is_vue_ref_value_target(member, semantic)
+                {
+                    return;
+                }
                 if let Some(id) = root_identifier_of_target(&assign.left)
                     && (is_created_dom_element(id, semantic)
                         || is_local_object_builder_binding(id, semantic)
@@ -96,6 +102,13 @@ impl OxcCheck for Check {
             }
             // obj.count++, --obj.count
             AstKind::UpdateExpression(update) => {
+                // Vue 3 reactive ref: `count.value++` drives reactivity.
+                if let oxc_ast::ast::SimpleAssignmentTarget::StaticMemberExpression(member) =
+                    &update.argument
+                    && is_vue_ref_value_target(member, semantic)
+                {
+                    return;
+                }
                 if let Some(id) = root_identifier_of_simple_target(&update.argument)
                     && (is_created_dom_element(id, semantic)
                         || is_get_context_call_binding(id, semantic))
@@ -911,6 +924,48 @@ mod tests {
                 const cfg = getConfig();
                 cfg.x = item;
             });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Vue 3 reactive ref `.value` mutation — issue #2164
+
+    #[test]
+    fn allows_vue_ref_value_mutation_issue_2164() {
+        // Regression for rbaumier/comply#2164 — `ref()` returns a reactive
+        // wrapper whose `.value` assignment/update is the intended mutation
+        // point that drives Vue's reactivity.
+        let src = r#"
+            import { ref } from 'vue'
+            const count = ref(0)
+            const input = ref('')
+            function update(e) {
+                count.value++
+                input.value = e.target.value
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_value_mutation_on_plain_const_without_vue_import() {
+        // Negative space: `.value` on a const from an external call (not a vue
+        // ref factory, no vue import) is a genuine mutation and stays flagged.
+        let src = r#"
+            const plain = getThing();
+            plain.value = 1;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_non_value_property_mutation_on_vue_ref() {
+        // Negative space: only `.value` is the reactive mutation point; writing
+        // any other property on a ref is still a mutation.
+        let src = r#"
+            import { ref } from 'vue'
+            const r = ref(0);
+            r.config = 5;
         "#;
         assert_eq!(run(src).len(), 1);
     }
