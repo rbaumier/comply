@@ -199,6 +199,26 @@ pub fn is_top_level_script_dir_path(path: &Path, project_root: &Path) -> bool {
         .is_some_and(|first| TOP_LEVEL_SCRIPT_DIRS.contains(&first))
 }
 
+/// True when `path` lives under a top-level `resources/` directory of the
+/// project (e.g. `<root>/resources/build-npm.ts`). A `resources/` directory at
+/// the project root holds build-time tooling — compiler-API scripts, npm
+/// package build scripts, benchmark harnesses — that runs at dev/CI time and
+/// never ships in the published package, so importing a devDependency from it is
+/// correct. Anchoring on the project root is deliberate: a nested
+/// `src/resources/` is runtime application code, and its dependency imports stay
+/// checked.
+pub fn is_top_level_resources_dir_path(path: &Path, project_root: &Path) -> bool {
+    let canon_path = canonicalize_cached(path);
+    let canon_root = canonicalize_cached(project_root);
+    let Ok(rel) = canon_path.strip_prefix(&canon_root) else {
+        return false;
+    };
+    rel.components()
+        .next()
+        .and_then(|c| c.as_os_str().to_str())
+        .is_some_and(|first| first == "resources")
+}
+
 /// True for build/codegen scripts: files under a `scripts/` or `config/`
 /// directory, or a root-level `build`/`bundle` script (e.g. `build.ts`,
 /// `bundle.mjs`) sitting directly in `project_root`. Both run at dev/CI time
@@ -866,6 +886,21 @@ mod aux_path_tests {
         // a real importable module and must NOT be exempted.
         assert!(!is_top_level_script_dir_path(&root.join("src/scripts/util.ts"), &root));
         assert!(!is_top_level_script_dir_path(&root.join("src/app/login.ts"), &root));
+    }
+
+    #[test]
+    fn top_level_resources_dir_is_root_anchored() {
+        // Issue #2399: a top-level `resources/` directory holds build tooling.
+        let root = PathBuf::from("/repo");
+        assert!(is_top_level_resources_dir_path(&root.join("resources/build-npm.ts"), &root));
+        assert!(is_top_level_resources_dir_path(
+            &root.join("resources/benchmark/worker-timing.js"),
+            &root
+        ));
+        // Anchored at the root only: a nested `src/resources/` is runtime code.
+        assert!(!is_top_level_resources_dir_path(&root.join("src/resources/loader.ts"), &root));
+        // A segment merely containing "resources" must not match.
+        assert!(!is_top_level_resources_dir_path(&root.join("resourcesLoader/x.ts"), &root));
     }
 
     #[test]
