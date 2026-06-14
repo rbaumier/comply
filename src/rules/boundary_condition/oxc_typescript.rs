@@ -548,6 +548,7 @@ const LENGTH_MATCHERS: [&str; 5] = [
 ///   2. `expect(<obj_text>).toHaveLength(N)` (Vitest/Jest assertion guard)
 ///   3. `expect(<obj_text>.length).<matcher>(N)` (equivalent length assertion,
 ///      where `<matcher>` is one of [`LENGTH_MATCHERS`])
+///   4. chai length assertion on the same array (see [`stmt_has_chai_length_assertion`])
 fn scan_preceding_stmts(
     stmts: &[Statement],
     node_span_start: u32,
@@ -586,8 +587,29 @@ fn scan_preceding_stmts(
                 return true;
             }
         }
+        if stmt_has_chai_length_assertion(stmt_text, obj_text) {
+            return true;
+        }
     }
     false
+}
+
+/// Returns true when `stmt_text` is a chai BDD length assertion on `obj_text`
+/// that proves the array is non-empty — making a subsequent `obj_text[0]` /
+/// `obj_text[obj_text.length - 1]` read in-bounds. Recognized forms:
+///   - `<obj>.length.should.<...>` — the `should` chain hung off `.length`
+///     (e.g. `.should.be.equal(N)`, `.should.be.greaterThan(0)`,
+///     `.should.be.at.least(1)`).
+///   - `<obj>.should.have.length(` / `<obj>.should.have.lengthOf(` — the
+///     alternative chai syntax that asserts the array's length directly.
+///
+/// Scoped to a length assertion on the SAME receiver array: a bare `.should`
+/// on `obj_text` (not on its `.length`, and not a `.have.length` assertion)
+/// does not vouch the read safe.
+fn stmt_has_chai_length_assertion(stmt_text: &str, obj_text: &str) -> bool {
+    stmt_text.contains(&format!("{obj_text}.length.should."))
+        || stmt_text.contains(&format!("{obj_text}.should.have.length("))
+        || stmt_text.contains(&format!("{obj_text}.should.have.lengthOf("))
 }
 
 /// Returns the substring of `haystack` immediately following the first
@@ -1386,6 +1408,55 @@ mod tests {
     fn still_flags_switch_on_other_array_length_issue_1602() {
         // `switch (other.length)` guards `other`, not `arr`.
         let src = "function f(arr, other) { switch (other.length) { case 1: return arr[0]; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_chai_length_should_be_equal_issue_2312() {
+        // The issue's exact pattern: `arr.length.should.be.equal(N)` throws if the
+        // length differs, so the subsequent `arr[0]` read is in-bounds.
+        let src = "mymigr.length.should.be.equal(1); mymigr[0].name.should.be.equal(\"InitUsers1530542855524\");";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_chai_length_should_be_greater_than_issue_2312() {
+        let src = "rows.length.should.be.greaterThan(0); const first = rows[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_chai_length_should_be_at_least_issue_2312() {
+        let src = "items.length.should.be.at.least(1); const last = items[items.length - 1];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_chai_should_have_length_issue_2312() {
+        // The alternative chai syntax: `arr.should.have.length(N)`.
+        let src = "rows.should.have.length(2); rows[0].id; rows[1].id;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_chai_should_have_length_of_issue_2312() {
+        let src = "rows.should.have.lengthOf(2); const first = rows[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_chai_length_assertion_on_other_array_issue_2312() {
+        // Negative space: the chai length assertion is on `other`, not `arr`, so
+        // `arr` may still be empty.
+        let src = "other.length.should.be.equal(1); const first = arr[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_bare_chai_should_without_length_issue_2312() {
+        // Negative space: a bare `.should` on the array (not on its `.length` and
+        // not a `.have.length` assertion) says nothing about its size.
+        let src = "rows.should.be.an('array'); const first = rows[0];";
         assert_eq!(run_on(src).len(), 1);
     }
 
