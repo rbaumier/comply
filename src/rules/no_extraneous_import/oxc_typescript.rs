@@ -45,7 +45,7 @@ impl OxcCheck for Check {
         if ctx.file.path_segments.in_storybook {
             return;
         }
-        if crate::rules::path_utils::is_config_file(ctx.path) {
+        if crate::rules::path_utils::is_config_file(ctx.path) || is_config_variant_file(ctx.path) {
             return;
         }
         // Build/codegen scripts (`scripts/`, `config/`), demonstration code
@@ -96,6 +96,19 @@ impl OxcCheck for Check {
             });
         }
     }
+}
+
+/// True when `path` is a hyphenated config-file variant such as
+/// `vitest.config-mutation.mts` or `webpack.config-prod.js`. These name a
+/// build-tooling config alongside the canonical `*.config.*` form (which
+/// [`crate::rules::path_utils::is_config_file`] already covers) but carry a
+/// `-<suffix>` discriminator after `config`, so they read as `*.config-*.*`.
+/// They are dev tooling that never ships, so importing a devDependency from
+/// them is correct.
+fn is_config_variant_file(path: &std::path::Path) -> bool {
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .is_some_and(|stem| stem.contains(".config-"))
 }
 
 fn package_root(specifier: &str) -> &str {
@@ -221,6 +234,45 @@ import userEvent from "@testing-library/user-event";
 export default defineConfig({});"#;
         let d = run_with_pkg_at_path(pkg, "vitest.config.ts", src);
         assert!(d.is_empty(), "vitest.config.ts should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_hyphenated_config_variant_file() {
+        // Issue #1861: recharts' `vitest.config-mutation.mts` is a Vitest
+        // mutation-testing config variant. Its stem is `vitest.config-mutation`,
+        // which the canonical `*.config.*` classifier misses, so it was flagged
+        // for importing `vitest` and `@vitejs/plugin-react` from devDependencies.
+        // A `*.config-<suffix>.*` file is dev tooling like any `*.config.*` and
+        // must not flag.
+        let pkg = r#"{
+            "devDependencies": {
+                "vitest": "^1",
+                "@vitejs/plugin-react": "^4"
+            }
+        }"#;
+        let src = r#"
+import { defineConfig } from 'vitest/config';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  test: { environment: 'jsdom', globals: true },
+});
+"#;
+        let d = run_with_pkg_at_path(pkg, "vitest.config-mutation.mts", src);
+        assert!(d.is_empty(), "hyphenated config variant should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_in_hyphenated_non_config_file() {
+        // Guard against over-relaxing: a production file whose name merely
+        // contains "config" as part of a segment (no `.config-` infix) must
+        // still flag a devDependency import.
+        let pkg = r#"{"devDependencies":{"vitest":"^1"}}"#;
+        let src = r#"import { describe } from "vitest";"#;
+        let d = run_with_pkg_at_path(pkg, "src/config-loader.ts", src);
+        assert_eq!(d.len(), 1, "non-config file should still flag: {d:?}");
+        assert!(d[0].message.contains("vitest"));
     }
 
     #[test]
