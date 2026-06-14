@@ -36,6 +36,22 @@ impl AstCheck for Check {
         if !has_mut {
             return;
         }
+        // `no_std` exemption: `OnceLock`/`LazyLock`/`Mutex`/`RwLock`/`Atomic*`
+        // live in `std`, not `core`. In a `no_std` crate (bare-metal, embedded)
+        // `static mut` is the only mechanism available for hardware singletons,
+        // interrupt state and MMIO addresses — the suggested alternatives don't
+        // compile. Skip when this file declares `no_std`, the crate's manifest
+        // is categorized no-std, or the crate root declares `#![no_std]` (the
+        // attribute usually lives in `lib.rs`/`main.rs`, not the flagged file).
+        if ctx.source_contains("no_std")
+            || ctx
+                .project
+                .nearest_cargo_manifest(ctx.path)
+                .is_some_and(|m| m.is_no_std())
+            || ctx.project.crate_root_is_no_std(ctx.path)
+        {
+            return;
+        }
         // Surface the static's name in the message if we can read it.
         let name = node
             .child_by_field_name("name")
@@ -77,10 +93,29 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
     }
+
+    /// Build a crate on disk so the `no_std` exemptions resolve against real
+    /// files: `Cargo.toml`, a crate root (`src/main.rs`), and `src/foo.rs`
+    /// holding the source under test. The rule runs on `foo.rs`.
+    fn run_in_crate(cargo_toml: &str, crate_root: &str, foo_src: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("Cargo.toml"), cargo_toml).unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/main.rs"), crate_root).unwrap();
+        let foo_path = dir.path().join("src/foo.rs");
+        fs::write(&foo_path, foo_src).unwrap();
+        crate::rules::test_helpers::run_rule(&Check, foo_src, &foo_path)
+    }
+
+    const STD_CARGO_TOML: &str = "[package]\nname = \"c\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
+    const NO_STD_CARGO_TOML: &str =
+        "[package]\nname = \"c\"\nversion = \"0.1.0\"\nedition = \"2021\"\ncategories = [\"no-std\"]\n";
 
     #[test]
     fn flags_static_mut() {
@@ -95,5 +130,63 @@ mod tests {
     #[test]
     fn allows_const() {
         assert!(run_on("const MAX: u32 = 100;").is_empty());
+    }
+
+    // ── no_std exemptions (Closes #1331) ──────────────────────────────────
+
+    /// The flagged file itself declares `#![no_std]` → `std` sync primitives
+    /// are unavailable, so `static mut` is exempt.
+    #[test]
+    fn allows_static_mut_in_no_std_source() {
+        assert!(
+            run_on("#![no_std]\npub static mut X: usize = 0;").is_empty(),
+            "must not flag `static mut` in a #![no_std] file"
+        );
+    }
+
+    /// The crate root (`main.rs`/`lib.rs`) declares `#![no_std]` even though the
+    /// flagged file (`foo.rs`) does not — mirrors the issue's xous-core example.
+    #[test]
+    fn allows_static_mut_when_crate_root_is_no_std() {
+        assert!(
+            run_in_crate(STD_CARGO_TOML, "#![no_std]\nfn main() {}", "pub static mut X: usize = 0;")
+                .is_empty(),
+            "must not flag `static mut` when the crate root declares #![no_std]"
+        );
+    }
+
+    /// The conditional `#![cfg_attr(not(test), no_std)]` form in the crate root.
+    #[test]
+    fn allows_static_mut_when_crate_root_is_conditionally_no_std() {
+        assert!(
+            run_in_crate(
+                STD_CARGO_TOML,
+                "#![cfg_attr(not(test), no_std)]\nfn main() {}",
+                "pub static mut X: usize = 0;"
+            )
+            .is_empty(),
+            "must not flag `static mut` under #![cfg_attr(not(test), no_std)]"
+        );
+    }
+
+    /// The crate's `Cargo.toml` lists the `no-std` category.
+    #[test]
+    fn allows_static_mut_in_no_std_category_crate() {
+        assert!(
+            run_in_crate(NO_STD_CARGO_TOML, "fn main() {}", "pub static mut X: usize = 0;")
+                .is_empty(),
+            "must not flag `static mut` in a crate with the no-std category"
+        );
+    }
+
+    /// Negative space: an ordinary `std` crate with no `no_std` signal anywhere
+    /// must still be flagged.
+    #[test]
+    fn still_flags_static_mut_in_std_crate() {
+        assert_eq!(
+            run_in_crate(STD_CARGO_TOML, "fn main() {}", "pub static mut X: usize = 0;").len(),
+            1,
+            "must keep flagging `static mut` in ordinary std crates"
+        );
     }
 }
