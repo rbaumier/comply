@@ -79,6 +79,13 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Skip if inside a `switch (<obj_text>.length)` case that proves the array
+        // is non-empty — a `case N:` with `N >= 1`, or a `default:` when the
+        // switch lists `case 0:` (so length 0 is handled elsewhere).
+        if has_switch_length_guard_ancestor(node, semantic, obj_text, source) {
+            return;
+        }
+
         // Skip if a preceding sibling guards with early exit or expect().toHaveLength()
         if has_preceding_guard(node, semantic, obj_text, source) {
             return;
@@ -380,6 +387,76 @@ fn condition_guards_index0(expr: &Expression, obj_text: &str, source: &str) -> b
 /// without it; both denote the same array.
 fn normalize_optional_chaining(text: &str) -> String {
     text.replace("?.", ".")
+}
+
+/// Returns true when an ancestor `switch (<obj_text>.length)` proves this access
+/// is in-bounds. The discriminant must be the same array's `.length`, and the
+/// enclosing case must guarantee a non-empty length: a `case N:` whose test is
+/// a numeric literal `N >= 1`, or the `default:` arm when the switch also lists
+/// an explicit `case 0:` (length 0 is handled there, so `default` implies
+/// `length >= 1`). Both first (`arr[0]`) and last (`arr[arr.length - 1]`) reads
+/// need only `length >= 1`, so the same predicate covers them.
+fn has_switch_length_guard_ancestor(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    obj_text: &str,
+    source: &str,
+) -> bool {
+    let nodes = semantic.nodes();
+    let node_span = node.kind().span();
+    for ancestor in nodes.ancestors(node.id()) {
+        let AstKind::SwitchStatement(switch) = ancestor.kind() else {
+            continue;
+        };
+        if !is_length_of(&switch.discriminant, obj_text, source) {
+            continue;
+        }
+        let has_zero_case = switch
+            .cases
+            .iter()
+            .any(|case| case.test.as_ref().is_some_and(|t| is_numeric_literal(t, 0, source)));
+        for case in &switch.cases {
+            if !case_contains_span(case, node_span) {
+                continue;
+            }
+            return match &case.test {
+                Some(test) => is_positive_numeric_literal(test, source),
+                None => has_zero_case,
+            };
+        }
+    }
+    false
+}
+
+/// Returns true when `expr` is `<obj_text>.length`.
+fn is_length_of(expr: &Expression, obj_text: &str, source: &str) -> bool {
+    let Expression::StaticMemberExpression(member) = expr else {
+        return false;
+    };
+    member.property.name.as_str() == "length" && expr_text(&member.object, source) == obj_text
+}
+
+/// Returns true when `expr` is the numeric literal `value`.
+fn is_numeric_literal(expr: &Expression, value: u32, source: &str) -> bool {
+    matches!(expr, Expression::NumericLiteral(lit)
+        if source[lit.span.start as usize..lit.span.end as usize]
+            .parse::<u32>()
+            .is_ok_and(|n| n == value))
+}
+
+/// Returns true when `expr` is a numeric literal `>= 1`.
+fn is_positive_numeric_literal(expr: &Expression, source: &str) -> bool {
+    matches!(expr, Expression::NumericLiteral(lit)
+        if source[lit.span.start as usize..lit.span.end as usize]
+            .parse::<u32>()
+            .is_ok_and(|n| n >= 1))
+}
+
+/// Returns true when `span` falls within any of `case`'s consequent statements.
+fn case_contains_span(case: &SwitchCase, span: oxc_span::Span) -> bool {
+    case.consequent
+        .iter()
+        .any(|stmt| stmt.span().start <= span.start && span.end <= stmt.span().end)
 }
 
 /// Returns true if `stmt` or a top-level statement within it is an early exit
@@ -1118,5 +1195,54 @@ mod tests {
         positions.sort_unstable();
         positions.dedup();
         assert_eq!(positions.len(), 3, "each access must report a unique column");
+    }
+
+    #[test]
+    fn no_fp_switch_on_length_case_and_default_issue_1602() {
+        // The issue's exact example: `case 1: return authors[0]` and
+        // `default: authors[authors.length - 1]` inside `switch (authors.length)`.
+        let src = "function transform(authors) { if (!authors) { return 'Author Unknown'; } switch (authors.length) { case 0: return 'Author Unknown'; case 1: return authors[0]; case 2: return authors.join(' and '); default: const last = authors[authors.length - 1]; return last; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_switch_on_length_positive_case_first_issue_1602() {
+        let src = "function f(arr) { switch (arr.length) { case 0: return; case 1: return arr[0]; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_switch_on_length_default_last_with_zero_case_issue_1602() {
+        let src = "function f(arr) { switch (arr.length) { case 0: return; default: return arr[arr.length - 1]; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_switch_case_zero_first_access_issue_1602() {
+        // `case 0:` means length is 0, so `arr[0]` is genuinely out of bounds.
+        let src = "function f(arr) { switch (arr.length) { case 0: return arr[0]; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_switch_default_without_zero_case_issue_1602() {
+        // No `case 0:`, so `default` can still be reached with length 0.
+        let src = "function f(arr) { switch (arr.length) { case 1: return; default: return arr[arr.length - 1]; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_switch_on_other_discriminant_issue_1602() {
+        // The discriminant is not `arr.length`, so the cases say nothing about
+        // `arr`'s size.
+        let src = "function f(arr, kind) { switch (kind) { case 'a': return arr[0]; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_switch_on_other_array_length_issue_1602() {
+        // `switch (other.length)` guards `other`, not `arr`.
+        let src = "function f(arr, other) { switch (other.length) { case 1: return arr[0]; } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
