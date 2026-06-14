@@ -37,6 +37,13 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `expect<T>()` with a type argument and no runtime arguments is a
+        // type-level assertion entry point (tstyche): the "argument" is the type
+        // parameter, not a runtime value. Only flag when neither is present.
+        if call.type_arguments.is_some() {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -103,6 +110,22 @@ mod tests {
     #[test]
     fn flags_member_expect() {
         let d = run_on("test.expect().toBe(1);");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_type_level_expect_with_no_runtime_args() {
+        // tstyche: `expect<T>()` takes a type argument and no runtime value.
+        let d = run_on(
+            "expect<testType>().type.toBe<HttpApiError.NotFound | HttpApiError.RequestTimeout>();",
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn flags_bare_expect_without_type_args() {
+        // No type argument and no runtime argument is still a genuine mistake.
+        let d = run_on("expect();");
         assert_eq!(d.len(), 1);
     }
 }
