@@ -53,6 +53,11 @@ impl TextCheck for Check {
         if stem.is_empty() {
             return Vec::new();
         }
+        // trybuild/rustc UI-test fixtures under `tests/ui/` conventionally use
+        // kebab-case scenario names paired with sibling `.stderr` output.
+        if crate::rules::path_utils::is_rust_ui_test_fixture(ctx.path) {
+            return Vec::new();
+        }
         if is_snake_case(strip_ordering_prefix(stem)) {
             return Vec::new();
         }
@@ -150,5 +155,15 @@ mod tests {
     #[test]
     fn flags_purely_numeric_stem() {
         assert_eq!(run("src/404.rs").len(), 1);
+    }
+
+    #[test]
+    fn allows_kebab_case_in_tests_ui_fixture() {
+        assert!(run("test_suite/tests/ui/enum-representation/untagged-struct.rs").is_empty());
+    }
+
+    #[test]
+    fn still_flags_kebab_case_outside_tests_ui() {
+        assert_eq!(run("src/my-module.rs").len(), 1);
     }
 }
