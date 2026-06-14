@@ -4,6 +4,11 @@
 //! Skips:
 //!   - Test files (`*.test.*`, `*.spec.*`, `tests/`, `__tests__/`) — these
 //!     may legitimately export fixtures used only internally.
+//!   - Storybook Component Story Format files (`*.stories.*` and files under a
+//!     Storybook directory, via `path_segments.in_storybook`) — each named
+//!     export is a Story the Storybook runtime discovers by glob and the
+//!     `default` export is the meta object. They are consumed at runtime, never
+//!     through a static import, so the import graph shows no importer.
 //!   - Entry points (`main.*`, `index.*` at the project root) — they are the
 //!     consumer, not the consumed, and aren't imported by convention.
 //!   - CLI-tool packages (the nearest `package.json` declares a `bin`) — the
@@ -290,6 +295,9 @@ pub struct Check;
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if ctx.file.path_segments.in_test_dir {
+            return Vec::new();
+        }
+        if ctx.file.path_segments.in_storybook {
             return Vec::new();
         }
         if is_config_file(ctx.path) {
@@ -809,6 +817,48 @@ mod tests {
         ];
         let (_dir, diags) = run_on_project(&files, "tax.test.ts");
         assert!(diags.is_empty(), "test files must not be flagged");
+    }
+
+    #[test]
+    fn ignores_storybook_csf_story_files_issue_1666() {
+        // Regression for #1666 — Storybook Component Story Format files
+        // (`*.stories.tsx`) export Stories (named) and a meta object (default)
+        // that the Storybook runtime discovers by glob, never through a static
+        // import, so the import graph shows no importer. Every export is live.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/components/NotificationList.stories.tsx",
+                "export default { component: NotificationList };\n\
+                 export const SingleNotification = { args: {} };\n\
+                 export const MultipleNotifications = { args: {} };\n\
+                 export const InsufficientContrast = { args: {} };\n",
+            ),
+            ("src/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) =
+            run_on_project(&files, "src/components/NotificationList.stories.tsx");
+        assert!(
+            diags.is_empty(),
+            "Storybook CSF story exports must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_dead_export_in_ordinary_file_alongside_stories() {
+        // Negative-space guard for #1666 — the Storybook skip is gated on the
+        // `.stories.` filename, so a genuinely unused export in an ordinary
+        // `.ts` file is still flagged.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/lib/tax.ts", "export function computeTax() { return 0; }"),
+            ("src/lib/other.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/lib/tax.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "an ordinary unused export must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("computeTax"));
     }
 
     #[test]
