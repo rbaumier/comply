@@ -17,6 +17,12 @@
 //!   `expect.extend`) whose name is not a local value binding — covering both
 //!   Jest setup files (hooks injected as globals, no import) and Vitest setup
 //!   files (hooks imported from `"vitest"`);
+//! - Vitest benchmark files, matched two ways: by the `.bench.{ts,tsx,js,jsx}`
+//!   extension (these are benchmark entry files run directly by `vitest bench`,
+//!   never imported or tree-shaken), or by content shape — a module that imports
+//!   from `"vitest"` and whose top-level call statements are all `describe(...)` /
+//!   `bench(...)` registrations (or standard lifecycle hooks), with a
+//!   locally-bound `describe`/`bench` name keeping the module flagged;
 //! - CLI entry points: files whose name is `bin.{ts,mts,js,mjs}` (the Node.js
 //!   `package.json` `"bin"` convention) or any file starting with a `#!`
 //!   shebang. Such files are executed directly (`tsx ./bin.ts`, `node ./bin.js`),
@@ -213,7 +219,7 @@ pub struct Check;
 
 fn is_test_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
-    [".test.", ".test-d.", ".spec.", "_spec.", "__tests__", "_test.", ".e2e.", ".cy.", ".mock."]
+    [".test.", ".test-d.", ".spec.", "_spec.", "__tests__", "_test.", ".e2e.", ".cy.", ".mock.", ".bench."]
         .iter()
         .any(|m| s.contains(m))
         || s.contains("/dtslint/")
@@ -408,6 +414,58 @@ fn shape_is_test_setup(program: &Program) -> bool {
         }
     }
     seen_any
+}
+
+const VITEST_BENCH_REGISTRATION_IDENTS: &[&str] = &["describe", "bench"];
+
+/// True when the program imports from `"vitest"` at the top level
+/// (`import { bench, describe } from "vitest"`). Any import form from the
+/// `vitest` package counts — the gate only needs to confirm the registration
+/// identifiers come from the benchmark runner, not a local helper.
+fn has_vitest_import(program: &Program) -> bool {
+    program.body.iter().any(|stmt| {
+        let Statement::ImportDeclaration(import) = stmt else { return false };
+        import.source.value.as_str() == "vitest"
+    })
+}
+
+/// True when the program is a Vitest benchmark file by content shape: it imports
+/// from `"vitest"`, has at least one top-level `describe(...)`/`bench(...)`
+/// registration call, and every top-level call/`new` statement is either such a
+/// registration or a standard lifecycle hook (`beforeAll`/…). Vitest benchmark
+/// files register their suites with top-level `describe`/`bench` calls exactly as
+/// test files register with `it`/`beforeAll`; they are executed directly by
+/// `vitest bench`, never imported, so the registrations are intentional, not a
+/// tree-shaking hazard. The `vitest` import is required and a locally-bound
+/// `describe`/`bench` name disqualifies the call, so an ordinary module that
+/// merely calls a local `describe()` is still flagged.
+fn is_vitest_bench_shape(program: &Program) -> bool {
+    if !has_vitest_import(program) {
+        return false;
+    }
+    let locals = module_top_level_value_bindings(program);
+    let mut seen_registration = false;
+    for stmt in &program.body {
+        let Statement::ExpressionStatement(es) = stmt else { continue };
+        match &es.expression {
+            Expression::CallExpression(call) => {
+                let is_registration = matches!(
+                    &call.callee,
+                    Expression::Identifier(id)
+                        if VITEST_BENCH_REGISTRATION_IDENTS.contains(&id.name.as_str())
+                            && !locals.contains(id.name.as_str())
+                );
+                if is_registration {
+                    seen_registration = true;
+                } else if !is_test_runner_hook_call(call, &locals) {
+                    return false;
+                }
+            }
+            Expression::NewExpression(_) => return false,
+            _ => {}
+        }
+    }
+    seen_registration
 }
 
 /// True when the call's callee is `listen` (bare) or a `.listen` member
@@ -1685,6 +1743,7 @@ impl OxcCheck for Check {
             || is_cli_entry(ctx.path, ctx.source)
             || is_benchmark_or_profile_script(ctx.path)
             || shape_is_test_setup(program)
+            || is_vitest_bench_shape(program)
             || is_server_entry_shape(program)
             || is_cli_main_entry_shape(program)
             || is_react_entry_shape(program)
@@ -1887,6 +1946,84 @@ mod tests {
         // calls in a genuine production module are still flagged.
         let prod = crate::rules::test_helpers::run_rule(&Check, src, "src/data-providers/strapi-v4/index.ts");
         assert_eq!(prod.len(), 2, "production src/*.ts must still flag both nock calls");
+    }
+
+    #[test]
+    fn skips_vitest_bench_file_by_extension() {
+        // Issue #2207: Vitest benchmark files use the `.bench.*` extension and
+        // register suites with top-level `describe(...)`/`bench(...)` calls. They
+        // are executed directly by `vitest bench`, never imported as modules, so
+        // tree-shaking does not apply. The top-level `let benchName = …` init is
+        // covered too since the whole file is exempt by extension.
+        let src = "\
+            import { bench, describe } from 'vitest';\n\
+            import { RoutePattern } from '@remix-run/route-pattern';\n\
+            let benchName = getBenchName();\n\
+            describe('RoutePattern.href() — static path', () => {\n\
+                bench(benchName, () => { pattern.href({}); });\n\
+            });\n\
+            describe('RoutePattern.href() — single param', () => {\n\
+                bench(benchName, () => { pattern.href({ id: '42' }); });\n\
+            });\n";
+        for path in [
+            "src/href.bench.ts",
+            "src/href.bench.tsx",
+            "src/href.bench.js",
+            "src/href.bench.jsx",
+        ] {
+            let diags = crate::rules::test_helpers::run_rule(&Check, src, path);
+            assert!(diags.is_empty(), "{path} should be exempt, got {diags:?}");
+        }
+        // The `.bench.` infix is what grants the extension exemption: the same
+        // top-level calls in a genuine production module that does NOT import
+        // from `vitest` are still flagged (the content-shape gate also requires
+        // the import, so we drop it here to isolate the extension signal).
+        let prod_src = "\
+            describe('RoutePattern.href() — static path', () => {});\n\
+            describe('RoutePattern.href() — single param', () => {});\n";
+        let prod = crate::rules::test_helpers::run_rule(&Check, prod_src, "src/href.ts");
+        assert_eq!(prod.len(), 2, "production src/href.ts must still flag both describe calls");
+    }
+
+    #[test]
+    fn skips_vitest_bench_file_by_content_shape() {
+        // Issue #2207: a Vitest benchmark file that does not use the `.bench.`
+        // extension is still recognized by content shape — a `vitest` import plus
+        // top-level `describe(...)`/`bench(...)` registration calls.
+        let src = "\
+            import { bench, describe } from 'vitest';\n\
+            describe('Raw Parsing - Landing Page', () => {\n\
+                bench('custom parser', () => { customParse(landingPage); });\n\
+            });\n\
+            describe('Raw Parsing - Blog Post', () => {\n\
+                bench('custom parser', () => { customParse(blogPost); });\n\
+            });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/html-parser.ts");
+        assert!(diags.is_empty(), "vitest bench shape should be exempt, got {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_describe_without_vitest_import() {
+        // Negative-space guard: a top-level `describe(...)` in a non-bench `.ts`
+        // module WITHOUT a `vitest` import is not a benchmark registration — the
+        // content-shape exemption requires the import gate — so it is still flagged.
+        let src = "describe('x', () => {});";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/index.ts");
+        assert_eq!(diags.len(), 1, "describe without a vitest import must still flag");
+    }
+
+    #[test]
+    fn still_flags_real_side_effect_in_bench_shape() {
+        // Negative-space guard: a genuine top-level side effect alongside the
+        // registrations breaks the uniform bench shape, so the file is still
+        // flagged. The `.bench.` extension is the unconditional escape hatch; a
+        // plain module must earn the exemption with a pure registration body.
+        let src = "\
+            import { bench, describe } from 'vitest';\n\
+            initSentry();\n\
+            describe('x', () => { bench('y', () => {}); });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/perf.ts");
+        assert!(!diags.is_empty(), "a real top-level side effect must still flag, got {diags:?}");
     }
 
     // --- (a) Vitest setup file exemption ----------------------------------
