@@ -4,6 +4,12 @@
 //! `preact/hooks`, which has no RSC runtime and no `"use client"` concept) is
 //! left alone.
 //!
+//! The rule only fires when the file's package is served by an SSR/RSC React
+//! framework (Next.js, Remix, Gatsby, Docusaurus). `"use client"` is a
+//! server-component boundary marker that only those frameworks understand; a
+//! framework-agnostic React component library cannot add it, so flagging
+//! `useLayoutEffect` there would be a false positive.
+//!
 //! The `useIsomorphicLayoutEffect` wrapper — the SSR-safe pattern the rule's
 //! own remediation recommends (`isSSR ? useEffect : useLayoutEffect`) — is not
 //! flagged: in the file that defines it, the `useLayoutEffect` reference on the
@@ -39,6 +45,23 @@ static RE_REACT_NAMESPACE: LazyLock<Regex> = LazyLock::new(|| {
 static RE_ISOMORPHIC_DEF: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\b(?:const|let|var)\s+(\w+)\s*=\s*([^?;]+)\?[^;]*?\buseLayoutEffect\b").unwrap()
 });
+
+/// React SSR/RSC frameworks whose runtime renders components on the server and
+/// understands the `"use client"` boundary marker. Outside such a framework
+/// (e.g. a framework-agnostic React component library), `"use client"` is
+/// meaningless and a server-side `useLayoutEffect` warning never occurs.
+const SSR_REACT_FRAMEWORKS: [&str; 4] = ["nextjs", "remix", "gatsby", "docusaurus"];
+
+/// Whether `path`'s nearest package is served by an SSR/RSC React framework.
+/// Detection is scoped to the file's package.json, so a Next.js app nested in a
+/// monorepo (or under a library's example dir) is recognized while the library
+/// package itself is not.
+fn under_ssr_react_framework(ctx: &CheckCtx) -> bool {
+    ctx.project
+        .frameworks_for_path(ctx.path)
+        .iter()
+        .any(|fw| SSR_REACT_FRAMEWORKS.contains(&fw.name.as_str()))
+}
 
 fn has_use_client_directive(source: &str) -> bool {
     for line in source.lines() {
@@ -131,7 +154,10 @@ impl TextCheck for Check {
     }
 
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        if has_use_client_directive(ctx.source) || !use_layout_effect_is_react(ctx.source) {
+        if !under_ssr_react_framework(ctx)
+            || has_use_client_directive(ctx.source)
+            || !use_layout_effect_is_react(ctx.source)
+        {
             return Vec::new();
         }
         // Exempt the `useLayoutEffect` references that build the SSR-safe
@@ -190,10 +216,43 @@ impl TextCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
 
+    /// `package.json` of a Next.js app — the SSR/RSC context where the rule is
+    /// meant to fire. Positive cases run under this manifest.
+    const NEXT_PKG: &str = r#"{ "name": "app", "dependencies": { "next": "14.0.0", "react": "18.0.0" } }"#;
+
+    /// `package.json` of a framework-agnostic React component library (recharts
+    /// shape): publishable entry fields, `react` as a peer, and crucially no SSR
+    /// framework. The rule must not fire here.
+    const LIBRARY_PKG: &str = r#"{ "name": "recharts", "main": "lib/index.js", "module": "es6/index.js", "peerDependencies": { "react": "^16.0.0" } }"#;
+
+    /// Run the check against `source`, written to `src/c.tsx` inside a tempdir
+    /// whose `package.json` is `pkg_json`, with a real `ProjectCtx`. The SSR
+    /// gate reads framework detection from that manifest.
+    fn run_with_pkg(pkg_json: &str, source: &str) -> Vec<Diagnostic> {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), pkg_json).unwrap();
+        let file_path = dir.path().join("src/c.tsx");
+        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        std::fs::write(&file_path, source).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: Language::Tsx,
+        };
+        let refs = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = std::fs::canonicalize(&file_path).unwrap();
+        Check.check(&CheckCtx::for_test_with_project(&canon, source, &project))
+    }
+
+    /// Positive cases run under a Next.js app, where `"use client"` and the
+    /// server-side `useLayoutEffect` warning actually apply.
     fn run(source: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new("c.tsx"), source))
+        run_with_pkg(NEXT_PKG, source)
     }
 
     #[test]
@@ -300,5 +359,27 @@ useLayoutEffect(() => {}, []);\n";
         let src = "import { useEffect, useLayoutEffect } from 'react'\n\
 const effect = featureFlag ? useLayoutEffect : useEffect\n";
         assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn ignores_use_layout_effect_in_react_library_without_ssr_framework() {
+        // Regression for rbaumier/comply#1863 — recharts'
+        // src/cartesian/ZAxis.tsx. A framework-agnostic React component library
+        // cannot add `"use client"` (the consuming app decides RSC boundaries),
+        // and with no SSR framework present the server-side `useLayoutEffect`
+        // warning never occurs. The rule must not fire.
+        let src = "import { useLayoutEffect, useRef } from 'react';\n\
+useLayoutEffect(() => {}, [settings, dispatch]);\n";
+        assert!(run_with_pkg(LIBRARY_PKG, src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_same_file_in_next_app() {
+        // Negative-space guard for #1863: the identical file inside a Next.js
+        // app (a real SSR context missing `"use client"`) is still a bug.
+        let src = "import { useLayoutEffect, useRef } from 'react';\n\
+useLayoutEffect(() => {}, [settings, dispatch]);\n";
+        // Two references: the named import and the bare call.
+        assert_eq!(run_with_pkg(NEXT_PKG, src).len(), 2);
     }
 }
