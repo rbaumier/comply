@@ -31,6 +31,38 @@ fn is_next_pages_router_file(ctx: &CheckCtx) -> bool {
         || crate::oxc_helpers::source_contains(ctx.source, "from \"next\"")
 }
 
+/// React Router v7 route-module convention exports. A route file can export
+/// these framework-recognized names alongside its default page component; the
+/// framework consumes them at build/runtime and React Fast Refresh tooling
+/// tolerates them in this convention, so flagging them as Fast-Refresh-breaking
+/// non-component exports is a false positive. PascalCase convention names
+/// (`ErrorBoundary`, `HydrateFallback`, `Layout`) are already treated as
+/// component exports and never need listing here.
+const REACT_ROUTER_ROUTE_EXPORTS: &[&str] = &[
+    "meta",
+    "loader",
+    "action",
+    "middleware",
+    "links",
+    "headers",
+    "clientLoader",
+    "clientAction",
+    "handle",
+    "shouldRevalidate",
+];
+
+/// A file is a React Router v7 route module when it imports the framework's
+/// auto-generated per-route types (`./+types/...`, emitted by `react-router
+/// typegen`) or imports from the `react-router` package itself. Either import is
+/// the framework's own convention marker for a route module, where `loader`,
+/// `action`, `meta`, etc. are mandatory framework exports rather than incidental
+/// non-component exports.
+fn is_react_router_route_file(ctx: &CheckCtx) -> bool {
+    crate::oxc_helpers::source_contains(ctx.source, "/+types/")
+        || crate::oxc_helpers::source_contains(ctx.source, "from 'react-router'")
+        || crate::oxc_helpers::source_contains(ctx.source, "from \"react-router\"")
+}
+
 impl OxcCheck for Check {
     fn run_on_semantic<'a>(
         &self,
@@ -62,6 +94,7 @@ impl OxcCheck for Check {
 
         let program = semantic.nodes().program();
         let next_pages_router = is_next_pages_router_file(ctx);
+        let react_router_route = is_react_router_route_file(ctx);
 
         let mut component_exports: Vec<String> = Vec::new();
         let mut non_component_exports: Vec<(String, usize)> = Vec::new();
@@ -72,6 +105,11 @@ impl OxcCheck for Check {
                     if let Some(name) = extract_named_export_name(named, ctx.source) {
                         if next_pages_router
                             && NEXT_PAGES_ROUTER_EXPORTS.contains(&name.as_str())
+                        {
+                            continue;
+                        }
+                        if react_router_route
+                            && REACT_ROUTER_ROUTE_EXPORTS.contains(&name.as_str())
                         {
                             continue;
                         }
@@ -314,6 +352,82 @@ export const getStaticProps = async () => {};
         let d = crate::rules::test_helpers::run_rule_gated(&Check, source, "src/components/Foo.tsx");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("getStaticProps"));
+    }
+
+    // Regression tests for issue #1801 — React Router v7 route modules export
+    // framework-recognized convention names (meta/loader/action/middleware/...)
+    // alongside the default page component. The framework consumes these at
+    // build/runtime and Fast Refresh tooling tolerates them in this convention.
+
+    #[test]
+    fn no_fp_react_router_v7_meta_with_component() {
+        // integration/templates/react-router-node/app/routes/home.tsx (issue #1801)
+        let source = r#"
+import { Show, UserButton } from '@clerk/react-router';
+import type { Route } from './+types/home';
+
+export function meta({}: Route.MetaArgs) {
+  return [{ title: 'New React Router App' }, { name: 'description', content: 'Welcome to React Router!' }];
+}
+
+export default function Home() {
+  return (
+    <div>
+      <UserButton />
+    </div>
+  );
+}
+"#;
+        let d = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            source,
+            "app/routes/home.tsx",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn no_fp_react_router_v7_middleware_and_loader_in_root() {
+        // integration/templates/react-router-node/app/root.tsx (issue #1801)
+        let source = r#"
+import type { Route } from './+types/root';
+
+export const middleware: Route.MiddlewareFunction[] = [clerkMiddleware()];
+export const loader = (args: Route.LoaderArgs) => rootAuthLoader(args);
+
+export function Layout({ children }: { children: React.ReactNode }) { return <html>{children}</html>; }
+export default function App() { return <Outlet />; }
+"#;
+        let d = crate::rules::test_helpers::run_rule_gated(&Check, source, "app/root.tsx");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn flags_non_convention_export_in_react_router_route() {
+        // A genuine non-component export still breaks Fast Refresh, even in a
+        // React Router route file — the exemption is scoped to the convention names.
+        let source = r#"
+import type { Route } from './+types/home';
+
+export const helper = () => {};
+export default function Home() { return <div />; }
+"#;
+        let d = crate::rules::test_helpers::run_rule_gated(&Check, source, "app/routes/home.tsx");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("helper"));
+    }
+
+    #[test]
+    fn flags_loader_outside_react_router_context() {
+        // Same convention name but the file is neither a `+types/` route module
+        // nor importing from `react-router` — still flagged.
+        let source = r#"
+export function MyComponent() { return <div />; }
+export const loader = async () => {};
+"#;
+        let d = crate::rules::test_helpers::run_rule_gated(&Check, source, "src/components/Foo.tsx");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("loader"));
     }
 
     // Regression tests for issue #1898 — publishable npm library source files.
