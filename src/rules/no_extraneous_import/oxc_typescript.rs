@@ -18,7 +18,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::ImportDeclaration(import) = node.kind() else {
@@ -55,6 +55,18 @@ impl OxcCheck for Check {
             return;
         }
         if crate::rules::path_utils::is_config_file(ctx.path) || is_config_variant_file(ctx.path) {
+            return;
+        }
+        // React Router v7 route-configuration tooling. A file that imports from
+        // `@react-router/dev` (e.g. `@react-router/dev/routes` for `RouteConfig`)
+        // is, by construction, build-time route-config tooling consumed by the
+        // React Router dev toolchain, never executed as runtime application code
+        // — conceptually equivalent to `vite.config.ts`. Its conventional name is
+        // `app/routes.ts`, too generic to add to the config-filename predicate, so
+        // the import of the framework's dev build API is the self-identifying
+        // signal. Such a file legitimately imports the devDependencies it needs to
+        // define the route tree (issue #2231).
+        if file_imports_react_router_dev(semantic) {
             return;
         }
         // Build/codegen scripts (`scripts/`, `config/`, root-level `build.ts`/
@@ -193,6 +205,28 @@ fn is_dev_tooling_dir_path(path: &std::path::Path) -> bool {
             std::path::Component::Normal(s)
                 if matches!(s.to_str(), Some("lint-rules" | "lint-processors" | "tools"))
         )
+    })
+}
+
+/// True when the file imports from `@react-router/dev` (the package itself or
+/// any subpath such as `@react-router/dev/routes`). Such an import is the
+/// React Router dev build API, so the file is build-time route-config tooling
+/// (`app/routes.ts`), not runtime application code. Covers static
+/// `import`/`export … from` declarations, which is how a route-config entry
+/// imports `RouteConfig`/route helpers.
+fn file_imports_react_router_dev(semantic: &oxc_semantic::Semantic<'_>) -> bool {
+    use oxc_ast::AstKind;
+
+    let is_rr_dev = |spec: &str| package_root(spec) == "@react-router/dev";
+
+    semantic.nodes().iter().any(|node| match node.kind() {
+        AstKind::ImportDeclaration(decl) => is_rr_dev(decl.source.value.as_str()),
+        AstKind::ExportNamedDeclaration(decl) => decl
+            .source
+            .as_ref()
+            .is_some_and(|src| is_rr_dev(src.value.as_str())),
+        AstKind::ExportAllDeclaration(decl) => is_rr_dev(decl.source.value.as_str()),
+        _ => false,
     })
 }
 
@@ -1511,5 +1545,47 @@ export default {
         let d = run_with_pkg_at_path(pkg, "src/presets.ts", src);
         assert_eq!(d.len(), 1, "non-preset file should still flag: {d:?}");
         assert!(d[0].message.contains("tailwindcss"));
+    }
+
+    #[test]
+    fn allows_dev_dep_in_react_router_routes_config() {
+        // Issue #2231: React Router v7's `app/routes.ts` is the route-config entry
+        // point — build-time tooling consumed by `@react-router/dev`, never runtime
+        // application code (conceptually equivalent to `vite.config.ts`). It imports
+        // `RouteConfig` from `@react-router/dev/routes` and a route-helper
+        // devDependency (`react-router-auto-routes`) to define the route tree. The
+        // import of the `@react-router/dev` build API self-identifies the file as
+        // route-config tooling, so neither devDependency import must flag.
+        let pkg = r#"{
+            "dependencies": {"react-router": "^7"},
+            "devDependencies": {
+                "@react-router/dev": "^7",
+                "react-router-auto-routes": "^1"
+            }
+        }"#;
+        let src = r#"
+import { type RouteConfig } from '@react-router/dev/routes';
+import { autoRoutes } from 'react-router-auto-routes';
+
+export default autoRoutes({
+  ignoredRouteFiles: ['.*', '**/*.css'],
+}) satisfies RouteConfig;
+"#;
+        let d = run_with_pkg_at_path(pkg, "app/routes.ts", src);
+        assert!(d.is_empty(), "RR v7 routes config should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_in_routes_file_without_react_router_dev_import() {
+        // Negative-space guard for #2231: an ordinary `app/routes.ts` that does NOT
+        // import `@react-router/dev` (so it is not React Router route-config
+        // tooling) but imports another devDependency from production code must
+        // still flag. The exemption is gated on the self-identifying
+        // `@react-router/dev` import, not on the generic `routes.ts` filename.
+        let pkg = r#"{"devDependencies":{"vitest":"^1"}}"#;
+        let src = r#"import { describe } from "vitest";"#;
+        let d = run_with_pkg_at_path(pkg, "app/routes.ts", src);
+        assert_eq!(d.len(), 1, "routes.ts without RR dev import should still flag: {d:?}");
+        assert!(d[0].message.contains("vitest"));
     }
 }
