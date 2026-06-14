@@ -1,4 +1,5 @@
-//! ts-no-non-null-assertion oxc backend — flag every `value!` postfix operator.
+//! ts-no-non-null-assertion oxc backend — flag every `value!` postfix operator,
+//! except the runtime-noop `null!` (its `!` is type-level-only).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -53,6 +54,14 @@ impl OxcCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::TSNonNullExpression(expr) = node.kind() else { return };
+
+        // `null!` is a runtime no-op (null stays null); the `!` carries only
+        // type-level intent and can never hide a "value might be null" bug. This
+        // covers the `null! as T` type-test idiom (the `as T` is a separate cast
+        // wrapping this `null!`).
+        if matches!(expr.expression.without_parentheses(), Expression::NullLiteral(_)) {
+            return;
+        }
 
         let prop = base_callee_property(&expr.expression);
 
@@ -147,6 +156,33 @@ mod tests {
     #[test]
     fn still_flags_item_outside_if() {
         let d = run_on("const x = files.item(0)!;");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_bare_null_assertion() {
+        assert!(run_on("const x = null!;").is_empty());
+    }
+
+    #[test]
+    fn allows_null_assertion_as_cast() {
+        assert!(run_on("expectType<Foo>(null! as Foo);").is_empty());
+    }
+
+    #[test]
+    fn allows_parenthesized_null_assertion() {
+        assert!(run_on("const x = (null)!;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_call_result() {
+        let d = run_on("const x = getValue()!;");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index_access() {
+        let d = run_on("const x = arr[0]!;");
         assert_eq!(d.len(), 1);
     }
 }
