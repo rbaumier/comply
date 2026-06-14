@@ -153,7 +153,14 @@ impl OxcCheck for Check {
             return;
         }
 
-        if crate::rules::path_utils::is_generated_file_specifier(&import_spec) {
+        // Imports into a build-output / codegen directory (dist/build/out,
+        // generated/__generated__/.prisma/prisma/gen, node_modules) or at a
+        // `.gen`/`.prebuilt` generated file resolve only after a build step.
+        // These artifacts are gitignored and absent in a clean checkout, so an
+        // unresolved import into them is expected, not a broken path.
+        if crate::rules::path_utils::is_generated_file_specifier(&import_spec)
+            || crate::rules::path_utils::is_build_output_specifier(&import_spec)
+        {
             return;
         }
 
@@ -337,6 +344,42 @@ mod tests {
             &["runtime/client/idle.ts"],
         );
         assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn no_fp_for_generated_dir_import_issue_1659() {
+        // apollo-server reproducer: imports point into a `generated/` directory
+        // produced by `graphql-codegen` / a precompile script. Those files are
+        // gitignored and absent in a clean checkout, so the imports must not be
+        // flagged.
+        let pkg_version =
+            "import { packageVersion } from '../../generated/packageVersion.js';";
+        let diags = run_in_dir(
+            "packages/server/src/plugin/usageReporting/plugin.ts",
+            pkg_version,
+            &[],
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+
+        let operations = "import type { SomeOperation } from './generated/operations';";
+        let diags = run_in_dir(
+            "packages/server/src/plugin/schemaReporting/schemaReporter.ts",
+            operations,
+            &[],
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_missing_import_without_generated_segment() {
+        // The exemption is keyed on a `generated/` (or build-output) path
+        // segment; a normal missing relative import without it stays a real
+        // error. `generated-things` is a substring, not a segment, so it must
+        // still fire.
+        let source = "import { x } from './generated-things/operations';";
+        let diags = run_in_dir("src/app.ts", source, &[]);
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("generated-things/operations"));
     }
 
     #[test]
