@@ -122,6 +122,19 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `match[0]` where `match` is the element bound by
+        // `for (const match of <expr>.matchAll(...))`. Each element yielded by
+        // `String.prototype.matchAll` is a `RegExpMatchArray` whose index 0 (the
+        // full match) is always present, and the loop body runs only for a
+        // successful match — so the first-element read is in-bounds with no null
+        // guard needed (unlike a nullable `.exec()` / `.match()` result).
+        if is_first
+            && let Expression::Identifier(obj_ident) = &member.object
+            && is_matchall_for_of_element(node, obj_ident.name.as_str(), semantic)
+        {
+            return;
+        }
+
         // Cypress idiom: `$el[0]` inside a `.then(($el) => ...)` callback unwraps the
         // underlying DOM node from the jQuery wrapper. Cypress invokes the callback
         // only when the queried element exists (it fails the test otherwise), so the
@@ -753,6 +766,54 @@ fn is_regex_exec_or_match_call(expr: &Expression) -> bool {
     matches!(member.property.name.as_str(), "exec" | "match")
 }
 
+/// Returns true when `name` is the element binding of an enclosing
+/// `for (const name of <expr>.matchAll(...))` loop. Walks ancestors
+/// innermost-first so the closest binding for-of wins (a nested loop shadowing
+/// `name` is honored over an outer one). Each element of a `matchAll` iterator
+/// is a `RegExpMatchArray` whose index 0 always exists, so `name[0]` in the body
+/// is in-bounds.
+fn is_matchall_for_of_element(
+    node: &oxc_semantic::AstNode,
+    name: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        let AstKind::ForOfStatement(for_of) = ancestor.kind() else {
+            continue;
+        };
+        if !for_of_binds_name(&for_of.left, name) {
+            continue;
+        }
+        return is_matchall_call(&for_of.right);
+    }
+    false
+}
+
+/// Returns true when a `for...of` head `for (const <name> of ...)` binds exactly
+/// the identifier `name` via a `const`/`let`/`var` declaration.
+fn for_of_binds_name(left: &ForStatementLeft, name: &str) -> bool {
+    let ForStatementLeft::VariableDeclaration(decl) = left else {
+        return false;
+    };
+    decl.declarations.iter().any(|declarator| {
+        matches!(&declarator.id, BindingPattern::BindingIdentifier(id) if id.name.as_str() == name)
+    })
+}
+
+/// Returns true when `expr` is a `<recv>.matchAll(...)` call — the iterable form
+/// that yields `RegExpMatchArray` elements. `<recv>` may itself be a member chain
+/// (e.g. `this.text.matchAll(re)`), so only the called property name is checked.
+fn is_matchall_call(expr: &Expression) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    member.property.name.as_str() == "matchAll"
+}
+
 /// Returns true when a preceding sibling statement in the same block exits early
 /// on `name` being nullish/falsy: `if (!name) return/throw`, `if (name === null)
 /// return/throw`, or `if (name == null) return/throw`. Does not cross function
@@ -1130,6 +1191,46 @@ mod tests {
     fn still_flags_regex_exec_last_index_after_null_guard_issue_1822() {
         // Only `[0]` (the full match) is guaranteed; `[length - 1]` is not.
         let src = "function f(s) { const m = re.exec(s); if (!m) return; return m[m.length - 1]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_matchall_for_of_index0_issue_1639() {
+        // The issue's exact pattern: `match[0]` inside
+        // `for (const match of text.matchAll(re))`. Each yielded element is a
+        // `RegExpMatchArray` whose `[0]` always exists, with no null guard needed.
+        let src = "function f(text) { for (const match of text.matchAll(RE)) { const end = match.index + match[0].length; nodes.push(match[0]); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_matchall_for_of_index0_member_receiver_issue_1639() {
+        // The `matchAll` receiver may be a member chain (`this.text.matchAll`).
+        let src = "function f() { for (const m of this.text.matchAll(/x/g)) { return m[0]; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_matchall_for_of_last_index_issue_1639() {
+        // Negative space: only `[0]` (the full match) is guaranteed. The
+        // `[length - 1]` last-element read is not, so it stays flagged.
+        let src = "function f(text) { for (const match of text.matchAll(RE)) { return match[match.length - 1]; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_for_of_index0_not_matchall_issue_1639() {
+        // Negative space: a plain `for...of` over an arbitrary array yields
+        // elements that may themselves be empty arrays, so `row[0]` stays flagged.
+        let src = "function f(rows) { for (const row of rows) { return row[0]; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_index0_outside_matchall_for_of_issue_1639() {
+        // The binding `match` only vouches reads inside the loop body; a same-named
+        // `match[0]` outside the loop is unrelated and stays flagged.
+        let src = "function f(text) { for (const match of text.matchAll(RE)) {} const match = getArr(); return match[0]; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
