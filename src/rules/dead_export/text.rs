@@ -1188,6 +1188,82 @@ mod tests {
     }
 
     #[test]
+    fn no_fp_for_bazel_ng_package_reexported_symbol_issue_2299() {
+        // Regression for #2299 (angular/angular) — in the monorepo a `@angular/*`
+        // source package under `packages/<pkg>/` is built by Bazel's `ng_package`
+        // rule, so its placeholder `package.json` declares no main/exports/module
+        // and its `index.ts` barrel is not at the project root. A deep module's
+        // public symbol (`Animation`) is consumed only through the barrel's
+        // `export … from './src/animation'`; no source file imports it. The
+        // sibling `BUILD.bazel` declaring `ng_package(...)` marks the barrel as the
+        // package entry, so the re-exported symbol is live, not dead.
+        let dir = TempDir::new().unwrap();
+        // Monorepo root: a non-library marker so the package below is not at root.
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"angular-srcs","private":true}"#,
+        )
+        .unwrap();
+        fs::write(dir.path().join("root.ts"), "export const root = 1;\n").unwrap();
+        let pkg = dir.path().join("packages").join("animations");
+        fs::create_dir_all(pkg.join("src")).unwrap();
+        fs::write(
+            pkg.join("package.json"),
+            r#"{"name":"@angular/animations","version":"0.0.0-PLACEHOLDER","dependencies":{"tslib":"^2.3.0"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            pkg.join("BUILD.bazel"),
+            "load(\"//tools:defaults.bzl\", \"ng_package\")\nng_package(\n    name = \"npm_package\",\n)\n",
+        )
+        .unwrap();
+        fs::write(
+            pkg.join("index.ts"),
+            "export { Animation } from './src/animation';\n",
+        )
+        .unwrap();
+        fs::write(
+            pkg.join("src").join("animation.ts"),
+            "export const Animation = 1;\n",
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let rels = [
+            "root.ts",
+            "packages/animations/index.ts",
+            "packages/animations/src/animation.ts",
+        ];
+        let source_files: Vec<SourceFile> = rels
+            .iter()
+            .map(|rel| SourceFile {
+                path: dir.path().join(rel),
+                language: Language::TypeScript,
+            })
+            .collect();
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let project = ProjectCtx::load(&refs, &config);
+
+        let target_path = pkg.join("src").join("animation.ts");
+        let source = fs::read_to_string(&target_path).unwrap();
+        let file_ctx = FileCtx::build(&target_path, &source, Language::TypeScript, &project);
+        let ctx = CheckCtx {
+            path: &target_path,
+            path_arc: std::sync::Arc::from(target_path.as_path()),
+            source: &source,
+            config: &config,
+            project: &project,
+            file: &file_ctx,
+            lang: Language::TypeScript,
+        };
+        let diags = Check.check(&ctx);
+        assert!(
+            diags.is_empty(),
+            "symbol re-exported by a Bazel ng_package barrel must not be flagged dead, got: {diags:?}"
+        );
+    }
+
+    #[test]
     fn skips_in_single_file_scan_mode() {
         // Regression for rbaumier/comply#33 — `comply src/shared/foo.ts`
         // sees only one indexed file, so it can't see consumers and
