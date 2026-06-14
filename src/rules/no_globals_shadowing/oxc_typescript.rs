@@ -120,6 +120,27 @@ fn is_ambient_declaration<'a>(
     false
 }
 
+/// True when the symbol is introduced by an `import` declaration: a default
+/// import (`import process from 'node:process'`), a named import
+/// (`import { global } from '@storybook/global'`), a renamed/aliased named
+/// import (`import { global as globalThis } from '@storybook/global'`), or a
+/// namespace import (`import * as global from '…'`). An import binding re-exposes
+/// a value from another module under a chosen name — it does not declare a local
+/// variable that masks the global of that name — so it must not be flagged.
+fn is_import_binding<'a>(
+    symbol_id: oxc_semantic::SymbolId,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let scoping = semantic.scoping();
+    let decl_node_id = scoping.symbol_declaration(symbol_id);
+    matches!(
+        semantic.nodes().kind(decl_node_id),
+        AstKind::ImportSpecifier(_)
+            | AstKind::ImportDefaultSpecifier(_)
+            | AstKind::ImportNamespaceSpecifier(_)
+    )
+}
+
 /// True when `ty` carries — directly, or as a member of a union/intersection —
 /// a type reference whose rightmost name corresponds to the global `name`. The
 /// correspondence is: `document` accepts any `*Document` type (DOM `Document`
@@ -181,6 +202,9 @@ impl OxcCheck for Check {
                 continue;
             }
             if is_ambient_declaration(symbol_id, semantic) {
+                continue;
+            }
+            if is_import_binding(symbol_id, semantic) {
                 continue;
             }
             if is_global_typed_di_binding(name, symbol_id, semantic) {
@@ -417,5 +441,47 @@ mod tests {
         // local shadowing one fires regardless of environment.
         assert_eq!(run_on("const process = {};").len(), 1);
         assert_eq!(run_on("let setTimeout = () => {};").len(), 1);
+    }
+
+    #[test]
+    fn allows_aliased_named_import_globalthis() {
+        // Issue #1667: `import { global as globalThis }` from the
+        // @storybook/global cross-env polyfill is an import binding, not a local
+        // variable masking the global.
+        assert!(
+            run_on(
+                "import { global as globalThis } from '@storybook/global';\nglobalThis.__X__ = 1;"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_named_import_global() {
+        // Issue #1667: `import { global }` is likewise an import binding.
+        assert!(
+            run_on("import { global } from '@storybook/global';\nconst { window: w } = global;")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_default_import_process() {
+        // A default import binding named after a global re-exposes a module value
+        // and does not mask the global.
+        assert!(run_on("import process from 'node:process';\nprocess.exit(0);").is_empty());
+    }
+
+    #[test]
+    fn allows_namespace_import_global() {
+        assert!(run_on("import * as globalThis from '@storybook/global';").is_empty());
+    }
+
+    #[test]
+    fn flags_local_const_globalthis_despite_import_exemption() {
+        // Negative space: a genuine local `const globalThis = {}` still shadows
+        // the global — the import exemption must not leak to runtime declarations.
+        assert_eq!(run_on("const globalThis = {};").len(), 1);
+        assert_eq!(run_on("let global = {};").len(), 1);
     }
 }
