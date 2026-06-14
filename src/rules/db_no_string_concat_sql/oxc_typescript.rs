@@ -253,4 +253,44 @@ mod tests {
         let src = r#"const q = "SELECT * FROM users WHERE id = " + userId;"#;
         assert_eq!(run_on(src).len(), 1);
     }
+
+    // Regression for rbaumier/comply#2321 — Sequelize's query-generator
+    // tests assert dialect→SQL snapshot objects via an `expectsql()` helper.
+    // Some expected strings interpolate dialect-specific schema names into
+    // the *expected output* (e.g. `${dialect.getDefaultSchema()}`). These
+    // are fixtures compared against, never executed against a database, so
+    // there is no injection risk. The engine's `skip_in_test_dir` gate
+    // suppresses the rule for any file in a test directory.
+    #[test]
+    fn gated_no_fp_on_test_snapshot_object() {
+        let src = r#"
+            it('produces a show constraints query', () => {
+              expectsql(() => queryGenerator.showConstraintsQuery('myTable'), {
+                postgres: `SELECT c.constraint_name FROM information_schema WHERE c.table_name = 'myTable'`,
+                oracle: `SELECT C.CONSTRAINT_NAME FROM ALL_CONSTRAINTS WHERE C.OWNER = '${dialect.getDefaultSchema()}'`,
+              });
+            });
+        "#;
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "packages/core/test/unit/query-generator/show-constraints-query.test.ts",
+            )
+            .is_empty(),
+            "skip_in_test_dir must suppress the rule for test-directory files"
+        );
+    }
+
+    // The same interpolated SQL string at a production path that reaches a
+    // query-execution sink is a genuine injection risk and must still fire.
+    #[test]
+    fn gated_still_flags_interpolated_sql_in_production() {
+        let src = r#"await db.query(`SELECT * FROM users WHERE id = ${userId}`);"#;
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "src/repo/users.ts").len(),
+            1,
+            "the rule must still fire on production paths"
+        );
+    }
 }
