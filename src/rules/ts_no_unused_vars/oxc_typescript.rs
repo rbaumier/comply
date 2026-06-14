@@ -164,6 +164,58 @@ fn is_custom_element_class(
     })
 }
 
+/// Collects the factory identifiers named by per-file JSX pragma comments:
+/// `@jsx X` (element factory) and `@jsxFrag X` (fragment factory). A file
+/// beginning with `/** @jsx jsx */` is the per-file equivalent of tsconfig's
+/// `jsxFactory`: every `<element>` compiles to `jsx('element', ...)` and every
+/// `<>` to a `Fragment` call, so the named binding is consumed by the JSX
+/// transform without ever appearing as an explicit source reference. Both the
+/// block (`/** @jsx X */`) and line (`// @jsx X`) comment forms are honored.
+fn jsx_pragma_factories(semantic: &oxc_semantic::Semantic, source: &str) -> HashSet<String> {
+    let mut factories = HashSet::new();
+    for comment in semantic.comments() {
+        let Some(text) = source.get(comment.span.start as usize..comment.span.end as usize) else {
+            continue;
+        };
+        // The factory name is the whitespace-separated token following the
+        // `@jsx` / `@jsxFrag` tag, e.g. `@jsx jsx` / `@jsxFrag Fragment`.
+        let mut tokens = text.split_whitespace().peekable();
+        while let Some(token) = tokens.next() {
+            if (token == "@jsx" || token == "@jsxFrag")
+                && let Some(&factory) = tokens.peek()
+                && is_identifier(factory)
+            {
+                factories.insert(factory.to_string());
+            }
+        }
+    }
+    factories
+}
+
+/// True when `s` is a plausible JS identifier: it starts with a letter, `_`, or
+/// `$` and contains only identifier characters. Guards against treating prose
+/// (`@jsx is the pragma`) as a factory name.
+fn is_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
+/// True when `decl_node` is an import binding (named, default, or namespace
+/// specifier). Used to scope the JSX-pragma exemption to imported factories — a
+/// local variable that happens to share the pragma name is not exempt.
+fn is_import_binding(decl_node: oxc_semantic::NodeId, semantic: &oxc_semantic::Semantic) -> bool {
+    matches!(
+        semantic.nodes().kind(decl_node),
+        AstKind::ImportSpecifier(_)
+            | AstKind::ImportDefaultSpecifier(_)
+            | AstKind::ImportNamespaceSpecifier(_)
+    )
+}
+
 /// True when the program contains any JSX element or fragment.
 fn file_contains_jsx(semantic: &oxc_semantic::Semantic) -> bool {
     semantic
@@ -255,9 +307,14 @@ impl OxcCheck for Check {
         let scoping = semantic.scoping();
         let nodes = semantic.nodes();
         let mut diagnostics = Vec::new();
-        // Memoized once a React pragma import is encountered; scanning every
-        // node for JSX is only worth paying for when there's a React import.
+        // Memoized once a JSX-factory pragma import is encountered; scanning
+        // every node for JSX is only worth paying for when there's such an
+        // import.
         let mut has_jsx: Option<bool> = None;
+        // Memoized on the first import binding that looks unused; scanning the
+        // comments for `@jsx`/`@jsxFrag` pragmas is only paid for when a file
+        // declares an import that would otherwise be flagged.
+        let mut jsx_factories: Option<HashSet<String>> = None;
         // Memoized on the first unreferenced enum member; building the
         // type-position use set scans every node, so it is only paid for in
         // files that actually declare an enum member that looks unused.
@@ -304,6 +361,20 @@ impl OxcCheck for Check {
             }
 
             if is_react_pragma_import(decl_node, semantic)
+                && *has_jsx.get_or_insert_with(|| file_contains_jsx(semantic))
+            {
+                continue;
+            }
+
+            // A binding named by a per-file `/** @jsx X */` / `// @jsx X` (or
+            // `@jsxFrag X`) pragma is the JSX factory: every JSX element/fragment
+            // in the file compiles to a call on it, so it is consumed by the
+            // transform without an explicit source reference. Gated on the file
+            // containing JSX so a stray pragma in a non-JSX file does not exempt.
+            if is_import_binding(decl_node, semantic)
+                && jsx_factories
+                    .get_or_insert_with(|| jsx_pragma_factories(semantic, ctx.source))
+                    .contains(name)
                 && *has_jsx.get_or_insert_with(|| file_contains_jsx(semantic))
             {
                 continue;
@@ -841,6 +912,102 @@ export interface ReaderStateBody {
         assert!(
             diags.iter().any(|d| d.message.contains("`Unused`")),
             "expected enum member `Unused` (referenced nowhere) to be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_jsx_pragma_factory_import() {
+        // A per-file `/** @jsx jsx */` pragma names a custom JSX factory: every
+        // `<element>` compiles to `jsx('element', ...)`, so the import is
+        // consumed by the JSX transform even though it has no explicit call
+        // site. oxc's reference count only sees source references. (Closes #2176)
+        let src = r#"/** @jsx jsx */
+import { jsx } from '../..'
+
+export const input = (
+  <editor>
+    <block>
+      <text />
+    </block>
+  </editor>
+)
+"#;
+        let diags = run(src);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`jsx`")),
+            "FP on `@jsx jsx` pragma factory import: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_jsx_pragma_line_comment_form() {
+        // The line-comment form `// @jsx jsx` is the equivalent per-file pragma
+        // and must be honored too. (Closes #2176)
+        let src = "// @jsx jsx\nimport { jsx } from '../..'\n\nexport const input = <editor />\n";
+        let diags = run(src);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`jsx`")),
+            "FP on `// @jsx jsx` line-comment pragma: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_jsx_frag_pragma_fragment_factory() {
+        // `@jsxFrag Fragment` names the fragment factory consumed by every `<>`
+        // fragment in the file; it is exempted alongside the element factory.
+        // (Closes #2176)
+        let src = r#"/** @jsx h */
+/** @jsxFrag Fragment */
+import { h, Fragment } from 'preact'
+
+export const view = (
+  <>
+    <div />
+  </>
+)
+"#;
+        let diags = run(src);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`h`")),
+            "FP on `@jsx h` pragma factory import: {diags:?}"
+        );
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`Fragment`")),
+            "FP on `@jsxFrag Fragment` pragma fragment factory import: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_unused_import_beside_jsx_pragma_factory() {
+        // Negative-space guard for #2176 — the pragma exempts only the named
+        // factory. A genuinely unused unrelated import in the same file is still
+        // dead code.
+        let src = r#"/** @jsx jsx */
+import { jsx } from '../..'
+import { unused } from './other'
+
+export const input = <editor />
+"#;
+        let diags = run(src);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`jsx`")),
+            "FP on `@jsx jsx` pragma factory import: {diags:?}"
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("`unused`")),
+            "expected unused unrelated import `unused` to be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_jsx_pragma_factory_import_without_jsx() {
+        // Negative-space guard for #2176 — a `@jsx jsx` pragma in a file with no
+        // JSX consumes nothing, so an unused `jsx` import is genuinely dead code.
+        let src = "/** @jsx jsx */\nimport { jsx } from '../..'\nexport {};";
+        let diags = run(src);
+        assert!(
+            diags.iter().any(|d| d.message.contains("`jsx`")),
+            "expected unused `jsx` import (no JSX in file) to be flagged: {diags:?}"
         );
     }
 
