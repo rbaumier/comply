@@ -343,6 +343,22 @@ pub fn has_type_probe_infix(path: &Path) -> bool {
         .is_some_and(|name| name.to_ascii_lowercase().contains(".tp."))
 }
 
+/// True when the file name carries a `.actual.` or `.expected.` infix (e.g.
+/// `theme.actual.js`, `color-imports.expected.ts`), the jscodeshift/babel
+/// codemod snapshot convention. These files are input/output fixture snapshots
+/// read as text by the codemod test harness — never imported, bundled, or
+/// executed as modules — so their top-level code is intentional test data. The
+/// infix is matched between dots (a leading dot is required), so an ordinary
+/// `factual.js` does not match.
+pub fn has_codemod_snapshot_infix(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| {
+            let lower = name.to_ascii_lowercase();
+            lower.contains(".actual.") || lower.contains(".expected.")
+        })
+}
+
 /// True when the file's basename stem ends with a PascalCase `Tests` or `Spec`
 /// suffix (capital `T`/`S`), e.g. `apolloServerTests.ts`, `httpServerSpec.tsx`.
 /// This is the test-suite-factory convention: files exporting `describe()`-block
