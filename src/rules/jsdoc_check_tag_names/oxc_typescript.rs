@@ -56,6 +56,8 @@ const KNOWN_TAGS: &[&str] = &[
     "import",
     "inheritdoc",
     "inheritDoc",
+    // JSDoc3-era inheritance tag, an alias of `@augments`/`@extends`.
+    "inherits",
     "inner",
     "instance",
     "interface",
@@ -279,6 +281,16 @@ mod tests {
         // (Angular DevKit schematics, ngrx/platform use it throughout).
         let src = "/**\n * @return all nodes of kind, or [] if none is found\n */\n";
         assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_inherits_alias_issue_2326() {
+        // `@inherits` is the JSDoc3-era inheritance tag (alias of `@augments`/
+        // `@extends`); mongoose uses it 48 times to document the prototype chain.
+        let src = "/**\n * The options defined on a SchemaNumber.\n * @inherits SchemaTypeOptions\n */\n";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+        // A genuine typo of the tag stays flagged.
+        assert_eq!(run("/**\n * @inhertis Foo\n */\n").len(), 1);
     }
 
     #[test]
