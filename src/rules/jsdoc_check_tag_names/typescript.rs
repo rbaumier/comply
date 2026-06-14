@@ -17,6 +17,9 @@ const KNOWN_TAGS: &[&str] = &[
     "abstract",
     "access",
     "alias",
+    // JSDoc3/Closure visibility marker (`@api public`/`@api private`); used
+    // pervasively across mature Node.js libraries (mongoose, express, koa).
+    "api",
     "async",
     "augments",
     "author",
@@ -209,6 +212,14 @@ mod tests {
         // `@return` is the documented JSDoc singular alias of `@returns`.
         let src = "/**\n * @return all nodes of kind, or [] if none is found\n */\n";
         assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_api_visibility_marker_issue_2325() {
+        // `@api` is the JSDoc3/Closure visibility marker (`@api public`).
+        assert!(run("/**\n * @api public\n */\n").is_empty());
+        // A genuine typo of the tag stays flagged.
+        assert_eq!(run("/**\n * @nonsensetag foo\n */\n").len(), 1);
     }
 
     #[test]

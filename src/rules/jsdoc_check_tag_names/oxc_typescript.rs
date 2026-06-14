@@ -14,6 +14,9 @@ const KNOWN_TAGS: &[&str] = &[
     "abstract",
     "access",
     "alias",
+    // JSDoc3/Closure visibility marker (`@api public`/`@api private`); used
+    // pervasively across mature Node.js libraries (mongoose, express, koa).
+    "api",
     "async",
     "augments",
     "author",
@@ -291,6 +294,18 @@ mod tests {
         assert!(run(src).is_empty(), "{:?}", run(src));
         // A genuine typo of the tag stays flagged.
         assert_eq!(run("/**\n * @inhertis Foo\n */\n").len(), 1);
+    }
+
+    #[test]
+    fn allows_api_visibility_marker_issue_2325() {
+        // `@api` is the JSDoc3/Closure visibility marker (`@api public`/
+        // `@api private`); mongoose uses it 1043 times to mark its public surface.
+        let src = "/**\n * @api public\n */\nclass SchemaNumberOptions {}\n";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+        // The bare tag (no argument) is accepted too.
+        assert!(run("/**\n * @api\n */\n").is_empty());
+        // A genuine typo of the tag stays flagged.
+        assert_eq!(run("/**\n * @nonsensetag foo\n */\n").len(), 1);
     }
 
     #[test]
