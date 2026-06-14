@@ -20,29 +20,26 @@ crate::ast_check! { on ["if_statement"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    // Report each duplicate line once: for each j >= 1, if bodies[j]
-    // matches any earlier bodies[i], emit exactly one diagnostic at line j.
+    // Only directly-adjacent arms are trivially mergeable (`A || B`).
+    // Non-adjacent arms with an identical body are separated by a distinct
+    // arm; merging them would require reordering the chain, which changes
+    // top-to-bottom evaluation when conditions overlap. Compare each arm
+    // against its immediate predecessor only.
     let mut reported: std::collections::HashSet<usize> = std::collections::HashSet::new();
     for j in 1..bodies.len() {
-        if bodies[j].1.is_empty() {
+        if bodies[j].1.is_empty() || bodies[j - 1].1.is_empty() {
             continue;
         }
-        for i in 0..j {
-            if bodies[i].1.is_empty() {
-                continue;
-            }
-            if bodies[i].1 == bodies[j].1 && reported.insert(bodies[j].0) {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: bodies[j].0,
-                    column: 1,
-                    rule_id: "no-duplicated-branches".into(),
-                    message: "This branch has the same body as another branch — merge conditions or remove the duplicate.".into(),
-                    severity: Severity::Warning,
-                    span: None,
-                });
-                break;
-            }
+        if bodies[j].1 == bodies[j - 1].1 && reported.insert(bodies[j].0) {
+            diagnostics.push(Diagnostic {
+                path: std::sync::Arc::clone(&ctx.path_arc),
+                line: bodies[j].0,
+                column: 1,
+                rule_id: "no-duplicated-branches".into(),
+                message: "This branch has the same body as the previous branch — merge conditions or remove the duplicate.".into(),
+                severity: Severity::Warning,
+                span: None,
+            });
         }
     }
 }
@@ -139,8 +136,11 @@ if (a) {
         assert_eq!(run_on(src).len(), 1);
     }
 
+    /// A non-adjacent duplicate (`foo` ... `bar` ... `foo`) is separated by a
+    /// distinct arm; merging it would require reordering the chain, so it is
+    /// not flagged.
     #[test]
-    fn flags_duplicate_in_else_if_chain() {
+    fn allows_non_adjacent_duplicate_in_else_if_chain() {
         let src = "\
 if (a) {
   foo();
@@ -148,6 +148,21 @@ if (a) {
   bar();
 } else if (c) {
   foo();
+}";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// A directly-adjacent duplicate in a longer chain is trivially mergeable
+    /// (`A || B`) and stays flagged.
+    #[test]
+    fn flags_adjacent_duplicate_in_else_if_chain() {
+        let src = "\
+if (a) {
+  foo();
+} else if (b) {
+  bar();
+} else if (c) {
+  bar();
 }";
         assert_eq!(run_on(src).len(), 1);
     }

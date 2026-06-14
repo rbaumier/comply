@@ -62,28 +62,26 @@ fn check_if_branches(
         }
     };
 
+    // Only directly-adjacent arms are trivially mergeable (`A || B`).
+    // Non-adjacent arms with an identical body are separated by a distinct
+    // arm; merging them would require reordering the chain, which changes
+    // top-to-bottom evaluation when conditions overlap. Compare each arm
+    // against its immediate predecessor only.
     let mut reported: std::collections::HashSet<usize> = std::collections::HashSet::new();
     for j in 1..branches.len() {
-        if branches[j].body.is_empty() {
+        if branches[j].body.is_empty() || branches[j - 1].body.is_empty() {
             continue;
         }
-        let kj = key(&branches[j]);
-        for i in 0..j {
-            if branches[i].body.is_empty() {
-                continue;
-            }
-            if key(&branches[i]) == kj && reported.insert(branches[j].line) {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: branches[j].line,
-                    column: 1,
-                    rule_id: "no-duplicated-branches".into(),
-                    message: "This branch has the same body as another branch \u{2014} merge conditions or remove the duplicate.".into(),
-                    severity: Severity::Warning,
-                    span: None,
-                });
-                break;
-            }
+        if key(&branches[j]) == key(&branches[j - 1]) && reported.insert(branches[j].line) {
+            diagnostics.push(Diagnostic {
+                path: std::sync::Arc::clone(&ctx.path_arc),
+                line: branches[j].line,
+                column: 1,
+                rule_id: "no-duplicated-branches".into(),
+                message: "This branch has the same body as the previous branch \u{2014} merge conditions or remove the duplicate.".into(),
+                severity: Severity::Warning,
+                span: None,
+            });
         }
     }
 }
@@ -266,6 +264,65 @@ mod tests {
         // are duplicates (line of branch 1 is the "reference"), so 2
         // diagnostics — not 3 (the old pairwise loop emitted 3).
         assert_eq!(run_on(src).len(), 2);
+    }
+
+    /// #1493: two arms in a flat chain produce the same value for distinct,
+    /// non-adjacent reasons (bat's `RangeCheckResult`). The duplicate arms
+    /// are separated by `BeforeOrBetweenRanges`, so merging them would
+    /// require reordering the chain — not trivially mergeable, not flagged.
+    #[test]
+    fn allows_non_adjacent_duplicate_in_chain() {
+        let src = r#"fn check(line: usize) -> RangeCheckResult {
+    if ranges.iter().any(|r| r.is_inside(line)) {
+        RangeCheckResult::InRange
+    } else if matches!(max_buffered, Final(n) if line > n) {
+        RangeCheckResult::AfterLastRange
+    } else if line < self.upper {
+        RangeCheckResult::BeforeOrBetweenRanges
+    } else {
+        RangeCheckResult::AfterLastRange
+    }
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// #1493: the same value reached through different nesting levels (bat's
+    /// `PagingMode::Never`) is captured as part of the consequence body text,
+    /// never enumerated as a sibling branch — so it is not flagged.
+    #[test]
+    fn allows_cross_nesting_duplicate_value() {
+        let src = r#"fn paging(&self) -> PagingMode {
+    if reading_from_stdin && !list_themes {
+        if self.interactive_output && !stdin_is_terminal() {
+            PagingMode::QuitIfOneScreen
+        } else {
+            PagingMode::Never
+        }
+    } else if self.interactive_output {
+        PagingMode::QuitIfOneScreen
+    } else {
+        PagingMode::Never
+    }
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Negative-space guard: a directly-adjacent identical arm in a longer
+    /// chain is still trivially mergeable (`A || B`) and stays flagged.
+    #[test]
+    fn flags_adjacent_duplicate_in_longer_chain() {
+        let src = r#"fn f(a: bool, b: bool, c: bool) {
+    if a {
+        foo();
+    } else if b {
+        bar();
+    } else if c {
+        baz();
+    } else {
+        baz();
+    }
+}"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
