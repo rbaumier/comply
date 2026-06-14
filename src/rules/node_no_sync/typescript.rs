@@ -3,7 +3,14 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["call_expression"] prefilter = ["Sync"] => |node, source, ctx, diagnostics|
-    if super::allows_sync_node_api(ctx.path, ctx.source) {
+    // A package that declares a `bin` field ships an executable CLI, where
+    // synchronous IO is the correct, idiomatic choice — a CLI runs to
+    // completion, there is no event loop to block.
+    let in_cli_package = ctx
+        .project
+        .nearest_package_json(ctx.path)
+        .is_some_and(|pkg| pkg.has_bin);
+    if super::allows_sync_node_api(ctx.path, ctx.source, in_cli_package) {
         return;
     }
 

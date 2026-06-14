@@ -77,7 +77,14 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if super::allows_sync_node_api(ctx.path, ctx.source) {
+        // A package that declares a `bin` field ships an executable CLI, where
+        // synchronous IO is the correct, idiomatic choice — a CLI runs to
+        // completion, there is no event loop to block.
+        let in_cli_package = ctx
+            .project
+            .nearest_package_json(ctx.path)
+            .is_some_and(|pkg| pkg.has_bin);
+        if super::allows_sync_node_api(ctx.path, ctx.source, in_cli_package) {
             return;
         }
 
@@ -145,7 +152,78 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::backend::CheckCtx;
     use crate::rules::test_helpers::{run_rule, run_rule_gated};
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser as OxcParser;
+    use oxc_semantic::SemanticBuilder;
+    use oxc_span::SourceType;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Run the check against an on-disk fixture so `ctx.project.nearest_package_json`
+    /// resolves the real `package.json` written next to `path`.
+    fn run_oxc_in_project(path: &std::path::Path, source: &str) -> Vec<Diagnostic> {
+        crate::oxc_helpers::reset_file_caches();
+        let allocator = Allocator::default();
+        let parse_ret = OxcParser::new(&allocator, source, SourceType::ts()).parse();
+        let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+        let ctx = CheckCtx::for_test(path, source);
+        let mut diagnostics = Vec::new();
+        for node in semantic.nodes().iter() {
+            if Check.interested_kinds().contains(&node.kind().ty()) {
+                Check.run(node, &ctx, &semantic, &mut diagnostics);
+            }
+        }
+        diagnostics
+    }
+
+    // ── Issue #1348: CLI-tool packages (package.json declares `bin`) ──────
+
+    #[test]
+    fn allows_sync_io_in_cli_tool_package_with_bin() {
+        // Issue #1348 — a package declaring `bin` ships an executable CLI, where
+        // synchronous IO is the correct, idiomatic choice (no event loop to block).
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"cli-helpers","bin":{"my-cli":"./dist/index.js"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("authTasks.ts");
+        let source = "const content = fs.readFileSync(graphqlPath).toString();";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "sync IO in a `bin`-declaring CLI package must not be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_sync_io_in_library_package_without_bin() {
+        // Negative space: the SAME sync call in a library/server package (no `bin`
+        // field) is still flagged.
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"lib","main":"./dist/index.js"}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("loader.ts");
+        let source = "const content = fs.readFileSync(graphqlPath).toString();";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "sync IO in a library package (no `bin`) must still be flagged, got {diags:?}"
+        );
+    }
 
     // ── Part 1: test directories (central skip_in_test_dir gate) ──────────
 
