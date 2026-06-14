@@ -6,8 +6,13 @@
 //! types, and differing argument types block a shared generic helper).
 //! Inherent impl methods on *different* types are also exempt: symmetric
 //! types (e.g. receive vs transmit hardware buffers) carry identical bodies
-//! by design and cannot be unified without introducing a trait. Free
-//! functions, and inherent methods on the same type, are still flagged.
+//! by design and cannot be unified without introducing a trait. Method pairs
+//! whose receivers differ in ownership/mutability (`self` vs `&self` vs
+//! `&mut self`) are exempt too: the idiomatic `as_x`/`as_x_mut` and
+//! `into_x`/`as_x` variants have syntactically identical bodies but
+//! incompatible types, so no shared helper can serve both. Free functions,
+//! and inherent methods on the same type with the same receiver, are still
+//! flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -19,13 +24,29 @@ fn normalize_body(text: &str) -> String {
         .join("\n")
 }
 
-/// A collected function: name, 1-based line, normalized body, and — when the
-/// function is an inherent-impl method — the text of its enclosing impl's
-/// self-type. `None` for free functions.
+/// The receiver shape of a function, classified from its `self` parameter.
+/// Two methods whose receivers differ here cannot share a helper even when
+/// their bodies are identical (the borrow checker forces the duplication).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Receiver {
+    /// `self` or `mut self` — takes ownership.
+    Owned,
+    /// `&self` — shared borrow.
+    Ref,
+    /// `&mut self` — exclusive borrow.
+    RefMut,
+    /// No `self` parameter (free function or associated function).
+    None,
+}
+
+/// A collected function: name, 1-based line, normalized body, the receiver
+/// shape, and — when the function is an inherent-impl method — the text of its
+/// enclosing impl's self-type (`None` for free functions).
 struct CollectedFn {
     name: String,
     line: usize,
     body: String,
+    receiver: Receiver,
     inherent_type: Option<String>,
 }
 
@@ -47,6 +68,15 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
                 (&functions[i].inherent_type, &functions[j].inherent_type)
                 && ti != tj
             {
+                continue;
+            }
+            // Method pairs whose receivers differ in ownership/mutability
+            // (`self`/`&self`/`&mut self`) carry identical bodies by necessity
+            // — the borrow checker forbids merging them into one helper. Free
+            // functions (`Receiver::None`) are unaffected: they only match each
+            // other, which never trips this guard.
+            let (ri, rj) = (functions[i].receiver, functions[j].receiver);
+            if ri != Receiver::None && rj != Receiver::None && ri != rj {
                 continue;
             }
             if functions[i].body == functions[j].body {
@@ -89,6 +119,7 @@ fn collect_functions(
                         name,
                         line,
                         body: normalized,
+                        receiver: extract_receiver(node, source),
                         inherent_type: inherent_type.map(str::to_string),
                     });
                 }
@@ -140,6 +171,42 @@ fn extract_function_info(
     let body = body_node.utf8_text(source).ok()?;
     let line = name_node.start_position().row + 1;
     Some((name.to_string(), line, body.to_string()))
+}
+
+/// Classify a function's receiver from its `self_parameter`. The
+/// `self_parameter` node text is the full receiver (`self`, `mut self`,
+/// `&self`, or `&mut self`), so the leading borrow tokens disambiguate the
+/// shape. Returns `Receiver::None` when there is no `self` parameter.
+fn extract_receiver(node: tree_sitter::Node, source: &[u8]) -> Receiver {
+    let Some(params) = node.child_by_field_name("parameters") else {
+        return Receiver::None;
+    };
+    let mut cursor = params.walk();
+    for child in params.children(&mut cursor) {
+        if child.kind() != "self_parameter" {
+            continue;
+        }
+        let Ok(text) = child.utf8_text(source) else {
+            return Receiver::Owned;
+        };
+        let text = text.trim_start();
+        let Some(rest) = text.strip_prefix('&') else {
+            // `self` or `mut self` — by-value receiver.
+            return Receiver::Owned;
+        };
+        // `&self`, `&mut self`, or with an explicit lifetime `&'a self` /
+        // `&'a mut self`. A `mut` token before `self` marks an exclusive borrow.
+        let borrows_mut = rest
+            .split_whitespace()
+            .take_while(|tok| *tok != "self")
+            .any(|tok| tok == "mut");
+        return if borrows_mut {
+            Receiver::RefMut
+        } else {
+            Receiver::Ref
+        };
+    }
+    Receiver::None
 }
 
 
@@ -298,6 +365,87 @@ impl TxBufferElement {
 }
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_borrow_variant_method_pair() {
+        // Issue #2203: `&self`/`&mut self` variant pair (as_x / as_x_mut) has an
+        // identical body but differs in receiver mutability — the duplication is
+        // forced by the borrow checker, not a refactoring opportunity.
+        let src = r#"
+enum JsExport {
+    Own(JsOwnExport),
+    Reexport(u32),
+}
+
+impl JsExport {
+    pub fn as_own_export(&self) -> Option<&JsOwnExport> {
+        match self {
+            Self::Own(own_export) => Some(own_export),
+            Self::Reexport(_) => None,
+        }
+    }
+
+    pub fn as_own_export_mut(&mut self) -> Option<&mut JsOwnExport> {
+        match self {
+            Self::Own(own_export) => Some(own_export),
+            Self::Reexport(_) => None,
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_owned_vs_borrow_conversion_pair() {
+        // Issue #2203: `self`/`&self` conversion pair (into_node / as_node) has an
+        // identical body but differs in receiver ownership.
+        let src = r#"
+struct Wrapper<N>(N);
+
+impl<N> Wrapper<N> {
+    pub fn into_node(self) -> Option<N> {
+        match self.0 {
+            Some(node) => Some(node),
+            None => None,
+        }
+    }
+
+    pub fn as_node(&self) -> Option<&N> {
+        match self.0 {
+            Some(node) => Some(node),
+            None => None,
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_same_receiver_identical_methods() {
+        // Negative-space guard: two methods with the SAME receiver and identical
+        // bodies are genuine duplication and must still be flagged.
+        let src = r#"
+struct Foo;
+
+impl Foo {
+    fn first(&self, x: i32) -> i32 {
+        let a = x + 1;
+        let b = a * 2;
+        b
+    }
+
+    fn second(&self, x: i32) -> i32 {
+        let a = x + 1;
+        let b = a * 2;
+        b
+    }
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
     }
 
     #[test]
