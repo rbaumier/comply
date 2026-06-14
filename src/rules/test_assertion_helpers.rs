@@ -136,6 +136,39 @@ fn member_chain_root_is_cy(expr: &Expression) -> bool {
     }
 }
 
+/// True when a chai `should`-style BDD assertion chain lies within `body_span`.
+/// Chai's `should` interface adds a `.should` getter to every object, so an
+/// assertion reads `value.should.be.equal(x)`, `arr.should.have.length(3)`, or
+/// the call-less getter form `result.should.be.true` — none of which contains an
+/// `expect(...)`/`assert(...)` call. The signal is a `StaticMemberExpression`
+/// named `should` that is itself the object of a further member access
+/// (`<expr>.should.<member>`); reaching such a chain means the test asserts. A
+/// `.should` read as a plain value (`const n = config.should`) has no member
+/// access on top of it and is therefore not counted.
+pub(crate) fn body_contains_chai_should_assertion(
+    semantic: &oxc_semantic::Semantic<'_>,
+    body_span: oxc_span::Span,
+) -> bool {
+    let nodes = semantic.nodes();
+    nodes.iter().any(|n| {
+        let AstKind::StaticMemberExpression(member) = n.kind() else {
+            return false;
+        };
+        if member.property.name.as_str() != "should" {
+            return false;
+        }
+        if member.span.start < body_span.start || member.span.end > body_span.end {
+            return false;
+        }
+        // The `.should` member must be chained further (`.should.<member>`),
+        // i.e. its parent is another member access — not a value read.
+        matches!(
+            nodes.kind(nodes.parent_id(n.id())),
+            AstKind::StaticMemberExpression(_) | AstKind::ComputedMemberExpression(_)
+        )
+    })
+}
+
 /// True when a `throw` statement lies within `body_span`. A `throw` is a valid
 /// assertion mechanism: timing/property/fuzzing tests fail by throwing on a
 /// violated condition (`if (after - before > 10) throw new Error(...)`), which
