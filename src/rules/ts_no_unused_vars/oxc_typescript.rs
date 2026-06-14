@@ -63,6 +63,82 @@ fn is_named_function_expression_id(
     )
 }
 
+/// True when the binding spanning `symbol_span` is a non-rest property of an
+/// object pattern that also has a rest element (`const { a, b, ...rest } = obj`).
+/// Such siblings are pulled out solely to exclude their keys from the rest
+/// spread — their purpose is the omission, not an individual reference — so an
+/// absence of references is by design, not dead code.
+///
+/// `decl_node` is the declarator (or parameter) that owns the destructuring
+/// pattern; oxc records it as the declaration of every name bound within. The
+/// pattern is walked downward to locate the binding and check whether its
+/// directly enclosing object pattern carries a rest. A binding in an object
+/// pattern *without* a rest, the rest binding itself, and a binding nested in an
+/// inner pattern that has no rest of its own are all left reportable.
+fn is_rest_sibling_destructure(
+    decl_node: oxc_semantic::NodeId,
+    symbol_span: oxc_span::Span,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::BindingPattern;
+
+    let root = match semantic.nodes().kind(decl_node) {
+        AstKind::VariableDeclarator(decl) => &decl.id,
+        AstKind::FormalParameter(param) => &param.pattern,
+        _ => return false,
+    };
+
+    // Returns true once the binding at `symbol_span` is found as a non-rest
+    // property of an object pattern whose `rest` is present.
+    fn walk(pattern: &BindingPattern<'_>, target: oxc_span::Span) -> bool {
+        match pattern {
+            BindingPattern::ObjectPattern(obj) => {
+                let has_rest = obj.rest.is_some();
+                for prop in &obj.properties {
+                    // The value is a `BindingIdentifier` directly (`tags`,
+                    // `_nodes: nodes`) or wrapped in a default (`a = 1`); in
+                    // either form it is a non-rest leaf of this pattern.
+                    if has_rest && binds_identifier_at(&prop.value, target) {
+                        return true;
+                    }
+                    if walk(&prop.value, target) {
+                        return true;
+                    }
+                }
+                obj.rest
+                    .as_ref()
+                    .is_some_and(|rest| walk(&rest.argument, target))
+            }
+            BindingPattern::ArrayPattern(arr) => {
+                arr.elements
+                    .iter()
+                    .flatten()
+                    .any(|el| walk(el, target))
+                    || arr
+                        .rest
+                        .as_ref()
+                        .is_some_and(|rest| walk(&rest.argument, target))
+            }
+            BindingPattern::AssignmentPattern(assign) => walk(&assign.left, target),
+            BindingPattern::BindingIdentifier(_) => false,
+        }
+    }
+
+    // True when `pattern` binds a single identifier whose span is `target`,
+    // possibly behind a default value (`a = 1`).
+    fn binds_identifier_at(pattern: &BindingPattern<'_>, target: oxc_span::Span) -> bool {
+        match pattern {
+            BindingPattern::BindingIdentifier(id) => id.span == target,
+            BindingPattern::AssignmentPattern(assign) => {
+                binds_identifier_at(&assign.left, target)
+            }
+            _ => false,
+        }
+    }
+
+    walk(root, symbol_span)
+}
+
 /// True when the program contains any JSX element or fragment.
 fn file_contains_jsx(semantic: &oxc_semantic::Semantic) -> bool {
     semantic
@@ -101,8 +177,13 @@ impl OxcCheck for Check {
             }
 
             let decl_node = scoping.symbol_declaration(symbol_id);
+            let symbol_span = scoping.symbol_span(symbol_id);
 
             if is_named_function_expression_id(decl_node, semantic) {
+                continue;
+            }
+
+            if is_rest_sibling_destructure(decl_node, symbol_span, semantic) {
                 continue;
             }
 
@@ -148,8 +229,7 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            let span = scoping.symbol_span(symbol_id);
-            let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
+            let (line, column) = byte_offset_to_line_col(ctx.source, symbol_span.start as usize);
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
                 line,
@@ -424,6 +504,49 @@ export { machineSnapshotMatches, machineSnapshotHasTag };
         let diags = run(src);
         assert_eq!(diags.len(), 1, "expected `unusedHelper` to be flagged: {diags:?}");
         assert!(diags[0].message.contains("`unusedHelper`"));
+    }
+
+    #[test]
+    fn no_fp_on_rest_sibling_destructure() {
+        // Bindings destructured alongside a rest element exist solely to exclude
+        // their keys from the rest spread (`...jsonValues`); their purpose is the
+        // omission, not an individual reference. (Closes #1606)
+        let src = r#"
+const machineSnapshotToJSON = function toJSON(this: AnyMachineSnapshot) {
+    const {
+        _nodes: nodes,
+        tags,
+        machine,
+        getMeta,
+        toJSON,
+        can,
+        hasTag,
+        matches,
+        ...jsonValues
+    } = this;
+    return { ...jsonValues, tags: Array.from(tags) };
+};
+export { machineSnapshotToJSON };
+"#;
+        let diags = run(src);
+        for name in ["nodes", "machine", "getMeta", "can", "hasTag", "matches"] {
+            assert!(
+                !diags.iter().any(|d| d.message.contains(&format!("`{name}`"))),
+                "FP on rest-sibling destructured binding `{name}`: {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_unused_destructure_without_rest_sibling() {
+        // Negative-space guard: a destructured binding with no rest element in
+        // its pattern is genuinely unused dead code and must still fire.
+        let src = "const { a, b } = obj;\nconsole.log(b);\nexport {};";
+        let diags = run(src);
+        assert!(
+            diags.iter().any(|d| d.message.contains("`a`")),
+            "expected unused destructured `a` (no rest sibling) to be flagged: {diags:?}"
+        );
     }
 
     #[test]
