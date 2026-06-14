@@ -8,9 +8,9 @@
 //! contains no `.where`, emit one diagnostic anchored on the outer call.
 //!
 //! The receiver filter (`db`, `database`, `tx`, `trx`, `conn`,
-//! `client`, `drizzle`, or any identifier containing `db`/`database`)
-//! keeps state-setter / React-query / generic `.update(..)` calls out
-//! of the noise floor.
+//! `client`, `drizzle`, `transaction`, any identifier containing
+//! `db`/`database`, or one ending with `Tx`/`Db`) keeps state-setter /
+//! React-query / generic `.update(..)` calls out of the noise floor.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -51,9 +51,11 @@ fn receiver_looks_like_db(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
     let lower = name.to_lowercase();
     matches!(
         lower.as_str(),
-        "db" | "database" | "tx" | "trx" | "conn" | "client" | "drizzle"
+        "db" | "database" | "tx" | "trx" | "conn" | "client" | "drizzle" | "transaction"
     ) || lower.contains("db")
         || lower.contains("database")
+        || name.ends_with("Tx")
+        || name.ends_with("Db")
 }
 
 fn leftmost_identifier(mut node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {

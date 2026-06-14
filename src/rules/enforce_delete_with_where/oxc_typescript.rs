@@ -69,9 +69,11 @@ fn receiver_looks_like_db(expr: &Expression, source: &str) -> bool {
     let lower = name.to_lowercase();
     matches!(
         lower.as_str(),
-        "db" | "database" | "tx" | "trx" | "conn" | "client" | "drizzle"
+        "db" | "database" | "tx" | "trx" | "conn" | "client" | "drizzle" | "transaction"
     ) || lower.contains("db")
         || lower.contains("database")
+        || name.ends_with("Tx")
+        || name.ends_with("Db")
 }
 
 fn leftmost_identifier<'a>(expr: &'a Expression<'a>, source: &str) -> Option<String> {
@@ -162,4 +164,60 @@ fn outermost_call_span(
         }
     }
     outer_start
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    #[test]
+    fn flags_delete_without_where() {
+        let src = r#"const r = await db.delete(users);"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_delete_with_where() {
+        let src = r#"const r = await db.delete(users).where(eq(users.id, 1));"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_set_delete() {
+        let src = r#"const set = new Set(); set.delete(x);"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Receivers absorbed from the removed drizzle-no-delete-without-where rule.
+    #[test]
+    fn flags_transaction_receiver_without_where() {
+        let src = r#"const r = await transaction.delete(users);"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_tx_suffix_receiver_without_where() {
+        let src = r#"const r = await userTx.delete(users);"#;
+        assert_eq!(run(src).len(), 1);
+    }
 }
