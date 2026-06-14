@@ -5,27 +5,34 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    let Some(attribute) = attribute_node(node) else {
+        return;
+    };
+
     // Only the `#[deprecated]` *declaration* attribute is in scope. A lint
     // attribute such as `#[allow(deprecated)]` / `#[expect(deprecated)]` is a
     // suppression *usage*, not a deprecation declaration: its path identifier is
     // `allow`/`expect`, and `deprecated` only appears inside its argument list.
     // Discriminate on the attribute path rather than on substring presence.
-    if attribute_path(node, source) != Some("deprecated") {
+    if attribute_path(attribute, source) != Some("deprecated") {
         return;
     }
 
-    let text = node.utf8_text(source).unwrap_or("");
+    // `#[deprecated = "msg"]` shorthand: the `attribute` node carries a `value`
+    // field (the message expression). It is equivalent to `note = "msg"`, so the
+    // migration path is documented — do not flag.
+    if attribute.child_by_field_name("value").is_some() {
+        return;
+    }
 
-    // #[deprecated] without arguments — always flag.
-    // #[deprecated(...)] — flag if no `note` key.
-    if let Some(paren_start) = text.find('(') {
-        let inner = &text[paren_start..];
-        if inner.contains("note") {
-            return;
-        }
-        // `since` alone without `note` is still missing the alternative.
-    } else {
-        // Bare `#[deprecated]` — no message at all.
+    // `#[deprecated(...)]`: the `arguments` field is a `token_tree`. Flag unless it
+    // names a `note` key. `since` alone is still missing the alternative.
+    // Bare `#[deprecated]` has no `arguments` field and is always flagged.
+    if attribute
+        .child_by_field_name("arguments")
+        .is_some_and(|arguments| token_tree_has_note(arguments, source))
+    {
+        return;
     }
 
     diagnostics.push(Diagnostic::at_node(
@@ -39,22 +46,34 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
     ));
 }
 
-/// Returns the path identifier of an `attribute_item` node, i.e. `deprecated`
-/// for `#[deprecated(...)]` and `allow` for `#[allow(deprecated)]`. In
-/// tree-sitter-rust the `attribute_item` wraps an `attribute` node whose first
-/// `identifier` child is the attribute name; any arguments live in a following
-/// `token_tree`. Returns `None` for path-qualified attributes (e.g.
-/// `#[some::path]`) since the leading segment is a `scoped_identifier`.
-fn attribute_path<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
-    let mut cursor = node.walk();
-    let attribute = node
-        .children(&mut cursor)
-        .find(|c| c.kind() == "attribute")?;
-    let mut attr_cursor = attribute.walk();
+/// Returns the `attribute` node wrapped by an `attribute_item`, i.e. the node
+/// spanning `deprecated = "..."` inside `#[deprecated = "..."]`.
+fn attribute_node(item: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let mut cursor = item.walk();
+    item.children(&mut cursor).find(|c| c.kind() == "attribute")
+}
+
+/// Returns the path identifier of an `attribute` node, i.e. `deprecated` for
+/// `#[deprecated(...)]` and `allow` for `#[allow(deprecated)]`. The first
+/// `identifier` child is the attribute name. Returns `None` for path-qualified
+/// attributes (e.g. `#[some::path]`) since the leading segment is a
+/// `scoped_identifier`.
+fn attribute_path<'a>(attribute: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    let mut cursor = attribute.walk();
     let path = attribute
-        .children(&mut attr_cursor)
+        .children(&mut cursor)
         .find(|c| c.kind() == "identifier")?;
     path.utf8_text(source).ok()
+}
+
+/// Returns true if the `token_tree` arguments of a `#[deprecated(...)]` attribute
+/// contain a top-level `note` key. The token tree flattens its contents, so the
+/// `note` identifier appears as a direct `identifier` child.
+fn token_tree_has_note(token_tree: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = token_tree.walk();
+    token_tree
+        .children(&mut cursor)
+        .any(|c| c.kind() == "identifier" && c.utf8_text(source) == Ok("note"))
 }
 
 
@@ -107,6 +126,18 @@ mod tests {
     fn allows_deprecated_note_only() {
         assert!(
             run("#[deprecated(note = \"Use new_fn\")]\npub fn old() {}").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_deprecated_eq_shorthand() {
+        // From axum-extra/src/extract/query.rs — the `= "msg"` shorthand is
+        // equivalent to `note = "msg"` (Closes #1516).
+        assert!(
+            run("#[deprecated = \"see documentation\"]\npub struct Query<T>(pub T);").is_empty()
+        );
+        assert!(
+            run("#[deprecated = \"Use new_fn instead\"]\npub fn old() {}").is_empty()
         );
     }
 
