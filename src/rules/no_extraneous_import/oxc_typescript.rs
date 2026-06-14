@@ -1308,6 +1308,40 @@ import { expectAssignable } from 'expect-type';
     }
 
     #[test]
+    fn allows_dev_dep_in_integration_test_fixture_src() {
+        // Issue #2378: NestJS keeps full mini-applications under
+        // `integration/*/src/` that are spun up by sibling `e2e/*.spec.ts`
+        // integration-test suites. They are test-fixture apps — never published
+        // — so importing a devDependency (`kafkajs`) from their controllers is
+        // correct, like any file under `__fixtures__/` or `test-projects/`.
+        let pkg = r#"{
+            "name": "@nestjs/microservices",
+            "main": "index.js",
+            "devDependencies": {"kafkajs": "^2"}
+        }"#;
+        let src = r#"import { Kafka } from 'kafkajs';"#;
+        let d = run_with_pkg_at_path(
+            pkg,
+            "integration/microservices/src/kafka-concurrent/kafka-concurrent.controller.ts",
+            src,
+        );
+        assert!(d.is_empty(), "integration-test fixture src should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_in_production_src_integration_module() {
+        // Guard against over-relaxing: a production `src/integration/` module
+        // (an "integration with service X", not the integration-test app tree)
+        // has no nested `src/` after the `integration/` segment, so it is not the
+        // fixture-app shape and must still flag a devDependency import.
+        let pkg = r#"{"name":"some-lib","devDependencies":{"vitest":"^1"}}"#;
+        let src = r#"import { describe } from "vitest";"#;
+        let d = run_with_pkg_at_path(pkg, "src/integration/payment-gateway.ts", src);
+        assert_eq!(d.len(), 1, "production src/integration module should still flag: {d:?}");
+        assert!(d[0].message.contains("vitest"));
+    }
+
+    #[test]
     fn allows_dev_dep_in_private_package() {
         // Issue #1373: directus' `@directus/app` dashboard is a bundled Vue SPA
         // marked `"private": true` and never published to npm. It lists all its
