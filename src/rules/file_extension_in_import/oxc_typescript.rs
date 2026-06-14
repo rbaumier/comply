@@ -34,6 +34,12 @@ const BUNDLER_CONFIG_FILES: &[&str] = &[
     "vite.config.mjs",
     "vite.config.cts",
     "vite.config.cjs",
+    "vitest.config.ts",
+    "vitest.config.js",
+    "vitest.config.mts",
+    "vitest.config.mjs",
+    "vitest.config.cts",
+    "vitest.config.cjs",
     "webpack.config.ts",
     "webpack.config.js",
     "webpack.config.mts",
@@ -265,6 +271,21 @@ mod tests {
         assert!(
             diags.is_empty(),
             "@angular/build dependency must suppress the rule: {diags:?}"
+        );
+    }
+
+    // Regression for #2243: a monorepo whose root carries vitest.config.ts (a
+    // Vite-based bundler) but no vite.config.ts must be recognised as a bundler
+    // project, so extensionless relative imports in sub-packages stay silent.
+    #[test]
+    fn skips_when_root_vitest_config_present() {
+        let diags = run_in_project(
+            &[("vitest.config.ts", "export default {}")],
+            "export { createTestingPinia } from './testing';\n",
+        );
+        assert!(
+            diags.is_empty(),
+            "vitest.config.ts → bundler context → silence: {diags:?}"
         );
     }
 
