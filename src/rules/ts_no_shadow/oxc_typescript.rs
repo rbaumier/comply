@@ -53,6 +53,18 @@ impl OxcCheck for Check {
                 {
                     continue;
                 }
+                // A binding referenced exclusively in decorator-head position
+                // (`@name` / `@name(...)`) is, like a type-only binding, never
+                // used as a plain value that a same-named parameter could be
+                // mistaken for: a decorator application is a syntactically
+                // distinct `Decorator` node, and the decorator is bound at the
+                // class declaration, outside the shadowing scope. Lit's
+                // `@state()` / `@property()` imports are the canonical case. If
+                // any reference is a plain value use, the shadow is genuine and
+                // still fires.
+                if outer_binding_used_only_as_decorator(semantic, outer_symbol) {
+                    continue;
+                }
                 // Static methods cannot access the enclosing class's type
                 // parameters, so a type parameter on a static method that
                 // reuses the class generic's name is a separate binding, not
@@ -275,6 +287,83 @@ fn is_destructured_callback_argument_param(nodes: &AstNodes, decl: NodeId) -> bo
         return false;
     };
     matches!(nodes.parent_kind(fn_id), AstKind::CallExpression(_))
+}
+
+/// True when `symbol` has at least one reference and every reference appears in
+/// decorator-head position (`@symbol` or `@symbol(...)`, including
+/// `@symbol({ ... })` and member forms `@ns.symbol()`).
+///
+/// A reference is in decorator-head position when, walking from the
+/// `IdentifierReference` up to an enclosing `Decorator`, every step stays on the
+/// callee/object *head* of the decorator expression — never inside its
+/// arguments. This rejects `@deco(symbol)`, where `symbol` is a plain value
+/// argument and the shadow is genuine. A binding with no references is not
+/// exempted (nothing observed to classify).
+fn outer_binding_used_only_as_decorator(
+    semantic: &oxc_semantic::Semantic,
+    symbol: oxc_semantic::SymbolId,
+) -> bool {
+    let scoping = semantic.scoping();
+    let nodes = semantic.nodes();
+    let mut has_reference = false;
+    for reference in scoping.get_resolved_references(symbol) {
+        has_reference = true;
+        if !reference_is_decorator_head(nodes, reference.node_id()) {
+            return false;
+        }
+    }
+    has_reference
+}
+
+/// True when `ref_id` (an `IdentifierReference`) is the head of a decorator
+/// expression. Walks ancestors staying on the head side: a `CallExpression`'s
+/// callee or a member expression's object continues the chain; reaching a
+/// `Decorator` confirms decorator-head position. Landing in an argument or any
+/// other position stops the walk (returns false).
+fn reference_is_decorator_head(nodes: &AstNodes, ref_id: NodeId) -> bool {
+    let mut current = ref_id;
+    loop {
+        let parent = nodes.parent_id(current);
+        if parent == current {
+            return false;
+        }
+        match nodes.kind(parent) {
+            AstKind::Decorator(_) => return true,
+            AstKind::ParenthesizedExpression(_) | AstKind::TSNonNullExpression(_) => {}
+            AstKind::CallExpression(call) => {
+                if !expression_contains(&call.callee, current, nodes) {
+                    return false;
+                }
+            }
+            AstKind::StaticMemberExpression(member) => {
+                if !expression_contains(&member.object, current, nodes) {
+                    return false;
+                }
+            }
+            AstKind::ComputedMemberExpression(member) => {
+                if !expression_contains(&member.object, current, nodes) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+        current = parent;
+    }
+}
+
+/// True when `node`'s span lies within `expr`'s span — used to confirm a child
+/// node sits on the head side (callee/object) of its parent expression rather
+/// than in the arguments.
+fn expression_contains(
+    expr: &oxc_ast::ast::Expression,
+    node: NodeId,
+    nodes: &AstNodes,
+) -> bool {
+    use oxc_span::GetSpan;
+
+    let node_span = nodes.kind(node).span();
+    let expr_span = expr.span();
+    expr_span.start <= node_span.start && node_span.end <= expr_span.end
 }
 
 #[cfg(test)]
@@ -598,6 +687,74 @@ mod tests {
         let d = run_on(
             "import { TopLevelCondition } from 'json-rules-engine';\n\
              function build() { const TopLevelCondition = 1; return TopLevelCondition; }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_param_shadowing_decorator_only_import() {
+        // Issue #2188 reproduction: `state` is imported from lit/decorators and
+        // used only as the `@state()` decorator. A callback parameter named
+        // `state` shadows a binding that is never a plain value.
+        let d = run_on(
+            "import { state } from 'lit/decorators.js';\n\
+             class X {\n\
+             @state() accessor d = 1;\n\
+             m() { fn((state) => state.x); }\n\
+             }",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_param_shadowing_bare_decorator_only_import() {
+        // A bare `@deco` decorator (no call) is also decorator-head position.
+        let d = run_on(
+            "import { deco } from 'lib';\n\
+             class X {\n\
+             @deco method() {}\n\
+             m() { fn((deco) => deco.x); }\n\
+             }",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_param_shadowing_import_used_as_decorator_and_value() {
+        // Negative space: `foo` is applied as `@foo()` AND called as a value
+        // `foo()`. The value use makes the parameter shadow genuine.
+        let d = run_on(
+            "import { foo } from 'lib';\n\
+             foo();\n\
+             class X {\n\
+             @foo() method() {}\n\
+             m() { fn((foo) => foo.x); }\n\
+             }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_param_shadowing_decorator_argument_value() {
+        // Negative space: `state` appears inside the decorator's *arguments*
+        // (`@deco(state)`), a plain value use, so the shadow is genuine.
+        let d = run_on(
+            "import { state } from 'lib';\n\
+             class X {\n\
+             @deco(state) accessor d = 1;\n\
+             m() { fn((state) => state.x); }\n\
+             }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_param_shadowing_plain_value_const() {
+        // Negative space: a plain `const state` value shadowed by a parameter is
+        // a genuine shadow; no decorator is involved.
+        let d = run_on(
+            "const state = { x: 1 };\n\
+             function m() { return fn((state) => state.x); }",
         );
         assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
     }
