@@ -19,6 +19,9 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if ctx.file.in_benchmark_dir() {
+            return;
+        }
         let (text, offset) = match node.kind() {
             AstKind::StringLiteral(lit) => (lit.value.as_str().to_string(), lit.span.start as usize),
             AstKind::TemplateLiteral(tpl) => {
@@ -85,5 +88,13 @@ mod tests {
     fn allows_tailwind_truncate_class() {
         let src = r#"const cls = "truncate flex items-center";"#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_truncate_in_benchmark_file_issue1497() {
+        let src = r#"const q = "TRUNCATE TABLE users";"#;
+        let found =
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "bench/reset.bench.ts");
+        assert!(found.is_empty());
     }
 }

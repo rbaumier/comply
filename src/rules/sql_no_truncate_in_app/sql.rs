@@ -8,6 +8,9 @@ pub struct Check;
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+        if ctx.file.in_benchmark_dir() {
+            return vec![];
+        }
         if !super::sql_uses_truncate(ctx.source) {
             return vec![];
         }
@@ -40,5 +43,18 @@ mod tests {
     #[test]
     fn allows_delete() {
         assert!(run("DELETE FROM users;").is_empty());
+    }
+
+    #[test]
+    fn allows_truncate_in_benchmark_file_issue1497() {
+        let path = Path::new("benches/reset.sql");
+        let file = crate::rules::file_ctx::FileCtx::build(
+            path,
+            "TRUNCATE TABLE users;",
+            crate::files::Language::Sql,
+            crate::project::default_static_project_ctx(),
+        );
+        let ctx = CheckCtx::for_test_with_file(path, "TRUNCATE TABLE users;", &file);
+        assert!(Check.check(&ctx).is_empty());
     }
 }
