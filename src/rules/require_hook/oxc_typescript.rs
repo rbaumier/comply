@@ -562,6 +562,37 @@ fn imports_node_test(program: &Program<'_>) -> bool {
     })
 }
 
+/// Is `spec` the k6 runtime module specifier — the bare `k6` or a `k6/<subpath>`
+/// such as `k6/http` / `k6/metrics`?
+fn is_k6_runtime_specifier(spec: &str) -> bool {
+    spec == "k6" || spec.starts_with("k6/")
+}
+
+/// Is this module a k6 load-test script — does it import from the `k6` runtime
+/// module (`k6` / `k6/*`) AND have an `export default` (k6's required entry
+/// point)? k6 scripts declare top-level configuration (`let endpoint = __ENV.URL
+/// || ...`) and `export let options` at module scope by design; the k6 CLI loads
+/// the script and reads them, so the top-level-side-effect check does not apply.
+/// Both signals are required so an ordinary test file is unaffected.
+fn is_k6_script(program: &Program<'_>) -> bool {
+    let mut imports_k6 = false;
+    let mut has_default_export = false;
+    for stmt in &program.body {
+        match stmt {
+            Statement::ImportDeclaration(import)
+                if is_k6_runtime_specifier(import.source.value.as_str()) =>
+            {
+                imports_k6 = true;
+            }
+            Statement::ExportDefaultDeclaration(_) => {
+                has_default_export = true;
+            }
+            _ => {}
+        }
+    }
+    imports_k6 && has_default_export
+}
+
 /// Classify a top-level statement.
 fn top_level_is_allowed(
     stmt: &Statement,
@@ -1715,6 +1746,52 @@ describe("x", () => { it("works", () => {}); });
     }
 
     #[test]
+    fn allows_top_level_config_in_k6_script() {
+        let src = r#"
+import { sleep, check } from 'k6';
+import http from 'k6/http';
+
+export let options = {
+  vus: 10,
+  duration: '30s',
+};
+
+let endpoint = __ENV.URL || 'http://localhost:3000';
+
+export const setup = () => {};
+
+export default (data) => {
+  http.get(endpoint);
+  sleep(1);
+};
+
+export const teardown = (data) => {};
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "loadtest.test.js");
+        assert!(
+            d.is_empty(),
+            "top-level config in a k6 script (k6 import + export default) must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_top_level_config_in_non_k6_test_file() {
+        let src = r#"
+import { sleep, check } from 'k6';
+
+let endpoint = __ENV.URL || 'http://localhost:3000';
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "endpoint.test.js");
+        assert_eq!(
+            d.len(),
+            1,
+            "the same top-level side effect in a test file without an export default (not a k6 script) must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
     fn allows_declare_global_namespace_augmentation() {
         let src = r#"
 declare global {
@@ -1750,6 +1827,12 @@ impl OxcCheck for Check {
         }
 
         let program = semantic.nodes().program();
+        // k6 load-test scripts declare top-level config at module scope by design
+        // (`let endpoint = __ENV.URL || ...`, `export let options`); the k6 CLI
+        // reads them, so the top-level-side-effect check does not apply.
+        if is_k6_script(program) {
+            return Vec::new();
+        }
         let node_test_mode = imports_node_test(program);
         let package_bindings = package_import_bindings(program);
         let mut diagnostics = Vec::new();

@@ -461,6 +461,14 @@ impl TextCheck for Check {
         // Computed lazily: only a surviving `default` export pays for the parse.
         let mut oxlint_plugin_entry: Option<bool> = None;
 
+        // Whether this module is a k6 load-test script — it imports from the `k6`
+        // runtime module (`k6` / `k6/*`) and has an `export default`. The k6 CLI
+        // reads the `options` export and invokes `default`/`setup`/`teardown` by
+        // name, never through a static import, so those exports are live despite
+        // having no importer. Computed lazily: only a surviving export named like
+        // a k6 magic export pays for the parse.
+        let mut k6_script_entry: Option<bool> = None;
+
         let mut diagnostics = Vec::new();
         for export in exports {
             if matches!(export.kind, ExportKind::StarReExport) {
@@ -501,6 +509,19 @@ impl TextCheck for Check {
                     crate::project::is_oxlint_plugin_entry_source(ctx.source, ctx.lang)
                 });
                 if is_plugin_entry {
+                    continue;
+                }
+            }
+            // k6 load-test script: the `default` entry function, the `options`
+            // runtime config, and the `setup`/`teardown` hooks of a module that
+            // imports from `k6`/`k6/*` and has an `export default` are consumed by
+            // the k6 CLI by name, never imported. Gated on the export being a k6
+            // magic name so an ordinary module pays nothing.
+            if crate::project::K6_SCRIPT_MAGIC_EXPORTS.contains(&export.name.as_str()) {
+                let is_k6_entry = *k6_script_entry.get_or_insert_with(|| {
+                    crate::project::is_k6_script_source(ctx.source, ctx.lang)
+                });
+                if is_k6_entry {
                     continue;
                 }
             }
@@ -1481,6 +1502,74 @@ mod tests {
             "a definePlugin default export without the @oxlint/plugins import must still be flagged: {diags:?}"
         );
         assert!(diags[0].message.contains("default"));
+    }
+
+    #[test]
+    fn ignores_k6_script_magic_exports_issue_1530() {
+        // Regression for #1530 (Grafana loadtest) — a k6 load-test script imports
+        // from the `k6` runtime module and `export default`s its entry function.
+        // The k6 CLI reads the `options` export and invokes
+        // `default`/`setup`/`teardown` by name, never through a static import, so
+        // those exports look dead. The import-source + export-default shape is what
+        // protects them.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "loadtest/script.ts",
+                "import { sleep, check } from 'k6';\n\
+                 import http from 'k6/http';\n\
+                 export let options = { vus: 10, duration: '30s' };\n\
+                 export const setup = () => {};\n\
+                 export default (data) => { http.get('x'); sleep(1); };\n\
+                 export const teardown = (data) => {};\n",
+            ),
+            ("loadtest/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "loadtest/script.ts");
+        assert!(
+            diags.is_empty(),
+            "k6 script exports (options/setup/teardown/default) are consumed by the k6 runtime: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_options_export_in_non_k6_module_issue_1530() {
+        // Negative-space guard for #1530 — the exemption is keyed on the k6 script
+        // shape (a `k6`/`k6/*` import). An `export const options` in an ordinary
+        // module with no k6 import, never imported, is genuinely dead and must
+        // still be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/config.ts", "export const options = { vus: 10 };\n"),
+            ("src/other.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/config.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "an `options` export in a non-k6 module must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("options"));
+    }
+
+    #[test]
+    fn still_flags_k6_named_exports_without_default_issue_1530() {
+        // Negative-space guard for #1530 — both signals are required. A module that
+        // imports from `k6` but has no `export default` is not a k6 script shape, so
+        // an unimported `options`/`setup` export must still be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/helpers.ts",
+                "import { sleep } from 'k6';\n\
+                 export const options = { vus: 1 };\n",
+            ),
+            ("src/other.ts", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/helpers.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a k6-importing module without an export default is not a k6 script — its unused `options` export must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("options"));
     }
 
     #[test]

@@ -778,6 +778,64 @@ fn export_default_calls_define_plugin(node: tree_sitter::Node, source: &[u8]) ->
         })
 }
 
+/// Export names a k6 load-test script exposes to the k6 runtime: the required
+/// `default` entry function, the `options` runtime configuration, and the
+/// `setup`/`teardown` lifecycle hooks. The k6 CLI loads the script and calls
+/// these by name, never through a static import, so none of them has an importer.
+pub const K6_SCRIPT_MAGIC_EXPORTS: &[&str] = &["default", "options", "setup", "teardown"];
+
+/// True when `source` is a k6 load-test script: it imports from the `k6` runtime
+/// module (`k6` itself or a `k6/<subpath>` such as `k6/http`) and has an
+/// `export default` (k6's required entry point). The k6 CLI resolves the script,
+/// reads its `options` export, and invokes `default`/`setup`/`teardown` by name,
+/// never through a static import, so those exports are live despite having no
+/// importer.
+///
+/// Both signals are required — the `k6`/`k6/*` import source *and* the
+/// `export default` — so an ordinary module that merely imports from a `k6`-like
+/// path, or one that has an `export default` without the runtime import, does not
+/// match. Keying on this shape rather than a directory name is deliberate: k6
+/// scripts follow no naming convention.
+#[must_use]
+pub fn is_k6_script_source(source: &str, lang: crate::files::Language) -> bool {
+    let Some(grammar) = crate::parsing::ts_language_for(lang) else {
+        return false;
+    };
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&grammar).is_err() {
+        return false;
+    }
+    let Some(tree) = parser.parse(source, None) else {
+        return false;
+    };
+    let bytes = source.as_bytes();
+    let mut imports_k6 = false;
+    let mut has_default_export = false;
+    crate::rules::walker::walk_tree(&tree, |node| {
+        match node.kind() {
+            "import_statement" if imports_from_k6_runtime(node, bytes) => {
+                imports_k6 = true;
+            }
+            "export_statement"
+                if node.children(&mut node.walk()).any(|c| c.kind() == "default") =>
+            {
+                has_default_export = true;
+            }
+            _ => {}
+        }
+    });
+    imports_k6 && has_default_export
+}
+
+/// True when `node` (an `import_statement`) imports from the k6 runtime module —
+/// the bare `k6` specifier or a `k6/<subpath>` (e.g. `k6/http`, `k6/metrics`).
+fn imports_from_k6_runtime(node: tree_sitter::Node, source: &[u8]) -> bool {
+    node.child_by_field_name("source")
+        .and_then(|src| src.utf8_text(source).ok())
+        .map(|spec| spec.trim_matches(|c| c == '\'' || c == '"' || c == '`'))
+        .is_some_and(|spec| spec == "k6" || spec.starts_with("k6/"))
+}
+
 /// True when the `globalSetup` option in a Vitest/Vite config's `raw` text
 /// references `target`. `config_dir` is the directory holding the config, used
 /// to resolve the relative specifiers the option carries.
