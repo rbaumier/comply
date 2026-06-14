@@ -48,6 +48,15 @@ fn is_return_type_context(
                     }
                 return false;
             }
+            // Interface call signatures like `(ctx: X): Foo | void` — the
+            // `return_type` is the boundary, reached before TSInterfaceDeclaration.
+            AstKind::TSCallSignatureDeclaration(cs) => {
+                if let Some(ret) = &cs.return_type
+                    && void_start >= ret.span.start && void_start < ret.span.end {
+                        return true;
+                    }
+                return false;
+            }
             AstKind::TSTypeAliasDeclaration(_) | AstKind::TSInterfaceDeclaration(_) => {
                 break;
             }
@@ -222,6 +231,23 @@ mod tests {
     fn flags_void_as_generic_constraint() {
         // The constraint position is still invalid, unlike the default.
         let diags = run_on("type Fn<T extends void> = () => T;");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_void_in_call_signature_return_union() {
+        // Regression for rbaumier/comply#1719 — vuejs/pinia PiniaPlugin: `void`
+        // in a `| void` union return type of an interface call signature.
+        let src = "interface PiniaPlugin { (context: PiniaPluginContext): Partial<X> | void }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_void_in_call_signature_param_union() {
+        // Negative space: `void` in a union outside the return type (here a
+        // parameter annotation of a call signature) is still invalid.
+        let src = "interface F { (ctx: string | void): number }";
+        let diags = run_on(src);
         assert_eq!(diags.len(), 1);
     }
 }
