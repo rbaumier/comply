@@ -77,6 +77,40 @@ fn is_intrinsic_tag(tag: &str) -> bool {
     tag.chars().next().is_some_and(|c| c.is_ascii_lowercase())
 }
 
+/// True when the file declares a `@jsxImportSource` pragma whose value points to
+/// a non-React JSX runtime. The pragma's source is the JSX factory package: any
+/// value other than `react` / `react-dom` (or a `react`/`react-dom` subpath)
+/// names a non-React dialect (`hono/jsx`, a relative `../../src/jsx`, a custom
+/// package), which intentionally uses native HTML attribute names. A `react`
+/// pragma, or no pragma at all, leaves the file treated as React.
+fn has_non_react_jsx_import_source_pragma(source: &str) -> bool {
+    let Some(idx) = memchr::memmem::find(source.as_bytes(), b"@jsxImportSource") else {
+        return false;
+    };
+    let after = &source[idx + "@jsxImportSource".len()..];
+    // The pragma value is the first whitespace-delimited token; it terminates at
+    // whitespace or a comment close (`*/`).
+    let value = after
+        .trim_start()
+        .split([' ', '\t', '\r', '\n'])
+        .next()
+        .map(|tok| tok.trim_end_matches("*/"))
+        .unwrap_or("");
+    if value.is_empty() {
+        return false;
+    }
+    !is_react_jsx_source(value)
+}
+
+/// True when a `@jsxImportSource` value names React's own runtime: `react`,
+/// `react-dom`, or a subpath of either (`react/jsx-runtime`).
+fn is_react_jsx_source(value: &str) -> bool {
+    value == "react"
+        || value == "react-dom"
+        || value.starts_with("react/")
+        || value.starts_with("react-dom/")
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::JSXOpeningElement]
@@ -119,7 +153,9 @@ impl OxcCheck for Check {
                 continue;
             };
 
-            if crate::oxc_helpers::is_non_react_jsx_file(ctx.source, ctx.project, ctx.path) {
+            if crate::oxc_helpers::is_non_react_jsx_file(ctx.source, ctx.project, ctx.path)
+                || has_non_react_jsx_import_source_pragma(ctx.source)
+            {
                 return;
             }
 
@@ -312,6 +348,43 @@ mod tests {
             "tsconfig.json",
             r#"{"compilerOptions":{"jsx":"react-jsx"}}"#,
         );
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("className"));
+    }
+
+    #[test]
+    fn allows_class_with_non_react_jsx_import_source_pragma() {
+        // A file with `@jsxImportSource` pointing at a non-React dialect (here a
+        // relative source, as Hono's runtime-tests use) intentionally uses native
+        // HTML attribute names — `class`, `tabindex` must not be flagged. (Closes #2103)
+        let src = "/** @jsxImportSource ../../src/jsx */\n\
+                   const a = <div class={x} tabindex={0} />;";
+        assert!(run(src).is_empty(), "got unexpected diagnostics: {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_class_with_hono_jsx_import_source_pragma() {
+        let src = "/** @jsxImportSource hono/jsx */\n\
+                   const a = <h1 class='foo'>hello</h1>;";
+        assert!(run(src).is_empty(), "got unexpected diagnostics: {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_class_with_react_jsx_import_source_pragma() {
+        // A `@jsxImportSource react` pragma still names React — the file keeps the
+        // `className` suggestion. The exemption requires a *non-React* source.
+        let src = "/** @jsxImportSource react */\n\
+                   const a = <div class=\"x\" />;";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("className"));
+    }
+
+    #[test]
+    fn flags_class_with_react_dom_jsx_import_source_pragma() {
+        let src = "/** @jsxImportSource react-dom */\n\
+                   const a = <div class=\"x\" />;";
+        let diags = run(src);
         assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
         assert!(diags[0].message.contains("className"));
     }
