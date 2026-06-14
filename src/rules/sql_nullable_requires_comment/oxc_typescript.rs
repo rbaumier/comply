@@ -110,4 +110,14 @@ mod tests {
             crate::rules::test_helpers::run_rule_gated(&Check, TEST_SCHEMA, "src/db/schema.ts");
         assert!(!diags.is_empty(), "expected diagnostics in production code");
     }
+
+    #[test]
+    fn ignores_insert_into_statements_issue_1340() {
+        // Regression for #1340 (prisma __scenarios.ts): `insert into` lines
+        // contain `INTO`, whose `INT` substring previously matched the INT
+        // type. The columns in the create-table are NOT NULL, so the whole
+        // block must produce zero diagnostics.
+        let src = "const up = `\n  create table teams (\n    id int primary key not null,\n    name text not null unique\n  );\n  insert into teams (id, name) values (1, 'a');\n  insert into teams (id, name) values (2, 'b');\n`;";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
 }

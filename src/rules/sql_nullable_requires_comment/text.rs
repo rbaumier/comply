@@ -4,31 +4,6 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 #[derive(Debug)]
 pub struct Check;
 
-const SQL_TYPES: &[&str] = &[
-    "INTEGER",
-    "INT",
-    "BIGINT",
-    "SMALLINT",
-    "TEXT",
-    "VARCHAR",
-    "CHAR",
-    "BOOLEAN",
-    "BOOL",
-    "TIMESTAMP",
-    "DATE",
-    "DECIMAL",
-    "NUMERIC",
-    "FLOAT",
-    "REAL",
-    "DOUBLE",
-    "UUID",
-    "JSONB",
-    "JSON",
-    "BYTEA",
-    "SERIAL",
-    "BIGSERIAL",
-];
-
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !crate::rules::sql_helpers::is_sql_ddl(ctx.source) {
@@ -39,7 +14,7 @@ impl TextCheck for Check {
         for (i, line) in lines.iter().enumerate() {
             let upper = line.to_ascii_uppercase();
             let t = upper.trim();
-            if !SQL_TYPES.iter().any(|ty| t.contains(ty)) {
+            if !super::contains_sql_type_keyword(t) {
                 continue;
             }
             if t.contains("NOT NULL") || t.contains("PRIMARY KEY") {
@@ -126,5 +101,25 @@ mod tests {
         // DDL with a nullable column and no comment must still be caught.
         let ddl = "CREATE TABLE users (\n  deleted_at TIMESTAMP,\n);";
         assert_eq!(run(ddl).len(), 1);
+    }
+
+    #[test]
+    fn ignores_insert_into_statements_issue_1340() {
+        // Regression for #1340: `insert into` contains `INTO`, whose `INT`
+        // substring previously matched the INT type. The columns are NOT
+        // NULL, so the block must produce no diagnostics.
+        let ddl = "create table teams (\n  id int primary key not null,\n  name text not null unique\n);\ninsert into teams (id, name) values (1, 'a');\ninsert into teams (id, name) values (2, 'b');";
+        assert!(run(ddl).is_empty(), "{:?}", run(ddl));
+    }
+
+    #[test]
+    fn point_geometry_not_misclassified_as_int_issue_1340() {
+        // `POINT` contains `INT` as a substring; a nullable GEOMETRY/POINT
+        // column is its own type, not an INT, but it must still be flagged
+        // as a nullable column (via GEOMETRY's own keyword would require it
+        // in SQL_TYPES; here we assert POINT alone is not matched as INT).
+        let ddl = "CREATE TABLE shapes (\n  location POINT,\n);";
+        // POINT is not a recognized SQL type keyword, so no diagnostic.
+        assert!(run(ddl).is_empty(), "{:?}", run(ddl));
     }
 }
