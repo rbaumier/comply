@@ -153,14 +153,45 @@ pub fn is_in_test_context(node: Node, source: &[u8]) -> bool {
     false
 }
 
-/// True if `path` is under a `tests/` directory component — i.e. any
-/// path segment equals `"tests"`. Covers `<crate>/tests/`, `tests/` at
-/// the workspace root, and deeply nested `foo/tests/` subdirectories.
+/// True if `path` is test infrastructure recognizable by path or file name,
+/// independent of any `#[cfg(test)]` attribute.
 ///
-/// Shared by rules that want to skip diagnostics for integration-test
-/// files without relying on the tree-sitter attribute walk.
+/// A file qualifies when either:
+///
+/// - any path SEGMENT (exact component match) is `tests`, `property_tests`,
+///   `test_utils`, `test_helpers`, or `testing` — covers Cargo's `tests/`
+///   integration directory, `property_tests/` generators, and shared
+///   test-helper modules at any nesting depth; OR
+/// - the file NAME is exactly `testing.rs`, `test_utils.rs`, or
+///   `test_helpers.rs`.
+///
+/// Cross-crate test helpers cannot be `#[cfg(test)]` (that gate hides them
+/// from integration tests in *other* crates), so their test-only nature is
+/// conveyed by path and name instead. Matching is on exact segments / exact
+/// file names, never substrings: `testingground/` and `my_testing.rs` are
+/// production code and do not qualify.
+///
+/// Shared by Rust rules that relax their discipline (allow `unwrap`,
+/// `panic!`, …) for test infrastructure without relying on the tree-sitter
+/// attribute walk.
 pub fn is_under_tests_dir(path: &std::path::Path) -> bool {
-    path.components().any(|c| c.as_os_str() == "tests")
+    const TEST_SEGMENTS: &[&str] = &[
+        "tests",
+        "property_tests",
+        "test_utils",
+        "test_helpers",
+        "testing",
+    ];
+    const TEST_FILE_NAMES: &[&str] = &["testing.rs", "test_utils.rs", "test_helpers.rs"];
+
+    if path
+        .components()
+        .any(|c| TEST_SEGMENTS.iter().any(|seg| c.as_os_str() == *seg))
+    {
+        return true;
+    }
+    path.file_name()
+        .is_some_and(|name| TEST_FILE_NAMES.iter().any(|test_name| name == *test_name))
 }
 
 /// True if the item has a test-marking attribute as a preceding
@@ -563,6 +594,37 @@ mod tests {
                 has_test_attribute(item, src.as_bytes()),
                 expected,
                 "has_test_attribute mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_under_tests_dir_matches_segments_and_file_names_exactly() {
+        use std::path::Path;
+        let cases = [
+            // Existing `tests/` behavior, any depth.
+            ("tests/helpers.rs", true),
+            ("crates/foo/tests/it.rs", true),
+            // New test-infrastructure segments.
+            ("crates/foo/src/types/property_tests/gen.rs", true),
+            ("crates/foo/src/test_utils/db.rs", true),
+            ("crates/foo/src/test_helpers/mod.rs", true),
+            ("crates/foo/src/testing/mod.rs", true),
+            // New exact file names (cross-crate test helpers, no #[cfg(test)]).
+            ("crates/foo/src/testing.rs", true),
+            ("crates/foo/src/test_utils.rs", true),
+            ("crates/foo/src/test_helpers.rs", true),
+            // Negative space: non-exact segments / file names are production.
+            ("crates/foo/src/lib.rs", false),
+            ("crates/foo/src/my_testing.rs", false),
+            ("crates/foo/src/testingground/k.rs", false),
+            ("crates/foo/src/property_tests_old/gen.rs", false),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(
+                is_under_tests_dir(Path::new(path)),
+                expected,
+                "is_under_tests_dir mismatch for `{path}`"
             );
         }
     }
