@@ -224,6 +224,21 @@ impl PackageJson {
             || self.engines.contains_key(name)
     }
 
+    /// Minimum supported Node.js version (`major`, `minor`) parsed from the
+    /// `engines.node` range, or `None` when no `node` constraint is declared.
+    ///
+    /// A range may list `||`-separated alternatives (e.g. `>=18.18 || >=20.9`);
+    /// the smallest alternative wins, since the package must run on every
+    /// version it permits. The minor component is needed by callers that gate on
+    /// sub-major thresholds (Node features backported within a major line, such
+    /// as `import.meta.dirname` landing in 20.11 and 21.2).
+    pub fn min_node_version(&self) -> Option<(u32, u32)> {
+        let spec = self.engines.get("node")?;
+        spec.split("||")
+            .filter_map(parse_node_range_min)
+            .min()
+    }
+
     /// True if `spec` is a Node.js subpath import declared in this manifest's
     /// `imports` field. Matches an exact key (`#import-plugin`) or a wildcard
     /// pattern (`#dep/*` covers `#dep/anything`). `spec` is the bare-specifier
@@ -274,6 +289,41 @@ impl PackageJson {
     pub fn is_self_name(&self, name: &str) -> bool {
         self.name.as_deref() == Some(name)
     }
+}
+
+/// Parse the lower bound (`major`, `minor`) of a single semver range alternative.
+///
+/// Reads the first version literal in the range — the lower bound of `>=`, `^`,
+/// `~`, a bare `20.11.0`, or `18.x` style specs — and returns its major and
+/// minor (defaulting the minor to `0` when absent, e.g. `>=18`). Returns `None`
+/// when the range contains no leading numeric version (`*`, `latest`, garbage).
+fn parse_node_range_min(range: &str) -> Option<(u32, u32)> {
+    let bytes = range.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && !bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    let major = read_uint(bytes, &mut i)?;
+    let minor = if i < bytes.len() && bytes[i] == b'.' {
+        i += 1;
+        read_uint(bytes, &mut i).unwrap_or(0)
+    } else {
+        0
+    };
+    Some((major, minor))
+}
+
+/// Read a run of ASCII digits at `*i` into a `u32`, advancing `*i` past them.
+/// Returns `None` when no digit is present at the cursor.
+fn read_uint(bytes: &[u8], i: &mut usize) -> Option<u32> {
+    let start = *i;
+    while *i < bytes.len() && bytes[*i].is_ascii_digit() {
+        *i += 1;
+    }
+    if *i == start {
+        return None;
+    }
+    std::str::from_utf8(&bytes[start..*i]).ok()?.parse().ok()
 }
 
 /// Extract source-file paths from a package.json script command value.
@@ -2417,6 +2467,32 @@ mod tests {
         );
         assert_eq!(parse_ng_package_entry_file(r#"{ "lib": {} }"#), None);
         assert_eq!(parse_ng_package_entry_file("not json"), None);
+    }
+
+    fn min_node(node_spec: &str) -> Option<(u32, u32)> {
+        let raw = format!(r#"{{"engines":{{"node":"{node_spec}"}}}}"#);
+        PackageJson::parse(&raw).unwrap().min_node_version()
+    }
+
+    #[test]
+    fn min_node_version_parses_major_and_minor() {
+        assert_eq!(min_node(">=20.11.0"), Some((20, 11)));
+        assert_eq!(min_node("^21.2.0"), Some((21, 2)));
+        assert_eq!(min_node(">=18"), Some((18, 0)));
+        assert_eq!(min_node("12.20.0"), Some((12, 20)));
+        assert_eq!(min_node("20.x"), Some((20, 0)));
+    }
+
+    #[test]
+    fn min_node_version_takes_smallest_alternative() {
+        assert_eq!(min_node(">=20.9 || >=18.18"), Some((18, 18)));
+        assert_eq!(min_node(">=21.2 || >=20.11"), Some((20, 11)));
+    }
+
+    #[test]
+    fn min_node_version_none_when_unconstrained() {
+        assert_eq!(min_node("*"), None);
+        assert_eq!(PackageJson::parse(r#"{"name":"t"}"#).unwrap().min_node_version(), None);
     }
 
     #[test]
