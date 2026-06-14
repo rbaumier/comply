@@ -266,6 +266,80 @@ mod tests {
         assert_eq!(run(src).len(), 1);
     }
 
+    /// Regression for #1510 — an `await` in the `for-of` iterable expression
+    /// is evaluated exactly once before iteration, not per iteration, so it is
+    /// not a serial-await-in-loop and must not be flagged.
+    #[test]
+    fn ignores_await_in_for_of_iterable_expression() {
+        let src = r#"
+            async function index(text: string) {
+                const hashedRefs = new Map<string, string>();
+                for (const [line, _] of (await shiki).splitLines(text)) {
+                    const [hash, name] = line.split(" ");
+                    hashedRefs.set(name, hash);
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    /// Companion to #1510 — an `await` in the `for-in` object expression is
+    /// likewise evaluated once before iteration begins.
+    #[test]
+    fn ignores_await_in_for_in_object_expression() {
+        let src = r"
+            async function each() {
+                for (const k in await loadConfig()) {
+                    use(k);
+                }
+            }
+        ";
+        assert!(run(src).is_empty());
+    }
+
+    /// Companion to #1510 — a C-style `for(;;)` `init` clause runs exactly
+    /// once, so an `await` there is not per-iteration.
+    #[test]
+    fn ignores_await_in_for_init_clause() {
+        let src = r"
+            async function run() {
+                for (let i = await start(); i < 10; i++) {
+                    use(i);
+                }
+            }
+        ";
+        assert!(run(src).is_empty());
+    }
+
+    /// Negative space for #1510 — the iterable-header exemption must not leak
+    /// into the loop body. An `await` in the body still serializes work and
+    /// must fire even when the iterable expression also contains one.
+    #[test]
+    fn flags_await_in_body_even_with_await_in_iterable() {
+        let src = r"
+            async function run(items: any) {
+                for (const x of await fetchAll()) {
+                    await f(x);
+                }
+            }
+        ";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    /// Negative space for #1510 — a `for(;;)` `test`/`update` runs per
+    /// iteration, so an `await` there is still the serial anti-pattern.
+    #[test]
+    fn flags_await_in_for_test_clause() {
+        let src = r"
+            async function run() {
+                for (let i = 0; await more(i); i++) {
+                    use(i);
+                }
+            }
+        ";
+        assert_eq!(run(src).len(), 1);
+    }
+
     /// Regression for #366 — class property arrow function self-recursion via
     /// `this.method()` must be exempt (PropertyDefinition key recovery).
     #[test]

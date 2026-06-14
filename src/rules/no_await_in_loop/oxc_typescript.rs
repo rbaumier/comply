@@ -6,6 +6,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BindingPattern, Expression, PropertyKey};
+use oxc_span::{GetSpan, Span};
 use std::sync::Arc;
 
 pub struct Check;
@@ -52,11 +53,32 @@ fn is_awaited_promise_combinator(arg: &Expression) -> bool {
         )
 }
 
+/// Whether `await_span` falls within the once-evaluated header of a loop
+/// rather than its per-iteration body. The iterable of a `for-of`/`for-in`
+/// (`right`) and the `init` clause of a C-style `for(;;)` run exactly once
+/// before iteration, so an `await` there is not a serial-per-iteration await.
+/// The `test`/`update` of a `for(;;)` and every loop body DO run per
+/// iteration, so awaits there still count.
+fn await_in_loop_header(loop_kind: &AstKind, await_span: Span) -> bool {
+    let contains = |span: Span| span.start <= await_span.start && await_span.end <= span.end;
+    match loop_kind {
+        AstKind::ForOfStatement(stmt) => contains(stmt.right.span()),
+        AstKind::ForInStatement(stmt) => contains(stmt.right.span()),
+        AstKind::ForStatement(stmt) => {
+            stmt.init.as_ref().is_some_and(|init| contains(init.span()))
+        }
+        _ => false,
+    }
+}
+
 /// Walk ancestors of the `await` looking for a loop boundary. Stops at
 /// function boundaries (a nested `async` function starts a fresh
 /// context — its awaits are not "in" the outer loop). Returns the name
 /// of the enclosing async function when a loop is found, so the caller
 /// can compare against the awaited callee for recursion detection.
+///
+/// An `await` in a loop's once-evaluated header (the `for-of`/`for-in`
+/// iterable, or a `for(;;)` `init`) is not treated as in-loop.
 ///
 /// Return values:
 ///   - `Some(Some(name))` — inside a loop in a named async function
@@ -64,6 +86,7 @@ fn is_awaited_promise_combinator(arg: &Expression) -> bool {
 ///   - `None` — not inside a loop (or the enclosing function is reached first)
 fn enclosing_loop_and_fn_name<'a>(
     node_id: oxc_semantic::NodeId,
+    await_span: Span,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> Option<Option<&'a str>> {
     let nodes = semantic.nodes();
@@ -76,12 +99,14 @@ fn enclosing_loop_and_fn_name<'a>(
         }
         let parent = nodes.get_node(parent_id);
         match parent.kind() {
-            AstKind::ForStatement(_)
+            kind @ (AstKind::ForStatement(_)
             | AstKind::ForOfStatement(_)
             | AstKind::ForInStatement(_)
             | AstKind::WhileStatement(_)
-            | AstKind::DoWhileStatement(_) => {
-                saw_loop = true;
+            | AstKind::DoWhileStatement(_)) => {
+                if !await_in_loop_header(&kind, await_span) {
+                    saw_loop = true;
+                }
             }
             AstKind::Function(func) => {
                 if !saw_loop {
@@ -149,7 +174,9 @@ impl OxcCheck for Check {
             return;
         };
 
-        let Some(enclosing_fn_name) = enclosing_loop_and_fn_name(node.id(), semantic) else {
+        let Some(enclosing_fn_name) =
+            enclosing_loop_and_fn_name(node.id(), await_expr.span, semantic)
+        else {
             return;
         };
 
