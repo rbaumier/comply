@@ -187,6 +187,22 @@ impl TextCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        self.check(&CheckCtx::for_test_full(path, src, project, file))
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
@@ -291,5 +307,24 @@ mod tests {
     fn allows_version_with_wildcard_suffix() {
         assert!(run(r#"let cases = ["3.9.0.0.*", "3.9.1.0.*"];"#).is_empty());
         assert!(run(r#"const version = "1.2.3.4.*";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_ip_literals_in_test_files_issue_1270() {
+        // Issue #1270: literal IPs in test code are fixtures (testing IP-field
+        // parsing/handling), not deployment config. `skip_in_test_dir` gates the
+        // rule off for test paths — exercise that gate via `run_rule_gated`.
+        use crate::rules::test_helpers::run_rule_gated;
+        let src = r#"let host = IpAddr::from_str("192.168.1.1").unwrap();"#;
+        assert!(run_rule_gated(&Check, src, "src/query/term_query/mod_test.rs").is_empty());
+        assert!(run_rule_gated(&Check, src, "tests/ip_query.rs").is_empty());
+    }
+
+    #[test]
+    fn flags_ip_literals_outside_test_files_issue_1270() {
+        // Negative space: the same literal IP in production source still flags.
+        use crate::rules::test_helpers::run_rule_gated;
+        let src = r#"let host = IpAddr::from_str("192.168.1.1").unwrap();"#;
+        assert_eq!(run_rule_gated(&Check, src, "src/server.rs").len(), 1);
     }
 }
