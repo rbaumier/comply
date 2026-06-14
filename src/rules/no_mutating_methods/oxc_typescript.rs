@@ -40,17 +40,9 @@ impl OxcCheck for Check {
         if !MUTATING.contains(&name) {
             return;
         }
-        // .fill() on a chained call (e.g. page.getByLabel(...).fill()) is almost
-        // certainly Playwright/Locator.fill, not Array.fill.
-        if name == "fill"
-            && matches!(
-                &member.object,
-                Expression::CallExpression(_)
-                    | Expression::StaticMemberExpression(_)
-                    | Expression::ComputedMemberExpression(_)
-            ) {
-                return;
-            }
+        if name == "fill" && is_non_array_fill(member, call, ctx) {
+            return;
+        }
 
         // Bounded local accumulator inside a `for` / `for-of` / `for-in`
         // loop: `const items = []; for (...) items.push(yield* fn());`.
@@ -85,6 +77,33 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// True when a `.fill(...)` call is not an `Array.prototype.fill` mutation.
+///
+/// `Array.prototype.fill(value, start?, end?)` always passes a fill value, so
+/// distinct same-named methods are recognised by shape rather than by a
+/// receiver-name allowlist:
+/// - a zero-argument `.fill()` is the Canvas2D `context.fill()` drawing call
+///   (`Array.prototype.fill()` with no value is degenerate and not written);
+/// - a chained receiver (`page.getByLabel(...).fill(...)`, `this.input.fill(...)`)
+///   is a Playwright/Locator interaction, not an array literal;
+/// - any `.fill(...)` inside a test/spec file is a Playwright/Cypress locator
+///   fill (`label.fill(text)`), where the receiver type cannot be recovered
+///   without type information.
+fn is_non_array_fill(
+    member: &oxc_ast::ast::StaticMemberExpression,
+    call: &oxc_ast::ast::CallExpression,
+    ctx: &CheckCtx,
+) -> bool {
+    call.arguments.is_empty()
+        || matches!(
+            &member.object,
+            Expression::CallExpression(_)
+                | Expression::StaticMemberExpression(_)
+                | Expression::ComputedMemberExpression(_)
+        )
+        || ctx.file.path_segments.in_test_dir
 }
 
 fn is_inside_loop_body(
@@ -177,6 +196,42 @@ mod tests {
 
     fn run(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    fn run_at(src: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_gated(&Check, src, path)
+    }
+
+    #[test]
+    fn ignores_zero_arg_canvas_fill() {
+        // Regression for rbaumier/comply#1688 — CanvasRenderingContext2D.fill()
+        // takes no fill value, so it is never an Array.prototype.fill mutation.
+        let src = r#"
+            function drawLabel(context) {
+                context.fillStyle = "red";
+                context.fill();
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_playwright_locator_fill_in_spec_file() {
+        // Regression for rbaumier/comply#1688 — `label.fill(text)` in a
+        // Playwright spec is a Locator interaction, not an array mutation.
+        let src = r#"
+            const label = page.getByLabel('Label');
+            await label.fill(`"Updated ${id}"`);
+        "#;
+        assert!(run_at(src, "e2e-tests/save-from-controls.spec.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_array_fill_in_source_file() {
+        // Negative space for rbaumier/comply#1688 — a genuine
+        // `arr.fill(0)` array mutation with a value, in a non-test file,
+        // must still be flagged.
+        assert_eq!(run_at("const arr = new Array(3); arr.fill(0);", "src/util.ts").len(), 1);
     }
 
     #[test]
