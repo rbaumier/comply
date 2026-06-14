@@ -89,4 +89,20 @@ mod tests {
     fn allows_empty_array_collection() {
         assert!(run("const listeners: Array<(state: State) => void> = [];").is_empty());
     }
+
+    // Angular Router mandates `export const routes: Routes` in `app.routes.ts`
+    // (issue #1718). The empty form and the populated form (an array of route
+    // object literals) are both configuration collections, not scalar magic
+    // constants, so neither is required to be SCREAMING_SNAKE_CASE.
+    #[test]
+    fn allows_angular_routes_empty() {
+        assert!(run("export const routes: Routes = [];").is_empty());
+    }
+
+    #[test]
+    fn allows_angular_routes_object_literals() {
+        let src =
+            "export const routes: Routes = [{ path: '', component: AppComponent }, { path: 'x', component: X }];";
+        assert!(run(src).is_empty());
+    }
 }
