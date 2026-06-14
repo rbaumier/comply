@@ -47,6 +47,20 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Mutation of a locally-owned array is not externally observable:
+        // the receiver resolves to a `const`/`let` declared in an inner
+        // (non-module) scope whose initialiser is an array literal (`[...]`,
+        // `[]`) or `new Array(...)`. This is the "build up an accumulator
+        // then return it" pattern (`const actions = [a, b]; actions.push(c);
+        // return v.pipe(...actions)`). A parameter array, a module-scope
+        // array, or a property (`this.items`, `obj.list`) is not exempt —
+        // those may be observed by other code.
+        if matches!(&member.object, Expression::Identifier(_))
+            && is_locally_owned_array(member, semantic)
+        {
+            return;
+        }
+
         // Bounded local accumulator inside a `for` / `for-of` / `for-in`
         // loop: `const items = []; for (...) items.push(yield* fn());`.
         // The non-mutating spread alternative is O(n²) and the
@@ -159,6 +173,55 @@ fn receiver_initializer<'a>(
             _ => None,
         })
         .flatten()
+}
+
+/// `true` when the member receiver is a plain identifier that resolves to a
+/// `const`/`let` binding declared in an inner (non-module) scope whose
+/// initialiser is an array literal (`[...]`, `[]`) or `new Array(...)`.
+///
+/// Such an array is locally owned: a mutation of it is not observable outside
+/// the declaring function. A receiver that is a parameter or a module-scope
+/// binding (no `VariableDeclarator` initialiser, or declared at the root
+/// scope) is not exempt.
+fn is_locally_owned_array(
+    member: &oxc_ast::ast::StaticMemberExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Expression::Identifier(receiver) = &member.object else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(ref_id) = receiver.reference_id.get() else {
+        return false;
+    };
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    if scoping.symbol_scope_id(sym_id) == scoping.root_scope_id() {
+        return false;
+    }
+    let decl_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    std::iter::once(nodes.kind(decl_id))
+        .chain(nodes.ancestor_kinds(decl_id))
+        .find_map(|kind| match kind {
+            AstKind::VariableDeclarator(decl) => Some(decl.init.as_ref()),
+            _ => None,
+        })
+        .flatten()
+        .is_some_and(is_array_initializer)
+}
+
+/// `true` when `expr` is an array literal (`[...]`, `[]`) or a `new Array(...)`
+/// construction.
+fn is_array_initializer(expr: &Expression) -> bool {
+    match expr {
+        Expression::ArrayExpression(_) => true,
+        Expression::NewExpression(new_expr) => {
+            matches!(&new_expr.callee, Expression::Identifier(id) if id.name.as_str() == "Array")
+        }
+        _ => false,
+    }
 }
 
 /// `true` when `expr` is a call to a router/history factory hook, e.g.
@@ -465,6 +528,94 @@ mod tests {
             }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_push_on_locally_declared_array_literal() {
+        // Regression for rbaumier/comply#1205 — the drizzle-valibot
+        // accumulator: a local array built up with conditional pushes and
+        // then spread. The mutation is not externally observable.
+        let src = r#"
+            function numberSchema(min, max, integer, regex) {
+                const actions: any[] = [v.minValue(min), v.maxValue(max)];
+                if (integer) {
+                    actions.push(v.integer());
+                }
+                if (regex) {
+                    actions.push(v.regex(regex));
+                }
+                return v.pipe(v.number(), ...actions);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_sort_on_locally_declared_array_literal() {
+        // #1205 — other mutating methods on a local array are equally
+        // unobservable.
+        let src = r#"
+            function sorted(items) {
+                const out = [...items];
+                out.sort();
+                return out;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_push_on_local_new_array() {
+        // #1205 — a `new Array(...)` initialiser is just as locally owned as
+        // an array literal.
+        let src = r#"
+            function build() {
+                const xs = new Array();
+                xs.push(1);
+                return xs;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_push_on_parameter_array() {
+        // Negative space for #1205 — a parameter array may be the caller's
+        // array, so the mutation is externally observable and must still fire.
+        let src = r#"
+            function append(arr: number[]) {
+                arr.push(1);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_push_on_member_property() {
+        // Negative space for #1205 — `this.items.push(x)` mutates shared
+        // object state; the receiver is not a plain local identifier.
+        let src = r#"
+            class Store {
+                items: number[] = [];
+                add(x: number) {
+                    this.items.push(x);
+                }
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_push_on_module_scope_array() {
+        // Negative space for #1205 — a module-scope array is reachable by
+        // other code in the module, so its mutation stays observable.
+        let src = r#"
+            const registry: number[] = [];
+            export function register(x: number) {
+                registry.push(x);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
