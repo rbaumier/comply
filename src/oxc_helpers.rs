@@ -70,7 +70,8 @@ pub const SLOT_TESTING_MSW: usize = 2;
 pub const SLOT_PLAYWRIGHT: usize = 3;
 pub const SLOT_DELETED_AT_COLUMN: usize = 4;
 pub const SLOT_TYPE_ONLY_FILE: usize = 5;
-const FILE_BOOL_SLOTS: usize = 6;
+pub const SLOT_WORKER_SCRIPT: usize = 6;
+const FILE_BOOL_SLOTS: usize = 7;
 
 /// Per-file memo backing [`file_typeof_guards`]: the set of global identifiers
 /// (`window`/`self`/`global`) the current file feature-detects with a `typeof`
@@ -200,6 +201,24 @@ pub fn imports_react(source: &str) -> bool {
         || source_contains(source, "require('react')")
         || source_contains(source, "require(\"react-dom")
         || source_contains(source, "require('react-dom")
+}
+
+/// True if the file is a Web Worker script, where `self` resolves to the
+/// `DedicatedWorkerGlobalScope` (the canonical worker global, equivalent to
+/// `globalThis` in that realm) rather than `window`. Detected by the
+/// worker-only API surface: registering a message handler (`self.onmessage`),
+/// posting back to the spawning thread (`self.postMessage(`), the classic
+/// worker importer (`importScripts(`), or a reference to the worker global
+/// scope type. Memoized per file via [`source_contains`].
+#[must_use]
+pub fn is_worker_script(source: &str) -> bool {
+    cached_file_bool(source, SLOT_WORKER_SCRIPT, || {
+        source_contains(source, "self.onmessage")
+            || source_contains(source, "self.onmessageerror")
+            || source_contains(source, "self.postMessage(")
+            || source_contains(source, "importScripts(")
+            || source_contains(source, "DedicatedWorkerGlobalScope")
+    })
 }
 
 /// Pick the right `SourceType` based on file extension. Defaults to `tsx()`
