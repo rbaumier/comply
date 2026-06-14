@@ -375,6 +375,11 @@ pub fn is_generated_file_specifier(spec: &str) -> bool {
 /// ROOT_FILES only — does NOT check dirs. Used by `dead-export` to bail out
 /// for framework-specific files even when the user has configured additional
 /// entrypoints (which disables the dirs bail-out).
+///
+/// Consults both the root-detected frameworks and the framework owning `path`
+/// via its nearest `package.json`: in a monorepo the framework dependency may be
+/// declared only in a nested sub-package (a Next.js playground whose `next` dep
+/// is in `playgrounds/next/package.json`), invisible to root-anchored detection.
 pub fn is_framework_specific_entry_point(path: &Path, project: &ProjectCtx) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     if project.framework_entry_files().any(|entry| entry == name) {
@@ -385,6 +390,20 @@ pub fn is_framework_specific_entry_point(path: &Path, project: &ProjectCtx) -> b
         .any(|suffix| name.ends_with(suffix))
     {
         return true;
+    }
+
+    for fw in project.frameworks_for_path(path) {
+        if fw.entry_points.files.iter().any(|entry| entry == name) {
+            return true;
+        }
+        if fw
+            .entry_points
+            .file_suffixes
+            .iter()
+            .any(|suffix| name.ends_with(suffix.as_str()))
+        {
+            return true;
+        }
     }
 
     let Some(root) = project.project_root.as_deref() else {
@@ -406,11 +425,25 @@ pub fn is_framework_specific_entry_point(path: &Path, project: &ProjectCtx) -> b
 /// True when `path` lives under a framework entry_points.dirs directory.
 /// Used by `dead-export` to suppress the dirs bail-out only when the user
 /// has NOT configured additional entrypoints (backward-compat mode).
+///
+/// Consults both the root-detected frameworks and the framework owning `path`
+/// via its nearest `package.json`, so a file-system-routed directory (Next.js
+/// `/app/`, Remix `routes/`) is recognized even when the framework dependency
+/// lives only in a nested sub-package, invisible to root-anchored detection.
 pub fn is_in_framework_entry_dir(path: &Path, project: &ProjectCtx) -> bool {
     let path_str = path.to_string_lossy().replace('\\', "/");
-    project
+    if project
         .framework_entry_dirs()
         .any(|dir| path_str.contains(dir))
+    {
+        return true;
+    }
+    project.frameworks_for_path(path).iter().any(|fw| {
+        fw.entry_points
+            .dirs
+            .iter()
+            .any(|dir| path_str.contains(dir.as_str()))
+    })
 }
 
 /// True when `file_name` is a SvelteKit route file: a `+`-prefixed basename
