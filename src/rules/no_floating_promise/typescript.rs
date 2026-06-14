@@ -8,10 +8,9 @@
 //!     already handled, skip.
 //!   - The callee is `Promise.resolve/reject/all/allSettled/race/any` →
 //!     flag (top-level promise literal).
-//!   - The callee is a member whose method name is in a short "looks
-//!     async" list: `send`, `save`, `load`, `fetch`, `query`, `emit`,
-//!     `publish`, `write`, `insert`, `update`, `close`, `connect`,
-//!     `dispatch` — flag.
+//!   - The callee is a member whose method name is in the shared
+//!     async-looking list (`save`, `fetch`, `query`, `connect`,
+//!     `dispatch`, …; see `super::shared::ASYNC_LOOKING_METHODS`) — flag.
 //!   - Otherwise skip.
 //!
 //! `delete` is intentionally omitted from the heuristic: `Map`, `Set`,
