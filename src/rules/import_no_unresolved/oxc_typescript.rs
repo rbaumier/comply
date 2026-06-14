@@ -136,7 +136,9 @@ pub(super) fn is_existing_asset_import(importer: &Path, specifier: &str) -> bool
 /// directory excluded from the scan (e.g. vendored code under `vendor/`).
 /// Mirrors the import index's resolution order — bare path, each source
 /// extension, then `index.<ext>` — but checks the filesystem directly instead
-/// of the in-memory `known` set. A specifier with no matching file on disk
+/// of the in-memory `known` set. A directory target additionally resolves via
+/// that directory's `package.json` `main`/`exports` entry (Node/TypeScript
+/// directory resolution). A specifier with no matching file on disk
 /// (e.g. `./does-not-exist`) returns `false` and is still flagged.
 pub(super) fn is_existing_source_import(importer: &Path, specifier: &str) -> bool {
     let Some(base_dir) = importer.parent() else {
@@ -155,9 +157,37 @@ pub(super) fn is_existing_source_import(importer: &Path, specifier: &str) -> boo
     if SOURCE_EXTS.iter().any(|ext| raw.with_extension(ext).is_file()) {
         return true;
     }
-    SOURCE_EXTS
+    if SOURCE_EXTS
         .iter()
         .any(|ext| raw.join(format!("index.{ext}")).is_file())
+    {
+        return true;
+    }
+    directory_resolves_via_package_json(&raw)
+}
+
+/// True when `dir` is a directory whose `package.json` declares a `main` or
+/// `exports` entry that points to an existing file. Mirrors Node/TypeScript
+/// directory resolution: `require('../..')` / `import x from '../'` resolves to
+/// the target directory's package entry point. [`PackageJson::entry_files`]
+/// already collects the `main` value and every `exports` target (including the
+/// conditional `import`/`require` variants), manifest-dir-relative with forward
+/// slashes, so each entry joins directly onto `dir`. A directory with no
+/// `package.json`, an unparseable one, or one whose entries name no on-disk
+/// file returns `false`.
+///
+/// [`PackageJson::entry_files`]: crate::project::PackageJson::entry_files
+fn directory_resolves_via_package_json(dir: &Path) -> bool {
+    if !dir.is_dir() {
+        return false;
+    }
+    let Ok(raw) = std::fs::read_to_string(dir.join("package.json")) else {
+        return false;
+    };
+    let Some(pkg) = crate::project::PackageJson::parse(&raw) else {
+        return false;
+    };
+    pkg.entry_files.iter().any(|entry| dir.join(entry).is_file())
 }
 
 /// True for an extensionless relative specifier (e.g. `./schema`,
@@ -765,5 +795,131 @@ mod fixture_dir_tests {
         let diags = run_gated("src/app/index.ts", source);
         assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
         assert!(diags[0].message.contains("./e"));
+    }
+}
+
+#[cfg(test)]
+mod directory_import_tests {
+    use super::Check;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Build a temp package tree (root `package.json` + the listed sibling
+    /// files), run the rule on the importer, and return its diagnostics. Each
+    /// `(rel, contents)` pair is written verbatim, so a test can stage a target
+    /// directory's own `package.json` and entry file on disk.
+    fn run_with_files(
+        importer_rel: &str,
+        source: &str,
+        files: &[(&str, &str)],
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        for (rel, contents) in files {
+            let p = dir.path().join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, contents).unwrap();
+        }
+        let importer = dir.path().join(importer_rel);
+        fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        fs::write(&importer, source).unwrap();
+        let canon = fs::canonicalize(&importer).unwrap();
+        let source_file = SourceFile {
+            path: canon.clone(),
+            language: Language::from_path(&canon).unwrap(),
+        };
+        let project = ProjectCtx::load(&[&source_file], &Config::default());
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    #[test]
+    fn no_fp_for_directory_import_via_main_issue_2350() {
+        // koa reproducer: a test imports `../..`, the package root directory,
+        // which Node resolves to `lib/application.js` via the `main` field.
+        let source = "const Koa = require('../..');\n";
+        let diags = run_with_files(
+            "__tests__/context/state.test.js",
+            source,
+            &[
+                (
+                    "package.json",
+                    r#"{"name":"koa","main":"lib/application.js"}"#,
+                ),
+                ("lib/application.js", "module.exports = class Koa {};\n"),
+            ],
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn no_fp_for_directory_import_via_exports_issue_2350() {
+        // The same root, resolved one level up (`../`) through the `exports`
+        // `.` `require` condition.
+        let source = "const required = require('../');\n";
+        let diags = run_with_files(
+            "__tests__/load.test.js",
+            source,
+            &[
+                (
+                    "package.json",
+                    r#"{"name":"koa","exports":{".":{"require":"./lib/application.js"}}}"#,
+                ),
+                ("lib/application.js", "module.exports = class Koa {};\n"),
+            ],
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn no_fp_for_directory_import_via_index_issue_2350() {
+        // A relative directory import resolving to a conventional `index.js`
+        // (no `package.json` entry needed) — already covered, kept as a guard.
+        let source = "import { helper } from '../utils';\n";
+        let diags = run_with_files(
+            "src/app/main.js",
+            source,
+            &[("src/utils/index.js", "export const helper = 1;\n")],
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_directory_import_with_missing_entry_issue_2350() {
+        // Negative space: the target directory has a `package.json` whose `main`
+        // points to a file that does NOT exist on disk, and there is no
+        // `index.*` either — a genuinely broken import that must still fire.
+        let source = "const broken = require('../..');\n";
+        let diags = run_with_files(
+            "__tests__/context/state.test.js",
+            source,
+            &[(
+                "package.json",
+                r#"{"name":"koa","main":"lib/application.js"}"#,
+            )],
+        );
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("../.."));
+    }
+
+    #[test]
+    fn still_flags_directory_import_without_entry_or_index_issue_2350() {
+        // A directory exists but declares no entry and has no `index.*`: Node
+        // cannot resolve it, so the import is a real error and must still fire.
+        let source = "import x from '../utils';\n";
+        let diags = run_with_files(
+            "src/app/main.js",
+            source,
+            &[("src/utils/helper.js", "export const helper = 1;\n")],
+        );
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("../utils"));
     }
 }
