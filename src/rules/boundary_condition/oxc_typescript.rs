@@ -118,6 +118,20 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `p[0]` where `p`'s binding has a literal tuple type annotation
+        // (`p: [number, number]`, `readonly [A, B]`) with at least one element.
+        // A fixed-length tuple guarantees the first element exists, so the read
+        // is in-bounds with no runtime guard. Resolved syntactically from the
+        // annotation on the receiver's parameter/variable declaration; an aliased
+        // tuple (`p: LineSegment<T>`) can't be resolved without type info and
+        // stays flagged.
+        if is_first
+            && let Expression::Identifier(obj_ident) = &member.object
+            && resolves_to_nonempty_tuple_type(obj_ident, semantic)
+        {
+            return;
+        }
+
         // `match[0]` after a null guard, where `match` is a `RegExp.prototype.exec`
         // or `String.prototype.match` result. A non-null exec/match result is a
         // `RegExpExecArray`/`RegExpMatchArray` whose index 0 (the full match) is
@@ -921,6 +935,61 @@ fn is_static_nonempty_array(arr: &ArrayExpression) -> bool {
     !arr.elements
         .iter()
         .any(|el| matches!(el, ArrayExpressionElement::SpreadElement(_)))
+}
+
+/// Returns true when `ident`'s binding has a literal tuple type annotation with
+/// at least one element — making `ident[0]` provably in-bounds. Resolves the
+/// reference to its declaration and reads the `type_annotation` on the enclosing
+/// `FormalParameter` (`p: [A, B]`) or `VariableDeclarator` (`const p: [A, B]`).
+/// A `readonly [...]` wrapper is unwrapped. An aliased tuple type
+/// (`LineSegment<T>`) is a `TSTypeReference`, not a `TSTupleType`, so it does not
+/// match: resolving the alias to its tuple definition needs type information this
+/// native backend doesn't have.
+fn resolves_to_nonempty_tuple_type(
+    ident: &IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let nodes = semantic.nodes();
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    for kind in std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        let annotation = match kind {
+            AstKind::FormalParameter(param) => &param.type_annotation,
+            AstKind::VariableDeclarator(decl) => &decl.type_annotation,
+            // Leaving the binding's own declaration without finding an annotation.
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
+                return false;
+            }
+            _ => continue,
+        };
+        return annotation
+            .as_ref()
+            .is_some_and(|ann| ts_type_is_nonempty_tuple(&ann.type_annotation));
+    }
+    false
+}
+
+/// Returns true when `ty` is a literal tuple type with at least one element,
+/// unwrapping a leading `readonly` operator (`readonly [A, B]`). An empty tuple
+/// `[]` has no element at index 0, so it does not qualify.
+fn ts_type_is_nonempty_tuple(ty: &TSType) -> bool {
+    match ty {
+        TSType::TSTupleType(tuple) => !tuple.element_types.is_empty(),
+        TSType::TSTypeOperatorType(op)
+            if op.operator == TSTypeOperatorOperator::Readonly =>
+        {
+            ts_type_is_nonempty_tuple(&op.type_annotation)
+        }
+        _ => false,
+    }
 }
 
 /// Returns true when `name` resolves to a same-scope `const`/`let` whose
@@ -1753,6 +1822,72 @@ mod tests {
     fn still_flags_non_length_assert_issue_2313() {
         // Negative space: a non-length assertion says nothing about the size.
         let src = "assert(arr.includes(2)); const first = arr[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_literal_tuple_param_index0_issue_1240() {
+        // A parameter annotated with a non-empty literal tuple type guarantees the
+        // first element exists, so `p[0]` needs no runtime guard.
+        let src = "function f(p: [number, number]) { return p[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_literal_tuple_three_elements_index0_issue_1240() {
+        let src = "function f(p: [number, number, number]) { return p[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_literal_tuple_const_index0_issue_1240() {
+        let src = "const p: [number, number] = getPair(); const x = p[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_literal_tuple_arrow_param_index0_issue_1240() {
+        let src = "const f = (seg: [number, number]) => seg[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_readonly_literal_tuple_param_index0_issue_1240() {
+        // `readonly [T, T]` is still a fixed-length tuple — index 0 is guaranteed.
+        let src = "function f(p: readonly [number, number]) { return p[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_empty_tuple_param_index0_issue_1240() {
+        // Negative space: an empty tuple `[]` has no element at index 0, so the
+        // read is genuinely out of bounds and stays flagged.
+        let src = "function f(p: []) { return p[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_plain_array_param_index0_issue_1240() {
+        // Negative space: a plain array (variable length) is NOT a tuple, so
+        // `arr[0]` may be `undefined` and stays flagged.
+        let src = "function f(arr: number[]) { return arr[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_aliased_tuple_param_index0_issue_1240() {
+        // Negative space (residual): an aliased tuple type cannot be resolved to
+        // its tuple definition without type information, so it stays flagged. This
+        // is the issue's own `LineSegment<GlobalPoint>` case — needs --type-aware.
+        let src = "function f(seg: LineSegment<GlobalPoint>) { return seg[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_last_index_on_tuple_issue_1240() {
+        // The exemption is scoped to the first-element read. A `<obj>.length - 1`
+        // last-read is not covered, so it stays flagged.
+        let src = "function f(p: [number, number]) { return p[p.length - 1]; }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
