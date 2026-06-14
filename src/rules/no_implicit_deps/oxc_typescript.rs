@@ -961,4 +961,99 @@ export default {
             "undeclared external package must still fire, got {diags:?}"
         );
     }
+
+    fn run_oxc_with_project(
+        file: &std::path::Path,
+        source: &str,
+        project: &crate::project::ProjectCtx,
+    ) -> Vec<Diagnostic> {
+        crate::oxc_helpers::reset_file_caches();
+        let allocator = Allocator::default();
+        let parse_ret = OxcParser::new(&allocator, source, SourceType::ts()).parse();
+        let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+        let ctx = CheckCtx::for_test_with_project(file, source, project);
+        let mut diagnostics = Vec::new();
+        for node in semantic.nodes().iter() {
+            let ty = node.kind().ty();
+            if Check.interested_kinds().contains(&ty) {
+                Check.run(node, &ctx, &semantic, &mut diagnostics);
+            }
+        }
+        diagnostics
+    }
+
+    // Regression #1797: pnpm monorepos (wagmi) declare members in
+    // `pnpm-workspace.yaml`, leaving the root `package.json#workspaces` empty.
+    // A test file importing a sibling workspace member (`@wagmi/test`) and a
+    // root devDependency (`vitest`) must not be flagged, while a specifier
+    // declared in no member and no root manifest still fires.
+    #[test]
+    fn allows_pnpm_workspace_member_and_root_dep_issue_1797() {
+        use crate::config::Config;
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"workspace","private":true,"devDependencies":{"vitest":"^2.0.0"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("pnpm-workspace.yaml"),
+            "packages:\n  - packages/*\n  - playgrounds/*\n",
+        )
+        .unwrap();
+
+        let connectors = dir.path().join("packages").join("connectors");
+        let test_src = connectors.join("src");
+        let test_pkg = dir.path().join("packages").join("test");
+        fs::create_dir_all(&test_src).unwrap();
+        fs::create_dir_all(test_pkg.join("src")).unwrap();
+        fs::write(
+            connectors.join("package.json"),
+            r#"{"name":"@wagmi/connectors"}"#,
+        )
+        .unwrap();
+        fs::write(test_pkg.join("package.json"), r#"{"name":"@wagmi/test"}"#).unwrap();
+
+        let importer = test_src.join("safe.test.ts");
+        let source =
+            "import { config } from '@wagmi/test';\nimport { expect, test } from 'vitest';\n";
+        fs::write(&importer, source).unwrap();
+        // A second member file anchors `project_root` at the repo root (their
+        // common ancestor's nearest manifest), matching a full repo scan.
+        let other = test_pkg.join("src").join("index.ts");
+        fs::write(&other, "export const config = {};\n").unwrap();
+
+        let importer = fs::canonicalize(&importer).unwrap();
+        let other = fs::canonicalize(&other).unwrap();
+        let sf_importer = SourceFile {
+            path: importer.clone(),
+            language: Language::TypeScript,
+        };
+        let sf_other = SourceFile {
+            path: other,
+            language: Language::TypeScript,
+        };
+        let refs: Vec<&SourceFile> = vec![&sf_importer, &sf_other];
+        let project = ProjectCtx::load(&refs, &Config::default());
+
+        let diags = run_oxc_with_project(&importer, source, &project);
+        assert!(
+            diags.is_empty(),
+            "pnpm-workspace member + root devDep must not be flagged, got {diags:?}"
+        );
+
+        let missing_source = "import x from 'totally-not-declared';\n";
+        let missing_file = test_src.join("missing.test.ts");
+        fs::write(&missing_file, missing_source).unwrap();
+        let missing_file = fs::canonicalize(&missing_file).unwrap();
+        let diags = run_oxc_with_project(&missing_file, missing_source, &project);
+        assert_eq!(
+            diags.len(),
+            1,
+            "a specifier declared nowhere must still fire, got {diags:?}"
+        );
+    }
 }
