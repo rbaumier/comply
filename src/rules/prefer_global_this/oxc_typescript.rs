@@ -37,6 +37,17 @@ const WINDOW_SPECIFIC: &[&str] = &[
     "onbeforeunload", "onmessage", "onpagehide", "onpageshow", "onunload",
 ];
 
+/// The accessed property name of a computed member (`obj["prop"]`) when the
+/// key is a static string literal, used to honour the `window`-specific
+/// allowlist for `window["innerWidth"]`. A dynamic key (`obj[expr]`) has no
+/// statically known name, so the allowlist cannot apply and `None` is returned.
+fn computed_key_name<'a>(member: &'a ComputedMemberExpression<'a>) -> Option<&'a str> {
+    match &member.expression {
+        Expression::StringLiteral(lit) => Some(lit.value.as_str()),
+        _ => None,
+    }
+}
+
 /// True if `node` is the operand of a `typeof` unary expression.
 fn is_under_typeof<'a>(
     node: &oxc_semantic::AstNode<'a>,
@@ -60,7 +71,10 @@ fn is_under_typeof<'a>(
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
-        &[AstType::StaticMemberExpression]
+        &[
+            AstType::StaticMemberExpression,
+            AstType::ComputedMemberExpression,
+        ]
     }
 
     // The rule only flags `window.`/`self.`/`global.` member access, so a file
@@ -76,12 +90,25 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        let AstKind::StaticMemberExpression(member) = node.kind() else {
-            return;
+        // Both `name.prop` (static) and `name["prop"]` (computed) are handled:
+        // `object` is the bare global candidate, `prop_text` is the accessed
+        // property name (known for static members and string-literal computed
+        // keys, `None` for a dynamic computed key), and `span` covers the whole
+        // member expression for the diagnostic location.
+        let (object, prop_text, span) = match node.kind() {
+            AstKind::StaticMemberExpression(member) => (
+                &member.object,
+                Some(member.property.name.as_str()),
+                member.span,
+            ),
+            AstKind::ComputedMemberExpression(member) => {
+                (&member.object, computed_key_name(member), member.span)
+            }
+            _ => return,
         };
 
         // Object must be a bare identifier.
-        let Expression::Identifier(obj) = &member.object else {
+        let Expression::Identifier(obj) = object else {
             return;
         };
 
@@ -93,9 +120,10 @@ impl OxcCheck for Check {
         // A local binding named `window`/`self`/`global` shadows the global, so
         // `name.X` is a member access on that local, not on the global object —
         // e.g. the `const self = this` / `const self = { ... }` closure-alias
-        // idiom. `is_reference_to_global_variable` is true only when the name
-        // resolves to an unbound (global) reference, so a shadowed local
-        // returns false and is left alone.
+        // idiom, or `self` used as a receiver parameter in functional-style
+        // libraries (Effect-TS, fp-ts, arktype). `is_reference_to_global_variable`
+        // is true only when the name resolves to an unbound (global) reference,
+        // so a shadowed local returns false and is left alone.
         if !semantic.is_reference_to_global_variable(obj) {
             return;
         }
@@ -107,9 +135,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        let prop_text = member.property.name.as_str();
-
-        if name == "window" && WINDOW_SPECIFIC.contains(&prop_text) {
+        if name == "window" && prop_text.is_some_and(|p| WINDOW_SPECIFIC.contains(&p)) {
             return;
         }
 
@@ -140,7 +166,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        let (line, column) = byte_offset_to_line_col(ctx.source, member.span.start as usize);
+        let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
             line,
@@ -264,5 +290,41 @@ mod tests {
         let d = run_ts(src);
         assert_eq!(d.len(), 1, "`window` must stay flagged in a worker file: {d:?}");
         assert!(d[0].message.contains("window"));
+    }
+
+    #[test]
+    fn ignores_self_as_function_parameter() {
+        // Regression for #1193: in functional TypeScript (Effect-TS, fp-ts,
+        // arktype) `self` is the receiver parameter, not the browser global.
+        let src = "export const addParam = (name: string) =>\n  \
+                   (self: Procedure): Procedure => ({\n    \
+                   ...self,\n    \
+                   params: { ...self.params, [name]: 1 },\n  \
+                   })";
+        assert!(
+            run_ts(src).is_empty(),
+            "`self` bound as a parameter must not be flagged: {:?}",
+            run_ts(src)
+        );
+    }
+
+    #[test]
+    fn ignores_self_computed_member_as_parameter() {
+        // A `self` parameter accessed via computed member must also be exempt.
+        let src = "const get = (self: Rec, key: string) => self[key];";
+        assert!(
+            run_ts(src).is_empty(),
+            "computed access on a local `self` must not be flagged: {:?}",
+            run_ts(src)
+        );
+    }
+
+    #[test]
+    fn flags_global_self_computed_member() {
+        // Negative-space guard: a genuine global `self` accessed via computed
+        // member (no local `self` in scope) is still flagged.
+        let d = run_ts("self['location'].reload();");
+        assert_eq!(d.len(), 1, "global `self[...]` must still fire: {d:?}");
+        assert!(d[0].message.contains("globalThis"));
     }
 }
