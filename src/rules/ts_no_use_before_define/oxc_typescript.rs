@@ -27,6 +27,14 @@
 //! call is already initialized when the callback runs.
 //!
 //! Also skips forward references to module-scoped bindings made from inside a
+//! callback passed to a test-runner registration call (`describe(...)`,
+//! `it(...)`, `test(...)`, `beforeEach(...)`, `afterEach(...)`,
+//! `beforeAll(...)`, `afterAll(...)`). Test runners register those callbacks
+//! during module evaluation and invoke them only afterwards, so a helper
+//! class/const declared later in the spec file is already initialized by the
+//! time the test body runs.
+//!
+//! Also skips forward references to module-scoped bindings made from inside a
 //! deferred definition body — a function declaration (`function Foo() {...}`),
 //! a class method/getter/setter/constructor, or an instance field initializer.
 //! Those bodies run only on explicit invocation, after the module has finished
@@ -107,6 +115,11 @@ impl OxcCheck for Check {
                         continue;
                     }
                     if is_inside_tanstack_route_factory_callback(nodes, ref_node_id) {
+                        continue;
+                    }
+                    if decl_is_module_scoped
+                        && is_inside_test_runner_callback(nodes, ref_node_id)
+                    {
                         continue;
                     }
                     if decl_is_module_scoped
@@ -257,6 +270,56 @@ fn callback_passed_to_react_hook<'a>(
     false
 }
 
+/// True when the reference sits inside a function/arrow callback that is passed
+/// directly as an argument to a test-runner registration call (`describe(...)`,
+/// `it(...)`, `test(...)`, `beforeEach(...)`, ...). Test runners register those
+/// callbacks during module evaluation but invoke them only afterwards, so a
+/// module-scoped binding declared later in the file is already initialized by the
+/// time the callback actually runs — the forward reference is not a real TDZ
+/// hazard. Callbacks nested across several such registrations (an `it(...)` inside
+/// a `describe(...)`) are covered because the walk inspects each enclosing
+/// function in turn.
+fn is_inside_test_runner_callback<'a>(
+    nodes: &'a oxc_semantic::AstNodes<'a>,
+    ref_node_id: NodeId,
+) -> bool {
+    for ancestor_id in nodes.ancestor_ids(ref_node_id) {
+        let ancestor = nodes.get_node(ancestor_id);
+        match ancestor.kind() {
+            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
+                if callback_passed_to_test_runner(ancestor_id, nodes) {
+                    return true;
+                }
+            }
+            AstKind::Program(_) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// True when `func_id` is the direct argument of an enclosing test-runner
+/// registration call (`it(...)`, `describe(...)`, ...). Stops at the next
+/// function boundary so that nested definitions do not leak across closures.
+fn callback_passed_to_test_runner<'a>(
+    func_id: NodeId,
+    nodes: &'a oxc_semantic::AstNodes<'a>,
+) -> bool {
+    for ancestor_id in nodes.ancestor_ids(func_id) {
+        let ancestor = nodes.get_node(ancestor_id);
+        match ancestor.kind() {
+            AstKind::CallExpression(call) => {
+                return callee_name(&call.callee).is_some_and(is_test_runner_name);
+            }
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
+                return false;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// True when the reference sits inside a function/arrow callback that is
 /// passed as an argument (directly or as a property value in an options object)
 /// to `createFileRoute(...)({...})` or `createLazyFileRoute(...)({...})`.
@@ -351,6 +414,24 @@ fn is_inside_deferred_definition<'a>(
         }
     }
     false
+}
+
+/// Test-runner registration functions whose callbacks are invoked after module
+/// evaluation completes: the BDD-style suite/case blocks (`describe`/`it`/
+/// `test`) and the lifecycle hooks (`beforeEach`/`afterEach`/`beforeAll`/
+/// `afterAll`). Shared by Jasmine, Jest, Vitest, Mocha and the Angular
+/// `TestBed` spec convention.
+fn is_test_runner_name(name: &str) -> bool {
+    matches!(
+        name,
+        "describe"
+            | "it"
+            | "test"
+            | "beforeEach"
+            | "afterEach"
+            | "beforeAll"
+            | "afterAll"
+    )
 }
 
 /// React hook naming convention: identifier starts with `use` followed by an
@@ -703,6 +784,79 @@ mod tests {
              const getOperationSpec = { path: \"/x\" };",
         );
         assert_eq!(d.len(), 1, "static block must still be flagged");
+    }
+
+    // Regression for #1535: an Angular spec references a test helper class
+    // declared at the bottom of the file from inside an `it(...)` callback
+    // nested in a `describe(...)` callback. The test runner invokes those
+    // callbacks after the module has finished evaluating, so the class is
+    // already initialized — safe forward reference.
+    #[test]
+    fn no_fp_test_helper_class_used_in_it_callback_issue_1535() {
+        let source = "describe('greet component', () => {\n\
+                      it('should bind to an input', () => {\n\
+                      const fixture = TestBed.createComponent(TestCmp);\n\
+                      return fixture;\n\
+                      });\n\
+                      });\n\
+                      class TestCmp {}";
+        assert!(
+            run_on_tsx(source).is_empty(),
+            "test helper class used in an it() callback should not be flagged: {:?}",
+            run_on_tsx(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_test_helper_used_in_before_each_callback_issue_1535() {
+        // The lifecycle hooks are deferred the same way as it()/describe().
+        let source = "describe('suite', () => {\n\
+                      beforeEach(() => {\n\
+                      setup(helper);\n\
+                      });\n\
+                      });\n\
+                      const helper = { ready: true };";
+        assert!(
+            run_on(source).is_empty(),
+            "module const used in a beforeEach() callback should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn still_flags_module_const_in_synchronous_for_each_callback_issue_1535() {
+        // Negative space: a callback passed to a non-test-runner call that
+        // invokes it synchronously during module evaluation (`forEach`) reads the
+        // binding before its declaration line — a real TDZ hazard that must
+        // still fire, proving the exemption is scoped to test-runner names only.
+        let d = run_on(
+            "[1].forEach(() => use(later));\n\
+             const later = 1;",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "forward ref in a synchronously-invoked forEach callback must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`later`"));
+    }
+
+    #[test]
+    fn still_flags_local_tdz_inside_it_callback_issue_1535() {
+        // A binding local to the it() callback used before its own declaration
+        // line is a genuine intra-execution TDZ error — the test-runner
+        // exemption only covers module-scoped bindings.
+        let d = run_on(
+            "it('x', () => {\n\
+             use(local);\n\
+             const local = 1;\n\
+             });",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "local TDZ inside an it() callback must still be flagged: {d:?}"
+        );
     }
 
     // Regression for #1652: a module-scoped `const` is referenced inside the
