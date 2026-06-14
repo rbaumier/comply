@@ -131,7 +131,7 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        // Both probes are directory-invariant (manifest + bundler config +
+        // Every probe is directory-invariant (manifest + bundler config +
         // tsconfig chain), so memoize the combined skip decision per directory:
         // `has_bundler_config` stat-walks the ancestor tree, which is otherwise
         // re-run for every file in a deep monorepo.
@@ -139,6 +139,7 @@ impl OxcCheck for Check {
             project_uses_bundler(ctx)
                 || tsconfig_uses_bundler_resolution(ctx)
                 || project_is_angular(ctx)
+                || ctx.project.is_commonjs_project(ctx.path)
         });
         if skip_for_bundler {
             return Vec::new();
@@ -320,6 +321,60 @@ mod tests {
         assert!(
             diags.is_empty(),
             "trailing `..` specifiers are directory imports, not files: {diags:?}"
+        );
+    }
+
+    // Regression for #2117: a CommonJS-configured sub-package (no `type:module`
+    // in package.json + `module:"commonjs"` in tsconfig) resolves relative
+    // imports via CJS require(), which never requires file extensions. The rule
+    // must stay silent there.
+    #[test]
+    fn skips_commonjs_configured_project_issue_2117() {
+        let pkg = r#"{"name":"@fluentui/workspace-plugin"}"#;
+        let tsconfig = r#"{"compilerOptions":{"module":"commonjs"}}"#;
+        let diags = run_in_project(
+            &[("package.json", pkg), ("tsconfig.json", tsconfig)],
+            "import { type PackageJson } from '../types';\n",
+        );
+        assert!(
+            diags.is_empty(),
+            "CommonJS project (no type:module + module:commonjs) must not require extensions: {diags:?}"
+        );
+    }
+
+    // Negative space for #2117: a package that IS ESM (`type:module`) but whose
+    // tsconfig still says `module:commonjs` declares ESM intent, so extensions
+    // remain required — the CJS exemption keys on the ABSENCE of `type:module`.
+    #[test]
+    fn still_flags_type_module_even_with_commonjs_tsconfig() {
+        let pkg = r#"{"name":"pkg","type":"module"}"#;
+        let tsconfig = r#"{"compilerOptions":{"module":"commonjs"}}"#;
+        let diags = run_in_project(
+            &[("package.json", pkg), ("tsconfig.json", tsconfig)],
+            "import { columns } from './makeData';\n",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "type:module declares ESM intent, extensions still required: {diags:?}"
+        );
+    }
+
+    // Negative space for #2117: an ambiguous config (no `type:module`, but
+    // tsconfig `module:nodenext` — dual-mode, ESM-capable) is NOT a positive
+    // CommonJS signal, so the rule keeps firing (conservative default).
+    #[test]
+    fn still_flags_nodenext_module_without_type_field() {
+        let pkg = r#"{"name":"pkg"}"#;
+        let tsconfig = r#"{"compilerOptions":{"module":"nodenext"}}"#;
+        let diags = run_in_project(
+            &[("package.json", pkg), ("tsconfig.json", tsconfig)],
+            "import { columns } from './makeData';\n",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "nodenext is dual-mode/ESM-capable, not a CJS signal — still flag: {diags:?}"
         );
     }
 
