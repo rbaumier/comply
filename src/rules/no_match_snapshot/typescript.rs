@@ -7,18 +7,32 @@
 //! Assert on specific fields instead.
 //!
 //! Exempt: files whose path contains `contract`, `serial`, `wire`, `protocol`,
-//! or `snapshot`. The first four pin a protocol/wire-format contract; `snapshot`
-//! marks files testing the snapshot mechanism itself (a test framework asserting
-//! on its own `toMatchSnapshot` output), where the inline location is intentional.
+//! `snapshot`, `upgrade`, `codemod`, `migration`, or `transform`. The first four
+//! pin a protocol/wire-format contract; `snapshot` marks files testing the
+//! snapshot mechanism itself (a test framework asserting on its own
+//! `toMatchSnapshot` output), where the inline location is intentional; the last
+//! four mark code-transformation tests where the exact tool output is the spec.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 
-/// Path markers that identify files where snapshots are the correct tool:
-/// protocol/contract/serialization tests pin a wire format, and files testing
-/// the snapshot mechanism itself (a test framework asserting on its own
-/// `toMatchSnapshot` output) intentionally embed the exact output inline.
-const CONTRACT_MARKERS: &[&str] = &["contract", "serial", "wire", "protocol", "snapshot"];
+/// Path markers that identify files where snapshots are the correct tool.
+/// `contract`/`serial`/`wire`/`protocol` tests pin a wire format; `snapshot`
+/// marks files testing the snapshot mechanism itself (a test framework asserting
+/// on its own `toMatchSnapshot` output), which intentionally embeds the exact
+/// output inline. `upgrade`/`codemod`/`migration`/`transform` mark code-
+/// transformation tests where the exact output the tool produces IS the spec.
+const CONTRACT_MARKERS: &[&str] = &[
+    "contract",
+    "serial",
+    "wire",
+    "protocol",
+    "snapshot",
+    "upgrade",
+    "codemod",
+    "migration",
+    "transform",
+];
 
 fn is_contract_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy().replace('\\', "/").to_lowercase();
