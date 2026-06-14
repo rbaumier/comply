@@ -456,6 +456,8 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
             || lower.starts_with("test-d/")
             || lower.contains("/test-tsd/")
             || lower.starts_with("test-tsd/")
+            || lower.contains("/spec/")
+            || lower.starts_with("spec/")
             || crate::rules::path_utils::has_test_d_infix(path)
             || crate::rules::path_utils::has_type_probe_infix(path)
             || crate::rules::path_utils::has_codemod_snapshot_infix(path)
@@ -635,6 +637,16 @@ mod tests {
         // without the `.test-d.` infix is still type-test infrastructure.
         assert!(scan_path(&PathBuf::from("test-tsd/common.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("packages/foo/test-tsd/common.ts")).in_test_dir);
+        // RSpec/Jasmine/Mocha `spec/` directory convention (issue #2306):
+        // hyphen-suffixed `foo-spec.ts` files have no `.spec.` infix, so the
+        // directory segment is what marks them as tests.
+        assert!(scan_path(&PathBuf::from("spec/operators/foo-spec.ts")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("packages/rxjs/spec/operators/first-spec.ts")).in_test_dir);
+        // Segment match — `respec/`, a `myspec.ts` file, or a file literally
+        // named `spec.ts` are not a `spec/` directory.
+        assert!(!scan_path(&PathBuf::from("respec/x.ts")).in_test_dir);
+        assert!(!scan_path(&PathBuf::from("myspec.ts")).in_test_dir);
+        assert!(!scan_path(&PathBuf::from("src/spec.ts")).in_test_dir);
         // dtslint type-testing convention (issue #1006).
         assert!(scan_path(&PathBuf::from("dtslint/Array.ts")).in_test_dir);
         // dtslint-style `__tests_dts__/` type-test directory (issue #1660).
