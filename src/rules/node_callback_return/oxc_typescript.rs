@@ -52,17 +52,12 @@ impl OxcCheck for Check {
             AstKind::ReturnStatement(_) => return,
             // Arrow body: `(err) => cb(err)`
             AstKind::ArrowFunctionExpression(_) => return,
-            // `const result = await callback(...)` or `return await callback(...)` —
-            // result captured for post-callback cleanup, or explicitly returned.
-            AstKind::AwaitExpression(_) => {
-                let grandparent = semantic.nodes().parent_node(parent.id());
-                if matches!(
-                    grandparent.kind(),
-                    AstKind::VariableDeclarator(_) | AstKind::ReturnStatement(_)
-                ) {
-                    return;
-                }
-            }
+            // `await callback(...)` — the call is awaited, so execution continues
+            // afterwards by design (capture result, post-downstream cleanup, or the
+            // Koa/Hono/Fastify "wrap" middleware pattern `await next(); <post-processing>`).
+            // An awaited call is structurally not a fire-and-forget Node error-first
+            // callback, so a trailing `return` is neither expected nor correct.
+            AstKind::AwaitExpression(_) => return,
             AstKind::ExpressionStatement(expr_stmt) => {
                 let grandparent = semantic.nodes().parent_node(parent.id());
                 if let AstKind::FunctionBody(block) = grandparent.kind() {
@@ -319,5 +314,27 @@ mod tests {
         // `return await callback(...)` — explicitly returned, not a Node FP.
         let src = "async function wrap(callback) { return await callback(conn); }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_awaited_next_then_post_processing() {
+        // Issue #1220: Koa/Hono/Fastify "wrap" middleware awaits the downstream
+        // chain then post-processes the response. `await next()` followed by more
+        // statements is intentional — `return next()` would skip the post-processing.
+        let src = r#"
+            app.use('/favicon-notfound.ico', async (c, next) => {
+              await next()
+              c.header('X-Custom', 'Deno')
+            })
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_fire_and_forget_callback() {
+        // Negative space: a genuine non-awaited, non-returned Node error-first
+        // callback followed by more work is still flagged.
+        let src = "function f(cb) { cb(err); doMore(); }";
+        assert_eq!(run(src).len(), 1);
     }
 }
