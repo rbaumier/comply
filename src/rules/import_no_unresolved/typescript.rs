@@ -317,4 +317,83 @@ mod tests {
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("index.d.ts"));
     }
+
+    #[test]
+    fn no_fp_for_directory_import_resolving_to_index_dts_issue_1686() {
+        // refine reproducer: `import { IPost } from '../../interfaces'` where the
+        // directory holds only `index.d.ts`. TypeScript resolves the directory to
+        // its declaration index; `.d.ts` files are excluded from the scan set, so
+        // resolution falls back to an on-disk existence check.
+        let dir = TempDir::new().unwrap();
+
+        let importer = dir.path().join("src/pages/posts/list.tsx");
+        fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        fs::write(&importer, "import { IPost, ICategory } from '../../interfaces';").unwrap();
+
+        // The declaration index lives on disk but is NOT added to the project.
+        let decl_index = dir.path().join("src/interfaces/index.d.ts");
+        fs::create_dir_all(decl_index.parent().unwrap()).unwrap();
+        fs::write(
+            &decl_index,
+            "export interface IPost { id: number; }\nexport interface ICategory { id: number; }",
+        )
+        .unwrap();
+
+        let lang = Language::from_path(&importer).unwrap();
+        let source_files = vec![SourceFile {
+            path: importer.clone(),
+            language: lang,
+        }];
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = fs::canonicalize(&importer).unwrap();
+        let source = "import { IPost, ICategory } from '../../interfaces';";
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        );
+        assert!(diags.is_empty(), "unexpected FP for directory index.d.ts import: {diags:?}");
+    }
+
+    #[test]
+    fn flags_directory_import_with_no_index_at_all_issue_1686() {
+        // Negative space: a directory import where the directory holds no index
+        // file of any kind (no index.ts/tsx/js, no index.d.ts) is genuinely
+        // unresolvable and must still be flagged.
+        let dir = TempDir::new().unwrap();
+
+        let importer = dir.path().join("src/pages/posts/list.tsx");
+        fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        fs::write(&importer, "import { IPost } from '../../interfaces';").unwrap();
+
+        // The directory exists but holds only a non-index declaration file, so
+        // the directory import has no entry point to resolve to.
+        let stray = dir.path().join("src/interfaces/types.d.ts");
+        fs::create_dir_all(stray.parent().unwrap()).unwrap();
+        fs::write(&stray, "export interface IPost { id: number; }").unwrap();
+
+        let lang = Language::from_path(&importer).unwrap();
+        let source_files = vec![SourceFile {
+            path: importer.clone(),
+            language: lang,
+        }];
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = fs::canonicalize(&importer).unwrap();
+        let source = "import { IPost } from '../../interfaces';";
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        );
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("interfaces"));
+    }
 }
