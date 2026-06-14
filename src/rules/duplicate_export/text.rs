@@ -47,6 +47,14 @@
 //!     types are erased at compile time and emit no runtime JS — so the variant
 //!     group collapses to a single effective path. A runtime-value re-export by
 //!     any member is left untouched, so genuine value duplicates still flag.
+//!   - Interchangeable multi-adapter barrels — when every barrel re-exporting a
+//!     name sources it `from` a *different external* package (icon-set facades
+//!     like `lucide-react` / `@phosphor-icons/react` / `@hugeicons/...`), the
+//!     barrels are deliberate drop-in alternatives selected by import path and
+//!     there is no single canonical barrel to pick. The name is suppressed only
+//!     when the re-export sources are all distinct bare specifiers; two barrels
+//!     sharing a source, or any relative (in-package) source, leave a genuine
+//!     ambiguous path and keep flagging.
 //!   - JSX automatic-runtime entries — a `jsx-runtime`/`jsx-dev-runtime` barrel
 //!     is a special entry point mandated by the JSX automatic-runtime transform
 //!     (React/Preact/etc.). The transform imports `jsx`, `jsxs`, and `Fragment`
@@ -69,8 +77,9 @@ use std::path::{Path, PathBuf};
 const RULE_ID: &str = "duplicate-export";
 
 /// Per-package re-export occurrences keyed by `(package dir, symbol name)`,
-/// each holding the barrel files and lines where the name is re-exported.
-type ReExportMap = HashMap<(Option<PathBuf>, String), Vec<(PathBuf, usize)>>;
+/// each holding the barrel file, line, and module specifier the name is
+/// re-exported `from` (the specifier discriminates interchangeable adapters).
+type ReExportMap = HashMap<(Option<PathBuf>, String), Vec<(PathBuf, usize, Option<String>)>>;
 
 #[derive(Debug)]
 pub struct Check;
@@ -116,7 +125,7 @@ impl TextCheck for Check {
                 reexports
                     .entry((package_dir, export.name.clone()))
                     .or_default()
-                    .push((path.to_path_buf(), export.line));
+                    .push((path.to_path_buf(), export.line, export.reexport_source.clone()));
             }
         }
 
@@ -151,7 +160,8 @@ impl TextCheck for Check {
             let (_, name) = key;
             let occurrences = &reexports[key];
             // Need at least two *distinct* barrel files re-exporting the name.
-            let mut barrels: Vec<&Path> = occurrences.iter().map(|(p, _)| p.as_path()).collect();
+            let mut barrels: Vec<&Path> =
+                occurrences.iter().map(|(p, _, _)| p.as_path()).collect();
             barrels.sort();
             barrels.dedup();
             if barrels.len() < 2 {
@@ -229,11 +239,28 @@ impl TextCheck for Check {
             if effective_paths < 2 {
                 continue;
             }
+            // Interchangeable multi-adapter pattern: when every surviving barrel
+            // re-exports this name from a *different external* package (icon-set
+            // facades like `lucide-react` / `@phosphor-icons/react`), there is no
+            // ambiguous canonical barrel to pick — the barrels are deliberate
+            // drop-in alternatives selected by import path. Suppress only when the
+            // sources are all distinct bare specifiers; two barrels sharing a
+            // source, or any relative (in-package) source, leave a genuine
+            // ambiguous path and keep flagging.
+            let surviving: Vec<&Path> = entry_barrels
+                .iter()
+                .chain(plain_barrels.iter())
+                .copied()
+                .collect();
+            if is_interchangeable_adapter_group(&surviving, occurrences) {
+                continue;
+            }
             // Anchor the diagnostic on the first occurrence (sorted by path)
             // for stable output. List every barrel in the message.
             let first = occurrences
                 .iter()
                 .min_by(|a, b| a.0.cmp(&b.0))
+                .map(|(path, line, _)| (path, *line))
                 .expect("at least one occurrence");
             let barrel_list = barrels
                 .iter()
@@ -256,6 +283,51 @@ impl TextCheck for Check {
         }
         diagnostics
     }
+}
+
+/// Whether `barrels` form an interchangeable multi-adapter group for one name:
+/// every barrel re-exports the name `from` a *bare* (external package) specifier
+/// and all those specifiers are pairwise distinct. That shape is the deliberate
+/// drop-in-adapter / facade pattern (icon-set files re-exporting the same icon
+/// names each from a different icon library), where no single canonical barrel
+/// exists to pick. Returns `false` — keeping the diagnostic — as soon as two
+/// barrels share a source or any source is relative (an in-package module, where
+/// the duplicate path is a genuine ambiguity), so real duplicates still flag.
+///
+/// `occurrences` are the `(barrel, line, source)` records for this `(package,
+/// name)` key; the source of each surviving barrel is recovered from them.
+fn is_interchangeable_adapter_group(
+    barrels: &[&Path],
+    occurrences: &[(PathBuf, usize, Option<String>)],
+) -> bool {
+    let mut sources: HashSet<&str> = HashSet::new();
+    for &barrel in barrels {
+        let Some(source) = occurrences
+            .iter()
+            .find(|(path, _, _)| path == barrel)
+            .and_then(|(_, _, source)| source.as_deref())
+        else {
+            return false;
+        };
+        if !is_bare_specifier(source) {
+            return false;
+        }
+        if !sources.insert(source) {
+            return false;
+        }
+    }
+    sources.len() == barrels.len() && barrels.len() >= 2
+}
+
+/// Whether `specifier` names an external package (a bare specifier), not a
+/// relative (`.`), absolute (`/`), or `node:` builtin path. A bare specifier
+/// points outside the package boundary, marking a barrel as a facade over a
+/// third-party implementation rather than an in-package re-export.
+fn is_bare_specifier(specifier: &str) -> bool {
+    !specifier.is_empty()
+        && !specifier.starts_with('.')
+        && !specifier.starts_with('/')
+        && !specifier.starts_with("node:")
 }
 
 /// Render `path` relative to `root` for the diagnostic message, falling back to
@@ -1226,5 +1298,66 @@ mod tests {
             diags
         );
         assert!(diags[0].message.contains("Fragment"));
+    }
+
+    /// #1632: shadcn-ui/ui's `apps/v4/registry/icons/` ships three interchangeable
+    /// icon-library adapter barrels — `__hugeicons__.ts`, `__lucide__.ts`,
+    /// `__phosphor__.ts` — that each re-export the same icon names (`ActivityIcon`)
+    /// from a *different* third-party package. They are drop-in alternatives an app
+    /// switches between by import path, not an ambiguous canonical barrel, so the
+    /// shared name must not be flagged.
+    #[test]
+    fn allows_same_symbol_across_interchangeable_adapter_barrels() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"@scope/ui"}"#),
+            (
+                "icons/__hugeicons__.ts",
+                "export { ActivityIcon } from \"@hugeicons/core-free-icons\";",
+            ),
+            (
+                "icons/__lucide__.ts",
+                "export { ActivityIcon } from \"lucide-react\";",
+            ),
+            (
+                "icons/__phosphor__.ts",
+                "export { ActivityIcon } from \"@phosphor-icons/react\";",
+            ),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert!(
+            diags.is_empty(),
+            "icons re-exported from distinct external packages are interchangeable adapters, got: {:?}",
+            diags
+        );
+    }
+
+    /// Negative space: two barrels in one directory re-exporting the same name
+    /// from the *same* source (`./icons`) are a genuine ambiguous import path, not
+    /// interchangeable adapters. The distinct-source discriminator must not
+    /// silence a real duplicate.
+    #[test]
+    fn flags_two_barrels_reexporting_from_same_source() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"@scope/ui"}"#),
+            ("icons/icons.ts", "export function ActivityIcon() {}"),
+            (
+                "icons/__a__.ts",
+                "export { ActivityIcon } from \"./icons\";",
+            ),
+            (
+                "icons/__b__.ts",
+                "export { ActivityIcon } from \"./icons\";",
+            ),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert_eq!(
+            diags.len(),
+            1,
+            "two barrels re-exporting `ActivityIcon` from the same source remain ambiguous, got: {:?}",
+            diags
+        );
+        assert!(diags[0].message.contains("ActivityIcon"));
     }
 }
