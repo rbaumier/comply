@@ -140,4 +140,34 @@ mod tests {
     fn allows_decorated_class_with_only_static_members() {
         assert!(run("@Injectable()\nclass Foo { static bar() {} }").is_empty());
     }
+
+    // Issue #2304: Angular compiler golden-output fixtures under
+    // `test/compliance/test_cases/` legitimately emit component classes whose
+    // only members are static `ɵfac`/`ɵcmp` metadata. They are generated test
+    // artifacts, not the hand-written static-only-class anti-pattern.
+    #[test]
+    fn skips_static_only_class_in_test_dir() {
+        let src = "export class TestComp {\n\
+                   static \u{275}fac = i0.\u{275}\u{275}ngDeclareFactory({ type: TestComp, deps: [] });\n\
+                   static \u{275}cmp = i0.\u{275}\u{275}ngDeclareComponent({ type: TestComp });\n\
+                   }";
+        let d = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            src,
+            "packages/compiler-cli/test/compliance/test_cases/r3_view_compiler_arrow_functions/GOLDEN_PARTIAL.js",
+        );
+        assert!(d.is_empty(), "rule must be suppressed in test fixtures");
+    }
+
+    // Negative-space guard: a hand-written static-only class in production code
+    // still fires.
+    #[test]
+    fn still_flags_static_only_class_in_production() {
+        let d = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            "export class Constants { static MAX = 100; static MIN = 0; }",
+            "src/config/constants.ts",
+        );
+        assert_eq!(d.len(), 1, "rule must still fire in production code");
+    }
 }
