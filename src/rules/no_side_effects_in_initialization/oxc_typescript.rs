@@ -222,7 +222,16 @@
 //!   object (`Exported[k] = v`). Local staging declarations in the body are
 //!   ignored. This is the pre-class-syntax pattern for intercepting prototype
 //!   methods on an exported object. A `forEach` touching any non-exported
-//!   target, or whose receiver is not a module-local const, is still flagged.
+//!   target, or whose receiver is not a module-local const, is still flagged;
+//! - Vue reactivity setup: a top-level bare-identifier call to a Vue Composition
+//!   API / VueUse reactivity primitive — `watch`, `watchEffect`,
+//!   `watchPostEffect`, `watchSyncEffect`, `debouncedWatch`, `watchDebounced`,
+//!   `watchThrottled`, `watchOnce` — whose callee is imported from a Vue
+//!   ecosystem package (`vue`, `@vue/*`, `@vueuse/core`). Vue composable modules
+//!   wire reactive state together with such calls at module scope; the call must
+//!   run when the composable is first imported, so it is declarative reactive
+//!   registration, not a tree-shaking hazard. The import-source gate keeps a
+//!   same-named local `watch()` (or one imported from `node:fs`) flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -1206,6 +1215,65 @@ fn is_start_transition_call(
     bindings.contains(id.name.as_str())
 }
 
+/// Vue Composition API / VueUse reactivity-setup primitives. A top-level call to
+/// one of these wires reactive state together when the module is first imported —
+/// a declarative reactive registration, not a tree-shakeable side effect.
+const VUE_REACTIVITY_IDENTS: &[&str] = &[
+    "watch",
+    "watchEffect",
+    "watchPostEffect",
+    "watchSyncEffect",
+    "debouncedWatch",
+    "watchDebounced",
+    "watchThrottled",
+    "watchOnce",
+];
+
+/// True when `src` is a Vue ecosystem package — `vue`, `@vue/*` (e.g.
+/// `@vue/reactivity`, `@vue/runtime-core`), or `@vueuse/core`. The reactivity
+/// primitives that drive the [`VUE_REACTIVITY_IDENTS`] exemption ship from these
+/// packages.
+fn is_vue_ecosystem_specifier(src: &str) -> bool {
+    src == "vue" || src == "@vueuse/core" || src.starts_with("@vue/")
+}
+
+/// Collect local identifier names bound to a Vue reactivity primitive imported
+/// from a Vue ecosystem package. Handles `import { watch } from "vue"` and
+/// `import { watchEffect as track } from "@vue/runtime-core"`. The import source
+/// gate keeps a same-named local `watch()` (or one imported from `node:fs`) out
+/// of the set, so only the genuine Vue idiom is exempted.
+fn vue_reactivity_bindings(program: &Program) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for stmt in &program.body {
+        let Statement::ImportDeclaration(import) = stmt else { continue };
+        if !is_vue_ecosystem_specifier(import.source.value.as_str()) {
+            continue;
+        }
+        let Some(specifiers) = &import.specifiers else { continue };
+        for spec in specifiers {
+            let ImportDeclarationSpecifier::ImportSpecifier(named) = spec else {
+                continue;
+            };
+            if VUE_REACTIVITY_IDENTS.contains(&named.imported.name().as_str()) {
+                out.insert(named.local.name.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// True when `call` is a top-level Vue reactivity-setup call — a bare-identifier
+/// call (`watch(...)`, `debouncedWatch(...)`) whose callee is bound to a Vue
+/// reactivity primitive imported from a Vue ecosystem package (see
+/// [`vue_reactivity_bindings`]).
+fn is_vue_reactivity_setup_call(
+    call: &oxc_ast::ast::CallExpression,
+    bindings: &HashSet<String>,
+) -> bool {
+    let Expression::Identifier(id) = &call.callee else { return false };
+    bindings.contains(id.name.as_str())
+}
+
 /// True when `call` registers a Node.js process signal handler at the top level:
 /// `process.on("SIG...", handler)` (`process.on("SIGINT", …)`,
 /// `process.on("SIGTERM", …)`, …). CLI entry points register these so the
@@ -1883,6 +1951,7 @@ impl OxcCheck for Check {
         }
 
         let start_transition_names = react_start_transition_bindings(program);
+        let vue_reactivity_names = vue_reactivity_bindings(program);
         let module_locals = module_const_bindings(program);
         let new_locals = module_const_new_bindings(program);
         let exported_locals = module_exported_local_bindings(program);
@@ -1897,6 +1966,7 @@ impl OxcCheck for Check {
 
             if let Expression::CallExpression(call) = &expr_stmt.expression
                 && (is_start_transition_call(call, &start_transition_names)
+                    || is_vue_reactivity_setup_call(call, &vue_reactivity_names)
                     || is_process_signal_handler_call(call)
                     || is_library_plugin_registration_call(call)
                     || is_commander_subcommand_chain(call)
@@ -4414,5 +4484,49 @@ mod tests {
 
         let app = crate::rules::test_helpers::run_rule(&Check, "app.use(mw);", "src/c.ts");
         assert_eq!(app.len(), 1, "app.use(mw) must still flag, got {app:?}");
+    }
+
+    // Issue #2083: a top-level `watch(...)` / `debouncedWatch(...)` whose callee
+    // is imported from a Vue ecosystem package is the standard Composition API /
+    // VueUse mechanism for wiring reactive state at module scope — declarative
+    // reactive registration, not a tree-shaking hazard.
+    #[test]
+    fn skips_vue_reactivity_setup() {
+        let composable = "\
+            import { ref, watch } from 'vue';\n\
+            import { debouncedWatch } from '@vueuse/core';\n\
+            export const panelSizes = ref([]);\n\
+            watch(panelSizes, (value) => { value.forEach(() => {}); });\n\
+            debouncedWatch(panelSizes, (value) => {}, { debounce: 100 });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, composable, "src/composables/panel.ts");
+        assert!(diags.is_empty(), "vue watch/debouncedWatch must be exempt, got {diags:?}");
+
+        let aliased = "\
+            import { watchEffect as track } from '@vue/runtime-core';\n\
+            track(() => {});\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, aliased, "src/composables/effect.ts");
+        assert!(diags.is_empty(), "aliased vue watchEffect must be exempt, got {diags:?}");
+    }
+
+    // Negative-space guard for #2083: a `watch(...)` whose callee is NOT imported
+    // from a Vue package (a same-named local, or imported from elsewhere) is not
+    // the Vue reactivity idiom and must still flag. A genuine side effect at
+    // module scope (`fetchData()`, `console.log()`) must also still flag.
+    #[test]
+    fn still_flags_non_vue_watch_and_side_effects() {
+        let local_watch = "\
+            function watch(x, cb) { cb(); }\n\
+            watch(state, () => {});\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, local_watch, "src/local.ts");
+        assert_eq!(diags.len(), 1, "local watch() must still flag, got {diags:?}");
+
+        let other_watch = "\
+            import { watch } from 'node:fs';\n\
+            watch('./dir', () => {});\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, other_watch, "src/fswatch.ts");
+        assert_eq!(diags.len(), 1, "non-vue watch() must still flag, got {diags:?}");
+
+        let fetch = crate::rules::test_helpers::run_rule(&Check, "fetchData();", "src/d.ts");
+        assert_eq!(fetch.len(), 1, "fetchData() must still flag, got {fetch:?}");
     }
 }
