@@ -2,8 +2,15 @@
 //!
 //! Flag `.await` on DB-like calls inside loops. In Rust this looks like
 //! `query(...).await` inside `for`/`while`/`loop` blocks.
+//!
+//! Inline `#[cfg(test)]` modules are exempt: parametrized tests routinely
+//! create a fresh in-memory datastore per loop iteration and run one query
+//! against it, which is not the N+1 antipattern (each iteration has isolated
+//! storage and cannot be batched). Path-based test files are handled by
+//! `skip_in_test_dir`; this covers tests embedded in production `src/` files.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::rust_helpers::is_in_test_context;
 
 const QUERY_METHODS: &[&str] = &[
     "query",
@@ -39,6 +46,10 @@ fn is_inside_loop(node: tree_sitter::Node) -> bool {
 
 crate::ast_check! { on ["await_expression"] => |node, source, ctx, diagnostics|
     if !is_inside_loop(node) {
+        return;
+    }
+
+    if is_in_test_context(node, source) {
         return;
     }
 
@@ -93,5 +104,46 @@ mod tests {
     fn allows_query_outside_loop() {
         let src = "async fn f() { db.query(1).await; }";
         assert!(run_on(src).is_empty());
+    }
+
+    // Issue #1470: parametrized tests create a fresh in-memory datastore per
+    // loop iteration and run one query against it — not an N+1 query. An inline
+    // `#[cfg(test)]` module in a production `src/` file must be exempt.
+    #[test]
+    fn allows_query_in_loop_inside_cfg_test_module() {
+        let src = r#"
+            #[cfg(test)]
+            mod tests {
+                async fn t() {
+                    for level in &test_levels {
+                        for case in &test_cases {
+                            let ds = Datastore::new("memory").await.unwrap();
+                            ds.execute(&query, &sess, None).await.unwrap();
+                        }
+                    }
+                }
+            }
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Issue #1470: a `tests/`-dir path is suppressed by `skip_in_test_dir`.
+    // Gated run honours the production `applies_to_file` gate.
+    #[test]
+    fn allows_query_in_loop_in_tests_dir() {
+        let src = "async fn f(ids: Vec<i32>) { for id in ids { db.query(id).await; } }";
+        let diags =
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "crate/tests/signin.rs");
+        assert!(diags.is_empty());
+    }
+
+    // Negative space: the same loop query in a production (non-test) path still
+    // fires — the exemption is test-scoped, the rule still catches real N+1.
+    #[test]
+    fn flags_query_in_loop_in_production_path() {
+        let src = "async fn f(ids: Vec<i32>) { for id in ids { db.query(id).await; } }";
+        let diags =
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "crate/src/iam/signin.rs");
+        assert_eq!(diags.len(), 1);
     }
 }
