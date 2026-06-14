@@ -95,4 +95,29 @@ mod tests {
         let src = r#"fn f() { let s = "SELECT amount FROM ledger WHERE amount::FLOAT > 0"; }"#;
         assert_eq!(run(src).len(), 1);
     }
+
+    #[test]
+    fn does_not_flag_real_substring_of_really_issue_1492() {
+        // SQL-shaped fixture (DML + FROM/WHERE) whose text embeds the English
+        // word "really" — `REAL` must not match as a whole word, even though a
+        // money word ("payment") is present.
+        let src = r#"fn f() { let s = "SELECT payment FROM logs WHERE note = 'it doesnt really abort fetch requests'"; }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_money_word_substring_of_identifier_issue_1492() {
+        // `AbortPaymentEvent` contains the substring "payment" but is an
+        // unrelated identifier — must not match as a whole word, even with a
+        // genuine float type ("REAL") present.
+        let src = r#"fn f() { let s = "SELECT AbortPaymentEvent FROM events WHERE flag = REAL"; }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_genuine_money_real_column() {
+        // Negative space: a real money column typed REAL must still fire.
+        let src = r#"fn f() { let s = "CREATE TABLE x (price REAL NOT NULL)"; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
 }
