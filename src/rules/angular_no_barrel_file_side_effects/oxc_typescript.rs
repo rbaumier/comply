@@ -3,6 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{CheckCtx, OxcCheck};
+use crate::rules::path_utils::is_angular_schematic_or_migration_entry;
 use oxc_ast::ast::Statement;
 use std::sync::Arc;
 
@@ -25,7 +26,7 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        if !is_barrel_path(ctx.path) {
+        if !is_barrel_path(ctx.path) || is_angular_schematic_or_migration_entry(ctx.path) {
             return Vec::new();
         }
         let mut diagnostics = Vec::new();
@@ -76,5 +77,90 @@ impl OxcCheck for Check {
             });
         }
         diagnostics
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_at(src: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, path)
+    }
+
+    #[test]
+    fn flags_side_effect_in_barrel() {
+        let src = "export * from './a';\nconsole.log('side');";
+        assert_eq!(run_at(src, "src/index.ts").len(), 1);
+    }
+
+    #[test]
+    fn allows_pure_reexports() {
+        let src = "export * from './a';\nexport { B } from './b';";
+        assert!(run_at(src, "src/index.ts").is_empty());
+    }
+
+    #[test]
+    fn ignores_non_barrel_files() {
+        let src = "console.log('side');";
+        assert!(run_at(src, "src/thing.ts").is_empty());
+    }
+
+    #[test]
+    fn exempts_angular_schematic_entry_point() {
+        // Issue #1597: ngrx/platform schematics/ng-add/index.ts is a default-export
+        // factory entry point loaded by the Angular CLI, not a re-export barrel.
+        let src = r#"
+            import { Rule, SchematicContext, Tree, chain, noop } from '@angular-devkit/schematics';
+            import { NodePackageInstallTask } from '@angular-devkit/schematics/tasks';
+            function addModuleToPackageJson() {
+                return (host: Tree, context: SchematicContext) => {
+                    context.addTask(new NodePackageInstallTask());
+                    return host;
+                };
+            }
+            export default function (options: any): Rule {
+                return (host: Tree, context: SchematicContext) => {
+                    return chain([options.skipPackageJson ? noop() : addModuleToPackageJson()])(host, context);
+                };
+            }
+        "#;
+        assert!(run_at(src, "modules/effects/schematics/ng-add/index.ts").is_empty());
+    }
+
+    #[test]
+    fn exempts_angular_migration_entry_point() {
+        // Issue #1597: ng update migration entry point under migrations/X_Y_Z/index.ts.
+        let src = r#"
+            import { Rule, Tree } from '@angular-devkit/schematics';
+            export default function (): Rule {
+                return (tree: Tree) => { tree.create('flag', ''); return tree; };
+            }
+        "#;
+        assert!(run_at(src, "modules/router-store/migrations/14_0_0/index.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_genuine_barrel_with_side_effects() {
+        // Negative space: a real barrel index.ts outside schematics/migrations
+        // with a side-effecting statement still fires.
+        let src = "export { A } from './a';\nwindow.dataLayer = window.dataLayer || [];";
+        assert_eq!(run_at(src, "src/components/index.ts").len(), 1);
     }
 }

@@ -118,6 +118,18 @@ pub fn is_fuzz_targets_path(path: &Path) -> bool {
     path.components().any(|c| c.as_os_str() == "fuzz_targets")
 }
 
+/// True when `path` lives under an Angular `schematics/` or `migrations/`
+/// directory. These hold Angular CLI schematic and `ng update` migration entry
+/// points: each is an `index.ts` exporting a default factory function that the
+/// CLI loads dynamically via the `collection.json`/`migration.json` manifest,
+/// never imported from TypeScript. Despite being named `index.ts`, they are
+/// executable entry points, not re-export barrels, and their factory bodies are
+/// expected side effects — so the barrel-side-effects check skips them. Segment
+/// match keeps an unrelated `src/migrationsHelper.ts` from matching.
+pub fn is_angular_schematic_or_migration_entry(path: &Path) -> bool {
+    has_path_segment(path, &["schematics", "migrations"])
+}
+
 /// True for files under a developer-only directory (`scripts/`, `bin/`,
 /// `migrations/`). One-off data-processing and migration scripts trade
 /// readability for getting the job done; this is the narrow subset of
@@ -700,6 +712,24 @@ mod aux_path_tests {
     fn fuzz_targets_path_match() {
         assert!(is_fuzz_targets_path(&PathBuf::from("fuzz/fuzz_targets/parse.rs")));
         assert!(!is_fuzz_targets_path(&PathBuf::from("src/lib.rs")));
+    }
+
+    #[test]
+    fn angular_schematic_or_migration_entry_segments() {
+        // Issue #1597: ngrx/platform schematic and ng-update migration entry points.
+        assert!(is_angular_schematic_or_migration_entry(&PathBuf::from(
+            "modules/effects/schematics/ng-add/index.ts"
+        )));
+        assert!(is_angular_schematic_or_migration_entry(&PathBuf::from(
+            "modules/router-store/migrations/14_0_0/index.ts"
+        )));
+        // Segment (not substring) match.
+        assert!(!is_angular_schematic_or_migration_entry(&PathBuf::from(
+            "src/migrationsHelper.ts"
+        )));
+        assert!(!is_angular_schematic_or_migration_entry(&PathBuf::from(
+            "src/components/index.ts"
+        )));
     }
 
     #[test]
