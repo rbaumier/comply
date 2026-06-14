@@ -6,6 +6,10 @@
 //! `.unwrap()` / `.expect(...)` method calls. Panicking from `Drop`
 //! during unwinding aborts the process — `Drop` runs on every error
 //! path and must be infallible.
+//!
+//! A panic guarded by `if !std::thread::panicking() { ... }` is exempt:
+//! when unwinding is already in progress the guarded block is skipped, so
+//! `drop` returns normally and no double-panic abort occurs.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -24,6 +28,66 @@ const PANIC_MACROS: &[&str] = &[
     "todo",
     "unreachable",
 ];
+
+/// True when `node` sits inside the consequence block of an enclosing
+/// `if !…panicking() { … }` guard, walking ancestors up to `body` (the
+/// `drop` body). Only the negated form guards the panic: when unwinding is
+/// already in progress the block is skipped, so `drop` returns normally.
+fn is_guarded_by_not_panicking(
+    node: tree_sitter::Node,
+    body: tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent == body {
+            return false;
+        }
+        if parent.kind() == "if_expression"
+            && let Some(consequence) = parent.child_by_field_name("consequence")
+            && consequence == cur
+            && let Some(condition) = parent.child_by_field_name("condition")
+            && is_negated_panicking_call(condition, source)
+        {
+            return true;
+        }
+        cur = parent;
+    }
+    false
+}
+
+/// True when `condition` is `!<expr>` and `<expr>` is a call whose function
+/// path ends in the `panicking` segment (`std::thread::panicking()`,
+/// `thread::panicking()`, or an imported `panicking()`).
+fn is_negated_panicking_call(condition: tree_sitter::Node, source: &[u8]) -> bool {
+    if condition.kind() != "unary_expression" {
+        return false;
+    }
+    let Some(op) = condition.child(0) else {
+        return false;
+    };
+    if op.utf8_text(source).unwrap_or("") != "!" {
+        return false;
+    }
+    let Some(operand) = condition.named_child(0) else {
+        return false;
+    };
+    if operand.kind() != "call_expression" {
+        return false;
+    }
+    let Some(func) = operand.child_by_field_name("function") else {
+        return false;
+    };
+    let last_segment = match func.kind() {
+        "identifier" => func.utf8_text(source).unwrap_or(""),
+        "scoped_identifier" => func
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+            .unwrap_or(""),
+        _ => return false,
+    };
+    last_segment == "panicking"
+}
 
 #[derive(Debug)]
 pub struct Check;
@@ -61,7 +125,9 @@ impl AstCheck for Check {
                     if let Some(m) = n.child_by_field_name("macro") {
                         let name = m.utf8_text(source_bytes).unwrap_or("");
                         let bare = name.rsplit("::").next().unwrap_or(name);
-                        if PANIC_MACROS.contains(&bare) {
+                        if PANIC_MACROS.contains(&bare)
+                            && !is_guarded_by_not_panicking(n, body, source_bytes)
+                        {
                             diagnostics.push(Diagnostic::at_node(
                                 std::sync::Arc::clone(&ctx.path_arc),
                                 &n,
@@ -82,7 +148,9 @@ impl AstCheck for Check {
                         && let Some(field) = func.child_by_field_name("field")
                     {
                         let name = field.utf8_text(source_bytes).unwrap_or("");
-                        if name == "unwrap" || name == "expect" {
+                        if (name == "unwrap" || name == "expect")
+                            && !is_guarded_by_not_panicking(n, body, source_bytes)
+                        {
                             diagnostics.push(Diagnostic::at_node(
                                 std::sync::Arc::clone(&ctx.path_arc),
                                 &n,
@@ -158,5 +226,33 @@ mod tests {
     fn allows_panic_in_other_impl() {
         let source = "struct A; impl A { fn f(&self) { panic!(\"x\"); } }";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_panic_guarded_by_std_thread_panicking() {
+        let source = "struct Child; impl Drop for Child { fn drop(&mut self) { \
+                      if !std::thread::panicking() { \
+                      panic!(\"Child was dropped before being joined\"); } } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_panic_guarded_by_imported_thread_panicking() {
+        let source = "use std::thread; struct Child; impl Drop for Child { \
+                      fn drop(&mut self) { if !thread::panicking() { panic!(); } } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_unguarded_panic_in_drop() {
+        let source = "struct A; impl Drop for A { fn drop(&mut self) { panic!(); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_non_negated_panicking_guard() {
+        let source = "struct A; impl Drop for A { fn drop(&mut self) { \
+                      if std::thread::panicking() { panic!(); } } }";
+        assert_eq!(run_on(source).len(), 1);
     }
 }
