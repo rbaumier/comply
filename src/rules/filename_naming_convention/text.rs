@@ -79,6 +79,15 @@ fn is_camel_case(stem: &str) -> bool {
     bytes.iter().all(|&b| b.is_ascii_alphanumeric())
 }
 
+/// Strips a leading run of underscores from `stem`, returning the remaining
+/// name. A leading `_` or `__` is the JS/TS "private/internal module" signal
+/// (e.g. `_utils`, `__database`), so the convention is validated against the
+/// name after the prefix. Returns an empty string for an all-underscore stem,
+/// which then fails every convention check and is still flagged.
+fn strip_private_prefix(stem: &str) -> &str {
+    stem.trim_start_matches('_')
+}
+
 fn is_ts_or_jsx_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
     s.ends_with(".ts")
@@ -112,16 +121,21 @@ impl TextCheck for Check {
         if super::is_nextjs_pages_router_file(ctx.path, file_name, stem) {
             return Vec::new();
         }
-        if is_kebab_case(stem) {
+        // A leading `_`/`__` marks a private/internal module; validate the
+        // convention against the name after the prefix.
+        let convention_stem = strip_private_prefix(stem);
+        if is_kebab_case(convention_stem) {
             return Vec::new();
         }
-        if is_composable_name(stem) {
+        if is_composable_name(convention_stem) {
             return Vec::new();
         }
-        if is_locale_tag(stem) {
+        if is_locale_tag(convention_stem) {
             return Vec::new();
         }
-        if is_ts_or_jsx_file(ctx.path) && (is_pascal_case(stem) || is_camel_case(stem)) {
+        if is_ts_or_jsx_file(ctx.path)
+            && (is_pascal_case(convention_stem) || is_camel_case(convention_stem))
+        {
             return Vec::new();
         }
         vec![Diagnostic {
@@ -231,8 +245,10 @@ mod tests {
     }
 
     #[test]
-    fn flags_underscore_prefix_outside_routes() {
-        assert_eq!(run("src/app/_authed.tsx").len(), 1);
+    fn allows_underscore_prefix_valid_remainder_outside_routes() {
+        // `_authed` strips to `authed`, a valid camelCase name; the leading
+        // underscore is the private-module signal, so it is allowed anywhere.
+        assert!(run("src/app/_authed.tsx").is_empty());
     }
 
     // Regression for #521: TanStack Router splat/dynamic route files use `$`.
@@ -379,5 +395,39 @@ mod tests {
         // `Ar_eg` inverts the required case pattern, so it is not a locale tag.
         assert!(!is_locale_tag("Ar_eg"));
         assert_eq!(run("src/Ar_eg.ts").len(), 1);
+    }
+
+    // Regression for #1616: a leading `_`/`__` is the JS/TS private-module
+    // signal; the convention is validated against the name after the prefix.
+    #[test]
+    fn allows_single_underscore_private_camel_case_issue_1616() {
+        assert!(run("packages/generator-helper/src/_utils.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_double_underscore_private_camel_case_issue_1616() {
+        assert!(run("src/__tests__/integration/postgresql/__database.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_underscore_private_pascal_case_issue_1616() {
+        assert!(run("src/_Platform.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_underscore_private_kebab_case_issue_1616() {
+        assert!(run("src/_user-profile.ts").is_empty());
+    }
+
+    // Guard: stripping the prefix does not exempt an invalid remainder.
+    #[test]
+    fn flags_underscore_private_snake_case_remainder_issue_1616() {
+        assert_eq!(run("src/_user_profile.ts").len(), 1);
+    }
+
+    // Guard: an all-underscore stem has an empty remainder and still fires.
+    #[test]
+    fn flags_all_underscore_stem_issue_1616() {
+        assert_eq!(run("src/__.ts").len(), 1);
     }
 }
