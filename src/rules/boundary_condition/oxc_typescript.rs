@@ -200,6 +200,17 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `const x = arr[0]` / `const x = arr[arr.length - 1]` where the binding
+        // `x` is null/undefined-guarded before any unguarded use. An out-of-bounds
+        // read yields `undefined`, which the guard already handles, so the access
+        // is defensively written, not an accidental unchecked read. Covers two
+        // idioms: an early-exit guard following the binding (`if (!x) return`) and
+        // every use of `x` being individually guarded (`x?.`, `x ?? d`, or inside
+        // an `if (x && …)` truthy narrowing). See [`result_binding_is_null_guarded`].
+        if (is_first || is_last) && result_binding_is_null_guarded(node, semantic) {
+            return;
+        }
+
         let which = if is_first { "first" } else { "last" };
         let at_arg = if is_first { "0" } else { "-1" };
         // Report at the opening `[` of this access, not at `member.span().start`.
@@ -1305,7 +1316,8 @@ fn has_preceding_nullish_exit_guard(
 }
 
 /// Returns true when `expr` is a guard condition that is satisfied exactly when
-/// `name` is nullish/falsy: `!name`, `name === null`, or `name == null`.
+/// `name` is nullish/falsy: `!name`, `name === null` / `name == null`, or
+/// `name === undefined` / `name == undefined`.
 fn condition_is_nullish_check(expr: &Expression, name: &str) -> bool {
     match expr {
         Expression::UnaryExpression(unary) => {
@@ -1316,18 +1328,275 @@ fn condition_is_nullish_check(expr: &Expression, name: &str) -> bool {
             matches!(
                 bin.operator,
                 BinaryOperator::StrictEquality | BinaryOperator::Equality
-            ) && binary_compares_identifier_to_null(&bin.left, &bin.right, name)
+            ) && binary_compares_identifier_to_nullish(&bin.left, &bin.right, name)
         }
         _ => false,
     }
 }
 
 /// Returns true when one side of a binary comparison is the identifier `name`
-/// and the other is the `null` literal (order-insensitive).
-fn binary_compares_identifier_to_null(left: &Expression, right: &Expression, name: &str) -> bool {
+/// and the other is the `null` literal or the `undefined` identifier
+/// (order-insensitive).
+fn binary_compares_identifier_to_nullish(
+    left: &Expression,
+    right: &Expression,
+    name: &str,
+) -> bool {
     let is_name = |e: &Expression| matches!(e, Expression::Identifier(id) if id.name.as_str() == name);
-    let is_null = |e: &Expression| matches!(e, Expression::NullLiteral(_));
-    (is_name(left) && is_null(right)) || (is_null(left) && is_name(right))
+    let is_nullish = |e: &Expression| {
+        matches!(e, Expression::NullLiteral(_))
+            || matches!(e, Expression::Identifier(id) if id.name.as_str() == "undefined")
+    };
+    (is_name(left) && is_nullish(right)) || (is_nullish(left) && is_name(right))
+}
+
+/// Returns true when the flagged index access is the initializer of a `const`/`let`
+/// binding whose every use is null/undefined-guarded — so an out-of-bounds
+/// `undefined` is already handled and the access is defensive, not accidental. A
+/// use qualifies as guarded when it is consumed as a condition, short-circuited by
+/// an optional chain or fallback, dominated by a preceding early-exit nullish
+/// guard, or sits inside a truthy-narrowed branch (see [`reference_is_guarded`]).
+///
+/// Conservative by construction: if the access is not a `const`/`let` initializer,
+/// the binding has no uses, or any reference is reachable unguarded, the function
+/// returns false and the access stays flagged.
+fn result_binding_is_null_guarded(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some((symbol_id, name)) = declarator_binding_of_init(node, semantic) else {
+        return false;
+    };
+    all_references_guarded(symbol_id, &name, semantic)
+}
+
+/// Returns the `(symbol_id, name)` of the binding when the flagged access is the
+/// initializer of a `const`/`let` declarator with a plain identifier pattern
+/// (`const x = arr[0]`). A destructuring pattern, a non-initializer position, or a
+/// `var` (function-scoped, may be reassigned across the scope) does not qualify.
+fn declarator_binding_of_init(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> Option<(oxc_semantic::SymbolId, String)> {
+    let nodes = semantic.nodes();
+    let node_span = node.kind().span();
+    for ancestor in nodes.ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::VariableDeclarator(declarator) => {
+                if declarator.kind == VariableDeclarationKind::Var {
+                    return None;
+                }
+                let init_span = declarator.init.as_ref()?.span();
+                if init_span != node_span {
+                    return None;
+                }
+                let BindingPattern::BindingIdentifier(id) = &declarator.id else {
+                    return None;
+                };
+                let symbol_id = id.symbol_id.get()?;
+                return Some((symbol_id, id.name.to_string()));
+            }
+            // The access feeds something other than a bare declarator initializer
+            // (a call argument, a member access, an array literal, …) — the
+            // result-binding exemption does not apply.
+            AstKind::ExpressionStatement(_)
+            | AstKind::CallExpression(_)
+            | AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_) => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Returns true when every resolved value reference to the binding is individually
+/// guarded against `name` being nullish (see [`reference_is_guarded`]). A binding
+/// with no references is not vouched safe (returns false): there is no consuming
+/// read, so the original flag is harmless to keep and avoids a vacuous exemption.
+fn all_references_guarded(
+    symbol_id: oxc_semantic::SymbolId,
+    name: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let scoping = semantic.scoping();
+    let mut saw_reference = false;
+    for reference in scoping.get_resolved_references(symbol_id) {
+        if !reference.is_value() {
+            continue;
+        }
+        saw_reference = true;
+        if !reference_is_guarded(reference.node_id(), name, semantic) {
+            return false;
+        }
+    }
+    saw_reference
+}
+
+/// Returns true when `parent_kind` (the direct parent of a reference at `ref_span`)
+/// consumes the binding `name` purely as a condition, never dereferencing it:
+///   - `!name` (logical-not);
+///   - an operand of `&&` / `||` / `??` (short-circuit / coalesce test);
+///   - an equality comparison against `null` / `undefined`
+///     (`name === null`, `name != undefined`, and the mirrored forms);
+///   - the bare test of `if (name)`, `name ? … : …`, or `while (name)`.
+///
+/// In all these positions the binding is read for truthiness or compared to
+/// nullish — the element behind a possibly-out-of-bounds index is never accessed —
+/// so the read is inherently safe regardless of the array's length.
+fn reference_is_pure_condition(
+    parent_kind: AstKind,
+    ref_span: oxc_span::Span,
+    name: &str,
+) -> bool {
+    match parent_kind {
+        AstKind::UnaryExpression(unary) => {
+            matches!(unary.operator, UnaryOperator::LogicalNot)
+                && unary.argument.span() == ref_span
+        }
+        AstKind::LogicalExpression(logical) => {
+            logical.left.span() == ref_span || logical.right.span() == ref_span
+        }
+        AstKind::BinaryExpression(bin) => {
+            matches!(
+                bin.operator,
+                BinaryOperator::StrictEquality
+                    | BinaryOperator::Equality
+                    | BinaryOperator::StrictInequality
+                    | BinaryOperator::Inequality
+            ) && binary_compares_identifier_to_nullish(&bin.left, &bin.right, name)
+        }
+        AstKind::IfStatement(if_stmt) => if_stmt.test.span() == ref_span,
+        AstKind::ConditionalExpression(cond) => cond.test.span() == ref_span,
+        AstKind::WhileStatement(while_stmt) => while_stmt.test.span() == ref_span,
+        _ => false,
+    }
+}
+
+/// Returns true when the reference node `ref_node_id` (an `IdentifierReference` to
+/// the binding) is used in a position that handles `name` being nullish:
+///   0. it is consumed purely as a condition — `!name`, an operand of
+///      `&&`/`||`/`??`, an equality comparison against `null`/`undefined`, or a
+///      bare `if`/ternary/`while` test (see [`reference_is_pure_condition`]);
+///   1. it is the base of an optional chain — `name?.foo`, `name?.[i]`, `name?.()`;
+///   2. a preceding early-exit nullish guard dominates it — `if (!name) return`
+///      earlier in its block (see [`has_preceding_nullish_exit_guard`]);
+///   3. it is the tested operand of a truthy guard whose consequent/expression it
+///      stays within — `if (name) { … }`, `if (name && …) { … }`,
+///      `name && name.foo`, `name ? name.foo : d`. The reference must sit inside
+///      the guarded branch, so a use outside the narrowing is not vouched safe.
+fn reference_is_guarded(
+    ref_node_id: oxc_semantic::NodeId,
+    name: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let ref_span = nodes.kind(ref_node_id).span();
+    let parent = nodes.parent_node(ref_node_id);
+    // 0: the reference is consumed purely as a condition — reading the binding for
+    // truthiness or comparing it to nullish never dereferences the (possibly
+    // `undefined`) element, so it is inherently safe.
+    if reference_is_pure_condition(parent.kind(), ref_span, name) {
+        return true;
+    }
+    // 1: the reference is the base of an optional chain — `name?.foo`,
+    // `name?.[i]`, `name?.()`. The `?.` short-circuits when `name` is nullish.
+    match parent.kind() {
+        AstKind::StaticMemberExpression(member) => {
+            if member.optional && member.object.span() == ref_span {
+                return true;
+            }
+        }
+        AstKind::ComputedMemberExpression(member) => {
+            if member.optional && member.object.span() == ref_span {
+                return true;
+            }
+        }
+        AstKind::CallExpression(call) => {
+            if call.optional && call.callee.span() == ref_span {
+                return true;
+            }
+        }
+        _ => {}
+    }
+    // 2: an early-exit nullish guard preceding the reference in its block dominates
+    // it — `if (!name) return/throw` runs before the reference, so reaching the
+    // reference proves `name` was non-nullish.
+    if has_preceding_nullish_exit_guard(nodes.get_node(ref_node_id), name, semantic) {
+        return true;
+    }
+    // 3: the reference is dominated by a truthy guard on `name` — an enclosing
+    // `if (name …) { <ref> }` / `name ? <ref> : …` / `name && <ref>` whose test
+    // truthy-narrows `name`, and `<ref>` lives in the narrowed branch.
+    reference_in_truthy_narrowed_branch(ref_node_id, ref_span, name, nodes)
+}
+
+/// Returns true when an enclosing construct truthy-narrows `name` and the
+/// reference at `ref_span` lives in the branch that runs only when `name` was
+/// truthy: the consequent of `if (<truthy name guard>)`, the consequent of a
+/// `<truthy name guard> ? <ref> : …` ternary, or the right operand of a
+/// `<truthy name guard> && <ref>` logical-and. The guard test is recognized by
+/// [`condition_truthy_narrows`].
+fn reference_in_truthy_narrowed_branch(
+    ref_node_id: oxc_semantic::NodeId,
+    ref_span: oxc_span::Span,
+    name: &str,
+    nodes: &oxc_semantic::AstNodes,
+) -> bool {
+    for ancestor in nodes.ancestors(ref_node_id) {
+        match ancestor.kind() {
+            AstKind::IfStatement(if_stmt) => {
+                if condition_truthy_narrows(&if_stmt.test, name)
+                    && span_contains(if_stmt.consequent.span(), ref_span)
+                {
+                    return true;
+                }
+            }
+            AstKind::ConditionalExpression(cond) => {
+                if condition_truthy_narrows(&cond.test, name)
+                    && span_contains(cond.consequent.span(), ref_span)
+                {
+                    return true;
+                }
+            }
+            AstKind::LogicalExpression(logical) => {
+                if matches!(logical.operator, LogicalOperator::And)
+                    && condition_truthy_narrows(&logical.left, name)
+                    && span_contains(logical.right.span(), ref_span)
+                {
+                    return true;
+                }
+            }
+            // Leaving the binding's scope without finding a guard.
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
+                return false;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Returns true when `expr` is a condition whose truth implies `name` is truthy
+/// (non-nullish): a bare `name`, or `name && …` where the left operand is the
+/// truthy check on `name`. This is the narrowing that makes a use of `name` in the
+/// guarded branch safe.
+fn condition_truthy_narrows(expr: &Expression, name: &str) -> bool {
+    match expr {
+        Expression::Identifier(id) => id.name.as_str() == name,
+        Expression::ParenthesizedExpression(paren) => {
+            condition_truthy_narrows(&paren.expression, name)
+        }
+        Expression::LogicalExpression(logical) => {
+            matches!(logical.operator, LogicalOperator::And)
+                && condition_truthy_narrows(&logical.left, name)
+        }
+        _ => false,
+    }
+}
+
+/// Returns true when `outer` fully contains `inner`.
+fn span_contains(outer: oxc_span::Span, inner: oxc_span::Span) -> bool {
+    outer.start <= inner.start && inner.end <= outer.end
 }
 
 /// Returns true when the index access lives inside a function whose parameter
@@ -2163,6 +2432,134 @@ mod tests {
         // Negative space: a `let` may be reassigned to a non-split value, so the
         // split contract no longer proves non-emptiness at the read site.
         let src = "let parts = s.split(','); parts = []; const x = parts[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_result_binding_early_exit_not_first_issue_2132() {
+        // The issue's InfiniteList example: `const lastItem = items[items.length - 1]`
+        // followed by `if (!lastItem) return`. The early exit handles the
+        // out-of-bounds `undefined`, so the last-element read is defensive.
+        let src = "function f(virtualItems) { const lastItem = virtualItems[virtualItems.length - 1]; if (!lastItem) return; if (lastItem.index >= 0) onLoadNextPage(); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_result_binding_early_exit_first_issue_2132() {
+        let src = "function f(items) { const first = items[0]; if (!first) return; use(first); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_result_binding_early_exit_loose_null_issue_2132() {
+        let src = "function f(arr) { const x = arr[0]; if (x == null) return; use(x); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_result_binding_early_exit_strict_undefined_issue_2132() {
+        let src = "function f(arr) { const x = arr[0]; if (x === undefined) return; use(x); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_result_binding_early_exit_throw_issue_2132() {
+        let src = "function f(arr) { const x = arr[0]; if (!x) throw new Error('empty'); return x.id; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_result_binding_truthy_and_narrowing_issue_2132() {
+        // The issue's AIAssistant example: `if (lastMessage && lastMessage.role ===
+        // 'assistant') { state.updateMessage(lastMessage) }`. Every use of
+        // `lastMessage` is inside the truthy-narrowed branch.
+        let src = "function f(chatMessages, state) { const lastMessage = chatMessages[chatMessages.length - 1]; if (lastMessage && lastMessage.role === 'assistant') { state.updateMessage(lastMessage); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_result_binding_if_truthy_block_issue_2132() {
+        let src = "function f(arr) { const x = arr[0]; if (x) { return x.name; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_result_binding_optional_chain_use_issue_2132() {
+        let src = "function f(arr) { const x = arr[0]; return x?.foo; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_result_binding_nullish_fallback_use_issue_2132() {
+        let src = "function f(arr) { const x = arr[0]; return x ?? defaultValue; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_result_binding_logical_or_fallback_use_issue_2132() {
+        let src = "function f(arr) { const x = arr[0]; return x || defaultValue; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_result_binding_logical_and_use_issue_2132() {
+        let src = "function f(arr) { const x = arr[0]; return x && x.foo; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_result_binding_unguarded_use_issue_2132() {
+        // Negative space: the binding is used without any null guard, so the
+        // out-of-bounds `undefined` is dereferenced — still a true positive.
+        let src = "function f(arr) { const x = arr[0]; use(x); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_result_binding_member_use_issue_2132() {
+        // Negative space: `x.foo` dereferences a possibly-`undefined` element with
+        // no guard, so it stays flagged.
+        let src = "function f(arr) { const x = arr[0]; return x.foo; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_result_binding_use_before_guard_issue_2132() {
+        // Negative space: the unguarded `use(x)` runs before the `if (!x)` guard,
+        // so the early read is not vouched safe.
+        let src = "function f(arr) { const x = arr[0]; use(x); if (!x) return; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_result_binding_guard_on_other_var_issue_2132() {
+        // Negative space: the early-exit guard is on `y`, not `x`, so `x` is still
+        // an unguarded out-of-bounds read.
+        let src = "function f(arr, y) { const x = arr[0]; if (!y) return; return x.foo; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_result_binding_use_outside_narrowed_branch_issue_2132() {
+        // Negative space: `x` is read in the `else` branch, where the truthy
+        // narrowing does not hold, so it can be `undefined`.
+        let src = "function f(arr) { const x = arr[0]; if (x) { use(x); } else { return x.foo; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_result_binding_var_declaration_issue_2132() {
+        // Negative space: a `var` is function-scoped and may be reassigned anywhere
+        // in the function, so the binding-level reasoning does not apply.
+        let src = "function f(arr) { var x = arr[0]; if (!x) return; use(x); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_first_index_not_a_binding_initializer_issue_2132() {
+        // Negative space: the access is a bare expression statement, not a
+        // `const`/`let` initializer, so the result-binding exemption never applies.
+        let src = "function f(arr) { arr[0]; }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
