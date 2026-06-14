@@ -53,6 +53,24 @@ fn has_pascal_case_base_with_underscore_suffix(name: &str) -> bool {
     is_pascal_case(base) && base.chars().any(|c| c.is_ascii_lowercase())
 }
 
+/// `SCREAMING_PREFIX_PascalCase` is an established React-ecosystem namespace
+/// convention: an ALL_CAPS prefix groups a library's internal components under a
+/// recognizable marker (Mantine React Table's `MRT_TableFooterRow`, `UI_Button`,
+/// `DS_Card`). Upstream `react/jsx-pascal-case` covers it via `allowAllCaps`.
+/// Accept a single all-caps prefix (`[A-Z][A-Z0-9]+`, length >= 2) followed by
+/// `_` and a PascalCase tail. The tail must be genuine mixed-case PascalCase, so
+/// a lowercase tail (`MRT_table`) or a bare prefix (`MRT_`) stays flagged, and
+/// pure `SCREAMING_SNAKE_CASE` (`MY_COMPONENT`) is not admitted.
+fn is_screaming_prefix_pascal_case(name: &str) -> bool {
+    let Some((prefix, tail)) = name.split_once('_') else {
+        return false;
+    };
+    let is_screaming_prefix = prefix.len() >= 2
+        && prefix.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        && prefix.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
+    is_screaming_prefix && is_pascal_case(tail) && tail.chars().any(|c| c.is_ascii_lowercase())
+}
+
 fn is_intrinsic(name: &str) -> bool {
     let first = name.chars().next().unwrap_or('a');
     first.is_ascii_lowercase()
@@ -132,7 +150,10 @@ impl OxcCheck for Check {
             _ => return,
         };
 
-        if !is_pascal_case(&tag) && !has_pascal_case_base_with_underscore_suffix(&tag) {
+        if !is_pascal_case(&tag)
+            && !has_pascal_case_base_with_underscore_suffix(&tag)
+            && !is_screaming_prefix_pascal_case(&tag)
+        {
             let (line, column) =
                 byte_offset_to_line_col(ctx.source, opening.name.span().start as usize);
 
@@ -302,6 +323,70 @@ mod tests {
     #[test]
     fn flags_leading_underscore_empty_base() {
         assert_eq!(run("const x = <_DataTable />;").len(), 1);
+    }
+
+    // Issue #2182: `SCREAMING_PREFIX_PascalCase` is a React-ecosystem namespace
+    // convention (Mantine React Table's `MRT_` prefix). An ALL_CAPS prefix +
+    // `_` + PascalCase tail must not be flagged.
+    #[test]
+    fn allows_screaming_prefix_mrt_table_footer_row() {
+        assert!(run("const x = <MRT_TableFooterRow />;").is_empty());
+    }
+
+    #[test]
+    fn allows_screaming_prefix_ui_button() {
+        assert!(run("const x = <UI_Button />;").is_empty());
+    }
+
+    #[test]
+    fn allows_screaming_prefix_ds_card() {
+        assert!(run("const x = <DS_Card>x</DS_Card>;").is_empty());
+    }
+
+    // Negative space for the SCREAMING_PREFIX relaxation: a bare prefix with no
+    // PascalCase tail and a lowercase tail are not the convention and still fire.
+    #[test]
+    fn flags_bare_screaming_prefix_no_tail() {
+        assert_eq!(run("const x = <MRT_ />;").len(), 1);
+    }
+
+    #[test]
+    fn flags_screaming_prefix_lowercase_tail() {
+        assert_eq!(run("const x = <MRT_table />;").len(), 1);
+    }
+
+    // `myComponent` (camel) is exempted as an intrinsic before the check; a
+    // member-root camel/kebab still fires (covered above). An all-lowercase
+    // snake name (`my_component`) is treated as intrinsic (lowercase-first) and
+    // is not this rule's concern — kebab/camel/lowercase-snake are covered by the
+    // intrinsic exemption and existing tests. Pure SCREAMING_SNAKE_CASE stays
+    // flagged.
+    #[test]
+    fn flags_pure_screaming_snake_case() {
+        assert_eq!(run("const x = <MY_COMPONENT />;").len(), 1);
+    }
+
+    #[test]
+    fn is_screaming_prefix_pascal_case_decisions() {
+        // ALL_CAPS prefix + PascalCase tail → accepted.
+        assert!(is_screaming_prefix_pascal_case("MRT_TableFooterRow"));
+        assert!(is_screaming_prefix_pascal_case("UI_Button"));
+        assert!(is_screaming_prefix_pascal_case("DS_Card"));
+        // Digits in the prefix are allowed (still all-caps namespace).
+        assert!(is_screaming_prefix_pascal_case("V2_Widget"));
+        // Bare prefix (empty tail) → rejected.
+        assert!(!is_screaming_prefix_pascal_case("MRT_"));
+        // Lowercase tail → rejected.
+        assert!(!is_screaming_prefix_pascal_case("MRT_table"));
+        // Pure SCREAMING_SNAKE_CASE (uppercase tail) → rejected.
+        assert!(!is_screaming_prefix_pascal_case("MY_COMPONENT"));
+        // Single-char prefix is too short to be a namespace marker → rejected.
+        assert!(!is_screaming_prefix_pascal_case("A_Button"));
+        // Mixed-case prefix is not an ALL_CAPS namespace → rejected (handled by
+        // the underscore-suffix convention instead).
+        assert!(!is_screaming_prefix_pascal_case("Input_Shadcn_"));
+        // No underscore → not this convention.
+        assert!(!is_screaming_prefix_pascal_case("MyComponent"));
     }
 
     #[test]
