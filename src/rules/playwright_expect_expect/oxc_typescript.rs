@@ -70,7 +70,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else {
@@ -97,23 +97,37 @@ impl OxcCheck for Check {
             _ => return,
         };
 
-        if !callback_contains_expect(
+        if callback_contains_expect(
             ctx.source,
             callback_span.start as usize,
             callback_span.end as usize,
         ) {
-            let (line, column) =
-                byte_offset_to_line_col(ctx.source, call.span.start as usize);
-            diagnostics.push(Diagnostic {
-                path: Arc::clone(&ctx.path_arc),
-                line,
-                column,
-                rule_id: super::META.id.into(),
-                message: "Test has no assertions.".into(),
-                severity: Severity::Warning,
-                span: None,
-            });
+            return;
         }
+        // The assertion may be delegated to a same-file helper whose body wraps
+        // `expect(...)` (e.g. `await expectSelectedTab(tabs, ...)`), or named by
+        // the `expect`/`assert` convention even when imported. Follow both
+        // signals before flagging.
+        if crate::rules::test_assertion_helpers::body_calls_asserting_local_helper(
+            callback_span,
+            semantic,
+        ) || crate::rules::test_assertion_helpers::body_contains_assertion_prefixed_call(
+            callback_span,
+            semantic,
+        ) {
+            return;
+        }
+
+        let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
+        diagnostics.push(Diagnostic {
+            path: Arc::clone(&ctx.path_arc),
+            line,
+            column,
+            rule_id: super::META.id.into(),
+            message: "Test has no assertions.".into(),
+            severity: Severity::Warning,
+            span: None,
+        });
     }
 }
 
@@ -190,6 +204,49 @@ mod tests {
             "test.describe('group', () => {\n  \
                 test('does nothing', async ({page}) => { await page.click('#btn'); });\n\
             });",
+        );
+        assert_eq!(d.len(), 1, "{d:?}");
+    }
+
+    // Regression for #2138 — withastro/starlight's `basics.test.ts` pattern: the
+    // test body's only assertion lives in a file-scope helper
+    // (`expectSelectedTab`) that wraps `expect(...).toHaveAttribute(...)`. The
+    // body has no literal `expect(`, only calls to the helper.
+    #[test]
+    fn allows_test_delegating_to_file_scope_helper_with_expect() {
+        let d = run(
+            "async function expectSelectedTab(tabs, syncKey, panelText) {\n  \
+                await expect(tabs.getByRole('tab')).toHaveAttribute('data-sync-key', syncKey);\n  \
+                await expect(tabs.getByRole('tabpanel')).toHaveText(panelText);\n\
+             }\n\
+             test('syncs tabs', async ({page}) => {\n  \
+                const tabs = page.locator('starlight-tabs');\n  \
+                await expectSelectedTab(tabs, 'pnpm', 'pnpm command');\n\
+             });",
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    // Regression for #2138 — the assertion-name convention also covers the case
+    // where the `expect`-prefixed helper is not defined in this file (imported).
+    #[test]
+    fn allows_test_delegating_to_expect_prefixed_callee() {
+        let d = run("test('shows banner', async ({page}) => { await expectVisible(page, '#banner'); });");
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    // Negative-space guard for #2138: a test whose body calls only a
+    // non-asserting helper (no `expect` inside, non-assertion name) must STILL
+    // be flagged.
+    #[test]
+    fn still_flags_test_calling_non_asserting_helper() {
+        let d = run(
+            "async function setup(page) {\n  \
+                await page.goto('/');\n\
+             }\n\
+             test('does nothing', async ({page}) => {\n  \
+                await setup(page);\n\
+             });",
         );
         assert_eq!(d.len(), 1, "{d:?}");
     }

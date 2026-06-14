@@ -419,6 +419,28 @@ pub(crate) fn body_calls_asserting_local_helper(
     span_reaches_asserting_helper(body_span, semantic, &mut visited, 0)
 }
 
+/// True when a call within `body_span` invokes an assertion entry point by name:
+/// a bare or `expect`/`assert`-prefixed identifier (`expect(...)`,
+/// `expectSelectedTab(...)`, `assertResponse(...)`), `attest`, a React render
+/// call, or an `expect.*`/`assert.*` member call. This is the naming-convention
+/// signal — it fires even when the helper is imported from another file, where
+/// [`body_calls_asserting_local_helper`] (which only follows same-file
+/// declarations) cannot see the assertion. Mirrors eslint-plugin-playwright /
+/// jest's `assertFunctionNames` defaults.
+pub(crate) fn body_contains_assertion_prefixed_call(
+    body_span: Span,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    semantic.nodes().iter().any(|n| {
+        let AstKind::CallExpression(call) = n.kind() else {
+            return false;
+        };
+        call.span.start >= body_span.start
+            && call.span.end <= body_span.end
+            && call_is_assertion(call)
+    })
+}
+
 /// Walk every call expression inside `span`; if any resolves to a same-file
 /// helper whose body asserts (directly or transitively), return true.
 fn span_reaches_asserting_helper(
