@@ -350,6 +350,27 @@ pub fn has_test_suite_factory_suffix(path: &Path) -> bool {
     })
 }
 
+/// Strip a build-tool query/hash suffix from a relative or absolute path
+/// specifier, returning the bare filesystem path. Vite (and other bundlers)
+/// attach an import directive as a query string — `./file.txt?url`,
+/// `./worker.js?worker`, `./image.png?raw&inline` — or a hash fragment that the
+/// bundler consumes at build time and that is not part of the on-disk path. The
+/// file resolver must stat `./file.txt`, not the literal `./file.txt?url`.
+///
+/// Only relative (`./`, `../`) and absolute (`/`) specifiers are stripped:
+/// bare package specifiers never name an on-disk path here and are returned
+/// unchanged, so a hypothetical `?` inside one is left intact. The suffix is cut
+/// at the first `?` or `#`, whichever comes first, since a query precedes a hash
+/// in URL grammar and the bundler treats everything after either as a directive.
+#[must_use]
+pub fn strip_specifier_query(spec: &str) -> &str {
+    if !(spec.starts_with("./") || spec.starts_with("../") || spec.starts_with('/')) {
+        return spec;
+    }
+    let cut = spec.find(['?', '#']).unwrap_or(spec.len());
+    &spec[..cut]
+}
+
 /// True for an import specifier that traverses into a build-output or
 /// code-generated directory (`dist`/`build`/`out` bundles, `generated`/
 /// `__generated__`/`.prisma`/`prisma`/`gen` codegen output) or `node_modules`.
@@ -809,6 +830,26 @@ mod aux_path_tests {
         assert!(!is_build_output_specifier("./lib/util.js"));
         assert!(!is_build_output_specifier("./generated-things"));
         assert!(!is_build_output_specifier("./does-not-exist"));
+    }
+
+    #[test]
+    fn strip_specifier_query_drops_vite_directives() {
+        // Issue #1582: Vite query-string asset imports — the `?…` directive is a
+        // build-time transform, not part of the on-disk path.
+        assert_eq!(strip_specifier_query("./file.txt?url"), "./file.txt");
+        assert_eq!(strip_specifier_query("./image.png?raw"), "./image.png");
+        assert_eq!(strip_specifier_query("./worker.js?worker"), "./worker.js");
+        assert_eq!(strip_specifier_query("./data.csv?url&inline"), "./data.csv");
+        assert_eq!(strip_specifier_query("../[url].txt?url"), "../[url].txt");
+        assert_eq!(strip_specifier_query("/abs/styles.css?url"), "/abs/styles.css");
+        // A hash fragment is cut too; a query before a hash wins (URL grammar).
+        assert_eq!(strip_specifier_query("./mod.js#frag"), "./mod.js");
+        assert_eq!(strip_specifier_query("./mod.js?url#frag"), "./mod.js");
+        // No suffix: returned unchanged.
+        assert_eq!(strip_specifier_query("./file.txt"), "./file.txt");
+        // Bare package specifiers are never on-disk paths here — left intact.
+        assert_eq!(strip_specifier_query("react?weird"), "react?weird");
+        assert_eq!(strip_specifier_query("@scope/pkg/sub"), "@scope/pkg/sub");
     }
 
     #[test]

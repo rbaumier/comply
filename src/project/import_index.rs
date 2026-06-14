@@ -2450,6 +2450,10 @@ fn resolve_relative(
     if !specifier.starts_with('.') {
         return None;
     }
+    // Drop a build-tool query/hash suffix (`./checks.js?worker`, `./mod.ts#frag`):
+    // the bundler consumes the directive at build time; only the bare path exists
+    // on disk.
+    let specifier = crate::rules::path_utils::strip_specifier_query(specifier);
     let base_dir = importer.parent()?;
     let target = base_dir.join(specifier);
     probe_path(&target, known).or_else(|| probe_decl_sibling(&target))
