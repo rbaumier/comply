@@ -133,26 +133,18 @@ struct OverloadSig {
     return_type: Option<String>,
 }
 
-/// True when ALL overload signatures share at least one generic type parameter
-/// name that appears in their return type. This signals "overloads load-bearing
-/// for generic return-type inference" — collapsing them would widen the return
-/// type via union and lose narrow inference at call sites.
+/// True when EVERY overload signature has a generic type parameter that appears
+/// in its return type. Each such overload's return type is parameterized by its
+/// own generics, so it is load-bearing for generic return-type inference at the
+/// call site. The generic names need not be shared across signatures: the
+/// canonical "optional-parameter overload" pattern uses disjoint generics —
+/// `f<S>(api: S): R<S>` and `f<S, U>(api: S, sel: (s) => U): U` infer different
+/// return types from different call sites. Collapsing such overloads into one
+/// signature would widen the return type via union (`R<S> | U`) and lose that
+/// per-call-site inference. A group where some signature lacks a generic in its
+/// return type does not qualify: that signature collapses into the union cleanly.
 fn preserves_generic_return_inference(sigs: &[OverloadSig]) -> bool {
-    let mut iter = sigs.iter();
-    let Some(first) = iter.next() else {
-        return false;
-    };
-    if first.generics_in_return.is_empty() {
-        return false;
-    }
-    let mut intersection: Vec<String> = first.generics_in_return.clone();
-    for sig in iter {
-        intersection.retain(|n| sig.generics_in_return.iter().any(|m| m == n));
-        if intersection.is_empty() {
-            return false;
-        }
-    }
-    true
+    sigs.iter().all(|sig| !sig.generics_in_return.is_empty())
 }
 
 /// True when EVERY overload signature returns a `x is T` type predicate. Each
@@ -311,6 +303,45 @@ export function make<
   return {} as any;
 }
 "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_disjoint_generic_return_overloads() {
+        // Regression for #1665: zustand `useStore` returns `ExtractState<S>` in
+        // its selector-less form and `U` in its selector form. The return-type
+        // generics are disjoint (`S` vs `U`), so no shared name exists, yet each
+        // overload's return type is inferred per call site. Collapsing into
+        // `(api: S, selector?: ...) => ExtractState<S> | U` would erase that
+        // inference and hand every caller the widened union.
+        let source = r#"
+export function useStore<S extends ReadonlyStoreApi<unknown>>(
+  api: S,
+): ExtractState<S>;
+export function useStore<S extends ReadonlyStoreApi<unknown>, U>(
+  api: S,
+  selector: (state: ExtractState<S>) => U,
+): U;
+export function useStore<TState, StateSlice>(
+  api: ReadonlyStoreApi<TState>,
+  selector: (state: TState) => StateSlice = identity as any,
+) {
+  return {} as any;
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_disjoint_generic_return_overloads_at_same_arity() {
+        // The disjoint-generic-return pattern is load-bearing even when the
+        // overloads share an arity: the arity-based call-context exemption does
+        // not fire here, but each return type is still inferred per call site.
+        let source = "
+function pick<S extends Api>(api: S): ExtractState<S>;
+function pick<S extends Api, U>(api: (state: S) => U): U;
+function pick(api: any): any { return api; }
+";
         assert!(run_on(source).is_empty());
     }
 
