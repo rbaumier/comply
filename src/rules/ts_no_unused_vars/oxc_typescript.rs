@@ -5,6 +5,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
+use oxc_ast::ast::FunctionType;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -39,6 +40,26 @@ fn is_react_pragma_import(
     }
     nodes.ancestor_kinds(decl_node).any(
         |k| matches!(k, AstKind::ImportDeclaration(import) if import.source.value == "react"),
+    )
+}
+
+/// True when `decl_node` is the id of a named function *expression*
+/// (`const f = function name() {}`). That name is the function's own identity,
+/// scoped to its body for self-reference / stack traces — it is intentionally
+/// not a binding in the outer scope, so an absence of references is by design,
+/// not dead code. A function *declaration* (`function name() {}`) is excluded:
+/// its name is a real outer-scope binding and an unused one stays reportable.
+fn is_named_function_expression_id(
+    decl_node: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    matches!(
+        semantic.nodes().kind(decl_node),
+        AstKind::Function(func)
+            if matches!(
+                func.r#type,
+                FunctionType::FunctionExpression | FunctionType::TSEmptyBodyFunctionExpression
+            )
     )
 }
 
@@ -80,6 +101,10 @@ impl OxcCheck for Check {
             }
 
             let decl_node = scoping.symbol_declaration(symbol_id);
+
+            if is_named_function_expression_id(decl_node, semantic) {
+                continue;
+            }
 
             if is_react_pragma_import(decl_node, semantic)
                 && *has_jsx.get_or_insert_with(|| file_contains_jsx(semantic))
@@ -356,6 +381,49 @@ export const El = () => <div />;
             diags.iter().any(|d| d.message.contains("`unusedDefault`")),
             "expected unused non-React default import to be flagged: {diags:?}"
         );
+    }
+
+    #[test]
+    fn no_fp_on_named_function_expression_id() {
+        // The inner name of a named function expression is scoped to the
+        // function body (self-reference / stack traces) and is intentionally not
+        // a binding in the outer scope, so its absence of outer references is by
+        // design, not dead code. (Closes #1603)
+        let src = r#"
+const machineSnapshotMatches = function matches(
+    this: AnyMachineSnapshot,
+    testValue: StateValue,
+) {
+    return matchesState(testValue, this.value);
+};
+
+const machineSnapshotHasTag = function hasTag(
+    this: AnyMachineSnapshot,
+    tag: string,
+) {
+    return this.tags.has(tag);
+};
+export { machineSnapshotMatches, machineSnapshotHasTag };
+"#;
+        let diags = run(src);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`matches`")),
+            "FP on named function expression id `matches`: {diags:?}"
+        );
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`hasTag`")),
+            "FP on named function expression id `hasTag`: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_unused_function_declaration() {
+        // Negative-space guard: a function *declaration*'s name is a real
+        // outer-scope binding, so a genuinely unused one is still dead code.
+        let src = "function unusedHelper() {}\nexport {};";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "expected `unusedHelper` to be flagged: {diags:?}");
+        assert!(diags[0].message.contains("`unusedHelper`"));
     }
 
     #[test]
