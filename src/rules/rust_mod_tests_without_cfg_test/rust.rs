@@ -1,8 +1,9 @@
 //! rust-mod-tests-without-cfg-test backend.
 //!
-//! Walks `mod_item` nodes whose name is `tests` (or `test`) and
-//! checks the preceding `attribute_item` siblings for a
-//! `#[cfg(test)]` attribute. Flag if absent.
+//! Walks `mod_item` nodes whose name is `tests` (or `test`) and checks the
+//! preceding `attribute_item` siblings for an attribute that activates the
+//! `test` cfg — `#[cfg(test)]`, compound forms like `#[cfg(all(test, …))]`
+//! and `#[cfg(any(test, …))]`, and `#[cfg_attr(test, …)]`. Flag if absent.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -32,7 +33,7 @@ impl AstCheck for Check {
         if name != "tests" && name != "test" {
             return;
         }
-        if has_cfg_test_attribute(node, source_bytes) {
+        if crate::rules::rust_helpers::has_test_attribute(node, source_bytes) {
             return;
         }
         let pos = node.start_position();
@@ -50,22 +51,6 @@ impl AstCheck for Check {
             span: None,
         });
     }
-}
-
-fn has_cfg_test_attribute(item: tree_sitter::Node, source: &[u8]) -> bool {
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        if s.kind() != "attribute_item" {
-            break;
-        }
-        if let Ok(text) = s.utf8_text(source)
-            && (text.contains("cfg(test)") || text.contains("cfg_attr(test"))
-        {
-            return true;
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
 }
 
 #[cfg(test)]
@@ -105,5 +90,36 @@ mod tests {
     #[test]
     fn does_not_flag_other_module() {
         assert!(run_on("mod helpers { fn h() {} }").is_empty());
+    }
+
+    #[test]
+    fn allows_mod_tests_with_compound_cfg_test() {
+        let cases = [
+            "#[cfg(all(test, not(loom)))]\nmod tests { #[test] fn t() {} }",
+            "#[cfg(any(test, feature = \"x\"))]\nmod tests { #[test] fn t() {} }",
+            "#[cfg(all(test, target_has_atomic = \"64\"))]\nmod test { #[test] fn t() {} }",
+        ];
+        for source in cases {
+            assert!(
+                run_on(source).is_empty(),
+                "should not flag compound cfg(test): {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_mod_tests_with_non_test_cfg() {
+        let cases = [
+            "mod tests { #[test] fn t() {} }",
+            "#[cfg(feature = \"x\")]\nmod tests { #[test] fn t() {} }",
+            "#[cfg(not(test))]\nmod tests { #[test] fn t() {} }",
+        ];
+        for source in cases {
+            assert_eq!(
+                run_on(source).len(),
+                1,
+                "should still flag non-test-cfg mod tests: {source}"
+            );
+        }
     }
 }
