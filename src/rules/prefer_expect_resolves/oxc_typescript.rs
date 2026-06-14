@@ -5,9 +5,26 @@ use std::sync::Arc;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Argument, Expression};
+use oxc_ast::ast::{Argument, Expression, Statement};
 
 pub struct Check;
+
+/// True when the file imports `expect` (or anything) from the `chai` package.
+/// Chai's `expect()` is a synchronous assertion wrapper with no `.resolves`
+/// property, so the `await expect(promise).resolves` rewrite this rule
+/// suggests is jest/vitest-only — applying it to a chai assertion would throw
+/// a `TypeError` at runtime. The `expect` identifier this rule keys on means
+/// chai's `expect` whenever the file imports from chai. Matches `'chai'` and
+/// chai subpath specifiers (e.g. `'chai/register-expect'`).
+fn imports_chai(program: &oxc_ast::ast::Program<'_>) -> bool {
+    program.body.iter().any(|stmt| {
+        let Statement::ImportDeclaration(import) = stmt else {
+            return false;
+        };
+        let source = import.source.value.as_str();
+        source == "chai" || source.starts_with("chai/")
+    })
+}
 
 /// True when the awaited expression is a React-Testing-Library `findBy*` /
 /// `findAllBy*` query. Those reject (throw) on not-found with RTL's own
@@ -39,7 +56,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else { return };
@@ -58,6 +75,12 @@ impl OxcCheck for Check {
 
         // RTL `findBy*` queries already reject on miss — no `.resolves` gain.
         if awaited_is_rtl_find_query(&await_expr.argument) {
+            return;
+        }
+
+        // chai's `expect()` has no `.resolves` API — the suggested rewrite is
+        // jest/vitest-only and would throw at runtime in a chai file.
+        if imports_chai(semantic.nodes().program()) {
             return;
         }
 
@@ -119,5 +142,38 @@ mod tests {
     #[test]
     fn skips_bare_find_by_import() {
         assert!(run(r#"expect(await findByTestId("x")).toBeVisible();"#).is_empty());
+    }
+
+    // Regression for #1728: graphql-js (node:test + chai) imports `expect` from
+    // chai, whose assertion object has no `.resolves` property. The suggested
+    // rewrite would throw a TypeError, so the rule must not fire.
+    #[test]
+    fn skips_when_expect_imported_from_chai() {
+        let src = r#"
+import { expect } from 'chai';
+const iterator = events[Symbol.asyncIterator]();
+expect(await iterator.next()).to.deep.equal({ value: [], done: false });
+"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn skips_when_chai_imported_via_subpath() {
+        let src = r#"
+import 'chai/register-expect';
+expect(await getValue()).to.equal(1);
+"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative space: a genuine jest/vitest `expect(await p)` (no chai import)
+    // is still flagged — the chai guard must not over-suppress.
+    #[test]
+    fn flags_jest_expect_when_no_chai_import() {
+        let src = r#"
+import { expect } from 'vitest';
+expect(await getValue()).toEqual(1);
+"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
