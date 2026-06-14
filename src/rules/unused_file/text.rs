@@ -111,6 +111,7 @@ fn detect_entry_points<'a>(
                 || is_test_file(p)
                 || project.entrypoints_contains(p)
                 || project.is_package_entry_file(p)
+                || project.is_in_published_files_surface(p)
         })
         .collect()
 }
@@ -1634,6 +1635,54 @@ mod tests {
         assert!(
             diags[0].path.to_str().unwrap().contains("dead.rs"),
             "only the genuinely orphaned dead.rs (declared by no `mod`) is flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #2373 (express 5.x): a published library declares a `files`
+    // whitelist but no `main`/`exports`/`module`, relying on npm's default
+    // `index.js` entry resolution. `is_library` is false (so the rule runs), but
+    // the files inside the published `files` surface are reachable only through
+    // the package boundary, never `import`ed within the repo. They must not be
+    // flagged.
+    #[test]
+    fn published_files_surface_without_main_exports_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"name":"express","files":["LICENSE","Readme.md","index.js","lib/"]}"#,
+            ),
+            ("index.js", "module.exports = require('./lib/express');\n"),
+            ("lib/express.js", "module.exports = function express() {};\n"),
+            ("lib/router.js", "module.exports = function router() {};\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "files within the published `files` surface of a library with no \
+             main/exports must not be flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #2373: the `files`-surface exemption is precise — a source
+    // file that is neither imported nor part of the published `files` whitelist
+    // (here `internal/scratch.js`, outside the published `lib/`) is still a true
+    // positive.
+    #[test]
+    fn orphan_outside_published_files_surface_still_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{"name":"express","files":["index.js","lib/"]}"#,
+            ),
+            ("index.js", "module.exports = require('./lib/express');\n"),
+            ("lib/express.js", "module.exports = function express() {};\n"),
+            ("internal/scratch.js", "module.exports = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("scratch"),
+            "only the orphan outside the published `files` surface is flagged: {diags:?}"
         );
     }
 }
