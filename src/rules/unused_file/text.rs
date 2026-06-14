@@ -123,6 +123,10 @@ fn is_entry_point(
 ) -> bool {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
 
+    if is_rust_entry_point(path) {
+        return true;
+    }
+
     if is_config_file(path) {
         return true;
     }
@@ -243,6 +247,21 @@ fn is_standalone_sample_script(path: &Path, stem: &str) -> bool {
     path.components().any(|c| {
         matches!(c.as_os_str().to_str(), Some("samples") | Some("samples-dev"))
     })
+}
+
+/// True for a Cargo entry point that the import-graph BFS cannot reach on its
+/// own. `lib.rs` / `main.rs` are crate roots Cargo compiles automatically — in
+/// a workspace each member has its own, and a sibling crate reaches them only
+/// via `use <crate_name>::…` (an external-crate name the module resolver does
+/// not follow), so each must seed the reachable set. `build.rs` is a build
+/// script Cargo executes directly; it is never `mod`-included, so nothing in the
+/// import graph references it. Seeding the crate roots makes their whole module
+/// tree (`mod.rs` and submodule files, via `mod` edges) reachable.
+fn is_rust_entry_point(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|n| n.to_str()),
+        Some("lib.rs") | Some("main.rs") | Some("build.rs")
+    )
 }
 
 fn is_declaration_file(path: &Path) -> bool {
@@ -1564,6 +1583,57 @@ mod tests {
         assert!(
             diags[0].path.to_str().unwrap().contains("orphan"),
             "without Docusaurus, an orphaned src/components/ file is still flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #1271 (kanidm): a Rust workspace's secondary-crate entry
+    // points are Cargo conventions the import-graph BFS cannot reach on its own.
+    // The primary binary crate's `main.rs` is a BFS root, but it pulls the
+    // secondary `proto` crate in via `use proto::…` — an external-crate name the
+    // module resolver cannot follow to `proto/src/lib.rs`. So `proto`'s crate
+    // root, its `build.rs` build script (never `mod`-included), and its
+    // `mod`-included modules (`v1/mod.rs` and the `v1/message.rs` it declares)
+    // are all unreachable from the binary, yet every one is a Cargo entry point
+    // or reachable through `mod` and must not be flagged.
+    #[test]
+    fn rust_workspace_crate_entry_points_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("Cargo.toml", "[workspace]\nmembers = [\"app\", \"proto\"]\n"),
+            ("app/Cargo.toml", "[package]\nname = \"app\"\n"),
+            ("app/src/main.rs", "use proto::v1::message::Message;\nfn main() {}\n"),
+            ("proto/Cargo.toml", "[package]\nname = \"proto\"\n"),
+            ("proto/build.rs", "fn main() {}\n"),
+            ("proto/src/lib.rs", "pub mod v1;\n"),
+            ("proto/src/v1/mod.rs", "pub mod message;\n"),
+            ("proto/src/v1/message.rs", "pub struct Message;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "lib.rs (crate root), build.rs (build script), and mod-included \
+             v1/mod.rs + v1/message.rs are all Cargo entry points / reachable: {diags:?}"
+        );
+    }
+
+    // Regression for #1271: the Cargo entry-point recognition is precise — a
+    // genuinely orphaned `.rs` file that is neither a crate root, nor a build
+    // script, nor declared by any `mod <name>;` is still a true positive.
+    #[test]
+    fn orphan_rust_file_not_mod_included_still_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("Cargo.toml", "[workspace]\nmembers = [\"app\", \"proto\"]\n"),
+            ("app/Cargo.toml", "[package]\nname = \"app\"\n"),
+            ("app/src/main.rs", "fn main() {}\n"),
+            ("proto/Cargo.toml", "[package]\nname = \"proto\"\n"),
+            ("proto/src/lib.rs", "pub mod v1;\n"),
+            ("proto/src/v1/mod.rs", "pub struct V1;\n"),
+            ("proto/src/dead.rs", "pub struct Dead;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("dead.rs"),
+            "only the genuinely orphaned dead.rs (declared by no `mod`) is flagged: {diags:?}"
         );
     }
 }
