@@ -281,10 +281,10 @@ fn is_valid_this_context(
     // determines validity:
     // - ArrowFunction: transparent, keep going.
     // - Function inside a MethodDefinition (class method): valid.
-    // - Function that is an object-literal shorthand method: valid.
+    // - Function that is an object-literal method or property value: valid.
     // - Standalone Function: invalid — stop.
     // - Class: valid (property initializer, etc.).
-    let mut hit_function = false;
+    let mut entered_function: Option<oxc_span::Span> = None;
     for ancestor in semantic.nodes().ancestors(node.id()) {
         match ancestor.kind() {
             AstKind::Class(_) => return true,
@@ -324,28 +324,35 @@ fn is_valid_this_context(
                 }
                 // Mark that we've entered a function scope; need to
                 // check if it's wrapped in a MethodDefinition.
-                hit_function = true;
+                entered_function = Some(func.span);
             }
-            AstKind::MethodDefinition(_) if hit_function => {
+            AstKind::MethodDefinition(_) if entered_function.is_some() => {
                 // The Function was a class method — `this` is valid.
                 return true;
             }
-            AstKind::PropertyDefinition(_) if hit_function => {
+            AstKind::PropertyDefinition(_) if entered_function.is_some() => {
                 // Property initializer context — valid.
                 return true;
             }
-            AstKind::ObjectProperty(prop) if hit_function && prop.method => {
-                // Object-literal shorthand method (`{ foo() { this } }`,
-                // including `[Symbol.asyncIterator]() { return this; }`) —
-                // `this` is bound to the object. A function-valued property
-                // (`{ foo: function() {} }`) has `method == false` and stays
-                // flagged.
+            AstKind::ObjectProperty(prop)
+                if entered_function.is_some_and(|func_span| {
+                    prop.method || prop.value.span() == func_span
+                }) =>
+            {
+                // Object-literal method or function-valued property —
+                // `this` is bound to the object when called as `obj.key()`.
+                // Both the shorthand form (`{ foo() { this } }`,
+                // `prop.method == true`) and the non-shorthand form
+                // (`{ foo: function () { this } }`, where the entered function
+                // is exactly the property value) are valid. A function nested
+                // deeper inside the value (`{ foo: arr.map(function () { this }) }`)
+                // has a different value span and stays flagged.
                 return true;
             }
             _ => {
                 // If we already hit a standalone function (not a method),
                 // any other ancestor means `this` is unbound.
-                if hit_function {
+                if entered_function.is_some() {
                     return false;
                 }
             }
@@ -440,8 +447,26 @@ mod tests {
     }
 
     #[test]
-    fn flags_this_in_function_valued_property() {
-        let diags = run_on("const obj = { foo: function() { return this; } };");
+    fn allows_this_in_function_valued_property() {
+        // A `function` expression that is the value of an object property is a
+        // method — `this` is bound to the object when called as `obj.foo()`.
+        assert!(run_on("const obj = { foo: function() { return this; } };").is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_named_function_expression_property() {
+        // Regression for #1642: fastify defines public-API methods as named
+        // function expressions assigned to object properties (`function _delete`)
+        // for clearer stack traces; `this` is the instance at call time.
+        let src = "const fastify = {\n  delete: function _delete (url, options, handler) {\n    return router.prepareRoute.call(this, { method: 'DELETE', url, options, handler })\n  },\n  hasPlugin: function (name) {\n    return this[kRegisteredPlugins].includes(name)\n  },\n};";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_function_nested_in_property_value() {
+        // Negative: a `function` nested inside the property value (not the value
+        // itself) gets no object binding — `this` is unbound and must fire.
+        let diags = run_on("const obj = { foo: arr.map(function () { return this.x; }) };");
         assert_eq!(diags.len(), 1);
     }
 
