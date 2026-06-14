@@ -85,8 +85,25 @@ fn byte_to_line_col(source: &str, byte_offset: usize) -> (usize, usize) {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        self.check(&CheckCtx::for_test_full(path, src, project, file))
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::test_helpers::run_rule_gated;
     use std::path::Path;
 
     fn run(source: &str) -> Vec<Diagnostic> {
@@ -137,5 +154,37 @@ export class AppComponent {}
     fn ignores_non_component_files() {
         let src = "export class Service {}";
         assert!(run(src).is_empty());
+    }
+
+    // Test fixture component in a `.spec.ts` file — the gate (`skip_in_test_dir`)
+    // suppresses the rule. Uses `run_rule_gated` so `applies_to_file` runs;
+    // plain `run_rule`/`run` bypasses the gate.
+    const SPEC_FIXTURE: &str = r#"
+import { Component } from '@angular/core';
+@Component({
+  template: `<greet [firstName]="firstName" />`,
+  imports: [GreetComponent],
+})
+class TestCmp {
+  clickCount = 0;
+  firstName = 'Initial';
+}
+"#;
+
+    #[test]
+    fn skips_test_fixture_component_in_spec_file() {
+        assert!(
+            run_rule_gated(&Check, SPEC_FIXTURE, "src/app/greet.component.spec.ts").is_empty(),
+            "test fixture components in .spec.ts files must not be flagged"
+        );
+    }
+
+    #[test]
+    fn still_flags_component_in_non_test_file() {
+        assert_eq!(
+            run_rule_gated(&Check, SPEC_FIXTURE, "src/app/greet.component.ts").len(),
+            1,
+            "the same component in a production file must still be flagged"
+        );
     }
 }
