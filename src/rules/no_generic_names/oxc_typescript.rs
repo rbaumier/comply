@@ -510,6 +510,74 @@ fn is_in_callback_property<'a>(
     matches!(nodes.kind(parent_id), AstKind::ObjectProperty(_))
 }
 
+/// Property names that, when assigned a function value, mark that function as a
+/// message-event handler (`self.onmessage = …`, `worker.onmessageerror = …`).
+const MESSAGE_HANDLER_PROPERTIES: &[&str] = &["onmessage", "onmessageerror"];
+
+/// Event-type string literals that, as the first `addEventListener` argument,
+/// mark the listener as a message-event handler.
+const MESSAGE_EVENT_TYPES: &[&str] = &["message", "messageerror"];
+
+/// True when the enclosing function of `node` is a message-event handler, i.e.
+/// either assigned to an `onmessage`/`onmessageerror` property
+/// (`self.onmessage = (data) => …`, `worker.onmessage = function (data) {}`) or
+/// passed as the listener argument of `addEventListener('message', …)` /
+/// `addEventListener('messageerror', …)`. The handler's first parameter is a
+/// `MessageEvent`, so naming it `data` mirrors the platform `MessageEvent.data`
+/// contract. The walk stops at the first enclosing arrow/function expression so
+/// only that function's own definition site is inspected.
+fn is_message_handler_param<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let mut func_node_id = None;
+    for (kind, nid) in nodes.ancestor_kinds(node.id()).zip(nodes.ancestor_ids(node.id())) {
+        match kind {
+            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
+                func_node_id = Some(nid);
+                break;
+            }
+            AstKind::FormalParameter(_) | AstKind::FormalParameters(_) => continue,
+            _ => break,
+        }
+    }
+    let Some(fid) = func_node_id else { return false };
+    let parent_id = nodes.parent_id(fid);
+    if parent_id == fid {
+        return false;
+    }
+    match nodes.kind(parent_id) {
+        // `self.onmessage = (data) => …` / `worker.onmessage = function (data) {}`
+        AstKind::AssignmentExpression(assign) => {
+            let AssignmentTarget::StaticMemberExpression(member) = &assign.left else {
+                return false;
+            };
+            MESSAGE_HANDLER_PROPERTIES.contains(&member.property.name.as_str())
+        }
+        // `addEventListener('message', (data) => …)` or
+        // `target.addEventListener('message', (data) => …)`. The function is, by
+        // construction, an argument of this call (it is its AST parent), and the
+        // first argument being the message-event string literal places the
+        // listener at a later index — so no per-argument span check is needed.
+        AstKind::CallExpression(call) => {
+            let callee_name = match &call.callee {
+                Expression::StaticMemberExpression(m) => m.property.name.as_str(),
+                Expression::Identifier(id) => id.name.as_str(),
+                _ => return false,
+            };
+            if callee_name != "addEventListener" {
+                return false;
+            }
+            let Some(Argument::StringLiteral(event_type)) = call.arguments.first() else {
+                return false;
+            };
+            MESSAGE_EVENT_TYPES.contains(&event_type.value.as_str())
+        }
+        _ => false,
+    }
+}
+
 /// True when the identifier is a property key in an object literal.
 fn is_object_literal_key<'a>(
     node: &oxc_semantic::AstNode<'a>,
@@ -702,6 +770,15 @@ impl OxcCheck for Check {
             // (e.g. TanStack Query's `onSuccess: (data) => {}`). The
             // library's own API prescribes `data` as the parameter name.
             if is_in_callback_property(node, semantic) {
+                return;
+            }
+            // The `data` parameter of a message-event handler (`self.onmessage =
+            // (data) => …`, `addEventListener('message', (data) => …)`) mirrors
+            // the platform `MessageEvent.data` contract — the idiomatic name.
+            if prefix == "data"
+                && is_function_param(node, semantic)
+                && is_message_handler_param(node, semantic)
+            {
                 return;
             }
             let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
@@ -1287,6 +1364,32 @@ mod tests {
         let src = r#"
             function g() { const value = getThing(); return value; }
             function f(data) { return data; }
+        "#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn no_fp_data_param_in_message_event_handler_issue_1499() {
+        // Regression for #1499 — the `data` parameter of a Web Worker /
+        // postMessage message-event handler mirrors the platform
+        // `MessageEvent.data` contract, so it is the idiomatic name there.
+        let src = r#"
+            self.onmessage = (data) => { use(data); };
+            worker.onmessage = function (data) { use(data); };
+            self.onmessageerror = (data) => { use(data); };
+            addEventListener('message', (data) => { use(data); });
+            target.addEventListener('messageerror', function (data) { use(data); });
+        "#;
+        assert!(run(src).is_empty(), "message-handler `data` param must not flag");
+    }
+
+    #[test]
+    fn still_flags_data_param_in_non_message_contexts_issue_1499() {
+        // Negative space: the exemption is scoped to the message-handler context.
+        // A plain function param and a non-`message` event listener keep firing.
+        let src = r#"
+            function process(data) { return data; }
+            element.addEventListener('click', (data) => { use(data); });
         "#;
         assert_eq!(run(src).len(), 2);
     }
