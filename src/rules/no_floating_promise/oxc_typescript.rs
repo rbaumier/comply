@@ -310,16 +310,29 @@ fn is_xml_http_request_send(member: &StaticMemberExpression) -> bool {
     name.contains("xhr") || name.contains("xmlhttp")
 }
 
-/// Redux's `Store.dispatch(action)` returns the dispatched `Action` synchronously
-/// for a plain action object — there is no Promise to await or catch.
-/// Matches when the `.dispatch(...)` receiver is a bare identifier whose name
-/// (case-insensitive) reads as a Redux store, e.g. `store`, `reduxStore`,
-/// `appStore`.
+/// Redux's `Store.dispatch(action)` and NgRx's `Store#dispatch(action)` both
+/// return synchronously (the dispatched `Action`, or `void` in NgRx) — there is
+/// no Promise to await or catch.
+/// Matches when the `.dispatch(...)` receiver reads as a store, either as a bare
+/// identifier (`store`, `reduxStore`, `appStore`) or as a member access whose
+/// terminal property reads as a store (`this.store`, `this.appStore` — the NgRx
+/// idiom where the `Store` is an injected field).
 fn is_redux_store_dispatch(member: &StaticMemberExpression) -> bool {
     if member.property.name.as_str() != "dispatch" {
         return false;
     }
-    matches!(&member.object, Expression::Identifier(id) if id.name.as_str().to_lowercase().contains("store"))
+    match &member.object {
+        Expression::Identifier(id) => name_reads_as_store(id.name.as_str()),
+        Expression::StaticMemberExpression(inner) => {
+            name_reads_as_store(inner.property.name.as_str())
+        }
+        _ => false,
+    }
+}
+
+/// Does an identifier or property name (case-insensitive) read as a store handle?
+fn name_reads_as_store(name: &str) -> bool {
+    name.to_lowercase().contains("store")
 }
 
 /// ProseMirror's `EditorView.dispatch(tr)` synchronously commits a transaction and
@@ -655,6 +668,34 @@ store.dispatch(
         // Control: `.dispatch(...)` on a non-store receiver (e.g. a message broker)
         // stays flagged.
         let d = run_on("emitter.dispatch(event);");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression tests for issue #1598: NgRx's `Store#dispatch(action)` returns
+    // `void` — the dominant call in Angular/NgRx apps is `this.store.dispatch(...)`,
+    // where the `Store` is an injected field, so a `.dispatch(...)` on a member
+    // access whose terminal property reads as a store must not be flagged.
+
+    #[test]
+    fn allows_ngrx_this_store_dispatch() {
+        let src = "\
+closeSidenav() {
+  this.store.dispatch(LayoutActions.closeSidenav());
+}
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_ngrx_named_injected_store_dispatch() {
+        assert!(run_on("this.appStore.dispatch(AuthActions.logoutConfirmation());").is_empty());
+    }
+
+    #[test]
+    fn still_flags_genuine_floating_promise_dispatch() {
+        // Negative-space guard: a real Promise-returning `.dispatch(...)` on a
+        // non-store member access (e.g. a job queue) stays flagged.
+        let d = run_on("this.queue.dispatch(job);");
         assert_eq!(d.len(), 1);
     }
 
