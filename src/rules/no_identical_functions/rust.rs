@@ -10,9 +10,12 @@
 //! whose receivers differ in ownership/mutability (`self` vs `&self` vs
 //! `&mut self`) are exempt too: the idiomatic `as_x`/`as_x_mut` and
 //! `into_x`/`as_x` variants have syntactically identical bodies but
-//! incompatible types, so no shared helper can serve both. Free functions,
-//! and inherent methods on the same type with the same receiver, are still
-//! flagged.
+//! incompatible types, so no shared helper can serve both. Functions in
+//! different `mod` blocks are exempt as well: Rust's path system makes
+//! `a::f` and `b::f` distinct, and co-located test suites routinely repeat
+//! the same assertions in sibling modules. Free functions, and inherent
+//! methods on the same type with the same receiver and in the same module,
+//! are still flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -40,28 +43,38 @@ enum Receiver {
 }
 
 /// A collected function: name, 1-based line, normalized body, the receiver
-/// shape, and — when the function is an inherent-impl method — the text of its
-/// enclosing impl's self-type (`None` for free functions).
+/// shape, the text of its enclosing inherent-impl self-type (`None` for free
+/// functions), and a `module_key` identifying the enclosing `mod` scope. The
+/// file top level is key `0`; each `mod` block (sibling or nested) gets a
+/// distinct id, so only functions sharing a key are compared.
 struct CollectedFn {
     name: String,
     line: usize,
     body: String,
     receiver: Receiver,
     inherent_type: Option<String>,
+    module_key: usize,
 }
 
 crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     // Only process at the root (source_file) to collect all functions once.
     let mut functions: Vec<CollectedFn> = Vec::new();
+    // Assigns a distinct id to every `mod` scope. `0` is the file top level.
+    let mut next_module_key: usize = 0;
 
     let child_count = node.named_child_count();
     for i in 0..child_count {
         let Some(child) = node.named_child(i) else { continue };
-        collect_functions(child, source, None, &mut functions);
+        collect_functions(child, source, None, 0, &mut next_module_key, &mut functions);
     }
 
     for i in 1..functions.len() {
         for j in 0..i {
+            // Functions in different `mod` scopes are distinct namespaces
+            // (`a::f` vs `b::f`) and cannot be merged — skip cross-module pairs.
+            if functions[i].module_key != functions[j].module_key {
+                continue;
+            }
             // Inherent methods on different types share a body by design
             // (symmetric layouts) and cannot be unified without a trait.
             if let (Some(ti), Some(tj)) =
@@ -102,11 +115,16 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
 
 /// `inherent_type` carries the self-type text of the nearest enclosing
 /// inherent impl, so identical methods on different types can be distinguished
-/// from identical methods on the same type.
+/// from identical methods on the same type. `module_key` identifies the
+/// enclosing `mod` scope (0 = file top level); descending into a `mod_item`
+/// allocates a fresh key from `next_module_key`, so sibling and nested modules
+/// each get a distinct key.
 fn collect_functions(
     node: tree_sitter::Node,
     source: &[u8],
     inherent_type: Option<&str>,
+    module_key: usize,
+    next_module_key: &mut usize,
     functions: &mut Vec<CollectedFn>,
 ) {
     match node.kind() {
@@ -121,6 +139,7 @@ fn collect_functions(
                         body: normalized,
                         receiver: extract_receiver(node, source),
                         inherent_type: inherent_type.map(str::to_string),
+                        module_key,
                     });
                 }
             }
@@ -142,10 +161,25 @@ fn collect_functions(
             } else {
                 inherent_type
             };
+            // A `mod` block is its own namespace: give it a fresh key so its
+            // functions are never compared against those in another module.
+            let module_key = if node.kind() == "mod_item" {
+                *next_module_key += 1;
+                *next_module_key
+            } else {
+                module_key
+            };
             let count = node.named_child_count();
             for i in 0..count {
                 if let Some(child) = node.named_child(i) {
-                    collect_functions(child, source, inherent_type, functions);
+                    collect_functions(
+                        child,
+                        source,
+                        inherent_type,
+                        module_key,
+                        next_module_key,
+                        functions,
+                    );
                 }
             }
         }
@@ -153,7 +187,14 @@ fn collect_functions(
             let count = node.named_child_count();
             for i in 0..count {
                 if let Some(child) = node.named_child(i) {
-                    collect_functions(child, source, inherent_type, functions);
+                    collect_functions(
+                        child,
+                        source,
+                        inherent_type,
+                        module_key,
+                        next_module_key,
+                        functions,
+                    );
                 }
             }
         }
@@ -442,6 +483,102 @@ impl Foo {
         let b = a * 2;
         b
     }
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_identical_functions_in_sibling_modules() {
+        // Issue #2187: identically-named tests in two sibling `mod` blocks are
+        // distinct namespaces (`a::check` vs `b::check`) and cannot be merged.
+        let src = r#"
+mod tests_inline {
+    fn check_offset_from() {
+        let base = "Lorem";
+        assert_eq!(offset_from(base, base), 0);
+        assert_eq!(offset_from(base, &base[1..]), 1);
+    }
+}
+
+mod tests_toplevel {
+    fn check_offset_from() {
+        let base = "Lorem";
+        assert_eq!(offset_from(base, base), 0);
+        assert_eq!(offset_from(base, &base[1..]), 1);
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_identical_functions_in_parent_vs_nested_module() {
+        // Issue #2187: a function in a module and an identical one in a nested
+        // child module live in different scopes (`m::f` vs `m::inner::f`).
+        let src = r#"
+mod outer {
+    fn run() {
+        let base = "Lorem";
+        assert_eq!(offset_from(base, base), 0);
+        assert_eq!(offset_from(base, &base[1..]), 1);
+    }
+
+    mod inner {
+        fn run() {
+            let base = "Lorem";
+            assert_eq!(offset_from(base, base), 0);
+            assert_eq!(offset_from(base, &base[1..]), 1);
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_identical_functions_in_same_module() {
+        // Negative-space guard: two identical functions in the SAME `mod` are
+        // genuine duplication and must still be flagged.
+        let src = r#"
+mod helpers {
+    fn alpha(x: i32) -> i32 {
+        let a = x + 1;
+        let b = a * 2;
+        println!("{}", b);
+        b
+    }
+
+    fn beta(x: i32) -> i32 {
+        let a = x + 1;
+        let b = a * 2;
+        println!("{}", b);
+        b
+    }
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_identical_functions_at_file_top_level() {
+        // Negative-space guard: two identical functions both at the file top
+        // level (no enclosing `mod`) share the root key and stay flagged.
+        let src = r#"
+fn alpha(x: i32) -> i32 {
+    let a = x + 1;
+    let b = a * 2;
+    println!("{}", b);
+    b
+}
+
+fn beta(x: i32) -> i32 {
+    let a = x + 1;
+    let b = a * 2;
+    println!("{}", b);
+    b
 }
 "#;
         let d = run_on(src);
