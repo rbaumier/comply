@@ -304,6 +304,14 @@ impl OxcCheck for Check {
         if is_snapshot_file(ctx.path) {
             return Vec::new();
         }
+        // Syntax-highlighter test fixtures (e.g. bat's
+        // `tests/syntax-tests/source/<Lang>/example.ts`) and other mock/fixture
+        // trees deliberately declare unused symbols to exercise the highlighter;
+        // they are sample source, not functional code with consumers, so unused
+        // declarations are by design, not dead code. (Closes #1315)
+        if crate::rules::path_utils::is_mock_or_fixture_dir_path(ctx.path) {
+            return Vec::new();
+        }
         let scoping = semantic.scoping();
         let nodes = semantic.nodes();
         let mut diagnostics = Vec::new();
@@ -1009,6 +1017,41 @@ export const input = <editor />
             diags.iter().any(|d| d.message.contains("`jsx`")),
             "expected unused `jsx` import (no JSX in file) to be flagged: {diags:?}"
         );
+    }
+
+    #[test]
+    fn no_fp_on_syntax_test_fixture() {
+        // Syntax-highlighter test fixtures (bat's
+        // `tests/syntax-tests/source/<Lang>/example.ts`) deliberately declare
+        // unused symbols to exercise the highlighter; they are sample source
+        // with no consumers, so unused declarations are by design. (Closes #1315)
+        let src = "let letNumber = 10;\nconst constNumber = 20;\n";
+        let path = "tests/syntax-tests/source/TypeScript/example.ts";
+        assert!(
+            run_at(src, path).is_empty(),
+            "FP on unused vars in a syntax-tests fixture file"
+        );
+    }
+
+    #[test]
+    fn still_flags_unused_var_in_ordinary_source() {
+        // Negative-space guard for #1315 — a genuinely unused variable in an
+        // ordinary source file (outside any fixture directory) must still fire.
+        let src = "let letNumber = 10;\nexport {};";
+        let diags = run_at(src, "src/foo.ts");
+        assert_eq!(diags.len(), 1, "expected `letNumber` to be flagged: {diags:?}");
+        assert!(diags[0].message.contains("`letNumber`"));
+    }
+
+    #[test]
+    fn still_flags_unused_var_in_syntax_tests_substring_dir() {
+        // Negative-space guard for #1315 — `syntax-tests` is matched as a path
+        // segment, not a substring. A `syntax-tests-data/` directory is a
+        // different, ordinary directory and its unused vars stay reportable.
+        let src = "let letNumber = 10;\nexport {};";
+        let diags = run_at(src, "syntax-tests-data/foo.ts");
+        assert_eq!(diags.len(), 1, "expected `letNumber` to be flagged: {diags:?}");
+        assert!(diags[0].message.contains("`letNumber`"));
     }
 
     #[test]
