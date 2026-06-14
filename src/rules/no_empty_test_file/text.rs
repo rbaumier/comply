@@ -61,6 +61,11 @@ fn exports_value(source: &str) -> bool {
 const RUNTIME_TEST_MARKERS: &[&str] =
     &["test(", "it(", "describe(", "expect(", "assert(", "assert."];
 
+/// Runner functions whose calls may be chained through modifier properties
+/// (`it.concurrent(`, `test.each([...])(`, `describe.skip(`, `it.concurrent.skip(`).
+/// The bare `name(` form is already covered by [`RUNTIME_TEST_MARKERS`].
+const CHAINABLE_RUNNERS: &[&str] = &["it", "test", "describe"];
+
 /// Compile-time type-assertion markers. Type-testing spec files (tsd,
 /// `@mui/types`) verify TypeScript inference with these instead of runtime
 /// `expect()`; they are real assertions, so a file using only them is not empty.
@@ -96,10 +101,73 @@ fn has_test_content(source: &str) -> bool {
     if source.contains(TS_EXPECT_ERROR_DIRECTIVE) {
         return true;
     }
+    if has_chained_runner_call(source) {
+        return true;
+    }
     if is_perf_test_scenario(source) {
         return true;
     }
     drives_imported_runner(source)
+}
+
+/// `true` when the source declares a test via a modifier-chained runner call:
+/// `it`/`test`/`describe` followed by one or more `.<ident>` segments and then
+/// `(` — e.g. `it.concurrent(`, `it.concurrent.skip(`, `test.each([...])(`,
+/// `describe.only(`. The bare `name(` form is handled by [`RUNTIME_TEST_MARKERS`];
+/// this covers only the chained shape that those substrings miss.
+///
+/// The runner name must stand alone (not be the tail of a larger identifier like
+/// `submit` or `wait`), so prose such as `// it.would be nice` is not matched.
+fn has_chained_runner_call(source: &str) -> bool {
+    CHAINABLE_RUNNERS
+        .iter()
+        .any(|runner| has_chained_call_for(source, runner))
+}
+
+fn has_chained_call_for(source: &str, runner: &str) -> bool {
+    let bytes = source.as_bytes();
+    let mut search_from = 0;
+    while let Some(offset) = source[search_from..].find(runner) {
+        let start = search_from + offset;
+        let after = start + runner.len();
+        search_from = after;
+        // The runner must be preceded by a non-identifier character (or be at the
+        // start of the file) so we don't match the tail of `submit`, `await`, etc.
+        if start > 0 && is_ident_byte(bytes[start - 1]) {
+            continue;
+        }
+        // A `.<ident>` chain must follow the runner name to form the chained call.
+        if matches_chained_call(&source[after..]) {
+            return true;
+        }
+    }
+    false
+}
+
+/// `true` when `rest` (the text right after a runner name) is one or more
+/// `.<ident>` segments followed by a `(` — i.e. the modifier-chained call form.
+fn matches_chained_call(rest: &str) -> bool {
+    let bytes = rest.as_bytes();
+    let mut i = 0;
+    let mut saw_modifier = false;
+    while bytes.get(i) == Some(&b'.') {
+        i += 1;
+        let ident_start = i;
+        while i < bytes.len() && is_ident_byte(bytes[i]) {
+            i += 1;
+        }
+        if i == ident_start {
+            // A `.` not followed by an identifier (e.g. `it..` or `it.(`) is not a
+            // modifier chain.
+            return false;
+        }
+        saw_modifier = true;
+    }
+    saw_modifier && bytes.get(i) == Some(&b'(')
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
 }
 
 /// True when the file imports from a perf-test framework package, marking it as
@@ -364,6 +432,34 @@ mod tests {
         let source = "import * as React from 'react';\n\
                       import { Button } from './Button';\n\
                       // setup only, no assertions\n";
+        assert_eq!(run("components.spec.tsx", source).len(), 1);
+    }
+
+    #[test]
+    fn allows_it_concurrent_only_spec() {
+        // `it.concurrent(...)` is a real Jest test declaration; the chained
+        // modifier must not hide it from the marker scan. No `expect(` here, so
+        // detection relies solely on recognizing the chained-call shape.
+        let source = "it.concurrent('one', () => { return Promise.resolve(); });\n";
+        assert!(run("e2e/concurrent.test.js", source).is_empty());
+    }
+
+    #[test]
+    fn allows_chained_modifier_only_spec() {
+        // `it.concurrent.skip`, `test.each([...])`, `it.todo()` are all test
+        // declarations on the `it`/`test` namespace.
+        let source = "it.concurrent.skip('two', () => {});\n\
+                      test.each([1, 2])('y %i', n => {});\n\
+                      it.todo();\n";
+        assert!(run("e2e/modifiers.test.js", source).is_empty());
+    }
+
+    #[test]
+    fn flags_empty_spec_with_no_chained_call() {
+        // A genuinely empty spec (imports/comments only, no test call of any
+        // form) is still flagged even when the substring `it.` appears in prose.
+        let source = "import { Button } from './Button';\n\
+                      // it.would be nice to test this\n";
         assert_eq!(run("components.spec.tsx", source).len(), 1);
     }
 
