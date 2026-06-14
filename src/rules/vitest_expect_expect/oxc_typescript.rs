@@ -203,6 +203,12 @@ impl OxcCheck for Check {
         if !is_test_file(ctx.path) || is_snippet_test_file(ctx.path) {
             return;
         }
+        // Playwright E2E files import their runner from `@playwright/test` and
+        // use Playwright's own assertion/auto-waiting model, not vitest
+        // `expect(...)` — they don't follow this rule's contract.
+        if crate::rules::test_assertion_helpers::imports_playwright_test(semantic) {
+            return;
+        }
         let AstKind::CallExpression(call) = node.kind() else {
             return;
         };
@@ -431,6 +437,31 @@ mod tests {
         let src = r#"
             function setup() {}
             it("x", () => { setup(); });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for #2348: Playwright test files import their runner from
+    // `@playwright/test` and use Playwright's own assertion/auto-waiting model
+    // (`page.waitForSelector`, `await expect(locator).toBeVisible()`), so they
+    // need no vitest `expect()`.
+    #[test]
+    fn allows_action_only_playwright_test() {
+        let src = r#"
+            import { test } from '@playwright/test';
+            test('go to /', async ({ page }) => {
+                await page.goto('/');
+                await page.waitForSelector(`text=tRPC user`);
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_vitest_test_without_assertion_no_playwright_import() {
+        let src = r#"
+            import { test } from 'vitest';
+            test('does nothing', () => { const x = 1 + 1; });
         "#;
         assert_eq!(run(src).len(), 1);
     }
