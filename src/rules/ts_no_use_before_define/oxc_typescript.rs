@@ -46,9 +46,21 @@
 //! setting up, so the captured `const`/`let` is already initialized. A binding
 //! local to the body itself, used before its own declaration line, stays
 //! flagged. Static field initializers and static blocks run at class-definition
-//! time (during module evaluation) and stay flagged; function and arrow
-//! *expressions* stay flagged too, since the binding they initialize can be
-//! invoked synchronously before the declaration.
+//! time (during module evaluation) and stay flagged.
+//!
+//! A function or arrow *expression* assigned to a variable
+//! (`const App = () => <View style={styles.x} />`, the React Native
+//! styles-at-bottom convention) is also treated as a deferred body, as long as
+//! that variable is never *called* before the referenced binding's declaration
+//! line. The expression runs only when its variable is invoked, so a
+//! `const`/`let` declared later in an enclosing scope is already initialized by
+//! then. The expression stays flagged when it could run during the synchronous
+//! initialization pass that precedes the declaration: an IIFE, or a variable
+//! that is called before the declaration (`const f = () => later; f(); const
+//! later = 1`). An anonymous function/arrow expression passed straight to a call
+//! (`someFn((x) => later)`) is not deferred this way — the callee may invoke it
+//! eagerly — so it stays flagged unless a more specific exemption (React hook,
+//! test runner, decorator thunk, ...) applies.
 //!
 //! Also skips forward references made from inside a function/arrow *expression*
 //! that lives inside a decorator (`@Decorator(...)`) — the lazy-thunk pattern
@@ -144,7 +156,7 @@ impl OxcCheck for Check {
                         continue;
                     }
                     if is_inside_deferred_definition(
-                        nodes, scoping, ref_node_id, decl_scope_id,
+                        nodes, scoping, ref_node_id, decl_scope_id, decl_span.start,
                     ) {
                         continue;
                     }
@@ -420,6 +432,10 @@ fn call_is_tanstack_route_factory(call: &oxc_ast::ast::CallExpression) -> bool {
 /// - A class method/getter/setter/constructor, or an instance (non-static)
 ///   field initializer: those run on instance/method invocation.
 ///
+/// - A function or arrow *expression* assigned to a variable
+///   (`const App = () => x`): deferred as long as that variable is not called
+///   before `decl_start`. The body runs only when the variable is invoked.
+///
 /// The exemption applies only when the binding is declared in a scope that
 /// contains the definition (`decl_scope_id` is an ancestor of — or equal to —
 /// the scope the definition is declared in). A binding local to the definition
@@ -428,21 +444,37 @@ fn call_is_tanstack_route_factory(call: &oxc_ast::ast::CallExpression) -> bool {
 ///
 /// Static field initializers and static blocks run at class-definition time
 /// (during module evaluation), so they are NOT deferred and any forward
-/// reference inside them is a real TDZ hazard. Function/arrow *expressions*
-/// (`const f = () => x`) are likewise not treated as deferred here: the binding
-/// they initialize can be invoked synchronously (IIFE, or a `const` that is
-/// called before the declaration), so those forward references stay flagged.
+/// reference inside them is a real TDZ hazard. A function/arrow expression is
+/// likewise not deferred when it could run during the synchronous initialization
+/// pass before the declaration: an IIFE, an anonymous expression passed straight
+/// to a call (the callee may invoke it eagerly), or a variable that is called
+/// before `decl_start`.
 fn is_inside_deferred_definition<'a>(
     nodes: &'a oxc_semantic::AstNodes<'a>,
     scoping: &Scoping,
     ref_node_id: NodeId,
     decl_scope_id: ScopeId,
+    decl_start: u32,
 ) -> bool {
     for ancestor_id in nodes.ancestor_ids(ref_node_id) {
         let node = nodes.get_node(ancestor_id);
         match node.kind() {
             AstKind::Function(func) if func.is_function_declaration() => {
                 return decl_scope_encloses(scoping, decl_scope_id, node.scope_id());
+            }
+            // A function/arrow expression that provably defers (bound to an
+            // un-called variable, not an IIFE) covers the reference. When it does
+            // not provably defer at this level it is transparent: an enclosing
+            // function declaration or method may still defer the whole chain, so
+            // the walk continues outward rather than concluding `false` here.
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
+                if decl_scope_encloses(scoping, decl_scope_id, node.scope_id())
+                    && is_deferred_function_expression(
+                        nodes, scoping, ancestor_id, decl_start,
+                    )
+                {
+                    return true;
+                }
             }
             AstKind::MethodDefinition(_) => {
                 return decl_scope_encloses(scoping, decl_scope_id, node.scope_id());
@@ -456,6 +488,78 @@ fn is_inside_deferred_definition<'a>(
         }
     }
     false
+}
+
+/// True when a function/arrow *expression* node runs only on later invocation,
+/// so a binding declared before `decl_start` in an enclosing scope is already
+/// initialized by the time the expression's body runs. An expression is deferred
+/// when it is assigned to a variable that is never *called* before `decl_start`.
+///
+/// It is NOT deferred — and the forward reference stays flagged — when it could
+/// run during the synchronous initialization pass before the declaration:
+/// - an IIFE (`(() => x)()`), which runs immediately;
+/// - an anonymous expression not bound to a variable (e.g. passed straight to a
+///   call as in `someFn((x) => later)`), since the callee may invoke it eagerly;
+/// - a variable whose value is the expression and that is called before
+///   `decl_start` (`const f = () => later; f(); const later = 1`).
+fn is_deferred_function_expression<'a>(
+    nodes: &'a oxc_semantic::AstNodes<'a>,
+    scoping: &Scoping,
+    func_id: NodeId,
+    decl_start: u32,
+) -> bool {
+    if is_immediately_invoked(nodes, func_id) {
+        return false;
+    }
+    let Some(symbol_id) = function_expression_binding(nodes, func_id) else {
+        return false;
+    };
+    !binding_called_before(nodes, scoping, symbol_id, decl_start)
+}
+
+/// The symbol of the variable a function/arrow expression is directly assigned
+/// to (`const App = () => ...`), or `None` when the expression is not bound to a
+/// simple variable (anonymous argument, object-property value, return value,
+/// ...). Only a `VariableDeclarator` parent with a plain binding identifier
+/// counts; a destructuring pattern has no single owning symbol and returns
+/// `None`.
+fn function_expression_binding<'a>(
+    nodes: &'a oxc_semantic::AstNodes<'a>,
+    func_id: NodeId,
+) -> Option<oxc_semantic::SymbolId> {
+    let parent_id = nodes.parent_id(func_id);
+    let AstKind::VariableDeclarator(declarator) = nodes.kind(parent_id) else {
+        return None;
+    };
+    let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &declarator.id else {
+        return None;
+    };
+    id.symbol_id.get()
+}
+
+/// True when the binding is the callee of a call expression whose call site
+/// starts before `decl_start` — meaning the function/arrow it holds runs during
+/// the synchronous initialization pass that precedes the declaration.
+fn binding_called_before(
+    nodes: &oxc_semantic::AstNodes,
+    scoping: &Scoping,
+    symbol_id: oxc_semantic::SymbolId,
+    decl_start: u32,
+) -> bool {
+    scoping.get_resolved_references(symbol_id).any(|reference| {
+        if !reference.is_value() {
+            return false;
+        }
+        let ref_id = reference.node_id();
+        let ref_span = nodes.kind(ref_id).span();
+        if ref_span.start >= decl_start {
+            return false;
+        }
+        let AstKind::CallExpression(call) = nodes.kind(nodes.parent_id(ref_id)) else {
+            return false;
+        };
+        call.callee.span() == ref_span
+    })
 }
 
 /// True when the reference sits inside a function/arrow *expression* that lives
@@ -1434,6 +1538,86 @@ mod tests {
             1,
             "local TDZ inside a decorator arrow must still be flagged: {d:?}"
         );
+    }
+
+    // Regression for #2130: the React Native styles-at-bottom convention places
+    // `const styles = StyleSheet.create({...})` after the component, which reads
+    // `styles` inside its body. An arrow-function component is a function
+    // *expression* assigned to a const that is never called before the `styles`
+    // declaration, so its body runs only on render — the module const is already
+    // initialized. Not a real TDZ hazard.
+    #[test]
+    fn no_fp_module_const_used_in_arrow_component_issue_2130() {
+        let source = "const LoginScreen = () => {\n\
+                      return <View style={styles.container} />;\n\
+                      };\n\
+                      const styles = StyleSheet.create({ container: {} });";
+        assert!(
+            run_on_tsx(source).is_empty(),
+            "module const used in an arrow component should not be flagged: {:?}",
+            run_on_tsx(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_module_const_used_in_function_component_issue_2130() {
+        // The function-declaration form of the same React Native pattern.
+        let source = "export default function LoginScreen() {\n\
+                      return <View style={styles.container} />;\n\
+                      }\n\
+                      const styles = StyleSheet.create({ container: {} });";
+        assert!(
+            run_on_tsx(source).is_empty(),
+            "module const used in a function component should not be flagged: {:?}",
+            run_on_tsx(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_plain_module_const_used_in_arrow_expression_issue_2130() {
+        // Not React-specific: any arrow expression bound to an un-called const
+        // can reference a later module const safely.
+        let source = "const render = () => config.value;\n\
+                      const config = { value: 1 };";
+        assert!(
+            run_on(source).is_empty(),
+            "module const used in an un-called arrow expression should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn still_flags_arrow_expression_called_before_define_issue_2130() {
+        // Negative space: the arrow's variable IS called before the `const later`
+        // declaration line, so the body runs during the synchronous init pass —
+        // a genuine TDZ hazard that must still fire.
+        let d = run_on(
+            "const f = () => later;\n\
+             f();\n\
+             const later = 1;",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "arrow expression called before the declaration must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`later`"));
+    }
+
+    #[test]
+    fn still_flags_top_level_use_before_define_issue_2130() {
+        // Negative space: a top-level read before the declaration line is a real
+        // module-init TDZ hazard, not deferred by any function body.
+        let d = run_on(
+            "console.log(x);\n\
+             const x = 1;",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "top-level use before define must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`x`"));
     }
 
     #[test]
