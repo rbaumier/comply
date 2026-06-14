@@ -849,6 +849,21 @@ impl ClassShape {
     }
 }
 
+/// True when `decorator_name` is a class decorator that registers its class in
+/// the browser's custom-element registry as a side effect (Lit's
+/// `@customElement('tag')`, which calls `customElements.define(...)`). Such a
+/// class is reached through its HTML tag name, never through a JavaScript
+/// identifier reference, so usage- and reachability-based rules must treat the
+/// decorated class as live even with no import or in-file reference.
+///
+/// Matched on the decorator's callee identifier only; the registered tag string
+/// is irrelevant. Add registering decorator names here so both `ts-no-unused-vars`
+/// and `dead-export` stay in sync from one place.
+#[must_use]
+pub fn is_custom_element_decorator_name(decorator_name: &str) -> bool {
+    decorator_name == "customElement"
+}
+
 /// Peel any nested `ParenthesizedExpression` wrappers off `expr`, returning the
 /// first non-parenthesized inner expression. Used by the cast rules so that
 /// `(x as unknown) as T` is analyzed identically to `x as unknown as T`.

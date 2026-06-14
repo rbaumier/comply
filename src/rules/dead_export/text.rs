@@ -77,6 +77,7 @@
 //!     specifier's path suffix matches a file, every export of it is live.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::oxc_helpers::is_custom_element_decorator_name;
 use crate::parsing::ts_language_for;
 use crate::project::import_index::ExportKind;
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -412,6 +413,13 @@ impl TextCheck for Check {
         let mut structurally_consumed: Option<HashSet<String>> = None;
         let mut in_file_referenced: Option<HashSet<String>> = None;
 
+        // Classes decorated with a custom-element-registering decorator
+        // (`@customElement('tag')`). They are registered in the browser's
+        // custom-element registry as a side effect and reached through their HTML
+        // tag name, never a static import — so their export is live despite
+        // having no importer. Computed lazily, like the scans above.
+        let mut custom_element_classes: Option<HashSet<String>> = None;
+
         // Docusaurus `@site/` alias importers. The alias maps to the site root
         // via webpack and never resolves in the import index, so a component
         // consumed exclusively through `@site/src/...` would look dead. When an
@@ -452,6 +460,11 @@ impl TextCheck for Check {
             let in_file_referenced = in_file_referenced
                 .get_or_insert_with(|| collect_in_file_referenced_names(ctx.source, ctx.lang));
             if in_file_referenced.contains(export.name.as_str()) {
+                continue;
+            }
+            let custom_element_classes = custom_element_classes
+                .get_or_insert_with(|| collect_custom_element_class_names(ctx.source, ctx.lang));
+            if custom_element_classes.contains(export.name.as_str()) {
                 continue;
             }
             let site_alias_importer = *site_alias_importer
@@ -606,6 +619,81 @@ fn collect_type_identifiers(node: tree_sitter::Node, source: &[u8], out: &mut Ha
     }
 }
 
+/// Collect the names of classes decorated with a custom-element-registering
+/// decorator (`@customElement('tag')`). Such a class is registered in the
+/// browser's custom-element registry as a side effect of the decorator and is
+/// reached through its HTML tag name, never through a static import — so its
+/// export has no importer yet is live.
+///
+/// Walks every class declaration in the file. The decorators of an exported
+/// decorated class (`@customElement('x') export class Foo`) attach to the
+/// enclosing `export_statement`, while a non-exported one's attach to the
+/// `class_declaration` itself; both placements are inspected. The decorator's
+/// callee identifier is matched via the shared `is_custom_element_decorator_name`
+/// predicate, so the registered tag string is irrelevant.
+fn collect_custom_element_class_names(source: &str, lang: crate::files::Language) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let Some(grammar) = ts_language_for(lang) else {
+        return out;
+    };
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&grammar).is_err() {
+        return out;
+    }
+    let Some(tree) = parser.parse(source, None) else {
+        return out;
+    };
+    let bytes = source.as_bytes();
+    walk_tree(&tree, |node| {
+        if node.kind() != "class_declaration" && node.kind() != "abstract_class_declaration" {
+            return;
+        }
+        let Some(name) = node
+            .named_children(&mut node.walk())
+            .find(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
+            .and_then(|id| id.utf8_text(bytes).ok())
+        else {
+            return;
+        };
+        let on_class = node
+            .named_children(&mut node.walk())
+            .any(|c| is_custom_element_decorator(c, bytes));
+        let on_export_parent = node
+            .parent()
+            .filter(|p| p.kind() == "export_statement")
+            .is_some_and(|p| {
+                p.named_children(&mut p.walk())
+                    .any(|c| is_custom_element_decorator(c, bytes))
+            });
+        if on_class || on_export_parent {
+            out.insert(name.to_string());
+        }
+    });
+    out
+}
+
+/// True when `node` is a `decorator` whose callee identifier registers a custom
+/// element. The callee is the `identifier` child of the decorator's
+/// `call_expression` (`@customElement('x')`), or the bare `identifier` child of
+/// the decorator (`@customElement`).
+fn is_custom_element_decorator(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() != "decorator" {
+        return false;
+    }
+    let callee = node
+        .named_children(&mut node.walk())
+        .find_map(|child| match child.kind() {
+            "call_expression" => child
+                .named_children(&mut child.walk())
+                .find(|c| c.kind() == "identifier"),
+            "identifier" => Some(child),
+            _ => None,
+        });
+    callee
+        .and_then(|id| id.utf8_text(source).ok())
+        .is_some_and(is_custom_element_decorator_name)
+}
+
 /// True when `path` is listed as a CLI entry point in a `package.json`
 /// `scripts` value (e.g. `"seed:dev": "bun run src/db/seed/dev.ts"`).
 /// Compares the file's path relative to `project_root` (forward-slash,
@@ -741,6 +829,54 @@ mod tests {
         ];
         let (_dir, diags) = run_on_project(&files, "foo.ts");
         assert!(diags.is_empty(), "single-file scan must not run dead-export");
+    }
+
+    #[test]
+    fn no_fp_for_custom_element_decorated_exported_class_issue_1805() {
+        // Regression for #1805 (TanStack/virtual) — `@customElement('my-app')`
+        // registers `MyApp` in the browser's custom-element registry as a side
+        // effect; it is reached through the `<my-app>` HTML tag, never a static
+        // import, so the import graph shows no importer even though it is live.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/main.ts",
+                "import { customElement } from 'lit/decorators.js';\n\
+                 @customElement('my-app')\n\
+                 export class MyApp extends LitElement {}\n",
+            ),
+            ("src/other.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/main.ts");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("MyApp")),
+            "@customElement-decorated exported class must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_undecorated_unused_exported_class_issue_1805() {
+        // Negative-space guard for #1805 — an exported class with no registering
+        // decorator and no importer is genuinely dead and must still fire, even
+        // alongside a custom-element class in a sibling file.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/widget.ts",
+                "export class PlainWidget {}\n",
+            ),
+            (
+                "src/main.ts",
+                "import { customElement } from 'lit/decorators.js';\n\
+                 @customElement('my-app')\n\
+                 export class MyApp extends LitElement {}\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/widget.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "undecorated unused exported class must still be flagged, got: {diags:?}"
+        );
+        assert!(diags[0].message.contains("PlainWidget"));
     }
 
     #[test]
