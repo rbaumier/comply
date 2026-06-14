@@ -38,8 +38,75 @@ fn is_semantic_grouping_prefix(prefix: &str) -> bool {
     matches!(prefix, "defa" | "ente" | "leav")
 }
 
-fn collect_optional_prefixes(members: &oxc_allocator::Vec<'_, oxc_ast::ast::TSSignature<'_>>) -> HashMap<String, usize> {
-    let mut counts: HashMap<String, usize> = HashMap::new();
+/// Axis / direction suffixes that, appended to a bare base field, name a
+/// CSS-inspired shorthand + per-axis property family: axes (`X`/`Y`/`Z`/
+/// `3d`), box sides (`Top`/`Right`/`Bottom`/`Left`) and logical edges
+/// (`Start`/`End`/`Inline`/`Block`). Case-sensitive: the suffix is the
+/// capitalized tail of a camelCase name (`translateX`), with `3d`/`3D`
+/// accepted for the depth axis.
+fn is_axis_suffix(suffix: &str) -> bool {
+    matches!(
+        suffix,
+        "X" | "Y"
+            | "Z"
+            | "3d"
+            | "3D"
+            | "Top"
+            | "Right"
+            | "Bottom"
+            | "Left"
+            | "Start"
+            | "End"
+            | "Inline"
+            | "Block"
+    )
+}
+
+/// Count the bucket members that are NOT part of a CSS-inspired
+/// shorthand + per-axis family, i.e. the members that still look like a
+/// discriminated-union state cluster.
+///
+/// A shorthand + per-axis family is a bare base field `F` (the shorthand,
+/// e.g. `translate`, `extrapolate`) together with the siblings formed by
+/// appending a recognized axis/direction suffix (`translateX`,
+/// `extrapolateLeft`). Those are composable — a consumer can set the
+/// shorthand or the individual axes independently — so they are excluded
+/// from the cluster count. The bare base must be present: a bucket of
+/// only suffixed siblings (`translateX`/`translateY`, no `translate`)
+/// lacks the shorthand signature and every member still counts.
+///
+/// Members sharing the prefix but belonging to no family (e.g. `transform`
+/// alongside the `translate*` family in the `tran` bucket) keep counting,
+/// so an unrelated state cluster is not masked by an adjacent family.
+fn variant_field_count(names: &[&str]) -> usize {
+    names
+        .iter()
+        .filter(|name| !is_in_shorthand_axis_family(name, names))
+        .count()
+}
+
+/// Whether `name` is the bare base of, or a suffixed sibling in, a
+/// shorthand + per-axis family present in `names`. A family requires a
+/// bare base `F` ∈ `names` and at least one sibling `F + <axis suffix>`
+/// also ∈ `names`.
+fn is_in_shorthand_axis_family(name: &str, names: &[&str]) -> bool {
+    let has_family = |base: &str| -> bool {
+        names.iter().any(|other| *other != base && other.strip_prefix(base).is_some_and(is_axis_suffix))
+    };
+    // `name` is itself a bare base with at least one suffixed sibling.
+    if has_family(name) {
+        return true;
+    }
+    // `name` is a suffixed sibling of some bare base present in `names`.
+    names
+        .iter()
+        .any(|base| name.strip_prefix(*base).is_some_and(is_axis_suffix) && has_family(base))
+}
+
+fn collect_optional_prefixes<'b>(
+    members: &'b oxc_allocator::Vec<'_, oxc_ast::ast::TSSignature<'_>>,
+) -> HashMap<String, Vec<&'b str>> {
+    let mut buckets: HashMap<String, Vec<&'b str>> = HashMap::new();
     for member in members.iter() {
         let oxc_ast::ast::TSSignature::TSPropertySignature(prop) = member else {
             continue;
@@ -66,24 +133,28 @@ fn collect_optional_prefixes(members: &oxc_allocator::Vec<'_, oxc_ast::ast::TSSi
         if is_semantic_grouping_prefix(&prefix) {
             continue;
         }
-        *counts.entry(prefix).or_insert(0) += 1;
+        buckets.entry(prefix).or_default().push(name);
     }
-    counts
+    buckets
 }
 
 fn check_optional_clusters(
-    counts: HashMap<String, usize>,
+    buckets: HashMap<String, Vec<&str>>,
     type_name: &str,
     span_start: u32,
     ctx: &CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut hits: Vec<(&String, &usize)> = counts.iter().filter(|(_, c)| **c >= 2).collect();
+    let mut hits: Vec<(&String, usize)> = buckets
+        .iter()
+        .map(|(prefix, names)| (prefix, variant_field_count(names)))
+        .filter(|(_, count)| *count >= 2)
+        .collect();
     if hits.is_empty() {
         return;
     }
-    hits.sort_by(|a, b| b.1.cmp(a.1));
-    let (prefix, count) = hits[0];
+    hits.sort_by(|a, b| b.1.cmp(&a.1));
+    let (prefix, count) = &hits[0];
     let (line, column) = byte_offset_to_line_col(ctx.source, span_start as usize);
     diagnostics.push(Diagnostic {
         path: Arc::clone(&ctx.path_arc),
@@ -211,6 +282,55 @@ mod tests {
         // The exemption is prefix-specific: a real optional-flag state
         // cluster must still be flagged.
         let src = "interface Order { id: string; shipReason?: string; shipmentAt?: string }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_translate_shorthand_axis_family() {
+        // Regression for #2190: a CSS-inspired shorthand (`translate`) plus
+        // per-axis siblings (`translateX`/`translateY`/`translateZ`/
+        // `translate3d`) is composable, not a discriminated-union state
+        // cluster — a consumer can set the shorthand or individual axes.
+        let src = r#"type TransformProps = {
+  transform?: string
+  translate?: Length
+  translateX?: Length
+  translateY?: Length
+  translateZ?: Length
+  translate3d?: readonly [Length, Length, Length]
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_extrapolate_shorthand_direction_family() {
+        // Regression for #2190: `extrapolate` is a shorthand that sets both
+        // `extrapolateLeft` and `extrapolateRight`; the per-direction props
+        // are independent, not mutually-exclusive variants.
+        let src = r#"export type InterpolatorConfig = {
+  extrapolate?: ExtrapolateType
+  extrapolateLeft?: ExtrapolateType
+  extrapolateRight?: ExtrapolateType
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_variant_group_without_shorthand_base() {
+        // The shorthand+axis exemption requires a bare base field whose
+        // siblings are `base + <axis suffix>`. A genuine state cluster that
+        // merely shares a 4-char prefix (`shipReason`/`shipmentAt`, bucket
+        // `ship`) has no bare base + axis siblings and stays flagged.
+        let src = "type Order = { shipReason?: string; shipmentAt?: string; shippedTo?: string };";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_axis_siblings_without_shorthand_base() {
+        // Per-axis siblings with no bare shorthand base (`translateX`/
+        // `translateY`/`translateZ`, no bare `translate`) lack the shorthand
+        // signature, so the cluster is not exempt.
+        let src = "type T = { translateX?: number; translateY?: number; translateZ?: number };";
         assert_eq!(run_on(src).len(), 1);
     }
 
