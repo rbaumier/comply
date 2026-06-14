@@ -18,7 +18,7 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["node"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
@@ -85,6 +85,14 @@ const NODE_SYNC_IO_METHODS: &[&str] = &[
 /// identifier that merely ends in `Sync`.
 pub(super) fn is_node_sync_io_method(method_name: &str) -> bool {
     NODE_SYNC_IO_METHODS.contains(&method_name)
+}
+
+/// Returns true when an enclosing function's name advertises a synchronous
+/// contract (suffix `Sync`, e.g. `copyDirSync`, `walkSync`). Inside such a
+/// function, synchronous I/O is the intended behaviour, mirroring Node's own
+/// naming convention for synchronous variants.
+pub(super) fn function_name_is_sync(name: &str) -> bool {
+    name.ends_with("Sync")
 }
 
 pub(super) fn allows_sync_node_api(path: &std::path::Path, source: &str) -> bool {
