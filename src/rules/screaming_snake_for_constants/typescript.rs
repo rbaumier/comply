@@ -170,4 +170,26 @@ mod tests {
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("prerender"));
     }
+
+    // Issue #1591: boolean mock config flags in a mock/fixture file mirror the
+    // camelCase property names of the runtime config object they simulate, so
+    // they are exempt from SCREAMING_SNAKE_CASE.
+    #[test]
+    fn allows_mock_config_flags_in_mock_file() {
+        let src = "export const asyncCallHook = true;\n\
+                   export const clientNodePlaceholder = false;\n\
+                   export const hasPluginDependencies = true;\n\
+                   export const componentIslands = true;";
+        assert!(run_at(src, "test/mocks/nuxt-config.ts").is_empty());
+        assert!(run_at(src, "src/__fixtures__/config.ts").is_empty());
+    }
+
+    // Negative space: a genuine top-level primitive constant in production source
+    // is unaffected by the mock/fixture exemption and must still fire.
+    #[test]
+    fn flags_numeric_constant_in_production_source() {
+        let diags = run_at("export const maxRetries = 5;", "src/lib/retry.ts");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("maxRetries"));
+    }
 }
