@@ -128,6 +128,15 @@ pub struct PackageJson {
     /// identify which source files are distinct public entry points of a
     /// multi-entry package.
     pub export_entry_stems: BTreeSet<String>,
+    /// Entries of the `files` field — the npm publish whitelist of paths and
+    /// directory globs shipped to the registry. Stored manifest-dir-relative,
+    /// forward-slash, leading `./` stripped; a directory entry keeps its
+    /// trailing `/` so a consumer can tell a file path (`index.js`) apart from a
+    /// published subtree (`lib/`). A pre-`exports`-era CJS library
+    /// (e.g. express 5.x) declares only `files` plus npm's default `index.js`
+    /// entry, so this whitelist is the package's published surface when no
+    /// `main`/`exports`/`module` exists.
+    pub files: BTreeSet<String>,
 }
 
 impl PackageJson {
@@ -196,6 +205,7 @@ impl PackageJson {
             entry_files: collect_entry_files(&json),
             entries_outside_src: entries_outside_src(&json),
             export_entry_stems: collect_export_entry_stems(&json),
+            files: collect_files_whitelist(&json),
         })
     }
 
@@ -592,6 +602,37 @@ fn collect_export_entry_stems(json: &Value) -> BTreeSet<String> {
         collect_export_targets(exports, &mut targets);
     }
     targets.iter().filter_map(|rel| entry_target_stem(rel)).collect()
+}
+
+/// The entries of the `files` field — the npm publish whitelist. Each is a
+/// relative path or directory glob normalized to forward slashes with a leading
+/// `./` stripped; a directory entry keeps its trailing `/` so a consumer can
+/// distinguish a single published file from a published subtree. Negation
+/// patterns (`!…`) and bare-glob wildcards are dropped: they exclude rather than
+/// publish, or name no concrete path/subtree to match against.
+fn collect_files_whitelist(json: &Value) -> BTreeSet<String> {
+    json.get("files")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .filter(|entry| !entry.starts_with('!') && !entry.contains('*'))
+                .filter_map(normalize_files_entry)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Normalize one `files` entry: strip a leading `./`, convert backslashes to
+/// forward slashes, and preserve a trailing `/` that marks a directory subtree.
+/// Returns `None` for an empty or root (`.`) entry, which names no concrete
+/// published path.
+fn normalize_files_entry(entry: &str) -> Option<String> {
+    let rel = entry.strip_prefix("./").unwrap_or(entry).replace('\\', "/");
+    if rel.is_empty() || rel == "." || rel == "/" {
+        return None;
+    }
+    Some(rel)
 }
 
 fn parse_dep_map(json: &Value, section: &str) -> BTreeMap<String, String> {
@@ -2103,6 +2144,42 @@ impl ProjectCtx {
         pkg.entry_files
             .iter()
             .any(|entry| manifest_dir.join(entry) == path)
+    }
+
+    /// True when `path` belongs to the published surface of a pre-`exports`-era
+    /// library — one whose nearest `package.json` declares a `files` whitelist
+    /// but no explicit `main`/`exports`/`module` entry (e.g. express 5.x). Such
+    /// a package relies on npm's default `index.js` entry resolution, so its
+    /// published surface is the `files` whitelist plus that root `index.js`.
+    /// A file inside that surface is reachable only through the package boundary
+    /// (an external `require('the-package')`), never `import`ed within the repo,
+    /// so the import-graph BFS cannot reach it even though it is genuinely
+    /// published — not dead code.
+    ///
+    /// Scoped to manifests with no explicit entry: once a package declares
+    /// `main`/`exports`, [`is_library`] short-circuits the rule and the precise
+    /// declared entries ([`is_package_entry_file`]) drive reachability instead,
+    /// so this broader `files`-surface heuristic stays inert.
+    ///
+    /// [`is_library`]: PackageJson::is_library
+    /// [`is_package_entry_file`]: ProjectCtx::is_package_entry_file
+    pub fn is_in_published_files_surface(&self, path: &Path) -> bool {
+        let Some(manifest_dir) = self.nearest_package_json_dir(path) else {
+            return false;
+        };
+        let Some(pkg) = self.nearest_package_json(path) else {
+            return false;
+        };
+        if pkg.is_library || pkg.files.is_empty() {
+            return false;
+        }
+        if manifest_dir.join("index.js") == path || manifest_dir.join("index.ts") == path {
+            return true;
+        }
+        pkg.files.iter().any(|entry| match entry.strip_suffix('/') {
+            Some(dir) => path.starts_with(manifest_dir.join(dir)),
+            None => manifest_dir.join(entry) == path,
+        })
     }
 
     /// True when `path` is invoked directly as a CLI entry by its nearest
@@ -3826,6 +3903,42 @@ mod tests {
         assert!(ctx.is_package_entry_file(&dir.path().join("inputrules/index.ts")));
         assert!(ctx.is_package_entry_file(&dir.path().join("state/index.ts")));
         assert!(!ctx.is_package_entry_file(&dir.path().join("other/index.ts")));
+    }
+
+    #[test]
+    fn is_in_published_files_surface_covers_files_whitelist_and_default_index() {
+        // express 5.x pattern: a `files` whitelist, no main/exports/module.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"express","files":["LICENSE","index.js","lib/"]}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx::empty();
+        // npm's default `index.js` entry, even though `files` lists it too.
+        assert!(ctx.is_in_published_files_surface(&dir.path().join("index.js")));
+        // A file inside a published directory subtree.
+        assert!(ctx.is_in_published_files_surface(&dir.path().join("lib/router.js")));
+        assert!(ctx.is_in_published_files_surface(&dir.path().join("lib/router/route.js")));
+        // A file outside the published surface.
+        assert!(!ctx.is_in_published_files_surface(&dir.path().join("internal/scratch.js")));
+    }
+
+    #[test]
+    fn is_in_published_files_surface_inert_when_main_or_exports_present() {
+        // A package with an explicit entry is driven by the precise declared
+        // entries, not the broad `files`-surface heuristic.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"pkg","main":"./lib/index.js","files":["lib/"]}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(!ctx.is_in_published_files_surface(&dir.path().join("lib/router.js")));
+        assert!(!ctx.is_in_published_files_surface(&dir.path().join("index.js")));
     }
 
     #[test]
