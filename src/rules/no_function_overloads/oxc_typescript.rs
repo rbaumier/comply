@@ -4,6 +4,7 @@ use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::{byte_offset_to_line_col, type_annotation_is_type_predicate};
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Declaration, Function, Statement};
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -61,6 +62,30 @@ fn return_type_text(source: &str, f: &Function) -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
+/// The source text of each fixed parameter's type annotation, positionally.
+/// A parameter without a type annotation yields an empty string so positions
+/// still align across signatures. The trailing rest parameter, when present, is
+/// not included — it is tracked separately via `first_param_is_rest`/arity.
+fn param_type_texts(source: &str, f: &Function) -> Vec<String> {
+    f.params
+        .items
+        .iter()
+        .map(|param| {
+            param
+                .type_annotation
+                .as_ref()
+                .and_then(|ann| {
+                    source.get(
+                        ann.type_annotation.span().start as usize
+                            ..ann.type_annotation.span().end as usize,
+                    )
+                })
+                .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
 impl OxcCheck for Check {
     fn run_on_semantic<'a>(
         &self,
@@ -90,6 +115,9 @@ impl OxcCheck for Check {
                         continue;
                     }
                     if preserves_rest_vs_fixed_return(&sigs) {
+                        continue;
+                    }
+                    if preserves_non_terminal_optional(&sigs) {
                         continue;
                     }
                     for sig in sigs {
@@ -131,6 +159,9 @@ struct OverloadSig {
     first_param_is_rest: bool,
     /// Source text of this signature's return-type annotation, if any.
     return_type: Option<String>,
+    /// Source text of each fixed parameter's type annotation, positionally.
+    /// Excludes a trailing rest parameter (tracked via arity / `first_param_is_rest`).
+    param_types: Vec<String>,
 }
 
 /// True when EVERY overload signature has a generic type parameter that appears
@@ -199,6 +230,48 @@ fn preserves_rest_vs_fixed_return(sigs: &[OverloadSig]) -> bool {
     any_rest_first && any_fixed_first
 }
 
+/// True when some pair of overloads differs by a parameter inserted in a
+/// NON-TERMINAL position — i.e. an arity-`n` signature whose fixed parameter
+/// types are not a positional prefix of an arity-`(n+1)` signature, yet the two
+/// share their trailing parameter type. Collapsing such a pair would require a
+/// middle optional `f(a, b?, c?)`, which TypeScript cannot express so that both
+/// `f(a, c)` and `f(a, b, c)` type-check: the second positional argument would be
+/// ambiguous between the `b` and `c` types. The separate overloads are therefore
+/// required (e.g. TypeORM's `OneToOne(typeFn, options?)` vs
+/// `OneToOne(typeFn, inverseSide?, options?)`).
+///
+/// A pure trailing-optional pair (the shorter list IS a prefix of the longer one)
+/// or a same-position type difference is NOT exempted here — those collapse into
+/// a single signature cleanly and must still be flagged.
+fn preserves_non_terminal_optional(sigs: &[OverloadSig]) -> bool {
+    sigs.iter().any(|shorter| {
+        sigs.iter().any(|longer| {
+            longer.param_types.len() == shorter.param_types.len() + 1
+                && extra_param_is_non_terminal(&shorter.param_types, &longer.param_types)
+        })
+    })
+}
+
+/// Given a shorter parameter-type list and a longer one with exactly one extra
+/// parameter, return true when that extra parameter sits in a NON-TERMINAL
+/// position — the longer list is the shorter list with one type inserted before
+/// its end. Detected by finding the insertion index `k`: the first `k` types
+/// match positionally and the remaining `shorter[k..]` match `longer[k+1..]`. An
+/// insertion at `k == shorter.len()` is a trailing append (returns false); any
+/// `k < shorter.len()` is a middle insertion (returns true). Returns false when
+/// no single-insertion alignment exists (the lists differ in more than the one
+/// inserted slot).
+fn extra_param_is_non_terminal(shorter: &[String], longer: &[String]) -> bool {
+    for k in 0..shorter.len() {
+        let prefix_matches = shorter[..k] == longer[..k];
+        let suffix_matches = shorter[k..] == longer[k + 1..];
+        if prefix_matches && suffix_matches {
+            return true;
+        }
+    }
+    false
+}
+
 /// Extract overload signature info if `stmt` is a function declaration without a body.
 fn extract_overload_sig(source: &str, stmt: &Statement) -> Option<OverloadSig> {
     match stmt {
@@ -234,6 +307,7 @@ fn sig_from_function(source: &str, f: &Function) -> Option<OverloadSig> {
         param_count,
         first_param_is_rest,
         return_type: return_type_text(source, f),
+        param_types: param_type_texts(source, f),
     })
 }
 
@@ -499,6 +573,62 @@ export function when(predicate: any, arg1?: any, arg2?: any): any {
 function foo<T>(x: T): string;
 function foo<T>(x: T, y: number): string;
 function foo<T>(x: T, y?: number): string { return ''; }
+";
+        assert_eq!(run_on(source).len(), 2);
+    }
+
+    #[test]
+    fn allows_overloads_differing_by_a_non_terminal_optional_param() {
+        // Regression for #2369: TypeORM's `OneToOne` decorator factory exposes a
+        // 2-arity form `(typeFn, options?)` and a 3-arity form
+        // `(typeFn, inverseSide?, options?)`. The shorter list is not a positional
+        // prefix of the longer one — the extra `inverseSide` is inserted in the
+        // middle, shifting `options` to the end. Unifying would require a middle
+        // optional `f(a, b?, c?)`, which TypeScript cannot express such that both
+        // `f(a, options)` and `f(a, inverseSide, options)` type-check, so the
+        // separate overloads are required.
+        let source = r#"
+export function OneToOne<T>(
+    typeFunctionOrTarget: string | ((type?: any) => ObjectType<T>),
+    options?: RelationOptions,
+): PropertyDecorator;
+export function OneToOne<T>(
+    typeFunctionOrTarget: string | ((type?: any) => ObjectType<T>),
+    inverseSide?: string | ((object: T) => any),
+    options?: RelationOptions,
+): PropertyDecorator;
+export function OneToOne<T>(
+    typeFunctionOrTarget: string | ((type?: any) => ObjectType<T>),
+    inverseSideOrOptions?: string | ((object: T) => any) | RelationOptions,
+    maybeOptions?: RelationOptions,
+): PropertyDecorator {
+    return {} as any;
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_trailing_optional_overloads() {
+        // A genuine trailing-optional pair: the shorter list IS a positional
+        // prefix of the longer one, so it collapses cleanly into
+        // `foo(a: string, b?: number): void`. Still flagged.
+        let source = "
+function foo(a: string): void;
+function foo(a: string, b: number): void;
+function foo(a: string, b?: number): void {}
+";
+        assert_eq!(run_on(source).len(), 2);
+    }
+
+    #[test]
+    fn flags_same_position_type_difference_overloads() {
+        // A pair differing only by one parameter's type at the same position
+        // collapses into `foo(a: string | number): void`. Still flagged.
+        let source = "
+function foo(a: string): void;
+function foo(a: number): void;
+function foo(a: string | number): void {}
 ";
         assert_eq!(run_on(source).len(), 2);
     }
