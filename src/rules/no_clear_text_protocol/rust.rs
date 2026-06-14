@@ -19,7 +19,9 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if ctx.file.path_segments.in_test_dir {
+        if ctx.file.path_segments.in_test_dir
+            || crate::rules::rust_helpers::is_under_tests_dir(ctx.path)
+        {
             return;
         }
         let source_bytes = ctx.source.as_bytes();
@@ -106,5 +108,30 @@ mod tests {
     fn does_not_flag_url_in_comment() {
         let src = "// see http://api.acme.io\nfn f() {}";
         assert!(run(src).is_empty());
+    }
+
+    // #1260 — axum's `test_helpers/test_client.rs` interpolates a loopback
+    // `SocketAddr` into `http://{addr}`. TLS is not viable for in-process test
+    // servers, so the whole test-helper file is exempt.
+    #[test]
+    fn does_not_flag_http_in_test_helpers_dir() {
+        let src = r#"fn get(&self) { self.client.get(format!("http://{}{url}", self.addr)); }"#;
+        let diags = crate::rules::test_helpers::run_rule(
+            &Check,
+            src,
+            "axum/src/test_helpers/test_client.rs",
+        );
+        assert!(diags.is_empty());
+    }
+
+    // #1260 negative space — a concrete external host in production code still fires.
+    #[test]
+    fn still_flags_external_host_in_production_file() {
+        let src = r#"fn f() { let u = "http://example.test"; let _ = u; }"#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/client.rs");
+        assert!(diags.is_empty(), "guard sanity: example.test is exempt");
+        let src = r#"fn f() { let u = "http://api.acme.io"; let _ = u; }"#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/client.rs");
+        assert_eq!(diags.len(), 1);
     }
 }
