@@ -36,7 +36,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::{arm_body_is_diverging, is_in_test_context};
 
 #[derive(Debug)]
 pub struct Check;
@@ -100,7 +100,7 @@ impl AstCheck for Check {
         // …) is a deliberate guard for the impossible/error case, not a
         // lazy catch-all to be replaced with enumerated variants — skip it.
         for arm in wildcard_arms {
-            if wildcard_arm_is_diverging(arm, source_bytes) {
+            if arm_body_is_diverging(arm, source_bytes) {
                 continue;
             }
             let pos = arm.start_position();
@@ -228,74 +228,6 @@ fn references_stdlib_closed_enum(pattern: tree_sitter::Node, source: &[u8]) -> b
     }
     // `std::io::ErrorKind` is #[non_exhaustive]: a `_` arm is mandatory.
     head.contains("ErrorKind::")
-}
-
-/// True if the wildcard arm's body is a single diverging or error
-/// expression — a `unreachable!`/`panic!`/`unimplemented!`/`todo!`/`bail!`
-/// macro invocation, or a `return Err(...)`. Such an arm is an explicit
-/// guard for the impossible/error case, not a catch-all standing in for
-/// unenumerated variants, so the rule must not flag it.
-fn wildcard_arm_is_diverging(arm: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(value) = arm.child_by_field_name("value") else {
-        return false;
-    };
-    expr_is_diverging(value, source)
-}
-
-/// Classify a match-arm body expression as diverging/error. A `block`
-/// body with a single statement is unwrapped to its inner expression so
-/// `{ bail!("…"); }` is treated like `bail!("…")`.
-fn expr_is_diverging(expr: tree_sitter::Node, source: &[u8]) -> bool {
-    match expr.kind() {
-        "block" => {
-            // Only an unconditional single-statement body is a guard:
-            // `{ bail!("…"); }` or `{ return Err(e); }`. A block doing
-            // other work before diverging is a real catch-all.
-            let mut cursor = expr.walk();
-            let mut children = expr.named_children(&mut cursor);
-            let (Some(only), None) = (children.next(), children.next()) else {
-                return false;
-            };
-            let inner = if only.kind() == "expression_statement" {
-                match only.named_child(0) {
-                    Some(node) => node,
-                    None => return false,
-                }
-            } else {
-                only
-            };
-            expr_is_diverging(inner, source)
-        }
-        "macro_invocation" => {
-            let Some(name_node) = expr.child_by_field_name("macro") else {
-                return false;
-            };
-            matches!(
-                name_node.utf8_text(source),
-                Ok("unreachable" | "panic" | "unimplemented" | "todo" | "bail")
-            )
-        }
-        "return_expression" => return_yields_err(expr, source),
-        _ => false,
-    }
-}
-
-/// True if a `return_expression` returns an `Err(...)` value — the head
-/// of the returned call expression is the `Err` constructor.
-fn return_yields_err(ret: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(returned) = ret.named_child(0) else {
-        return false;
-    };
-    if returned.kind() != "call_expression" {
-        return false;
-    }
-    let Some(callee) = returned.child_by_field_name("function") else {
-        return false;
-    };
-    let Ok(text) = callee.utf8_text(source) else {
-        return false;
-    };
-    text.rsplit("::").next().unwrap_or(text).trim() == "Err"
 }
 
 #[cfg(test)]

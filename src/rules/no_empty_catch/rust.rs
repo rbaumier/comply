@@ -10,6 +10,7 @@
 //! justification for swallowing the error.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::rust_helpers::arm_body_is_diverging;
 
 crate::ast_check! { on ["match_arm", "let_condition", "let_chain", "if_expression"] => |node, source, ctx, diagnostics|
 match node.kind() {
@@ -20,6 +21,14 @@ match node.kind() {
             }
             let Some(value) = node.child_by_field_name("value") else { return };
             if !is_empty_block(&value, source) {
+                return;
+            }
+            // A controlled assertion: `Err(Foo) => {}` paired with a
+            // sibling arm that diverges (`v => panic!(...)`,
+            // `_ => unreachable!()`, `_ => return Err(e)`, …) asserts the
+            // result must be this exact error — the empty arm is the
+            // success case, not silent error-swallowing.
+            if has_diverging_sibling_arm(&node, source) {
                 return;
             }
             push_diag(node, ctx, diagnostics);
@@ -61,6 +70,29 @@ fn push_diag(
         severity: Severity::Warning,
         span: None,
     });
+}
+
+/// True if any *other* arm of the same `match` diverges (panics, aborts,
+/// or returns an error). The empty `Err(...)` arm's parent is the
+/// `match_block`; we scan its `match_arm` siblings, skipping the arm
+/// itself.
+fn has_diverging_sibling_arm(arm: &tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(match_block) = arm.parent() else {
+        return false;
+    };
+    if match_block.kind() != "match_block" {
+        return false;
+    }
+    let mut cursor = match_block.walk();
+    for sibling in match_block.named_children(&mut cursor) {
+        if sibling.kind() != "match_arm" || sibling.id() == arm.id() {
+            continue;
+        }
+        if arm_body_is_diverging(sibling, source) {
+            return true;
+        }
+    }
+    false
 }
 
 fn is_empty_block(node: &tree_sitter::Node, _source: &[u8]) -> bool {
@@ -179,5 +211,37 @@ mod tests {
     fn allows_non_empty_if_let_err() {
         let src = "fn f(r: Result<u8, E>) { if let Err(e) = r { log(e); } }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_empty_err_arm_with_panicking_sibling() {
+        // Issue #1504: `Err(DeserializationError(_)) => {}` paired with a
+        // `v => panic!(...)` arm is a controlled assertion that the result
+        // must be exactly this error — the empty arm is the success case.
+        let src = "fn f(values: Result<u8, E>) { match values { \
+                   Err(DeserializationError(_)) => {} \
+                   v => panic!(\"Expected a deserialization error, got {:?}\", v), \
+                   } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_empty_err_arm_with_unreachable_sibling() {
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Err(_) => {} \
+                   _ => unreachable!(), \
+                   } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_empty_err_arm_without_diverging_sibling() {
+        // Negative space: a genuinely empty error arm with no diverging
+        // sibling is still silent error-swallowing and must fire.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Ok(v) => go(v), \
+                   Err(_) => {} \
+                   } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
