@@ -113,6 +113,13 @@
 //!   of the published `dist/`, so its top-level build steps are intentional and
 //!   the tree-shaking concern does not apply. An ordinary library module the
 //!   scripts never invoke is still flagged;
+//! - files under a top-level CLI/automation entry directory reported by
+//!   `is_top_level_script_dir_path` (`scripts/`, `bin/`, `tools/`, `examples/`,
+//!   `example-apps/`, `benchmark/`, `benchmarks/` at the project root). These
+//!   are build tools and automation scripts run directly by Node or a build
+//!   runner, never `import`-ed as library modules, so their top-level inline
+//!   execution is the entry point's purpose. A nested `src/scripts/` library
+//!   module is still flagged;
 //! - framework entry points reported by `is_framework_entry_point`;
 //! - TanStack Start entry files (`app/{client,router,server}.{ts,tsx}` or
 //!   `src/app/…`) when the `tanstack-router` framework is detected;
@@ -164,6 +171,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use crate::rules::path_utils::{
     is_browser_asset_dir_path, is_config_file, is_framework_entry_point,
+    is_top_level_script_dir_path,
 };
 use oxc_ast::ast::{
     Argument, AssignmentTarget, BindingPattern, Declaration, ExportDefaultDeclarationKind,
@@ -1519,6 +1527,11 @@ impl OxcCheck for Check {
         if is_framework_entry_point(ctx.path, ctx.project)
             || is_tanstack_start_entry(ctx.path, ctx.project)
             || ctx.project.is_script_entry_file(ctx.path)
+            || ctx
+                .project
+                .project_root
+                .as_deref()
+                .is_some_and(|root| is_top_level_script_dir_path(ctx.path, root))
             || is_config_file(ctx.path)
             || is_browser_asset_dir_path(ctx.path)
         {
@@ -3353,6 +3366,85 @@ mod tests {
             diags.len(),
             1,
             "an imported src/ module the scripts never run must still be flagged, got {diags:?}"
+        );
+    }
+
+    /// Build a `ProjectCtx` rooted at a tempdir holding the given files, so
+    /// `project_root`-anchored path classifiers resolve against a real root.
+    /// Returns `(tempdir, project, canonical paths)` — drop `tempdir` last.
+    fn project_rooted_at_tempdir(
+        files: &[(&str, &str)],
+    ) -> (tempfile::TempDir, crate::project::ProjectCtx, Vec<std::path::PathBuf>) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut source_files = Vec::new();
+        let mut paths = Vec::new();
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(&p, content).unwrap();
+            let lang = crate::files::Language::from_path(&p).unwrap();
+            source_files.push(crate::files::SourceFile { path: p.clone(), language: lang });
+            paths.push(std::fs::canonicalize(&p).unwrap());
+        }
+        let refs: Vec<&crate::files::SourceFile> = source_files.iter().collect();
+        let project = crate::project::ProjectCtx::load(&refs, &crate::config::Config::default());
+        (dir, project, paths)
+    }
+
+    // Regression for #1657: an inline CLI/build script under a top-level
+    // `scripts/` directory (apollo-server's `scripts/precompile.mjs`) is run
+    // directly via `node scripts/precompile.mjs`, never imported as a library,
+    // so its top-level inline side effects are the entry point's purpose.
+    #[test]
+    fn allows_inline_cli_script_in_scripts_dir() {
+        let src = "\
+            import path from 'path';\n\
+            import { readFileSync, writeFileSync, mkdirSync } from 'fs';\n\
+            const { version } = JSON.parse(readFileSync(path.join('packages', 'package.json'), 'utf-8'));\n\
+            mkdirSync('packages/server/src/generated', { recursive: true });\n\
+            writeFileSync('packages/server/src/generated/packageVersion.ts', `export const packageVersion = ${version};\\n`);\n";
+        let (_dir, project, paths) = project_rooted_at_tempdir(&[
+            ("package.json", r#"{"name":"@apollo/server","scripts":{"precompile":"node scripts/precompile.mjs"}}"#),
+            ("scripts/precompile.mjs", src),
+        ]);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            src,
+            &paths[1],
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        );
+        assert!(
+            diags.is_empty(),
+            "scripts/precompile.mjs is a top-level CLI/automation entry, got {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #1657: a genuine library module under `src/` —
+    // even one carrying `scripts` deeper in its path — keeps its top-level side
+    // effects flagged. The exemption is anchored to top-level `scripts/` only.
+    #[test]
+    fn still_flags_library_module_in_nested_scripts_dir() {
+        let src = "\
+            import { registerGlobals } from './globals';\n\
+            registerGlobals();\n";
+        let (_dir, project, paths) = project_rooted_at_tempdir(&[
+            ("package.json", r#"{"name":"app"}"#),
+            ("src/scripts/loader.ts", src),
+        ]);
+        let diags = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            src,
+            &paths[1],
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "a nested src/scripts/ library module must still be flagged, got {diags:?}"
         );
     }
 }

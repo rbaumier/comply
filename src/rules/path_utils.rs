@@ -127,6 +127,38 @@ pub fn is_developer_script_path(path: &Path) -> bool {
     has_path_segment(path, &["scripts", "bin", "migrations"])
 }
 
+/// Top-level directory names that hold CLI tools, build/automation scripts, and
+/// benchmark harnesses run directly (by Node, a build runner, or a shell),
+/// never `import`-ed as library modules. Matched only at the project root, so a
+/// nested `src/scripts/` library helper does not qualify.
+const TOP_LEVEL_SCRIPT_DIRS: &[&str] = &[
+    "scripts",
+    "bin",
+    "tools",
+    "examples",
+    "example-apps",
+    "benchmark",
+    "benchmarks",
+];
+
+/// True when `path` lives under a top-level CLI/automation entry directory of
+/// the project (e.g. `<root>/scripts/precompile.mjs`, `<root>/bin/cli.ts`).
+/// These files are executed directly, never imported, so concerns that only
+/// apply to importable library modules (dead exports, top-level side effects
+/// blocking tree-shaking) do not apply to them. Anchoring on the project root
+/// keeps a nested `src/scripts/util.ts` library module from being exempted.
+pub fn is_top_level_script_dir_path(path: &Path, project_root: &Path) -> bool {
+    let canon_path = canonicalize_cached(path);
+    let canon_root = canonicalize_cached(project_root);
+    let Ok(rel) = canon_path.strip_prefix(&canon_root) else {
+        return false;
+    };
+    rel.components()
+        .next()
+        .and_then(|c| c.as_os_str().to_str())
+        .is_some_and(|first| TOP_LEVEL_SCRIPT_DIRS.contains(&first))
+}
+
 /// True for build/codegen scripts: files under a `scripts/` or `config/`
 /// directory, or a root-level `build`/`bundle` script (e.g. `build.ts`,
 /// `bundle.mjs`) sitting directly in `project_root`. Both run at dev/CI time
@@ -504,6 +536,23 @@ mod aux_path_tests {
         assert!(!is_developer_script_path(&PathBuf::from("config/helpers.ts")));
         assert!(!is_developer_script_path(&PathBuf::from("examples/app/page.tsx")));
         assert!(!is_developer_script_path(&PathBuf::from("templates/app/page.tsx")));
+    }
+
+    #[test]
+    fn top_level_script_dir_is_root_anchored() {
+        let root = PathBuf::from("/repo");
+        for dir in ["scripts", "bin", "tools", "examples", "example-apps", "benchmark", "benchmarks"] {
+            assert!(
+                is_top_level_script_dir_path(&root.join(format!("{dir}/run.ts")), &root),
+                "top-level {dir}/ is a CLI/automation entry dir"
+            );
+        }
+        // Issue #1657: an inline build script under top-level `scripts/`.
+        assert!(is_top_level_script_dir_path(&root.join("scripts/precompile.mjs"), &root));
+        // Anchored at the root only: a nested `src/scripts/` library helper is
+        // a real importable module and must NOT be exempted.
+        assert!(!is_top_level_script_dir_path(&root.join("src/scripts/util.ts"), &root));
+        assert!(!is_top_level_script_dir_path(&root.join("src/app/login.ts"), &root));
     }
 
     #[test]
