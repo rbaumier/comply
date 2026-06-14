@@ -92,4 +92,39 @@ mod tests {
         let src = r#"fn commit_hash() { Command::new("git").args(["rev-parse", "--short", "HEAD"]).output().ok(); }"#;
         assert!(crate::rules::test_helpers::run_rule(&Check, src, "build.rs").is_empty());
     }
+
+    #[test]
+    fn skips_command_in_integration_test_dir() {
+        let src = r#"#[test]
+fn invalid_justfile() {
+  let output = Command::new(JUST)
+    .current_dir(tmp.path())
+    .output()
+    .unwrap();
+  assert!(!output.status.success());
+}"#;
+        let diags = crate::rules::test_helpers::run_rule_gated(&Check, src, "tests/edit.rs");
+        assert!(
+            diags.is_empty(),
+            "Command::new without a timeout in an integration test file is a false positive"
+        );
+    }
+
+    #[test]
+    fn flags_command_in_non_test_dir() {
+        let src = r#"#[test]
+fn invalid_justfile() {
+  let output = Command::new(JUST)
+    .current_dir(tmp.path())
+    .output()
+    .unwrap();
+  assert!(!output.status.success());
+}"#;
+        let diags = crate::rules::test_helpers::run_rule_gated(&Check, src, "src/main.rs");
+        assert_eq!(
+            diags.len(),
+            1,
+            "the same Command::new must still fire outside test directories"
+        );
+    }
 }
