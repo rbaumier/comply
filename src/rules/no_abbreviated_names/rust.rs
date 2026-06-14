@@ -24,11 +24,14 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 // descriptor in virtualization/device-driver protocols (VirtIO/USB/PCIe
 // `Descriptor`) and the SQL `ORDER BY … DESC` keyword — it has multiple
 // canonical expansions, so suggesting 'description' is frequently wrong.
+// `pwd` is likewise exempt: in shell/filesystem/OS code it is the Unix
+// `pwd(1)` command and `$PWD` variable ("print working directory"), while
+// in URL/auth code it means "password" — two canonical expansions, so
+// suggesting either single full word is frequently wrong.
 const DEFAULT_BANNED: &[(&str, &str)] = &[
     ("acct", "account"),
     ("usr", "user"),
     ("btn", "button"),
-    ("pwd", "password"),
     ("cnt", "count"),
 ];
 
@@ -69,9 +72,6 @@ impl AstCheck for Check {
         if allowed.iter().any(|a| a == &abbr) {
             return;
         }
-        if abbr == "pwd" && binding_type_mentions_passwd(parent, source_bytes) {
-            return;
-        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -87,18 +87,6 @@ impl AstCheck for Check {
             span: None,
         });
     }
-}
-
-/// `pwd` is the canonical POSIX name for a `struct passwd` binding
-/// (`libc::passwd` holds uid/gid/home dir/shell — a user-database entry,
-/// not a password). When the binding's type annotation mentions `passwd`
-/// (e.g. `let mut pwd: MaybeUninit<libc::passwd>`), renaming to
-/// `password` would be misleading, so the identifier is exempt.
-fn binding_type_mentions_passwd(binding: tree_sitter::Node, source: &[u8]) -> bool {
-    binding
-        .child_by_field_name("type")
-        .and_then(|type_node| type_node.utf8_text(source).ok())
-        .is_some_and(|type_text| type_text.contains("passwd"))
 }
 
 fn build_banned_list(extra: &[String]) -> Vec<(String, String)> {
@@ -218,23 +206,24 @@ mod tests {
     }
 
     #[test]
-    fn allows_pwd_bound_to_posix_passwd_struct() {
-        // Regression for issue #977: a `libc::passwd` binding is a POSIX
-        // user-database entry, not a password — `pwd` is the canonical
-        // name and `password` would be misleading.
-        assert!(run_on(
-            "fn f() { let mut pwd: std::mem::MaybeUninit<libc::passwd> = \
-             std::mem::MaybeUninit::uninit(); }"
-        )
-        .is_empty());
+    fn allows_pwd_print_working_directory_term() {
+        // Regression for issue #1484: in shell/filesystem code `pwd` means
+        // "print working directory" (the `pwd(1)` command, `$PWD`), not
+        // "password" — and as a POSIX `struct passwd` binding (#977) it is
+        // a user-database entry. With two canonical expansions, `pwd` is
+        // exempt entirely (like `desc`).
+        assert!(run_on("fn f() { let mut file_pwd = get(); }").is_empty());
+        assert!(run_on("fn engine_state_with_pwd() {}").is_empty());
+        assert!(run_on("fn pwd_points_to_symlink_to_directory() {}").is_empty());
         assert!(run_on("fn f() { let pwd: libc::passwd = entry; }").is_empty());
     }
 
     #[test]
-    fn still_flags_pwd_without_passwd_type() {
-        let diags = run_on("fn f() { let pwd = \"secret\"; }");
-        assert!(diags.iter().any(|d| d.message.contains("pwd")));
-        let diags = run_on("fn f() { let mut pwd = \"secret\"; }");
-        assert!(diags.iter().any(|d| d.message.contains("pwd")));
+    fn still_flags_other_abbreviations() {
+        // Removing `pwd` must not weaken detection of genuine abbreviations.
+        let diags = run_on("fn f() { let user_acct = 1; }");
+        assert!(diags.iter().any(|d| d.message.contains("acct")));
+        let diags = run_on("fn f() { let btn = 1; }");
+        assert!(diags.iter().any(|d| d.message.contains("btn")));
     }
 }
