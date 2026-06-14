@@ -23,6 +23,24 @@ pub const META: RuleMeta = RuleMeta {
     skip_in_relaxed_dir: false,
 };
 
+/// True for SCREAMING_SNAKE_CASE / all-uppercase identifiers (named constants):
+/// at least one letter, every letter uppercase, only letters/digits/underscores.
+/// Shared by both backends to classify a comparison's left operand.
+fn is_screaming_snake_case(name: &str) -> bool {
+    let mut has_letter = false;
+    for ch in name.chars() {
+        if ch.is_alphabetic() {
+            if ch.is_lowercase() {
+                return false;
+            }
+            has_letter = true;
+        } else if !ch.is_ascii_digit() && ch != '_' {
+            return false;
+        }
+    }
+    has_letter
+}
+
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
