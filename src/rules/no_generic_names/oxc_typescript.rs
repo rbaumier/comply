@@ -98,6 +98,49 @@ fn mirrors_dom_api_name(name: &str) -> bool {
     DOM_API_NAME_ALLOWLIST.contains(&name)
 }
 
+/// Grafana plugin-SDK base classes that a datasource plugin entry extends. The
+/// SDK mandates the implementing class be named exactly `DataSource`, so a class
+/// extending one of these is a framework-prescribed entry point, not a lazily
+/// named `data*` compound.
+const GRAFANA_DATASOURCE_BASES: &[&str] = &["DataSourceApi", "DataSourceWithBackend"];
+
+/// True when `node` is the name of a class that `extends` a Grafana datasource
+/// SDK base (`class DataSource extends DataSourceApi<…>`). The exemption is
+/// scoped to the class *name* binding: the node must be the class's own `id`, so
+/// generic identifiers declared inside the class body stay flagged. Matches both
+/// a bare base (`DataSourceApi`) and a namespaced one (`grafana.DataSourceApi`)
+/// by its last `.`-segment, mirroring the heritage check in `react-no-typos`.
+fn is_grafana_datasource_class_name<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    ctx: &CheckCtx,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let parent_id = nodes.parent_id(node.id());
+    if parent_id == node.id() {
+        return false;
+    }
+    let AstKind::Class(class) = nodes.kind(parent_id) else {
+        return false;
+    };
+    // The node must be the class's own name, not a member inside its body.
+    let node_span = node.kind().span();
+    if class.id.as_ref().is_none_or(|id| id.span != node_span) {
+        return false;
+    }
+    let Some(super_class) = &class.super_class else {
+        return false;
+    };
+    let start = super_class.span().start as usize;
+    let end = super_class.span().end as usize;
+    if end > ctx.source.len() {
+        return false;
+    }
+    let base = &ctx.source[start..end];
+    let base = base.rsplit('.').next().unwrap_or(base);
+    GRAFANA_DATASOURCE_BASES.contains(&base)
+}
+
 /// Return the banned prefix matching `name` on a word boundary, or None.
 fn matched_banned_prefix(name: &str) -> Option<&'static str> {
     let bytes = name.as_bytes();
@@ -583,6 +626,12 @@ impl OxcCheck for Check {
             }) {
                 return;
             }
+            // A class extending a Grafana datasource SDK base
+            // (`class DataSource extends DataSourceApi<…>`) is a
+            // framework-mandated plugin entry name, not a lazy `data*` compound.
+            if prefix == "data" && is_grafana_datasource_class_name(node, ctx, semantic) {
+                return;
+            }
             // A descriptive type annotation (e.g. `data: TData`) carries
             // the domain information the identifier name would otherwise need.
             if type_annotation_is_descriptive(node, semantic) {
@@ -736,6 +785,37 @@ mod tests {
         // canonical UI primitives.
         let src = r#"const dataSource = 1; const DataObject = {}; const DataValue = 2;"#;
         assert_eq!(run(src).len(), 3);
+    }
+
+    #[test]
+    fn no_fp_grafana_datasource_class_extends_sdk_base_issue_1531() {
+        // Regression for #1531 — the Grafana plugin SDK mandates the datasource
+        // implementation class be named `DataSource` and extend `DataSourceApi`
+        // (or `DataSourceWithBackend`). The structural `extends` is what proves
+        // it is the framework-prescribed entry point, not a lazy `data*` name.
+        let src = r#"
+            export class DataSource extends DataSourceApi<MyQuery, MyDataSourceOptions> {
+                query() { return null; }
+            }
+            export class BackendDataSource extends DataSourceWithBackend<MyQuery, MyOptions> {}
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_bare_data_source_class_without_grafana_base_issue_1531() {
+        // Negative space: a bare `class DataSource {}` with no Grafana base is a
+        // genuinely generic name and must still fire. The exemption is purely
+        // structural — it hinges on the `extends DataSourceApi` heritage, not on
+        // the literal name `DataSource` or its directory.
+        let src = r#"
+            class DataSource {}
+            class Manager {}
+            class DataSourceExtendingOther extends SomethingElse {}
+        "#;
+        // `DataSource` and `DataSourceExtendingOther` use the `data` prefix;
+        // `Manager` is not generic, so exactly two fire.
+        assert_eq!(run(src).len(), 2);
     }
 
     #[test]
