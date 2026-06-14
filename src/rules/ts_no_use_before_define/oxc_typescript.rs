@@ -50,6 +50,19 @@
 //! *expressions* stay flagged too, since the binding they initialize can be
 //! invoked synchronously before the declaration.
 //!
+//! Also skips forward references made from inside a function/arrow *expression*
+//! that lives inside a decorator (`@Decorator(...)`) — the lazy-thunk pattern
+//! used for circular model references in association decorators
+//! (`@OneToMany(() => Post)`, `@BelongsTo(() => Author)`,
+//! `@ManyToOne({ target: () => Author })`). The decorator factory stores such an
+//! arrow and invokes it later (after the surrounding classes are defined), so a
+//! binding declared later in an enclosing scope is already initialized by the
+//! time the arrow runs. Object/array-literal wrappers between the arrow and the
+//! decorator are transparent (a thunk nested in the decorator's options object
+//! still counts). A binding local to the arrow body used before its own
+//! declaration line, an IIFE, or a direct (non-arrow) reference inside the
+//! decorator stays flagged.
+//!
 //! Ambient `declare` declarations (`declare const`/`declare let`/`declare var`/
 //! `declare function`/`declare class`, or any binding inside a `declare global`
 //! / ambient module block) are type-only: they create no runtime binding and
@@ -131,6 +144,11 @@ impl OxcCheck for Check {
                         continue;
                     }
                     if is_inside_deferred_definition(
+                        nodes, scoping, ref_node_id, decl_scope_id,
+                    ) {
+                        continue;
+                    }
+                    if is_inside_deferred_call_argument(
                         nodes, scoping, ref_node_id, decl_scope_id,
                     ) {
                         continue;
@@ -435,6 +453,75 @@ fn is_inside_deferred_definition<'a>(
             }
             AstKind::StaticBlock(_) | AstKind::Program(_) => return false,
             _ => {}
+        }
+    }
+    false
+}
+
+/// True when the reference sits inside a function/arrow *expression* that lives
+/// inside a decorator (`@Decorator(...)`) — the lazy-thunk pattern used for
+/// circular model references in association decorators (`@OneToMany(() => Post)`,
+/// `@BelongsTo(() => Author)`, `@ManyToOne({ target: () => Author })`).
+///
+/// A decorator factory stores such an arrow and invokes it later (after the
+/// surrounding classes are defined), so a binding declared later in an enclosing
+/// scope is already initialized by the time the arrow runs — the forward
+/// reference is not a real TDZ hazard. Scoping the exemption to decorators keeps
+/// it structural and sound: unlike a generic `callee(() => x)`, the decorator
+/// `@` syntax marks a thunk the runtime defers, so eager callees (`forEach`,
+/// `someFn`) are unaffected.
+///
+/// The exemption requires:
+/// - the binding to be declared in a scope that encloses the arrow
+///   (`decl_scope_id` is an ancestor of, or equal to, the arrow's scope) — a
+///   binding local to the arrow body, read before its own declaration line, is a
+///   genuine intra-execution TDZ error and stays flagged;
+/// - the arrow not being an IIFE — an immediately-invoked closure runs in the
+///   synchronous flow, so a forward reference inside it stays flagged.
+///
+/// A direct (non-arrow) reference inside a decorator runs at class-definition
+/// time and is not covered here, so it stays subject to the usual ordering.
+fn is_inside_deferred_call_argument<'a>(
+    nodes: &'a oxc_semantic::AstNodes<'a>,
+    scoping: &Scoping,
+    ref_node_id: NodeId,
+    decl_scope_id: ScopeId,
+) -> bool {
+    for ancestor_id in nodes.ancestor_ids(ref_node_id) {
+        let node = nodes.get_node(ancestor_id);
+        match node.kind() {
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
+                if is_immediately_invoked(nodes, ancestor_id) {
+                    return false;
+                }
+                return is_inside_decorator(nodes, ancestor_id)
+                    && decl_scope_encloses(scoping, decl_scope_id, node.scope_id());
+            }
+            AstKind::Program(_) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// True when `func_id` sits inside a decorator expression (`@Decorator(...)`),
+/// reached through call/object/array/property wrappers so a thunk nested in a
+/// decorator's options object still counts. Any function boundary or the program
+/// root stops the walk before a decorator is found.
+fn is_inside_decorator<'a>(
+    nodes: &'a oxc_semantic::AstNodes<'a>,
+    func_id: NodeId,
+) -> bool {
+    for ancestor_id in nodes.ancestor_ids(func_id) {
+        let node = nodes.get_node(ancestor_id);
+        match node.kind() {
+            AstKind::Decorator(_) => return true,
+            AstKind::CallExpression(_)
+            | AstKind::ObjectExpression(_)
+            | AstKind::ObjectProperty(_)
+            | AstKind::ArrayExpression(_)
+            | AstKind::ParenthesizedExpression(_) => {}
+            _ => return false,
         }
     }
     false
@@ -1230,6 +1317,139 @@ mod tests {
             d.len(),
             1,
             "value use of a class before its definition must still be flagged: {d:?}"
+        );
+    }
+
+    // Regression for #2322: a class-level association decorator with a lazy
+    // `() => ClassName` thunk referencing a class declared later in the file
+    // (the circular-model-reference pattern). The arrow is captured by the
+    // decorator factory and only invoked after both classes are defined, so it
+    // is not a real use-before-define.
+    #[test]
+    fn no_fp_lazy_arrow_in_class_decorator_issue_2322() {
+        let source = "@Entity(() => Author)\n\
+                      class Post {}\n\
+                      class Author {}";
+        assert!(
+            run_on(source).is_empty(),
+            "lazy arrow in a class decorator should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_lazy_arrow_in_method_decorator_issue_2322() {
+        let source = "class Post {\n\
+                      @Validate(() => Author)\n\
+                      check() {}\n\
+                      }\n\
+                      class Author {}";
+        assert!(
+            run_on(source).is_empty(),
+            "lazy arrow in a method decorator should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_lazy_arrow_in_decorator_options_object_issue_2322() {
+        // The thunk can sit as a property value inside the decorator's options
+        // object: @ManyToOne({ target: () => Author }). Object/property wrappers
+        // between the arrow and the decorator call are transparent.
+        let source = "class Post {\n\
+                      @ManyToOne({ target: () => Author })\n\
+                      author;\n\
+                      }\n\
+                      class Author {}";
+        assert!(
+            run_on(source).is_empty(),
+            "lazy arrow in a decorator options object should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_lazy_arrow_in_field_decorator_with_options_issue_2322() {
+        // The exact sequelize shape: a field decorator with a lazy thunk and an
+        // options object, the target class declared later.
+        let source = "class Post {\n\
+                      @BelongsTo(() => Author, { foreignKey: 'authorId' })\n\
+                      declare author: Author;\n\
+                      }\n\
+                      class Author {}";
+        assert!(
+            run_on(source).is_empty(),
+            "lazy arrow in a field decorator should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn still_flags_direct_class_ref_in_class_decorator_issue_2322() {
+        // Negative space: a DIRECT (non-arrow) class reference inside a class
+        // decorator runs at class-definition time, before the later class — a
+        // real TDZ hazard that must still fire. The decorator exemption only
+        // covers references wrapped in a lazy arrow/function.
+        let d = run_on(
+            "@Entity(Author)\n\
+             class Post {}\n\
+             class Author {}",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "direct class ref in a class decorator must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_iife_in_decorator_issue_2322() {
+        // Negative space: an IIFE inside a decorator runs immediately, so a
+        // forward reference inside it stays flagged.
+        let d = run_on(
+            "@Entity((() => Author)())\n\
+             class Post {}\n\
+             class Author {}",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "IIFE inside a decorator must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_local_tdz_inside_decorator_lazy_arrow_issue_2322() {
+        // Negative space: a binding local to the arrow body, read before its own
+        // declaration line, is a genuine intra-execution TDZ error — the
+        // decorator exemption only covers bindings from an enclosing scope.
+        let d = run_on(
+            "class Post {\n\
+             @Validate(() => { use(local); const local = 1; })\n\
+             check() {}\n\
+             }",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "local TDZ inside a decorator arrow must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_non_decorator_lazy_arrow_call_argument_issue_2322() {
+        // Negative space: an arrow passed to a plain (non-decorator) call may be
+        // invoked eagerly by the callee (`forEach`, a custom helper), so a
+        // forward reference inside it stays flagged — the exemption is scoped to
+        // decorators only.
+        let d = run_on(
+            "register(() => Service);\n\
+             class Service {}",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "lazy arrow in a non-decorator call must still be flagged: {d:?}"
         );
     }
 }
