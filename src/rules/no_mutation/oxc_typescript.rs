@@ -55,6 +55,13 @@ impl OxcCheck for Check {
         if ctx.file.path_segments.in_test_dir {
             return;
         }
+        // Storybook CSF2 attaches story metadata (args, storyName, play,
+        // parameters, decorators) by assigning to named properties on the
+        // exported story function — the designed API with no immutable
+        // alternative; the runner reads these off the function.
+        if ctx.file.path_segments.in_storybook {
+            return;
+        }
         // Sentry's beforeSend/beforeBreadcrumb hooks receive the event by
         // reference, expect in-place mutation, and return the same object —
         // there is no immutable alternative API.
@@ -767,6 +774,52 @@ mod tests {
         let src = r#"
             const RadioGroup = React.forwardRef((props, ref) => null);
             RadioGroup.label = "RadioGroup";
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Storybook CSF2 story-file exemption — issue #1680
+
+    fn storybook_file_ctx() -> crate::rules::file_ctx::FileCtx {
+        crate::rules::file_ctx::FileCtx {
+            path_segments: crate::rules::file_ctx::PathSegments {
+                in_storybook: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn allows_csf2_story_property_assignments() {
+        // Regression for rbaumier/comply#1680 — CSF2 attaches story metadata
+        // via property assignment on the exported story function. No immutable
+        // alternative exists; story files must not be flagged.
+        let src = r#"
+            export const WithArgs = (args) => <Button {...args} />;
+            WithArgs.args = { label: "With args" };
+            WithArgs.storyName = "With args";
+            WithArgs.play = () => { /* interaction test */ };
+        "#;
+        assert!(
+            crate::rules::test_helpers::run_rule_with_ctx(
+                &Check,
+                src,
+                "Button.stories.tsx",
+                crate::project::default_static_project_ctx(),
+                &storybook_file_ctx(),
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_same_pattern_in_non_story_file() {
+        // Negative space: the identical property-assignment-on-const pattern
+        // in a non-story file is still a mutation and must fire.
+        let src = r#"
+            const WithArgs = (args) => null;
+            WithArgs.args = { label: "With args" };
         "#;
         assert_eq!(run(src).len(), 1);
     }
