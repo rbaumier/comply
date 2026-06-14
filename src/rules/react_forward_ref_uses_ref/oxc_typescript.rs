@@ -3,10 +3,62 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, FunctionBody, Statement};
+use oxc_ast::ast::{Expression, FunctionBody, ImportDeclarationSpecifier, Program, Statement};
 use std::sync::Arc;
 
 pub struct Check;
+
+/// React's `forwardRef` is exported from `react`; `react-dom` re-exports the
+/// React namespace, so both are in-scope. Other packages — notably
+/// `@nestjs/common` and `@angular/core`, whose `forwardRef(() => Token)`
+/// resolves circular DI — are unrelated APIs and must not be flagged.
+fn is_react_source(source: &str) -> bool {
+    source == "react" || source == "react-dom"
+}
+
+/// The local binding `callee` of a `forwardRef(...)` / `<ns>.forwardRef(...)`
+/// call. For a bare call this is the named binding `forwardRef`; for a member
+/// call it is the namespace/default object (e.g. `React` in `React.forwardRef`).
+/// Returns `None` for shapes this rule does not recognise.
+fn forward_ref_binding<'a>(callee: &Expression<'a>) -> Option<&'a str> {
+    match callee {
+        Expression::Identifier(id) if id.name.as_str() == "forwardRef" => Some("forwardRef"),
+        Expression::StaticMemberExpression(member)
+            if member.property.name.as_str() == "forwardRef" =>
+        {
+            match &member.object {
+                Expression::Identifier(obj) => Some(obj.name.as_str()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// True when `binding` is introduced by an `import` from React. Keying on the
+/// binding's import provenance — not the literal name — lets a file import both
+/// React's and NestJS's `forwardRef` and only flag the React one.
+fn binding_imported_from_react(program: &Program<'_>, binding: &str) -> bool {
+    program.body.iter().any(|stmt| {
+        let Statement::ImportDeclaration(import) = stmt else {
+            return false;
+        };
+        if !is_react_source(import.source.value.as_str()) {
+            return false;
+        }
+        let Some(specifiers) = &import.specifiers else {
+            return false;
+        };
+        specifiers.iter().any(|spec| {
+            let local = match spec {
+                ImportDeclarationSpecifier::ImportSpecifier(s) => s.local.name.as_str(),
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => s.local.name.as_str(),
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => s.local.name.as_str(),
+            };
+            local == binding
+        })
+    })
+}
 
 /// A deprecated API-compatibility stub keeps the `forwardRef` signature for
 /// backward compatibility but is a no-op: it emits a deprecation warning and
@@ -63,26 +115,20 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else {
             return;
         };
 
-        // Check callee is `forwardRef` or `React.forwardRef`.
-        let is_forward_ref = match &call.callee {
-            Expression::Identifier(id) => id.name == "forwardRef",
-            Expression::StaticMemberExpression(m) => {
-                if let Expression::Identifier(obj) = &m.object {
-                    obj.name == "React" && m.property.name.as_str() == "forwardRef"
-                } else {
-                    false
-                }
-            }
-            _ => false,
+        // Only React's `forwardRef` wraps a component that should accept a `ref`.
+        // Same-named DI helpers from `@nestjs/common` / `@angular/core` take a
+        // zero-arg factory, so gate on the binding's import source.
+        let Some(binding) = forward_ref_binding(&call.callee) else {
+            return;
         };
-        if !is_forward_ref {
+        if !binding_imported_from_react(semantic.nodes().program(), binding) {
             return;
         }
 
@@ -151,19 +197,19 @@ mod tests {
 
     #[test]
     fn flags_missing_ref_param() {
-        let src = "const Comp = React.forwardRef((props) => <div />);";
+        let src = "import * as React from \"react\";\nconst Comp = React.forwardRef((props) => <div />);";
         assert_eq!(run(src).len(), 1);
     }
 
     #[test]
     fn allows_ref_param() {
-        let src = "const Comp = React.forwardRef((props, ref) => <div ref={ref} />);";
+        let src = "import * as React from \"react\";\nconst Comp = React.forwardRef((props, ref) => <div ref={ref} />);";
         assert!(run(src).is_empty());
     }
 
     #[test]
     fn flags_no_params() {
-        let src = "const Comp = React.forwardRef(() => <div />);";
+        let src = "import * as React from \"react\";\nconst Comp = React.forwardRef(() => <div />);";
         assert_eq!(run(src).len(), 1);
     }
 
@@ -171,20 +217,52 @@ mod tests {
     fn allows_deprecation_stub_warn_return_null() {
         // Regression for issue #2013: deprecated API-compatibility stubs keep the
         // `forwardRef` signature but are no-ops that warn and return null.
-        let src = "const CalendarPickerSkeleton = React.forwardRef(function DeprecatedCalendarPickerSkeleton() {\n  warn();\n  return null;\n}) as CalendarPickerSkeletonComponent;";
+        let src = "import * as React from \"react\";\nconst CalendarPickerSkeleton = React.forwardRef(function DeprecatedCalendarPickerSkeleton() {\n  warn();\n  return null;\n}) as CalendarPickerSkeletonComponent;";
         assert!(run(src).is_empty());
     }
 
     #[test]
     fn allows_deprecation_stub_console_warn() {
-        let src = "const Old = React.forwardRef(() => {\n  console.warn('deprecated');\n  return null;\n});";
+        let src = "import * as React from \"react\";\nconst Old = React.forwardRef(() => {\n  console.warn('deprecated');\n  return null;\n});";
         assert!(run(src).is_empty());
     }
 
     #[test]
     fn flags_component_that_forgets_ref_without_deprecation() {
         // A real mistake: returns JSX, never uses ref, no deprecation marker — still fires.
-        let src = "const Comp = React.forwardRef(function Comp(props) {\n  return <div />;\n});";
+        let src = "import * as React from \"react\";\nconst Comp = React.forwardRef(function Comp(props) {\n  return <div />;\n});";
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for #2398: NestJS's `forwardRef(() => Service)` from
+    // `@nestjs/common` resolves circular DI — a different API that shares the
+    // name. It must not be flagged for a missing `ref` parameter.
+    #[test]
+    fn ignores_nestjs_forward_ref() {
+        let src = r#"
+            import { Module, forwardRef } from "@nestjs/common";
+            @Module({ imports: [forwardRef(() => CircularModule)] })
+            export class InputModule {}
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative space: a genuine React `forwardRef` imported from `react` and used
+    // without a `ref` param must still be flagged.
+    #[test]
+    fn flags_react_forward_ref_missing_ref_param() {
+        let src = r#"
+            import { forwardRef } from "react";
+            const Btn = forwardRef((props) => <div />);
+        "#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // A bare `forwardRef(...)` with no import cannot be proven to be React's, so
+    // it must not be flagged.
+    #[test]
+    fn ignores_forward_ref_without_import() {
+        let src = r#"const Btn = forwardRef((props) => <div />);"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
     }
 }
