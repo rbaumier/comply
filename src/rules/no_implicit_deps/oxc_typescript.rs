@@ -10,7 +10,7 @@ use std::sync::Arc;
 use super::{
     is_bare_specifier, is_node_builtin, is_subpath_import, is_sveltekit_adapter_virtual_module,
     is_sveltekit_app_alias, is_virtual_module, jest_module_roots, matches_alias, module_federation,
-    root_package_name,
+    root_package_name, types_package_name,
 };
 
 pub struct Check;
@@ -123,7 +123,14 @@ impl OxcCheck for Check {
             return;
         }
         let root = root_package_name(spec);
-        if pkg.has_dep_or_engine(root) {
+        // DefinitelyTyped convention: a project that lists only `@types/X` (and
+        // never `X`) in its (dev|peer)dependencies can still `import … from "X"`
+        // — TypeScript resolves the bare specifier to the `@types/X`
+        // declarations (e.g. `@types/json-schema` satisfies an import from
+        // `json-schema`). The aliased name is consulted alongside `root` at
+        // every dependency-resolution layer below.
+        let types_root = types_package_name(root);
+        if pkg.has_dep_or_engine(root) || pkg.has_dep_or_engine(&types_root) {
             return;
         }
         // Node.js self-reference: a package may import from itself by its own
@@ -160,7 +167,10 @@ impl OxcCheck for Check {
                 if let Some(ancestor_pkg) =
                     ctx.project.nearest_package_json(&ancestor_dir.join("_"))
                 {
-                    if ancestor_pkg.has_dep_or_engine(root) || ancestor_pkg.is_self_name(root) {
+                    if ancestor_pkg.has_dep_or_engine(root)
+                        || ancestor_pkg.has_dep_or_engine(&types_root)
+                        || ancestor_pkg.is_self_name(root)
+                    {
                         return;
                     }
                 }
@@ -173,7 +183,11 @@ impl OxcCheck for Check {
         // a specifier declared only in a sibling member (declared in neither the
         // importing package nor any ancestor). Resolve the members from the root
         // `workspaces` globs and consult the union of their declared deps.
-        if ctx.project.dep_declared_in_workspace_siblings(ctx.path, root) {
+        if ctx.project.dep_declared_in_workspace_siblings(ctx.path, root)
+            || ctx
+                .project
+                .dep_declared_in_workspace_siblings(ctx.path, &types_root)
+        {
             return;
         }
 
@@ -183,7 +197,9 @@ impl OxcCheck for Check {
         // the repo root declares no `workspaces` field the workspace walk above
         // never sees those siblings, so consult the union of every dep declared
         // anywhere under the project root before flagging.
-        if ctx.project.dep_declared_in_tree(ctx.path, root) {
+        if ctx.project.dep_declared_in_tree(ctx.path, root)
+            || ctx.project.dep_declared_in_tree(ctx.path, &types_root)
+        {
             return;
         }
 
@@ -1465,6 +1481,79 @@ export default {
             diags.len(),
             1,
             "a genuinely unlisted non-builtin import must still fire, got {diags:?}"
+        );
+    }
+
+    // Regression #1374: a bare specifier whose type declarations are provided by
+    // a `@types/X` package listed in devDependencies (the DefinitelyTyped
+    // convention) is satisfied — TypeScript resolves `json-schema` to the
+    // `@types/json-schema` declarations. The import must not be flagged.
+    #[test]
+    fn allows_import_satisfied_by_types_dep_issue_1374() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"payload","devDependencies":{"@types/json-schema":"7.0.15"}}"#,
+        )
+        .unwrap();
+        let cfg = dir.path().join("src").join("config");
+        fs::create_dir_all(&cfg).unwrap();
+        let file = cfg.join("types.ts");
+        // A value import reaches the dependency lookup (declaration-level
+        // `import type` is exempted earlier); the `@types/` alias must satisfy it.
+        let source = "import { JSONSchema4 } from 'json-schema';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "import satisfied by @types/X devDependency must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Scoped variant of #1374: TypeScript maps a scoped package `@foo/bar` to
+    // `@types/foo__bar` (scope separator folded to a double underscore), so an
+    // `@types/foo__bar` dependency satisfies an import from `@foo/bar`.
+    #[test]
+    fn allows_scoped_import_satisfied_by_types_dep_issue_1374() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","devDependencies":{"@types/foo__bar":"1.0.0"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("t.ts");
+        let source = "import { X } from '@foo/bar';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "scoped import satisfied by @types/foo__bar must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #1374: an import with neither a matching runtime
+    // dependency nor a matching `@types/X` dependency must still fire — the
+    // exemption only suppresses imports a DefinitelyTyped package actually backs.
+    #[test]
+    fn flags_unlisted_dep_without_types_dep_issue_1374() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","devDependencies":{"@types/json-schema":"7.0.15"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("t.ts");
+        let source = "import { x } from 'totally-missing';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "an import with no matching dep nor @types/X must still fire, got {diags:?}"
         );
     }
 

@@ -216,6 +216,19 @@ pub(super) fn root_package_name(spec: &str) -> &str {
     }
 }
 
+/// DefinitelyTyped package name that provides the type declarations for a
+/// runtime package: `json-schema` → `@types/json-schema`, and a scoped
+/// `@foo/bar` → `@types/foo__bar` (TypeScript folds the scope separator to a
+/// double underscore). A project that lists only `@types/X` in its
+/// `(dev|peer)dependencies` can still `import … from "X"`, since TypeScript
+/// resolves the bare specifier to those declarations.
+pub(crate) fn types_package_name(spec: &str) -> String {
+    if let Some(scoped) = spec.strip_prefix('@') {
+        return format!("@types/{}", scoped.replacen('/', "__", 1));
+    }
+    format!("@types/{spec}")
+}
+
 /// True if `spec` matches any alias prefix (exact or `prefix/...`).
 pub(super) fn matches_alias(spec: &str, alias_prefixes: &[String]) -> bool {
     alias_prefixes.iter().any(|p| {
