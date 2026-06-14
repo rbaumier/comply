@@ -60,11 +60,16 @@ fn is_internal_crate(path: &Path) -> bool {
     let Some(manifest) = nearest_manifest(path) else {
         return false;
     };
+    // From here a `Cargo.toml` exists: the crate's publish status is what
+    // decides whether its `pub enum`s are a SemVer-bound public API. The rule
+    // must only flag when the crate is *provably* published, so any failure to
+    // read or parse the manifest fails open to "internal" — notably TOML 1.1
+    // multiline inline tables, which the `toml` 0.8 parser rejects.
     let Ok(content) = std::fs::read_to_string(&manifest) else {
-        return false;
+        return true;
     };
     let Ok(value) = content.parse::<toml::Value>() else {
-        return false;
+        return true;
     };
 
     if !value.get("package").is_some_and(toml::Value::is_table) {
@@ -240,6 +245,40 @@ mod tests {
         .unwrap();
 
         assert!(is_internal_crate(&dir.path().join("src/lib.rs")));
+    }
+
+    #[test]
+    fn treats_publish_false_crate_with_multiline_inline_table_as_internal() {
+        // Regression for #1732: a `publish = false` crate whose Cargo.toml uses
+        // a TOML 1.1 multiline inline table (which the `toml` 0.8 parser
+        // rejects) must still be recognized as internal. The parse failure
+        // fails open to "internal" rather than treating the crate as public.
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"biome_cli\"\nversion = \"0.0.0\"\npublish = false\n\n\
+             [dependencies]\ntokio = {\n  workspace = true,\n  features  = [\"rt\", \"sync\"]\n}\n",
+        )
+        .unwrap();
+
+        assert!(is_internal_crate(&dir.path().join("src/diagnostics.rs")));
+    }
+
+    #[test]
+    fn flags_published_lib_crate_with_bare_pub_enum() {
+        // Negative space for #1732: a genuinely published lib crate (parseable
+        // manifest, no `publish = false`) with a bare `pub enum` is still
+        // flagged — fail-open on parse failure must not suppress real APIs.
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"mylib\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+
+        assert!(!is_internal_crate(&dir.path().join("src/lib.rs")));
     }
 
     #[test]
