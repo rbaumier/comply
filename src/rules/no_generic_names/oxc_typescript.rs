@@ -549,6 +549,110 @@ fn ts_type_references_row(ty: &TSType) -> bool {
     }
 }
 
+/// True when the binding's explicit type annotation mirrors the identifier
+/// name: the annotation's base type name (case-insensitively) equals OR ends
+/// with the identifier name. A `const item: Item`/`item: VirtualItem` is the
+/// typed value of its own domain type — the name carries the type's domain
+/// meaning, not a generic placeholder. Generalizes the #1233 `Row` exemption to
+/// all banned words: an identifier that mirrors its annotated type is
+/// self-documenting (`item: Item`, `value: FormValue`), while a non-mirroring
+/// annotation stays flagged (`temp: string`, `obj: Record<string, unknown>`).
+/// The walk stops at the binding's own FormalParameter / VariableDeclarator.
+fn binding_type_mirrors_name<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    name: &str,
+) -> bool {
+    for kind in semantic.nodes().ancestor_kinds(node.id()) {
+        match kind {
+            AstKind::FormalParameter(p) => {
+                return p
+                    .type_annotation
+                    .as_ref()
+                    .is_some_and(|ann| ts_type_base_name_mirrors(&ann.type_annotation, name));
+            }
+            AstKind::VariableDeclarator(d) => {
+                return d
+                    .type_annotation
+                    .as_ref()
+                    .is_some_and(|ann| ts_type_base_name_mirrors(&ann.type_annotation, name));
+            }
+            AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Program(_) => return false,
+            _ => continue,
+        }
+    }
+    false
+}
+
+/// True when `ty` is (or wraps) a type reference whose base name
+/// (case-insensitively) equals OR ends with `name`. Recurses through array
+/// types (`Item[]`), `readonly` operators, unions (`Item | null`), and
+/// single-argument generic wrappers (`Promise`/`Array`/`Readonly`/
+/// `ReadonlyArray`) so `Item[]`, `readonly VirtualItem[]`, and `Array<Item>`
+/// all mirror `item`. The "ends with" match is anchored on a PascalCase word
+/// boundary (the character preceding the suffix is uppercase), so `VirtualItem`
+/// mirrors `item` but `LineItem` mirrors `item` too while `Submit` does not
+/// mirror `it` (no such banned word) — and crucially `Items` does not falsely
+/// mirror `tem`.
+fn ts_type_base_name_mirrors(ty: &TSType, name: &str) -> bool {
+    match ty {
+        TSType::TSTypeReference(type_ref) => {
+            let type_name = match &type_ref.type_name {
+                TSTypeName::IdentifierReference(id) => Some(id.name.as_str()),
+                TSTypeName::QualifiedName(q) => Some(q.right.name.as_str()),
+                _ => None,
+            };
+            if type_name.is_some_and(|t| base_name_mirrors(t, name)) {
+                return true;
+            }
+            if matches!(
+                type_name,
+                Some("Promise") | Some("Readonly") | Some("Array") | Some("ReadonlyArray")
+            ) && let Some(params) = &type_ref.type_arguments
+                && let Some(first) = params.params.first()
+            {
+                return ts_type_base_name_mirrors(first, name);
+            }
+            false
+        }
+        TSType::TSArrayType(arr) => ts_type_base_name_mirrors(&arr.element_type, name),
+        TSType::TSTypeOperatorType(op) => ts_type_base_name_mirrors(&op.type_annotation, name),
+        TSType::TSUnionType(u) => u.types.iter().any(|t| ts_type_base_name_mirrors(t, name)),
+        _ => false,
+    }
+}
+
+/// True when `type_name` (case-insensitively) equals `name`, or ends with `name`
+/// on a PascalCase word boundary (the character immediately before the matched
+/// suffix is uppercase, so the suffix is its own capitalized word). `Item`
+/// mirrors `item`; `VirtualItem` mirrors `item` (the `I` of `Item` is a word
+/// start); `Items` does not mirror `tem` (no boundary, and `tem` is not a banned
+/// word anyway); `Submit` does not mirror `mit`.
+fn base_name_mirrors(type_name: &str, name: &str) -> bool {
+    if type_name.eq_ignore_ascii_case(name) {
+        return true;
+    }
+    let nlen = name.len();
+    if type_name.len() <= nlen {
+        return false;
+    }
+    let (head, tail) = type_name.split_at(type_name.len() - nlen);
+    if !tail.eq_ignore_ascii_case(name) {
+        return false;
+    }
+    // The suffix must start its own PascalCase word: either its first byte is
+    // uppercase, or the preceding byte is uppercase (a word boundary).
+    tail.as_bytes()
+        .first()
+        .is_some_and(|b| b.is_ascii_uppercase())
+        || head
+            .as_bytes()
+            .last()
+            .is_some_and(|b| b.is_ascii_uppercase())
+}
+
 /// True when the identifier is a function parameter inside an arrow function
 /// or function expression that is used as an object property value.
 /// Covers TanStack Query callbacks like `useMutation({ onSuccess: (data) => {} })`
@@ -762,6 +866,13 @@ impl OxcCheck for Check {
                     if matches!(lower.as_str(), "row" | "rows")
                         && binding_type_references_row(node, semantic)
                     {
+                        return;
+                    }
+                    // The binding's explicit type annotation mirrors the
+                    // identifier name (`item: Item`, `item: VirtualItem`,
+                    // `item: Item[]`): the value IS its own domain type, so the
+                    // name is self-documenting rather than vague.
+                    if binding_type_mirrors_name(node, semantic, name) {
                         return;
                     }
                     // An explicit `unknown` annotation is a deliberate opacity
@@ -1499,6 +1610,44 @@ mod tests {
             const row: number = 0;
         "#;
         assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn no_fp_item_annotated_with_mirroring_domain_type_issue_2197() {
+        // Regression for #2197 — a banned identifier whose explicit type
+        // annotation mirrors its name (the type's base name equals or ends with
+        // the identifier) is the typed value of its own domain type, not a
+        // generic placeholder. Covers exact match (`item: Item`), PascalCase
+        // word-boundary suffix (`item: VirtualItem`), and annotated array
+        // indexing (`const item: Item = items[index]!`).
+        // Exact-match annotation `item: Item`.
+        assert!(run("function f(): Item { const item: Item = fetchOne(); return item; }").is_empty());
+        // PascalCase word-boundary suffix `item: VirtualItem`.
+        assert!(run("function f() { const item: VirtualItem = measurements[0]!; return item; }").is_empty());
+        // Annotated array indexing `const item: Item = items[index]!`.
+        assert!(run("function f(items: Item[], index: number) { const item: Item = items[index]!; return item; }").is_empty());
+        // Array annotation `item: Item[]`.
+        assert!(run("function f() { const item: Item[] = getAll(); return item; }").is_empty());
+        // Union with the mirroring type `item: VirtualItem | null`.
+        assert!(run("function f() { const item: VirtualItem | null = maybeOne(); return item; }").is_empty());
+        // Mirroring type as a function parameter (`item: Item`).
+        assert!(run("function use(item: Item) { return item.value; }").is_empty());
+    }
+
+    #[test]
+    fn still_flags_inferred_item_and_non_mirroring_annotation_issue_2197() {
+        // Negative space: the exemption is anchored on the explicit annotation
+        // mirroring the name. An inferred `const item = getStuff()` (no
+        // annotation) and a banned word whose annotation does NOT mirror it
+        // (`temp: string`, `val: number`, `item: string`) stay flagged — the
+        // inferred case needs --type-aware and is documented as residual.
+        let src = r#"
+            function f() { const item = getStuff(); return item; }
+            const temp: string = compute();
+            const val: number = 0;
+            const item: string = "x";
+        "#;
+        assert_eq!(run(src).len(), 4);
     }
 
     #[test]
