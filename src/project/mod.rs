@@ -699,6 +699,85 @@ fn object_has_cloudflare_worker_handler(object: tree_sitter::Node, source: &[u8]
     })
 }
 
+/// Module specifier the OXLint plugin API is imported from. A file is only
+/// recognized as a plugin entry when its `definePlugin` comes from this package,
+/// so an unrelated local `definePlugin` never matches the shape.
+const OXLINT_PLUGINS_MODULE: &str = "@oxlint/plugins";
+
+/// Factory call whose result an OXLint plugin file exports as `default`.
+const OXLINT_DEFINE_PLUGIN: &str = "definePlugin";
+
+/// Export name an OXLint plugin file exposes to the linter at run time: the
+/// `default` export carries the plugin definition. OXLint resolves plugin
+/// modules from its config (`oxlintrc.json`) and loads this default export
+/// itself, so it never has a static importer.
+pub const OXLINT_PLUGIN_ENTRY_EXPORTS: &[&str] = &["default"];
+
+/// True when `source` is an OXLint custom-plugin entry point: it imports
+/// `definePlugin` from `@oxlint/plugins` and its `export default` value is a
+/// call to `definePlugin(...)`. OXLint resolves plugin modules from its config
+/// and consumes this default export at run time, never through a static import,
+/// so dead-export must not flag it.
+///
+/// Both signals are required — the `@oxlint/plugins` import source *and* the
+/// `export default definePlugin(...)` call shape — so an unrelated `definePlugin`
+/// from another module, or a default export that merely happens to be a call,
+/// does not match. An ordinary `export default {}` stays subject to the rule.
+#[must_use]
+pub fn is_oxlint_plugin_entry_source(source: &str, lang: crate::files::Language) -> bool {
+    let Some(grammar) = crate::parsing::ts_language_for(lang) else {
+        return false;
+    };
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&grammar).is_err() {
+        return false;
+    }
+    let Some(tree) = parser.parse(source, None) else {
+        return false;
+    };
+    let bytes = source.as_bytes();
+    let mut imports_define_plugin = false;
+    let mut exports_define_plugin_default = false;
+    crate::rules::walker::walk_tree(&tree, |node| {
+        match node.kind() {
+            "import_statement" if imports_from_oxlint_plugins(node, bytes) => {
+                imports_define_plugin = true;
+            }
+            "export_statement" if export_default_calls_define_plugin(node, bytes) => {
+                exports_define_plugin_default = true;
+            }
+            _ => {}
+        }
+    });
+    imports_define_plugin && exports_define_plugin_default
+}
+
+/// True when `node` (an `import_statement`) imports from `@oxlint/plugins`.
+/// Keys on the module specifier alone — the `definePlugin` binding is matched on
+/// the export side — so any import from the package satisfies the source gate.
+fn imports_from_oxlint_plugins(node: tree_sitter::Node, source: &[u8]) -> bool {
+    node.child_by_field_name("source")
+        .and_then(|src| src.utf8_text(source).ok())
+        .map(|spec| spec.trim_matches(|c| c == '\'' || c == '"' || c == '`'))
+        .is_some_and(|spec| spec == OXLINT_PLUGINS_MODULE)
+}
+
+/// True when `node` (an `export_statement`) is an `export default` whose value
+/// is a call to `definePlugin(...)`.
+fn export_default_calls_define_plugin(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let is_default = node.children(&mut node.walk()).any(|c| c.kind() == "default");
+    if !is_default {
+        return false;
+    }
+    node.named_children(&mut node.walk())
+        .filter(|c| c.kind() == "call_expression")
+        .any(|call| {
+            call.child_by_field_name("function")
+                .and_then(|f| f.utf8_text(source).ok())
+                .is_some_and(|name| name == OXLINT_DEFINE_PLUGIN)
+        })
+}
+
 /// True when the `globalSetup` option in a Vitest/Vite config's `raw` text
 /// references `target`. `config_dir` is the directory holding the config, used
 /// to resolve the relative specifiers the option carries.
