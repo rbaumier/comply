@@ -1352,6 +1352,8 @@ pub struct CargoManifest {
     manifest_dir: PathBuf,
     /// `[lib]` table is present.
     has_lib_table: bool,
+    /// One or more `[[bin]]` tables are present.
+    has_bin_table: bool,
     /// An async runtime (`tokio`, `async-std`, `futures`) is declared in any
     /// dependency section.
     async_runtime: bool,
@@ -1373,6 +1375,8 @@ impl CargoManifest {
 
         let has_lib_table = value.get("lib").is_some();
 
+        let has_bin_table = value.get("bin").is_some();
+
         let async_runtime = ["dependencies", "dev-dependencies", "build-dependencies"]
             .iter()
             .filter_map(|section| value.get(section).and_then(toml::Value::as_table))
@@ -1391,6 +1395,7 @@ impl CargoManifest {
         Some(CargoManifest {
             manifest_dir,
             has_lib_table,
+            has_bin_table,
             async_runtime,
             no_std_category,
         })
@@ -1400,6 +1405,17 @@ impl CargoManifest {
     /// `src/lib.rs` next to the manifest.
     pub fn is_binary_only(&self) -> bool {
         !self.has_lib_table && !self.manifest_dir.join("src/lib.rs").is_file()
+    }
+
+    /// True when the crate builds at least one binary target: a `[[bin]]`
+    /// table is declared, or `src/main.rs` exists next to the manifest. Unlike
+    /// [`is_binary_only`], this stays true for application crates (e.g. CLIs)
+    /// that also carry a `[lib]` purely to share code between their own
+    /// binaries — those crates still own their stdout.
+    ///
+    /// [`is_binary_only`]: CargoManifest::is_binary_only
+    pub fn declares_binary(&self) -> bool {
+        self.has_bin_table || self.manifest_dir.join("src/main.rs").is_file()
     }
 
     /// True when the crate depends on an async runtime.
@@ -4398,6 +4414,7 @@ tokio = "1"
             first.is_binary_only(),
             "no [lib] table and no src/lib.rs on disk => binary-only"
         );
+        assert!(first.declares_binary(), "[[bin]] table is present");
         assert!(first.has_async_runtime(), "tokio is declared");
         assert!(first.is_no_std(), "categories lists no-std");
     }
