@@ -1,10 +1,12 @@
 //! rust-prefer-once-lock — `lazy_static!` and `once_cell` are obsolete.
 //!
 //! Since Rust 1.70, `std::sync::OnceLock` and `std::sync::LazyLock`
-//! cover the same use cases as `lazy_static!` and `once_cell::sync::{Lazy,OnceCell}`
-//! without a third-party dep, heavy macros, or init-order pitfalls.
-//! Flag `lazy_static!` and `once_cell::sync::{Lazy,OnceCell}` so new
-//! code picks the std primitive.
+//! cover the same use cases as `lazy_static!` and the `once_cell` crate's
+//! `Lazy` / `OnceCell` without a third-party dep, heavy macros, or init-order
+//! pitfalls. Flag `lazy_static!` and the `once_cell` crate's `Lazy` / `OnceCell`
+//! (attributed by import) so new code picks the std primitive. Other once-cell
+//! types with no `OnceLock` equivalent — e.g. async-aware `tokio::sync::OnceCell`
+//! — are left alone.
 
 mod rust;
 
