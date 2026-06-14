@@ -98,6 +98,14 @@ impl OxcCheck for Check {
             return;
         }
 
+        // An `async` arrow always returns a `Promise` even without an explicit
+        // `return` — `async () => {}` yields `Promise<undefined>`. The
+        // `Promise.all(arr.map(async (x) => { await work(x); }))` pattern is
+        // correct and must not be flagged.
+        if arg_expr.r#async {
+            return;
+        }
+
         if !body_has_return(&arg_expr.body) {
             let (line, col) =
                 byte_offset_to_line_col(semantic.source_text(), arg_expr.span().start as usize);
@@ -111,5 +119,74 @@ impl OxcCheck for Check {
                 span: None,
             });
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn flags_non_async_block_body_without_return() {
+        let src = "const x = arr.map((item) => { doWork(item); });";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_block_body_with_return() {
+        let src = "const x = arr.map((item) => { return item * 2; });";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_concise_arrow() {
+        let src = "const x = arr.map((item) => item * 2);";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Regression for #2375 — an `async` arrow callback implicitly returns a
+    /// `Promise`, so the absence of an explicit `return` is correct.
+    #[test]
+    fn no_fp_async_arrow_callback_without_return() {
+        let src = r#"
+            Promise.all(
+                dataSources.map(async (connection) => {
+                    await connection.manager.save(document);
+                }),
+            );
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Regression for #2375 — an `async function` callback likewise always
+    /// returns a `Promise`.
+    #[test]
+    fn no_fp_async_function_callback_without_return() {
+        let src = r#"
+            arr.map(async function (x) {
+                await work(x);
+            });
+        "#;
+        assert!(run_on(src).is_empty());
     }
 }
