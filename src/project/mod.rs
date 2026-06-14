@@ -1188,6 +1188,12 @@ pub struct Tsconfig {
     pub strict: bool,
     pub exact_optional_property_types: bool,
     pub jsx: Option<String>,
+    /// `compilerOptions.jsxImportSource` — the package the JSX factory is
+    /// imported from when files use automatic-runtime JSX without an explicit
+    /// import. `"react"` (or absent) means React; any other value (e.g.
+    /// `"@builder.io/qwik"`, `"solid-js"`, `"preact"`) means a framework that
+    /// uses native HTML attribute names in JSX.
+    pub jsx_import_source: Option<String>,
     pub out_dir: Option<PathBuf>,
 }
 
@@ -1238,6 +1244,10 @@ impl Tsconfig {
                 .unwrap_or(false),
             jsx: co
                 .and_then(|x| x.get("jsx"))
+                .and_then(|s| s.as_str())
+                .map(String::from),
+            jsx_import_source: co
+                .and_then(|x| x.get("jsxImportSource"))
                 .and_then(|s| s.as_str())
                 .map(String::from),
             out_dir: co
@@ -1351,6 +1361,10 @@ fn parse_tsconfig_value(json: &Value) -> Tsconfig {
             .and_then(|x| x.get("jsx"))
             .and_then(|s| s.as_str())
             .map(String::from),
+        jsx_import_source: co
+            .and_then(|x| x.get("jsxImportSource"))
+            .and_then(|s| s.as_str())
+            .map(String::from),
         out_dir: co
             .and_then(|x| x.get("outDir"))
             .and_then(|s| s.as_str())
@@ -1359,7 +1373,8 @@ fn parse_tsconfig_value(json: &Value) -> Tsconfig {
 }
 
 /// Overlay `child` onto `parent`. Scalars (`base_url`, `module`,
-/// `module_resolution`, `jsx`, `out_dir`) are taken from the child when present;
+/// `module_resolution`, `jsx`, `jsx_import_source`, `out_dir`) are taken from the
+/// child when present;
 /// `paths`
 /// are merged key-by-key so parent-only aliases survive. Boolean flags
 /// (`strict`, `exact_optional_property_types`) default to false in
@@ -1379,6 +1394,7 @@ fn merge_tsconfig(parent: Tsconfig, child: Tsconfig) -> Tsconfig {
         exact_optional_property_types: child.exact_optional_property_types
             || parent.exact_optional_property_types,
         jsx: child.jsx.or(parent.jsx),
+        jsx_import_source: child.jsx_import_source.or(parent.jsx_import_source),
         out_dir: child.out_dir.or(parent.out_dir),
     }
 }
@@ -2604,6 +2620,20 @@ impl ProjectCtx {
         self.nearest_tsconfig(path)
             .map(|tsc| tsc.exact_optional_property_types)
             .unwrap_or(false)
+    }
+
+    /// True when the tsconfig governing `path` declares a
+    /// `compilerOptions.jsxImportSource` pointing at a non-React JSX runtime
+    /// (anything other than `react`), directly or inherited through its
+    /// `extends` chain. Such projects (Qwik, Solid, Preact, …) inject the JSX
+    /// factory from that package and use native HTML attribute names in JSX, so
+    /// React's camelCase prop conventions do not apply even when a file carries
+    /// no framework import. Defaults to false when no tsconfig is found or it
+    /// sets no `jsxImportSource`.
+    pub fn has_non_react_jsx_import_source(&self, path: &Path) -> bool {
+        self.nearest_tsconfig(path)
+            .and_then(|tsc| tsc.jsx_import_source.clone())
+            .is_some_and(|src| src != "react")
     }
 
     /// Walk up from `path` to the nearest `tsconfig.json` and return the
