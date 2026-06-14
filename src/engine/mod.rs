@@ -646,6 +646,43 @@ mod tests {
     }
 
     #[test]
+    fn next_rules_gated_off_outside_nextjs() {
+        // These Next.js-only rules must run only when `nextjs` is detected,
+        // via the central framework gate — never on plain Node/Vite/SvelteKit.
+        let metas: &[(&str, &crate::rules::meta::RuleMeta)] = &[
+            (
+                "next-inline-script-id",
+                &crate::rules::next_inline_script_id::META,
+            ),
+            (
+                "next-no-duplicate-head",
+                &crate::rules::next_no_duplicate_head::META,
+            ),
+            (
+                "next-no-script-component-in-head",
+                &crate::rules::next_no_script_component_in_head::META,
+            ),
+            (
+                "next-no-title-in-document-head",
+                &crate::rules::next_no_title_in_document_head::META,
+            ),
+            ("next-no-typos", &crate::rules::next_no_typos::META),
+        ];
+        let non_next = ProjectCtx::empty();
+        let next = ProjectCtx::for_test_with_framework("nextjs");
+        for (id, meta) in metas {
+            assert!(
+                super::should_skip_framework_scoped_rule(meta, &non_next),
+                "{id} must be skipped when the project is not Next.js"
+            );
+            assert!(
+                !super::should_skip_framework_scoped_rule(meta, &next),
+                "{id} must still fire on a Next.js project"
+            );
+        }
+    }
+
+    #[test]
     fn dedup_mutation_family_keeps_most_specific() {
         let mut diags = vec![
             mk("no-mutation", 30, 18),

@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Move `<title>` to per-page `<Head>` from `next/head`, or use the App Router's `metadata` export.",
     severity: Severity::Error,
     doc_url: Some("https://nextjs.org/docs/messages/no-title-in-document-head"),
-    categories: &["next"],
+    categories: &["nextjs"],
 
     skip_in_test_dir: false,
     skip_in_relaxed_dir: false,

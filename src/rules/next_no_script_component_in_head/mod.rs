@@ -14,7 +14,7 @@ pub const META: RuleMeta = RuleMeta {
     remediation: "Move the `<Script>` element outside `<Head>` so Next's `strategy` (`afterInteractive`, `lazyOnload`, …) can do its job.",
     severity: Severity::Error,
     doc_url: Some("https://nextjs.org/docs/messages/no-script-component-in-head"),
-    categories: &["next"],
+    categories: &["nextjs"],
 
     skip_in_test_dir: false,
     skip_in_relaxed_dir: false,
