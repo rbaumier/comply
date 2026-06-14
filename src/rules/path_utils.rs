@@ -302,16 +302,22 @@ pub fn is_auto_mock_dir_path(path: &Path) -> bool {
     has_path_segment(path, &["__mocks__"])
 }
 
-/// True when `path` lives under a `mock`, `mocks`, `__mocks__`, `fixtures`, or
-/// `__fixtures__` directory: the conventional homes for test mock objects and
-/// fixture data. Value-level mocks of a runtime config object mirror that
-/// object's camelCase property names (`hasPluginDependencies`), and fixture
-/// constants are scenario data, not application-wide compile-time invariants —
-/// so naming conventions that require SCREAMING_SNAKE_CASE for top-level
-/// constants do not apply (issue #1591). Segment match keeps an unrelated
-/// `src/mockingbird/` or `src/fixturesHelper.ts` from matching.
+/// True when `path` lives under a `mock`, `mocks`, `__mocks__`, `fixtures`,
+/// `__fixtures__`, or `__testfixtures__` directory: the conventional homes for
+/// test mock objects and fixture data. Value-level mocks of a runtime config
+/// object mirror that object's camelCase property names (`hasPluginDependencies`),
+/// and fixture constants are scenario data, not application-wide compile-time
+/// invariants — so naming conventions that require SCREAMING_SNAKE_CASE for
+/// top-level constants do not apply (issue #1591). `__testfixtures__` is
+/// jscodeshift's standard fixture directory: its `*.input.tsx`/`*.output.tsx`
+/// files are sample source a codemod transforms, importing packages the codemod
+/// host package does not depend on by design (issue #2115). Segment match keeps
+/// an unrelated `src/mockingbird/` or `src/fixturesHelper.ts` from matching.
 pub fn is_mock_or_fixture_dir_path(path: &Path) -> bool {
-    has_path_segment(path, &["mock", "mocks", "__mocks__", "fixtures", "__fixtures__"])
+    has_path_segment(
+        path,
+        &["mock", "mocks", "__mocks__", "fixtures", "__fixtures__", "__testfixtures__"],
+    )
 }
 
 /// True when `path` lives under a `testing/` directory, the test-infrastructure
@@ -1028,9 +1034,14 @@ mod aux_path_tests {
         assert!(is_mock_or_fixture_dir_path(&PathBuf::from("__mocks__/fs.js")));
         assert!(is_mock_or_fixture_dir_path(&PathBuf::from("test/fixtures/data.ts")));
         assert!(is_mock_or_fixture_dir_path(&PathBuf::from("__fixtures__/sample.ts")));
+        // Issue #2115: jscodeshift `__testfixtures__/` codemod fixture dir.
+        assert!(is_mock_or_fixture_dir_path(&PathBuf::from(
+            "src/v5/rename-properties/__testfixtures__/rename-cache-time.input.tsx"
+        )));
         // Segment (not substring) match.
         assert!(!is_mock_or_fixture_dir_path(&PathBuf::from("src/mockingbird/index.ts")));
         assert!(!is_mock_or_fixture_dir_path(&PathBuf::from("src/fixturesHelper.ts")));
+        assert!(!is_mock_or_fixture_dir_path(&PathBuf::from("src/__testfixtures__data/index.ts")));
         assert!(!is_mock_or_fixture_dir_path(&PathBuf::from("src/app/login.ts")));
     }
 

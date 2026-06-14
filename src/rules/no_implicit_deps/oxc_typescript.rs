@@ -7,6 +7,8 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
+use crate::rules::path_utils::is_mock_or_fixture_dir_path;
+
 use super::{
     is_bare_specifier, is_node_builtin, is_path_alias_prefix, is_subpath_import,
     is_sveltekit_adapter_virtual_module, is_sveltekit_app_alias, is_virtual_module,
@@ -40,6 +42,16 @@ impl OxcCheck for Check {
         // A mixed import (`import { type X, y }`) keeps a value binding (`y`)
         // and stays `import_kind == Value`, so it remains checked.
         if import.import_kind.is_type() {
+            return;
+        }
+
+        // Fixture directories (`__testfixtures__/`, `__fixtures__/`, `fixtures/`,
+        // `mocks/`, …) hold sample source a codemod transforms or test mock data —
+        // not the host package's own code. A jscodeshift codemod's
+        // `__testfixtures__/*.input.tsx` imports packages (`react`,
+        // `@tanstack/react-query`) the codemod package itself does not depend on,
+        // by design, so their bare imports are not implicit dependencies.
+        if is_mock_or_fixture_dir_path(ctx.path) {
             return;
         }
 
@@ -1757,6 +1769,84 @@ export default {
             diags.len(),
             1,
             "an import with no matching dep nor @types/X must still fire, got {diags:?}"
+        );
+    }
+
+    // Regression #2115: jscodeshift codemod fixture files under `__testfixtures__/`
+    // are sample source the codemod transforms — they import packages (`react`,
+    // `@tanstack/react-query`) that the codemod host package does not depend on,
+    // by design. A bare import inside such a fixture must not be flagged.
+    #[test]
+    fn allows_unlisted_dep_in_testfixtures_dir_issue_2115() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"@tanstack/query-codemods","dependencies":{}}"#,
+        )
+        .unwrap();
+        let fixtures = dir
+            .path()
+            .join("src")
+            .join("v5")
+            .join("rename-properties")
+            .join("__testfixtures__");
+        fs::create_dir_all(&fixtures).unwrap();
+        let file = fixtures.join("rename-cache-time.input.tsx");
+        let source =
+            "import * as React from 'react';\nimport { useQuery } from '@tanstack/react-query';\n";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "imports inside a __testfixtures__/ fixture must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #2115: the SAME unlisted import in an ordinary
+    // `src/` file (not under a fixture/test dir) must still fire — the exemption
+    // is scoped to fixture directories only.
+    #[test]
+    fn flags_unlisted_dep_outside_fixtures_dir_issue_2115() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"@tanstack/query-codemods","dependencies":{}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src").join("v5").join("rename-properties");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("transform.ts");
+        let source = "import * as React from 'react';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "an unlisted import in ordinary src/ (outside a fixture dir) must still fire, got {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #2115: the segment match must not over-reach — a
+    // `__testfixtures__data/` directory (substring, not a segment) is ordinary
+    // source and its unlisted import must still fire.
+    #[test]
+    fn flags_unlisted_dep_in_testfixtures_substring_dir_issue_2115() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","dependencies":{}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src").join("__testfixtures__data");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("index.ts");
+        let source = "import x from 'some-unlisted-pkg';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "a `__testfixtures__data/` substring dir is ordinary source and must still fire, got {diags:?}"
         );
     }
 
