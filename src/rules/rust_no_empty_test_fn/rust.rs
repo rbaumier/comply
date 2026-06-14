@@ -5,6 +5,12 @@
 //! children (no statements, no expressions). The body still has
 //! the `{` and `}` punctuation tokens, but those are anonymous
 //! children — `named_child_count() == 0` is the right check.
+//!
+//! An empty test that also carries a `#[cfg(...)]` configuration
+//! attribute is exempt: it is conditionally compiled, so the empty
+//! body is intentional — when the gate is active the test compiles,
+//! verifying the feature-gated code/macros compile (the compile
+//! phase is the test).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -28,6 +34,9 @@ impl AstCheck for Check {
     ) {
         let source_bytes = ctx.source.as_bytes();
         if !has_test_attribute(node, source_bytes) {
+            return;
+        }
+        if has_cfg_attribute(node, source_bytes) {
             return;
         }
         let Some(body) = node.child_by_field_name("body") else {
@@ -67,6 +76,26 @@ fn has_test_attribute(item: tree_sitter::Node, source: &[u8]) -> bool {
             && (text.contains("#[test]")
                 || text.contains("::test]")   // #[tokio::test], #[actix_rt::test], …
                 || text.contains("::test("))  // #[tokio::test(flavor = "multi_thread")], …
+        {
+            return true;
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+/// True if the function carries a `#[cfg(...)]` configuration-predicate
+/// attribute as a preceding `attribute_item` sibling. Such a test is
+/// conditionally compiled: when the predicate is active it must compile,
+/// so an empty body is an intentional compile-time check, not a stub.
+fn has_cfg_attribute(item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        if s.kind() != "attribute_item" {
+            break;
+        }
+        if let Ok(text) = s.utf8_text(source)
+            && text.contains("cfg(")
         {
             return true;
         }
@@ -119,6 +148,22 @@ mod tests {
     #[test]
     fn flags_empty_tokio_test_fn() {
         let src = "#[tokio::test]\nasync fn it_works() {}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_feature_gated_empty_test_as_compile_check() {
+        // helix-lsp-types: an empty `#[test]` carrying a `#[cfg(feature)]`
+        // gate is a compile-time check, not a stub (Closes #1462).
+        let src = "#[test]\n#[cfg(feature = \"proposed\")]\nfn check_proposed_macro_definitions() {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_empty_test_without_cfg() {
+        // Negative-space guard: a plain empty `#[test]` with no cfg gate
+        // must still fire — only the conditionally-compiled case is exempt.
+        let src = "#[test]\nfn check_proposed_macro_definitions() {}";
         assert_eq!(run_on(src).len(), 1);
     }
 }
