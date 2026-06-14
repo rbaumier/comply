@@ -77,6 +77,50 @@ pub fn is_codemod_fixture_file(path: &Path) -> bool {
     })
 }
 
+/// True when `path` is a linter/parser test-spec fixture: a file under a
+/// `tests/specs/` directory (a `specs` segment directly inside a `tests`/`tests-*`
+/// segment) whose basename stem is `valid`/`invalid` (e.g. `invalid.jsx`,
+/// `valid.ts`), or any `.snap`/`.snap.<ext>` snapshot file under that same
+/// directory. This is the convention used by Rust-based JS linters/parsers
+/// (rome-tools, Biome): `invalid.*` files hold code the linter-under-test should
+/// flag, `valid.*` files hold code it should not, and `.snap` files capture the
+/// diagnostic output. The harness reads them as text — they are never imported,
+/// bundled, or executed — so the deliberately unusual code in them is test data,
+/// not source, and no lint rule applies. The `tests/specs/` ancestor scopes the
+/// exemption so an ordinary `src/valid.ts` (no spec ancestor) stays checked.
+pub fn is_linter_spec_fixture(path: &Path) -> bool {
+    if !has_tests_specs_ancestor(path) {
+        return false;
+    }
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if name.contains(".snap.") || name.ends_with(".snap") {
+        return true;
+    }
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    stem == "valid" || stem == "invalid"
+}
+
+/// True when `path` has a `specs` segment whose immediately-preceding segment is
+/// a test root (`tests`, `test`, or a `tests-`/`test-` prefixed variant), i.e.
+/// the `tests/specs/` shape. Segment (not substring) matching keeps an unrelated
+/// `src/specs/` (no test-root parent) from qualifying.
+fn has_tests_specs_ancestor(path: &Path) -> bool {
+    let segments: Vec<&str> = path
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => s.to_str(),
+            _ => None,
+        })
+        .collect();
+    segments.windows(2).any(|pair| {
+        pair[1] == "specs"
+            && (pair[0] == "tests"
+                || pair[0] == "test"
+                || pair[0].starts_with("tests-")
+                || pair[0].starts_with("test-"))
+    })
+}
+
 /// True when any `Normal` path segment equals one of `names`. Segment (not
 /// substring) matching is what keeps `src/appconfig/` from matching `config`
 /// and `src/mysamples/` from matching `samples`.
@@ -1354,5 +1398,53 @@ mod aux_path_tests {
         // Negative space: the `routes/` directory and an ordinary module name.
         assert!(!is_react_router_routes_config(Path::new("app/routes/index.tsx")));
         assert!(!is_react_router_routes_config(Path::new("app/route.ts")));
+    }
+
+    #[test]
+    fn linter_spec_fixture_under_tests_specs() {
+        // Issue #1438: rome-tools/Biome linter spec fixtures — valid/invalid
+        // inputs and `.snap` outputs under a `tests/specs/` directory.
+        assert!(is_linter_spec_fixture(&PathBuf::from(
+            "crates/rome_js_analyze/tests/specs/a11y/noAccessKey/invalid.jsx"
+        )));
+        assert!(is_linter_spec_fixture(&PathBuf::from(
+            "crates/rome_js_analyze/tests/specs/complexity/noUselessRename/invalid.js"
+        )));
+        assert!(is_linter_spec_fixture(&PathBuf::from(
+            "crates/rome_js_analyze/tests/specs/a11y/useValidLang/valid.jsx"
+        )));
+        assert!(is_linter_spec_fixture(&PathBuf::from("pkg/tests/specs/foo/valid.ts")));
+        // Snapshot outputs under the same dir.
+        assert!(is_linter_spec_fixture(&PathBuf::from(
+            "crates/rome_js_analyze/tests/specs/a11y/noAccessKey/invalid.jsx.snap"
+        )));
+        assert!(is_linter_spec_fixture(&PathBuf::from(
+            "pkg/tests/specs/foo/invalid.snap.new"
+        )));
+        // `tests-`/`test-` prefixed test roots and singular `test/specs/`.
+        assert!(is_linter_spec_fixture(&PathBuf::from("pkg/test/specs/foo/valid.js")));
+        assert!(is_linter_spec_fixture(&PathBuf::from(
+            "pkg/tests-integration/specs/foo/invalid.ts"
+        )));
+    }
+
+    #[test]
+    fn linter_spec_fixture_negative_space() {
+        // A normal `src/valid.ts` with NO `tests/specs/` ancestor stays checked.
+        assert!(!is_linter_spec_fixture(&PathBuf::from("src/valid.ts")));
+        assert!(!is_linter_spec_fixture(&PathBuf::from("src/invalid.jsx")));
+        // A `specs/` dir not under a test root is not a spec-fixture dir.
+        assert!(!is_linter_spec_fixture(&PathBuf::from("src/specs/valid.ts")));
+        // Under `tests/specs/`, only valid/invalid stems (or .snap) are fixtures;
+        // a normal helper module there is still real test code.
+        assert!(!is_linter_spec_fixture(&PathBuf::from(
+            "crates/rome_js_analyze/tests/specs/utils/helper.ts"
+        )));
+        // Segment (not substring) match — `tests-specs/` is one segment, not
+        // `tests/specs/`, and `myspecs/` is not `specs/`.
+        assert!(!is_linter_spec_fixture(&PathBuf::from("pkg/tests-specs/valid.ts")));
+        assert!(!is_linter_spec_fixture(&PathBuf::from("pkg/tests/myspecs/valid.ts")));
+        // A `.snap` outside a spec dir is not exempted by this predicate.
+        assert!(!is_linter_spec_fixture(&PathBuf::from("src/__snapshots__/foo.snap")));
     }
 }

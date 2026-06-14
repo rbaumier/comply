@@ -388,7 +388,11 @@ fn dispatch_with_lang(
     }
 
     let file_ctx = FileCtx::build(path, source, file.language, project);
-    if file_ctx.is_generated || file_ctx.is_minified || file_ctx.path_segments.is_vendored {
+    if file_ctx.is_generated
+        || file_ctx.is_minified
+        || file_ctx.path_segments.is_vendored
+        || file_ctx.path_segments.is_linter_spec_fixture
+    {
         return Vec::new();
     }
 
@@ -750,6 +754,57 @@ export function Fixture() {
                 .iter()
                 .all(|diagnostic| !skipped_rule_ids.contains(&diagnostic.rule_id.as_ref())),
             "expected fixture-only rules to stay silent in tests, got: {diagnostics:?}",
+        );
+    }
+
+    #[test]
+    fn skips_all_rules_in_linter_spec_fixtures_issue1438() {
+        // Issue #1438: rome-tools/Biome linter spec fixtures (invalid.jsx /
+        // valid.jsx under tests/specs/) hold intentional test data — code the
+        // linter-under-test should/shouldn't flag — read as text, never imported
+        // or bundled. Every rule must skip them; here ts-no-unused-vars and
+        // ts-no-empty-function both fire on the same content in a normal file.
+        let source = "const unused = 1;\nfunction empty() {}\n";
+        let fixture = lint_in_memory(
+            Path::new("crates/rome_js_analyze/tests/specs/a11y/noAccessKey/invalid.jsx"),
+            Language::JavaScript,
+            source,
+            default_static_config(),
+            None,
+        );
+        assert!(
+            fixture.is_empty(),
+            "linter spec fixtures must be exempt from all rules, got: {fixture:?}"
+        );
+
+        // Negative space: the SAME content in a normal source file is still
+        // flagged — the exemption is scoped to the tests/specs/ fixture path.
+        let normal = lint_in_memory(
+            Path::new("src/feature.js"),
+            Language::JavaScript,
+            source,
+            default_static_config(),
+            None,
+        );
+        assert!(
+            normal
+                .iter()
+                .any(|d| d.rule_id == "ts-no-unused-vars" || d.rule_id == "ts-no-empty-function"),
+            "normal source with the same patterns must still be flagged, got: {normal:?}"
+        );
+
+        // Negative space: a `src/valid.ts` (no tests/specs/ ancestor) with an
+        // unused var must still be checked — the stem alone must not exempt.
+        let plain_valid = lint_in_memory(
+            Path::new("src/valid.js"),
+            Language::JavaScript,
+            "const unused = 1;\n",
+            default_static_config(),
+            None,
+        );
+        assert!(
+            plain_valid.iter().any(|d| d.rule_id == "ts-no-unused-vars"),
+            "src/valid.js (no spec ancestor) must still be checked, got: {plain_valid:?}"
         );
     }
 
