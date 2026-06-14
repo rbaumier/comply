@@ -19,6 +19,9 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if ctx.file.in_benchmark_dir() {
+            return;
+        }
         let source_bytes = ctx.source.as_bytes();
         let Ok(text) = node.utf8_text(source_bytes) else {
             return;
@@ -62,6 +65,10 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, src, "t.rs")
     }
 
+    fn run_at(src: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_gated(&Check, src, path)
+    }
+
     #[test]
     fn flags_truncate_table() {
         let src = r#"fn f() { let q = "TRUNCATE TABLE users"; }"#;
@@ -72,5 +79,31 @@ mod tests {
     fn allows_delete_from() {
         let src = r#"fn f() { let q = "DELETE FROM users"; }"#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_truncate_in_benchmark_dir_issue1497() {
+        // Issue #1497: benchmark cleanup uses TRUNCATE to reset state fast.
+        let src = r#"
+            pub const CLEANUP_QUERIES: &[&str] = &[
+                "TRUNCATE TABLE comments",
+                "TRUNCATE TABLE posts",
+                "TRUNCATE TABLE users",
+            ];
+        "#;
+        assert!(run_at(src, "diesel_bench/benches/consts.rs").is_empty());
+    }
+
+    #[test]
+    fn allows_truncate_in_test_dir_issue1497() {
+        let src = r#"fn cleanup() { let q = "TRUNCATE TABLE users"; }"#;
+        assert!(run_at(src, "tests/db/cleanup.rs").is_empty());
+    }
+
+    #[test]
+    fn flags_truncate_in_production_code_issue1497() {
+        // Negative-space guard: ordinary production code is still flagged.
+        let src = r#"fn cleanup() { let q = "TRUNCATE TABLE users"; }"#;
+        assert_eq!(run_at(src, "src/db/cleanup.rs").len(), 1);
     }
 }

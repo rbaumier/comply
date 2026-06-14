@@ -65,6 +65,11 @@ pub struct PathSegments {
     /// A cargo-fuzz `fuzz_targets/` directory segment — where `panic!` is the
     /// deliberate crash-signaling mechanism.
     pub in_fuzz_targets: bool,
+    /// A benchmark file: a `benches/` directory segment (Rust's convention) or a
+    /// `_bench`/`-bench`/`.bench.` file-stem marker. Benchmark setup/teardown
+    /// deliberately uses fast, side-stepping operations (e.g. `TRUNCATE` to reset
+    /// tables between iterations) that production rules must not flag.
+    pub in_benchmark_dir: bool,
     /// A test-runner setup/teardown hook file resolved by path, not by name:
     /// Vitest `globalSetup`/`setup` files and Playwright
     /// `globalSetup`/`globalTeardown` files. The framework imports them by the
@@ -86,6 +91,14 @@ pub struct FileCtx {
 impl FileCtx {
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    /// True when this file is benchmark code (a `benches/` directory or a
+    /// `_bench`/`-bench`/`.bench.` file marker). Opt-in: consulted only by rules
+    /// that target production application code and must not fire on benchmark
+    /// setup/teardown.
+    pub fn in_benchmark_dir(&self) -> bool {
+        self.path_segments.in_benchmark_dir
     }
 
     pub fn build(path: &Path, source: &str, language: Language, project: &ProjectCtx) -> Self {
@@ -370,6 +383,25 @@ fn has_test_internal_dir(normalized: &str) -> bool {
         .any(|pair| TEST_ROOT_SEGMENTS.contains(&pair[0]) && pair[1] == "internal")
 }
 
+/// True when `path` is a benchmark source file: a `benches/` directory segment
+/// (Rust's standard benchmark directory, matched between `/` delimiters so
+/// `benches-old/` is not matched) or a file stem carrying a `_bench`/`-bench`
+/// marker (e.g. `parse_bench.rs`), or a `.bench.` filename infix
+/// (e.g. `parse.bench.ts`).
+fn is_benchmark_path(normalized: &str) -> bool {
+    if normalized.split('/').any(|seg| seg == "benches") {
+        return true;
+    }
+    let Some(name) = normalized.rsplit('/').next() else {
+        return false;
+    };
+    if name.contains(".bench.") {
+        return true;
+    }
+    let stem = name.split('.').next().unwrap_or("");
+    stem.ends_with("_bench") || stem.ends_with("-bench")
+}
+
 pub(crate) fn scan_path(path: &Path) -> PathSegments {
     let lower = path.to_string_lossy().replace('\\', "/");
     PathSegments {
@@ -426,6 +458,7 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
         is_relaxed_dir: has_relaxed_segment(&lower),
         in_aux_dir: crate::rules::path_utils::is_aux_dir_path(path),
         in_fuzz_targets: crate::rules::path_utils::is_fuzz_targets_path(path),
+        in_benchmark_dir: is_benchmark_path(&lower),
         is_framework_hook_file: is_framework_hook_file(path),
     }
 }
@@ -678,6 +711,39 @@ mod tests {
     fn in_fuzz_targets_set_for_cargo_fuzz_path() {
         assert!(scan_path(&PathBuf::from("fuzz/fuzz_targets/x.rs")).in_fuzz_targets);
         assert!(!scan_path(&PathBuf::from("src/lib.rs")).in_fuzz_targets);
+    }
+
+    #[test]
+    fn in_benchmark_dir_set_for_benches_and_bench_markers_issue1497() {
+        // `benches/` directory segment (Rust convention) and *_bench file stems.
+        assert!(scan_path(&PathBuf::from("foo/benches/x.rs")).in_benchmark_dir);
+        assert!(scan_path(&PathBuf::from("diesel_bench/benches/consts.rs")).in_benchmark_dir);
+        assert!(scan_path(&PathBuf::from("src/parse_bench.rs")).in_benchmark_dir);
+        assert!(scan_path(&PathBuf::from("src/parse-bench.rs")).in_benchmark_dir);
+        assert!(scan_path(&PathBuf::from("src/parse.bench.ts")).in_benchmark_dir);
+        // Plain production files are not benchmarks.
+        assert!(!scan_path(&PathBuf::from("src/foo.rs")).in_benchmark_dir);
+        // Exact-segment match only: `benches-old/` is not a benchmark dir.
+        assert!(!scan_path(&PathBuf::from("benches-old/x.rs")).in_benchmark_dir);
+    }
+
+    #[test]
+    fn file_ctx_in_benchmark_dir_method_issue1497() {
+        let project = ProjectCtx::empty();
+        let bench = FileCtx::build(
+            Path::new("diesel_bench/benches/consts.rs"),
+            "const X: &str = \"x\";",
+            Language::Rust,
+            &project,
+        );
+        assert!(bench.in_benchmark_dir());
+        let prod = FileCtx::build(
+            Path::new("src/foo.rs"),
+            "const X: &str = \"x\";",
+            Language::Rust,
+            &project,
+        );
+        assert!(!prod.in_benchmark_dir());
     }
 
     #[test]
