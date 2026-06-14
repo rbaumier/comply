@@ -2,11 +2,13 @@
 //! `eprintln`, `print` or `eprint`, located inside async code — either an
 //! `async fn` or an `async { … }` / `async move { … }` block.
 //!
-//! Source files of a binary-only crate (the nearest `Cargo.toml` declares
-//! no `[lib]` table and no `src/lib.rs` exists next to it) are exempt:
-//! the application owns its stdout, and interactive CLI prompts via
-//! `print!` / `println!` are the feature there. The rule's concern is
-//! library async code grabbing the application's stdout.
+//! Source files of an application crate (the nearest `Cargo.toml` declares a
+//! `[[bin]]` target or a `src/main.rs` exists next to it) are exempt — even
+//! when the crate also carries a `[lib]` to share code between its own
+//! binaries (e.g. a CLI tool). The application owns its stdout, so
+//! user-facing terminal output and interactive prompts via `print!` /
+//! `println!` are the feature there. The rule's concern is pure-library async
+//! code grabbing the application's stdout.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{is_in_test_context, is_inside_async_fn};
@@ -45,7 +47,7 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
 
     if !is_inside_async_fn(node, source) && !is_inside_async_block(node) { return; }
 
-    if ctx.project.nearest_cargo_manifest(ctx.path).is_some_and(|m| m.is_binary_only()) { return; }
+    if ctx.project.nearest_cargo_manifest(ctx.path).is_some_and(|m| m.declares_binary()) { return; }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -91,8 +93,8 @@ mod tests {
     fn run_in_crate(cargo_toml_contents: &str, rel_path: &str, source: &str) -> Vec<Diagnostic> {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("Cargo.toml"), cargo_toml_contents).unwrap();
-        fs::create_dir_all(dir.path().join("src")).unwrap();
         let src_path = dir.path().join(rel_path);
+        fs::create_dir_all(src_path.parent().unwrap()).unwrap();
         fs::write(&src_path, source).unwrap();
         crate::rules::test_helpers::run_rule(&Check, source, &src_path)
     }
@@ -117,6 +119,25 @@ edition = "2021"
 [[bin]]
 name = "mytool"
 path = "src/main.rs"
+"#;
+
+    /// kanidm `tools/cli` shape: a CLI application that declares one or more
+    /// `[[bin]]` targets but also carries a `[lib]` table to share code
+    /// between its own binaries. `is_binary_only()` is false here, yet the
+    /// crate still owns its stdout.
+    const CLI_WITH_LIB_CARGO_TOML: &str = r#"
+[package]
+name = "kanidm_tools"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "kanidm_cli"
+path = "src/cli/lib.rs"
+
+[[bin]]
+name = "kanidm"
+path = "src/cli/main.rs"
 "#;
 
     #[test]
@@ -168,5 +189,15 @@ path = "src/main.rs"
     fn flags_println_in_async_fn_in_library_crate_module() {
         let src = "async fn f() { println!(\"hi\"); }";
         assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/util.rs", src).len(), 1);
+    }
+
+    /// Regression for #1250: kanidm `tools/cli` declares a `[[bin]]` target
+    /// (the `kanidm` CLI) alongside a `[lib]` used only to share code between
+    /// its own binaries. `println!` in an async command handler is the
+    /// user-facing terminal output — not a library grabbing the app's stdout.
+    #[test]
+    fn allows_println_in_async_fn_cli_crate_with_internal_lib() {
+        let src = "async fn client_search() { println!(\"{}\", result); }";
+        assert!(run_in_crate(CLI_WITH_LIB_CARGO_TOML, "src/cli/person.rs", src).is_empty());
     }
 }
