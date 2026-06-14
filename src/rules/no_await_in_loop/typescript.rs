@@ -89,6 +89,66 @@ mod tests {
         assert!(run(src).is_empty());
     }
 
+    /// Regression for #1182 — `await Promise.all(batch.map(...))` inside a
+    /// loop is a batching pattern (each batch parallelized, batches
+    /// sequential for back-pressure). Must not be flagged.
+    #[test]
+    fn ignores_await_promise_all_in_loop() {
+        let src = r"
+            async function processInBatches(batches: string[][]) {
+                for (const batch of batches) {
+                    await Promise.all(batch.map(item => fetch(item)));
+                }
+            }
+        ";
+        assert!(run(src).is_empty());
+    }
+
+    /// `Promise.allSettled`, `Promise.race`, and `Promise.any` are equally
+    /// explicit multi-promise coordination — awaiting one in a loop is exempt.
+    #[test]
+    fn ignores_await_other_promise_combinators_in_loop() {
+        let settled = r"
+            async function run(batches: string[][]) {
+                for (const batch of batches) {
+                    await Promise.allSettled(batch.map(item => fetch(item)));
+                }
+            }
+        ";
+        let race = r"
+            async function run(rounds: Promise<unknown>[][]) {
+                for (const round of rounds) {
+                    await Promise.race(round);
+                }
+            }
+        ";
+        let any = r"
+            async function run(rounds: Promise<unknown>[][]) {
+                for (const round of rounds) {
+                    await Promise.any(round);
+                }
+            }
+        ";
+        assert!(run(settled).is_empty());
+        assert!(run(race).is_empty());
+        assert!(run(any).is_empty());
+    }
+
+    /// Negative space for #1182 — the batching exemption is scoped to the
+    /// `Promise` combinators. A genuine single-promise `await` per iteration
+    /// is still the serial anti-pattern and must fire exactly one diagnostic.
+    #[test]
+    fn flags_single_await_alongside_promise_all_exemption() {
+        let src = r"
+            async function run(urls: string[]) {
+                for (const url of urls) {
+                    await fetch(url);
+                }
+            }
+        ";
+        assert_eq!(run(src).len(), 1);
+    }
+
     /// Regression for #104 — deliberate sequential async recursion in a
     /// depth-first directory walk must not be flagged. The await target
     /// is a recursive call to the enclosing async function.

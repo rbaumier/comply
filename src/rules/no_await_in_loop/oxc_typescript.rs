@@ -30,6 +30,28 @@ fn awaited_callee_name<'a>(arg: &Expression<'a>) -> Option<&'a str> {
     }
 }
 
+/// Whether the awaited expression is a `Promise` combinator call that
+/// coordinates multiple promises in parallel: `Promise.all`,
+/// `Promise.allSettled`, `Promise.race`, or `Promise.any`. Awaiting one
+/// of these inside a loop is a deliberate batching pattern (the items are
+/// already parallelized), not the serial-await anti-pattern.
+fn is_awaited_promise_combinator(arg: &Expression) -> bool {
+    let Expression::CallExpression(call) = arg else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    let Expression::Identifier(object) = &member.object else {
+        return false;
+    };
+    object.name == "Promise"
+        && matches!(
+            member.property.name.as_str(),
+            "all" | "allSettled" | "race" | "any"
+        )
+}
+
 /// Walk ancestors of the `await` looking for a loop boundary. Stops at
 /// function boundaries (a nested `async` function starts a fresh
 /// context — its awaits are not "in" the outer loop). Returns the name
@@ -130,6 +152,14 @@ impl OxcCheck for Check {
         let Some(enclosing_fn_name) = enclosing_loop_and_fn_name(node.id(), semantic) else {
             return;
         };
+
+        // Batching exception: `await Promise.all/allSettled/race/any(...)`
+        // already coordinates multiple promises in parallel. The outer
+        // sequential loop is intentional (back-pressure, rate limiting,
+        // data-dependency between batches), not serial-await-per-iteration.
+        if is_awaited_promise_combinator(&await_expr.argument) {
+            return;
+        }
 
         // Recursion exception: if the awaited expression is a direct
         // call to the enclosing async function, skip — sequential
