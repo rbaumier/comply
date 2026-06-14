@@ -53,10 +53,13 @@ impl AstCheck for Check {
         if !is_sql_string(format_string) {
             return;
         }
-        // Require interpolation (`{}` or `{...}` placeholders) — a
-        // bare `format!("SELECT ...")` with no args is harmless
-        // (caller could just have written a string literal).
-        if !format_string.contains('{') {
+        // Require a risky interpolation — a runtime, non-const value
+        // substituted into the SQL. A bare `format!("SELECT ...")`
+        // (no placeholders), escaped `{{`/`}}` literal braces (e.g.
+        // ClickHouse `{{db:String}}` parameter syntax), and inline
+        // compile-time const placeholders (`{COLUMN_KIND}`) are all
+        // safe and must not be flagged.
+        if !has_risky_placeholder(format_string) {
             return;
         }
         let pos = node.start_position();
@@ -98,6 +101,59 @@ fn first_string_literal_in_macro<'src>(
         }
     }
     None
+}
+
+/// Whether the format string contains at least one placeholder that
+/// interpolates a runtime, non-const value.
+///
+/// Applies Rust's format-string rules to the literal text:
+/// - `{{` and `}}` are escaped literal braces (consumed as a pair),
+///   not placeholders — ClickHouse `{{p:String}}` parameter syntax
+///   yields a literal `{p:String}` and contributes no interpolation.
+/// - A real `{...}` placeholder is risky unless its argument name is a
+///   SCREAMING_SNAKE_CASE identifier, which denotes an inline
+///   compile-time const (`{COLUMN_KIND}`), not user input. A positional
+///   `{}` / `{0}` is filled by a macro argument expression and is risky.
+fn has_risky_placeholder(format_string: &str) -> bool {
+    let bytes = format_string.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' if bytes.get(i + 1) == Some(&b'{') => i += 2,
+            b'}' if bytes.get(i + 1) == Some(&b'}') => i += 2,
+            b'{' => {
+                let Some(end) = format_string[i + 1..].find('}') else {
+                    return false;
+                };
+                let inner = &format_string[i + 1..i + 1 + end];
+                let name = inner.split(':').next().unwrap_or("");
+                if !is_const_name(name) {
+                    return true;
+                }
+                i += 1 + end + 1;
+            }
+            _ => i += 1,
+        }
+    }
+    false
+}
+
+/// Whether `name` is a SCREAMING_SNAKE_CASE identifier — a compile-time
+/// const captured inline by `format!` (safe), e.g. `COLUMN_KIND_REGULAR`.
+///
+/// Requires at least one letter, all letters uppercase, and only
+/// `A-Z` / `0-9` / `_`. A positional placeholder (empty `name`) or an
+/// index (`0`) has no letter and is therefore not a const.
+fn is_const_name(name: &str) -> bool {
+    let mut has_letter = false;
+    for ch in name.chars() {
+        match ch {
+            'A'..='Z' => has_letter = true,
+            '0'..='9' | '_' => {}
+            _ => return false,
+        }
+    }
+    has_letter
 }
 
 #[cfg(test)]
@@ -162,5 +218,46 @@ mod tests {
         let src = r#"fn f() { vec!["SELECT * FROM users WHERE id = {}", "x"]; }"#;
         // `vec!` isn't a format macro; not our concern.
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_clickhouse_parameterized_query() {
+        // Issue #1442: escaped `{{db:String}}` braces are ClickHouse
+        // parameters (literal `{db:String}` in the output, bound
+        // separately) and the `{COLUMN_KIND_*}` are inline consts.
+        let src = r#"fn f() {
+            let query = format!(
+                "SELECT name, type, default_kind \
+                 FROM system.columns \
+                 WHERE database = {{db:String}} AND table = {{tbl:String}} \
+                 AND default_kind IN ('{COLUMN_KIND_REGULAR}', '{COLUMN_KIND_DEFAULT}') \
+                 ORDER BY position FORMAT JSONEachRow"
+            );
+        }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_only_escaped_braces() {
+        let src = r#"fn f() { let q = format!("SELECT * FROM t WHERE x = {{p:String}}"); }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_only_const_placeholder() {
+        let src = r#"fn f() { let q = format!("SELECT * FROM t WHERE k = '{COLUMN_KIND}'"); }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_positional_runtime_arg() {
+        let src = r#"fn f(user_id: i32) { let q = format!("SELECT * FROM t WHERE id = {}", user_id); }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_inline_lowercase_runtime_var() {
+        let src = r#"fn f() { let q = format!("SELECT * FROM t WHERE name = '{user_name}'"); }"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
