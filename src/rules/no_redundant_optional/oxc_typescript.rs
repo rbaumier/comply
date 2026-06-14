@@ -1,10 +1,45 @@
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::{byte_offset_to_line_col, cached_file_bool, SLOT_TYPE_ONLY_FILE};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Declaration, Statement, TSModuleDeclarationBody, TSType};
+use oxc_ast::ast::{Declaration, Expression, Statement, TSModuleDeclarationBody, TSType};
 use std::sync::Arc;
 
 pub struct Check;
+
+/// Identifiers that introduce a type-level assertion taking the asserted type as
+/// a type argument — Vitest / expect-type. Inside `expectTypeOf<…>()` or
+/// `assertType<…>(value)` (and chained matchers like `.toEqualTypeOf<…>()`), an
+/// explicit `?: T | undefined` is the very thing the test asserts: removing the
+/// `| undefined` would change the assertion's meaning. It is therefore not
+/// redundant in that position.
+const TYPE_ASSERTION_ROOTS: &[&str] = &["expectTypeOf", "assertType"];
+
+/// True when the optional property sits inside the type arguments of a
+/// type-assertion call. A `TSPropertySignature` only ever appears in a type
+/// position (within a `TSTypeLiteral`), never in a call's value arguments, so an
+/// enclosing assertion `CallExpression` means the signature is part of the
+/// asserted type.
+fn inside_type_assertion(node: &oxc_semantic::AstNode, semantic: &oxc_semantic::Semantic) -> bool {
+    semantic.nodes().ancestors(node.id()).any(|ancestor| {
+        matches!(ancestor.kind(), AstKind::CallExpression(call)
+            if callee_roots_at_type_assertion(&call.callee))
+    })
+}
+
+/// True when the callee is — or is a member chain rooted at — a call to a
+/// type-assertion identifier: `expectTypeOf<…>()`, `assertType<…>(…)`, or a
+/// matcher chain such as `expectTypeOf<…>().toEqualTypeOf`.
+fn callee_roots_at_type_assertion(expr: &Expression) -> bool {
+    match expr {
+        Expression::Identifier(id) => TYPE_ASSERTION_ROOTS.contains(&id.name.as_str()),
+        Expression::CallExpression(call) => callee_roots_at_type_assertion(&call.callee),
+        Expression::StaticMemberExpression(m) => callee_roots_at_type_assertion(&m.object),
+        Expression::ComputedMemberExpression(m) => callee_roots_at_type_assertion(&m.object),
+        Expression::TSInstantiationExpression(i) => callee_roots_at_type_assertion(&i.expression),
+        Expression::ParenthesizedExpression(p) => callee_roots_at_type_assertion(&p.expression),
+        _ => false,
+    }
+}
 
 /// True when every top-level statement is purely type-level: the file declares
 /// no runtime value, imports none, and executes nothing. This is the structure
@@ -161,6 +196,14 @@ impl OxcCheck for Check {
         // diverge: only the latter accepts an explicit `undefined`. The union
         // member is then meaningful, not redundant, so suppress the diagnostic.
         if ctx.project.uses_exact_optional_property_types(ctx.path) {
+            return;
+        }
+
+        // Inside a type-level assertion (`expectTypeOf<…>().toEqualTypeOf<…>()`,
+        // `assertType<…>(…)`), an explicit `?: T | undefined` is intentional —
+        // the test asserts the type carries the `| undefined`, so removing it
+        // would change what the assertion checks.
+        if inside_type_assertion(node, semantic) {
             return;
         }
 
@@ -323,6 +366,35 @@ mod tests {
                      }\n\
                    }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_explicit_undefined_in_expecttypeof_assertion() {
+        // Regression #1189 scenario 1: in a vitest type-test, the explicit
+        // `?: T | undefined` inside `expectTypeOf<…>().toEqualTypeOf<…>()` is the
+        // very thing the test asserts. Removing `| undefined` changes the
+        // assertion's meaning, so the rule must not flag it.
+        let src = r#"it('preserves optional union', () => {
+            expectTypeOf<InferInput<{ name?: string | undefined }, 'query'>>()
+                .toEqualTypeOf<{ name?: string | undefined }>()
+        })"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_explicit_undefined_in_asserttype_type_argument() {
+        // `assertType<…>(value)` takes the asserted type as a type argument.
+        let src = "assertType<{ name?: string | undefined }>(getValue());";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_explicit_undefined_outside_type_assertion() {
+        // Negative-space guard: the same redundant union outside any type
+        // assertion (a plain interface declared next to a runtime value) is a
+        // true positive and must still fire.
+        let src = "const x = 1; interface I { name?: string | undefined; }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
