@@ -290,6 +290,16 @@ impl OxcCheck for Check {
         if body_contains_cypress_assertion(semantic, body_span) {
             return;
         }
+        // Chai's `should` BDD style asserts via `value.should.be.equal(x)` /
+        // `arr.should.have.length(3)` / the getter form `x.should.be.true`, with
+        // no `expect(...)`/`assert(...)` call. AST-based and anchored on a
+        // `.should` member that is chained further, so a `.should` read as a
+        // plain value is not mistaken for an assertion.
+        if crate::rules::test_assertion_helpers::body_contains_chai_should_assertion(
+            semantic, body_span,
+        ) {
+            return;
+        }
         // A `throw` in the body is a valid assertion mechanism — timing/
         // property/fuzzing tests fail by throwing on a violated condition,
         // which the runner reports as a failure. AST-based so the word
@@ -981,6 +991,38 @@ mod tests {
     #[test]
     fn still_flags_test_without_type_assertion() {
         let src = r#"it("x", () => { type t = { id: number }; const y = 1 + 1; });"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #2307 — chai's `should` BDD style adds a `.should` property
+    // to every object, so assertions read `value.should.be.equal(x)` /
+    // `arr.should.have.length(N)` without any `expect(...)`/`assert(...)` call.
+    #[test]
+    fn allows_chai_should_call_form_assertion() {
+        let src = r#"it("inserts", () => { loadedUsers1.length.should.be.equal(10); loadedUsers2.length.should.be.equal(3); });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_chai_should_have_length_assertion() {
+        let src = r#"it("has length", () => { const arr = getItems(); arr.should.have.length(3); });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #2307 — getter form `result.should.be.true` has no call at
+    // all; the `.should` member is the assertion signal.
+    #[test]
+    fn allows_chai_should_getter_form_assertion() {
+        let src = r#"it("is true", () => { const result = check(); result.should.be.true; });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative-space guard for #2307: a property literally named `should` that is
+    // not the head of a chai assertion chain (read as a value) is not an
+    // assertion, so an otherwise empty test still fires.
+    #[test]
+    fn still_flags_test_with_should_property_read() {
+        let src = r#"it("x", () => { const n = config.should; log(n); });"#;
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
