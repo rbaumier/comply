@@ -39,7 +39,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: format!(
-                    "Constraint `{name}` must end with _pk|_fk|_key|_chk|_exl|_idx (format: {{table}}_{{col}}_{{suffix}})."
+                    "Constraint `{name}` must end with _pk|_fk|_key|_chk|_exl|_idx|_pkey|_fkey (format: {{table}}_{{col}}_{{suffix}})."
                 ),
                 severity: Severity::Warning,
                 span: None,
@@ -81,5 +81,23 @@ mod tests {
     fn allows_key_suffix() {
         let src = r#"const m = "ALTER TABLE t ADD CONSTRAINT user_email_key UNIQUE (email)";"#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_postgres_pkey_suffix() {
+        let src = r#"const m = await sql`CREATE TABLE "workflow" ("id" uuid NOT NULL, CONSTRAINT "workflow_pkey" PRIMARY KEY ("id"))`.execute(db);"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_postgres_fkey_suffix() {
+        let src = r#"const m = await sql`CREATE TABLE "workflow" ("ownerId" uuid NOT NULL, CONSTRAINT "workflow_ownerId_fkey" FOREIGN KEY ("ownerId") REFERENCES "user"("id"))`.execute(db);"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_constraint_without_recognized_suffix() {
+        let src = r#"const m = await sql`CREATE TABLE "workflow" ("id" uuid NOT NULL, CONSTRAINT "workflow_bad" PRIMARY KEY ("id"))`.execute(db);"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
