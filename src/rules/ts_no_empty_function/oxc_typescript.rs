@@ -1,6 +1,9 @@
 //! ts-no-empty-function OxcCheck backend.
 //!
-//! Flag functions/methods with empty bodies that contain no comments.
+//! Flag functions/methods with empty bodies. A body that contains a comment is
+//! treated as non-empty (the comment is the "intentionally empty" signal).
+//! Dependency-injection constructors — whose parameters carry an accessibility
+//! modifier, `readonly`, or a decorator — are exempt: the parameters are the work.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -52,27 +55,19 @@ fn is_placeholder_callback_position(
     }
 }
 
-/// Returns true when the function body is empty (no statements, no directives)
-/// and contains no comments in the source text between the braces.
-fn is_empty_body(body: &FunctionBody, source: &str) -> bool {
+/// Returns true when the function body is empty: no statements, no directives,
+/// and no comment between the braces. A comment is the explicit "intentionally
+/// empty" signal, so a comment-bearing body is treated as non-empty.
+fn is_empty_body(body: &FunctionBody, semantic: &oxc_semantic::Semantic) -> bool {
     if !body.statements.is_empty() || !body.directives.is_empty() {
         return false;
     }
-    // Check if there's a comment inside the body braces.
-    let start = body.span.start as usize;
-    let end = body.span.end as usize;
-    if end > start && end <= source.len() {
-        let inner = &source[start..end];
-        // Strip outer braces
-        let trimmed = inner.trim();
-        if trimmed.len() > 2 {
-            let content = trimmed[1..trimmed.len() - 1].trim();
-            if content.starts_with("//") || content.starts_with("/*") {
-                return false;
-            }
-        }
-    }
-    true
+    let start = body.span.start;
+    let end = body.span.end;
+    !semantic
+        .comments()
+        .iter()
+        .any(|comment| comment.span.start >= start && comment.span.end <= end)
 }
 
 impl OxcCheck for Check {
@@ -108,7 +103,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        if !is_empty_body(body, ctx.source) {
+        if !is_empty_body(body, semantic) {
             return;
         }
 
@@ -121,17 +116,20 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Skip constructors with parameter properties (accessibility modifiers).
+        // Skip dependency-injection constructors: a constructor whose parameters
+        // carry an accessibility modifier (`private`/`public`/`protected`),
+        // `readonly`, or a decorator (e.g. `@Inject(...)`) is a parameter-property
+        // constructor — the parameters ARE the work, not an empty body.
         if is_method
             && let AstKind::MethodDefinition(method) = semantic.nodes().parent_node(node.id()).kind()
-                && method.key.is_specific_id("constructor")
-                    && let AstKind::Function(func) = node.kind() {
-                        for param in &func.params.items {
-                            if param.accessibility.is_some() {
-                                return;
-                            }
-                        }
-                    }
+            && method.key.is_specific_id("constructor")
+            && let AstKind::Function(func) = node.kind()
+            && func.params.items.iter().any(|param| {
+                param.accessibility.is_some() || param.readonly || !param.decorators.is_empty()
+            })
+        {
+            return;
+        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
         diagnostics.push(Diagnostic {
@@ -225,6 +223,95 @@ mod tests {
             const x = <Foo onClose={() => {}} />;
         "#;
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.tsx");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_di_constructor_with_decorated_param() {
+        // NestJS: a decorated DI parameter is the constructor's purpose.
+        let src = r#"
+            export class HelperService {
+                constructor(@Inject(REQUEST) request) {}
+            }
+        "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "helper.service.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_di_constructor_with_decorated_param_property() {
+        let src = r#"
+            export class HelperService {
+                constructor(@Inject(REQUEST) public readonly request) {}
+            }
+        "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "helper.service.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_constructor_with_readonly_param_property() {
+        let src = r#"
+            export class HelperService {
+                constructor(readonly request: Request) {}
+            }
+        "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "helper.service.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_method_with_comment_only_body() {
+        let src = r#"
+            export class HelperService {
+                public noop() {
+                    // intentionally empty
+                }
+            }
+        "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "helper.service.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_function_with_block_comment_only_body() {
+        let src = r#"
+            function noop() {
+                /* intentionally empty */
+            }
+        "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty());
+    }
+
+    #[test]
+    fn flags_empty_constructor_with_plain_param() {
+        // Negative space: a plain (non-property, non-decorated) param is not DI.
+        let src = r#"
+            export class Foo {
+                constructor(request: Request) {}
+            }
+        "#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "foo.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_no_arg_constructor() {
+        // Negative space: a bare empty constructor with no params is still dead.
+        let src = r#"
+            export class Foo {
+                constructor() {}
+            }
+        "#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "foo.ts");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_noop_method_without_comment() {
+        // Negative space: a `noop` method with NO comment is still flagged.
+        let src = r#"
+            export class Foo {
+                public noop() {}
+            }
+        "#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "foo.ts");
         assert_eq!(diags.len(), 1);
     }
 }
