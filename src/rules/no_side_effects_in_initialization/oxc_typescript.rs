@@ -504,14 +504,27 @@ fn is_vanilla_extract_style_file(program: &Program) -> bool {
     has_vanilla_extract_import(program)
 }
 
-/// True when the call's callee is `listen` (bare) or a `.listen` member
-/// access (`fastify.listen`, `app.listen`, `server.listen`, …). Server
-/// frameworks (Fastify, Express, Node's `http.Server`) all start the server
-/// with a `listen` call.
+/// True when the call's callee is a server-startup entry call:
+/// - `listen` (bare) or a `.listen` member access (`fastify.listen`,
+///   `app.listen`, `server.listen`, …) — Fastify, Express, and Node's
+///   `http.Server` all start the server with a `listen` call;
+/// - `serve` (bare) — the canonical Deno std-library Edge Function entry
+///   (`serve(handler)` from `deno.land/std/http/server.ts`), the runtime
+///   equivalent of `listen`;
+/// - `Deno.serve` or `Bun.serve` — the modern Deno/Bun runtime server entry
+///   points. The receiver root is matched precisely (`Deno`/`Bun`) so an
+///   unrelated `obj.serve(...)` does not gain the exemption.
 fn is_listen_call(call: &oxc_ast::ast::CallExpression) -> bool {
     match &call.callee {
-        Expression::Identifier(id) => id.name == "listen",
-        Expression::StaticMemberExpression(m) => m.property.name == "listen",
+        Expression::Identifier(id) => id.name == "listen" || id.name == "serve",
+        Expression::StaticMemberExpression(m) => {
+            m.property.name == "listen"
+                || (m.property.name == "serve"
+                    && matches!(
+                        &m.object,
+                        Expression::Identifier(obj) if obj.name == "Deno" || obj.name == "Bun"
+                    ))
+        }
         _ => false,
     }
 }
@@ -561,16 +574,17 @@ fn branch_contains_listen_call(branch: &Statement) -> bool {
 }
 
 /// True when the program is a server application entry point by content shape: it
-/// has a `listen(...)` call statement either at the top level
-/// (`fastify.listen({ port })`) or inside the consequent/alternate of a top-level
-/// `if` statement (the socket-activation pattern: `if (socketActivation) {
-/// server.listen({ fd }) } else { server.listen({ port }) }`). Starting an HTTP
-/// server this way makes the surrounding route/hook/middleware/signal-handler
-/// registrations mandatory, intentional side effects, not tree-shakeable library
-/// code. A `listen` call chained with a `.catch(...)`/`.then(...)` continuation
-/// counts the same. Only the top level and the first level of `if` branches are
-/// inspected, so a `listen()` buried inside an unrelated function body does not
-/// grant the exemption.
+/// has a server-startup call statement (`listen`, bare `serve`, `Deno.serve`,
+/// `Bun.serve` — see `is_listen_call`) either at the top level
+/// (`fastify.listen({ port })`, `Deno.serve(handler)`) or inside the
+/// consequent/alternate of a top-level `if` statement (the socket-activation
+/// pattern: `if (socketActivation) { server.listen({ fd }) } else {
+/// server.listen({ port }) }`). Starting an HTTP server this way makes the
+/// surrounding route/hook/middleware/signal-handler registrations mandatory,
+/// intentional side effects, not tree-shakeable library code. A startup call
+/// chained with a `.catch(...)`/`.then(...)` continuation counts the same. Only
+/// the top level and the first level of `if` branches are inspected, so a startup
+/// call buried inside an unrelated function body does not grant the exemption.
 fn is_server_entry_shape(program: &Program) -> bool {
     program.body.iter().any(|stmt| {
         if is_listen_call_statement(stmt) {
@@ -2604,6 +2618,65 @@ mod tests {
             diags.len(),
             2,
             "a non-listen .catch() chain must still be flagged, got {diags:?}"
+        );
+    }
+
+    // Regression for #2125: Deno Edge Functions start their HTTP server with a
+    // top-level `Deno.serve(...)` (modern API) — the runtime equivalent of
+    // `app.listen()`. The whole module is one server-startup call and is never
+    // tree-shaken.
+    #[test]
+    fn allows_deno_serve_server_entry_point() {
+        let src = "\
+            import 'https://deno.land/x/xhr@0.3.0/mod.ts';\n\
+            Deno.serve(async (req) => {\n\
+                const { query } = await req.json();\n\
+                return new Response('ok');\n\
+            });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "functions/openai/index.ts");
+        assert!(diags.is_empty(), "Deno.serve() is a server entry point, got {diags:?}");
+    }
+
+    // Regression for #2125: the Bun runtime server entry point is
+    // `Bun.serve({ fetch })`, the runtime equivalent of `app.listen()`.
+    #[test]
+    fn allows_bun_serve_server_entry_point() {
+        let src = "\
+            Bun.serve({\n\
+                fetch(req) {\n\
+                    return new Response('ok');\n\
+                },\n\
+            });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/server.ts");
+        assert!(diags.is_empty(), "Bun.serve() is a server entry point, got {diags:?}");
+    }
+
+    // Regression for #2125: legacy Deno Edge Functions use the bare `serve(...)`
+    // entry from the Deno std HTTP library — the canonical Deno server startup,
+    // matching the bare-`listen()` precedent.
+    #[test]
+    fn allows_bare_serve_server_entry_point() {
+        let src = "\
+            import { serve } from 'https://deno.land/std@0.170.0/http/server.ts';\n\
+            import { handler } from './handler.tsx';\n\
+            serve(handler);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "functions/og-images/index.ts");
+        assert!(diags.is_empty(), "bare serve() is a Deno server entry point, got {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_non_deno_member_serve_call() {
+        // Negative space: `.serve(...)` on an arbitrary object is not the
+        // Deno/Bun runtime entry shape (only `Deno.serve`/`Bun.serve` are), so an
+        // ordinary `foo.serve()` side effect must still be flagged.
+        let src = "\
+            register('widget');\n\
+            foo.serve();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/util.ts");
+        assert_eq!(
+            diags.len(),
+            2,
+            "an arbitrary obj.serve() is not a server entry and must still flag, got {diags:?}"
         );
     }
 
