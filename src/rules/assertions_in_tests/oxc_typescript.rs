@@ -46,6 +46,17 @@ fn is_testing_library_query(text: &str) -> bool {
     TESTING_LIBRARY_QUERIES.iter().any(|q| text.contains(q))
 }
 
+/// True when the test title declares an implicit "must not throw" assertion.
+/// A test named `should not throw` / `should not throw when host is void`
+/// asserts by *completing without an unhandled exception*: if the body throws,
+/// the runner records a failure. The name is explicit documentation of that
+/// intent, so a body with no `expect(...)` is intentional, not a smell. The
+/// match requires the full phrase (case-insensitive) and is deliberately not
+/// broadened to any "throw"/"error" mention.
+fn name_declares_no_throw(name: &str) -> bool {
+    name.to_ascii_lowercase().contains("should not throw")
+}
+
 /// Extract the test name from the first string argument.
 fn extract_test_name(args: &[Argument]) -> String {
     if let Some(first) = args.first() {
@@ -243,6 +254,13 @@ impl OxcCheck for Check {
             };
 
             if !has_assertion.contains(&cb_id) {
+                let name = extract_test_name(&call.arguments);
+                // A test explicitly named "should not throw" asserts by
+                // completing without an unhandled exception — its missing
+                // `expect(...)` is intentional.
+                if name_declares_no_throw(&name) {
+                    continue;
+                }
                 // The test delegates to a caller-supplied callback (`it(name,
                 // () => fn())` inside a wrapper whose `fn` param carries the
                 // assertions) — the inline body legitimately has none.
@@ -271,7 +289,6 @@ impl OxcCheck for Check {
                 ) {
                     continue;
                 }
-                let name = extract_test_name(&call.arguments);
                 let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),
@@ -837,6 +854,30 @@ mod tests {
     #[test]
     fn still_flags_test_with_should_property_read() {
         let src = r#"it("x", () => { const n = config.should; log(n); });"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #2353 — a test explicitly named "should not throw" asserts
+    // by completing without an unhandled exception; a plain expression/assignment
+    // body with no `expect(...)` is intentional, not assertion-less.
+    #[test]
+    fn allows_no_throw_named_test_with_plain_body() {
+        let src = r#"it("should not throw", () => { response().status = 403 });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_no_throw_named_test_with_suffix() {
+        let src = r#"it("should not throw when host is void", () => { const req = request(); req.host = undefined });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative-space guard for #2353: a test whose name does NOT contain
+    // "should not throw" and whose body has no assertion must still fire — the
+    // name heuristic is the only exemption signal and must stay tight.
+    #[test]
+    fn still_flags_assertionless_test_without_no_throw_name() {
+        let src = r#"it("returns the status", () => { response().status = 403 });"#;
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
