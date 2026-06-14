@@ -12,6 +12,14 @@
 //! Non-numeric targets (pointer, reference, trait object) are ignored.
 //! Casts like `*const u8 as usize` are false positives; suppress with
 //! `// comply-ignore` on the offending line.
+//!
+//! Float-target casts (`as f32` / `as f64`) are only flagged when the
+//! source type is statically known to have a matching `From` impl
+//! (`f64: From<{i8,i16,i32,u8,u16,u32,f32}>`, `f32: From<{i8,i16,u8,u16}>`).
+//! `as` is the only std conversion for wider sources (`u64`, `usize`,
+//! `u128`, …) and for operands whose type can't be resolved from the AST
+//! (method calls, field accesses, un-annotated bindings), so those are
+//! left alone — suggesting `f64::from(x)` there would not compile.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -67,8 +75,17 @@ impl AstCheck for Check {
         if is_literal_cast(node, source_bytes) {
             return;
         }
-        if let Some(source_type) = source_numeric_type(node, source_bytes)
-            && !is_dangerous_cast(source_type, target_type)
+        let source_type = source_numeric_type(node, source_bytes);
+        if target_type.kind == NumericKind::Float {
+            // `as f32`/`as f64` is the only std conversion unless the source
+            // has a matching `From` impl. Suggesting `f64::from(x)` for a
+            // wider or unresolved source would not compile, so only flag
+            // when `From` is provably available.
+            if !source_type.is_some_and(|src| from_available(src, target_type)) {
+                return;
+            }
+        } else if let Some(src) = source_type
+            && !is_dangerous_cast(src, target_type)
         {
             return;
         }
@@ -108,6 +125,23 @@ fn numeric_type(type_text: &str) -> Option<NumericType> {
         _ => return None,
     };
     Some(NumericType { kind, bits })
+}
+
+/// Whether `<target as float>::from(<source>)` compiles.
+///
+/// `f64: From<T>` for `T ∈ {i8,i16,i32,u8,u16,u32,f32}`;
+/// `f32: From<T>` for `T ∈ {i8,i16,u8,u16}`. No `From` exists for wider
+/// integers (`u64`, `i64`, `usize`, …) or for the lossy `f64 -> f32`.
+fn from_available(source: NumericType, target: NumericType) -> bool {
+    match target.bits {
+        64 => match source.kind {
+            NumericKind::Unsigned | NumericKind::Signed => source.bits <= 32,
+            NumericKind::Float => source.bits == 32,
+        },
+        32 => matches!(source.kind, NumericKind::Unsigned | NumericKind::Signed)
+            && source.bits <= 16,
+        _ => false,
+    }
 }
 
 fn is_dangerous_cast(source: NumericType, target: NumericType) -> bool {
@@ -294,5 +328,49 @@ mod tests {
     #[test]
     fn test_flags_dangerous_narrowing_i64_to_u32() {
         assert_eq!(run_on("fn f(x: i64) -> u32 { x as u32 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_1253_method_call_as_f64_not_flagged() {
+        // `as_millis()` returns u128; `f64::from(u128)` does not compile.
+        let src = "fn f(d: Duration) -> f64 { d.as_millis() as f64 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_1253_usize_binding_as_f64_not_flagged() {
+        // usize is wider than u32 on 64-bit; `f64::from(usize)` does not compile.
+        let src = "fn f(n: usize) -> f64 { n as f64 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_1253_u64_binding_as_f64_not_flagged() {
+        // `f64::from(u64)` does not compile.
+        assert!(run_on("fn f(x: u64) -> f64 { x as f64 }").is_empty());
+    }
+
+    #[test]
+    fn repro_1253_field_access_as_f64_not_flagged() {
+        // Field access — source type not resolvable from the AST.
+        assert!(run_on("fn f(s: S) -> f64 { s.count as f64 }").is_empty());
+    }
+
+    #[test]
+    fn repro_1253_from_compatible_i32_as_f64_still_flagged() {
+        // `f64::from(i32)` compiles — the rule should keep flagging this.
+        assert_eq!(run_on("fn f(x: i32) -> f64 { x as f64 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_from_compatible_u8_as_f32() {
+        // `f32::from(u8)` compiles — keep flagging.
+        assert_eq!(run_on("fn f(x: u8) -> f32 { x as f32 }").len(), 1);
+    }
+
+    #[test]
+    fn allows_u32_as_f32_no_from_impl() {
+        // `f32: From<u32>` does not exist (lossy) — `as` is correct here.
+        assert!(run_on("fn f(x: u32) -> f32 { x as f32 }").is_empty());
     }
 }
