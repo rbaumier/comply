@@ -170,6 +170,12 @@ impl OxcCheck for Check {
                     if is_known(&tag.name) {
                         continue;
                     }
+                    // A `/` in the token is not valid JSDoc tag syntax: `@scope/pkg`
+                    // is a scoped npm package reference in prose (`@ngrx/entity`,
+                    // `@angular/core`), not a tag.
+                    if tag.name.contains('/') {
+                        continue;
+                    }
                     // Standard JSDoc tags are all lowercase, so a typo of one is
                     // too. A tag containing an uppercase letter is an intentional
                     // custom convention tag (camelCase `@publicApi`, `@usageNotes`)
@@ -306,6 +312,17 @@ mod tests {
         assert!(run("/**\n * @api\n */\n").is_empty());
         // A genuine typo of the tag stays flagged.
         assert_eq!(run("/**\n * @nonsensetag foo\n */\n").len(), 1);
+    }
+
+    #[test]
+    fn allows_scoped_package_references_in_prose_issue_2281() {
+        // Scoped npm package names in JSDoc prose (`@ngrx/entity`, `@angular/core`)
+        // are not JSDoc tags — a `/` after the first word is not valid tag syntax
+        // (ngrx/platform documents reducers this way).
+        let src = "/**\n * @ngrx/entity provides a predefined interface for handling\n * a structured dictionary of records.\n */\n";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+        let src = "/**\n * meta-reducer. This returns all providers for an @angular/core\n * based application.\n */\n";
+        assert!(run(src).is_empty(), "{:?}", run(src));
     }
 
     #[test]
