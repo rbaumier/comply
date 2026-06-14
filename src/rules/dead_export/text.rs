@@ -47,6 +47,15 @@
 //!     filename convention at build time, so it never has a static importer.
 //!     The whole file is treated as a framework entry point. The leading
 //!     underscore is required: an ordinary `meta.ts` stays subject to the rule.
+//!   - Docusaurus theme swizzle and plugin `default` exports — when Docusaurus
+//!     is detected for the file (root or nearest package.json), a component
+//!     under a `src/theme/` directory and a plugin `index.{ts,js}` directly
+//!     inside a `plugins/<name>/` directory have their `default` export
+//!     consumed by Docusaurus's theme system / config-driven plugin loader by
+//!     path convention, never through a static import. Only `default` is magic
+//!     and only when Docusaurus is detected, so named exports and non-Docusaurus
+//!     projects stay subject to the rule. (`knip.ts`/`knip.js` are handled by
+//!     the shared `is_config_file` predicate alongside `knip.config.*`.)
 //!   - Serverless `handler` exports under a `functions/` directory — a file in
 //!     the per-function layout AWS Lambda / SST / Cloudflare Workers / Vercel
 //!     Edge use exports `handler`, which the cloud runtime invokes through the
@@ -3175,5 +3184,120 @@ mod tests {
             "a `Layout` export in a non-convention module must still be flagged: {diags:?}"
         );
         assert!(diags[0].message.contains("Layout"));
+    }
+
+    #[test]
+    fn ignores_docusaurus_theme_swizzle_default_export_issue_1558() {
+        // Regression for #1558 — a Docusaurus theme override under `src/theme/`
+        // is discovered by the theme system through its path and webpack theme
+        // aliases, never a static import, so its `default` export looks dead.
+        // Entrypoints are configured to disable the framework-dir bail-out, so
+        // only the per-export magic-export path can protect it.
+        let pkg = r#"{ "dependencies": { "@docusaurus/core": "3.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/theme/MDXComponents/index.tsx",
+                "export default function MDXComponents() { return null; }\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg_and_entrypoints(
+            pkg,
+            vec!["src/server.ts".to_string()],
+            &files,
+            "src/theme/MDXComponents/index.tsx",
+        );
+        assert!(
+            diags.is_empty(),
+            "Docusaurus theme swizzle default export must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_docusaurus_plugin_default_export_issue_1558() {
+        // Regression for #1558 — a Docusaurus local plugin (`plugins/*/index.ts`)
+        // is loaded by the path string in `docusaurus.config`, calling its
+        // `default` export, never a static import.
+        let pkg = r#"{ "dependencies": { "@docusaurus/core": "3.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "plugins/recent-blog-posts/index.ts",
+                "export default function recentBlogPostsPlugin() { return {}; }\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) =
+            run_on_project_with_pkg(Some(pkg), &files, "plugins/recent-blog-posts/index.ts");
+        assert!(
+            diags.is_empty(),
+            "Docusaurus plugin default export must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_knip_config_default_export_issue_1558() {
+        // Regression for #1558 — `knip.ts` exports its config as `export default`;
+        // the Knip tool reads the file by name and never `import`s it.
+        let files: Vec<(&str, &str)> = vec![
+            ("knip.ts", "export default { entry: ['src/index.ts'] };\n"),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "knip.ts");
+        assert!(
+            diags.is_empty(),
+            "knip.ts config default export must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_theme_default_export_in_non_docusaurus_project_issue_1558() {
+        // Negative-space guard for #1558 — the theme exemption is gated on
+        // Docusaurus detection. A `src/theme/` default export in a project with
+        // no Docusaurus dependency is genuinely dead and must still be flagged.
+        let pkg = r#"{ "dependencies": { "react": "18.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/theme/Foo.tsx",
+                "export default function Foo() { return null; }\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/theme/Foo.tsx");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a theme default export in a non-Docusaurus project must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("default"));
+    }
+
+    #[test]
+    fn still_flags_named_export_in_docusaurus_theme_file_issue_1558() {
+        // Negative-space guard for #1558 — only the `default` export of a theme
+        // swizzle is magic. A plain named export in the same file, with no
+        // importer, is genuinely dead and must still be flagged. Entrypoints are
+        // configured to disable the framework-dir bail-out so the per-export
+        // check is what decides.
+        let pkg = r#"{ "dependencies": { "@docusaurus/core": "3.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/theme/MDXComponents/index.tsx",
+                "export default function MDXComponents() { return null; }\n\
+                 export const unusedHelper = () => 1;\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg_and_entrypoints(
+            pkg,
+            vec!["src/server.ts".to_string()],
+            &files,
+            "src/theme/MDXComponents/index.tsx",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "a named export in a Docusaurus theme file must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("unusedHelper"));
     }
 }
