@@ -46,6 +46,15 @@ impl OxcCheck for Check {
         if result_consumed_by_optional_access(node, semantic) {
             return;
         }
+
+        // jest/vitest mock-introspection arrays — `<spy>.mock.calls[0]`,
+        // `.mock.results[0]`, `.mock.instances[0]` (and a further index into a
+        // call entry, `.mock.calls[0][1]`). These arrays are framework-managed
+        // test structures; indexing them is the idiomatic way to read a recorded
+        // call/result, not an unguarded out-of-bounds read on user data.
+        if object_is_mock_introspection_array(&member.object) {
+            return;
+        }
         let source = ctx.source;
 
         // Only flag when object is a plain identifier or member expression chain
@@ -174,6 +183,39 @@ fn expr_text<'a>(expr: &'a Expression, source: &'a str) -> &'a str {
     let start = expr.span().start as usize;
     let end = expr.span().end as usize;
     &source[start..end]
+}
+
+/// Names of the jest/vitest mock-introspection arrays hung off `<spy>.mock`.
+const MOCK_INTROSPECTION_ARRAYS: [&str; 3] = ["calls", "results", "instances"];
+
+/// Returns true when `object` is (or is a further index into) a jest/vitest
+/// mock-introspection array — a member chain ending in `.mock.calls`,
+/// `.mock.results`, or `.mock.instances`. Indexing these framework-managed
+/// arrays (`spy.mock.calls[0]`, and a nested `spy.mock.calls[0][1]` into a call
+/// entry) is an idiomatic test read, not an unguarded out-of-bounds access.
+///
+/// Recognized structurally on the AST so it never matches a project-specific
+/// identifier: any number of trailing computed accesses are peeled off first
+/// (covers `.mock.calls[0]` being indexed again), then the underlying static
+/// member chain must read `<expr>.mock.<calls|results|instances>`.
+fn object_is_mock_introspection_array(object: &Expression) -> bool {
+    let mut current = object;
+    // Peel trailing computed accesses (`...[0]`, `...[0][1]`) to reach the
+    // static `.mock.<array>` chain underneath.
+    while let Expression::ComputedMemberExpression(computed) = current {
+        current = &computed.object;
+    }
+    let Expression::StaticMemberExpression(array_member) = current else {
+        return false;
+    };
+    if !MOCK_INTROSPECTION_ARRAYS.contains(&array_member.property.name.as_str()) {
+        return false;
+    }
+    matches!(
+        &array_member.object,
+        Expression::StaticMemberExpression(mock_member)
+            if mock_member.property.name.as_str() == "mock"
+    )
 }
 
 /// Byte offset of the opening `[` of a computed access. The bracket sits after
@@ -1286,10 +1328,10 @@ mod tests {
 
     #[test]
     fn no_duplicate_positions_on_chained_index_issue_1067() {
-        // `calls[0][0][0]` is three computed accesses; each is a real unchecked
+        // `rows[0][0][0]` is three computed accesses; each is a real unchecked
         // read, but they must land on distinct positions (their own `[`), not
         // collapse onto the chain start.
-        let diags = run_on("const lgs = exportStub.mock.calls[0][0][0];");
+        let diags = run_on("const lgs = rows[0][0][0];");
         assert_eq!(diags.len(), 3);
         let mut positions: Vec<(usize, usize)> =
             diags.iter().map(|d| (d.line, d.column)).collect();
@@ -1344,6 +1386,54 @@ mod tests {
     fn still_flags_switch_on_other_array_length_issue_1602() {
         // `switch (other.length)` guards `other`, not `arr`.
         let src = "function f(arr, other) { switch (other.length) { case 1: return arr[0]; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_mock_calls_index0_issue_2386() {
+        // `<spy>.mock.calls[0]` is a jest/vitest mock-introspection array read.
+        let src = "const arg = myMock.mock.calls[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_mock_calls_nested_index_issue_2386() {
+        // The issue's exact pattern: `<spy>.mock.calls[0][1]` indexes a recorded
+        // call's argument list — both computed accesses are exempt.
+        let src = "const arg = myMock.mock.calls[0][1];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_mock_results_index0_issue_2386() {
+        let src = "const r = fn.mock.results[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_mock_instances_index0_issue_2386() {
+        let src = "const inst = fn.mock.instances[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_mock_calls_on_member_receiver_issue_2386() {
+        // The issue's source line: the spy is itself a member chain.
+        let src = "expect(driverAdapter.executeRawMock.mock.calls[0][0].sql).toEqual('COMMIT');";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_plain_array_index0_issue_2386() {
+        // Negative space: an ordinary array read stays flagged.
+        let src = "const x = someArray[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_calls_not_under_mock_issue_2386() {
+        // Negative space: `calls` not hung off `.mock` is an ordinary array.
+        let src = "const x = obj.calls[0];";
         assert_eq!(run_on(src).len(), 1);
     }
 }
