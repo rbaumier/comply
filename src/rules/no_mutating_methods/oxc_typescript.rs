@@ -40,7 +40,7 @@ impl OxcCheck for Check {
         if !MUTATING.contains(&name) {
             return;
         }
-        if name == "fill" && is_non_array_fill(member, call, ctx) {
+        if name == "fill" && is_non_array_fill(member, call, ctx, semantic) {
             return;
         }
         if name == "push" && is_router_navigation(member, semantic) {
@@ -107,13 +107,21 @@ impl OxcCheck for Check {
 ///   is a Playwright/Locator interaction, not an array literal;
 /// - any `.fill(...)` inside a test/spec file is a Playwright/Cypress locator
 ///   fill (`label.fill(text)`), where the receiver type cannot be recovered
-///   without type information.
+///   without type information;
+/// - a bare-identifier receiver (`field.fill("12")`) is treated as
+///   `Array.prototype.fill` only when the binding is array-evident — its
+///   initialiser is an array literal, `new Array(...)`, or an array-returning
+///   call (`.map`/`.filter`/`.slice`/`.concat`/`Array.from`). A receiver bound
+///   to an arbitrary member-chain such as a Playwright `Locator`
+///   (`const field = page.getByLabel(...)`) is not array-evident, so the
+///   single-argument `field.fill(value)` is a Locator interaction.
 fn is_non_array_fill(
     member: &oxc_ast::ast::StaticMemberExpression,
     call: &oxc_ast::ast::CallExpression,
     ctx: &CheckCtx,
+    semantic: &oxc_semantic::Semantic,
 ) -> bool {
-    call.arguments.is_empty()
+    if call.arguments.is_empty()
         || matches!(
             &member.object,
             Expression::CallExpression(_)
@@ -121,6 +129,46 @@ fn is_non_array_fill(
                 | Expression::ComputedMemberExpression(_)
         )
         || ctx.file.path_segments.in_test_dir
+    {
+        return true;
+    }
+    // A single-argument `.fill(value)` on a bare identifier is an
+    // `Array.prototype.fill` mutation only when the binding is array-evident;
+    // otherwise the receiver is an opaque value (e.g. a Playwright `Locator`).
+    if let Expression::Identifier(receiver) = &member.object {
+        return !receiver_initializer(receiver, semantic).is_some_and(is_array_evident_initializer);
+    }
+    false
+}
+
+/// `true` when `expr` proves its value is an array: an array literal (`[...]`,
+/// `[]`), a `new Array(...)` construction, or an array-returning call
+/// (`x.map(...)`, `x.filter(...)`, `x.slice(...)`, `x.concat(...)`,
+/// `Array.from(...)`, `Array.of(...)`).
+fn is_array_evident_initializer(expr: &Expression) -> bool {
+    if is_array_initializer(expr) {
+        return true;
+    }
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    match &call.callee {
+        Expression::StaticMemberExpression(member) => {
+            let method = member.property.name.as_str();
+            if matches!(
+                &member.object,
+                Expression::Identifier(id) if id.name.as_str() == "Array"
+            ) {
+                return matches!(method, "from" | "of");
+            }
+            matches!(
+                method,
+                "map" | "filter" | "slice" | "concat" | "flat" | "flatMap" | "toSorted"
+                    | "toReversed" | "toSpliced" | "fill"
+            )
+        }
+        _ => false,
+    }
 }
 
 /// True when a `.push(...)` call is a router/history navigation, not an
@@ -372,6 +420,42 @@ mod tests {
         // `arr.fill(0)` array mutation with a value, in a non-test file,
         // must still be flagged.
         assert_eq!(run_at("const arr = new Array(3); arr.fill(0);", "src/util.ts").len(), 1);
+    }
+
+    #[test]
+    fn ignores_playwright_locator_fill_via_bare_variable() {
+        // Regression for rbaumier/comply#3001 — `rfaField.fill("12")` where
+        // `rfaField` is a Playwright Locator bound to `page.getByLabel(...)`.
+        // The receiver is not array-evident (member-chain initialiser), so the
+        // single-arg `.fill(value)` must not be flagged as Array.prototype.fill,
+        // even outside a recognised test directory.
+        let src = r#"
+            function editRfa(page) {
+                const rfaField = page.getByLabel("RFA (%)");
+                rfaField.fill("12");
+            }
+        "#;
+        assert!(run_at(src, "src/page-objects/lab.ts").is_empty());
+    }
+
+    #[test]
+    fn ignores_playwright_locator_fill_via_locator_variable() {
+        // Regression for rbaumier/comply#3001 — `locator.fill("text")` where the
+        // binding initialiser is `page.locator(...)`.
+        let src = r##"
+            function typeInto(page) {
+                const locator = page.locator("#input");
+                locator.fill("text");
+            }
+        "##;
+        assert!(run_at(src, "src/helpers/forms.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_fill_on_local_array_variable() {
+        // Negative space for rbaumier/comply#3001 — a genuine array fill on a
+        // module-scope array literal binding stays flagged.
+        assert_eq!(run_at("const arr = [1, 2, 3]; arr.fill(0);", "src/util.ts").len(), 1);
     }
 
     #[test]
