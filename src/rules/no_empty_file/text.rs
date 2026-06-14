@@ -47,6 +47,18 @@ impl TextCheck for Check {
             if name == "lib.rs" || name == "main.rs" {
                 return Vec::new();
             }
+        } else {
+            // An empty `index.{ts,tsx,js,jsx,mjs,cts,mts}` is the barrel/entry
+            // placeholder convention: a package or workspace-project entry point
+            // declared up front, meant to re-export (or be populated by the
+            // build), and intentionally empty in source control. Exempting it
+            // by the `index` stem covers package.json `main`/`exports` barrels
+            // and tool-config entry points (e.g. Nx `project.json` `main`) alike
+            // without special-casing any one build tool.
+            let stem = ctx.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if stem == "index" {
+                return Vec::new();
+            }
         }
         if !is_empty(ctx.source) {
             return Vec::new();
@@ -105,6 +117,25 @@ mod tests {
     #[test]
     fn flags_triple_slash_only() {
         assert_eq!(run("/// <reference types=\"vite/client\" />").len(), 1);
+    }
+
+    #[test]
+    fn empty_index_barrel_not_flagged() {
+        // Issue #2285: an empty `index.ts` is an intentional barrel/entry
+        // placeholder (Nx project entry, package barrel populated by the build).
+        let diags = Check.check(&CheckCtx::for_test(
+            Path::new("modules/schematics/src/index.ts"),
+            "",
+        ));
+        assert_eq!(diags.len(), 0);
+    }
+
+    #[test]
+    fn empty_non_index_source_still_flagged() {
+        // Negative space: an empty non-index source file has no entry role and
+        // is a forgotten-file smell.
+        let diags = Check.check(&CheckCtx::for_test(Path::new("src/service.ts"), ""));
+        assert_eq!(diags.len(), 1);
     }
 
     #[test]
