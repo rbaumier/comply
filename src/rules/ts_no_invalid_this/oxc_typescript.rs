@@ -216,6 +216,54 @@ fn is_cypress_callback(
     is_cypress_chain(&member.object)
 }
 
+/// Chai plugin-registration methods. Each invokes its registered function with
+/// `this` bound to the `chai.Assertion` instance, so `this` in the function body
+/// is the documented Chai plugin API.
+const CHAI_REGISTRATION_METHODS: &[&str] = &[
+    "addMethod", "addProperty", "overwriteMethod", "overwriteProperty",
+];
+
+/// True when `expr` is a `chai.Assertion` receiver — either the bare `Assertion`
+/// identifier or a member access ending in `.Assertion` (e.g. `chai.Assertion`).
+/// This is the object on which Chai's plugin-registration methods are called.
+fn is_chai_assertion_receiver(expr: &Expression) -> bool {
+    match expr {
+        Expression::Identifier(ident) => ident.name == "Assertion",
+        Expression::StaticMemberExpression(member) => member.property.name == "Assertion",
+        _ => false,
+    }
+}
+
+/// True when `func_id` is a `function` expression passed as an argument to a Chai
+/// plugin-registration call (`chai.Assertion.addMethod(name, function () {...})`,
+/// `Assertion.overwriteProperty(...)`, …). Chai invokes the registered function
+/// with `this` bound to the Assertion instance, so `this` inside the body is the
+/// documented plugin API and is valid.
+fn is_chai_registration_callback(
+    func_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let parent_id = nodes.parent_id(func_id);
+    let call = match nodes.kind(parent_id) {
+        AstKind::CallExpression(call) => call,
+        _ => {
+            let gp_id = nodes.parent_id(parent_id);
+            let AstKind::CallExpression(call) = nodes.kind(gp_id) else {
+                return false;
+            };
+            call
+        }
+    };
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    if !CHAI_REGISTRATION_METHODS.contains(&member.property.name.as_str()) {
+        return false;
+    }
+    is_chai_assertion_receiver(&member.object)
+}
+
 /// True when `name` follows the constructor-function convention (starts with an
 /// uppercase ASCII letter, e.g. `Suspense`, `Component`). Such functions are
 /// conventionally invoked with `new`, so `this` is the new instance.
@@ -307,6 +355,14 @@ fn is_valid_this_context(
                 // to `this` (`this.alias` from a prior `.as('alias')`), so
                 // `this` is valid.
                 if is_cypress_callback(ancestor.id(), semantic) {
+                    return true;
+                }
+                // Chai plugin registration: a `function` passed to
+                // `chai.Assertion.addMethod`/`addProperty`/`overwriteMethod`/
+                // `overwriteProperty` is invoked with `this` bound to the
+                // Assertion instance — the documented plugin API — so `this`
+                // is valid.
+                if is_chai_registration_callback(ancestor.id(), semantic) {
                     return true;
                 }
                 // Constructor function: a PascalCase `function`, or one
@@ -614,6 +670,47 @@ mod tests {
         // Negative: a JSDoc block without `@type`/`@this` does not declare a
         // `this` context, so a stray `this` must still fire.
         let diags = run_on("/** Does a thing. @param value - input */\nexport function equals(value) {\n  return value === this.v;\n}");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_chai_add_method_callback() {
+        // Regression for #1549: Chai binds the Assertion instance to `this`
+        // inside a `function` passed to `chai.Assertion.addMethod(...)`.
+        let src = "chai.Assertion.addMethod('x', function () {\n  return this._obj;\n});";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_chai_overwrite_property_callback() {
+        // Regression for #1549: the other Chai plugin-registration methods
+        // (`addProperty`/`overwriteMethod`/`overwriteProperty`) and a bare
+        // `Assertion` receiver bind `this` the same way.
+        let src = "Assertion.overwriteProperty('ok', function () {\n  return this.assert(this._obj);\n});";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_free_function_at_module_scope() {
+        // Negative-space guard for #1549: a free `function` at module scope is
+        // not a Chai registration callback — `this` is unbound and must fire.
+        let diags = run_on("function f() {\n  return this.x;\n}");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_this_in_array_foreach_callback() {
+        // Negative-space guard for #1549: a bare `function` passed to `forEach`
+        // is a genuine invalid-this — the Chai allowance must not leak to it.
+        let diags = run_on("[1].forEach(function () {\n  return this.x;\n});");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_this_in_non_assertion_add_method_callback() {
+        // Negative-space guard for #1549: `addMethod` on a non-Assertion
+        // receiver is not the Chai API — `this` stays unbound and must fire.
+        let diags = run_on("registry.addMethod('x', function () {\n  return this._obj;\n});");
         assert_eq!(diags.len(), 1);
     }
 
