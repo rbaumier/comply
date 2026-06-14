@@ -6,6 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::is_in_test_context;
 use std::path::{Path, PathBuf};
 
 const KINDS: &[&str] = &["enum_item"];
@@ -30,6 +31,20 @@ impl AstCheck for Check {
             return;
         }
         if has_non_exhaustive(node, source_bytes) {
+            return;
+        }
+        // Test-helper enum: `#[non_exhaustive]` would force wildcard match
+        // arms in tests, defeating exhaustiveness checking. Not an external API.
+        if is_in_test_context(node, source_bytes) {
+            return;
+        }
+        // Binary-only crate (no `[lib]` target): no external consumers, so
+        // adding a variant is never a SemVer break.
+        if ctx
+            .project
+            .nearest_cargo_manifest(ctx.path)
+            .is_some_and(|m| m.is_binary_only())
+        {
             return;
         }
         if is_internal_crate(ctx.path) {
@@ -76,16 +91,6 @@ fn is_internal_crate(path: &Path) -> bool {
         return true;
     }
     if publish_is_disabled(&value) {
-        return true;
-    }
-
-    // Binary-only crate: no [lib] section in Cargo.toml AND no src/lib.rs
-    // (Cargo auto-detects src/lib.rs as the default library target when [lib] is absent).
-    let has_lib_section = value.get("lib").is_some_and(toml::Value::is_table);
-    let has_lib_rs = manifest
-        .parent()
-        .map_or(false, |root| root.join("src/lib.rs").is_file());
-    if !has_lib_section && !has_lib_rs {
         return true;
     }
 
@@ -282,19 +287,35 @@ mod tests {
     }
 
     #[test]
-    fn treats_binary_only_crate_as_internal() {
+    fn does_not_flag_pub_enum_in_binary_only_crate() {
+        // #1469: a binary-only crate (no `[lib]`, no `src/lib.rs`) has no
+        // external consumers, so a bare `pub enum` is not a SemVer concern.
+        // Detection reuses the central `CargoManifest::is_binary_only` lever.
         let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
         fs::write(
             dir.path().join("Cargo.toml"),
-            "[package]\nname = \"mybin\"\nversion = \"0.1.0\"\n[[bin]]\nname = \"mybin\"\npath = \"src/main.rs\"\n",
+            "[package]\nname = \"mytool\"\nversion = \"0.1.0\"\n[[bin]]\nname = \"mytool\"\npath = \"src/main.rs\"\n",
         )
         .unwrap();
+        let src_path = dir.path().join("src/config.rs");
+        let source = "pub enum Either<L, R> { Left(L), Right(R) }";
+        fs::write(&src_path, source).unwrap();
 
-        assert!(is_internal_crate(&dir.path().join("src/main.rs")));
+        assert!(crate::rules::test_helpers::run_rule(&Check, source, &src_path).is_empty());
     }
 
     #[test]
-    fn treats_lib_crate_without_explicit_lib_section_as_external() {
+    fn does_not_flag_pub_enum_in_cfg_test_module() {
+        // #1469: a `pub enum` inside a `#[cfg(test)]` module is a test helper —
+        // `#[non_exhaustive]` would force wildcard arms and weaken exhaustiveness
+        // checking in tests.
+        let source = "#[cfg(test)]\nmod tests {\n    pub enum FixtureProvider { Git, Hg }\n}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn treats_standalone_published_crate_as_external() {
         let dir = TempDir::new().unwrap();
         fs::write(
             dir.path().join("Cargo.toml"),

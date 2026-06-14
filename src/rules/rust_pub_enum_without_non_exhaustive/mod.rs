@@ -6,9 +6,10 @@
 //! crates are forced from day one to write `_ => …`, so the next
 //! variant you add doesn't break their build.
 //!
-//! This is a library hygiene rule. For binaries you don't ship as
-//! a crate, the constraint doesn't apply — suppress with
-//! `// comply-ignore` on the line above the enum.
+//! This is a library hygiene rule, so it only fires for published
+//! library crates. Binary-only crates (no `[lib]` target), crates with
+//! `publish = false`, and enums in a test context (`#[cfg(test)]`) are
+//! exempt — none of them expose a SemVer-bound public API.
 
 mod rust;
 
