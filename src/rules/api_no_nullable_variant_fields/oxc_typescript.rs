@@ -25,6 +25,19 @@ fn leading_prefix(name: &str) -> String {
     buf
 }
 
+/// Prefix buckets that name a React/UI concept rather than a state
+/// machine, so a cluster sharing one is a semantic grouping, not an
+/// optional-flag state encoding:
+/// - `defa` — idiomatic uncontrolled-component props (`defaultValue`,
+///   `defaultActiveId`, `defaultChecked`, `defaultOpen`): independent
+///   initial-state props, not mutually-exclusive variants.
+/// - `ente` / `leav` — Headless UI / Tailwind animation phases
+///   (`enter`/`enterFrom`/`enterTo`, `leave`/`leaveFrom`/`leaveTo`):
+///   all apply simultaneously to describe one transition.
+fn is_semantic_grouping_prefix(prefix: &str) -> bool {
+    matches!(prefix, "defa" | "ente" | "leav")
+}
+
 fn collect_optional_prefixes(members: &oxc_allocator::Vec<'_, oxc_ast::ast::TSSignature<'_>>) -> HashMap<String, usize> {
     let mut counts: HashMap<String, usize> = HashMap::new();
     for member in members.iter() {
@@ -48,6 +61,9 @@ fn collect_optional_prefixes(members: &oxc_allocator::Vec<'_, oxc_ast::ast::TSSi
         };
         let prefix = leading_prefix(name);
         if prefix.len() < 4 {
+            continue;
+        }
+        if is_semantic_grouping_prefix(&prefix) {
             continue;
         }
         *counts.entry(prefix).or_insert(0) += 1;
@@ -155,6 +171,47 @@ mod tests {
         // state flag, so the cluster heuristic must skip it.
         let src = "type Phantom = { page?: never; pageSize?: never; q?: never; sort?: never };";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_default_prefixed_react_props() {
+        // Regression for #1786: `default*` props are the idiomatic React
+        // uncontrolled-component API (`defaultValue`, `defaultActiveId`),
+        // independent initial-state props, not a state-variant cluster.
+        let src = r#"export interface AccordionProps {
+  children?: React.ReactNode
+  className?: string
+  defaultActiveId?: (string | number)[]
+  onChange?: (item: string | string[]) => void
+  openBehaviour: 'single' | 'multiple'
+  defaultValue?: string | string[] | undefined
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_animation_phase_groupings() {
+        // Regression for #1786: Headless UI / Tailwind animation phases
+        // (`enter`/`enterFrom`/`enterTo`, `leave`/`leaveFrom`/`leaveTo`)
+        // all apply simultaneously to describe one transition, not
+        // mutually-exclusive state variants.
+        let src = r#"export interface AnimationTailwindClasses {
+  enter?: string
+  enterFrom?: string
+  enterTo?: string
+  leave?: string
+  leaveFrom?: string
+  leaveTo?: string
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_genuine_state_cluster() {
+        // The exemption is prefix-specific: a real optional-flag state
+        // cluster must still be flagged.
+        let src = "interface Order { id: string; shipReason?: string; shipmentAt?: string }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
