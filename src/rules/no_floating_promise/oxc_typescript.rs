@@ -51,7 +51,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        let is_flag = is_promise_combinator(call) || is_async_looking_member_call(call);
+        let is_flag = is_promise_combinator(call) || is_async_looking_member_call(call, ctx);
         if !is_flag {
             return;
         }
@@ -123,7 +123,7 @@ fn is_promise_combinator(call: &CallExpression) -> bool {
 }
 
 /// Is the callee a member whose method name is in the async-looking list?
-fn is_async_looking_member_call(call: &CallExpression) -> bool {
+fn is_async_looking_member_call(call: &CallExpression, ctx: &CheckCtx) -> bool {
     let Expression::StaticMemberExpression(member) = &call.callee else {
         return false;
     };
@@ -145,8 +145,21 @@ fn is_async_looking_member_call(call: &CallExpression) -> bool {
     if is_audio_node_connect(call, member) {
         return false;
     }
+    if is_better_sqlite3_sync_method(member, ctx) {
+        return false;
+    }
     let method = member.property.name.as_str();
     ASYNC_LOOKING_METHODS.contains(&method)
+}
+
+/// better-sqlite3 is a fully synchronous library: `Statement.run()` returns a
+/// `RunResult` and `Database.exec()` returns the `Database` — never a Promise.
+/// These are the only two heuristic-listed method names the library exposes, so
+/// in a file that imports `better-sqlite3` a statement-level `.run()` / `.exec()`
+/// call is synchronous and must not be flagged.
+fn is_better_sqlite3_sync_method(member: &StaticMemberExpression, ctx: &CheckCtx) -> bool {
+    matches!(member.property.name.as_str(), "run" | "exec")
+        && ctx.source_contains("better-sqlite3")
 }
 
 /// RxJS `TestScheduler.prototype.flush()` runs all scheduled virtual-time
@@ -821,6 +834,57 @@ scheduler.flush();
         // Negative-space guard: `.flush(...)` with an argument is not the
         // `flush(): void` scheduler signature, so it stays flagged.
         let d = run_on("buffer.flush(chunk);");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression tests for issue #2391: better-sqlite3 is a fully synchronous
+    // library — its `Statement.run()` and `Database.exec()` return non-Promise
+    // values. When a file imports `better-sqlite3`, these statement-level calls
+    // must not be flagged.
+
+    #[test]
+    fn allows_better_sqlite3_sync_methods() {
+        // The issue's exact examples from prisma's better-sqlite3 adapter.
+        let src = "\
+import Database from 'better-sqlite3';
+
+class Adapter {
+  executeScript(script: string): Promise<void> {
+    this.client.exec(script);
+    return Promise.resolve();
+  }
+
+  async startTransaction(): Promise<void> {
+    this.client.prepare('BEGIN').run();
+  }
+
+  runStatement(stmt: Statement): void {
+    stmt.run();
+  }
+}
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_floating_promise_without_better_sqlite3_import() {
+        // Negative-space guard: the same `.run()` / `.exec()` names stay flagged
+        // in a file that does not import better-sqlite3.
+        let d = run_on("job.run();");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_genuine_floating_promise_in_better_sqlite3_file() {
+        // Negative-space guard: only the better-sqlite3 synchronous method names
+        // (`run`, `exec`) are exempted — a genuine Promise-returning call (e.g.
+        // `repo.save(...)`) in the same file stays flagged.
+        let src = "\
+import Database from 'better-sqlite3';
+
+repo.save(entity);
+";
+        let d = run_on(src);
         assert_eq!(d.len(), 1);
     }
 }
