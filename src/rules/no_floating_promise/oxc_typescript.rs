@@ -1124,4 +1124,27 @@ class ExampleComponent {
         let d = run_on("api.fetch(url);");
         assert_eq!(d.len(), 1);
     }
+
+    // Regression test for issue #2116: the `.sync` suffix is the synchronous
+    // counterpart of an async API (`execa.sync()`), returns a plain value, and
+    // must not be flagged.
+
+    #[test]
+    fn allows_execa_sync() {
+        let src = "\
+execa.sync('yarn', ['link', '--private', '--all', rootDirectory], {
+  cwd,
+  stdio: 'inherit',
+});
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_genuine_floating_promise_after_sync_removed() {
+        // Negative-space guard: an async-dominant method name still in the
+        // heuristic (`fetch`) used as a statement stays flagged.
+        let d = run_on("api.fetch(url);");
+        assert_eq!(d.len(), 1);
+    }
 }
