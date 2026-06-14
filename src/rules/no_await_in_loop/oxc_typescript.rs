@@ -1,11 +1,12 @@
 //! no-await-in-loop OXC backend — flag `await` inside a loop body, but
 //! exempt recursive calls to the enclosing async function (deliberate
-//! depth-first traversal).
+//! depth-first traversal) and retry/polling loops that exit early on a
+//! result and pace themselves with a delay/backoff `await`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BindingPattern, Expression, PropertyKey};
+use oxc_ast::ast::{BindingPattern, Expression, PropertyKey, Statement};
 use oxc_span::{GetSpan, Span};
 use std::sync::Arc;
 
@@ -71,6 +72,104 @@ fn await_in_loop_header(loop_kind: &AstKind, await_span: Span) -> bool {
     }
 }
 
+/// Whether an awaited call targets a delay/backoff primitive — `delay`,
+/// `sleep`, `wait`, `setTimeout`, or `setInterval`, called bare or as a
+/// member (`timers.setTimeout`, `this.sleep`). An `await` on one of these
+/// is sequential pacing (polling/backoff), not parallelizable work.
+fn is_delay_await(arg: &Expression) -> bool {
+    let Expression::CallExpression(call) = arg else {
+        return false;
+    };
+    let name = match &call.callee {
+        Expression::Identifier(id) => id.name.as_str(),
+        Expression::StaticMemberExpression(member) => member.property.name.as_str(),
+        _ => return false,
+    };
+    matches!(name, "delay" | "sleep" | "wait" | "setTimeout" | "setInterval")
+}
+
+/// Whether an expression statement is `await <delay-call>`.
+fn stmt_is_delay_await(stmt: &Statement) -> bool {
+    let Statement::ExpressionStatement(expr_stmt) = stmt else {
+        return false;
+    };
+    let Expression::AwaitExpression(await_expr) = &expr_stmt.expression else {
+        return false;
+    };
+    is_delay_await(&await_expr.argument)
+}
+
+/// Recursively scan the statements of a loop body, recording whether it
+/// contains an early exit (`return`/`break`) and a delay/backoff `await`.
+/// Nested loops and nested functions are not descended into — their
+/// statements belong to a different iteration context.
+fn scan_retry_signals(stmt: &Statement, has_exit: &mut bool, has_delay: &mut bool) {
+    if stmt_is_delay_await(stmt) {
+        *has_delay = true;
+    }
+    match stmt {
+        Statement::ReturnStatement(_) | Statement::BreakStatement(_) => {
+            *has_exit = true;
+        }
+        Statement::BlockStatement(block) => {
+            for s in &block.body {
+                scan_retry_signals(s, has_exit, has_delay);
+            }
+        }
+        Statement::IfStatement(if_stmt) => {
+            scan_retry_signals(&if_stmt.consequent, has_exit, has_delay);
+            if let Some(alt) = &if_stmt.alternate {
+                scan_retry_signals(alt, has_exit, has_delay);
+            }
+        }
+        Statement::TryStatement(t) => {
+            for s in &t.block.body {
+                scan_retry_signals(s, has_exit, has_delay);
+            }
+            if let Some(h) = &t.handler {
+                for s in &h.body.body {
+                    scan_retry_signals(s, has_exit, has_delay);
+                }
+            }
+            if let Some(f) = &t.finalizer {
+                for s in &f.body {
+                    scan_retry_signals(s, has_exit, has_delay);
+                }
+            }
+        }
+        Statement::LabeledStatement(l) => scan_retry_signals(&l.body, has_exit, has_delay),
+        Statement::SwitchStatement(sw) => {
+            for case in &sw.cases {
+                for s in &case.consequent {
+                    scan_retry_signals(s, has_exit, has_delay);
+                }
+            }
+        }
+        // Nested loops / functions start a fresh iteration or async context;
+        // their bodies are not part of this loop's per-iteration shape.
+        _ => {}
+    }
+}
+
+/// Whether a loop is a retry/polling loop that is sequential by design:
+/// its body both exits early on a result (`return`/`break`) and paces
+/// itself with a delay/backoff `await`. Such a loop cannot be rewritten as
+/// `Promise.all` — each iteration depends on the previous attempt's outcome.
+fn is_retry_polling_loop(loop_kind: &AstKind) -> bool {
+    let body = match loop_kind {
+        AstKind::ForStatement(stmt) => &stmt.body,
+        AstKind::ForOfStatement(stmt) => &stmt.body,
+        AstKind::ForInStatement(stmt) => &stmt.body,
+        AstKind::WhileStatement(stmt) => &stmt.body,
+        AstKind::DoWhileStatement(stmt) => &stmt.body,
+        _ => return false,
+    };
+    let mut has_exit = false;
+    let mut has_delay = false;
+    scan_retry_signals(body, &mut has_exit, &mut has_delay);
+    has_exit && has_delay
+}
+
 /// Walk ancestors of the `await` looking for a loop boundary. Stops at
 /// function boundaries (a nested `async` function starts a fresh
 /// context — its awaits are not "in" the outer loop). Returns the name
@@ -105,6 +204,12 @@ fn enclosing_loop_and_fn_name<'a>(
             | AstKind::WhileStatement(_)
             | AstKind::DoWhileStatement(_)) => {
                 if !await_in_loop_header(&kind, await_span) {
+                    // Retry/polling exemption: the nearest enclosing loop
+                    // exits early on a result and paces itself with a delay —
+                    // it is sequential by design and cannot be parallelized.
+                    if !saw_loop && is_retry_polling_loop(&kind) {
+                        return None;
+                    }
                     saw_loop = true;
                 }
             }

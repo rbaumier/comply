@@ -340,6 +340,98 @@ mod tests {
         assert_eq!(run(src).len(), 1);
     }
 
+    /// Regression for #1258 — a retry/polling loop (Lemmy `waitUntil`) that
+    /// exits early on a successful result and paces itself with `await delay(...)`
+    /// is sequential by design. Neither the `await fetcher()` nor the
+    /// `await delay(...)` may be flagged — `Promise.all` is impossible here.
+    #[test]
+    fn ignores_retry_polling_loop() {
+        let src = r"
+            async function waitUntil(fetcher: any, checker: any, retries: number, delaySeconds: number) {
+                let retry = 0;
+                let result;
+                while (retry++ < retries) {
+                    try {
+                        result = await fetcher();
+                        if (checker(result)) return result;
+                    } catch (error) {
+                        console.error(error);
+                    }
+                    await delay(delaySeconds * 1000);
+                }
+                throw Error(`Failed after ${retries} retries`);
+            }
+        ";
+        assert!(run(src).is_empty());
+    }
+
+    /// Companion to #1258 — a counter-`for` retry loop with `break` on success
+    /// and an `await sleep(...)` backoff is equally sequential by design.
+    #[test]
+    fn ignores_retry_for_loop_with_break_and_sleep() {
+        let src = r"
+            async function fetchWithRetry(url: string, attempts: number) {
+                let result;
+                for (let i = 0; i < attempts; i++) {
+                    result = await fetch(url);
+                    if (result.ok) break;
+                    await sleep(1000);
+                }
+                return result;
+            }
+        ";
+        assert!(run(src).is_empty());
+    }
+
+    /// Negative space for #1258 — the retry exemption requires BOTH an early
+    /// exit AND a delay/backoff await. A plain collection iteration awaiting
+    /// each independent item (no delay, no early exit) is still the serial
+    /// anti-pattern and must fire.
+    #[test]
+    fn flags_independent_item_await_without_retry_signals() {
+        let src = r"
+            async function run(items: Item[]) {
+                for (const item of items) {
+                    await process(item);
+                }
+            }
+        ";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    /// Negative space for #1258 — an early-exit alone (no delay/backoff await)
+    /// does not make a loop sequential-by-design; awaiting an independent item
+    /// per iteration is still flaggable.
+    #[test]
+    fn flags_await_with_early_exit_but_no_delay() {
+        let src = r"
+            async function firstMatch(urls: string[]) {
+                for (const url of urls) {
+                    const r = await fetch(url);
+                    if (r.ok) return r;
+                }
+            }
+        ";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    /// Negative space for #1258 — a delay await alone (no early exit) does not
+    /// trigger the retry exemption. A rate-limited fan-out without a result-based
+    /// stop is still the serial anti-pattern target.
+    #[test]
+    fn flags_await_with_delay_but_no_early_exit() {
+        let src = r"
+            async function pacedFetch(urls: string[]) {
+                for (const url of urls) {
+                    await fetch(url);
+                    await delay(1000);
+                }
+            }
+        ";
+        // Two body awaits, neither exempted (no early exit) → two diagnostics.
+        assert_eq!(run(src).len(), 2);
+    }
+
     /// Regression for #366 — class property arrow function self-recursion via
     /// `this.method()` must be exempt (PropertyDefinition key recovery).
     #[test]
