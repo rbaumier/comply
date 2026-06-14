@@ -72,16 +72,23 @@ const BOOLEAN_PREFIXES: &[&str] = &[
     "loaded", "allow", "need", "must",
 ];
 
+// True when `name` follows the boolean-naming convention: a boolean prefix at a
+// camelCase boundary (e.g. `isSelected`, `hasFilters`) or the bare prefix word
+// (`is`, `has`). Requiring an uppercase letter after the prefix avoids matching
+// words that merely begin with the letters (`island`, `cancel`, `history`).
 fn has_boolean_prefix(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    BOOLEAN_PREFIXES.iter().any(|p| lower.starts_with(p))
+    BOOLEAN_PREFIXES.iter().any(|p| {
+        name.strip_prefix(p)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(|c: char| c.is_uppercase()))
+    })
 }
 
 // True when the operand can only evaluate to a boolean, so `expr && <X />`
 // cannot leak a literal `0`/`''`. Covers boolean-prefixed predicates (calls
 // like isError(), bare identifiers like withTimeBubble) plus syntactic forms
 // that are always boolean: comparison/relational binary expressions, logical
-// NOT (also covering `!!x`), and `typeof`.
+// NOT (also covering `!!x`), and `typeof`. A `&&`/`||` chain is boolean when
+// both operands are themselves boolean (`hasFilters && onClear !== undefined`).
 fn is_boolean_predicate(expr: &Expression) -> bool {
     match expr.without_parentheses() {
         Expression::CallExpression(call) => {
@@ -93,6 +100,12 @@ fn is_boolean_predicate(expr: &Expression) -> bool {
         }
         Expression::UnaryExpression(unary) => {
             unary.operator.is_not() || unary.operator.is_typeof()
+        }
+        Expression::LogicalExpression(logical) => {
+            use oxc_ast::ast::LogicalOperator;
+            matches!(logical.operator, LogicalOperator::And | LogicalOperator::Or)
+                && is_boolean_predicate(&logical.left)
+                && is_boolean_predicate(&logical.right)
         }
         _ => false,
     }
@@ -202,5 +215,33 @@ mod tests {
     fn allows_typeof_expression() {
         assert!(run_on("const x = <div>{typeof x === 'string' && <Box />}</div>;").is_empty());
         assert!(run_on("const x = <div>{typeof x && <Box />}</div>;").is_empty());
+    }
+
+    #[test]
+    fn allows_boolean_prefixed_identifier_camel_case() {
+        // Regression for #1282: boolean-prefixed identifiers are booleans by
+        // convention and cannot leak `0`/`''`.
+        assert!(run_on("const x = <div>{isSelected && <div />}</div>;").is_empty());
+        assert!(run_on("const x = <div>{hasFilters && <div />}</div>;").is_empty());
+        assert!(run_on("const x = <div>{shouldRender && <div />}</div>;").is_empty());
+        assert!(run_on("const x = <div>{canEdit && <div />}</div>;").is_empty());
+    }
+
+    #[test]
+    fn allows_boolean_prefixed_identifier_chain() {
+        // The whole `&&` chain is boolean: a boolean-prefixed identifier and a
+        // comparison.
+        assert!(
+            run_on("const x = <div>{hasFilters && onClear !== undefined && <button />}</div>;")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_non_camel_case_boolean_lookalike() {
+        // Starts with `is`/`can` but not at a camelCase boundary, so it is not a
+        // boolean by convention and stays flagged.
+        assert_eq!(run_on("const x = <div>{island && <div />}</div>;").len(), 1);
+        assert_eq!(run_on("const x = <div>{cancel && <div />}</div>;").len(), 1);
     }
 }
