@@ -8,7 +8,7 @@ use crate::project::{ImportIndex, ProjectCtx};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::path_utils::{
     is_angular_schematic_or_migration_entry, is_auto_mock_dir_path, is_config_file,
-    is_framework_entry_point, is_storybook_story, is_top_level_script_dir_path,
+    is_framework_entry_point, is_sample_dir_path, is_storybook_story, is_top_level_script_dir_path,
 };
 use std::path::Path;
 
@@ -154,6 +154,16 @@ fn is_entry_point(
     }
 
     if is_standalone_sample_script(path, stem) {
+        return true;
+    }
+
+    // Files under a demonstration directory (`examples/`, `example/`, `demo/`,
+    // `demos/`, `samples/`, `sample/`, …) are standalone runnable scripts and
+    // documentation examples: they import the library but nothing imports them,
+    // so they are leaf entry points, not dead code. This covers nested
+    // `packages/<pkg>/examples/` dirs that the top-level-only
+    // `is_top_level_script_dir_path` check misses.
+    if is_sample_dir_path(path) {
         return true;
     }
 
@@ -1467,6 +1477,76 @@ mod tests {
         assert!(
             diags[0].path.to_str().unwrap().contains("orphan"),
             "only the genuine orphan must be flagged; the story is an entry point: {diags:?}"
+        );
+    }
+
+    // Regression for #1214: files under a (possibly nested) demonstration
+    // directory (`examples/`, `example/`, `demo/`, `samples/`, …) are standalone
+    // runnable scripts / documentation examples — they import the library but
+    // nothing imports them, so they are leaf entry points, not dead code. The
+    // effect-ts cases live in nested `packages/<pkg>/examples/` dirs that the
+    // top-level-only entry-dir check misses.
+    #[test]
+    fn nested_example_demo_sample_dir_files_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.ts", "export const root = 1;\n"),
+            (
+                "packages/sql-mysql2/examples/statement-transform.ts",
+                "import { Sql } from '@effect/sql';\nvoid Sql;\n",
+            ),
+            (
+                "packages/opentelemetry/examples/index.ts",
+                "import { Otel } from '@effect/opentelemetry';\nvoid Otel;\n",
+            ),
+            (
+                "packages/sql-mssql/examples/migrations/0001_create_people.ts",
+                "export default () => {};\n",
+            ),
+            ("packages/ui/components/tabs/demo/basic.tsx", "export const Demo = 1;\n"),
+            ("packages/core/samples/usage.ts", "import { lib } from 'core';\nvoid lib;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "files under example/demo/sample dirs are standalone entry points: {diags:?}"
+        );
+    }
+
+    // Regression for #1214: the example-dir exemption is precise — a genuinely
+    // orphaned ordinary source file under `src/` (no example/demo/sample path
+    // segment, imported by nothing) is still a true positive.
+    #[test]
+    fn orphan_file_outside_example_dirs_still_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.ts", "export const root = 1;\n"),
+            (
+                "packages/sql-mysql2/examples/statement-transform.ts",
+                "import { Sql } from '@effect/sql';\nvoid Sql;\n",
+            ),
+            ("src/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "only the genuine orphan must be flagged; example files are entry points: {diags:?}"
+        );
+    }
+
+    // Regression for #1214: the exemption matches `examples` as a path segment,
+    // not a substring — an orphaned `src/myexamples/foo.ts` (no `examples/`
+    // directory boundary) is regular source and stays a true positive.
+    #[test]
+    fn example_substring_dir_file_is_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.ts", "export const root = 1;\n"),
+            ("src/myexamples/foo.ts", "export const foo = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("myexamples"),
+            "a `examples` substring (not a path segment) is not exempted: {diags:?}"
         );
     }
 

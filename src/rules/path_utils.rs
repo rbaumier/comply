@@ -226,16 +226,17 @@ fn is_root_level_build_script(path: &Path, project_root: &Path) -> bool {
     ) && (stem == "build" || stem == "bundle")
 }
 
-/// True for demonstration code under `samples/`, `samples-dev/`, `examples/`,
-/// `example/`, `example-apps/`, `demo/`, or `demos/`. Compiled and run at dev
-/// time to show library usage; it never ships in the published package. (A
-/// component library's `components/**/demo/` files are documentation examples
-/// that legitimately import devDependencies — issue #1563.)
+/// True for demonstration code under `samples/`, `sample/`, `samples-dev/`,
+/// `examples/`, `example/`, `example-apps/`, `demo/`, or `demos/`. Compiled and
+/// run at dev time to show library usage; it never ships in the published
+/// package. (A component library's `components/**/demo/` files are documentation
+/// examples that legitimately import devDependencies — issue #1563.)
 pub fn is_sample_dir_path(path: &Path) -> bool {
     has_path_segment(
         path,
         &[
             "samples",
+            "sample",
             "samples-dev",
             "examples",
             "example",
@@ -884,7 +885,11 @@ mod aux_path_tests {
         assert!(is_sample_dir_path(&PathBuf::from("components/tabs/demo/style-class.tsx")));
         assert!(is_sample_dir_path(&PathBuf::from("packages/foo/demos/index.tsx")));
         assert!(is_sample_dir_path(&PathBuf::from("example/app.ts")));
+        // Issue #1214: singular `sample/` directory.
+        assert!(is_sample_dir_path(&PathBuf::from("packages/foo/sample/usage.ts")));
         assert!(!is_sample_dir_path(&PathBuf::from("src/mysamples/index.ts")));
+        // Segment (not substring) match — `myexamples` must not match `examples`.
+        assert!(!is_sample_dir_path(&PathBuf::from("src/myexamples/foo.ts")));
         // Segment (not substring) match — `demonstration` must not match `demo`.
         assert!(!is_sample_dir_path(&PathBuf::from("src/demonstration/index.ts")));
     }
