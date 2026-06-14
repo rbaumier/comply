@@ -84,4 +84,25 @@ mod tests {
     fn allows_different_sides() {
         assert!(run_on("fn f() { if a == b {} }").is_empty());
     }
+
+    // diesel test code intentionally uses `value - value` to verify SQL null
+    // propagation (issue #1500). `skip_in_test_dir` must suppress the rule there.
+    #[test]
+    fn skips_identical_operands_in_test_dir() {
+        let src = "fn f() { let data = nullable_table.select(value - value).load(connection); }";
+        let d = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            src,
+            "diesel_tests/tests/expressions/ops.rs",
+        );
+        assert!(d.is_empty(), "rule must be suppressed in a test directory");
+    }
+
+    #[test]
+    fn flags_identical_operands_in_non_test_dir() {
+        let src = "fn f() { let data = nullable_table.select(value - value).load(connection); }";
+        let d = crate::rules::test_helpers::run_rule_gated(&Check, src, "src/ops.rs");
+        assert_eq!(d.len(), 1, "rule must still fire outside test directories");
+        assert!(d[0].message.contains("-"));
+    }
 }
