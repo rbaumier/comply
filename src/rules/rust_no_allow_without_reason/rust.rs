@@ -1,5 +1,9 @@
 //! Walks `attribute_item` nodes matching `#[allow(...)]`.
-//! Flags when no comment exists on the same line, the line above, or the line below.
+//! Flags when no justification exists: neither an inline `reason = "..."`
+//! argument (stabilized in Rust 1.81) nor a `//` comment on the same line,
+//! the line above, or the line below.
+
+use tree_sitter::Node;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::is_in_test_context;
@@ -7,6 +11,10 @@ use crate::rules::rust_helpers::is_in_test_context;
 crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
     let text = node.utf8_text(source).unwrap_or("");
     if !text.starts_with("#[allow(") && !text.starts_with("#[allow (") {
+        return;
+    }
+
+    if has_inline_reason(node, source) {
         return;
     }
 
@@ -51,6 +59,44 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
         format!("`{text}` without justification — add a `//` comment explaining why."),
         Severity::Warning,
     ));
+}
+
+/// True if the attribute carries an inline `reason = "..."` argument, the
+/// justification form stabilized in Rust 1.81 for `#[allow]`/`#[expect]`/
+/// `#[warn]`/`#[deny]`. The argument is the justification, so no adjacent
+/// `//` comment is required.
+///
+/// `attribute_item` parses as `attribute_item > attribute > token_tree`, where
+/// the token tree holds the comma-separated arguments as a flat sequence of
+/// nodes. A `reason` argument appears as the ordered triple `identifier("reason")`,
+/// `=`, `string_literal`; detecting that triple in the token tree avoids text
+/// scanning, which would also match a lint literally named `reason` or a `reason`
+/// substring inside another string.
+fn has_inline_reason(attribute_item: Node, source: &[u8]) -> bool {
+    let mut item_cursor = attribute_item.walk();
+    let Some(attribute) = attribute_item
+        .children(&mut item_cursor)
+        .find(|child| child.kind() == "attribute")
+    else {
+        return false;
+    };
+
+    let mut attr_cursor = attribute.walk();
+    let Some(token_tree) = attribute
+        .children(&mut attr_cursor)
+        .find(|child| child.kind() == "token_tree")
+    else {
+        return false;
+    };
+
+    let mut cursor = token_tree.walk();
+    let children: Vec<Node> = token_tree.children(&mut cursor).collect();
+    children.windows(3).any(|triple| {
+        triple[0].kind() == "identifier"
+            && triple[0].utf8_text(source) == Ok("reason")
+            && triple[1].kind() == "="
+            && triple[2].kind() == "string_literal"
+    })
 }
 
 fn allow_list_contains(attribute: &str, name: &str) -> bool {
@@ -109,6 +155,38 @@ mod tests {
     #[test]
     fn allows_with_inline_comment() {
         assert!(run("#[allow(dead_code)] // kept for FFI compat\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn allows_with_inline_reason_argument() {
+        assert!(
+            run("#[allow(dead_code, reason = \"deserialized but not directly read\")]\nfn f() {}")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_with_inline_reason_after_multiple_lints() {
+        assert!(
+            run("#[allow(unused, clippy::foo, reason = \"kept for symmetry\")]\nfn f() {}")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_with_multiline_reason_argument() {
+        assert!(
+            run("#[allow(\n    dead_code,\n    reason = \"kept for symmetry; sizes come \\\n    from FIPS 204 Table 2\"\n)]\nstruct S { priv_key_len: usize }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_allow_without_reason_or_comment() {
+        // Negative-space guard: a lint named `reason` is not a `reason = "..."`
+        // argument and must still be flagged.
+        assert_eq!(run("#[allow(dead_code)]\nfn f() {}").len(), 1);
+        assert_eq!(run("#[allow(reason)]\nfn f() {}").len(), 1);
     }
 
     #[test]
