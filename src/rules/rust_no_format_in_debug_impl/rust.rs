@@ -5,10 +5,17 @@
 //! body for `format!` macro invocations. Each one is a wasted
 //! allocation that should be a `write!`.
 //!
-//! Exception: a `format!` that supplies the *name* argument of a
-//! `debug_struct(...)` / `debug_tuple(...)` call is allowed — those
-//! methods require a runtime `&str` name, so a type name embedding a
-//! const generic (`format!("Grid<{N}>")`) can only be built that way.
+//! Two `format!` shapes are allowed:
+//!
+//! - One that supplies the *name* argument of a `debug_struct(...)` /
+//!   `debug_tuple(...)` call — those methods require a runtime `&str`
+//!   name, so a type name embedding a const generic (`format!("Grid<{N}>")`)
+//!   can only be built that way.
+//! - One whose arguments contain a truncation signal: a `.len()` /
+//!   `.count()` / `.capacity()` method call or an index/slice expression
+//!   (`v[0]`). Those mark an intentionally summarized rendering of large
+//!   data (embedding vectors, result sets) where printing the full
+//!   structure would dump unbounded output.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -131,6 +138,78 @@ fn is_first_named_arg(arguments: tree_sitter::Node, child: tree_sitter::Node) ->
         .is_some_and(|first| first == child)
 }
 
+/// True when the `format!` invocation's arguments carry a truncation
+/// signal — a `.len()` / `.count()` / `.capacity()` method call or an
+/// index/slice expression (`v[0]`). Such a `format!` renders an
+/// intentionally summarized view of large data, not a wasteful
+/// re-allocation of an already-`Debug`-able value, so it is exempt.
+///
+/// Macro arguments are not parsed into a structured AST: they live in a
+/// `token_tree` where `hits.len()` flattens to `(identifier "hits") .
+/// (identifier "len") (token_tree "()")` and `v[0]` to `(identifier "v")
+/// (token_tree "[0]")`. We walk that token stream looking for either
+/// shape.
+fn format_args_contain_truncation_signal(
+    format_node: tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    let mut cursor = format_node.walk();
+    format_node
+        .children(&mut cursor)
+        .find(|child| child.kind() == "token_tree")
+        .is_some_and(|token_tree| token_tree_has_truncation_signal(token_tree, source))
+}
+
+const TRUNCATION_METHODS: &[&str] = &["len", "count", "capacity"];
+
+/// Recursively scans a `token_tree` for a truncation signal.
+fn token_tree_has_truncation_signal(token_tree: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = token_tree.walk();
+    let children: Vec<tree_sitter::Node> = token_tree.children(&mut cursor).collect();
+    for (index, child) in children.iter().enumerate() {
+        match child.kind() {
+            // A nested `token_tree` is either an index/slice bracket
+            // (`[0]` — a truncation signal on its own) or grouping
+            // parens we must recurse into.
+            "token_tree" => {
+                if starts_with_byte(*child, source, b'[') {
+                    return true;
+                }
+                if token_tree_has_truncation_signal(*child, source) {
+                    return true;
+                }
+            }
+            // `.len()` / `.count()` / `.capacity()`: a method-name
+            // identifier preceded by `.` and followed by a `(` group.
+            "identifier"
+                if child
+                    .utf8_text(source)
+                    .is_ok_and(|text| TRUNCATION_METHODS.contains(&text))
+                    && index
+                        .checked_sub(1)
+                        .is_some_and(|prev| is_dot(children.get(prev), source))
+                    && children
+                        .get(index + 1)
+                        .is_some_and(|next| starts_with_byte(*next, source, b'(')) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Whether `node`'s source text begins with `byte`.
+fn starts_with_byte(node: tree_sitter::Node, source: &[u8], byte: u8) -> bool {
+    source.get(node.start_byte()) == Some(&byte)
+}
+
+/// Whether `node` is the anonymous `.` token.
+fn is_dot(node: Option<&tree_sitter::Node>, source: &[u8]) -> bool {
+    node.is_some_and(|n| n.utf8_text(source) == Ok("."))
+}
+
 fn collect_format_macros_in(
     body: tree_sitter::Node,
     source: &[u8],
@@ -144,6 +223,7 @@ fn collect_format_macros_in(
             && let Ok(name) = macro_node.utf8_text(source)
             && name == "format"
             && !is_debug_builder_name_arg(node, source)
+            && !format_args_contain_truncation_signal(node, source)
         {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
@@ -266,6 +346,61 @@ mod tests {
                 f.debug_struct("Foo")
                     .field("x", &format!("{}-{}", self.a, self.b))
                     .finish()
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_format_summarizing_len() {
+        // meilisearch: `format!` produces a short summary of a large result
+        // set; the `.len()` is the truncation signal. See #1333.
+        let source = r#"impl Debug for Foo {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                debug.field("hits", &format!("[{} hits returned]", hits.len()));
+                debug.finish()
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_format_summarizing_index_and_len() {
+        // meilisearch: a truncated embedding vector render mixing indexing
+        // (`v[0]`) and `.len()`. See #1333.
+        let source = r#"impl Debug for Foo {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                debug.field(
+                    "vector",
+                    &format!("[{}, {}, {}, ... {} dimensions]", v[0], v[1], v[2], v.len()),
+                );
+                debug.finish()
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_format_summarizing_count() {
+        // `.count()` is an equally valid truncation signal. See #1333.
+        let source = r#"impl Debug for Foo {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                debug.field("items", &format!("[{} items]", self.iter().count()));
+                debug.finish()
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_field_value_format_without_truncation_signal() {
+        // No `.len()`/`.count()`/`.capacity()` and no indexing: a plain
+        // field-value `format!` is still the waste the rule targets. This is
+        // #1326's negative-space guard — it must stay flagged.
+        let source = r#"impl Debug for Foo {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                debug.field("name", &format!("{}", self.raw));
+                debug.finish()
             }
         }"#;
         assert_eq!(run_on(source).len(), 1);
