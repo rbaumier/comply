@@ -23,6 +23,12 @@ const ALLOWED_PROPS: &[&str] = &[
     "right",
     "header",
     "footer",
+    // React Router v6 composition slots: `element` is the route's render
+    // target and `children` nests routes — both receive a JSX literal by
+    // design. React Router caches the element reference, so the
+    // "new element every render" concern does not apply.
+    "element",
+    "children",
     // Base UI / Radix / coss composition API: a primitive accepts a
     // JSX element in `render` and calls cloneElement on it to merge
     // its own props onto the consumer's element. JSX literal is the
@@ -129,6 +135,33 @@ mod tests {
     fn ignores_known_slot_props() {
         let src = r#"const x = <Card header={<Title />} footer={<Buttons />} />;"#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_react_router_element_prop() {
+        // Regression for rbaumier/comply#1356 — React Router v6's `element`
+        // prop is a composition slot designed to receive a JSX element.
+        let src = r#"const x = <Route element={<HomePage />} />;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_react_router_nested_element_prop() {
+        let src = r#"const x = <Route element={<Authenticated><Outlet /></Authenticated>} />;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_children_jsx_prop() {
+        let src = r#"const x = <Provider children={<App />} />;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_allowed_prop_with_jsx_value() {
+        // Negative-space guard: a prop outside the allowlist still fires.
+        let src = r#"const x = <Wrapper foo={<Bar />} />;"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
 
