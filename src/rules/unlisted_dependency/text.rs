@@ -11,9 +11,10 @@
 //! Skips:
 //!   - tsconfig path aliases (e.g. `@/utils`, `~/lib`) — they resolve to
 //!     local source via `compilerOptions.paths`, not to an npm package.
-//!   - Node.js subpath imports (`#`-prefixed specifiers) declared in the
-//!     `imports` field of the root or an importer's nearest package.json —
-//!     self-referencing aliases resolved to internal files, not npm packages.
+//!   - Node.js subpath imports (`#`-prefixed specifiers) — Node reserves the
+//!     `#` prefix for internal aliases resolved via a package.json `imports`
+//!     map or a framework's module resolver (Nuxt's `#app`/`#imports`), never
+//!     for npm package names.
 //!
 //! The rule produces project-wide diagnostics, not per-file ones, so it
 //! fires only on the first indexed path of the run. Every other invocation
@@ -72,19 +73,13 @@ impl TextCheck for Check {
             if pkg.has_dep_or_engine(spec) {
                 continue;
             }
-            // Node.js subpath imports: a `#`-prefixed specifier is a
-            // self-referencing alias declared in a package.json `imports` map,
-            // resolved to an internal file at runtime — never an npm package.
-            // Exempt it when the root or any importer's nearest manifest
-            // declares it under `imports`.
-            if spec.starts_with('#')
-                && (pkg.declares_subpath_import(spec)
-                    || info.importers.iter().any(|imp| {
-                        ctx.project
-                            .nearest_package_json(imp)
-                            .is_some_and(|p| p.declares_subpath_import(spec))
-                    }))
-            {
+            // Node.js subpath imports: Node reserves the `#` prefix exclusively
+            // for internal aliases — resolved either via a package.json `imports`
+            // map or by a framework's module resolver (Nuxt's `#app`/`#imports`).
+            // A `#`-specifier is therefore never an npm package name, so it can
+            // never be an unlisted npm dependency. Mirrors `no-implicit-deps`,
+            // which skips every `#`-specifier via `is_subpath_import`.
+            if spec.starts_with('#') {
                 continue;
             }
             if workspace_names.contains(spec) {
@@ -485,24 +480,39 @@ mod tests {
     }
 
     #[test]
-    fn flags_undeclared_subpath_import() {
-        // Precision guard: a `#`-specifier with no matching key in `imports`
-        // is not exempted by the subpath-import branch.
+    fn allows_nuxt_framework_subpath_imports() {
+        // Regression for #1723 — Nuxt runtime files import from `#app` and
+        // `#imports`, framework-resolved virtual modules that are not declared
+        // in any package.json `imports` map. Node reserves the `#` prefix for
+        // internal aliases, so a `#`-specifier is never an npm package name and
+        // must not be flagged as an unlisted dependency, declared or not.
         let files: Vec<(&str, &str)> = vec![
-            ("a.ts", "import { x } from '#not-declared';"),
+            (
+                "a.ts",
+                "import { useNuxtApp } from '#app';\n\
+                 import { definePayloadReducer } from '#imports';",
+            ),
             ("b.ts", "export const x = 1;"),
         ];
-        let (_dir, diags) = run_on_project(
-            &files,
-            Some(r##"{ "imports": { "#other": "./src/other.js" } }"##),
-            None,
+        let (_dir, diags) = run_on_project(&files, Some(r#"{ "dependencies": {} }"#), None);
+        assert!(
+            diags.is_empty(),
+            "Nuxt `#app`/`#imports` are framework subpath imports, not npm packages: {diags:?}"
         );
-        assert_eq!(
-            diags.len(),
-            1,
-            "`#not-declared` is absent from `imports`: {diags:?}"
-        );
-        assert!(diags[0].message.contains("#not-declared"));
+    }
+
+    #[test]
+    fn flags_undeclared_bare_package() {
+        // Negative-space guard for #1723 — the unconditional `#`-skip must not
+        // leak into bare package names: a genuinely unlisted npm package
+        // (`lodash`, no leading `#`) absent from package.json still fires.
+        let files: Vec<(&str, &str)> = vec![
+            ("a.ts", "import _ from 'lodash';"),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, Some(r#"{ "dependencies": {} }"#), None);
+        assert_eq!(diags.len(), 1, "`lodash` is unlisted: {diags:?}");
+        assert!(diags[0].message.contains("lodash"));
     }
 
     #[test]
