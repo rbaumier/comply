@@ -1,10 +1,17 @@
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::rust_helpers::is_in_trait_impl;
 
 crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, ctx, diagnostics|
     let Some(name_node) = node.child_by_field_name("name") else { return };
     let Ok(name) = name_node.utf8_text(source) else { return };
 
     if !name.starts_with("get_") { return; }
+
+    // A method inside `impl Trait for Type` takes its name verbatim from the
+    // trait declaration; the implementor cannot rename it. Inherent impls
+    // (`impl Type`) and free functions keep being flagged — the author owns
+    // the name there.
+    if is_in_trait_impl(node) { return; }
 
     // Stripping `get_` from e.g. `get_ref`/`get_mut` would yield a Rust
     // reserved keyword, which is not a legal method name. The suggested rename
@@ -226,5 +233,31 @@ mod tests {
         let diags = run(src);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("rename to `name`"), "{:?}", diags);
+    }
+
+    #[test]
+    fn allows_get_prefix_in_trait_impl_issue_1330() {
+        // The method name is dictated by the external trait — the implementor
+        // cannot rename it.
+        let src = "impl Scroller for Widget {\n\
+            fn get_scroller_mut(&mut self) -> &mut Core { &mut self.scroller }\n\
+            fn get_scroller(&self) -> &Core { &self.scroller }\n\
+        }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_get_prefix_in_inherent_impl_issue_1330() {
+        // `impl Widget` (no trait) — the author chose the name and can rename it.
+        let src = "impl Widget {\n    fn get_id(&self) -> u32 { self.id }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_get_prefix_free_function_issue_1330() {
+        // A free function with `&self` (e.g. a closure-like accessor) is not in
+        // any impl — still flagged.
+        let src = "impl Widget {\n    fn get_id(&self) -> u32 { self.id }\n    fn unrelated(&self) -> u32 { 0 }\n}";
+        assert_eq!(run(src).len(), 1);
     }
 }
