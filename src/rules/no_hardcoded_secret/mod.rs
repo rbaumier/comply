@@ -1,6 +1,7 @@
 //! no-hardcoded-secret — scan for committed API keys / tokens.
 
-mod text;
+mod rust;
+pub(crate) mod text;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -23,16 +24,18 @@ pub const META: RuleMeta = RuleMeta {
 };
 
 pub fn register() -> RuleDef {
-    let backends: Vec<_> = [
+    let mut backends: Vec<_> = [
         Language::TypeScript,
         Language::Tsx,
         Language::JavaScript,
-        Language::Rust,
         Language::Vue,
     ]
     .into_iter()
     .map(|lang| (lang, Backend::Text(Box::new(text::Check))))
     .collect();
+    // Rust uses a tree-sitter backend so it can skip credentials inside
+    // `#[cfg(test)]` modules, which the directory-based test lever can't reach.
+    backends.push((Language::Rust, Backend::TreeSitter(Box::new(rust::Check))));
     RuleDef {
         meta: META,
         backends,
