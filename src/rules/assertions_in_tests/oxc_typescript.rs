@@ -112,12 +112,18 @@ impl OxcCheck for Check {
                         // `@arktype/attest` assertion. React render calls
                         // (`render`, `renderToString`, `renderHook`, …) throw
                         // when the component/hook crashes, so they are implicit
-                        // "does not throw" assertions.
+                        // "does not throw" assertions. `node:assert` named
+                        // exports (`strictEqual`, `deepStrictEqual`, …) throw
+                        // `AssertionError` on a failed check, so a direct call
+                        // to one is an assertion.
                         Expression::Identifier(id) => {
                             id.name.starts_with("expect")
                                 || id.name.as_str() == "attest"
                                 || crate::rules::test_assertion_helpers::RENDER_ASSERTION_CALLS
                                     .contains(&id.name.as_str())
+                                || crate::rules::test_assertion_helpers::is_node_assert_function(
+                                    id.name.as_str(),
+                                )
                         }
                         Expression::StaticMemberExpression(member) => {
                             member.property.name.as_str() == "expect"
@@ -647,5 +653,40 @@ mod tests {
             "{:?}",
             run_at(src, "/tmp/index.spec.js")
         );
+    }
+
+    // Regression for #1215 — node:assert named exports (`strictEqual`,
+    // `deepStrictEqual`, …) destructured from `node:assert` or a wrapper like
+    // `@effect/vitest/utils` are assertion functions: they throw `AssertionError`
+    // on mismatch. A test whose only assertion is such a call must not be flagged.
+    #[test]
+    fn allows_test_with_node_assert_named_exports() {
+        let src = r#"
+            import { deepStrictEqual, strictEqual } from "@effect/vitest/utils";
+            it("joins path without trailing slash on base", () => {
+                strictEqual(request.url, "https://api.example.com/v1/users");
+            });
+            it("parses URL instances", () => {
+                deepStrictEqual(actual, expected);
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // True positive guard for #1215: a call to an ordinary, non-assertion
+    // function with a similar arity must still flag the test as assertion-less —
+    // only the known node:assert names count.
+    #[test]
+    fn still_flags_test_with_ordinary_call_only() {
+        let src = r#"it("x", () => { foo(a, b); });"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Negative-space guard for #1215: a test with no assertion of any kind (no
+    // expect/assert/strictEqual/…) is still flagged.
+    #[test]
+    fn still_flags_test_with_no_assertion_at_all() {
+        let src = r#"it("does nothing", () => { const y = compute(1, 2); return y; });"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }

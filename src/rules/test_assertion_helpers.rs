@@ -23,6 +23,39 @@ const MAX_HELPER_DEPTH: u32 = 3;
 pub(crate) const RENDER_ASSERTION_CALLS: &[&str] =
     &["render", "renderToString", "renderToStaticMarkup", "renderHook"];
 
+/// The `node:assert` named assertion functions. Destructured and called
+/// directly (`strictEqual(a, b)`, `deepStrictEqual(actual, expected)`), they
+/// throw `AssertionError` on a failed check, so a test whose only assertion is
+/// such a call does assert. Wrappers like `@effect/vitest/utils` re-export this
+/// same API, so keying off the import source is unreliable — the function names
+/// are the stable signal. This is the canonical `node:assert` surface, not an
+/// arbitrary allow-list.
+pub(crate) const NODE_ASSERT_FUNCTIONS: &[&str] = &[
+    "strictEqual",
+    "notStrictEqual",
+    "deepStrictEqual",
+    "notDeepStrictEqual",
+    "deepEqual",
+    "notDeepEqual",
+    "equal",
+    "notEqual",
+    "ok",
+    "match",
+    "doesNotMatch",
+    "throws",
+    "doesNotThrow",
+    "rejects",
+    "doesNotReject",
+    "ifError",
+    "fail",
+];
+
+/// True when `name` is one of the [`NODE_ASSERT_FUNCTIONS`] — a `node:assert`
+/// named assertion function recognised regardless of which module re-exports it.
+pub(crate) fn is_node_assert_function(name: &str) -> bool {
+    NODE_ASSERT_FUNCTIONS.contains(&name)
+}
+
 /// True when `text` contains a call to one of [`RENDER_ASSERTION_CALLS`]. The
 /// identifier is word-boundary-anchored on the left so `customRender(` /
 /// `prerenderToString(` do not match, and the call's `(` must immediately
@@ -430,6 +463,7 @@ fn call_is_assertion(call: &CallExpression) -> bool {
                 || name.starts_with("assert")
                 || name == "attest"
                 || RENDER_ASSERTION_CALLS.contains(&name)
+                || is_node_assert_function(name)
         }
         Expression::StaticMemberExpression(member) => {
             let object = member.object.get_inner_expression();
