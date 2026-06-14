@@ -50,6 +50,177 @@ fn collect_ref_bindings<'a>(
     refs
 }
 
+/// True if a `useRef(...)` argument is a safe-default initial value: a literal
+/// (`0`, `''`, `false`, `null`), an empty array/object, or a negated/unary
+/// literal (`-1`). `useRef(0)` is safe to read during render before the
+/// post-mount effect runs; `useRef()` (undefined) and `useRef(someExpr)` are not
+/// covered by the post-mount exemption.
+fn is_safe_default_init(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+    match expr {
+        Expression::NumericLiteral(_)
+        | Expression::StringLiteral(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::NullLiteral(_)
+        | Expression::ArrayExpression(_)
+        | Expression::ObjectExpression(_) => true,
+        Expression::UnaryExpression(unary) => is_safe_default_init(&unary.argument),
+        _ => false,
+    }
+}
+
+/// Collect ref binding names whose `useRef(...)` initializer is a safe default
+/// (see `is_safe_default_init`).
+fn collect_safe_default_refs<'a>(
+    body_span: oxc_span::Span,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    source: &str,
+) -> HashSet<String> {
+    let mut refs = HashSet::new();
+    for node in semantic.nodes().iter() {
+        let AstKind::VariableDeclarator(decl) = node.kind() else {
+            continue;
+        };
+        if decl.span.start < body_span.start || decl.span.end > body_span.end {
+            continue;
+        }
+        let Some(oxc_ast::ast::Expression::CallExpression(call)) = &decl.init else {
+            continue;
+        };
+        let callee_text =
+            &source[call.callee.span().start as usize..call.callee.span().end as usize];
+        if callee_text != "useRef" && !callee_text.ends_with(".useRef") {
+            continue;
+        }
+        let Some(arg) = call.arguments.first().and_then(|a| a.as_expression()) else {
+            continue;
+        };
+        if !is_safe_default_init(arg) {
+            continue;
+        }
+        let oxc_ast::ast::BindingPattern::BindingIdentifier(ident) = &decl.id else {
+            continue;
+        };
+        refs.insert(ident.name.to_string());
+    }
+    refs
+}
+
+/// Collect the names of refs that are written ONLY inside a post-mount effect
+/// (`useLayoutEffect`/`useEffect` callback with an empty dep array `[]`) and
+/// never during render, and whose `useRef` init is a safe default literal.
+///
+/// Such a ref is never mutated during render, so reading `ref.current` during
+/// render cannot tear — this is the documented post-mount-measurement pattern
+/// (e.g. capturing `element.offsetTop` once after mount to feed a layout config
+/// input). The init being a safe default guarantees the first-render read is
+/// well-defined before the effect runs.
+fn collect_post_mount_effect_only_refs<'a>(
+    body_span: oxc_span::Span,
+    refs: &HashSet<String>,
+    safe_default_refs: &HashSet<String>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    source: &str,
+) -> HashSet<String> {
+    // Spans of post-mount-effect callbacks (`useLayoutEffect`/`useEffect`
+    // called with an empty-array 2nd arg) inside this component body.
+    let mut effect_callback_spans: Vec<oxc_span::Span> = Vec::new();
+    for node in semantic.nodes().iter() {
+        let AstKind::CallExpression(call) = node.kind() else {
+            continue;
+        };
+        if call.span.start < body_span.start || call.span.end > body_span.end {
+            continue;
+        }
+        let callee_text =
+            &source[call.callee.span().start as usize..call.callee.span().end as usize];
+        let is_effect = callee_text == "useEffect"
+            || callee_text == "useLayoutEffect"
+            || callee_text.ends_with(".useEffect")
+            || callee_text.ends_with(".useLayoutEffect");
+        if !is_effect || call.arguments.len() != 2 {
+            continue;
+        }
+        let Some(oxc_ast::ast::Expression::ArrayExpression(deps)) =
+            call.arguments[1].as_expression()
+        else {
+            continue;
+        };
+        if !deps.elements.is_empty() {
+            continue;
+        }
+        let Some(callback) = call.arguments[0].as_expression() else {
+            continue;
+        };
+        let cb_span = match callback {
+            oxc_ast::ast::Expression::ArrowFunctionExpression(arrow) => arrow.body.span,
+            oxc_ast::ast::Expression::FunctionExpression(func) => {
+                let Some(b) = &func.body else { continue };
+                b.span
+            }
+            _ => continue,
+        };
+        effect_callback_spans.push(cb_span);
+    }
+
+    let span_inside_effect = |span: oxc_span::Span| {
+        effect_callback_spans
+            .iter()
+            .any(|cb| span.start >= cb.start && span.end <= cb.end)
+    };
+
+    // Classify every `ref.current` write target (assignment LHS or update arg):
+    // written in render (disqualifies) vs written in a post-mount effect.
+    let mut written_in_render: HashSet<String> = HashSet::new();
+    let mut written_in_effect: HashSet<String> = HashSet::new();
+
+    for node in semantic.nodes().iter() {
+        let write = match node.kind() {
+            AstKind::AssignmentExpression(assign) => {
+                let oxc_ast::ast::AssignmentTarget::StaticMemberExpression(member) =
+                    &assign.left
+                else {
+                    continue;
+                };
+                Some(member.as_ref())
+            }
+            AstKind::UpdateExpression(update) => {
+                let oxc_ast::ast::SimpleAssignmentTarget::StaticMemberExpression(member) =
+                    &update.argument
+                else {
+                    continue;
+                };
+                Some(member.as_ref())
+            }
+            _ => continue,
+        };
+        let Some(member) = write else { continue };
+        if member.property.name.as_str() != "current" {
+            continue;
+        }
+        if member.span.start < body_span.start || member.span.end > body_span.end {
+            continue;
+        }
+        let oxc_ast::ast::Expression::Identifier(obj) = &member.object else {
+            continue;
+        };
+        let name = obj.name.as_str();
+        if !refs.contains(name) {
+            continue;
+        }
+        if span_inside_effect(member.span) {
+            written_in_effect.insert(name.to_string());
+        } else {
+            written_in_render.insert(name.to_string());
+        }
+    }
+
+    written_in_effect
+        .into_iter()
+        .filter(|name| !written_in_render.contains(name) && safe_default_refs.contains(name))
+        .collect()
+}
+
 /// Check if a `ref.current` member expression is the LHS of an
 /// assignment (`ref.current = x`, `ref.current += x`, `ref.current ??= x`,
 /// etc.) or the operand of an `UpdateExpression` (`ref.current++`,
@@ -175,6 +346,19 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // Refs written ONLY in a post-mount effect (empty-dep
+            // `useLayoutEffect`/`useEffect`) and initialized to a safe default
+            // are never mutated during render; reading them during render is the
+            // documented post-mount-measurement pattern and is safe.
+            let safe_default_refs = collect_safe_default_refs(body_span, semantic, ctx.source);
+            let post_mount_only_refs = collect_post_mount_effect_only_refs(
+                body_span,
+                &refs,
+                &safe_default_refs,
+                semantic,
+                ctx.source,
+            );
+
             // Walk semantic nodes for `.current` member accesses inside this body
             for inner_node in semantic.nodes().iter() {
                 let AstKind::StaticMemberExpression(member) = inner_node.kind() else {
@@ -192,6 +376,11 @@ impl OxcCheck for Check {
                     continue;
                 };
                 if !refs.contains(obj.name.as_str()) {
+                    continue;
+                }
+                // Skip refs written only in a post-mount effect with a safe
+                // default init — the render-time read cannot tear.
+                if post_mount_only_refs.contains(obj.name.as_str()) {
                     continue;
                 }
                 // Must NOT be inside a nested function
@@ -432,6 +621,68 @@ mod tests {
     fn still_allows_plain_assignment_to_ref_current() {
         let src = "function C() { const r = useRef(0); r.current = 1; return null; }";
         assert!(run(src).is_empty());
+    }
+
+    // Regression for issue #2194 — canonical TanStack Virtual scroll-offset
+    // pattern: a ref initialized to a safe default, written ONCE inside a
+    // useLayoutEffect with empty deps, then read during render as a stable
+    // layout config input. The ref is never mutated during render, so the read
+    // cannot tear.
+    #[test]
+    fn allows_ref_read_when_written_only_in_layout_effect() {
+        let src = "function Example() { \
+                   const listRef = useRef(null); \
+                   const listOffsetRef = useRef(0); \
+                   useLayoutEffect(() => { listOffsetRef.current = listRef.current?.offsetTop ?? 0; }, []); \
+                   const v = useWindowVirtualizer({ scrollMargin: listOffsetRef.current }); \
+                   return <div ref={listRef}>{v}</div>; \
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_ref_read_when_written_only_in_effect() {
+        let src = "function Example() { \
+                   const offsetRef = useRef(0); \
+                   useEffect(() => { offsetRef.current = 42; }, []); \
+                   return <div>{offsetRef.current}</div>; \
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    // Negative-space guard for #2194 — a ref written during render (not in an
+    // effect) and then read during render is still the tearing antipattern and
+    // must STILL be flagged. Only the WRITE is suppressed; the READ flags.
+    #[test]
+    fn still_flags_read_when_ref_written_during_render() {
+        let src = "function C() { const r = useRef(0); r.current = compute(); return <div>{r.current}</div>; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Negative-space guard for #2194 — a ref read during render but written in
+    // an effect with NON-empty deps re-runs after dependent renders, so the
+    // render-time read can observe a stale/changing value. Still flagged.
+    #[test]
+    fn still_flags_read_when_effect_has_non_empty_deps() {
+        let src = "function C({ dep }) { \
+                   const r = useRef(0); \
+                   useEffect(() => { r.current = dep; }, [dep]); \
+                   return <div>{r.current}</div>; \
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Negative-space guard for #2194 — a ref written BOTH during render and in
+    // an effect must still be flagged: it is mutated during render.
+    #[test]
+    fn still_flags_read_when_ref_written_in_render_and_effect() {
+        let src = "function C() { \
+                   const r = useRef(0); \
+                   r.current = 1; \
+                   useEffect(() => { r.current = 2; }, []); \
+                   return <div>{r.current}</div>; \
+                   }";
+        assert_eq!(run(src).len(), 1);
     }
 
     // Regression for issue #374 — latest-ref pattern with useCallback: the write
