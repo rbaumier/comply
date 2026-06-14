@@ -48,12 +48,17 @@ impl OxcCheck for Check {
         if crate::rules::path_utils::is_config_file(ctx.path) || is_config_variant_file(ctx.path) {
             return;
         }
-        // Build/codegen scripts (`scripts/`, `config/`), demonstration code
-        // (`samples/`, `examples/`, …), and generator scaffold templates
-        // (`templates/`, `scaffold/`, …) run at dev time and never ship in the
-        // published package, so importing a devDependency from them is correct.
+        // Build/codegen scripts (`scripts/`, `config/`, root-level `build.ts`/
+        // `bundle.ts`), demonstration code (`samples/`, `examples/`, …), and
+        // generator scaffold templates (`templates/`, `scaffold/`, …) run at
+        // dev time and never ship in the published package, so importing a
+        // devDependency from them is correct.
+        let project_root = ctx
+            .project
+            .nearest_package_json_dir(ctx.path)
+            .unwrap_or_default();
         if ctx.file.path_segments.in_aux_dir
-            || crate::rules::path_utils::is_build_script_path(ctx.path)
+            || crate::rules::path_utils::is_build_script_path(ctx.path, &project_root)
             || crate::rules::path_utils::is_sample_dir_path(ctx.path)
         {
             return;
@@ -283,6 +288,51 @@ export default defineConfig({
         let src = r#"import { Generator, getConfig } from "@tanstack/router-generator";"#;
         let d = run_with_pkg_at_path(pkg, "scripts/generate-routes.ts", src);
         assert!(d.is_empty(), "build script should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_root_level_build_script() {
+        // Issue #1673: elysia's root-level `build.ts` is a dev/CI bundler script
+        // that imports `tsup` and `esbuild-fix-imports-plugin` from
+        // devDependencies. Root-level `build.ts`/`bundle.ts` files never ship in
+        // the published package, so importing a devDependency is correct.
+        let pkg = r#"{
+            "dependencies": {"bun": "^1"},
+            "devDependencies": {
+                "tsup": "^8",
+                "esbuild-fix-imports-plugin": "^1"
+            }
+        }"#;
+        let src = r#"
+import { $ } from 'bun'
+import { build } from 'tsup'
+import { fixImportsPlugin } from 'esbuild-fix-imports-plugin'
+"#;
+        let d = run_with_pkg_at_path(pkg, "build.ts", src);
+        assert!(d.is_empty(), "root-level build.ts should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_in_src_entry() {
+        // Guard against over-relaxing: a shipped entry point under `src/`
+        // importing the same bundler devDependency must still flag.
+        let pkg = r#"{"devDependencies":{"tsup":"^8"}}"#;
+        let src = r#"import { build } from 'tsup';"#;
+        let d = run_with_pkg_at_path(pkg, "src/index.ts", src);
+        assert_eq!(d.len(), 1, "src/ entry should still flag: {d:?}");
+        assert!(d[0].message.contains("tsup"));
+    }
+
+    #[test]
+    fn still_flags_dev_dep_in_root_non_build_file() {
+        // Guard against over-relaxing: a root-level file with a different name
+        // (not `build`/`bundle`) importing an extraneous devDependency must
+        // still flag.
+        let pkg = r#"{"devDependencies":{"tsup":"^8"}}"#;
+        let src = r#"import { build } from 'tsup';"#;
+        let d = run_with_pkg_at_path(pkg, "app.ts", src);
+        assert_eq!(d.len(), 1, "root-level app.ts should still flag: {d:?}");
+        assert!(d[0].message.contains("tsup"));
     }
 
     #[test]
