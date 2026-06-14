@@ -14,6 +14,20 @@ use super::{
 
 pub struct Check;
 
+/// True if the identifier reference resolves to a local binding (a declared
+/// variable, parameter, import, etc.) that shadows the global Node.js API of the
+/// same name. References to a genuine Node global stay unresolved (no
+/// `symbol_id`), so only a same-named local declaration yields `Some` here.
+fn resolves_to_local_binding(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    semantic.scoping().get_reference(ref_id).symbol_id().is_some()
+}
+
 /// True if the identifier is in a declaration position (variable name, param
 /// name, function/class name). Prevents "shim" declarations from tripping
 /// the rule on themselves.
@@ -67,6 +81,9 @@ impl OxcCheck for Check {
             match node.kind() {
                 AstKind::IdentifierReference(ident) => {
                     if is_declaration_name(node, semantic) {
+                        continue;
+                    }
+                    if resolves_to_local_binding(ident, semantic) {
                         continue;
                     }
                     let text = ident.name.as_str();
@@ -295,6 +312,40 @@ mod tests {
         let d = setup_at_path(">=16", "const ev = new CustomEvent('x');", "src/server.ts");
         assert_eq!(d.len(), 1, "{d:?}");
         assert!(d[0].message.contains("CustomEvent"));
+    }
+
+    #[test]
+    fn exempts_local_shadow_of_node_global_issue_1703() {
+        // Regression for issue #1703: a `const fetch = vi.fn()` mock shadows the
+        // global fetch API; references to it resolve to the local binding, not
+        // globalThis.fetch, and must not be flagged.
+        let source = r#"it('computed', () => {
+  const a = atom(0)
+  const b = atom((get) => get(a))
+  const fetch = vi.fn()
+  const c = atom((get) => fetch(get(a)))
+  const w = atom(null, (get, set) => {
+    set(a, 1)
+    fetch.mockClear()
+    store.set(w)
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+})"#;
+        let d = setup_at_path(">=12", source, "tests/vanilla/dependency.test.tsx");
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    #[test]
+    fn still_flags_global_fetch_alongside_unrelated_local_issue_1703() {
+        // The shadow exemption is scoped: a genuine global `fetch` call must still
+        // flag even when an unrelated local named differently exists.
+        let d = setup_at_path(
+            ">=12",
+            "const handler = () => fetch('https://example.com');",
+            "src/api.ts",
+        );
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(d[0].message.contains("fetch"));
     }
 
     #[test]
