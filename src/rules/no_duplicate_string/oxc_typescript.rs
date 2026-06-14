@@ -83,9 +83,10 @@ impl OxcCheck for Check {
 
 /// Decide whether a string-literal node sits in a context where
 /// extracting it to a constant doesn't make sense — a direct element of
-/// an array literal (categorized lookup / keyword tables), import/export
-/// specifiers, equality comparisons, `switch` cases, JSX
-/// `className` / `class` values, or Tailwind class-composition helpers.
+/// an array literal (categorized lookup / keyword tables), an object
+/// property key, import/export specifiers, equality comparisons, `switch`
+/// cases, JSX `className` / `class` values, or Tailwind class-composition
+/// helpers.
 fn should_ignore_oxc_node<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
@@ -98,6 +99,17 @@ fn should_ignore_oxc_node<'a>(
         semantic.nodes().parent_kind(node.id()),
         AstKind::ArrayExpression(_)
     ) {
+        return true;
+    }
+
+    // A string literal in the *key* position of a non-computed object
+    // property (`{ 'tl-color-bg': v }`) is a structural identifier, not a
+    // magic value: it names the field. Design-token / theme objects map
+    // the same keys across many variants by design, and there is no
+    // meaningful "extract to a constant" refactor for a key. The *value*
+    // (`{ k: 'tl-color' }`) is a separate node whose span won't match the
+    // key, so it stays counted.
+    if is_object_property_key(node, semantic) {
         return true;
     }
     for ancestor in semantic.nodes().ancestors(node.id()) {
@@ -151,6 +163,21 @@ fn should_ignore_oxc_node<'a>(
         }
     }
     false
+}
+
+/// True when `node` is the key of a non-computed object property
+/// (`{ 'tl-color': v }`). Matches on span so a value of the same string
+/// (`{ k: 'tl-color' }`) is not affected, and a computed key
+/// (`{ ['tl-color']: v }`, which IS a real expression) stays counted.
+fn is_object_property_key<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    use oxc_span::GetSpan;
+    let AstKind::ObjectProperty(prop) = semantic.nodes().parent_kind(node.id()) else {
+        return false;
+    };
+    !prop.computed && prop.key.span() == node.kind().span()
 }
 
 #[cfg(test)]
@@ -268,6 +295,37 @@ mod tests {
             track("checkout-completed");
             track("checkout-completed");
             track("checkout-completed");
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_object_property_keys_in_theme_variants() {
+        // Design-token / theme objects map the same CSS-variable keys
+        // across every variant by design (issue #1246: 851 FPs in
+        // tldraw). The key is a structural identifier, not a magic value
+        // to extract — `'tl-color-bg'` here is >= min_length and repeats
+        // past the threshold, yet must not be flagged.
+        let src = r#"
+            const themes = {
+                dracula: { 'tl-color-bg': '#282a36' },
+                dark: { 'tl-color-bg': '#000000' },
+                light: { 'tl-color-bg': '#ffffff' },
+                solarized: { 'tl-color-bg': '#002b36' },
+            };
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_string_duplicated_in_value_position() {
+        // The same string repeated as a property *value* (not a key) is
+        // still an extractable duplicate — this proves only the key
+        // position is exempt, not the string globally.
+        let src = r#"
+            const a = { x: 'duplicate-value' };
+            const b = { y: 'duplicate-value' };
+            const c = { z: 'duplicate-value' };
         "#;
         assert_eq!(run(src).len(), 1);
     }
