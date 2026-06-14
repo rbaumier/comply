@@ -593,6 +593,32 @@ fn is_k6_script(program: &Program<'_>) -> bool {
     imports_k6 && has_default_export
 }
 
+/// Does the file use a test framework with hooks at all — i.e. does a top-level
+/// statement register a test/suite, call a hook, or run a fixture runner
+/// (`describe`/`it`/`test`/`beforeEach`/`Deno.test`/`pluginTester(...)`)?
+///
+/// A `*.test.ts` / `*.spec.ts` script written as a sequential top-level program
+/// — a Deno/Node integration script run directly with `deno run …` — has no such
+/// call: it is named by convention but is not structured as a hook-based test
+/// suite. The require-hook remediation ("move this into `beforeEach`/`beforeAll`")
+/// is meaningless there because there are no hooks to move it into, so the rule
+/// must not fire. `node:test` files are recognised by their import upstream.
+fn file_has_test_framework_context(
+    program: &Program<'_>,
+    package_bindings: &FxHashSet<&str>,
+) -> bool {
+    program.body.iter().any(|stmt| {
+        let Statement::ExpressionStatement(expr_stmt) = stmt else {
+            return false;
+        };
+        let expr = &expr_stmt.expression;
+        callee_is_allowed_test_call(expr)
+            || is_suite_factory_call(expr)
+            || is_describe_like_suite_call(expr)
+            || is_fixture_runner_call(expr, package_bindings)
+    })
+}
+
 /// Classify a top-level statement.
 fn top_level_is_allowed(
     stmt: &Statement,
@@ -1792,6 +1818,48 @@ describe("x", () => { it("works", () => {}); });
     }
 
     #[test]
+    fn allows_script_mode_test_file_without_test_framework() {
+        let src = r#"
+import { MikroORM } from '@mikro-orm/core';
+import { MongoDriver, defineEntity, p } from '@mikro-orm/mongodb';
+
+const Author = defineEntity({ name: 'Author' });
+const Book = defineEntity({ name: 'Book' });
+
+const orm = await MikroORM.init({
+  driver: MongoDriver,
+  clientUrl: 'mongodb://localhost:27017/mikro-orm-test',
+});
+
+await orm.schema.create();
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "tests/deno/mongodb.test.ts");
+        assert!(
+            d.is_empty(),
+            "a script-mode *.test.ts with top-level setup but no test-framework call must not be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_top_level_setup_when_test_framework_present() {
+        let src = r#"
+import { describe, it, beforeAll } from 'vitest';
+
+const orm = await MikroORM.init({ driver: MongoDriver });
+
+describe('orm', () => {
+  it('works', () => {});
+});
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "tests/orm.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "top-level setup in a file that DOES use a test framework (describe/it) must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
     fn allows_declare_global_namespace_augmentation() {
         let src = r#"
 declare global {
@@ -1835,6 +1903,13 @@ impl OxcCheck for Check {
         }
         let node_test_mode = imports_node_test(program);
         let package_bindings = package_import_bindings(program);
+        // A file with no test-framework hook context (no `describe`/`it`/`test`/
+        // hook/`Deno.test`/fixture-runner call, no `node:test` import) is a
+        // script-mode `*.test.ts`, not a hook-based suite. There is nowhere to
+        // move setup into, so the rule does not apply.
+        if !node_test_mode && !file_has_test_framework_context(program, &package_bindings) {
+            return Vec::new();
+        }
         let mut diagnostics = Vec::new();
 
         for stmt in &program.body {
