@@ -76,6 +76,12 @@ pub struct PathSegments {
     /// configured file path and invokes their default export, so the default
     /// export is anonymous by convention (the file name carries the intent).
     pub is_framework_hook_file: bool,
+    /// A linter/parser test-spec fixture: a `valid.*`/`invalid.*` file or a
+    /// `.snap` snapshot under a `tests/specs/` directory (rome-tools/Biome
+    /// convention). These are test data read as text — never imported or
+    /// executed — so the engine skips them for every rule. See
+    /// [`crate::rules::path_utils::is_linter_spec_fixture`].
+    pub is_linter_spec_fixture: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -505,6 +511,7 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
         in_fuzz_targets: crate::rules::path_utils::is_fuzz_targets_path(path),
         in_benchmark_dir: is_benchmark_path(&lower),
         is_framework_hook_file: is_framework_hook_file(path),
+        is_linter_spec_fixture: crate::rules::path_utils::is_linter_spec_fixture(path),
     }
 }
 
@@ -812,6 +819,26 @@ mod tests {
     fn in_fuzz_targets_set_for_cargo_fuzz_path() {
         assert!(scan_path(&PathBuf::from("fuzz/fuzz_targets/x.rs")).in_fuzz_targets);
         assert!(!scan_path(&PathBuf::from("src/lib.rs")).in_fuzz_targets);
+    }
+
+    #[test]
+    fn linter_spec_fixture_flag_set_issue1438() {
+        // Issue #1438: rome-tools/Biome linter spec fixtures under tests/specs/.
+        assert!(
+            scan_path(&PathBuf::from(
+                "crates/rome_js_analyze/tests/specs/a11y/noAccessKey/invalid.jsx"
+            ))
+            .is_linter_spec_fixture
+        );
+        assert!(
+            scan_path(&PathBuf::from(
+                "crates/rome_js_analyze/tests/specs/a11y/useValidLang/valid.jsx"
+            ))
+            .is_linter_spec_fixture
+        );
+        // A normal source file and an ordinary `src/valid.ts` are not fixtures.
+        assert!(!scan_path(&PathBuf::from("src/valid.ts")).is_linter_spec_fixture);
+        assert!(!scan_path(&PathBuf::from("src/app.ts")).is_linter_spec_fixture);
     }
 
     #[test]
