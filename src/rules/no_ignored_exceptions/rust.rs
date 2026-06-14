@@ -21,6 +21,12 @@
 //! - `let _ = expr.send(..)`: the best-effort channel fire-and-forget idiom on
 //!   a `oneshot`/`mpsc` sender. An `Err` from `send` only signals the receiver
 //!   already dropped (shutdown/cleanup path), which is intentionally ignored.
+//! - `let _ = stderr()/stdout().write_all(..)` (also `write`/`write_fmt`/`flush`):
+//!   a best-effort write to a standard stream. These run in error-reporting
+//!   paths (panic/signal handlers, `Drop`, fallback loggers) where an I/O error
+//!   has nowhere to be propagated or reported, so `let _ =` intentionally drops
+//!   it. Scoped to receiver chains rooted at `stderr()`/`stdout()` so a plain
+//!   `let _ = file.write_all(..)` still fires.
 //!
 //! NOTE: This rule uses a heuristic (call-like pattern matching) rather than
 //! type awareness. It may flag `let _ = infallible_fn()` where the function
@@ -78,6 +84,12 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
     // Skip the best-effort channel fire-and-forget idiom `let _ = expr.send(..)`:
     // an `Err` only signals the receiver dropped on a shutdown/cleanup path.
     if is_channel_send(value, source) {
+        return;
+    }
+
+    // Skip the best-effort standard-stream write `let _ = stderr()/stdout()...`:
+    // the I/O error has nowhere to go in an error-reporting path.
+    if is_std_stream_write(value, source) {
         return;
     }
 
@@ -145,6 +157,73 @@ fn is_channel_send(value: Node, source: &[u8]) -> bool {
         return false;
     };
     matches!(field.utf8_text(source), Ok("send"))
+}
+
+/// True if `value` is a write method call (`write_all`/`write`/`write_fmt`/
+/// `flush`) whose receiver chain roots at `stderr()` or `stdout()` — the
+/// best-effort standard-stream write idiom. The error has nowhere to be
+/// propagated in an error-reporting path, so `let _ =` drops it intentionally.
+///
+/// Anchoring on the root receiver (not just the method name) keeps the
+/// exemption tight: `let _ = file.write_all(..)` to an ordinary writer still
+/// fires, since its chain does not root at a standard stream.
+fn is_std_stream_write(value: Node, source: &[u8]) -> bool {
+    if value.kind() != "call_expression" {
+        return false;
+    }
+    let Some(function) = value.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    let Some(field) = function.child_by_field_name("field") else {
+        return false;
+    };
+    let is_write_method = matches!(
+        field.utf8_text(source),
+        Ok("write_all" | "write" | "write_fmt" | "flush")
+    );
+    if !is_write_method {
+        return false;
+    }
+    let Some(receiver) = function.child_by_field_name("value") else {
+        return false;
+    };
+    receiver_roots_at_std_stream(receiver, source)
+}
+
+/// True if the receiver chain bottoms out at a `stderr()`/`stdout()` call,
+/// walking through any intermediate method calls (e.g. `stderr().lock()`).
+fn receiver_roots_at_std_stream(mut node: Node, source: &[u8]) -> bool {
+    loop {
+        match node.kind() {
+            "call_expression" => {
+                let Some(function) = node.child_by_field_name("function") else {
+                    return false;
+                };
+                match function.kind() {
+                    // `stderr()` / `std::io::stderr()` — the chain root.
+                    "identifier" | "scoped_identifier" => {
+                        let Ok(callee) = function.utf8_text(source) else {
+                            return false;
+                        };
+                        let name = callee.rsplit("::").next().unwrap_or(callee);
+                        return name == "stderr" || name == "stdout";
+                    }
+                    // `stderr().lock()` etc. — descend into the receiver.
+                    "field_expression" => {
+                        let Some(receiver) = function.child_by_field_name("value") else {
+                            return false;
+                        };
+                        node = receiver;
+                    }
+                    _ => return false,
+                }
+            }
+            _ => return false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -290,6 +369,33 @@ mod tests {
         // call result is still genuinely swallowed.
         let src = "fn f() { let _ = foo.bar(); }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_std_stream_write() {
+        // Regression for #1524: a best-effort write to a standard stream in an
+        // error-reporting path. The I/O error has nowhere to be propagated.
+        let scoped = "fn p(m: &str) { let _ = std::io::stderr().write_all(m.as_bytes()); }";
+        let bare = r#"fn p() { let _ = stderr().write_all(b"\n"); }"#;
+        let stdout = r#"fn p() { let _ = std::io::stdout().write_all(b"x"); }"#;
+        let flush = "fn p() { let _ = std::io::stderr().flush(); }";
+        let locked = r#"fn p() { let _ = std::io::stderr().lock().write_all(b"x"); }"#;
+        assert!(run_on(scoped).is_empty());
+        assert!(run_on(bare).is_empty());
+        assert!(run_on(stdout).is_empty());
+        assert!(run_on(flush).is_empty());
+        assert!(run_on(locked).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_non_std_stream_write() {
+        // Negative space for #1524: the exemption is anchored on a `stderr()`/
+        // `stdout()` root receiver. A `write_all` on an ordinary writer (file,
+        // socket, buffer) genuinely swallows the error and must still fire.
+        let file = "fn f(mut w: File) { let _ = w.write_all(b\"x\"); }";
+        let business = "fn f() { let _ = persist_to_disk(record); }";
+        assert_eq!(run_on(file).len(), 1);
+        assert_eq!(run_on(business).len(), 1);
     }
 
     #[test]
