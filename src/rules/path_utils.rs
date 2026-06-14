@@ -306,6 +306,38 @@ pub fn has_type_probe_infix(path: &Path) -> bool {
         .is_some_and(|name| name.to_ascii_lowercase().contains(".tp."))
 }
 
+/// True when the file's basename stem ends with a PascalCase `Tests` or `Spec`
+/// suffix (capital `T`/`S`), e.g. `apolloServerTests.ts`, `httpServerSpec.tsx`.
+/// This is the test-suite-factory convention: files exporting `describe()`-block
+/// factories (`defineIntegrationTestSuiteApolloServerTests`) consumed by real
+/// `.test.ts` specs. They carry no `.test.`/`.spec.` infix, so the lowercase
+/// substring scan misses them; the suffix is matched case-sensitively to avoid
+/// flagging ordinary words like `manifests.ts` or `respec.ts`.
+pub fn has_test_suite_factory_suffix(path: &Path) -> bool {
+    const TEST_SUFFIXES: &[&str] = &["Tests", "Spec"];
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    if !matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs")
+    ) {
+        return false;
+    }
+    TEST_SUFFIXES.iter().any(|suffix| {
+        let Some(prefix) = stem.strip_suffix(suffix) else {
+            return false;
+        };
+        // Require a non-empty prefix ending in a lowercase letter or digit so the
+        // suffix is a genuine camelCase word boundary (`serverTests`), not the
+        // whole stem (`Tests.ts`) or another capitalized token (`HTTPSpec`).
+        prefix
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    })
+}
+
 /// True for an import specifier that traverses into a build-output or
 /// code-generated directory (`dist`/`build`/`out` bundles, `generated`/
 /// `__generated__`/`.prisma`/`prisma`/`gen` codegen output) or `node_modules`.
@@ -621,6 +653,26 @@ mod aux_path_tests {
     fn fuzz_targets_path_match() {
         assert!(is_fuzz_targets_path(&PathBuf::from("fuzz/fuzz_targets/parse.rs")));
         assert!(!is_fuzz_targets_path(&PathBuf::from("src/lib.rs")));
+    }
+
+    #[test]
+    fn test_suite_factory_suffix_match() {
+        // Issue #1661: PascalCase `Tests`/`Spec` test-suite-factory convention.
+        assert!(has_test_suite_factory_suffix(&PathBuf::from(
+            "packages/integration-testsuite/src/apolloServerTests.ts"
+        )));
+        assert!(has_test_suite_factory_suffix(&PathBuf::from("src/httpServerTests.js")));
+        assert!(has_test_suite_factory_suffix(&PathBuf::from("src/queryTests.tsx")));
+        assert!(has_test_suite_factory_suffix(&PathBuf::from("src/parserSpec.ts")));
+        // Negative space: ordinary words that merely end in lowercase `tests`/`spec`
+        // (no capital boundary) are production files, not test factories.
+        assert!(!has_test_suite_factory_suffix(&PathBuf::from("src/manifests.ts")));
+        assert!(!has_test_suite_factory_suffix(&PathBuf::from("src/respec.ts")));
+        // The suffix must be a camelCase word boundary, not the whole stem.
+        assert!(!has_test_suite_factory_suffix(&PathBuf::from("src/Tests.ts")));
+        assert!(!has_test_suite_factory_suffix(&PathBuf::from("src/Spec.ts")));
+        // Only JS/TS source extensions qualify.
+        assert!(!has_test_suite_factory_suffix(&PathBuf::from("src/apolloServerTests.md")));
     }
 
     #[test]
