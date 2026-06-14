@@ -61,13 +61,17 @@ type RawClone = (usize, usize, usize, usize, usize, usize);
 pub fn lint_files(files: &[&SourceFile]) -> Vec<Diagnostic> {
     // Sample/example/docs/fixture/bench directories hold intentionally
     // self-contained, duplicated code (multi-bundler demos, standalone sample
-    // apps). Drop them up front so a relaxed file is neither reported nor used
-    // as a canonical match, and downstream `file_data`/`files` indices stay
-    // internally consistent.
+    // apps). Generated files (e.g. TanStack Router's `routeTree.gen.ts`) are
+    // machine-emitted and structurally repetitive by design. Drop both up front
+    // so a relaxed file is neither reported nor used as a canonical match, and
+    // downstream `file_data`/`files` indices stay internally consistent.
     let files: Vec<&SourceFile> = files
         .iter()
         .copied()
-        .filter(|file| !crate::rules::file_ctx::scan_path(&file.path).is_relaxed_dir)
+        .filter(|file| {
+            !crate::rules::file_ctx::scan_path(&file.path).is_relaxed_dir
+                && !crate::rules::file_ctx::is_generated_path(&file.path)
+        })
         .collect();
 
     if files.len() < 2 {
@@ -1063,6 +1067,34 @@ mod tests {
             language: Language::Vue,
         };
         assert!(lint_files(&[&fa, &fb]).is_empty());
+    }
+
+    #[test]
+    fn generated_files_excluded() {
+        // Regression test for issue #1343: TanStack Router's `routeTree.gen.ts`
+        // and similar codegen output are structurally identical across variant
+        // examples by design. The `.gen.ts` suffix marks them generated, so
+        // clone detection must skip them.
+        let dir = tempfile::tempdir().unwrap();
+        let block = large_ts_block(20);
+        let pa = dir.path().join("a.gen.ts");
+        let pb = dir.path().join("b.gen.ts");
+        std::fs::write(&pa, &block).unwrap();
+        std::fs::write(&pb, &block).unwrap();
+        let fa = SourceFile { path: pa, language: Language::TypeScript };
+        let fb = SourceFile { path: pb, language: Language::TypeScript };
+        assert!(lint_files(&[&fa, &fb]).is_empty());
+    }
+
+    #[test]
+    fn handwritten_files_still_reported() {
+        // Negative-space guard for issue #1343: ordinary hand-written files with
+        // the same duplicated block must still be flagged — the generated-file
+        // skip must not weaken clone detection for normal sources.
+        let dir = tempfile::tempdir().unwrap();
+        let block = large_ts_block(20);
+        let (fa, fb) = write_pair(&dir, "ts", &block);
+        assert_eq!(lint_files(&[&fa, &fb]).len(), 1);
     }
 
     #[test]

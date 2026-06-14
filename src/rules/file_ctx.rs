@@ -278,6 +278,15 @@ fn is_in_generated_dir(path: &Path) -> bool {
     normalized.split('/').any(|seg| seg == "generated")
 }
 
+/// True when `path` is recognized as generated from its path alone — either a
+/// codegen filename suffix (e.g. `routeTree.gen.ts`) or a `generated/` directory
+/// segment. The content-based `@generated`-marker scan ([`scan_generated`]) is
+/// intentionally excluded: this predicate is for callers that only have a path,
+/// not the file source.
+pub(crate) fn is_generated_path(path: &Path) -> bool {
+    is_generated_filename(path) || is_in_generated_dir(path)
+}
+
 fn scan_minified(path: &Path, source: &str) -> bool {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     if !matches!(ext, "js" | "css" | "mjs" | "cjs") {
