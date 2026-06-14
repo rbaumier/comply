@@ -153,8 +153,8 @@ mod tests {
     }
 
     #[test]
-    fn flags_user_token_comparison() {
-        assert_eq!(run_on("if (userToken == expectedToken) {}").len(), 1);
+    fn flags_auth_token_comparison() {
+        assert_eq!(run_on("if (authToken == expectedAuthToken) {}").len(), 1);
     }
 
     #[test]
@@ -191,6 +191,14 @@ mod tests {
     #[test]
     fn allows_hash_map_size() {
         assert!(run_on("if (hashMapSize === 0) {}").is_empty());
+    }
+
+    /// `token` / `signature` without a secret indicator are non-security
+    /// role words (lexer tokens, LSP signatures), not credentials.
+    #[test]
+    fn allows_comment_token_and_lsp_signature() {
+        assert!(run_on("if (commentToken !== currentCommentToken) {}").is_empty());
+        assert!(run_on("if (oldLspSig !== lspSignature) {}").is_empty());
     }
 
     #[test]

@@ -2,11 +2,9 @@
 //!
 //! Walks `binary_expression` nodes whose operator is `==` / `!=` and
 //! flags the comparison if either operand refers to an identifier whose
-//! normalized name ends with a sensitive word (`password`, `token`,
-//! `signature`, `hash`, …). Operands that are string literals, call
-//! expressions, or any other shape are ignored, which eliminates the
-//! whole class of substring FPs that the previous line-scan produced
-//! on strings like `"index_signature"`.
+//! normalized name is sensitive (see `is_sensitive_identifier`). Operands
+//! that are string literals, call expressions, or any other shape are
+//! ignored, so a string like `"index_signature"` is never inspected.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -85,8 +83,8 @@ mod tests {
     }
 
     #[test]
-    fn flags_user_token_comparison() {
-        let src = "fn f() -> bool { user_token == expected_token }";
+    fn flags_auth_token_comparison() {
+        let src = "fn f() -> bool { auth_token == expected_auth_token }";
         assert_eq!(run_on(src).len(), 1);
     }
 
@@ -159,6 +157,31 @@ fn check(member: tree_sitter::Node) {
     let _ = member.kind() != "password";
 }
 "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// helix-core/src/comment.rs:63 — `token` is a comment-syntax marker
+    /// (`//`, `#`, …), not an auth token.
+    #[test]
+    fn does_not_flag_comment_syntax_token() {
+        let src = "fn f(fragment: &str, token: &str) -> bool { fragment != token }";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// helix-term/src/commands.rs:5305 — `current_comment_token` is the
+    /// active comment prefix in the editor.
+    #[test]
+    fn does_not_flag_current_comment_token() {
+        let src =
+            "fn f(token: &str, current_comment_token: Option<&str>) -> bool { Some(token) == current_comment_token }";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// helix-term/src/handlers/signature_help.rs:253 — `lsp_signature` is
+    /// an LSP function-call signature, not a digital signature.
+    #[test]
+    fn does_not_flag_lsp_signature() {
+        let src = "fn f(old_lsp_sig: &Sig, lsp_signature: &Sig) -> bool { old_lsp_sig != lsp_signature }";
         assert!(run_on(src).is_empty());
     }
 }
