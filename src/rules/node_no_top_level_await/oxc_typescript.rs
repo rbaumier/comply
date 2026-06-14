@@ -209,6 +209,34 @@ const testFiles = await fs.readdir(new URL('.', import.meta.url));
         assert!(d[0].message.contains("Top-level"));
     }
 
+    // Regression for #1198: `type-tests/` directories (drizzle-orm's tstyche /
+    // tsd-style type-correctness suites) use module-scope `await` so TypeScript
+    // infers the resolved query result type; they are never published. The
+    // central test-dir predicate classifies `type-tests/` via its `-tests/`
+    // marker, so the rule must not flag it.
+    #[test]
+    fn allows_top_level_await_in_type_tests_dir() {
+        let src =
+            "const leftJoinFull = await db.select().from(users).leftJoin(city, eq(users.id, city.id));";
+        assert!(
+            run_at(src, "drizzle-orm/type-tests/mysql/select.ts").is_empty(),
+            "top-level await in a `type-tests/` directory is a type-correctness test, not a published module"
+        );
+    }
+
+    // Negative space for #1198: an ordinary published source module (no
+    // test-directory segment) must still be flagged. The exemption is keyed on
+    // the `type-tests/` convention, not relaxed for production source.
+    #[test]
+    fn still_flags_top_level_await_in_published_db_client() {
+        let d = run_at(
+            "const conn = await connect(process.env.DATABASE_URL);",
+            "src/db/client.ts",
+        );
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Top-level"));
+    }
+
     /// Run the rule against `importer_rel` inside a temp tree whose root
     /// `package.json` is `pkg_json`, exercising the on-disk
     /// `nearest_package_json` ESM detection.
