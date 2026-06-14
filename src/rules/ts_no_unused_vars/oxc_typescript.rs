@@ -291,6 +291,47 @@ fn is_enum_member_used_in_type_position(
     type_position_uses.contains(&(enum_symbol, member_name.to_string()))
 }
 
+/// True when `decl_node` is a parameter of a class method whose enclosing class
+/// has an `implements` clause. Such a method's signature is dictated by the
+/// interface contract: a parameter it ignores cannot be dropped or renamed
+/// without breaking the contract, so an absence of references is by design, not
+/// dead code (e.g. stub/noop interface-method implementations).
+///
+/// Scoped to *parameters* (`FormalParameter` is the decl node) of the method
+/// *directly* enclosing them — the first function-like ancestor must be a class
+/// method. A parameter of a closure nested inside such a method, an unused
+/// local, or a method in a class with no `implements` clause is left reportable.
+fn is_param_of_implements_class_method(
+    decl_node: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    if !matches!(nodes.kind(decl_node), AstKind::FormalParameter(_)) {
+        return false;
+    }
+    // The first function-like ancestor must be the method owning this
+    // parameter; a closure nested inside the method would shadow it and the
+    // parameter would no longer be contract-mandated.
+    let mut ancestors = nodes.ancestors(decl_node).peekable();
+    let in_class_method = loop {
+        match ancestors.next().map(|node| node.kind()) {
+            Some(AstKind::Function(_)) => {
+                break matches!(ancestors.peek().map(|node| node.kind()), Some(AstKind::MethodDefinition(_)));
+            }
+            Some(AstKind::ArrowFunctionExpression(_)) => break false,
+            Some(_) => continue,
+            None => break false,
+        }
+    };
+    if !in_class_method {
+        return false;
+    }
+    nodes.ancestor_kinds(decl_node).find_map(|kind| match kind {
+        AstKind::Class(class) => Some(!class.implements.is_empty()),
+        _ => None,
+    }) == Some(true)
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[]
@@ -349,6 +390,14 @@ impl OxcCheck for Check {
             }
 
             if is_rest_sibling_destructure(decl_node, symbol_span, semantic) {
+                continue;
+            }
+
+            // A parameter mandated by an interface contract — a method of a
+            // class with an `implements` clause — cannot be dropped or renamed
+            // without breaking the contract, so an unreferenced one (stub/noop
+            // implementation) is by design, not dead code.
+            if is_param_of_implements_class_method(decl_node, semantic) {
                 continue;
             }
 
@@ -1052,6 +1101,87 @@ export const input = <editor />
         let diags = run_at(src, "syntax-tests-data/foo.ts");
         assert_eq!(diags.len(), 1, "expected `letNumber` to be flagged: {diags:?}");
         assert!(diags[0].message.contains("`letNumber`"));
+    }
+
+    #[test]
+    fn no_fp_on_unused_param_in_implements_class_method() {
+        // A class implementing an interface must keep the method parameters the
+        // contract mandates, even when the body ignores some of them
+        // (stub/noop methods). The signature cannot drop or rename a param
+        // without breaking the interface, so an unreferenced one there is by
+        // design, not dead code. (Closes #1318)
+        let src = r#"
+class R implements ITreeRenderer<Element, void, HTMLElement> {
+    disposeTemplate(templateData: HTMLElement): void {}
+    getTemplateId(element: Element): string {
+        return 'default';
+    }
+    renderElement(element: ITreeNode<Element, void>, index: number, templateData: HTMLElement): void {
+        templateData.textContent = 'x';
+    }
+}
+export {};
+"#;
+        let diags = run(src);
+        for name in ["templateData", "element", "index"] {
+            assert!(
+                !diags.iter().any(|d| d.message.contains(&format!("`{name}`"))),
+                "FP on interface-mandated parameter `{name}` in an implements-class method: {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_unused_param_in_class_without_implements() {
+        // Negative-space guard for #1318 — a class with no `implements` clause is
+        // not bound by an interface contract, so an unused method parameter is a
+        // real binding and stays reportable.
+        let src = r#"
+class Plain {
+    greet(unusedParam: string): string {
+        return 'hi';
+    }
+}
+export { Plain };
+"#;
+        let diags = run(src);
+        assert!(
+            diags.iter().any(|d| d.message.contains("`unusedParam`")),
+            "expected unused param in a non-implements class to be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_unused_local_inside_implements_class_method() {
+        // Negative-space guard for #1318 — the exemption is scoped strictly to
+        // parameters. An unused *local* variable inside an implements-class
+        // method is still dead code and must fire.
+        let src = r#"
+class R implements ITreeRenderer<Element, void, HTMLElement> {
+    getTemplateId(element: Element): string {
+        const unusedLocal = element;
+        return 'default';
+    }
+}
+export {};
+"#;
+        let diags = run(src);
+        assert!(
+            diags.iter().any(|d| d.message.contains("`unusedLocal`")),
+            "expected unused local in an implements-class method to be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_unused_param_in_standalone_function() {
+        // Negative-space guard for #1318 — a standalone function (no enclosing
+        // implements class) keeps flagging unused params.
+        let src = "function f(unusedParam: number): number {\n  return 1;\n}\nexport { f };";
+        let diags = run(src);
+        assert!(
+            diags.iter().any(|d| d.message.contains("`unusedParam`")),
+            "expected unused param in a standalone function to be flagged: {diags:?}"
+        );
     }
 
     #[test]
