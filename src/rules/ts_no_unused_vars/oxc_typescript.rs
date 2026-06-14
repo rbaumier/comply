@@ -5,7 +5,9 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, is_custom_element_decorator_name};
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
-use oxc_ast::ast::{Expression, FunctionType};
+use oxc_ast::ast::{Expression, FunctionType, TSTypeName};
+use oxc_semantic::SymbolId;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -170,6 +172,73 @@ fn file_contains_jsx(semantic: &oxc_semantic::Semantic) -> bool {
         .any(|node| matches!(node.kind(), AstKind::JSXElement(_) | AstKind::JSXFragment(_)))
 }
 
+/// Collects every enum member referenced in *type position* as
+/// `EnumName.Member` — the discriminated-union literal-type pattern
+/// (`readonly kind: ReaderStateKind.Header`). oxc resolves the enum name itself
+/// but not the trailing member, so these references are invisible to the symbol
+/// reference count and the member would otherwise be flagged as unused.
+///
+/// Each pair is `(enum symbol id, member name)`: `ReaderStateKind.Header`
+/// records `(ReaderStateKind, "Header")` and counts only as a use of `Header`,
+/// never `Body`. The left side is resolved through its `reference_id` so the
+/// match is symbol-accurate, not name-based — an unrelated `Other.Header` in the
+/// same file does not exempt the enum's `Header`.
+fn collect_type_position_enum_member_uses(
+    semantic: &oxc_semantic::Semantic,
+) -> HashSet<(SymbolId, String)> {
+    let scoping = semantic.scoping();
+    let nodes = semantic.nodes();
+    let mut uses = HashSet::new();
+
+    for node in nodes.iter() {
+        let AstKind::TSQualifiedName(qualified) = node.kind() else {
+            continue;
+        };
+        let TSTypeName::IdentifierReference(left) = &qualified.left else {
+            continue;
+        };
+        let Some(ref_id) = left.reference_id.get() else {
+            continue;
+        };
+        let Some(enum_symbol) = scoping.get_reference(ref_id).symbol_id() else {
+            continue;
+        };
+        if !matches!(
+            nodes.kind(scoping.symbol_declaration(enum_symbol)),
+            AstKind::TSEnumDeclaration(_)
+        ) {
+            continue;
+        }
+        uses.insert((enum_symbol, qualified.right.name.to_string()));
+    }
+
+    uses
+}
+
+/// True when the enum member declared at `decl_node` is referenced in type
+/// position as `EnumName.Member` — i.e. `(enclosing enum symbol, member name)`
+/// is present in `type_position_uses`. Returns false for any non-enum-member
+/// declaration, so a genuinely unreferenced member (value or type) stays
+/// reportable.
+fn is_enum_member_used_in_type_position(
+    decl_node: oxc_semantic::NodeId,
+    member_name: &str,
+    type_position_uses: &HashSet<(SymbolId, String)>,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    if !matches!(nodes.kind(decl_node), AstKind::TSEnumMember(_)) {
+        return false;
+    }
+    let Some(enum_symbol) = nodes.ancestor_kinds(decl_node).find_map(|kind| match kind {
+        AstKind::TSEnumDeclaration(decl) => decl.id.symbol_id.get(),
+        _ => None,
+    }) else {
+        return false;
+    };
+    type_position_uses.contains(&(enum_symbol, member_name.to_string()))
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[]
@@ -189,6 +258,10 @@ impl OxcCheck for Check {
         // Memoized once a React pragma import is encountered; scanning every
         // node for JSX is only worth paying for when there's a React import.
         let mut has_jsx: Option<bool> = None;
+        // Memoized on the first unreferenced enum member; building the
+        // type-position use set scans every node, so it is only paid for in
+        // files that actually declare an enum member that looks unused.
+        let mut enum_member_type_uses: Option<HashSet<(SymbolId, String)>> = None;
 
         for symbol_id in scoping.symbol_ids() {
             let name = scoping.symbol_name(symbol_id);
@@ -211,6 +284,22 @@ impl OxcCheck for Check {
             }
 
             if is_rest_sibling_destructure(decl_node, symbol_span, semantic) {
+                continue;
+            }
+
+            // An enum member referenced only as `EnumName.Member` in a type
+            // position (discriminated-union literal type) is used; oxc resolves
+            // the enum name but not the trailing member, so it is invisible to
+            // the reference count above.
+            if matches!(nodes.kind(decl_node), AstKind::TSEnumMember(_))
+                && is_enum_member_used_in_type_position(
+                    decl_node,
+                    name,
+                    enum_member_type_uses
+                        .get_or_insert_with(|| collect_type_position_enum_member_uses(semantic)),
+                    semantic,
+                )
+            {
                 continue;
             }
 
@@ -694,6 +783,64 @@ export {};
         assert!(
             diags.iter().any(|d| d.message.contains("`unusedParam`")),
             "expected unused implementation parameter `unusedParam` to be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_enum_member_used_as_literal_type_discriminant() {
+        // Enum members used exclusively as `EnumName.Member` literal types in a
+        // discriminated union — the standard TS pattern — are referenced only at
+        // the type level. oxc resolves the enum name but not the trailing
+        // member, so the value-usage reference count misses them. (Closes #2181)
+        let src = r#"
+enum ReaderStateKind {
+    Header = 0,
+    Body = 1,
+}
+
+interface ReaderStateHeader {
+    readonly kind: ReaderStateKind.Header;
+    contentLength?: number;
+}
+
+interface ReaderStateBody {
+    readonly kind: ReaderStateKind.Body;
+    readonly contentLength: number;
+}
+
+export type ReaderState = ReaderStateHeader | ReaderStateBody;
+"#;
+        let diags = run(src);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`Header`") || d.message.contains("`Body`")),
+            "FP on enum members used only as literal type discriminants: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_enum_member_never_referenced() {
+        // Negative-space guard for #2181 — only the members actually named in a
+        // type position are exempted. `Body` is referenced as
+        // `ReaderStateKind.Body`; `Unused` is referenced nowhere (value or
+        // type), so it stays reportable.
+        let src = r#"
+enum ReaderStateKind {
+    Body = 1,
+    Unused = 2,
+}
+
+export interface ReaderStateBody {
+    readonly kind: ReaderStateKind.Body;
+}
+"#;
+        let diags = run(src);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`Body`")),
+            "FP on enum member used as literal type discriminant: {diags:?}"
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("`Unused`")),
+            "expected enum member `Unused` (referenced nowhere) to be flagged: {diags:?}"
         );
     }
 
