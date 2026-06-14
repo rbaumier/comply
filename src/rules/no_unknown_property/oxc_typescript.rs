@@ -73,31 +73,6 @@ fn react_equivalent(name: &str) -> Option<String> {
     None
 }
 
-/// True when the file is JSX for a framework that uses native HTML attribute
-/// names (`class`, `for`, …) rather than React's camelCase — Vue, Solid,
-/// Preact, Qwik, or Stencil. Detected three ways: via a framework import, via an
-/// in-file `@jsxImportSource` pragma, or via the nearest `tsconfig.json`'s
-/// `compilerOptions.jsxImportSource` set to a non-React runtime (which injects
-/// the JSX factory project-wide, so files need no framework import).
-/// `no-unknown-property` encodes React's prop conventions and must not fire on
-/// these.
-fn is_non_react_jsx_file(ctx: &CheckCtx) -> bool {
-    ctx.source_contains("solid-js")
-        || ctx.source_contains("@solidjs/")
-        || ctx.source_contains("solid-start")
-        || ctx.source_contains("@vue/")
-        || ctx.source_contains("@builder.io/qwik")
-        || ctx.source_contains("@stencil/core")
-        || ctx.source_contains("preact/")
-        || ctx.source_contains("'vue'")
-        || ctx.source_contains("\"vue\"")
-        || ctx.source_contains("'preact'")
-        || ctx.source_contains("\"preact\"")
-        || ctx.source_contains("jsxImportSource vue")
-        || ctx.source_contains("jsxImportSource preact")
-        || ctx.project.has_non_react_jsx_import_source(ctx.path)
-}
-
 fn is_intrinsic_tag(tag: &str) -> bool {
     tag.chars().next().is_some_and(|c| c.is_ascii_lowercase())
 }
@@ -144,7 +119,7 @@ impl OxcCheck for Check {
                 continue;
             };
 
-            if is_non_react_jsx_file(ctx) {
+            if crate::oxc_helpers::is_non_react_jsx_file(ctx.source, ctx.project, ctx.path) {
                 return;
             }
 

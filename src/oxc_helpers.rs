@@ -234,6 +234,35 @@ pub fn in_non_react_framework_package(
     (declares("vue") || declares("solid-js")) && !declares("react")
 }
 
+/// True when the file is JSX for a framework that uses native HTML attribute
+/// names (`class`, `for`, …) rather than React's camelCase — Vue, Solid,
+/// Preact, Qwik, or Stencil. Detected three ways: via a framework import, via an
+/// in-file `@jsxImportSource` pragma, or via the nearest `tsconfig.json`'s
+/// `compilerOptions.jsxImportSource` set to a non-React runtime (which injects
+/// the JSX factory project-wide, so files need no framework import).
+///
+/// React-specific rules (`no-unknown-property`, `react-display-name`) must not
+/// fire on these files: React DevTools, Fast Refresh, and React's prop
+/// conventions are all React-only concerns. Source checks are memoized per file
+/// via [`source_contains`].
+#[must_use]
+pub fn is_non_react_jsx_file(source: &str, project: &crate::project::ProjectCtx, path: &Path) -> bool {
+    source_contains(source, "solid-js")
+        || source_contains(source, "@solidjs/")
+        || source_contains(source, "solid-start")
+        || source_contains(source, "@vue/")
+        || source_contains(source, "@builder.io/qwik")
+        || source_contains(source, "@stencil/core")
+        || source_contains(source, "preact/")
+        || source_contains(source, "'vue'")
+        || source_contains(source, "\"vue\"")
+        || source_contains(source, "'preact'")
+        || source_contains(source, "\"preact\"")
+        || source_contains(source, "jsxImportSource vue")
+        || source_contains(source, "jsxImportSource preact")
+        || project.has_non_react_jsx_import_source(path)
+}
+
 /// True if the file is a Web Worker script, where `self` resolves to the
 /// `DedicatedWorkerGlobalScope` (the canonical worker global, equivalent to
 /// `globalThis` in that realm) rather than `window`. Detected by the
