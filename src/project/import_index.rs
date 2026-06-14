@@ -2507,6 +2507,11 @@ fn read_package_name(manifest: &Path) -> Option<String> {
 
 fn probe_path(raw: &Path, known: &std::collections::HashSet<PathBuf>) -> Option<PathBuf> {
     const EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mts", "mjs", "cts", "cjs", "vue"];
+    // Declaration-only directory entries. TypeScript resolves `import './dir'`
+    // to `./dir/index.d.ts` when the directory holds only a declaration file.
+    // These never appear in `known` (`.d.*` files are excluded from the scan
+    // set), so they need an existence-only check rather than a `known` lookup.
+    const INDEX_DECL_FILES: &[&str] = &["index.d.ts", "index.d.mts", "index.d.cts"];
 
     // Explicit .d.* imports: existence-only check, no `known` membership required.
     // .d.ts files are intentionally excluded from the scan set but are valid import targets.
@@ -2620,6 +2625,13 @@ fn probe_path(raw: &Path, known: &std::collections::HashSet<PathBuf>) -> Option<
         if let Ok(c) = std::fs::canonicalize(&candidate)
             && known.contains(&c)
         {
+            return Some(c);
+        }
+    }
+    // Declaration-only directory: `./dir` → `./dir/index.d.ts`. Existence-only,
+    // since `.d.*` files are not in `known`.
+    for decl in INDEX_DECL_FILES {
+        if let Ok(c) = std::fs::canonicalize(raw.join(decl)) {
             return Some(c);
         }
     }
