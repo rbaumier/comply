@@ -2830,6 +2830,39 @@ impl ProjectCtx {
             .is_some_and(|src| src != "react")
     }
 
+    /// True when the project governing `path` positively declares CommonJS as
+    /// its module system, where the resolver supplies extensions and relative
+    /// imports therefore need none. The positive signal is the nearest tsconfig
+    /// selecting CommonJS output or classic resolution
+    /// (`compilerOptions.module` is `commonjs`, or `compilerOptions.module` /
+    /// `moduleResolution` is one of `node`/`node10`/`classic`) *and* the nearest
+    /// `package.json` not declaring `"type":"module"`.
+    ///
+    /// Conservative by construction: dual-mode signals (`node16`/`nodenext`)
+    /// are ESM-capable and want explicit extensions, so they are not CommonJS
+    /// here. Absent or ambiguous config returns false — callers keep their
+    /// default (ESM) behavior rather than silently assuming CommonJS.
+    pub fn is_commonjs_project(&self, path: &Path) -> bool {
+        if self
+            .nearest_package_json(path)
+            .is_some_and(|pkg| pkg.module_type == ModuleType::Module)
+        {
+            return false;
+        }
+        let Some(tsc) = self.nearest_tsconfig(path) else {
+            return false;
+        };
+        const CLASSIC: &[&str] = &["node", "node10", "classic"];
+        let module_is_cjs = tsc.module.as_deref().is_some_and(|m| {
+            m.eq_ignore_ascii_case("commonjs") || CLASSIC.iter().any(|c| m.eq_ignore_ascii_case(c))
+        });
+        let resolution_is_classic = tsc
+            .module_resolution
+            .as_deref()
+            .is_some_and(|m| CLASSIC.iter().any(|c| m.eq_ignore_ascii_case(c)));
+        module_is_cjs || resolution_is_classic
+    }
+
     /// Walk up from `path` to the nearest `tsconfig.json` and return the
     /// *directory* containing it. Shares the manifest-dir cache and walk
     /// semantics with `nearest_tsconfig`.
