@@ -134,4 +134,31 @@ mod tests {
     fn allows_verify_true() {
         assert!(run_on("const x = { verify: true };").is_empty());
     }
+
+    // Regression for #1511: self-signed certs in a local HTTPS test server are
+    // intentional, so `skip_in_test_dir` must suppress the rule in test files.
+    const ISSUE_1511_SOURCE: &str = r#"undici.setGlobalDispatcher(
+  new undici.Agent({
+    allowH2: true,
+    connect: {
+      rejectUnauthorized: false,
+    },
+  }),
+);"#;
+
+    #[test]
+    fn skips_self_signed_cert_in_test_dir() {
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            ISSUE_1511_SOURCE,
+            "packages/tests/server/adapters/standalone.http2.test.ts",
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn still_flags_self_signed_cert_in_source_dir() {
+        let diags = crate::rules::test_helpers::run_rule_gated(&Check, ISSUE_1511_SOURCE, "src/client.ts");
+        assert_eq!(diags.len(), 1);
+    }
 }
