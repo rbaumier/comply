@@ -92,6 +92,15 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
+        // React Fast Refresh constraints only apply to files that actually use
+        // React. A .tsx/.jsx file that pulls in no `react`/`react-dom` import
+        // (e.g. a custom reactive UI framework with its own HMR, SolidJS, Preact,
+        // Vue JSX) is not subject to Fast Refresh, so mixing component and
+        // non-component exports breaks nothing.
+        if !crate::oxc_helpers::imports_react(ctx.source) {
+            return Vec::new();
+        }
+
         let program = semantic.nodes().program();
         let next_pages_router = is_next_pages_router_file(ctx);
         let react_router_route = is_react_router_route_file(ctx);
@@ -234,6 +243,7 @@ mod tests {
     #[test]
     fn flags_mixed_exports() {
         let source = r#"
+import React from 'react';
 export function MyComponent() { return <div />; }
 export const helper = () => {};
 "#;
@@ -267,6 +277,7 @@ export function MyComponent() { return <div />; }
     fn no_fp_tanstack_start_utility_function_with_component() {
         // getProductsColumns co-located with DataTableHeader (issue #457)
         let source = r#"
+import React from 'react';
 export function getProductsColumns(t) { return []; }
 export function DataTableHeader() { return <div />; }
 "#;
@@ -277,6 +288,7 @@ export function DataTableHeader() { return <div />; }
     fn no_fp_tanstack_start_cva_variant_with_component() {
         // badgeVariants CVA co-located with Badge (issue #457)
         let source = r#"
+import React from 'react';
 export const badgeVariants = cva("badge", { variants: {} });
 export function Badge({ className }) { return <div className={className} />; }
 "#;
@@ -287,6 +299,7 @@ export function Badge({ className }) { return <div className={className} />; }
     fn no_fp_tanstack_start_context_hook_with_provider() {
         // useSidebar hook co-located with SidebarProvider (issue #457)
         let source = r#"
+import React from 'react';
 export function useSidebar() { return useContext(SidebarContext); }
 export function SidebarProvider({ children }) { return <div>{children}</div>; }
 "#;
@@ -301,6 +314,7 @@ export function SidebarProvider({ children }) { return <div>{children}</div>; }
     fn no_fp_next_pages_router_get_static_exports() {
         // website/src/pages/docs/[...slug].tsx (issue #1896)
         let source = r#"
+import React from 'react';
 import { GetStaticPaths, GetStaticProps } from 'next';
 
 export default function DocsPage() { return <div />; }
@@ -320,6 +334,7 @@ export const getStaticPaths: GetStaticPaths = async () => { return { paths: [], 
     #[test]
     fn no_fp_next_pages_router_get_server_side_props() {
         let source = r#"
+import React from 'react';
 export default function Page() { return <div />; }
 export const getServerSideProps = async () => { return { props: {} }; };
 "#;
@@ -333,6 +348,7 @@ export const getServerSideProps = async () => { return { props: {} }; };
         // A genuine non-component export still breaks Fast Refresh, even in a
         // Pages Router file — the exemption is scoped to the convention names.
         let source = r#"
+import React from 'react';
 export default function Page() { return <div />; }
 export const helper = () => {};
 "#;
@@ -346,6 +362,7 @@ export const helper = () => {};
         // Same name but neither under pages/ nor importing from next — not a
         // Pages Router page, so the export is still flagged.
         let source = r#"
+import React from 'react';
 export function MyComponent() { return <div />; }
 export const getStaticProps = async () => {};
 "#;
@@ -363,6 +380,7 @@ export const getStaticProps = async () => {};
     fn no_fp_react_router_v7_meta_with_component() {
         // integration/templates/react-router-node/app/routes/home.tsx (issue #1801)
         let source = r#"
+import React from 'react';
 import { Show, UserButton } from '@clerk/react-router';
 import type { Route } from './+types/home';
 
@@ -390,6 +408,7 @@ export default function Home() {
     fn no_fp_react_router_v7_middleware_and_loader_in_root() {
         // integration/templates/react-router-node/app/root.tsx (issue #1801)
         let source = r#"
+import React from 'react';
 import type { Route } from './+types/root';
 
 export const middleware: Route.MiddlewareFunction[] = [clerkMiddleware()];
@@ -407,6 +426,7 @@ export default function App() { return <Outlet />; }
         // A genuine non-component export still breaks Fast Refresh, even in a
         // React Router route file — the exemption is scoped to the convention names.
         let source = r#"
+import React from 'react';
 import type { Route } from './+types/home';
 
 export const helper = () => {};
@@ -422,6 +442,7 @@ export default function Home() { return <div />; }
         // Same convention name but the file is neither a `+types/` route module
         // nor importing from `react-router` — still flagged.
         let source = r#"
+import React from 'react';
 export function MyComponent() { return <div />; }
 export const loader = async () => {};
 "#;
@@ -473,6 +494,7 @@ export const loader = async () => {};
         // packages/formik/src/FieldArray.tsx (issue #1898): utility helpers
         // co-located with a component in a publishable package's source.
         let source = r#"
+import React from 'react';
 export const move = (array, from, to) => { return array; };
 export const swap = (array, a, b) => { return array; };
 export const FieldArray = connect(FieldArrayInner);
@@ -486,12 +508,58 @@ export const FieldArray = connect(FieldArrayInner);
         // Same code under a private app package (no main/module/exports) still
         // breaks Fast Refresh — the exemption is scoped to publishable libraries.
         let source = r#"
+import React from 'react';
 export const move = (array, from, to) => { return array; };
 export const FieldArray = connect(FieldArrayInner);
 "#;
         let d = run_with_pkg(r#"{ "name": "my-app", "private": true }"#, source);
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("move"));
+    }
+
+    // Regression tests for issue #1647 — a .tsx file that uses JSX via a custom,
+    // non-React UI framework (no `react`/`react-dom` import) is not subject to
+    // React Fast Refresh, so mixing component and non-component exports is not a
+    // false positive.
+
+    #[test]
+    fn no_fp_non_react_custom_ui_framework() {
+        // packages/ui/src/components/tabs/tabs.tsx (issue #1647): a custom
+        // reactive framework with its own HMR, no `react` import.
+        let source = r#"
+import {
+  attrs, css, createElement, createMixin, on,
+  type Handle, type MixinHandle, type Props,
+} from '@remix-run/ui';
+
+export const listStyle = tabsListCss;
+export const triggerStyle = tabsTriggerCss;
+
+export const list = listMixin;
+export const panel = panelMixin;
+export const trigger = triggerMixin;
+
+export function Tabs(handle) {
+  return () => createElement('div');
+}
+"#;
+        assert!(run(source).is_empty(), "expected no diagnostics, got {:?}", run(source));
+    }
+
+    #[test]
+    fn flags_same_shape_with_react_import() {
+        // The identical mixed-export shape *with* a `react` import is genuinely
+        // subject to Fast Refresh and is still flagged — the gate is scoped to
+        // files that do not use React.
+        let source = r#"
+import * as React from 'react';
+
+export const listStyle = tabsListCss;
+export function Tabs() { return <div />; }
+"#;
+        let d = run(source);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("listStyle"));
     }
 
     // Regression tests for issue #1866 — test-directory helper .tsx files. React
@@ -504,6 +572,7 @@ export const FieldArray = connect(FieldArrayInner);
         // test/helper/parameterizedTestCases.tsx (issue #1866): component test
         // cases co-located with an `includingCompact` utility function.
         let source = r#"
+import React from 'react';
 export const BarChartCase = { name: 'BarChart', Comp: BarChart };
 export function includingCompact(testCases) { return testCases; }
 export const allCartesianChartCases = [BarChartCase];
@@ -521,6 +590,7 @@ export const allCartesianChartCases = [BarChartCase];
         // Visual-regression test directory (recharts test-vr/) — also never
         // loaded under Fast Refresh.
         let source = r#"
+import React from 'react';
 export function Chart() { return <div />; }
 export const helper = () => {};
 "#;
@@ -533,6 +603,7 @@ export const helper = () => {};
         // Same mixed-export shape in production source still breaks Fast Refresh —
         // the exemption is scoped to test directories.
         let source = r#"
+import React from 'react';
 export function Chart() { return <div />; }
 export const helper = () => {};
 "#;
