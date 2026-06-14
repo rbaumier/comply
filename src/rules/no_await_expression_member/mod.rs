@@ -19,7 +19,11 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["unicorn"],
 
-    skip_in_test_dir: false,
+    // Accessing a member on an awaited value (`(await api.get(url)).data`) is the
+    // idiomatic, intentionally-concise pattern in HTTP integration tests using
+    // supertest/axios; the readability smell this rule guards against is a
+    // production-code concern, so test files are exempt.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
