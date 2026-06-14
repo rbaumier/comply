@@ -75,7 +75,11 @@ impl TextCheck for Check {
         if !is_prisma_file(ctx.source) {
             return Vec::new();
         }
-        find_violations(ctx.source)
+        // Mask comment text so `.findMany(` written inside a JSDoc `@example`
+        // (or any comment) is not flagged. Masking is offset-preserving, so the
+        // line/col reported for real violations is unchanged.
+        let masked = crate::oxc_helpers::mask_comments(ctx.source);
+        find_violations(&masked)
             .into_iter()
             .map(|(line, column)| Diagnostic {
                 path: std::sync::Arc::clone(&ctx.path_arc),
@@ -128,5 +132,44 @@ mod tests {
     fn ignores_non_prisma_files() {
         let src = "const rows = client.user.findMany();";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_findmany_in_jsdoc_example() {
+        // Issue #1623: `.findMany()` inside a JSDoc `@example` block is
+        // documentation, not executable code, and must not be flagged.
+        let src = r#"import { PrismaClient } from '@prisma/client';
+const prisma = new PrismaClient();
+
+/**
+ * Executes a function with query tags.
+ *
+ * @example
+ * ```ts
+ * const users = await prisma.user.findMany()
+ * const posts = await prisma.post.findMany()
+ * ```
+ */
+export function withQueryTags() {}"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_real_findmany_alongside_jsdoc_example() {
+        // Negative-space guard: the comment-masking must not suppress a real,
+        // executable `.findMany()` without `take` that follows a doc example.
+        let src = r#"import { PrismaClient } from '@prisma/client';
+const prisma = new PrismaClient();
+
+/**
+ * @example
+ * ```ts
+ * const users = await prisma.user.findMany()
+ * ```
+ */
+export async function load() {
+  return prisma.user.findMany({ where: { active: true } });
+}"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
