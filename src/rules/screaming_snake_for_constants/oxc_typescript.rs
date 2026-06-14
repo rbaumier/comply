@@ -25,6 +25,15 @@ impl OxcCheck for Check {
             return;
         };
 
+        // Story files (a `*.stories.*` name, or any file inside a `stories/` or
+        // `storybook/` directory) hold story-argument fixtures, option lists, and
+        // framework-magic names like `__namedExportsOrder` — local story data
+        // following camelCase by convention, not application-wide compile-time
+        // invariants (issue #1668).
+        if ctx.file.path_segments.in_storybook {
+            return;
+        }
+
         if !decl.kind.is_const() {
             return;
         }

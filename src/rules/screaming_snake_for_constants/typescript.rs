@@ -1,10 +1,25 @@
 #[cfg(test)]
 mod tests {
     use crate::diagnostic::Diagnostic;
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
     use crate::rules::screaming_snake_for_constants::oxc_typescript::Check;
 
     fn run(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    fn run_in_storybook(source: &str) -> Vec<Diagnostic> {
+        let file = FileCtx {
+            path_segments: PathSegments { in_storybook: true, ..Default::default() },
+            ..Default::default()
+        };
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            "Button.stories.tsx",
+            crate::project::default_static_project_ctx(),
+            &file,
+        )
     }
 
     #[test]
@@ -104,5 +119,21 @@ mod tests {
         let src =
             "export const routes: Routes = [{ path: '', component: AppComponent }, { path: 'x', component: X }];";
         assert!(run(src).is_empty());
+    }
+
+    // Issue #1668: top-level constants in Storybook story files are story-argument
+    // fixtures and framework-magic names, not application-wide invariants.
+    #[test]
+    fn allows_story_constants_in_storybook_file() {
+        let src = "const arrayOptions = ['Foo', 'Bar', 'Baz'];\n\
+                   export const __namedExportsOrder = ['Story1', 'Story2'];\n\
+                   const maxRetries = 3;";
+        assert!(run_in_storybook(src).is_empty());
+    }
+
+    #[test]
+    fn flags_numeric_constant_in_non_story_file() {
+        let diags = run("const maxRetries = 3;");
+        assert_eq!(diags.len(), 1);
     }
 }
