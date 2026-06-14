@@ -842,6 +842,92 @@ mod tests {
     }
 
     #[test]
+    fn ignores_gatsby_ssr_lifecycle_exports_issue_1700() {
+        // Regression for #1700 — Gatsby's `gatsby-ssr.js` at the project root is
+        // a lifecycle entry: its named exports (`onRenderBody`, re-exported
+        // `wrapPageElement`) are consumed by Gatsby's build pipeline, never by a
+        // static import. The root-file match must bail out the whole file.
+        let pkg = r#"{ "dependencies": { "gatsby": "5.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "gatsby-ssr.js",
+                "export { wrapRootElement, wrapPageElement } from './gatsby-shared.js';\n\
+                 export const onRenderBody = ({ setHtmlAttributes }) => { setHtmlAttributes({ lang: 'en' }); };\n",
+            ),
+            (
+                "gatsby-shared.js",
+                "export const wrapRootElement = ({ element }) => element;\n\
+                 export const wrapPageElement = ({ element }) => element;\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "gatsby-ssr.js");
+        assert!(
+            diags.is_empty(),
+            "gatsby-ssr.js is a framework lifecycle entry; dead-export must not fire, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_gatsby_node_api_exports_issue_1700() {
+        // Regression for #1700 — `gatsby-node.js` named exports (`createPages`,
+        // `onCreateNode`) are Gatsby Node APIs invoked by the build, not imported.
+        let pkg = r#"{ "dependencies": { "gatsby": "5.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "gatsby-node.js",
+                "export const createPages = async ({ actions }) => { actions.createPage({}); };\n\
+                 export const onCreateNode = ({ node }) => node;\n",
+            ),
+            ("src/util.js", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "gatsby-node.js");
+        assert!(
+            diags.is_empty(),
+            "gatsby-node.js Node-API exports are framework-consumed: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_gatsby_page_default_and_head_exports_issue_1700() {
+        // Regression for #1700 — files under `src/pages/` are consumed by
+        // Gatsby's file-system router: the default export is the page component
+        // and `Head` is the Gatsby v5 Head API. Neither is imported by user code.
+        let pkg = r#"{ "dependencies": { "gatsby": "5.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/pages/index.js",
+                "export default function IndexPage() { return null; }\n\
+                 export function Head() { return null; }\n",
+            ),
+            ("src/util.js", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/pages/index.js");
+        assert!(
+            diags.is_empty(),
+            "Gatsby src/pages/* exports are router-consumed entry points: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_ordinary_dead_export_in_gatsby_project_issue_1700() {
+        // Negative-space guard for #1700 — a genuinely unused export in an
+        // ordinary source file (not a Gatsby entry/page) is still flagged even
+        // when the project is detected as Gatsby.
+        let pkg = r#"{ "dependencies": { "gatsby": "5.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            ("src/lib/tax.js", "export function computeTax() { return 0; }\n"),
+            ("src/lib/other.js", "export const z = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/lib/tax.js");
+        assert_eq!(
+            diags.len(),
+            1,
+            "an ordinary unused export must still be flagged in a Gatsby project: {diags:?}"
+        );
+        assert!(diags[0].message.contains("computeTax"));
+    }
+
+    #[test]
     fn ignores_module_consumed_via_namespace_import() {
         // When `import * as ns from './m'` exists, individual symbol usages
         // are intentionally not linked; flagging every export would be noise.
