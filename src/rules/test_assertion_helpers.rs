@@ -1,5 +1,4 @@
-//! Shared heuristics for the test-assertion rules (`vitest-expect-expect`,
-//! `assertions-in-tests`).
+//! Shared heuristics for the `assertions-in-tests` rule.
 
 use crate::rules::backend::AstKind;
 use oxc_ast::ast::{BindingPattern, CallExpression, Expression};
@@ -72,30 +71,6 @@ pub(crate) fn imports_playwright_test(semantic: &oxc_semantic::Semantic<'_>) -> 
     })
 }
 
-/// True when `text` contains a call to one of [`RENDER_ASSERTION_CALLS`]. The
-/// identifier is word-boundary-anchored on the left so `customRender(` /
-/// `prerenderToString(` do not match, and the call's `(` must immediately
-/// follow the name.
-pub(crate) fn has_render_assertion_call(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    for name in RENDER_ASSERTION_CALLS {
-        let mut from = 0usize;
-        while let Some(rel) = text[from..].find(name) {
-            let i = from + rel;
-            let prev_ok = i == 0
-                || !(bytes[i - 1].is_ascii_alphanumeric()
-                    || bytes[i - 1] == b'_'
-                    || bytes[i - 1] == b'$');
-            let after = i + name.len();
-            if prev_ok && bytes.get(after) == Some(&b'(') {
-                return true;
-            }
-            from = i + name.len();
-        }
-    }
-    false
-}
-
 /// True when `call` is a Cypress assertion: a `.should(...)` or `.and(...)`
 /// member call whose receiver chain is rooted at the global `cy` identifier.
 /// Cypress expresses assertions by chaining `should`/`and` onto a command
@@ -134,82 +109,6 @@ fn member_chain_root_is_cy(expr: &Expression) -> bool {
             _ => return false,
         }
     }
-}
-
-/// True when a chai `should`-style BDD assertion chain lies within `body_span`.
-/// Chai's `should` interface adds a `.should` getter to every object, so an
-/// assertion reads `value.should.be.equal(x)`, `arr.should.have.length(3)`, or
-/// the call-less getter form `result.should.be.true` — none of which contains an
-/// `expect(...)`/`assert(...)` call. The signal is a `StaticMemberExpression`
-/// named `should` that is itself the object of a further member access
-/// (`<expr>.should.<member>`); reaching such a chain means the test asserts. A
-/// `.should` read as a plain value (`const n = config.should`) has no member
-/// access on top of it and is therefore not counted.
-pub(crate) fn body_contains_chai_should_assertion(
-    semantic: &oxc_semantic::Semantic<'_>,
-    body_span: oxc_span::Span,
-) -> bool {
-    let nodes = semantic.nodes();
-    nodes.iter().any(|n| {
-        let AstKind::StaticMemberExpression(member) = n.kind() else {
-            return false;
-        };
-        if member.property.name.as_str() != "should" {
-            return false;
-        }
-        if member.span.start < body_span.start || member.span.end > body_span.end {
-            return false;
-        }
-        // The `.should` member must be chained further (`.should.<member>`),
-        // i.e. its parent is another member access — not a value read.
-        matches!(
-            nodes.kind(nodes.parent_id(n.id())),
-            AstKind::StaticMemberExpression(_) | AstKind::ComputedMemberExpression(_)
-        )
-    })
-}
-
-/// True when a `throw` statement lies within `body_span`. A `throw` is a valid
-/// assertion mechanism: timing/property/fuzzing tests fail by throwing on a
-/// violated condition (`if (after - before > 10) throw new Error(...)`), which
-/// the test runner reports as a failure — functionally equivalent to an
-/// `expect(...)` call. A test whose body throws is therefore not assertion-less.
-pub(crate) fn body_contains_throw(
-    semantic: &oxc_semantic::Semantic<'_>,
-    body_span: oxc_span::Span,
-) -> bool {
-    semantic.nodes().iter().any(|n| {
-        if let AstKind::ThrowStatement(throw) = n.kind() {
-            throw.span.start >= body_span.start && throw.span.end <= body_span.end
-        } else {
-            false
-        }
-    })
-}
-
-/// True when a compile-time type assertion lies within `body_span` — a
-/// `TSTypeReference` to the `Expect` or `Equal` type-level helpers. These power
-/// the `type t = Expect<Equal<typeof x, T>>` idiom: the file fails to compile if
-/// the types differ, so the assertion *is* the type check and no runtime
-/// `expect(...)` is expected. AST-based so the word `Expect`/`Equal` inside a
-/// string literal or an unrelated value identifier does not count.
-pub(crate) fn body_contains_type_assertion(
-    semantic: &oxc_semantic::Semantic<'_>,
-    body_span: oxc_span::Span,
-) -> bool {
-    use oxc_ast::ast::TSTypeName;
-    semantic.nodes().iter().any(|n| {
-        let AstKind::TSTypeReference(type_ref) = n.kind() else {
-            return false;
-        };
-        if type_ref.span.start < body_span.start || type_ref.span.end > body_span.end {
-            return false;
-        }
-        let TSTypeName::IdentifierReference(id) = &type_ref.type_name else {
-            return false;
-        };
-        matches!(id.name.as_str(), "Expect" | "Equal")
-    })
 }
 
 /// True when the test callback (2nd argument of an `it`/`test` call) invokes an
@@ -417,22 +316,6 @@ pub(crate) fn is_promise_reject_assertion(
         return false;
     }
     call_callee_is_promise_executor_param(call, semantic, 1)
-}
-
-/// True when a call within `body_span` invokes the resolve parameter of an
-/// enclosing `new Promise(...)` executor — see [`is_promise_resolve_call`].
-pub(crate) fn body_contains_promise_resolve_call(
-    semantic: &oxc_semantic::Semantic<'_>,
-    body_span: oxc_span::Span,
-) -> bool {
-    semantic.nodes().iter().any(|n| {
-        let AstKind::CallExpression(call) = n.kind() else {
-            return false;
-        };
-        call.span.start >= body_span.start
-            && call.span.end <= body_span.end
-            && is_promise_resolve_call(call, semantic)
-    })
 }
 
 /// True when `call`'s callee is a bare identifier bound to the formal parameter
