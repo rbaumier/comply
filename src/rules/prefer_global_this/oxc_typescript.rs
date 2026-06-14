@@ -113,6 +113,15 @@ impl OxcCheck for Check {
             return;
         }
 
+        // In a Web Worker script `self` is the `DedicatedWorkerGlobalScope` —
+        // the canonical, idiomatic global of that realm (there is no `window`).
+        // `self.onmessage` / `self.postMessage` are the spec API surface, so
+        // rewriting them to `globalThis` obscures intent rather than improving
+        // portability. `window`/`global` stay flagged even in worker files.
+        if name == "self" && crate::oxc_helpers::is_worker_script(ctx.source) {
+            return;
+        }
+
         if is_under_typeof(node, semantic) {
             return;
         }
@@ -215,5 +224,45 @@ mod tests {
     fn ignores_window_local_binding() {
         let src = "function f(window: Win) {\n  return window.location;\n}";
         assert!(run_ts(src).is_empty(), "{:?}", run_ts(src));
+    }
+
+    #[test]
+    fn ignores_self_in_worker_script_with_onmessage() {
+        // Regression for #1658: in a Web Worker `self` is the canonical global
+        // (`DedicatedWorkerGlobalScope`), so `self.onmessage`/`self.postMessage`
+        // must not be rewritten to `globalThis`.
+        let src = "self.onmessage = (event) => {\n  \
+                   self.postMessage({ msg: 'load worker' })\n\
+                   }";
+        assert!(run_ts(src).is_empty(), "worker `self` must not be flagged: {:?}", run_ts(src));
+    }
+
+    #[test]
+    fn ignores_self_post_message_in_worker_script() {
+        // The `wasm/worker.js` example from #1658: only `self.postMessage`
+        // marks the file as a worker, no `onmessage` handler.
+        let src = "import init from './add.wasm?init'\n\
+                   init().then(({ exports }) => {\n  \
+                   self.postMessage({ result: exports.add(1, 2) })\n\
+                   })";
+        assert!(run_ts(src).is_empty(), "worker `self` must not be flagged: {:?}", run_ts(src));
+    }
+
+    #[test]
+    fn flags_self_in_non_worker_file() {
+        // Negative-space guard: a file with no worker signals still gets the
+        // `self` -> `globalThis` suggestion.
+        let d = run_ts("const data = self.crypto.randomUUID();");
+        assert_eq!(d.len(), 1, "non-worker `self` must still be flagged: {d:?}");
+        assert!(d[0].message.contains("globalThis"));
+    }
+
+    #[test]
+    fn flags_window_even_in_worker_file() {
+        // The worker exemption is `self`-only; `window` stays flagged.
+        let src = "self.onmessage = () => {};\nconst u = window.location;";
+        let d = run_ts(src);
+        assert_eq!(d.len(), 1, "`window` must stay flagged in a worker file: {d:?}");
+        assert!(d[0].message.contains("window"));
     }
 }
