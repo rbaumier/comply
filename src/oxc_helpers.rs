@@ -653,6 +653,64 @@ pub fn is_reduce_accumulator_param(
     false
 }
 
+/// True when `ident` resolves to a binding initialised from a `.getContext(...)`
+/// call — e.g. `const ctx = canvas.getContext('2d')`. A rendering context
+/// (`CanvasRenderingContext2D`, `WebGLRenderingContext`, …) is an imperative,
+/// stateful browser API whose entire contract is property assignment
+/// (`ctx.fillStyle = …`, `ctx.lineWidth = …`); there is no immutable
+/// "build a new context" alternative. Mutating its properties is the API.
+///
+/// Resolves the binding via `reference_id` → symbol → declaration node, then
+/// confirms the declarator's initializer is a call to a `.getContext` member,
+/// unwrapping a trailing non-null assertion (`getContext('2d')!`). Any other
+/// initializer shape stays flagged.
+#[must_use]
+pub fn is_get_context_call_binding(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            let Some(init) = &decl.init else {
+                return false;
+            };
+            return is_get_context_call(init);
+        }
+    }
+    false
+}
+
+/// True when `expr` is a `*.getContext(...)` call, looking through a trailing
+/// non-null assertion (`canvas.getContext('2d')!`).
+fn is_get_context_call(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+
+    match expr {
+        Expression::TSNonNullExpression(nn) => is_get_context_call(&nn.expression),
+        Expression::CallExpression(call) => {
+            matches!(
+                &call.callee,
+                Expression::StaticMemberExpression(member)
+                    if member.property.name.as_str() == "getContext"
+            )
+        }
+        _ => false,
+    }
+}
+
 /// True when `assign` sets a `displayName` property to a string literal
 /// (`Component.displayName = "Component"`). React reads `displayName` off the
 /// component function object to name anonymous `forwardRef`/`memo` results in
