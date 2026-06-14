@@ -43,6 +43,11 @@ impl OxcCheck for Check {
             if imp.source_path.is_some() {
                 continue;
             }
+            // Drop a build-tool query/hash suffix (`./file.txt?url`,
+            // `./worker.js?worker`) before any on-disk check: Vite et al. attach
+            // the import directive as a query the bundler consumes at build time;
+            // only the bare path exists on disk.
+            let fs_specifier = crate::rules::path_utils::strip_specifier_query(&imp.specifier);
             // Skip gitignored build-time generated files (e.g. TanStack
             // Router's `routeTree.gen.ts`) and imports into build-output /
             // codegen directories (dist/build/out, generated/__generated__/
@@ -64,14 +69,14 @@ impl OxcCheck for Check {
             // build-tool support (Webpack, Vite, Next.js) and never enter the
             // TS/JS index. When such a non-source file exists on disk next to
             // the importer, the import is resolved — don't flag it.
-            if is_existing_asset_import(ctx.path, &imp.specifier) {
+            if is_existing_asset_import(ctx.path, fs_specifier) {
                 continue;
             }
             // A relative import whose target source file exists on disk but lives
             // in a directory excluded from the scan (e.g. vendored code under
             // `vendor/`) is absent from the import index, so `source_path` is
             // `None` — yet the import is genuinely resolvable. Don't flag it.
-            if is_existing_source_import(ctx.path, &imp.specifier) {
+            if is_existing_source_import(ctx.path, fs_specifier) {
                 continue;
             }
             // Angular schematics/builders generate a `schema.ts` TypeScript
@@ -79,7 +84,7 @@ impl OxcCheck for Check {
             // `json-schema-to-typescript`). The `.ts` is gitignored and absent
             // in a clean checkout, but the `.json` source of truth sits next to
             // the importer at the same base path — treat that as resolved.
-            if has_generated_json_sibling(ctx.path, &imp.specifier) {
+            if has_generated_json_sibling(ctx.path, fs_specifier) {
                 continue;
             }
             if !seen.insert((imp.specifier.clone(), imp.line)) {
@@ -620,6 +625,90 @@ mod generated_target_tests {
         );
         assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
         assert!(diags[0].message.contains("does-not-exist.js"));
+    }
+}
+
+#[cfg(test)]
+mod vite_query_string_tests {
+    use super::Check;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Build a temp tree with the importer plus on-disk asset files, run the rule
+    /// on the importer, and return its diagnostics.
+    fn run_with_assets(
+        importer_rel: &str,
+        source: &str,
+        assets: &[&str],
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
+        let importer = dir.path().join(importer_rel);
+        fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        fs::write(&importer, source).unwrap();
+        for asset_rel in assets {
+            let asset = dir.path().join(asset_rel);
+            fs::create_dir_all(asset.parent().unwrap()).unwrap();
+            fs::write(&asset, "asset contents").unwrap();
+        }
+        let canon = fs::canonicalize(&importer).unwrap();
+        let source_file = SourceFile {
+            path: canon.clone(),
+            language: Language::from_path(&canon).unwrap(),
+        };
+        let project = ProjectCtx::load(&[&source_file], &Config::default());
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    #[test]
+    fn no_fp_for_vite_query_string_asset_import_issue_1582() {
+        // sveltejs/kit reproducer: Vite asset imports carry a `?url` (or
+        // `?raw`/`?inline`/`?worker`/`?base64`) directive. The file exists on
+        // disk; the query is a build-time transform, not part of the path, so the
+        // import must not be flagged.
+        let source = "import file from './file.txt?url';";
+        let diags = run_with_assets(
+            "src/routes/read/+server.js",
+            source,
+            &["src/routes/read/file.txt"],
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+
+        // Bracketed route-param filenames with the same suffix (kit `basics`).
+        let url = "import url from './[url].txt?url';";
+        let diags = run_with_assets(
+            "src/routes/read-file/+page.server.js",
+            url,
+            &["src/routes/read-file/[url].txt"],
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+
+        let styles = "import styles from './[styles].css?url';";
+        let diags = run_with_assets(
+            "src/routes/read-file/+page.server.js",
+            styles,
+            &["src/routes/read-file/[styles].css"],
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_missing_vite_query_string_asset_issue_1582() {
+        // Negative space: stripping the `?url` query must not mask a genuinely
+        // missing file — the bare path does not exist on disk, so it still fires.
+        let source = "import file from './genuinely-missing.txt?url';";
+        let diags = run_with_assets("src/app.ts", source, &[]);
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("genuinely-missing.txt"));
     }
 }
 

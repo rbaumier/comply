@@ -160,6 +160,13 @@ impl OxcCheck for Check {
             _ => return,
         };
 
+        // Strip a build-tool query/hash suffix (`./file.txt?url`,
+        // `./worker.js?worker`) before resolution: Vite et al. attach the import
+        // directive as a query the bundler consumes at build time; only the bare
+        // path exists on disk.
+        let import_spec =
+            crate::rules::path_utils::strip_specifier_query(&import_spec).to_string();
+
         if !is_relative_path(&import_spec) {
             return;
         }
@@ -409,6 +416,44 @@ mod tests {
         let diags = run_in_dir("app.ts", source, &[]);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("does-not-exist"));
+    }
+
+    #[test]
+    fn no_fp_for_vite_query_string_asset_import_issue_1582() {
+        // sveltejs/kit reproducer: Vite asset imports carry a `?url` (or
+        // `?raw`/`?inline`/`?worker`/`?base64`) directive. The file exists on
+        // disk; the query is a build-time transform, not part of the path, so the
+        // import must not be flagged.
+        let source = "import file from './file.txt?url';";
+        let diags = run_in_dir("src/routes/read/+server.js", source, &["src/routes/read/file.txt"]);
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+
+        // Bracketed route-param filenames with the same suffix (kit `basics`).
+        let url = "import url from './[url].txt?url';";
+        let diags = run_in_dir(
+            "src/routes/read-file/+page.server.js",
+            url,
+            &["src/routes/read-file/[url].txt"],
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+
+        let styles = "import styles from './[styles].css?url';";
+        let diags = run_in_dir(
+            "src/routes/read-file/+page.server.js",
+            styles,
+            &["src/routes/read-file/[styles].css"],
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_missing_vite_query_string_asset_issue_1582() {
+        // Negative space: stripping the `?url` query must not mask a genuinely
+        // missing file — the bare path does not exist on disk, so it still fires.
+        let source = "import file from './genuinely-missing.txt?url';";
+        let diags = run_in_dir("src/app.ts", source, &[]);
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("genuinely-missing.txt"));
     }
 
     #[test]
