@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::JSXElementName;
+use oxc_ast::ast::{JSXElementName, JSXMemberExpression, JSXMemberExpressionObject};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -43,14 +43,14 @@ fn is_intrinsic(name: &str) -> bool {
     first.is_ascii_lowercase()
 }
 
-/// A JSX member-expression tag whose final segment is a lowercase intrinsic HTML
-/// element (e.g. `Primitive.div`, `styled.button`) is the valid Radix-UI /
-/// styled-components namespace pattern — the component is accessed through a
-/// namespace, not a PascalCase chain.
-fn is_namespaced_intrinsic(tag: &str) -> bool {
-    match tag.rsplit_once('.') {
-        Some((_, last)) => is_intrinsic(last),
-        None => false,
+/// The leftmost identifier of a JSX member expression (`Table` in `Table.td`,
+/// `Foo` in `Foo.Bar.Baz`). A `this` root (`<this.Orange />`) has no identifier
+/// name and yields `None`.
+fn member_root_name<'a>(member: &'a JSXMemberExpression<'a>) -> Option<&'a str> {
+    match &member.object {
+        JSXMemberExpressionObject::IdentifierReference(id) => Some(id.name.as_str()),
+        JSXMemberExpressionObject::MemberExpression(inner) => member_root_name(inner),
+        JSXMemberExpressionObject::ThisExpression(_) => None,
     }
 }
 
@@ -72,29 +72,50 @@ impl OxcCheck for Check {
             return;
         };
 
+        // For a member expression (`Table.td`, `Form.Item`), the PascalCase
+        // requirement applies only to the leftmost/root identifier — the
+        // property accessor is the compound-component sub-name and is exempt. A
+        // lowercase root (`table.Foo`) is a real violation, not an intrinsic
+        // host element, so the member-expression root skips the intrinsic
+        // exemption. Plain identifiers and namespaced names keep the full check.
         let tag = match &opening.name {
-            JSXElementName::Identifier(id) => id.name.as_str().to_string(),
-            JSXElementName::IdentifierReference(id) => id.name.as_str().to_string(),
-            JSXElementName::MemberExpression(member) => {
-                // Reconstruct Foo.Bar from member expression.
-                let span = member.span;
-                let start = span.start as usize;
-                let end = span.end as usize;
-                if end <= ctx.source.len() {
-                    ctx.source[start..end].to_string()
-                } else {
+            JSXElementName::Identifier(id) => {
+                let tag = id.name.as_str();
+                if is_intrinsic(tag) {
                     return;
                 }
+                tag.to_string()
+            }
+            JSXElementName::IdentifierReference(id) => {
+                let tag = id.name.as_str();
+                if is_intrinsic(tag) {
+                    return;
+                }
+                tag.to_string()
+            }
+            JSXElementName::MemberExpression(member) => {
+                // `Namespace.htmlElement` (e.g. `Primitive.div`, `Table.td`) is a
+                // valid compound-component / styled-components namespace and is
+                // never flagged on its sub-name.
+                if is_intrinsic(member.property.name.as_str()) {
+                    return;
+                }
+                // A `this`-rooted member (`<this.Orange />`) has no component
+                // identifier to validate.
+                let Some(root) = member_root_name(member) else {
+                    return;
+                };
+                root.to_string()
             }
             JSXElementName::NamespacedName(ns) => {
-                format!("{}:{}", ns.namespace.name, ns.name.name)
+                let tag = format!("{}:{}", ns.namespace.name, ns.name.name);
+                if is_intrinsic(&tag) {
+                    return;
+                }
+                tag
             }
             _ => return,
         };
-
-        if is_intrinsic(&tag) || is_namespaced_intrinsic(&tag) {
-            return;
-        }
 
         if !is_pascal_case(&tag) {
             let (line, column) =
@@ -204,5 +225,42 @@ mod tests {
         // The prefix must be a literal `unstable_`/`experimental_`; an uppercase
         // look-alike is not the convention and still fails.
         assert!(!is_pascal_case("Unstable_Thing"));
+    }
+
+    // Issue #1370: compound components accessed via dot notation use lowercase
+    // sub-names that mirror native HTML elements (`Table.td`, `Table.th`,
+    // `Table.tr`). Only the root (`Table`) must be PascalCase; the sub-name is
+    // exempt.
+    #[test]
+    fn allows_compound_component_td() {
+        assert!(run("const x = <Table.td>x</Table.td>;").is_empty());
+    }
+
+    #[test]
+    fn allows_compound_component_th() {
+        assert!(run("const x = <Table.th>x</Table.th>;").is_empty());
+    }
+
+    #[test]
+    fn allows_compound_component_tr() {
+        assert!(run("const x = <Table.tr>x</Table.tr>;").is_empty());
+    }
+
+    #[test]
+    fn allows_compound_component_pascal_subname() {
+        // `Form.Item` — non-intrinsic PascalCase sub-name, PascalCase root.
+        assert!(run("const x = <Form.Item>x</Form.Item>;").is_empty());
+    }
+
+    // Positive space: a member expression whose ROOT is not PascalCase still
+    // fires on the root, even when the sub-name is fine.
+    #[test]
+    fn flags_lowercase_root_member_expression() {
+        assert_eq!(run("const x = <table.Foo>x</table.Foo>;").len(), 1);
+    }
+
+    #[test]
+    fn flags_camel_root_member_expression() {
+        assert_eq!(run("const x = <myObj.Bar>x</myObj.Bar>;").len(), 1);
     }
 }
