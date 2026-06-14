@@ -125,6 +125,27 @@ pub fn is_fuzz_targets_path(path: &Path) -> bool {
     path.components().any(|c| c.as_os_str() == "fuzz_targets")
 }
 
+/// True when `path` lives under a `tests/ui/` directory: a `ui` segment that
+/// appears after a `tests` segment. These are `trybuild`/`rustc` UI-test
+/// fixtures, where each `.rs` scenario is paired with a sibling `.stderr` holding
+/// the expected compiler output. The convention names scenarios in kebab-case to
+/// mirror the hyphenated error-message style (e.g. `untagged-struct.rs`), so
+/// filename-convention checks exempt them. Segment match keeps an unrelated
+/// `src/ui/` from matching unless it sits under `tests/`.
+pub fn is_rust_ui_test_fixture(path: &Path) -> bool {
+    let mut seen_tests = false;
+    for component in path.components() {
+        if let std::path::Component::Normal(segment) = component {
+            if segment == "tests" {
+                seen_tests = true;
+            } else if seen_tests && segment == "ui" {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// True when `path` lives under an Angular `schematics/` or `migrations/`
 /// directory. These hold Angular CLI schematic and `ng update` migration entry
 /// points: each is an `index.ts` exporting a default factory function that the
