@@ -8,7 +8,7 @@ use crate::project::{ImportIndex, ProjectCtx};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::path_utils::{
     is_angular_schematic_or_migration_entry, is_auto_mock_dir_path, is_config_file,
-    is_framework_entry_point, is_top_level_script_dir_path,
+    is_framework_entry_point, is_storybook_story, is_top_level_script_dir_path,
 };
 use std::path::Path;
 
@@ -128,6 +128,14 @@ fn is_entry_point(
     }
 
     if is_framework_entry_point(path, project) {
+        return true;
+    }
+
+    // Storybook story files (`*.stories.{ts,tsx,js,jsx,mjs,cjs,mdx}`, also the
+    // older `*.story.*`) are discovered by Storybook's `stories: [...]` glob in
+    // `.storybook/main.*` and loaded at runtime, never `import`ed — so the
+    // import-graph BFS cannot reach them, yet they are real entry points.
+    if is_storybook_story(path) {
         return true;
     }
 
@@ -1410,6 +1418,55 @@ mod tests {
         assert!(
             diags[0].path.to_str().unwrap().contains("orphan"),
             "only the genuine orphan must be flagged; schematic entries are entry points: {diags:?}"
+        );
+    }
+
+    // Regression for #1359: Storybook story files (`*.stories.tsx`, etc.) are
+    // discovered by Storybook's `stories: [...]` glob and loaded at runtime,
+    // never `import`ed, so the import-graph BFS cannot reach them — but they are
+    // central entry points, not dead code, and must not be flagged. (`.stories.mdx`
+    // is also a story extension, covered in path_utils::is_storybook_story's unit
+    // test; comply does not process `.mdx` as a source language, so an `.mdx` file
+    // never enters the import index here.)
+    #[test]
+    fn storybook_story_files_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/index.ts", "export const app = 1;\n"),
+            (
+                "components/Button.stories.tsx",
+                "import { Button } from './Button';\nexport default { component: Button };\n",
+            ),
+            (
+                "components/button.stories.js",
+                "export default { title: 'Button' };\n",
+            ),
+            ("components/Toggle.story.jsx", "export default { title: 'Toggle' };\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "Storybook story files are glob-loaded entry points, not dead code: {diags:?}"
+        );
+    }
+
+    // Regression for #1359: the Storybook exemption is precise — a genuinely
+    // orphaned ordinary source file is still a true positive even when the
+    // project contains story files.
+    #[test]
+    fn orphan_file_beside_storybook_stories_still_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/index.ts", "export const app = 1;\n"),
+            (
+                "components/Button.stories.tsx",
+                "export default { title: 'Button' };\n",
+            ),
+            ("src/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "only the genuine orphan must be flagged; the story is an entry point: {diags:?}"
         );
     }
 
