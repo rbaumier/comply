@@ -6,6 +6,11 @@
 //! its ancestor `generic_type` nodes is a recognised sharing wrapper
 //! (`Arc`, `Rc`, `LazyLock`, `OnceLock`, `Lazy`, `OnceCell`).
 //!
+//! Non-usage positions are exempt: a type alias definition
+//! (`type Lists<T> = Mutex<…>;`) and the subject of an `impl` head
+//! (`impl<T> RwLock<T>`, `unsafe impl<T> Send for RwLock<T>`) name the lock
+//! type rather than use it, so neither can be `Arc`-wrapped at that site.
+//!
 //! Test code is exempted — tests commonly use bare `Mutex` for simple
 //! state without thread sharing, and rewriting them to `RefCell`
 //! wouldn't catch a real bug.
@@ -24,6 +29,7 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     let base = type_text.rsplit("::").next().unwrap_or("");
     if base != "Mutex" && base != "RwLock" { return; }
 
+    let mut child = node;
     let mut cur = node.parent();
     while let Some(ancestor) = cur {
         match ancestor.kind() {
@@ -39,8 +45,23 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
             }
             "field_declaration" | "field_declaration_list" => return,
             "static_item" | "const_item" => return,
+            // A type alias definition (`type Lists<T> = Mutex<…>;`) is not a
+            // usage: callers wrap the alias in `Arc` at the use site, which the
+            // alias body can't observe.
+            "type_item" => return,
+            // The subject of an `impl` head (`impl<T> RwLock<T>` or
+            // `unsafe impl<T> Send for RwLock<T>`) is the type being
+            // implemented, not a usage to wrap in `Arc`. Reaching the
+            // `impl_item` through its `body` means we are inside the block and
+            // looking at a genuine usage, so only exempt the head.
+            "impl_item" => {
+                if ancestor.child_by_field_name("body") != Some(child) {
+                    return;
+                }
+            }
             _ => {}
         }
+        child = ancestor;
         cur = ancestor.parent();
     }
     if local_mutex_is_shared_later(node, source) {
@@ -205,5 +226,32 @@ fn f() {
     #[test]
     fn allows_in_test_context() {
         assert!(run("#[cfg(test)]\nmod tests { struct S { m: Mutex<u32> } }").is_empty());
+    }
+
+    #[test]
+    fn allows_mutex_type_alias() {
+        assert!(run("type Lists<T> = Mutex<ListsInner<T>>;").is_empty());
+    }
+
+    #[test]
+    fn allows_rwlock_type_alias() {
+        assert!(run("type Lock<T> = RwLock<Inner<T>>;").is_empty());
+    }
+
+    #[test]
+    fn allows_unsafe_impl_send_for_lock_type() {
+        let src = "unsafe impl<T> Send for RwLock<T> where T: ?Sized + Send {}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_inherent_impl_on_lock_type() {
+        assert!(run("impl<T: ?Sized> RwLock<T> { fn f(&self) {} }").is_empty());
+    }
+
+    #[test]
+    fn flags_bare_mutex_used_inside_impl_body() {
+        let src = "impl S { fn f(&self) { let m: Mutex<u32> = Mutex::new(0); } }";
+        assert_eq!(run(src).len(), 1);
     }
 }
