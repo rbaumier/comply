@@ -51,6 +51,13 @@ impl AstCheck for Check {
         if !operand_is_float(left, source) && !operand_is_float(right, source) {
             return;
         }
+        // Comparing against exact zero is legitimate: `0.0` is exactly
+        // representable, so "is this exactly zero?" (e.g. `val.fract() == 0.0`
+        // to test integer-ness, or an exact-divisibility `rem == 0.0`) is the
+        // correct tool, not an epsilon. Clippy's `float_cmp` skips zero too.
+        if operand_is_float_zero(left, source) || operand_is_float_zero(right, source) {
+            return;
+        }
         diagnostics.push(Diagnostic::at_node(
             ctx.path,
             &node,
@@ -86,6 +93,35 @@ fn operand_is_float(node: tree_sitter::Node, source: &[u8]) -> bool {
         return true;
     }
     false
+}
+
+/// Is `node` a float-zero literal? Covers `0.0`, `0.0f64`, `0f64`, `0.`,
+/// and a leading-minus `-0.0`. A negative zero appears as a `unary_expression`
+/// (`-` applied to the literal) in the tree-sitter grammar, so unwrap it first.
+fn operand_is_float_zero(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let lit = if node.kind() == "unary_expression" {
+        match node.child_by_field_name("operator").and_then(|o| o.utf8_text(source).ok()) {
+            Some("-") => match node.named_child(0) {
+                Some(inner) => inner,
+                None => return false,
+            },
+            _ => return false,
+        }
+    } else {
+        node
+    };
+    if lit.kind() != "float_literal" {
+        return false;
+    }
+    let Ok(text) = lit.utf8_text(source) else {
+        return false;
+    };
+    // Strip an optional `f32`/`f64` type suffix, then check the mantissa is
+    // numerically zero (`0`, `0.`, `0.0`, `0.000`, `0e0`).
+    let mantissa = text.trim_end_matches("f64").trim_end_matches("f32");
+    mantissa
+        .parse::<f64>()
+        .is_ok_and(|value| value == 0.0)
 }
 
 /// Walk upward from `node` looking for a `let_declaration` whose pattern
@@ -172,5 +208,55 @@ mod tests {
     fn allows_partial_cmp() {
         let src = "fn f(a: f64, b: f64) -> Option<std::cmp::Ordering> { a.partial_cmp(&b) }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_fract_eq_zero() {
+        // tantivy columnar/src/value.rs: `fract == 0.0` (let-bound fract()).
+        let src = "fn f(val: f64) -> bool { let fract = val.fract(); fract == 0.0 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_remainder_eq_zero() {
+        let src = "fn f(right_f: f64, right_as_i: i64) -> bool { \
+                   let rem = right_f - (right_as_i as f64); rem == 0.0 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_direct_fract_call_eq_zero() {
+        let src = "fn f(x: f64) -> bool { x.fract() == 0.0 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_zero_neq() {
+        let src = "fn f(x: f64) -> bool { x != 0.0 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_zero_variants() {
+        for src in [
+            "fn f(x: f64) -> bool { x == 0.0f64 }",
+            "fn f(x: f64) -> bool { x == 0f64 }",
+            "fn f(x: f64) -> bool { x == 0. }",
+            "fn f(x: f64) -> bool { x == -0.0 }",
+            "fn f(x: f64) -> bool { 0.0 == x }",
+        ] {
+            assert!(run_on(src).is_empty(), "should not flag: {src}");
+        }
+    }
+
+    #[test]
+    fn flags_nonzero_float_literal_eq() {
+        // Negative space: a genuine epsilon-needing comparison still fires.
+        assert_eq!(run_on("fn f(x: f64) -> bool { x == 1.5 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_nonzero_sum_eq() {
+        assert_eq!(run_on("fn f(a: f64, b: f64) -> bool { (a + b) == 0.3 }").len(), 1);
     }
 }
