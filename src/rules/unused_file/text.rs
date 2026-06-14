@@ -7,7 +7,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::{ImportIndex, ProjectCtx};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::path_utils::{
-    is_config_file, is_framework_entry_point, is_top_level_script_dir_path,
+    is_auto_mock_dir_path, is_config_file, is_framework_entry_point, is_top_level_script_dir_path,
 };
 use std::path::Path;
 
@@ -75,6 +75,7 @@ impl TextCheck for Check {
             if is_declaration_file(path)
                 || is_config_file(path)
                 || is_test_file(path)
+                || is_auto_mock_dir_path(path)
                 || is_in_ui_library(path)
                 || is_in_fixture_dir(path)
                 || is_jest_config_variant(path, &jest_base_config_dirs)
@@ -787,6 +788,60 @@ mod tests {
         assert!(
             diags[0].path.to_str().unwrap().contains("orphan"),
             "diagnostic should target the orphaned non-Cypress file: {diags:?}"
+        );
+    }
+
+    // Regression for #1951: files inside a `__mocks__/` directory are Jest/
+    // Vitest manual mocks, auto-loaded by the test runner via a string-based
+    // lookup when test code calls `jest.mock(...)`. Nothing `import`s them, so
+    // the import graph cannot reach them — but they are test infrastructure
+    // loaded by convention, not dead code, and must not be flagged.
+    #[test]
+    fn auto_mock_files_are_not_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/index.ts", "export const app = 1;\n"),
+            ("__mocks__/react-native.js", "module.exports = {};\n"),
+            ("__mocks__/react-primitives.js", "module.exports = {};\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.is_empty(),
+            "__mocks__/ files are auto-loaded test mocks, not dead code: {diags:?}"
+        );
+    }
+
+    // Regression for #1951: the `__mocks__/` exemption is precise — a genuinely
+    // orphaned ordinary source file is still a true positive even when the
+    // project contains a `__mocks__/` directory.
+    #[test]
+    fn orphan_file_beside_auto_mocks_still_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/index.ts", "export const app = 1;\n"),
+            ("__mocks__/react-native.js", "module.exports = {};\n"),
+            ("src/orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "only the genuine orphan must be flagged; the mock is test infra: {diags:?}"
+        );
+    }
+
+    // Regression for #1951: the exemption matches `__mocks__` as a path segment,
+    // not a substring — an orphaned `src/__mocks__data.ts` (no `__mocks__/`
+    // directory boundary) is regular source and stays a true positive.
+    #[test]
+    fn auto_mock_substring_file_is_flagged() {
+        let files: Vec<(&str, &str)> = vec![
+            ("src/index.ts", "export const app = 1;\n"),
+            ("src/__mocks__data.ts", "export const data = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("__mocks__data"),
+            "a `__mocks__` substring (not a path segment) is not exempted: {diags:?}"
         );
     }
 
