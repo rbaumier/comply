@@ -306,6 +306,17 @@ mod tests {
     }
 
     #[test]
+    fn allows_charset_in_solidstart_entry_server() {
+        // SolidStart's `entry-server.tsx` imports only from `@solidjs/start/server`
+        // (never from `solid-js` directly) yet renders the document shell with
+        // native HTML attribute names. `<meta charset="utf-8" />` is correct Solid
+        // JSX and must not be flagged with the React `charSet` suggestion. (Closes #2212)
+        let src = "import { createHandler, StartServer } from '@solidjs/start/server';\n\
+                   const a = <meta charset=\"utf-8\" />;";
+        assert!(run(src).is_empty(), "got unexpected diagnostics: {:?}", run(src));
+    }
+
+    #[test]
     fn allows_class_in_tanstack_solid_router_route() {
         // TanStack Router's Solid adapter (`@tanstack/solid-router`) produces
         // Solid JSX — `class` is the native Solid attribute. Routes often import
