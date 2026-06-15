@@ -77,6 +77,48 @@ pub fn is_codemod_fixture_file(path: &Path) -> bool {
     })
 }
 
+/// Base file-name stems for Next.js App Router metadata file conventions. The
+/// code-generating variant of each (`.ts`/`.tsx`/`.js`/`.jsx`) exports a
+/// framework-consumed function (`sitemap()`, `robots()`, `Image()`, …) that
+/// Next.js calls directly to produce a route asset (`sitemap.xml`,
+/// `robots.txt`, an OG image, a manifest). They are not deduplication-eligible
+/// data fetchers shared across a render tree. The image stems
+/// (`opengraph-image`/`twitter-image`/`icon`/`apple-icon`) may carry a numeric
+/// suffix (e.g. `icon1.tsx`), so the file stem is compared after trailing
+/// digits are stripped.
+const NEXT_METADATA_CONVENTION_STEMS: &[&str] = &[
+    "sitemap",
+    "robots",
+    "manifest",
+    "opengraph-image",
+    "twitter-image",
+    "icon",
+    "apple-icon",
+    "favicon",
+];
+
+/// True when `path` is a Next.js App Router metadata file convention in its
+/// code-generating form: a file whose basename stem (after stripping a trailing
+/// numeric suffix) is one of [`NEXT_METADATA_CONVENTION_STEMS`] and whose
+/// extension is a JS/TS module (`.ts`/`.tsx`/`.js`/`.jsx`). The framework
+/// invokes the file's exports directly to generate a route asset, so an async
+/// export here is a lifecycle endpoint, not a cacheable fetcher.
+pub fn is_next_metadata_convention_file(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let mut parts = name.rsplitn(2, '.');
+    let ext = parts.next().unwrap_or("");
+    let Some(stem) = parts.next() else {
+        return false;
+    };
+    if !matches!(ext, "ts" | "tsx" | "js" | "jsx") {
+        return false;
+    }
+    let stem = stem.trim_end_matches(|c: char| c.is_ascii_digit());
+    NEXT_METADATA_CONVENTION_STEMS.contains(&stem)
+}
+
 /// True when `path` is a linter/parser test-spec fixture: a file under a
 /// `tests/specs/` directory (a `specs` segment directly inside a `tests`/`tests-*`
 /// segment) whose basename stem is `valid`/`invalid` (e.g. `invalid.jsx`,

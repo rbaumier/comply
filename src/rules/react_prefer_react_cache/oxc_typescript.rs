@@ -153,6 +153,16 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Next.js App Router metadata file conventions (`sitemap.ts`,
+        // `robots.ts`, `opengraph-image.tsx`, `manifest.ts`, …) export
+        // functions the framework calls directly to produce a route asset.
+        // They are lifecycle endpoints, not deduplication-eligible fetchers
+        // shared across a render tree, so wrapping them in `React.cache()` is
+        // semantically wrong.
+        if crate::rules::path_utils::is_next_metadata_convention_file(ctx.path) {
+            return;
+        }
+
         // Only flag at module scope
         let nodes = semantic.nodes();
         if let Some(parent) = nodes.ancestors(node.id()).nth(1)
@@ -471,6 +481,62 @@ export async function generateMetadata() {
 }
 "#;
         assert!(run_next_at(src, "pages/api/users.ts").is_empty());
+    }
+
+    // Regression for #2208: `app/sitemap.ts` exports a framework-consumed
+    // `sitemap()` generator (produces `sitemap.xml`), not a deduplication-
+    // eligible fetcher shared across a render tree.
+    #[test]
+    fn no_fp_app_router_sitemap_convention_file() {
+        let src = r#"export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+    const routes = await getRoutes()
+    return [...routes]
+}
+"#;
+        assert!(run_next_at(src, "app/sitemap.ts").is_empty());
+    }
+
+    // Regression for #2208: `app/robots.ts` exports a framework-consumed
+    // `robots()` generator (produces `robots.txt`).
+    #[test]
+    fn no_fp_app_router_robots_convention_file() {
+        let src = r#"export default async function robots(): Promise<MetadataRoute.Robots> {
+    const host = await getHost()
+    return { rules: { userAgent: '*' }, host }
+}
+"#;
+        assert!(run_next_at(src, "app/robots.ts").is_empty());
+    }
+
+    // Regression for #2208: `opengraph-image.tsx` exports a framework-consumed
+    // `Image()` generator. (The uppercase name is also excluded, but the file
+    // convention is the load-bearing signal here.)
+    #[test]
+    fn no_fp_app_router_opengraph_image_convention_file() {
+        let src = r#"export default async function Image() {
+    const data = await fetch('/api/og')
+    return new ImageResponse(<div />)
+}
+
+export async function generateImageMetadata() {
+    const data = await fetch('/api/og-meta')
+    return []
+}
+"#;
+        assert!(run_next_at(src, "app/blog/opengraph-image.tsx").is_empty());
+    }
+
+    // The #2208 exemption keys on the FILE convention, not the function name:
+    // an async `sitemap()` in an ordinary `page.tsx` is a genuine fetcher and
+    // must still be flagged.
+    #[test]
+    fn still_flags_convention_named_fn_outside_convention_file() {
+        let src = r#"export async function sitemap() {
+    const data = await fetch('/api/data')
+    return data.json()
+}
+"#;
+        assert_eq!(run_next_at(src, "app/blog/page.tsx").len(), 1);
     }
 
     // A genuine RSC data fetcher must still be flagged — the exemptions are
