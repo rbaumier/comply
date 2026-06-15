@@ -105,6 +105,126 @@ mod tests {
         );
     }
 
+    // Regression for #2302 — TSLint custom rule files follow the plugin
+    // convention: export a class named `Rule` that extends `AbstractRule` (or
+    // `Rules.AbstractRule`). TSLint discovers them by loading the file and
+    // calling `new Rule()`, so no `.ts` file ever imports `Rule`. The class is
+    // consumed by the TSLint runtime by convention, like the AWS Lambda handler
+    // in #1771, so dead-export must not flag it.
+    #[test]
+    fn no_fp_for_tslint_rule_class_issue_2302() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "tools/tslint/validateImportForEsmCjsInteropRule.ts",
+                "import { RuleFailure, Rules } from 'tslint';\n\
+                 import * as ts from 'typescript';\n\
+                 export class Rule extends Rules.AbstractRule {\n\
+                   override apply(sourceFile: ts.SourceFile): RuleFailure[] {\n\
+                     return [];\n\
+                   }\n\
+                 }\n",
+            ),
+            ("tools/build.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) =
+            run_on_project(&files, "tools/tslint/validateImportForEsmCjsInteropRule.ts");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("Rule")),
+            "TSLint custom rule class must not be flagged dead, got: {diags:?}"
+        );
+    }
+
+    // Variant of #2302 — the AbstractRule base is imported directly (not via the
+    // `Rules` namespace) as `import { Rules, AbstractRule } from 'tslint'` and the
+    // class extends the bare `AbstractRule`. Both heritage shapes must be exempt.
+    #[test]
+    fn no_fp_for_tslint_rule_class_bare_abstract_rule_issue_2302() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "tools/tslint/noImplicitOverrideAbstractRule.ts",
+                "import { AbstractRule } from 'tslint/lib/rules';\n\
+                 export class Rule extends AbstractRule {\n\
+                   apply() {\n\
+                     return [];\n\
+                   }\n\
+                 }\n",
+            ),
+            ("tools/build.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) =
+            run_on_project(&files, "tools/tslint/noImplicitOverrideAbstractRule.ts");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("Rule")),
+            "TSLint rule extending a bare AbstractRule must not be flagged, got: {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #2302 — an ordinary `export class Rule {}` that
+    // does NOT extend `AbstractRule` and whose file does NOT import from `tslint`
+    // is a plain dead export and must still be flagged.
+    #[test]
+    fn still_flags_plain_rule_class_without_tslint_issue_2302() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/rule.ts",
+                "export class Rule {\n\
+                   apply() {}\n\
+                 }\n",
+            ),
+            ("src/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/rule.ts");
+        assert!(
+            diags.iter().any(|d| d.message.contains("Rule")),
+            "a plain Rule class not extending AbstractRule must still be flagged, got: {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #2302 — the exemption is scoped to the convention
+    // `Rule` class. A genuinely dead helper export in a tslint-importing rule
+    // file (anything other than the `Rule` class) must still be flagged.
+    #[test]
+    fn still_flags_dead_helper_in_tslint_rule_file_issue_2302() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "tools/tslint/noFooRule.ts",
+                "import { Rules } from 'tslint';\n\
+                 export class Rule extends Rules.AbstractRule {\n\
+                   apply() { return []; }\n\
+                 }\n\
+                 export const __DEAD_HELPER = 1;\n",
+            ),
+            ("tools/build.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "tools/tslint/noFooRule.ts");
+        assert!(
+            diags.iter().any(|d| d.message.contains("__DEAD_HELPER")),
+            "a dead helper alongside the Rule class must still be flagged, got: {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #2302 — a `Rule` class extending `AbstractRule`
+    // but in a file that does NOT import from `tslint` is not a TSLint rule (the
+    // base could be any local `AbstractRule`), so it stays subject to the rule.
+    #[test]
+    fn still_flags_rule_extending_abstract_rule_without_tslint_import_issue_2302() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/myRule.ts",
+                "import { AbstractRule } from './base';\n\
+                 export class Rule extends AbstractRule {\n\
+                   apply() {}\n\
+                 }\n",
+            ),
+            ("src/base.ts", "export class AbstractRule {}\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/myRule.ts");
+        assert!(
+            diags.iter().any(|d| d.message.contains("Rule")),
+            "Rule extending a non-tslint AbstractRule must still be flagged, got: {diags:?}"
+        );
+    }
+
     // Negative-space guard for #1556 — an export imported from no file at all
     // (not `.ts`/`.tsx`/`.md`/`.mdx`) is genuinely dead and must still fire.
     #[test]

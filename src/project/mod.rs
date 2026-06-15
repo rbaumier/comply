@@ -925,6 +925,122 @@ fn export_default_calls_define_plugin(node: tree_sitter::Node, source: &[u8]) ->
         })
 }
 
+/// Export name a TSLint custom-rule file exposes to the TSLint runtime: the
+/// `Rule` class. TSLint discovers rule modules by directory and loads them with
+/// `require()`, then instantiates `new Rule()` — the class name is the plugin
+/// API contract — so `Rule` never has a static importer yet is live. Used as the
+/// cheap name gate before the shape-confirming source scan runs.
+pub const TSLINT_RULE_ENTRY_EXPORTS: &[&str] = &["Rule"];
+
+/// Base class a TSLint custom rule extends, as the rightmost segment of the
+/// heritage clause — `AbstractRule` (imported directly) or `Rules.AbstractRule` /
+/// `Lint.Rules.AbstractRule` (reached through the `tslint` namespace).
+const TSLINT_ABSTRACT_RULE: &str = "AbstractRule";
+
+/// True when `source` is a TSLint custom-rule module: it imports from `tslint`
+/// (the bare specifier or a `tslint/<subpath>` such as `tslint/lib/rules`) and
+/// declares a class named `Rule` that extends `AbstractRule` (or
+/// `Rules.AbstractRule` / `Lint.Rules.AbstractRule`). TSLint discovers rule files
+/// by directory and instantiates `new Rule()` at run time, never through a static
+/// import, so the `Rule` export is live despite having no importer.
+///
+/// Both signals are required — the `tslint` import source *and* the `Rule extends
+/// AbstractRule` class shape — so an ordinary `export class Rule {}`, or a `Rule`
+/// extending a local non-tslint `AbstractRule`, stays subject to the rule.
+#[must_use]
+pub fn is_tslint_rule_source(source: &str, lang: crate::files::Language) -> bool {
+    let Some(grammar) = crate::parsing::ts_language_for(lang) else {
+        return false;
+    };
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&grammar).is_err() {
+        return false;
+    }
+    let Some(tree) = parser.parse(source, None) else {
+        return false;
+    };
+    let bytes = source.as_bytes();
+    let mut imports_tslint = false;
+    let mut declares_rule_class = false;
+    crate::rules::walker::walk_tree(&tree, |node| match node.kind() {
+        "import_statement" if imports_from_tslint(node, bytes) => {
+            imports_tslint = true;
+        }
+        "class_declaration" if is_tslint_rule_class(node, bytes) => {
+            declares_rule_class = true;
+        }
+        _ => {}
+    });
+    imports_tslint && declares_rule_class
+}
+
+/// True when `node` (an `import_statement`) imports from the `tslint` package —
+/// the bare `tslint` specifier or a `tslint/<subpath>` (e.g. `tslint/lib/rules`).
+fn imports_from_tslint(node: tree_sitter::Node, source: &[u8]) -> bool {
+    node.child_by_field_name("source")
+        .and_then(|src| src.utf8_text(source).ok())
+        .map(|spec| spec.trim_matches(|c| c == '\'' || c == '"' || c == '`'))
+        .is_some_and(|spec| spec == "tslint" || spec.starts_with("tslint/"))
+}
+
+/// True when `node` (a `class_declaration`) is named `Rule` and extends a base
+/// whose rightmost name segment is `AbstractRule` — `AbstractRule`,
+/// `Rules.AbstractRule`, or `Lint.Rules.AbstractRule`.
+fn is_tslint_rule_class(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let named_rule = node
+        .named_children(&mut node.walk())
+        .find(|c| c.kind() == "type_identifier" || c.kind() == "identifier")
+        .and_then(|id| id.utf8_text(source).ok())
+        .is_some_and(|name| name == "Rule");
+    if !named_rule {
+        return false;
+    }
+    node.named_children(&mut node.walk())
+        .filter(|c| c.kind() == "class_heritage")
+        .any(|heritage| heritage_extends_abstract_rule(heritage, source))
+}
+
+/// True when a `class_heritage` node has an `extends` clause whose base type's
+/// rightmost name segment is `AbstractRule`. A `member_expression` /
+/// `nested_type_identifier` (`Rules.AbstractRule`) is matched on its last segment;
+/// a bare `identifier`/`type_identifier` (`AbstractRule`) on its own text.
+fn heritage_extends_abstract_rule(heritage: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = heritage.walk();
+    for clause in heritage.named_children(&mut cursor) {
+        if clause.kind() != "extends_clause" {
+            continue;
+        }
+        let extends_abstract_rule = clause
+            .named_children(&mut clause.walk())
+            .any(|base| rightmost_name_is_abstract_rule(base, source));
+        if extends_abstract_rule {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when `node`'s rightmost name segment equals `AbstractRule`. Handles a
+/// bare `identifier`/`type_identifier` and a dotted `member_expression` /
+/// `nested_type_identifier` (the heritage base is a value expression in JS, a
+/// type reference in TS), where the last `.`-segment is the relevant name.
+fn rightmost_name_is_abstract_rule(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let text = match node.kind() {
+        "identifier" | "type_identifier" | "member_expression" | "nested_type_identifier" => {
+            node.utf8_text(source).ok()
+        }
+        // A generic instantiation (`AbstractRule<T>`) wraps the base name in a
+        // `generic_type` whose first child carries the name.
+        "generic_type" => node
+            .named_children(&mut node.walk())
+            .next()
+            .and_then(|n| n.utf8_text(source).ok()),
+        _ => None,
+    };
+    text.and_then(|t| t.rsplit('.').next())
+        .is_some_and(|last| last == TSLINT_ABSTRACT_RULE)
+}
+
 /// Export names a k6 load-test script exposes to the k6 runtime: the required
 /// `default` entry function, the `options` runtime configuration, and the
 /// `setup`/`teardown` lifecycle hooks. The k6 CLI loads the script and calls

@@ -63,6 +63,14 @@
 //!     through a static TS import. The exemption is gated on BOTH the
 //!     `functions/` directory and the `handler` name, so a lone `handler`
 //!     export elsewhere stays subject to the rule.
+//!   - TSLint custom-rule `Rule` class exports — a class named `Rule` that
+//!     extends `AbstractRule` (or `Rules.AbstractRule` / `Lint.Rules.AbstractRule`)
+//!     in a module that imports from `tslint`. TSLint discovers rule files by
+//!     directory and instantiates `new Rule()` at run time, never through a static
+//!     import, so the `Rule` export is live despite having no importer. Gated on
+//!     BOTH the `tslint` import AND the `Rule extends AbstractRule` class shape, so
+//!     an ordinary `export class Rule {}`, or a `Rule` extending a local non-tslint
+//!     base, stays subject to the rule.
 //!   - Node.js ESM customization-hook exports (`resolve`/`load`/`globalPreload`)
 //!     in an `.mjs`/`.mts` module declared with the canonical chained-hook
 //!     signature — Node loads the module through the `--loader`/`--import` (or
@@ -690,6 +698,14 @@ impl TextCheck for Check {
         // Computed lazily: only a surviving `default` export pays for the parse.
         let mut oxlint_plugin_entry: Option<bool> = None;
 
+        // Whether this module is a TSLint custom-rule entry point — it imports
+        // from `tslint` and declares a class named `Rule` that extends
+        // `AbstractRule` (or `Rules.AbstractRule`). TSLint discovers rule files by
+        // directory and instantiates `new Rule()` at run time, never through a
+        // static import, so the `Rule` export is live despite having no importer.
+        // Computed lazily: only a surviving `Rule` export pays for the parse.
+        let mut tslint_rule_entry: Option<bool> = None;
+
         // Whether this module is a k6 load-test script — it imports from the `k6`
         // runtime module (`k6` / `k6/*`) and has an `export default`. The k6 CLI
         // reads the `options` export and invokes `default`/`setup`/`teardown` by
@@ -768,6 +784,19 @@ impl TextCheck for Check {
                     crate::project::is_oxlint_plugin_entry_source(ctx.source, ctx.lang)
                 });
                 if is_plugin_entry {
+                    continue;
+                }
+            }
+            // TSLint custom rule: the `Rule` class of a module that imports from
+            // `tslint` and declares `class Rule extends AbstractRule` is loaded by
+            // TSLint from its rule directory and instantiated as `new Rule()`,
+            // never imported. Gated on the export being `Rule` so an ordinary
+            // module pays nothing.
+            if crate::project::TSLINT_RULE_ENTRY_EXPORTS.contains(&export.name.as_str()) {
+                let is_rule_entry = *tslint_rule_entry.get_or_insert_with(|| {
+                    crate::project::is_tslint_rule_source(ctx.source, ctx.lang)
+                });
+                if is_rule_entry {
                     continue;
                 }
             }
