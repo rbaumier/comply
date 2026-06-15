@@ -1,11 +1,16 @@
 //! sql-no-select-then-insert-race — oxc backend for TS / JS / TSX.
 //!
-//! Collects all string/template literals in a file, then checks for
-//! SELECT+INSERT on the same table without ON CONFLICT.
+//! Collects the string/template literals in a file together with their
+//! enclosing function, then flags a SELECT followed by an INSERT on the same
+//! table — without ON CONFLICT — only when both occur in the same function
+//! body. A TOCTOU race is a check-then-act sequence within one execution path;
+//! a SELECT in one function and an INSERT in a separate function never run in
+//! sequence and are not a race.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_span::Span;
 use std::sync::Arc;
 
 pub struct Check;
@@ -21,11 +26,19 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        let mut collected: Vec<(String, usize)> = Vec::new();
+        // Each literal is keyed by the span of its nearest enclosing function
+        // (`None` = module top level). Cross-matching is confined to a single
+        // scope so two independent functions are never paired.
+        struct Literal {
+            text: String,
+            offset: usize,
+            scope: Option<Span>,
+        }
+        let mut collected: Vec<Literal> = Vec::new();
         for node in semantic.nodes().iter() {
-            match node.kind() {
+            let (text, offset) = match node.kind() {
                 AstKind::StringLiteral(lit) => {
-                    collected.push((lit.value.as_str().to_string(), lit.span.start as usize));
+                    (lit.value.as_str().to_string(), lit.span.start as usize)
                 }
                 AstKind::TemplateLiteral(tpl) => {
                     let s: String = tpl
@@ -34,28 +47,39 @@ impl OxcCheck for Check {
                         .map(|q| q.value.raw.as_str())
                         .collect::<Vec<_>>()
                         .join(" ");
-                    collected.push((s, tpl.span.start as usize));
+                    (s, tpl.span.start as usize)
                 }
-                _ => {}
-            }
+                _ => continue,
+            };
+            let scope = semantic.nodes().ancestors(node.id()).find_map(|ancestor| {
+                match ancestor.kind() {
+                    AstKind::Function(f) => Some(f.span),
+                    AstKind::ArrowFunctionExpression(a) => Some(a.span),
+                    _ => None,
+                }
+            });
+            collected.push(Literal { text, offset, scope });
         }
 
         let mut diagnostics = Vec::new();
-        for (i, (sel_text, _sel_offset)) in collected.iter().enumerate() {
-            let Some(sel_table) = super::extract_select_from_table(sel_text) else {
+        for (i, sel) in collected.iter().enumerate() {
+            let Some(sel_table) = super::extract_select_from_table(&sel.text) else {
                 continue;
             };
-            for (ins_text, ins_offset) in &collected[i + 1..] {
-                let Some(ins_table) = super::extract_insert_into_table(ins_text) else {
+            for ins in &collected[i + 1..] {
+                if ins.scope != sel.scope {
+                    continue;
+                }
+                let Some(ins_table) = super::extract_insert_into_table(&ins.text) else {
                     continue;
                 };
                 if ins_table != sel_table {
                     continue;
                 }
-                if super::has_on_conflict(ins_text) {
+                if super::has_on_conflict(&ins.text) {
                     break;
                 }
-                let (line, column) = byte_offset_to_line_col(ctx.source, *ins_offset);
+                let (line, column) = byte_offset_to_line_col(ctx.source, ins.offset);
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),
                     line,
@@ -107,5 +131,33 @@ mod tests {
     fn allows_on_conflict() {
         let src = "const a = `SELECT id FROM user WHERE email = $1`; const b = `INSERT INTO user (email) VALUES ($1) ON CONFLICT (email) DO NOTHING`;";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_select_and_insert_in_separate_functions() {
+        // Issue #2210: a SELECT in getPosts() and an INSERT in createPost() are
+        // independent functions, never executed in sequence — not a TOCTOU race.
+        let src = r#"
+            export async function getPosts(db) {
+              return db.prepare('SELECT * FROM posts ORDER BY created_at DESC').all();
+            }
+            export async function createPost(db, title) {
+              return db.prepare('INSERT INTO posts (title) VALUES (?)').bind(title).run();
+            }
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_select_then_insert_within_same_function() {
+        // Negative space: a genuine check-then-act in one function still flags.
+        let src = r#"
+            async function upsert(db, email) {
+              const existing = await db.query('SELECT id FROM user WHERE email = $1', [email]);
+              if (existing) return existing;
+              return db.query('INSERT INTO user (email) VALUES ($1)', [email]);
+            }
+        "#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
