@@ -74,6 +74,14 @@ pub struct PackageJson {
     /// a `#`-prefixed self-referencing alias (e.g. `#import-plugin`, `#dep/*`)
     /// resolved to an internal file at runtime, never an npm package.
     pub subpath_imports: BTreeSet<String>,
+    /// `imports` field entries paired with their manifest-relative string target,
+    /// e.g. `("#app/*", "./app/*")`. Conditional-object targets contribute their
+    /// first string condition value (`{ "import": "./x.js" }` → `"./x.js"`); a
+    /// non-string target (nested arrays/objects) is skipped. Lets the import
+    /// resolver map a `#`-prefixed specifier to its physical path independent of
+    /// `node_modules`/tsconfig resolution, which can silently fail when a
+    /// checked-in `tsconfig.json` `extends` an absent package.
+    pub subpath_import_targets: Vec<(String, String)>,
     /// True if `browserslist` is present at any form (array, object, string).
     pub has_browserslist: bool,
     pub workspaces: Vec<String>,
@@ -178,6 +186,7 @@ impl PackageJson {
                 .and_then(|node| node.as_object())
                 .map(|obj| obj.keys().cloned().collect())
                 .unwrap_or_default(),
+            subpath_import_targets: collect_subpath_import_targets(&json),
             has_browserslist: json.get("browserslist").is_some(),
             is_library: json.get("main").is_some()
                 || json.get("exports").is_some()
@@ -709,6 +718,33 @@ fn parse_dep_map(json: &Value, section: &str) -> BTreeMap<String, String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Pair each `imports` field key with its string target. A value may be a plain
+/// string (`"#app/*": "./app/*"`) or a conditions object whose values are
+/// strings (`"#app/*": { "default": "./app/*" }`); for the object form one string
+/// condition value is taken. Nested conditions (object/array values) and `null`
+/// targets are skipped — they have no single physical target.
+fn collect_subpath_import_targets(json: &Value) -> Vec<(String, String)> {
+    let Some(obj) = json.get("imports").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    obj.iter()
+        .filter_map(|(key, target)| {
+            subpath_import_string_target(target).map(|t| (key.clone(), t.to_string()))
+        })
+        .collect()
+}
+
+/// Resolve one `imports` target node to a single string path. A bare string is
+/// returned as-is; a conditions object yields its first string condition value.
+/// Returns `None` for nested/array/null targets.
+fn subpath_import_string_target(target: &Value) -> Option<&str> {
+    match target {
+        Value::String(s) => Some(s.as_str()),
+        Value::Object(conditions) => conditions.values().find_map(Value::as_str),
+        _ => None,
+    }
 }
 
 /// Workspace package globs from the `workspaces` field, supporting both

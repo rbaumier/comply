@@ -2929,11 +2929,19 @@ fn is_cypress_dir(dir: &Path) -> bool {
     dir.join("cypress").is_dir()
 }
 
-/// Read the `name` field of a `package.json`, or `None` when the file is
-/// absent, unparseable, or declares no `name`.
-fn read_package_name(manifest: &Path) -> Option<String> {
+/// Parse a `package.json`, or `None` when the file is absent or unparseable.
+fn read_package_json(manifest: &Path) -> Option<crate::project::PackageJson> {
     let raw = std::fs::read_to_string(manifest).ok()?;
-    crate::project::PackageJson::parse(&raw)?.name
+    crate::project::PackageJson::parse(&raw)
+}
+
+/// Expand a `package.json` `imports` target into the alias-target path for `dir`.
+/// The manifest-relative target (`./app/*`) is stripped of its leading `./` and
+/// joined onto `dir`, preserving a trailing `*` so the wildcard alias machinery
+/// substitutes the matched suffix (`#app/utils/x` → `<dir>/app/utils/x`).
+fn subpath_import_target_path(dir: &Path, target: &str) -> PathBuf {
+    let rel = target.strip_prefix("./").unwrap_or(target);
+    dir.join(rel)
 }
 
 fn probe_path(raw: &Path, known: &std::collections::HashSet<PathBuf>) -> Option<PathBuf> {
@@ -3141,6 +3149,12 @@ impl OxcPathResolver {
         // Workspace member name → its manifest directory. Built from every
         // named `package.json` reachable above an indexed file.
         let mut workspace_packages: HashMap<String, PathBuf> = HashMap::new();
+        // Directory of a `package.json` declaring a non-empty `imports` field →
+        // its `(key, manifest-relative target)` pairs. The `#`-prefixed subpath
+        // aliases are synthesized below from these, so they resolve even when the
+        // dir's `tsconfig.json` `extends` an absent package and oxc resolution
+        // (which would otherwise handle `imports`) fails for the whole scope.
+        let mut subpath_import_dirs: HashMap<PathBuf, Vec<(String, String)>> = HashMap::new();
 
         for path in known_paths {
             let Some(mut dir) = path.parent() else {
@@ -3155,8 +3169,15 @@ impl OxcPathResolver {
                 if candidate.exists() {
                     tsconfig_dirs.entry(dir.to_path_buf()).or_insert(candidate);
                 }
-                if let Some(name) = read_package_name(&dir.join("package.json")) {
-                    workspace_packages.entry(name).or_insert_with(|| dir.to_path_buf());
+                if let Some(pkg) = read_package_json(&dir.join("package.json")) {
+                    if let Some(name) = pkg.name {
+                        workspace_packages.entry(name).or_insert_with(|| dir.to_path_buf());
+                    }
+                    if !pkg.subpath_import_targets.is_empty() {
+                        subpath_import_dirs
+                            .entry(dir.to_path_buf())
+                            .or_insert(pkg.subpath_import_targets);
+                    }
                 }
                 if is_sveltekit_dir(dir) {
                     sveltekit_dirs.insert(dir.to_path_buf());
@@ -3183,22 +3204,35 @@ impl OxcPathResolver {
                     Some(&tsconfig_path),
                     &sveltekit_dirs,
                     &cypress_dirs,
+                    &subpath_import_dirs,
                 );
                 let oxc = Self::make_oxc(Some(tsconfig_path));
                 TsconfigResolver { dir, aliases, oxc }
             })
             .collect();
 
-        // Framework project roots without a checked-in `tsconfig.json` still need
-        // a resolver entry so the synthetic alias applies (`$lib` for SvelteKit,
-        // `cypress/*` for Cypress). A Cypress base dir, in particular, typically
-        // ships only `cypress.config.*` and no `tsconfig.json`, so the alias must
-        // be synthesized off the framework signal alone.
-        for dir in sveltekit_dirs.union(&cypress_dirs) {
+        // Project roots that carry an in-process synthetic alias but no
+        // checked-in `tsconfig.json` still need a resolver entry: `$lib` for
+        // SvelteKit, `cypress/*` for Cypress, and `#`-subpath imports from
+        // `package.json`. A Cypress base dir, in particular, typically ships only
+        // `cypress.config.*` and no `tsconfig.json`, and a `package.json` with an
+        // `imports` field need not have a sibling `tsconfig.json` at all.
+        let synthetic_dirs: HashSet<&PathBuf> = sveltekit_dirs
+            .iter()
+            .chain(cypress_dirs.iter())
+            .chain(subpath_import_dirs.keys())
+            .collect();
+        for dir in synthetic_dirs {
             if resolvers.iter().any(|r| &r.dir == dir) {
                 continue;
             }
-            let aliases = Self::aliases_for_dir(dir, None, &sveltekit_dirs, &cypress_dirs);
+            let aliases = Self::aliases_for_dir(
+                dir,
+                None,
+                &sveltekit_dirs,
+                &cypress_dirs,
+                &subpath_import_dirs,
+            );
             let oxc = Self::make_oxc(None);
             resolvers.push(TsconfigResolver { dir: dir.clone(), aliases, oxc });
         }
@@ -3228,11 +3262,17 @@ impl OxcPathResolver {
     ///   maps to `<dir>/cypress/utils/urls`. The alias only wins when the
     ///   expanded path is an indexed source file; a real npm `cypress` subpath
     ///   import (no matching project file) falls through to oxc resolution.
+    /// - `package.json` `imports`: each `#`-prefixed key maps to its
+    ///   manifest-relative target, e.g. `"#app/*": "./app/*"` →
+    ///   `#app/*` → `<dir>/app/*`. A `#`-specifier with no matching key stays
+    ///   unresolved (no spurious edge), as does an alias whose expansion names
+    ///   no indexed file.
     fn aliases_for_dir(
         dir: &Path,
         tsconfig_path: Option<&Path>,
         sveltekit_dirs: &HashSet<PathBuf>,
         cypress_dirs: &HashSet<PathBuf>,
+        subpath_import_dirs: &HashMap<PathBuf, Vec<(String, String)>>,
     ) -> Vec<(String, Vec<PathBuf>)> {
         let mut aliases = tsconfig_path
             .map(|p| Self::read_path_aliases(dir, p))
@@ -3243,6 +3283,11 @@ impl OxcPathResolver {
         }
         if cypress_dirs.contains(dir) {
             aliases.push(("cypress/*".to_string(), vec![dir.join("cypress").join("*")]));
+        }
+        if let Some(targets) = subpath_import_dirs.get(dir) {
+            for (key, target) in targets {
+                aliases.push((key.clone(), vec![subpath_import_target_path(dir, target)]));
+            }
         }
         aliases
     }
@@ -5057,6 +5102,176 @@ mod tests {
         assert!(
             imp.source_path.is_none(),
             "cypress/* must not alias-resolve in a non-Cypress project"
+        );
+    }
+
+    /// Build an epic-stack-shaped project: a `package.json` with an `"imports"`
+    /// field declaring `#`-prefixed subpath aliases, an export under `app/`, and
+    /// an importer that reaches it exclusively via a `#app/*` specifier (with the
+    /// `.ts` extension, as epic-stack writes it). A `tsconfig.json` whose
+    /// `extends` names an absent package is written too: it makes oxc's own
+    /// `imports` resolution fail for the whole scope (the real epic-stack
+    /// failure mode), so the in-process alias is what must resolve the specifier.
+    #[cfg(test)]
+    fn build_subpath_imports_index(pkg_json: &str) -> (TempDir, ImportIndex, PathBuf, PathBuf) {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), pkg_json).unwrap();
+        fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{ "extends": ["@epic-web/config/typescript"] }"#,
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join("app/utils")).unwrap();
+        fs::create_dir_all(dir.path().join("app/routes")).unwrap();
+        let auth = dir.path().join("app/utils/auth.server.ts");
+        fs::write(
+            &auth,
+            "export async function requireUserId() {}\nexport function unusedHelper() {}\n",
+        )
+        .unwrap();
+        let route = dir.path().join("app/routes/profile.tsx");
+        fs::write(
+            &route,
+            "import { requireUserId } from '#app/utils/auth.server.ts';\nexport const used = requireUserId;\n",
+        )
+        .unwrap();
+        let sources = [
+            SourceFile { path: auth.clone(), language: Language::TypeScript },
+            SourceFile { path: route.clone(), language: Language::Tsx },
+        ];
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let index = ImportIndex::build(&refs);
+        let auth_canon = fs::canonicalize(&auth).unwrap();
+        let route_canon = fs::canonicalize(&route).unwrap();
+        (dir, index, auth_canon, route_canon)
+    }
+
+    // Regression for #2228: Node.js `package.json` `"imports"` subpath aliases
+    // (`"#app/*": "./app/*"`) must resolve `#app/...` specifiers to their physical
+    // path so an export imported only via the alias is not flagged dead.
+    #[test]
+    fn subpath_imports_alias_resolves_hash_specifier() {
+        let (_dir, index, auth_canon, route_canon) = build_subpath_imports_index(
+            r##"{"name":"epic-stack","imports":{"#app/*":"./app/*","#tests/*":"./tests/*"}}"##,
+        );
+
+        let imp = index
+            .get_imports(&route_canon)
+            .iter()
+            .find(|i| i.specifier == "#app/utils/auth.server.ts")
+            .expect("#app/* import must be indexed");
+        assert_eq!(
+            imp.source_path.as_ref(),
+            Some(&auth_canon),
+            "#app/* must resolve to ./app/* via package.json imports"
+        );
+        assert!(
+            !index.get_usages(&auth_canon, "requireUserId").is_empty(),
+            "requireUserId must record a cross-file usage via the #app alias"
+        );
+    }
+
+    // Negative-space guard for #2228: an export imported by nobody stays dead even
+    // when the subpath-imports alias is active — the alias resolves edges, it does
+    // not blanket-mark every export in the aliased tree as used.
+    #[test]
+    fn subpath_imports_alias_keeps_genuinely_unused_export_dead() {
+        let (_dir, index, auth_canon, _route_canon) = build_subpath_imports_index(
+            r##"{"name":"epic-stack","imports":{"#app/*":"./app/*"}}"##,
+        );
+
+        assert!(
+            index.get_usages(&auth_canon, "unusedHelper").is_empty(),
+            "an export imported by nobody must stay dead under the #app alias"
+        );
+    }
+
+    // Negative-space guard for #2228: a `#`-specifier with no matching `imports`
+    // entry must stay unresolved (no spurious edge, no crash). Here `imports`
+    // declares only `#app/*`, so `#missing/x` finds no mapping.
+    #[test]
+    fn subpath_imports_unmapped_hash_specifier_stays_unresolved() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r##"{"name":"app","imports":{"#app/*":"./app/*"}}"##,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{ "extends": ["@epic-web/config/typescript"] }"#,
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join("app")).unwrap();
+        let target = dir.path().join("app/x.ts");
+        fs::write(&target, "export const x = 1;\n").unwrap();
+        let consumer = dir.path().join("app/consumer.ts");
+        fs::write(
+            &consumer,
+            "import { x } from '#missing/x';\nexport const used = x;\n",
+        )
+        .unwrap();
+        let sources = [
+            SourceFile { path: target.clone(), language: Language::TypeScript },
+            SourceFile { path: consumer.clone(), language: Language::TypeScript },
+        ];
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let index = ImportIndex::build(&refs);
+        let consumer_canon = fs::canonicalize(&consumer).unwrap();
+
+        let imp = index
+            .get_imports(&consumer_canon)
+            .iter()
+            .find(|i| i.specifier == "#missing/x")
+            .expect("#missing/x import must be indexed");
+        assert!(
+            imp.source_path.is_none(),
+            "a #-specifier with no matching imports entry must stay unresolved"
+        );
+    }
+
+    // #2228: the exact-key form of subpath imports (`"#config": "./app/config.ts"`)
+    // resolves the non-wildcard specifier to its physical target.
+    #[test]
+    fn subpath_imports_exact_key_resolves() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r##"{"name":"app","imports":{"#config":"./app/config.ts"}}"##,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{ "extends": ["@epic-web/config/typescript"] }"#,
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join("app")).unwrap();
+        let config = dir.path().join("app/config.ts");
+        fs::write(&config, "export const setting = 1;\n").unwrap();
+        let consumer = dir.path().join("app/consumer.ts");
+        fs::write(
+            &consumer,
+            "import { setting } from '#config';\nexport const used = setting;\n",
+        )
+        .unwrap();
+        let sources = [
+            SourceFile { path: config.clone(), language: Language::TypeScript },
+            SourceFile { path: consumer.clone(), language: Language::TypeScript },
+        ];
+        let refs: Vec<&SourceFile> = sources.iter().collect();
+        let index = ImportIndex::build(&refs);
+        let config_canon = fs::canonicalize(&config).unwrap();
+        let consumer_canon = fs::canonicalize(&consumer).unwrap();
+
+        let imp = index
+            .get_imports(&consumer_canon)
+            .iter()
+            .find(|i| i.specifier == "#config")
+            .expect("#config import must be indexed");
+        assert_eq!(
+            imp.source_path.as_ref(),
+            Some(&config_canon),
+            "exact-key subpath import must resolve to its target file"
         );
     }
 
