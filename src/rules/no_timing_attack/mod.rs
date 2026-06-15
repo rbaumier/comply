@@ -35,6 +35,12 @@
 //! over two fields of the same `&Self`, with no attacker-input vs. stored-secret
 //! asymmetry, so the timing-attack premise does not apply.
 //!
+//! A comparison where either operand is a JS `Symbol` (TS) is exempt: an inline
+//! `Symbol(...)` / `Symbol.for(...)` call, or an identifier bound to one. A
+//! `Symbol` is compared by reference identity (an O(1) id check), not byte by
+//! byte, so the capability-token idiom (`const secret = Symbol(); arg ===
+//! secret`) cannot leak timing.
+//!
 //! ## Known gap
 //!
 //! No constant propagation. A comparison whose operand is the result
