@@ -23,10 +23,15 @@ fn is_event_handler_prop(name: &str) -> bool {
 
 /// True if the identifier name starts with an accepted handler prefix.
 ///
+/// A single leading `_` (the standard TS private/internal convention) is
+/// stripped before checking, so `_onRenderRow` and `_handleBlur` are
+/// treated like `onRenderRow` and `handleBlur`.
+///
 /// `set` covers React `useState` setters (`setOpen`, `setUser`, …) which
 /// are the canonical name for state setters per the React docs and are
 /// routinely passed directly to handler props like `onOpenChange`.
 fn has_valid_handler_prefix(name: &str) -> bool {
+    let name = name.strip_prefix('_').unwrap_or(name);
     let prefixes: [&str; 4] = ["handle", "on", "toggle", "set"];
     prefixes.iter().any(|p| {
         if let Some(rest) = name.strip_prefix(p) {
@@ -139,6 +144,35 @@ mod tests {
         // pass straight through to onOpenChange without renaming.
         let src = r#"const x = <Dialog open={open} onOpenChange={setOpen} />;"#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_leading_underscore_before_valid_prefix() {
+        // Regression for rbaumier/comply#2109 — a single leading `_`
+        // (private/internal convention) before a valid handler prefix is
+        // stripped before checking.
+        let on = r#"const x = <DetailsList onRenderRow={_onRenderRow} />;"#;
+        let handle = r#"const x = <Btn onBlur={_handleBlur} />;"#;
+        let toggle = r#"const x = <Btn onToggle={_toggleThing} />;"#;
+        assert!(run(on).is_empty());
+        assert!(run(handle).is_empty());
+        assert!(run(toggle).is_empty());
+    }
+
+    #[test]
+    fn still_flags_underscore_without_valid_prefix() {
+        // Only the privacy prefix is stripped, not blanket-accepting any
+        // underscored name: `_doStuff`/`_fooBar` have no valid prefix.
+        let do_stuff = r#"const x = <Btn onClick={_doStuff} />;"#;
+        let foo_bar = r#"const x = <Btn onClick={_fooBar} />;"#;
+        assert_eq!(run(do_stuff).len(), 1);
+        assert_eq!(run(foo_bar).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_non_underscore_invalid_name() {
+        let src = r#"const x = <Btn onClick={doStuff} />;"#;
+        assert_eq!(run(src).len(), 1);
     }
 
 }
