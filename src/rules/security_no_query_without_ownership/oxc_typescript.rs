@@ -133,13 +133,10 @@ fn is_in_route_handler(
         let parent = nodes.get_node(parent_id);
 
         match parent.kind() {
-            // Express/Hono/Fastify-style: app.get(...), app.post(...)
+            // Express/Hono/Fastify-style: app.get('/x', handler), app.post('/x', handler)
             AstKind::CallExpression(call) => {
-                if let Expression::StaticMemberExpression(member) = &call.callee {
-                    let prop = member.property.name.as_str();
-                    if matches!(prop, "get" | "post" | "put" | "patch" | "delete" | "all") {
-                        return true;
-                    }
+                if is_http_route_registration(call) {
+                    return true;
                 }
             }
             // Next.js / Remix-style: export function GET(req) { ... }
@@ -176,6 +173,41 @@ fn is_in_route_handler(
     }
 }
 
+/// True when `call` is an HTTP route registration like `app.post('/x', handler)`.
+///
+/// Distinguishes a route registration from a method invocation that merely
+/// shares an HTTP-verb name — e.g. the Prisma fluent relation accessor
+/// `prisma.user.findUnique(...).post()` or a query on a model named `post`.
+/// A registration is a `<obj>.<verb>(...)` call whose property is an HTTP verb
+/// AND that carries both a route-path argument (string/template literal) and a
+/// handler argument (function/arrow). The fluent accessor carries neither.
+fn is_http_route_registration(call: &oxc_ast::ast::CallExpression<'_>) -> bool {
+    use oxc_ast::ast::Argument;
+
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    if !matches!(
+        member.property.name.as_str(),
+        "get" | "post" | "put" | "patch" | "delete" | "all"
+    ) {
+        return false;
+    }
+
+    let has_path_arg = matches!(
+        call.arguments.first(),
+        Some(Argument::StringLiteral(_) | Argument::TemplateLiteral(_))
+    );
+    let has_handler_arg = call.arguments.iter().any(|arg| {
+        matches!(
+            arg,
+            Argument::ArrowFunctionExpression(_) | Argument::FunctionExpression(_)
+        )
+    });
+
+    has_path_arg && has_handler_arg
+}
+
 fn function_has_request_param_oxc(
     params: &oxc_ast::ast::FormalParameters<'_>,
     source: &str,
@@ -191,4 +223,84 @@ fn function_has_request_param_oxc(
         }
     }
     false
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    #[test]
+    fn flags_find_unique_in_route_handler() {
+        let src = "app.get('/orders/:id', (req, res) => { prisma.order.findUnique({ where: { id: req.params.id } }); });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_find_with_owner_filter_in_route() {
+        let src = "app.post('/orders', (req, res) => { prisma.order.findUnique({ where: { id, orgId } }); });";
+        assert!(run(src).is_empty());
+    }
+
+    // Regression for rbaumier/comply#3356: a Prisma model/relation named after
+    // an HTTP verb must not be mistaken for an `app.post(...)` route handler.
+
+    #[test]
+    fn ignores_prisma_model_named_post() {
+        // packages/client/tests/functional/batching/tests.ts — `prisma.post`
+        // is a database model, not an HTTP route registration.
+        let src = "const res = await Promise.all([\
+            prisma.user.findUnique({ where: { id: user1.id } }),\
+            prisma.post.findUnique({ where: { id: post1.id } }),\
+        ]);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_prisma_fluent_post_relation() {
+        // packages/client/tests/functional/fluent-api/tests.ts — `.post()` here
+        // traverses a relation, it is not an Express route registration.
+        let src = "const data = await prisma.user.findUnique({ where: { email } }).property().house().like().post();";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_prisma_fluent_get_relation() {
+        // Generality: any HTTP-verb-named relation accessor is excluded.
+        let src = "const data = await prisma.user.findUnique({ where: { email } }).get();";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_prisma_model_named_delete() {
+        // Generality: a model named after another HTTP verb is excluded too.
+        let src = "const row = prisma.delete.findFirst({ where: { id } });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_unguarded_query_via_post_route() {
+        // A genuine unguarded query inside an `app.post(...)` route still flags.
+        let src = "app.post('/posts/:id', (req, res) => { prisma.post.findUnique({ where: { id: req.params.id } }); });";
+        assert_eq!(run(src).len(), 1);
+    }
 }
