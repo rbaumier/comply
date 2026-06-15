@@ -87,6 +87,34 @@ export const db = drizzle(new Client({ url: env.DATABASE_URL }), { schema });"#;
 const db = drizzle({ connectionString: url });"#;
         assert_eq!(run(src).len(), 1);
     }
+
+    #[test]
+    fn no_fp_non_db_pool_class() {
+        // Regression: issue #3326 — `Pool` imported from a non-database module
+        // (vitest's own worker process pool) must not flag.
+        let src = r#"import { Pool } from '../pool/pool-class';
+
+export function createPool(ctx) {
+  return new Pool({ distPath: ctx.distPath, teardownTimeout: ctx.config.teardownTimeout, state: ctx.state }, ctx.logger);
+}"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_pg_pool_without_timeout() {
+        // A real node-postgres Pool with no statement_timeout must still flag.
+        let src = r#"import { Pool } from "pg";
+const pool = new Pool({ host: "localhost", database: "app" });"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_mysql2_pool_without_timeout() {
+        // mysql2 Pool with no statement_timeout must still flag.
+        let src = r#"import { Pool } from 'mysql2/promise';
+const pool = new Pool({ host: "localhost" });"#;
+        assert_eq!(run(src).len(), 1);
+    }
 }
 
 pub struct Check;
@@ -112,6 +140,29 @@ fn uses_driver_without_statement_timeout(ctx: &CheckCtx) -> bool {
     DRIVERS_WITHOUT_STATEMENT_TIMEOUT
         .iter()
         .any(|source| ctx.source_contains(source))
+}
+
+/// Import sources whose `Pool` export is a database connection pool that
+/// honours `statement_timeout`. `new Pool(...)` only flags when the file
+/// imports `Pool` from one of these — a bare `Pool` from any other module
+/// (e.g. a worker-process pool) is not a DB pool.
+const DB_POOL_IMPORT_SOURCES: &[&str] = &[
+    "pg",
+    "pg-pool",
+    "mysql2",
+    "mysql2/promise",
+    "postgres",
+    "@neondatabase/serverless",
+];
+
+/// True when the file imports from a known DB pool library. Matches the
+/// quoted import-source form (`from "pg"` / `from 'pg'`) so a short token
+/// like `pg` cannot match an unrelated substring.
+fn pool_imported_from_db_library(ctx: &CheckCtx) -> bool {
+    DB_POOL_IMPORT_SOURCES.iter().any(|source| {
+        ctx.source_contains(&format!("from \"{source}\""))
+            || ctx.source_contains(&format!("from '{source}'"))
+    })
 }
 
 impl OxcCheck for Check {
@@ -142,6 +193,10 @@ impl OxcCheck for Check {
             AstKind::NewExpression(new_expr) => {
                 let Some(name) = callee_name(&new_expr.callee) else { return };
                 if name != "Pool" {
+                    return;
+                }
+                // Only a `Pool` imported from a DB pool library is a DB pool.
+                if !pool_imported_from_db_library(ctx) {
                     return;
                 }
                 let (line, column) =
