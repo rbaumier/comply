@@ -114,6 +114,19 @@ pub struct PackageJson {
     /// manifest-dir-relative, forward-slash, no leading `./`, so a consumer can
     /// join them onto the manifest directory and compare against a file path.
     pub entry_files: BTreeSet<String>,
+    /// Manifest-dir-relative `exports` targets that contain a `*` wildcard — e.g.
+    /// `src/v4/locales/*` from `"./v4/locales/*": { ... }`. Gathered from every
+    /// condition (standard and non-standard like `@zod/source`), since a package
+    /// may point only a non-standard condition at its `.ts` source while standard
+    /// `import`/`types` point at compiled output. Each pattern is a glob whose `*`
+    /// expands to any substring, so every source file matching it is a public
+    /// entry point reachable across the package boundary
+    /// (`import("mylib/v4/locales/de")`) and never imported within the repo.
+    /// Stored separately from [`entry_files`] because the literal-equality entry
+    /// check cannot match a path against a glob.
+    ///
+    /// [`entry_files`]: PackageJson::entry_files
+    pub entry_wildcards: BTreeSet<String>,
     /// True when every published entry (`main`/`module`/`exports`/`browser`/
     /// `react-native`) lives outside a top-level `src/` directory and at least
     /// one such entry exists. Marks `src/` as build *input* whose contents are
@@ -203,6 +216,7 @@ impl PackageJson {
                 })
                 .unwrap_or_default(),
             entry_files: collect_entry_files(&json),
+            entry_wildcards: collect_entry_wildcards(&json),
             entries_outside_src: entries_outside_src(&json),
             export_entry_stems: collect_export_entry_stems(&json),
             files: collect_files_whitelist(&json),
@@ -553,6 +567,39 @@ fn collect_entry_files(json: &Value) -> BTreeSet<String> {
         collect_substitute_targets(native, &mut out);
     }
     out
+}
+
+/// The `exports` targets of `json` that contain a `*` wildcard, gathered from
+/// every condition (standard and non-standard). Each is a glob pattern whose
+/// `*` expands to any substring; a source file matching it is a public entry
+/// point. Patterns whose target is the package root (`*` alone, after
+/// normalization) are dropped — they would match every file in the package.
+fn collect_entry_wildcards(json: &Value) -> BTreeSet<String> {
+    let Some(exports) = json.get("exports") else {
+        return BTreeSet::new();
+    };
+    let mut all = BTreeSet::new();
+    collect_export_targets(exports, &mut all);
+    all.into_iter()
+        .filter(|target| target.contains('*') && target != "*")
+        .collect()
+}
+
+/// Whether the manifest-relative source path `rel` matches a single-`*`
+/// `exports` wildcard `pattern` (e.g. `src/locales/*` or `dist/*.js`). Per the
+/// Node spec a subpath pattern carries exactly one `*` that expands to an
+/// arbitrary substring, so the match is `rel == prefix + <non-empty> + suffix`:
+/// `rel` starts with the text before `*`, ends with the text after it, the two
+/// don't overlap, and the spanned substring is non-empty. Both sides use
+/// forward slashes (the pattern is normalized, `rel` is path-derived on the
+/// caller). A pattern with no `*` never reaches here.
+fn wildcard_target_matches(pattern: &str, rel: &str) -> bool {
+    let Some((prefix, suffix)) = pattern.split_once('*') else {
+        return false;
+    };
+    rel.len() > prefix.len() + suffix.len()
+        && rel.starts_with(prefix)
+        && rel.ends_with(suffix)
 }
 
 /// True when every published entry path of `json` lives outside a top-level
@@ -2394,6 +2441,32 @@ impl ProjectCtx {
             .any(|entry| manifest_dir.join(entry) == path)
     }
 
+    /// True when `path` matches a wildcard `exports` target of its nearest
+    /// `package.json` — e.g. `src/v4/locales/de.ts` against the pattern
+    /// `src/v4/locales/*`. A wildcard subpath export publishes every matching
+    /// source file as a public entry point (`import("mylib/v4/locales/de")`),
+    /// reachable only across the package boundary and never imported within the
+    /// repo, so the import-graph BFS cannot reach it even though it is genuinely
+    /// published — not dead code. The patterns are gathered from every condition
+    /// (including non-standard ones like `@zod/source` that point at the `.ts`
+    /// source while standard conditions point at compiled output). The `*` in a
+    /// pattern matches any non-empty substring, matched here against the actual
+    /// source path comply scans.
+    pub fn is_wildcard_entry_file(&self, path: &Path) -> bool {
+        let Some(manifest_dir) = self.nearest_package_json_dir(path) else {
+            return false;
+        };
+        let Some(pkg) = self.nearest_package_json(path) else {
+            return false;
+        };
+        let Some(rel) = path.strip_prefix(manifest_dir).ok().and_then(Path::to_str) else {
+            return false;
+        };
+        pkg.entry_wildcards
+            .iter()
+            .any(|pattern| wildcard_target_matches(pattern, rel))
+    }
+
     /// True when `path` belongs to the published surface of a pre-`exports`-era
     /// library — one whose nearest `package.json` declares a `files` whitelist
     /// but no explicit `main`/`exports`/`module` entry (e.g. express 5.x). Such
@@ -3882,6 +3955,43 @@ mod tests {
         assert_eq!(min_major_version(">=19.0.0"), Some(19));
         assert_eq!(min_major_version("^19"), Some(19));
         assert_eq!(min_major_version("workspace:*"), None);
+    }
+
+    #[test]
+    fn wildcard_target_matches_substring_and_rejects_non_matches() {
+        // `*` expands to a non-empty substring (Node subpath-pattern semantics).
+        assert!(wildcard_target_matches("src/locales/*", "src/locales/de.ts"));
+        // `*` may span path separators.
+        assert!(wildcard_target_matches("src/locales/*", "src/locales/nested/de.ts"));
+        // A suffix after `*` must be honored.
+        assert!(wildcard_target_matches("dist/*.js", "dist/de.js"));
+        assert!(!wildcard_target_matches("dist/*.js", "dist/de.ts"));
+        // The spanned substring must be non-empty — prefix/suffix cannot overlap.
+        assert!(!wildcard_target_matches("src/locales/*", "src/locales/"));
+        // A path outside the prefix never matches.
+        assert!(!wildcard_target_matches("src/locales/*", "src/internal/de.ts"));
+    }
+
+    #[test]
+    fn collect_entry_wildcards_gathers_every_condition() {
+        // A non-standard condition (`@zod/source`) is the only one pointing at
+        // `.ts` source; it must still be gathered. Literal (non-`*`) targets and
+        // a bare-specifier value are excluded.
+        let json: Value = serde_json::from_str(
+            r#"{"exports":{
+                "./locales/*":{"@zod/source":"./src/locales/*","import":"./locales/*.js"},
+                "./util":"./src/util.ts",
+                "./pkg/*":"some-other-package/*"
+            }}"#,
+        )
+        .unwrap();
+        let wildcards = collect_entry_wildcards(&json);
+        assert!(wildcards.contains("src/locales/*"), "{wildcards:?}");
+        assert!(wildcards.contains("locales/*.js"), "{wildcards:?}");
+        // `./util` is a literal target, not a wildcard.
+        assert!(!wildcards.contains("src/util.ts"), "{wildcards:?}");
+        // A bare specifier (no leading `./`) names no file here.
+        assert!(!wildcards.iter().any(|w| w.contains("some-other-package")), "{wildcards:?}");
     }
 
     #[test]

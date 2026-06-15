@@ -115,6 +115,7 @@ fn detect_entry_points<'a>(
                 || is_gecko_dynamic_loaded_file(p, &gecko_loaded_module_names)
                 || project.entrypoints_contains(p)
                 || project.is_package_entry_file(p)
+                || project.is_wildcard_entry_file(p)
                 || project.is_in_published_files_surface(p)
                 || project.is_declared_entry_barrel(p)
                 || project.is_ng_package_entry_file(p)
@@ -960,6 +961,44 @@ mod tests {
             diags[0].path.to_str().is_some_and(|p| p.contains("orphan")),
             "the flagged file must be the genuine orphan inside the workspace \
              package, not a subpath-export entry: {diags:?}"
+        );
+    }
+
+    // Regression for #2092 (zod): a workspace package exposes a wildcard subpath
+    // export (`./locales/*`) whose only condition pointing at source files is a
+    // NON-STANDARD one (`@custom/source` → `./src/locales/*`). Every source file
+    // matching that glob is a public entry point reachable as
+    // `import("mylib/locales/de")`, so it must be seeded — not flagged. A source
+    // file outside the wildcard's directory prefix, with no importer, is still a
+    // genuine orphan and must still be flagged.
+    #[test]
+    fn wildcard_subpath_export_source_files_are_not_flagged_issue_2092() {
+        let files: Vec<(&str, &str)> = vec![
+            // Root is not a library and declares the workspace, so the rule's
+            // anchor (root index.ts) does not short-circuit the run.
+            ("package.json", r#"{"name":"zod-root","private":true,"workspaces":["packages/*"]}"#),
+            ("index.ts", "export const root = 1;\n"),
+            (
+                "packages/lib/package.json",
+                r#"{"name":"mylib","exports":{"./locales/*":{"@custom/source":"./src/locales/*","types":"./locales/*.d.cts","import":"./locales/*.js"}}}"#,
+            ),
+            ("packages/lib/src/locales/de.ts", "export const de = 1;\n"),
+            ("packages/lib/src/locales/fr.ts", "export const fr = 1;\n"),
+            // Genuine orphan inside the package but OUTSIDE the wildcard prefix:
+            // no exports target/glob matches it, nothing imports it → still flagged.
+            ("packages/lib/src/internal/scratch.ts", "export const scratch = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(
+            diags.len(),
+            1,
+            "wildcard-export source files (via a non-standard condition) must be \
+             seeded; only the orphan outside the wildcard prefix is flagged: {diags:?}"
+        );
+        assert!(
+            diags[0].path.to_str().is_some_and(|p| p.contains("scratch")),
+            "the flagged file must be the orphan outside the wildcard prefix, not a \
+             wildcard-export entry: {diags:?}"
         );
     }
 
