@@ -23,17 +23,20 @@ fn is_describe_callee(callee: &Expression) -> bool {
     }
 }
 
-/// Return true when the call is `describe.each(table)(name, fn)` — the `fn`
-/// callback receives row data as arguments, so parameters are expected and
-/// must not be flagged.
-fn callee_is_describe_each(callee: &Expression) -> bool {
+/// Return true when the call is a parameterized describe form —
+/// `describe.each(table)(name, fn)` or `describe.for(table)(name, fn)` (and
+/// chained variants like `describe.concurrent.for(...)`). The `fn` callback
+/// receives the table row as arguments, so parameters are expected and must
+/// not be flagged.
+fn callee_is_parameterized_describe(callee: &Expression) -> bool {
     let Expression::CallExpression(inner) = callee else {
         return false;
     };
     let Expression::StaticMemberExpression(member) = &inner.callee else {
         return false;
     };
-    member.property.name.as_str() == "each" && is_describe_callee(&member.object)
+    let prop = member.property.name.as_str();
+    (prop == "each" || prop == "for") && is_describe_callee(&member.object)
 }
 
 impl OxcCheck for Check {
@@ -62,12 +65,12 @@ impl OxcCheck for Check {
         }
         let cb = &call.arguments[1];
 
-        let is_each = callee_is_describe_each(&call.callee);
+        let is_parameterized = callee_is_parameterized_describe(&call.callee);
 
         match cb {
             oxc_ast::ast::Argument::ArrowFunctionExpression(arrow) => {
                 let is_async = arrow.r#async;
-                let has_params = !is_each && !arrow.params.items.is_empty();
+                let has_params = !is_parameterized && !arrow.params.items.is_empty();
                 let returns_value = if arrow.expression {
                     // Arrow with expression body = implicit return. A bare call
                     // (`() => helper(arg)`) invokes a side-effecting suite helper
@@ -101,7 +104,7 @@ impl OxcCheck for Check {
             }
             oxc_ast::ast::Argument::FunctionExpression(func) => {
                 let is_async = func.r#async;
-                let has_params = !is_each && !func.params.items.is_empty();
+                let has_params = !is_parameterized && !func.params.items.is_empty();
                 let returns_value = func.body.as_ref()
                     .map(|body| body_returns_value_stmts(&body.statements))
                     .unwrap_or(false);
@@ -235,6 +238,27 @@ mod tests {
     fn allows_describe_each_tsx_with_typed_params() {
         let d = crate::rules::test_helpers::run_rule(&Check, "describe.each([['foo', fn1]])('%s', (_label, decision) => { it('x', () => {}); });", "t.tsx");
         assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+    }
+
+    // Regression #3341 — describe.for is the sibling parameterized API; its
+    // callback receives the table row and must not be flagged for parameters.
+    #[test]
+    fn allows_describe_for_with_destructured_param() {
+        let d = crate::rules::test_helpers::run_rule(&Check, "describe.for([[1, 1], [1, 2], [2, 1]])('add(%i, %i)', ([a, b]) => { test('test', () => { expect(a + b).matchSnapshot(); }); });", "t.ts");
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+    }
+
+    #[test]
+    fn allows_describe_concurrent_for_with_param() {
+        let d = crate::rules::test_helpers::run_rule(&Check, "describe.concurrent.for([1, 2])('concurrent %i', (item) => { test('is marked concurrent', () => { expect(item).toBeGreaterThan(0); }); });", "t.ts");
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_describe_for_with_async_callback() {
+        let d = crate::rules::test_helpers::run_rule(&Check, "describe.for([1])('suite', async (item) => { it('x', () => {}); });", "t.ts");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("async"));
     }
 
     #[test]
