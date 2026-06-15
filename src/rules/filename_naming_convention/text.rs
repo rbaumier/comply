@@ -138,10 +138,10 @@ impl TextCheck for Check {
         if super::is_tanstack_pathless_route(ctx.path, file_name) {
             return Vec::new();
         }
-        if super::is_nextjs_pages_router_file(ctx.path, file_name, stem) {
+        if super::is_file_based_route_segment(ctx.path, file_name) {
             return Vec::new();
         }
-        if super::is_solidstart_route_file(ctx.path, file_name) {
+        if super::is_nextjs_numeric_error_page(ctx.path, stem) {
             return Vec::new();
         }
         if is_public_api_barrel_file(ctx.path) {
