@@ -1,7 +1,9 @@
 //! migration-needs-lock-timeout
 //!
-//! Scoped to migration files only (`**/migrations/**`). For `.sql` files
-//! the raw content is checked directly; for TS/Rust files, string literals
+//! Scoped to migration files only (`**/migrations/**`) and skipped in test
+//! dirs, where DDL strings are inline snapshots/assertions of generated
+//! migration output, not executed migrations. For `.sql` files the raw
+//! content is checked directly; for TS/Rust files, string literals
 //! containing a complete DDL statement are checked. `contains_ddl`
 //! requires a `verb object target` shape so query-builder fragments
 //! (`push_sql("ALTER TABLE ")`) — which have nowhere to attach a lock
@@ -28,7 +30,7 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["database", "migrations"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 

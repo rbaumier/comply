@@ -86,4 +86,41 @@ mod tests {
         let src = "// ALTER TABLE t ADD CONSTRAINT foo CHECK (x > 0)\nconst x = 1;";
         assert!(run(src).is_empty());
     }
+
+    #[test]
+    fn skips_inline_snapshot_in_test_dir_issue3354() {
+        // Issue #3354: the `ADD CONSTRAINT ... FOREIGN KEY` DDL here is a
+        // `toMatchInlineSnapshot` assertion of generated migration output,
+        // never executed. The central `skip_in_test_dir` gate exempts it.
+        let src = r#"expect(ctx.fs.read(f)).toMatchInlineSnapshot(`
+"-- AddForeignKey
+ALTER TABLE \"Order\" ADD CONSTRAINT \"Order_userId_fkey\" FOREIGN KEY (\"userId\") REFERENCES \"User\"(\"id\");
+"
+`)"#;
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "packages/migrate/src/__tests__/MigrateDev.test.ts",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_genuine_migration_file() {
+        // Over-exemption guard: a real migration under `migrations/` (not a
+        // test dir) must still flag.
+        let src =
+            r#"const m = "ALTER TABLE t ADD CONSTRAINT t_u_fk FOREIGN KEY (u) REFERENCES \"user\"(id);";"#;
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "app/migrations/002_add_fk.ts",
+            )
+            .len(),
+            1
+        );
+    }
 }
