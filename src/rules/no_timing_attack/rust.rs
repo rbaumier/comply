@@ -300,14 +300,14 @@ impl MyTrait for Thing {
         assert_eq!(run_on(src).len(), 1);
     }
 
-    /// Negative-space guard: a `hash` comparison in an inherent method (no
+    /// Negative-space guard: a credential comparison in an inherent method (no
     /// trait) is NOT exempt — the exemption is scoped to `PartialEq::eq`.
     #[test]
-    fn flags_hash_in_inherent_eq_method() {
+    fn flags_secret_in_inherent_eq_method() {
         let src = r#"
 impl Thing {
     fn eq(&self, other: &Self) -> bool {
-        self.hash == other.hash
+        self.password_hash == other.password_hash
     }
 }
 "#;
@@ -331,11 +331,20 @@ impl PartialEq for Thing {
         assert_eq!(run_on(src).len(), 1);
     }
 
-    /// Negative-space guard: pattern 3 from #1445 (cache invalidation outside
-    /// any `PartialEq` impl) remains flagged — no crisp non-secret signal.
+    /// #3375: a bare `hash` is overloaded — a URL fragment / structural hash,
+    /// not a credential — so a comparison of bare `hash` operands is exempt
+    /// even outside a `PartialEq` impl.
     #[test]
-    fn flags_hash_cache_invalidation_outside_partial_eq() {
+    fn allows_bare_hash_comparison() {
         let src = "fn process(info: &Info, new_hash: u64) -> bool { info.hash == new_hash }";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Over-exemption guard: a qualified cryptographic hash carries a crypto
+    /// qualifier and stays flagged — only the bare `hash` is exempt.
+    #[test]
+    fn flags_qualified_crypto_hash_comparison() {
+        let src = "fn f(password_hash: &str, expected_hash: &str) -> bool { password_hash == expected_hash }";
         assert_eq!(run_on(src).len(), 1);
     }
 

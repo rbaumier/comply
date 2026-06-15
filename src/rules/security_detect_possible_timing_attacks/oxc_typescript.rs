@@ -8,6 +8,10 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// `hash` alone is excluded: a bare `.hash` property is the URL fragment
+/// (`#section`) of a parsed route location (`a.hash`, `route.hash`,
+/// `to.hash`), not a credential. A cryptographic digest in this codebase is
+/// named explicitly (`hashedPassword`, `hashed_password`), and those stay.
 const SECRET_NAMES: &[&str] = &[
     "password",
     "passwd",
@@ -16,7 +20,6 @@ const SECRET_NAMES: &[&str] = &[
     "token",
     "apiKey",
     "api_key",
-    "hash",
     "hashed_password",
     "hashedPassword",
     "signature",
@@ -243,5 +246,22 @@ mod tests {
     fn flags_secret_identifier_vs_env_member() {
         let src = r#"if (token === process.env.SECRET) {}"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for #3375: vuejs/router location.ts:187 and
+    // defineColadaLoader.ts:748. A bare `.hash` property is the URL fragment of
+    // a parsed route location, not a credential, so route-hash equality is not a
+    // timing-attack target.
+    #[test]
+    fn allows_url_route_hash_comparison() {
+        assert!(run(r#"if (a.hash === b.hash) {}"#).is_empty());
+        assert!(run(r#"if (tracked.hash.v !== to.hash) {}"#).is_empty());
+    }
+
+    // Over-exemption guard: an explicitly-named cryptographic password hash
+    // still flags — only the bare URL-fragment `hash` is exempt.
+    #[test]
+    fn flags_hashed_password_comparison() {
+        assert_eq!(run(r#"if (hashedPassword === stored) {}"#).len(), 1);
     }
 }
