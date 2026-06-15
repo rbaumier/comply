@@ -3,7 +3,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::project::Framework;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
-use oxc_ast::ast::{Expression, TSType, TSTypeName};
+use oxc_ast::ast::{Expression, TSType};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -55,16 +55,22 @@ fn is_declaration_file(path: &Path) -> bool {
         .is_some_and(|n| n.ends_with(".d.ts"))
 }
 
-/// True when a binding named after a global is explicitly annotated with the
-/// type of that global, i.e. it deliberately *injects* the global object rather
-/// than accidentally colliding with its name. Examples that are exempt:
+/// True when a binding named after a global is explicitly annotated with an
+/// object-shaped type, i.e. it deliberately *injects* a value of that name
+/// rather than accidentally colliding with the global. The annotation, not its
+/// specific name, is the signal: deliberately typing a parameter/variable with
+/// an interface, object literal, or type reference is a dependency-injection
+/// contract. Examples that are exempt:
 ///   - `document: Document | ShadowRoot` (DOM dependency injection, #1880)
 ///   - `window: Window & typeof globalThis`
 ///   - `document: TextDocument` / `document: lsp.TextDocument` (LSP convention)
-/// A binding with no annotation, or annotated with an unrelated type
-/// (`document: string`), is not injection and stays flagged.
+///   - `console: VitestLogger` (console-shaped logger injection, #3332)
+///   - `global: Record<string, unknown>` (test-environment object, #3332)
+/// A binding with no annotation, or one annotated with a primitive / `any` /
+/// `unknown` (`document: string`, `console: any`), is not injection: a global's
+/// value is an object, so a non-object annotation signals an accidental name
+/// collision and stays flagged.
 fn is_global_typed_di_binding<'a>(
-    name: &str,
     symbol_id: oxc_semantic::SymbolId,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
@@ -77,18 +83,48 @@ fn is_global_typed_di_binding<'a>(
                 return param
                     .type_annotation
                     .as_ref()
-                    .is_some_and(|ann| type_matches_global(name, &ann.type_annotation));
+                    .is_some_and(|ann| type_is_object_shaped(&ann.type_annotation));
             }
             AstKind::VariableDeclarator(decl) => {
                 return decl
                     .type_annotation
                     .as_ref()
-                    .is_some_and(|ann| type_matches_global(name, &ann.type_annotation));
+                    .is_some_and(|ann| type_is_object_shaped(&ann.type_annotation));
             }
             // Stop at function / program boundaries — no annotation found.
             AstKind::Function(_)
             | AstKind::ArrowFunctionExpression(_)
             | AstKind::Program(_) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// True when the symbol is a parameter of an object-literal method, e.g.
+/// `setup` in `<Environment>{ setup(global, options) { … } }`. A method on an
+/// object literal implements an externally-defined contract (here vitest's
+/// `Environment` interface, #3332) whose parameter names are dictated by that
+/// contract, not freely chosen by the author. Renaming such a parameter would
+/// break the contract, so a global-shadowing name is intentional, not a
+/// confusing accident. A standalone `function`/arrow parameter is freely named
+/// and stays flagged.
+fn is_contract_method_param<'a>(
+    symbol_id: oxc_semantic::SymbolId,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let scoping = semantic.scoping();
+    let decl_node_id = scoping.symbol_declaration(symbol_id);
+    let nodes = semantic.nodes();
+    if !matches!(nodes.kind(decl_node_id), AstKind::FormalParameter(_)) {
+        return false;
+    }
+    for kind in nodes.ancestor_kinds(decl_node_id) {
+        match kind {
+            AstKind::ObjectProperty(prop) if prop.method => return true,
+            // Stop at the enclosing program — the parameter's own function body
+            // is walked through transparently to reach its object property.
+            AstKind::Program(_) => return false,
             _ => {}
         }
     }
@@ -236,37 +272,24 @@ fn is_import_binding<'a>(
     )
 }
 
-/// True when `ty` carries — directly, or as a member of a union/intersection —
-/// a type reference whose rightmost name corresponds to the global `name`. The
-/// correspondence is: `document` accepts any `*Document` type (DOM `Document`
-/// plus the LSP `TextDocument` convention), `window` accepts `Window`.
-fn type_matches_global(name: &str, ty: &TSType) -> bool {
+/// True when `ty` is object-shaped: an interface/class type reference
+/// (`Document`, `VitestLogger`, `Record<…>`), an inline object literal type
+/// (`{ info(): void }`), or the `object` keyword — including such a type as a
+/// member of a union/intersection (`Document | ShadowRoot`,
+/// `Window & typeof globalThis`).
+///
+/// A global's runtime value is always an object, so annotating a same-named
+/// binding with an object-shaped type is dependency injection of that value.
+/// Primitives (`string`, `number`, …) and the `any`/`unknown` escape hatches
+/// are deliberately excluded: they carry no structural contract, so a binding
+/// typed with one is treated as an accidental shadow and stays flagged.
+fn type_is_object_shaped(ty: &TSType) -> bool {
     match ty {
-        TSType::TSUnionType(union) => union
-            .types
-            .iter()
-            .any(|member| type_matches_global(name, member)),
-        TSType::TSIntersectionType(intersection) => intersection
-            .types
-            .iter()
-            .any(|member| type_matches_global(name, member)),
-        TSType::TSTypeReference(type_ref) => {
-            let type_name = match &type_ref.type_name {
-                TSTypeName::IdentifierReference(ident) => ident.name.as_str(),
-                TSTypeName::QualifiedName(qualified) => qualified.right.name.as_str(),
-                TSTypeName::ThisExpression(_) => return false,
-            };
-            global_accepts_type(name, type_name)
+        TSType::TSUnionType(union) => union.types.iter().any(type_is_object_shaped),
+        TSType::TSIntersectionType(intersection) => {
+            intersection.types.iter().any(type_is_object_shaped)
         }
-        _ => false,
-    }
-}
-
-/// True when `type_name` is a valid injected type for the global `name`.
-fn global_accepts_type(name: &str, type_name: &str) -> bool {
-    match name {
-        "document" => type_name.ends_with("Document"),
-        "window" => type_name == "Window",
+        TSType::TSTypeReference(_) | TSType::TSTypeLiteral(_) | TSType::TSObjectKeyword(_) => true,
         _ => false,
     }
 }
@@ -305,7 +328,10 @@ impl OxcCheck for Check {
             if is_import_binding(symbol_id, semantic) {
                 continue;
             }
-            if is_global_typed_di_binding(name, symbol_id, semantic) {
+            if is_global_typed_di_binding(symbol_id, semantic) {
+                continue;
+            }
+            if is_contract_method_param(symbol_id, semantic) {
                 continue;
             }
             if is_captured_from_global(symbol_id, semantic) {
@@ -671,6 +697,76 @@ mod tests {
         // Negative space: an arrow function body binds `document` at runtime.
         assert_eq!(
             run_on_browser("const g = (document) => { return document; };").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_console_param_interface_type() {
+        // Issue #3332 (vitest viteLogger.ts): `console: VitestLogger` injects a
+        // console-shaped logger. The annotation is an interface type — DI, not a
+        // shadow — even though the type name isn't literally `Console`.
+        assert!(
+            run_on(
+                "export function createViteLogger(console: VitestLogger, level: LogLevel = 'info'): Logger { return makeLogger(console, level); }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_global_param_record_type() {
+        // A `global` parameter typed as a plain object (`Record<…>`/`object`) is
+        // the test-environment-configuration pattern — DI of the object whose
+        // properties become globals.
+        assert!(
+            run_on("function setup(global: Record<string, unknown>) { global.x = 1; }").is_empty()
+        );
+        assert!(run_on("function setup(global: object) { return global; }").is_empty());
+    }
+
+    #[test]
+    fn allows_global_object_literal_method_param() {
+        // Issue #3332 (vitest Environment API): `setup(global, options)` is a
+        // method on an object literal implementing the `Environment` contract.
+        // `global` is dictated by that contract, not freely named, so the
+        // unannotated parameter is intentional injection.
+        assert!(
+            run_on(
+                "export default <Environment>{ setup(global, { custom }) { global.testEnvironment = 'custom'; return { teardown() { delete global.testEnvironment; } }; } };"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_console_param_primitive_type() {
+        // Negative space: a primitive annotation carries no injection contract,
+        // so `console: string` is an accidental shadow and still fires.
+        assert_eq!(
+            run_on("function f(console: string) { return console; }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_console_param_any_type() {
+        // Negative space: `any`/`unknown` are escape hatches, not object-shaped
+        // injection — a same-named parameter still shadows the global.
+        assert_eq!(
+            run_on("function f(console: any) { return console; }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_global_standalone_function_param() {
+        // Negative space: a standalone function freely names its parameters, so
+        // an unannotated `global` parameter genuinely shadows the global — the
+        // object-method exemption must not leak to ordinary functions.
+        assert_eq!(run_on("function setup(global) { return global; }").len(), 1);
+        assert_eq!(
+            run_on("const setup = (global) => { return global; };").len(),
             1
         );
     }
