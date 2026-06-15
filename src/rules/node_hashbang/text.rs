@@ -4,8 +4,9 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
 
 /// JS/TS runtime launchers a hashbang may legitimately invoke, including the
-/// TypeScript-aware runners (`tsx`, `ts-node`, `esno`) run directly or via `npx`.
-const JS_RUNTIMES: &[&str] = &["node", "bun", "tsx", "ts-node", "esno"];
+/// TypeScript-aware runners (`tsx`, `ts-node`, `esno`) run directly or via `npx`,
+/// and `deno`, whose canonical hashbang is `#!/usr/bin/env -S deno run <flags>`.
+const JS_RUNTIMES: &[&str] = &["node", "bun", "tsx", "ts-node", "esno", "deno"];
 
 /// True when an `env` invocation launches a recognized JS/TS runtime.
 ///
@@ -105,11 +106,31 @@ mod tests {
         assert!(run("#!/usr/bin/env -S node --experimental-vm-modules\nx();").is_empty());
     }
 
+    // Regression for #2139: `deno` is a legitimate JS/TS runtime; its canonical
+    // hashbang uses the `env -S deno run <flags>` split-string form.
+    #[test]
+    fn allows_deno_run_split_string_hashbangs() {
+        assert!(run("#!/usr/bin/env -S deno run -ERNW --allow-sys\nconsole.log('hi');").is_empty());
+        assert!(
+            run("#!/usr/bin/env -S deno run --allow-read=. --config=x.json\nconsole.log('hi');")
+                .is_empty()
+        );
+    }
+
     // Negative space: a runtime substring inside an unrelated command must still
     // be flagged — only whole-token runtimes count.
     #[test]
     fn flags_env_with_non_runtime_command() {
         let d = run("#!/usr/bin/env nodemon\nconsole.log('hi');");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Invalid hashbang"));
+    }
+
+    // Negative space for #2139: an unknown runtime in the `env -S` form is still
+    // flagged — only recognized whole-token runtimes count.
+    #[test]
+    fn flags_env_split_string_with_unknown_runtime() {
+        let d = run("#!/usr/bin/env -S frobnicate run\nconsole.log('hi');");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("Invalid hashbang"));
     }
