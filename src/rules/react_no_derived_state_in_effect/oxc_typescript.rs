@@ -3,11 +3,47 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, Statement};
+use oxc_ast::ast::{BindingPattern, Expression, Statement};
 use oxc_span::GetSpan;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
+
+/// Names destructured as the setter slot of a `useState` call anywhere in the
+/// file, e.g. `setUser` from `const [user, setUser] = useState(...)`. These are
+/// the only functions that mutate React state; a `set`-prefixed call that is not
+/// in this set (`setSentryUser`, `localStorage`-style `setItem`, ...) pushes to
+/// an external store, which is the canonical legitimate `useEffect` use.
+fn use_state_setters<'a>(
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    ctx: &CheckCtx,
+) -> FxHashSet<&'a str> {
+    let mut setters = FxHashSet::default();
+    for node in semantic.nodes().iter() {
+        let AstKind::VariableDeclarator(decl) = node.kind() else {
+            continue;
+        };
+        let Some(Expression::CallExpression(call)) = &decl.init else {
+            continue;
+        };
+        let callee_span = call.callee.span();
+        let callee_text = &ctx.source[callee_span.start as usize..callee_span.end as usize];
+        if callee_text != "useState" && !callee_text.ends_with(".useState") {
+            continue;
+        }
+        let BindingPattern::ArrayPattern(arr) = &decl.id else {
+            continue;
+        };
+        // The second destructured slot is the setter.
+        if let Some(Some(setter_pattern)) = arr.elements.get(1)
+            && let BindingPattern::BindingIdentifier(setter_id) = setter_pattern
+        {
+            setters.insert(setter_id.name.as_str());
+        }
+    }
+    setters
+}
 
 /// Root identifier names declared in a `useEffect` dependency array. For a
 /// member-expression dependency like `item.path`, the root is `item`. Spread or
@@ -67,7 +103,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else {
@@ -116,12 +152,15 @@ impl OxcCheck for Check {
             }
         }
 
-        // Check that the inner call is a setter (starts with "set").
+        // The inner call must be a real React state setter — one destructured
+        // from a `useState` in this file. A `set`-prefixed call that is not a
+        // `useState` setter (e.g. `setSentryUser`, `setItem`) pushes to an
+        // external store, the canonical legitimate `useEffect` use.
         let inner_name = match &inner_call.callee {
             Expression::Identifier(id) => id.name.as_str(),
             _ => return,
         };
-        if !inner_name.starts_with("set") {
+        if !use_state_setters(semantic, ctx).contains(inner_name) {
             return;
         }
 
@@ -195,28 +234,58 @@ mod tests {
 
     #[test]
     fn flags_derived_value_from_dependency() {
-        assert_eq!(
-            run("useEffect(() => { setFull(first + ' ' + last) }, [first, last])").len(),
-            1
-        );
+        let src = r#"
+function C() {
+  const [full, setFull] = useState("");
+  useEffect(() => { setFull(first + ' ' + last) }, [first, last]);
+}
+"#;
+        assert_eq!(run(src).len(), 1);
     }
 
     // Regression for #2215: `setIsOpen(false)` resets state to a literal constant
     // in response to a navigation change — a side-effect, not derived state.
     #[test]
     fn allows_setter_with_literal_constant() {
-        assert!(
-            run("useEffect(() => { setIsOpen(false) }, [pathname, searchParams])").is_empty()
-        );
+        let src = r#"
+function C() {
+  const [isOpen, setIsOpen] = useState(false);
+  useEffect(() => { setIsOpen(false) }, [pathname, searchParams]);
+}
+"#;
+        assert!(run(src).is_empty());
     }
 
     // Guard for #2215: comparing a dependency still computes a value FROM the
     // dependency, so it remains derived state and must flag.
     #[test]
     fn flags_setter_referencing_dependency() {
-        assert_eq!(
-            run("useEffect(() => { setActive(pathname === item.path) }, [pathname])").len(),
-            1
-        );
+        let src = r#"
+function C() {
+  const [active, setActive] = useState(false);
+  useEffect(() => { setActive(pathname === item.path) }, [pathname]);
+}
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for #3330: a `set`-prefixed call that is not a `useState`
+    // setter pushes a derived value to an external store (here the Sentry SDK).
+    // That is the canonical legitimate `useEffect` use, not derived React state.
+    #[test]
+    fn allows_push_to_external_store() {
+        let src = r#"
+import { useEffect } from "react";
+import { useSession } from "@/app/features/auth/session";
+import { setSentryUser } from "@/app/lib/sentry-runtime";
+
+export function useSentryUserSync(): void {
+  const userId = useSession()?.user.id ?? null;
+  useEffect(() => {
+    setSentryUser(userId === null ? null : { id: userId });
+  }, [userId]);
+}
+"#;
+        assert!(run(src).is_empty());
     }
 }
