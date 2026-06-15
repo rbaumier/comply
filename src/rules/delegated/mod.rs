@@ -15,6 +15,7 @@ mod import;
 mod nextjs;
 mod oxc;
 mod promise;
+mod react;
 mod ts;
 pub mod tsgolint;
 pub mod type_aware;
@@ -34,6 +35,7 @@ pub fn register_all() -> Vec<RuleDef> {
     rules.extend(oxc::register_all());
     rules.extend(vue::register_all());
     rules.extend(nextjs::register_all());
+    rules.extend(react::register_all());
     rules
 }
 

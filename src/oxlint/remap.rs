@@ -35,6 +35,7 @@ pub fn build_table(
 /// - `promise/*` → `eslint-plugin-promise(*)`
 /// - `vue/*` → `eslint-plugin-vue(*)`
 /// - `nextjs/*` → `eslint-plugin-next(*)`
+/// - `react/*` → `eslint-plugin-react(*)`
 /// - `oxc/*` → `oxc(*)`
 /// - bare eslint core → `eslint(*)`
 pub fn config_key_to_oxlint_code(config_key: &str) -> String {
@@ -55,6 +56,9 @@ pub fn config_key_to_oxlint_code(config_key: &str) -> String {
     }
     if let Some(rest) = config_key.strip_prefix("nextjs/") {
         return format!("eslint-plugin-next({rest})");
+    }
+    if let Some(rest) = config_key.strip_prefix("react/") {
+        return format!("eslint-plugin-react({rest})");
     }
     if let Some(rest) = config_key.strip_prefix("oxc/") {
         return format!("oxc({rest})");
@@ -91,6 +95,10 @@ mod tests {
         assert_eq!(
             config_key_to_oxlint_code("nextjs/no-before-interactive-script-outside-document"),
             "eslint-plugin-next(no-before-interactive-script-outside-document)"
+        );
+        assert_eq!(
+            config_key_to_oxlint_code("react/jsx-curly-brace-presence"),
+            "eslint-plugin-react(jsx-curly-brace-presence)"
         );
         assert_eq!(
             config_key_to_oxlint_code("oxc/no-barrel-file"),
