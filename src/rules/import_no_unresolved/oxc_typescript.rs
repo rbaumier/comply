@@ -133,6 +133,13 @@ impl OxcCheck for Check {
 /// the target is genuinely missing and must be flagged.
 const SOURCE_EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mts", "mjs", "cts", "cjs", "vue"];
 
+/// Declaration-file extensions a JS-extension specifier maps onto under
+/// TypeScript's `nodeNext`/`node16` resolution: a `./foo.js` import resolves to
+/// a sibling `foo.d.ts` when only a declaration file (no `.ts` source) exists.
+/// Probed via `with_extension`, which replaces the specifier's JS extension
+/// (`logger.js` → `logger.d.ts`), mirroring the `.js` → `.ts` source mapping.
+const DECL_EXTS: &[&str] = &["d.ts", "d.mts", "d.cts"];
+
 /// True for a relative specifier that names a non-source file (a `.css`,
 /// `.svg`, `.png`, … asset) present on disk next to the importer. These never
 /// enter the TS/JS index, so `source_path` is always `None`, yet the import is
@@ -174,6 +181,12 @@ pub(super) fn is_existing_source_import(importer: &Path, specifier: &str) -> boo
         return true;
     }
     if SOURCE_EXTS.iter().any(|ext| raw.with_extension(ext).is_file()) {
+        return true;
+    }
+    // TypeScript `nodeNext`/`node16`: a `.js` specifier whose only on-disk
+    // counterpart is a declaration file (`logger.d.ts`, no `.ts` source)
+    // resolves there. Replace the JS extension with each `.d.*` form.
+    if DECL_EXTS.iter().any(|ext| raw.with_extension(ext).is_file()) {
         return true;
     }
     if SOURCE_EXTS
@@ -562,6 +575,33 @@ mod angular_schema_json_tests {
         let diags = run_with_siblings("packages/html-reporter/src/index.tsx", source, &[]);
         assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
         assert!(diags[0].message.contains("./nope"));
+    }
+
+    #[test]
+    fn no_fp_for_js_specifier_resolving_to_dts_issue_3338() {
+        // fastify reproducer: a `.tst.ts` type test imports `../../types/logger.js`
+        // where the only on-disk file is `types/logger.d.ts` (declaration-only, no
+        // `.ts` source, excluded from the index). Under `moduleResolution:
+        // nodeNext` the `.js` specifier resolves to the `.d.ts`, so the import must
+        // not be flagged.
+        let source = "import { ResSerializerReply } from '../../types/logger.js';\n";
+        let diags = run_with_siblings(
+            "test/types/logger.tst.ts",
+            source,
+            &["types/logger.d.ts"],
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_js_specifier_without_source_or_dts_issue_3338() {
+        // Negative space: a `.js` specifier with no `.js`/`.ts` source AND no
+        // `.d.ts` declaration sibling on disk is a genuine broken import and must
+        // still fire — the declaration mapping stays precise.
+        let source = "import { Gone } from '../../types/gone.js';\n";
+        let diags = run_with_siblings("test/types/logger.tst.ts", source, &[]);
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("types/gone.js"));
     }
 }
 
