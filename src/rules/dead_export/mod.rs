@@ -247,4 +247,116 @@ mod tests {
             "export imported nowhere must still be flagged, got: {diags:?}"
         );
     }
+
+    // Regression for #3346 (huntabyte/shadcn-svelte) — files under a shadcn
+    // component registry's distribution root are copied into a consumer's project
+    // by the registry CLI and read as source text by the build step, never
+    // imported as modules within the repo. A `registry.json` manifest declaring
+    // them via `items[].files[].path` marks the distribution root, so their
+    // exports are consumed downstream and must not be flagged dead.
+    #[test]
+    fn no_fp_for_shadcn_registry_component_file_issue_3346() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "docs/registry.json",
+                r#"{
+                    "$schema": "https://shadcn-svelte.com/schema/registry.json",
+                    "name": "shadcn-svelte",
+                    "homepage": "https://shadcn-svelte.com",
+                    "items": [
+                        {
+                            "name": "sidebar",
+                            "type": "registry:ui",
+                            "files": [
+                                { "path": "src/lib/registry/ui/sidebar/index.ts", "type": "registry:ui" }
+                            ]
+                        },
+                        {
+                            "name": "dialog",
+                            "type": "registry:ui",
+                            "files": [
+                                { "path": "src/lib/registry/ui/dialog/index.ts", "type": "registry:ui" }
+                            ]
+                        }
+                    ]
+                }"#,
+            ),
+            (
+                "docs/src/lib/registry/ui/sidebar/index.ts",
+                "export function useSidebar() {}\n",
+            ),
+            // A second app file so the index is not in single-file mode.
+            ("docs/src/routes/app.ts", "export const used = 1;\n"),
+        ];
+        let (_dir, diags) =
+            run_on_project(&files, "docs/src/lib/registry/ui/sidebar/index.ts");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("useSidebar")),
+            "a shadcn registry source file must not be flagged dead, got: {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #3346 — the exemption is scoped to the registry's
+    // distribution root. A genuinely dead export OUTSIDE that root, in the same
+    // project as a `registry.json`, must still be flagged.
+    #[test]
+    fn still_flags_dead_export_outside_registry_root_issue_3346() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "docs/registry.json",
+                r#"{
+                    "$schema": "https://shadcn-svelte.com/schema/registry.json",
+                    "name": "shadcn-svelte",
+                    "homepage": "https://shadcn-svelte.com",
+                    "items": [
+                        {
+                            "name": "sidebar",
+                            "type": "registry:ui",
+                            "files": [
+                                { "path": "src/lib/registry/ui/sidebar/index.ts", "type": "registry:ui" }
+                            ]
+                        }
+                    ]
+                }"#,
+            ),
+            (
+                "docs/src/lib/registry/ui/sidebar/index.ts",
+                "export function useSidebar() {}\n",
+            ),
+            (
+                "docs/src/lib/utils/orphan.ts",
+                "export const deadHelper = 1;\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "docs/src/lib/utils/orphan.ts");
+        assert!(
+            diags.iter().any(|d| d.message.contains("deadHelper")),
+            "a dead export outside the registry root must still be flagged, got: {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #3346 — a `registry.json` that lacks the shadcn
+    // `$schema` marker is an unrelated tool's config (npm/Terraform registry
+    // metadata), not a shadcn component registry, so it must NOT exempt sibling
+    // files from the rule.
+    #[test]
+    fn still_flags_when_registry_json_is_not_shadcn_issue_3346() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "registry.json",
+                r#"{ "name": "some-tool", "modules": ["a", "b"] }"#,
+            ),
+            (
+                "src/lib/registry/ui/sidebar/index.ts",
+                "export function useSidebar() {}\n",
+            ),
+            ("src/app.ts", "export const used = 1;\n"),
+        ];
+        let (_dir, diags) =
+            run_on_project(&files, "src/lib/registry/ui/sidebar/index.ts");
+        assert!(
+            diags.iter().any(|d| d.message.contains("useSidebar")),
+            "a non-shadcn registry.json must not exempt sibling files, got: {diags:?}"
+        );
+    }
 }
