@@ -296,31 +296,59 @@ pub fn is_non_react_jsx_file(source: &str, project: &crate::project::ProjectCtx,
         || project.has_non_react_jsx_import_source(path)
 }
 
-/// True when the file declares a `@jsxImportSource` pragma whose value points to
-/// a non-React JSX runtime. The pragma's value is the JSX factory package: any
-/// value other than `react` / `react-dom` (or a `react`/`react-dom` subpath)
-/// names a non-React dialect (`hono/jsx`, a relative `./` or `../../src/jsx`, a
-/// custom package), which intentionally uses native HTML attribute names and its
-/// own `style` semantics. A `react` pragma, or no pragma at all, leaves the file
-/// treated as React.
+/// The value of the file's `@jsxImportSource` pragma — the JSX factory package
+/// name (`react`, `solid-js`, `hono/jsx`, a relative path, …) — or `None` when
+/// the file declares no pragma. The value is the first whitespace-delimited token
+/// after the directive; it terminates at whitespace or a comment close (`*/`).
 #[must_use]
-pub fn has_non_react_jsx_import_source_pragma(source: &str) -> bool {
-    let Some(idx) = memchr::memmem::find(source.as_bytes(), b"@jsxImportSource") else {
-        return false;
-    };
+pub fn jsx_import_source_pragma_value(source: &str) -> Option<&str> {
+    let idx = memchr::memmem::find(source.as_bytes(), b"@jsxImportSource")?;
     let after = &source[idx + "@jsxImportSource".len()..];
-    // The pragma value is the first whitespace-delimited token; it terminates at
-    // whitespace or a comment close (`*/`).
     let value = after
         .trim_start()
         .split([' ', '\t', '\r', '\n'])
         .next()
         .map(|tok| tok.trim_end_matches("*/"))
         .unwrap_or("");
-    if value.is_empty() {
-        return false;
-    }
-    !is_react_jsx_source(value)
+    (!value.is_empty()).then_some(value)
+}
+
+/// True when the file declares a `@jsxImportSource` pragma whose value points to
+/// a non-React JSX runtime. Any value other than `react` / `react-dom` (or a
+/// `react`/`react-dom` subpath) names a non-React dialect (`hono/jsx`, a relative
+/// `./` or `../../src/jsx`, a custom package), which intentionally uses native
+/// HTML attribute names and its own `style` semantics. A `react` pragma, or no
+/// pragma at all, leaves the file treated as React.
+#[must_use]
+pub fn has_non_react_jsx_import_source_pragma(source: &str) -> bool {
+    jsx_import_source_pragma_value(source).is_some_and(|value| !is_react_jsx_source(value))
+}
+
+/// True when the file belongs to a SolidJS project. Unlike
+/// [`is_non_react_jsx_file`] — which lumps Solid in with Vue/Preact/Qwik/Stencil
+/// to *exempt* React-specific rules — this is a **positive** Solid signal, for
+/// rules that must fire only on Solid. Detected three ways: a Solid framework
+/// import (`solid-js`, `@solidjs/`, `solid-start`, `@tanstack/solid-router`), a
+/// `@jsxImportSource solid-js` pragma, or the nearest `package.json` declaring
+/// `solid-js`. Source checks are memoized per file via [`source_contains`].
+#[must_use]
+pub fn is_solid_file(source: &str, project: &crate::project::ProjectCtx, path: &Path) -> bool {
+    source_contains(source, "solid-js")
+        || source_contains(source, "@solidjs/")
+        || source_contains(source, "solid-start")
+        || source_contains(source, "@tanstack/solid-router")
+        || jsx_import_source_pragma_value(source).is_some_and(|value| value == "solid-js")
+        || project
+            .nearest_package_json(path)
+            .is_some_and(|pkg| declares_solid(&pkg))
+}
+
+/// True when a `package.json` declares `solid-js` in any dependency section.
+fn declares_solid(pkg: &crate::project::PackageJson) -> bool {
+    pkg.dependencies.contains_key("solid-js")
+        || pkg.dev_dependencies.contains_key("solid-js")
+        || pkg.peer_dependencies.contains_key("solid-js")
+        || pkg.optional_dependencies.contains_key("solid-js")
 }
 
 /// True when a `@jsxImportSource` value names React's own runtime: `react`,
