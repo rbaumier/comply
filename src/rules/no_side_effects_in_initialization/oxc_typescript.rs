@@ -261,7 +261,7 @@ pub struct Check;
 
 fn is_test_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
-    [".test.", ".test-d.", ".spec.", "_spec.", "__tests__", "_test.", ".e2e.", ".cy.", ".mock.", ".bench."]
+    [".test.", ".test-d.", ".spec.", "_spec.", ".unit.", "__tests__", "_test.", ".e2e.", ".cy.", ".mock.", ".bench."]
         .iter()
         .any(|m| s.contains(m))
         || s.contains("/dtslint/")
@@ -2112,6 +2112,36 @@ mod tests {
         // The `.cy.` infix is what grants the exemption: the same top-level
         // call in a genuine production module still flags.
         let prod = crate::rules::test_helpers::run_rule(&Check, "describe('x', () => {});", "src/index.ts");
+        assert_eq!(prod.len(), 1, "production src/index.ts must still flag");
+    }
+
+    #[test]
+    fn skips_vitest_unit_file_by_extension() {
+        // Issue #2233: Qwik (and other Vitest projects) name unit tests with the
+        // `.unit.*` infix. These files contain only top-level `test(...)` /
+        // `describe(...)` registration calls — the Vitest runner API — and are
+        // executed by the runner, never imported as modules, so tree-shaking
+        // does not apply.
+        let src = "import { assert, test } from 'vitest';\n\
+                   import { scopeStylesheet } from './scoped-stylesheet';\n\
+                   test('selectors', () => {\n\
+                       assert.equal(scopeStylesheet('div {}', '_'), 'div.x_ {}');\n\
+                   });\n\
+                   test('unicode', () => {\n\
+                       assert.equal(scopeStylesheet('.a{}', '_'), '.a.x_{}');\n\
+                   });";
+        for path in [
+            "packages/qwik/src/core/style/scoped-stylesheet.unit.ts",
+            "packages/qwik/src/core/render/ssr/render-ssr.unit.tsx",
+            "src/util/helper.unit.js",
+            "src/util/helper.unit.jsx",
+        ] {
+            let diags = crate::rules::test_helpers::run_rule(&Check, src, path);
+            assert!(diags.is_empty(), "{path} should be exempt, got {diags:?}");
+        }
+        // The `.unit.` infix is what grants the exemption: the same top-level
+        // call in a genuine production module still flags.
+        let prod = crate::rules::test_helpers::run_rule(&Check, "test('x', () => {});", "src/index.ts");
         assert_eq!(prod.len(), 1, "production src/index.ts must still flag");
     }
 
