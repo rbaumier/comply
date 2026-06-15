@@ -24,11 +24,16 @@ pub const META: RuleMeta = RuleMeta {
 
 use crate::rules::path_utils::is_sveltekit_route_file;
 
-/// Returns `true` for TanStack Router pathless layout routes: a file whose
-/// name starts with `_` living under any `routes/` ancestor directory.
-/// See https://tanstack.com/router/latest/docs/framework/react/routing/file-based-routing#pathless-routes.
+/// Returns `true` for TanStack Router pathless layout routes living under any
+/// `routes/` ancestor directory, in either spelling:
+/// - directory-style: the file name starts with `_` (`_authed.tsx`);
+/// - flat-route style: the first dot-segment of the file name ends with `_`
+///   (`posts_.$postId.tsx`), the trailing-`_` marker for a layout route that
+///   contributes no path segment.
+/// See https://tanstack.com/router/latest/docs/framework/react/routing/file-based-routing#pathless-layout-routes.
 fn is_tanstack_pathless_route(path: &std::path::Path, file_name: &str) -> bool {
-    if !file_name.starts_with('_') {
+    let stem = file_name.split('.').next().unwrap_or(file_name);
+    if !file_name.starts_with('_') && !stem.ends_with('_') {
         return false;
     }
     path.components()
