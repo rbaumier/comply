@@ -24,6 +24,15 @@ pub const META: RuleMeta = RuleMeta {
 
 use crate::rules::path_utils::is_sveltekit_route_file;
 
+/// Returns `true` when any ancestor directory of `path` is named `routes`, the
+/// gate shared by every TanStack / SolidStart file-router exemption: it scopes
+/// the framework-mandated naming allowance to actual route modules, leaving a
+/// like-named file elsewhere flaggable.
+fn has_routes_ancestor(path: &std::path::Path) -> bool {
+    path.components()
+        .any(|c| c.as_os_str() == std::ffi::OsStr::new("routes"))
+}
+
 /// Returns `true` for TanStack Router pathless layout routes living under any
 /// `routes/` ancestor directory, in either spelling:
 /// - directory-style: the file name starts with `_` (`_authed.tsx`);
@@ -36,8 +45,35 @@ fn is_tanstack_pathless_route(path: &std::path::Path, file_name: &str) -> bool {
     if !file_name.starts_with('_') && !stem.ends_with('_') {
         return false;
     }
-    path.components()
-        .any(|c| c.as_os_str() == std::ffi::OsStr::new("routes"))
+    has_routes_ancestor(path)
+}
+
+/// Returns `true` for a TanStack Vue Router SFC route file living under any
+/// `routes/` ancestor directory. The convention names route components
+/// `{route-name}.component.vue`, `{route-name}.errorComponent.vue`, and
+/// `{route-name}.notFoundComponent.vue`, where the dot-segment immediately
+/// before `.vue` is the framework-fixed component role and everything before it
+/// is the route name. The route name follows TanStack's route-path grammar
+/// (kebab-case `editing-a`, `$param` segments, the `__root` / `_layout`
+/// pathless markers, `index`, and dotted path segments such as `posts.$postId`),
+/// none of which can adopt PascalCase without breaking the file-based router, so
+/// the component-role suffix alone identifies the file and the route name is not
+/// validated.
+/// See https://tanstack.com/router/latest/docs/framework/vue/routing/file-based-routing.
+fn is_tanstack_vue_sfc_route(path: &std::path::Path, file_name: &str) -> bool {
+    let Some(stem) = file_name.strip_suffix(".vue") else {
+        return false;
+    };
+    let Some((route_name, role)) = stem.rsplit_once('.') else {
+        return false;
+    };
+    if !matches!(role, "component" | "errorComponent" | "notFoundComponent") {
+        return false;
+    }
+    if route_name.is_empty() {
+        return false;
+    }
+    has_routes_ancestor(path)
 }
 
 /// Returns `true` for Next.js Pages Router file-router names that the framework
@@ -82,8 +118,7 @@ fn is_solidstart_route_file(path: &std::path::Path, file_name: &str) -> bool {
     if !is_route_shape {
         return false;
     }
-    path.components()
-        .any(|c| c.as_os_str() == std::ffi::OsStr::new("routes"))
+    has_routes_ancestor(path)
 }
 
 /// Returns `true` for a Nuxt file-based-routing dynamic-segment Vue SFC living
