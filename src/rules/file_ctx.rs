@@ -490,6 +490,7 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
             || lower.starts_with("e2e/")
             || lower.contains(".test.")
             || lower.contains(".spec.")
+            || lower.contains(".unit.")
             || lower.contains(".e2e.")
             || lower.contains(".cy.")
             || lower.contains("_test.")
@@ -635,6 +636,12 @@ mod tests {
         assert!(scan_path(&PathBuf::from("src/e2e/login.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("src/foo.e2e.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("src/foo_test.ts")).in_test_dir);
+        // Vitest `.unit.` convention used by Qwik and others (issue #2233). The
+        // leading dot is required, so a regular `business-unit.ts` module is not
+        // matched.
+        assert!(scan_path(&PathBuf::from("src/style/scoped-stylesheet.unit.ts")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("src/render/render-ssr.unit.tsx")).in_test_dir);
+        assert!(!scan_path(&PathBuf::from("src/models/business-unit.ts")).in_test_dir);
         // Jasmine/Angular underscore-spec convention (issue #1737).
         assert!(scan_path(&PathBuf::from("packages/schematics/recorder_spec.ts")).in_test_dir);
         // Test-helper infrastructure directories (issue #481).
