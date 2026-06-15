@@ -54,6 +54,9 @@ const CLIENT_COMPONENT_FACTORY_CALLS: &[&str] = &[
 /// re-export propagating the directive is the idiomatic pattern. The charting and
 /// table entries (`recharts`, `@tanstack/react-table`, …) drive browser-only
 /// rendering through `ResizeObserver` and hook-powered objects internally.
+/// `@griffel/react` is Fluent UI's CSS-in-JS runtime: `makeStyles` /
+/// `makeResetStyles` inject CSS custom properties into the DOM at runtime, so a
+/// file calling them is a client module even with no hook or handler.
 ///
 /// The unified `radix-ui` v4 package (shadcn/ui v4 migrated to it from the
 /// per-component `@radix-ui/react-*` packages) is matched separately by
@@ -61,6 +64,7 @@ const CLIENT_COMPONENT_FACTORY_CALLS: &[&str] = &[
 /// is not exempted by accident.
 const CLIENT_ONLY_PACKAGE_PREFIXES: &[&str] = &[
     "@base-ui/react",
+    "@griffel/react",
     "@radix-ui/",
     "motion/react",
     "framer-motion",
@@ -801,6 +805,39 @@ import { Primitive } from "radix-ui/internal"
 export const Root = Primitive.div
 "#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression tests for #2108 — Fluent UI's @griffel/react CSS-in-JS runtime
+    // (`makeStyles` / `makeResetStyles`) injects CSS custom properties into the
+    // DOM at runtime, so a file calling it legitimately needs `"use client"`.
+    #[test]
+    fn no_fp_for_griffel_make_reset_styles_oxc() {
+        let src = r#"'use client';
+import { makeResetStyles } from '@griffel/react';
+export const useHTMLNoScrollStyles = makeResetStyles({ overflowY: ['hidden','clip'] });
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_griffel_make_styles_oxc() {
+        let src = r#"'use client';
+import { makeStyles } from '@griffel/react';
+export const useStyles = makeStyles({ root: { color: 'red' } });
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Negative space: a non-client package (e.g. lodash) with no hooks, handlers,
+    // or browser globals is still flagged — the exemption is tied to the
+    // `@griffel/react` client-only signal, not blanket-disabled.
+    #[test]
+    fn still_flags_use_client_with_util_import_only_oxc() {
+        let src = r#"'use client';
+import { debounce } from 'lodash';
+export const wait = debounce(() => {}, 100);
+"#;
+        assert_eq!(run(src).len(), 1);
     }
 
     // Negative space: a lookalike scope with no client API is still flagged.
