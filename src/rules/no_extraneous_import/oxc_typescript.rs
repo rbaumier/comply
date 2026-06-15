@@ -1526,6 +1526,49 @@ import { expectAssignable } from 'expect-type';
     }
 
     #[test]
+    fn allows_dev_dep_in_private_docs_server_package() {
+        // Issue #2224: remix's `docs/` workspace package is `"private": true` and
+        // runs a documentation server that imports `shiki`/`typescript`/`typedoc`
+        // at runtime. Because the package is never published to npm, those tooling
+        // deps are placed in devDependencies (standard practice for private
+        // app/site packages). The deps/devDeps split here is about install cost
+        // (`npm prune --production`), not "production code must not import
+        // devDeps", so a server-side `import { codeToHtml } from 'shiki'` must not
+        // flag.
+        let pkg = r#"{
+            "name": "docs",
+            "private": true,
+            "dependencies": {"front-matter": "*", "marked": "*", "remix": "*"},
+            "devDependencies": {"shiki": "*", "typedoc": "*", "typescript": "*"}
+        }"#;
+        let src = r#"
+import { codeToHtml } from 'shiki';
+import ts from 'typescript';
+import TypeDoc from 'typedoc';
+"#;
+        let d = run_with_pkg_at_path(pkg, "src/server/demos.tsx", src);
+        assert!(d.is_empty(), "private docs server package should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_absent_package_via_no_implicit_deps_only_even_when_private() {
+        // Negative-space guard for #2224: the private exemption only removes the
+        // deps/devDeps distinction; it must not turn the rule into a blanket
+        // silencer. A package absent from EVERY manifest section is the concern of
+        // `no-implicit-deps`, never this rule — so `no-extraneous-import` stays
+        // silent on it regardless of `private` (it only ever flags packages
+        // present in `devDependencies`).
+        let pkg = r#"{
+            "name": "docs",
+            "private": true,
+            "devDependencies": {"shiki": "*"}
+        }"#;
+        let src = r#"import x from 'totally-unlisted-pkg';"#;
+        let d = run_with_pkg_at_path(pkg, "src/server/demos.tsx", src);
+        assert!(d.is_empty(), "absent package is no-implicit-deps' job, not this rule's: {d:?}");
+    }
+
+    #[test]
     fn allows_dev_dep_declared_with_workspace_protocol() {
         // Issue #2384: in pnpm monorepos, workspace sibling packages are listed
         // in `devDependencies` with the `workspace:*` protocol (e.g. prisma's
