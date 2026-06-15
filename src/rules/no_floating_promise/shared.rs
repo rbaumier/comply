@@ -25,7 +25,16 @@
 /// `cross-spawn.sync()`, `glob.sync()` all return a plain value, never a Promise.
 /// The name explicitly says "I am synchronous", so it is the opposite of an
 /// async signal.
+///
+/// `commit` and `flush` are likewise excluded: both names are dominated by
+/// *synchronous* APIs across the ecosystem. `.commit()` is the synchronous
+/// transaction commit of SQLite / better-sqlite3, the synchronous state-staging
+/// of data-loader / store libraries, and ProseMirror's synchronous
+/// `EditorView`-style transaction commit. `.flush()` is the synchronous draining
+/// of buffers, streams, loggers, and test schedulers, and synchronous resolver
+/// helpers. A name-only match on either produces more false positives than true
+/// positives, so the name alone is too weak an async signal to flag.
 pub(super) const ASYNC_LOOKING_METHODS: &[&str] = &[
     "save", "load", "fetch", "query", "publish", "insert", "connect", "dispatch",
-    "flush", "commit", "rollback", "run", "exec", "execute", "process", "handle",
+    "rollback", "run", "exec", "execute", "process", "handle",
 ];

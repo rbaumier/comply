@@ -262,4 +262,23 @@ parsed.searchParams.delete(\"a\");
 ";
         assert!(run_on(src).is_empty());
     }
+
+    // Regression tests for issue #3377: `.commit()` and `.flush()` are dominated
+    // by synchronous APIs, so both names were dropped from the heuristic.
+
+    #[test]
+    fn allows_void_commit_call() {
+        assert!(run_on("entry.commit(to);").is_empty());
+    }
+
+    #[test]
+    fn allows_void_flush_call() {
+        assert!(run_on("scrollWaiter.flush();").is_empty());
+    }
+
+    #[test]
+    fn still_flags_genuine_async_save_after_commit_flush_drop() {
+        let d = run_on("repo.save(entity);");
+        assert_eq!(d.len(), 1);
+    }
 }
