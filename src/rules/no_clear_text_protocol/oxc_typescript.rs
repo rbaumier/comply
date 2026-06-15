@@ -145,4 +145,18 @@ mod tests {
         let src = r#"const el = <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><path d="M5 12 10 18 19 5" /></svg>;"#;
         assert!(run(src).is_empty());
     }
+
+    // #3364 — JSON Schema draft `$schema` URIs are frozen spec identifiers.
+    #[test]
+    fn does_not_flag_json_schema_draft_uri() {
+        let src = r#"result.$schema = "http://json-schema.org/draft-07/schema#";"#;
+        assert!(run(src).is_empty());
+    }
+
+    // #3364 — `new URL(`http://[${addr}]`)` is an IPv6 validator, not a request.
+    #[test]
+    fn does_not_flag_ipv6_url_constructor_validator() {
+        let src = r"new URL(`http://[${payload.value}]`);";
+        assert!(run(src).is_empty());
+    }
 }
