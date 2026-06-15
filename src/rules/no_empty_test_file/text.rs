@@ -107,7 +107,7 @@ fn has_test_content(source: &str) -> bool {
     if is_perf_test_scenario(source) {
         return true;
     }
-    drives_imported_runner(source)
+    drives_imported_runner(source) || drives_required_runner(source)
 }
 
 /// `true` when the source declares a test via a modifier-chained runner call:
@@ -251,6 +251,146 @@ fn push_binding(raw: &str, bindings: &mut Vec<String>) {
     if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
         bindings.push(name.to_string());
     }
+}
+
+/// True when the file delegates its tests through a CommonJS `require`, the CJS
+/// counterpart of [`drives_imported_runner`]. Two shapes count:
+///
+/// * an inline call on the require result, e.g.
+///   `require('./helper').payloadMethod(t)` — the module's exported runner is
+///   invoked directly; and
+/// * a `const`/`let`/`var` binding of a require result that is then called as a
+///   top-level statement, e.g. `const run = require('./helper').run; run(t)` or
+///   `const { runner } = require('./helper'); runner(t)`.
+///
+/// A bare side-effect `require('./setup')` (no method call, no binding usage) is
+/// not test delegation, mirroring how a lone ESM `import './setup'` is ignored.
+fn drives_required_runner(source: &str) -> bool {
+    if source.lines().any(|line| has_inline_require_call(line.trim_start())) {
+        return true;
+    }
+    let bound = required_bindings(source);
+    if bound.is_empty() {
+        return false;
+    }
+    source.lines().any(|line| {
+        let trimmed = line.trim_start();
+        bound.iter().any(|name| invokes_binding(trimmed, name))
+    })
+}
+
+/// `true` when `line` invokes `name` at statement start, either directly
+/// (`name(...)`) or through a method on it (`name.method(...)`) — the latter is
+/// the common CJS shape where the whole module object is bound and one of its
+/// exported runners is called.
+fn invokes_binding(line: &str, name: &str) -> bool {
+    let Some(rest) = line.strip_prefix(name) else {
+        return false;
+    };
+    // Reject a longer identifier (`helperFn` when `name` is `helper`).
+    match rest.as_bytes().first() {
+        Some(&b'(') => true,
+        Some(&b'.') => matches_chained_call(rest),
+        _ => false,
+    }
+}
+
+/// `true` when `line` invokes a method on the result of a `require(...)` call,
+/// e.g. `require('./helper').payloadMethod(t)`. The `require(...)` may sit at the
+/// statement start or after an assignment (`const x = require('./helper').run()`).
+fn has_inline_require_call(line: &str) -> bool {
+    let mut search_from = 0;
+    while let Some(offset) = line[search_from..].find("require(") {
+        let after_require = search_from + offset + "require(".len();
+        search_from = after_require;
+        // Skip past the `require(...)` argument list to find what follows the
+        // closing paren.
+        let Some(close) = matching_paren(&line[after_require..]) else {
+            continue;
+        };
+        let rest = line[after_require + close + 1..].trim_start();
+        // A `.method(` chain on the require result is a delegated runner call.
+        if matches_chained_call(rest) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns the byte offset, within `rest`, of the `)` that closes an already-open
+/// `require(` argument list, accounting for nested parens and quoted strings.
+fn matching_paren(rest: &str) -> Option<usize> {
+    let bytes = rest.as_bytes();
+    let mut depth = 0usize;
+    let mut quote: Option<u8> = None;
+    for (i, &b) in bytes.iter().enumerate() {
+        match quote {
+            Some(q) => {
+                if b == q {
+                    quote = None;
+                }
+            }
+            None => match b {
+                b'\'' | b'"' | b'`' => quote = Some(b),
+                b'(' => depth += 1,
+                b')' if depth == 0 => return Some(i),
+                b')' => depth -= 1,
+                _ => {}
+            },
+        }
+    }
+    None
+}
+
+/// Collects identifiers bound to a `require(...)` result: both the default form
+/// (`const x = require('./m')`) and destructured names
+/// (`const { a, b: c } = require('./m')`, recording `a` and the `c` alias).
+fn required_bindings(source: &str) -> Vec<String> {
+    let mut bindings = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        let Some(after_kw) = strip_declaration_keyword(trimmed) else {
+            continue;
+        };
+        let Some(eq) = after_kw.find('=') else {
+            continue;
+        };
+        let (target, value) = after_kw.split_at(eq);
+        if !value.contains("require(") {
+            continue;
+        }
+        collect_require_targets(target.trim(), &mut bindings);
+    }
+    bindings
+}
+
+/// Records the binding names in a `require` declarator target: a plain
+/// identifier (`helper`), or destructured names with optional CJS `:` renames
+/// (`{ runner }`, `{ runner: r }` records `r`).
+fn collect_require_targets(target: &str, bindings: &mut Vec<String>) {
+    let inner = match (target.find('{'), target.rfind('}')) {
+        (Some(open), Some(close)) if close > open => &target[open + 1..close],
+        _ => target,
+    };
+    for spec in inner.split(',') {
+        // A `key: local` rename binds the right-hand name; a bare `key` binds itself.
+        let name = spec.rsplit(':').next().unwrap_or(spec).trim();
+        if !name.is_empty() && name.chars().all(is_binding_char) {
+            bindings.push(name.to_string());
+        }
+    }
+}
+
+fn is_binding_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '$'
+}
+
+/// Strips a leading `const`/`let`/`var` keyword (with its trailing space) from a
+/// statement, returning the declarator text after it.
+fn strip_declaration_keyword(line: &str) -> Option<&str> {
+    ["const ", "let ", "var "]
+        .iter()
+        .find_map(|kw| line.strip_prefix(kw))
 }
 
 impl TextCheck for Check {
@@ -403,6 +543,44 @@ mod tests {
     fn flags_imported_but_uncalled_binding() {
         assert_eq!(
             run("utils.test.ts", "import { helper } from './helper';").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_cjs_require_inline_runner() {
+        // fastify/fastify test/put.test.js: tests are delegated to a factory via
+        // an inline call on the `require(...)` result.
+        let source = "'use strict'\n\
+                      \n\
+                      const t = require('node:test')\n\
+                      require('./helper').payloadMethod('put', t)\n\
+                      require('./input-validation').payloadMethod('put', t)\n";
+        assert!(run("test/put.test.js", source).is_empty());
+    }
+
+    #[test]
+    fn allows_cjs_require_bound_runner() {
+        let source = "'use strict'\n\
+                      const helper = require('./helper')\n\
+                      const t = require('node:test')\n\
+                      helper.payloadMethod('put', t)\n";
+        assert!(run("test/put.test.js", source).is_empty());
+    }
+
+    #[test]
+    fn allows_cjs_require_destructured_runner() {
+        let source = "const { payloadMethod } = require('./helper')\n\
+                      payloadMethod('put')\n";
+        assert!(run("test/patch.test.js", source).is_empty());
+    }
+
+    #[test]
+    fn flags_cjs_side_effect_require_only() {
+        // A bare side-effect require with no method call and no called binding is
+        // not test delegation — the file stays empty.
+        assert_eq!(
+            run("test/put.test.js", "require('./setup')\n").len(),
             1
         );
     }
