@@ -288,11 +288,17 @@ fn is_chai_registration_callback(
     is_chai_assertion_receiver(&member.object)
 }
 
-/// True when `name` follows the constructor-function convention (starts with an
-/// uppercase ASCII letter, e.g. `Suspense`, `Component`). Such functions are
-/// conventionally invoked with `new`, so `this` is the new instance.
+/// True when `name` follows the constructor-function convention: after any
+/// leading underscores, the first character is an uppercase ASCII letter (e.g.
+/// `Suspense`, `Component`, or the module-private `_Reply`). Such functions are
+/// conventionally invoked with `new`, so `this` is the new instance. Leading
+/// underscores mark a binding as internal/private and do not change the
+/// capitalized-initial signal.
 fn is_constructor_name(name: &str) -> bool {
-    name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+    name.trim_start_matches('_')
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_uppercase())
 }
 
 /// True when the reference at `ref_node_id` is used in a way that binds the
@@ -660,6 +666,26 @@ mod tests {
         // Negative: an ordinary lowercase free function never used as a
         // constructor or bound method still has a stray `this`.
         let diags = run_on("function foo() {\n  return this.bar;\n}\nfoo();");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_underscore_prefixed_constructor_function() {
+        // Regression for #3357: a module-private constructor function follows the
+        // `_PascalCase` convention — after stripping the leading underscore the
+        // initial is uppercase, so it is a constructor and the `this.*` instance
+        // setup is valid. fastify's `lib/reply.js` builds `_Reply` this way and
+        // wires its prototype chain with `Object.setPrototypeOf`.
+        let src = "function buildReply (R) {\n  function _Reply (res, request, log) {\n    this.raw = res\n    this.request = request\n    this[kReplyHeaders] = {}\n  }\n  Object.setPrototypeOf(_Reply.prototype, R.prototype)\n  Object.setPrototypeOf(_Reply, R)\n  return _Reply\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_underscore_prefixed_lowercase_function() {
+        // Negative-space guard for #3357: stripping leading underscores must not
+        // turn a lowercase-initial function into a constructor — `_reply` is not
+        // PascalCase, so its stray `this` must still fire.
+        let diags = run_on("function _reply() {\n  return this.x;\n}\n_reply();");
         assert_eq!(diags.len(), 1);
     }
 
