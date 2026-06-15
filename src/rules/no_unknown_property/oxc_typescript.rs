@@ -306,6 +306,29 @@ mod tests {
     }
 
     #[test]
+    fn allows_class_in_tanstack_solid_router_route() {
+        // TanStack Router's Solid adapter (`@tanstack/solid-router`) produces
+        // Solid JSX — `class` is the native Solid attribute. Routes often import
+        // only from the adapter and never from `solid-js` itself, yet must not be
+        // flagged. (Closes #2145)
+        let src = "import { createFileRoute } from '@tanstack/solid-router';\n\
+                   const a = <div class=\"p-2\" />;";
+        assert!(run(src).is_empty(), "got unexpected diagnostics: {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_class_in_tanstack_react_router_route() {
+        // The React adapter (`@tanstack/react-router`) produces React JSX —
+        // `class` must still be flagged with the `className` suggestion. The
+        // exemption requires the Solid adapter source, not any `@tanstack/*-router`.
+        let src = "import { createFileRoute } from '@tanstack/react-router';\n\
+                   const a = <div class=\"x\" />;";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("className"));
+    }
+
+    #[test]
     fn flags_for_in_react_jsx() {
         let src = "const a = <label for=\"x\" />;";
         assert_eq!(run(src).len(), 1);

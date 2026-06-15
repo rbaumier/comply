@@ -250,6 +250,7 @@ pub fn is_non_react_jsx_file(source: &str, project: &crate::project::ProjectCtx,
     source_contains(source, "solid-js")
         || source_contains(source, "@solidjs/")
         || source_contains(source, "solid-start")
+        || source_contains(source, "@tanstack/solid-router")
         || source_contains(source, "@vue/")
         || source_contains(source, "@builder.io/qwik")
         || source_contains(source, "@stencil/core")
