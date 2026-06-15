@@ -35,6 +35,13 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // Skip non-React JSX (SolidJS, Vue, Preact, Qwik…). Those frameworks
+            // accept `style="css-string"` as valid JSX; the object-syntax advice
+            // is React-only. Mirrors `no-unknown-property`'s exemption.
+            if crate::oxc_helpers::is_non_react_jsx_file(ctx.source, ctx.project, ctx.path) {
+                return;
+            }
+
             // Flag if value is a string literal (not an expression container).
             if let Some(JSXAttributeValue::StringLiteral(_)) = &attr.value {
                 let (line, column) =
@@ -52,5 +59,68 @@ impl OxcCheck for Check {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.tsx")
+    }
+
+    #[test]
+    fn flags_string_style_in_react_jsx() {
+        let src = r#"const x = <div style="color:red">hello</div>;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_string_style_in_react_file_importing_react() {
+        // Genuine React file (imports `react`, no Solid markers) must still be
+        // flagged with the object-syntax suggestion.
+        let src = "import { useState } from 'react';\nconst x = <div style=\"color:red\">hi</div>;";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("style={{"));
+    }
+
+    #[test]
+    fn allows_object_style() {
+        let src = r#"const x = <div style={{ color: "red" }}>hello</div>;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_string_style_in_solid_jsx() {
+        // SolidJS accepts `style="css-string"` as valid JSX. A file importing
+        // `solid-js` must not be flagged. (Closes #2216)
+        let src =
+            "import { ErrorBoundary } from 'solid-js';\nconst x = <span style=\"font-size:1.5em\">{message}</span>;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_string_style_in_solid_type_only_import() {
+        // The icons.tsx example: a type-only import from solid-js.
+        let src = "import type { JSX } from 'solid-js';\nconst x = <svg style=\"width:24px;height:24px\" />;";
+        assert!(run(src).is_empty());
     }
 }
