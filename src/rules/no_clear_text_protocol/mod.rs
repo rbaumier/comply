@@ -100,7 +100,7 @@ pub(super) fn is_clear_text_url(content: &str) -> Option<&'static str> {
             if DEV_PREFIXES.iter().any(|d| trimmed.starts_with(d)) {
                 return None;
             }
-            if XML_NAMESPACE_PREFIXES.iter().any(|ns| trimmed.starts_with(ns)) {
+            if SPEC_NAMESPACE_PREFIXES.iter().any(|ns| trimmed.starts_with(ns)) {
                 return None;
             }
             let host = &trimmed[prefix.len()..];
@@ -109,6 +109,14 @@ pub(super) fn is_clear_text_url(content: &str) -> Option<&'static str> {
                 .unwrap_or(host.len());
             let hostname = &host[..host_end];
             if hostname.len() <= 1 {
+                return None;
+            }
+            // An empty IPv6 bracket host (`http://[]`) is the static skeleton of
+            // a URL-parser validation template — `new URL(`http://[${addr}]`)` —
+            // where the address comes from the interpolated slot. A hardcoded
+            // IPv6 endpoint keeps a non-empty address inside the brackets
+            // (`http://[2001:db8::1]`) and still flags.
+            if hostname == "[]" {
                 return None;
             }
             // `schemas.*` subdomains exist solely to host XML/SOAP namespace
@@ -151,10 +159,13 @@ const DUMMY_HOSTS: &[&str] =
 // samples, not production connections.
 const DEMO_HOSTS: &[&str] = &["petstore.swagger.io", "echoapi.cloudapp.net"];
 
-// XML namespace URIs are frozen spec identifiers, not network endpoints.
-// The browser never makes an HTTP request to these; they are syntax-level
-// identifiers (xmlns="http://www.w3.org/2000/svg" etc.).
-const XML_NAMESPACE_PREFIXES: &[&str] = &["http://www.w3.org/"];
+// Frozen spec/namespace identifiers in `http://` form: immutable tokens that
+// match by exact value and are never dereferenced over the network. W3C XML
+// namespaces (`xmlns="http://www.w3.org/2000/svg"`) and JSON Schema draft
+// `$schema`/`$id` URIs (`http://json-schema.org/draft-07/schema#`) both live
+// here — upgrading them to https would break syntax-level identity matching.
+const SPEC_NAMESPACE_PREFIXES: &[&str] =
+    &["http://www.w3.org/", "http://json-schema.org/"];
 
 fn trim_string_quotes(s: &str) -> &str {
     // TS strings: leading `"`, `'`, or backtick.
@@ -296,6 +307,29 @@ mod helper_tests {
     fn does_not_flag_canonical_demo_endpoints() {
         assert!(is_clear_text_url("\"http://petstore.swagger.io/v2/swagger.json\"").is_none());
         assert!(is_clear_text_url("\"http://echoapi.cloudapp.net/api\"").is_none());
+    }
+
+    // #3364 — JSON Schema draft `$schema` URIs are frozen spec identifiers
+    // (matched verbatim, never fetched), the same category as XML namespaces.
+    #[test]
+    fn does_not_flag_json_schema_draft_uri() {
+        assert!(is_clear_text_url("\"http://json-schema.org/draft-07/schema#\"").is_none());
+        assert!(is_clear_text_url("\"http://json-schema.org/draft-04/schema#\"").is_none());
+    }
+
+    // #3364 — `new URL(`http://[${addr}]`)` IPv6/CIDRv6 validators concatenate
+    // to the empty-bracket skeleton `http://[]`; the address is interpolated,
+    // so no cleartext endpoint exists.
+    #[test]
+    fn does_not_flag_empty_ipv6_bracket_validator() {
+        assert!(is_clear_text_url("\"http://[]\"").is_none());
+    }
+
+    // #3364 — a hardcoded IPv6 endpoint keeps its address inside the brackets
+    // and is a real cleartext connection, so it must still fire.
+    #[test]
+    fn still_flags_hardcoded_ipv6_endpoint() {
+        assert_eq!(is_clear_text_url("\"http://[2001:db8::1]/api\""), Some("http://"));
     }
 
     // #1102 — a real `*.cloudapp.net` / `*.microsoft.com` endpoint that is NOT
