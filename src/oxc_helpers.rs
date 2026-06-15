@@ -71,7 +71,8 @@ pub const SLOT_PLAYWRIGHT: usize = 3;
 pub const SLOT_DELETED_AT_COLUMN: usize = 4;
 pub const SLOT_TYPE_ONLY_FILE: usize = 5;
 pub const SLOT_WORKER_SCRIPT: usize = 6;
-const FILE_BOOL_SLOTS: usize = 7;
+pub const SLOT_PROTOCOL_MANDATED_WEAK_HASH: usize = 7;
+const FILE_BOOL_SLOTS: usize = 8;
 
 /// Per-file memo backing [`file_typeof_guards`]: the set of global identifiers
 /// (`window`/`self`/`global`) the current file feature-detects with a `typeof`
@@ -181,6 +182,38 @@ pub fn source_contains(source: &str, needle: &str) -> bool {
         let hit = memchr::memmem::find(source.as_bytes(), needle.as_bytes()).is_some();
         c.hits.insert(needle.to_string(), hit);
         hit
+    })
+}
+
+/// HTTP/WebSocket protocol fields whose digest algorithm is fixed by an RFC.
+/// MD5/SHA-1 here is a protocol contract, not a security choice: the peer
+/// decodes the field assuming that exact algorithm, so "use SHA-256" would
+/// break interop. Matched case-insensitively (header names are case-insensitive
+/// per spec).
+const PROTOCOL_MANDATED_HASH_FIELDS: &[&str] = &[
+    "content-md5", // RFC 1864 — Content-MD5 entity header / trailer (MD5)
+    "sec-websocket-key", // RFC 6455 — WebSocket handshake key (SHA-1)
+    "sec-websocket-accept", // RFC 6455 — WebSocket handshake accept (SHA-1)
+];
+
+/// True when the file references a protocol field whose hash algorithm is
+/// mandated by an RFC (see [`PROTOCOL_MANDATED_HASH_FIELDS`]). In such files an
+/// MD5/SHA-1 digest is computed to satisfy the protocol, not chosen for
+/// collision resistance, so `no-weak-hashing` must not fire. The signal is the
+/// field name, not the surrounding variable names, so it survives renaming and
+/// generalizes across every site that produces the same protocol field.
+///
+/// Memoized per file via [`source_contains`]; the match is case-insensitive, so
+/// the lowercased source is scanned for the (already lowercase) field names.
+#[must_use]
+pub fn references_protocol_mandated_weak_hash(source: &str) -> bool {
+    // Field names are short and rare; scanning the lowercased source once and
+    // memoizing the result keeps this off the per-node hot path.
+    cached_file_bool(source, SLOT_PROTOCOL_MANDATED_WEAK_HASH, || {
+        let lower = source.to_ascii_lowercase();
+        PROTOCOL_MANDATED_HASH_FIELDS
+            .iter()
+            .any(|field| memchr::memmem::find(lower.as_bytes(), field.as_bytes()).is_some())
     })
 }
 
