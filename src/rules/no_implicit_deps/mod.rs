@@ -185,25 +185,19 @@ pub(super) fn is_sveltekit_adapter_virtual_module(spec: &str) -> bool {
     SVELTEKIT_ADAPTER_VIRTUAL_MODULES.contains(&spec)
 }
 
-/// SvelteKit's reserved `$`-prefixed application aliases. These are resolved by
-/// SvelteKit's Vite plugin to project source or generated code, never to an npm
-/// package: `$lib` maps to `src/lib`, `$app/*` exposes the runtime modules
-/// (`$app/navigation`, `$app/stores`, `$app/environment`, …), `$env/*` exposes
-/// the typed env accessors (`$env/static/private`, `$env/dynamic/public`, …),
-/// and `$service-worker` exposes the service-worker module. They are reserved by
-/// the framework and not user-configurable, so they never appear in
-/// `package.json`.
-const SVELTEKIT_APP_ALIAS_PREFIXES: &[&str] = &["$app/", "$env/", "$lib/"];
-
-/// True if `spec` is a SvelteKit reserved application alias (`$lib`, `$lib/…`,
-/// `$app/…`, `$env/…`, or `$service-worker`). Gated by the caller on SvelteKit
-/// detection so a `$`-prefixed specifier remains a genuine implicit-dependency
-/// error in a non-SvelteKit project. Only the documented aliases match — an
-/// arbitrary `$`-prefixed specifier is not exempted.
+/// True if `spec` is a `$`-prefixed SvelteKit alias. This covers both the
+/// framework's reserved application aliases — `$lib`/`$lib/…` (→ `src/lib`),
+/// `$app/…` (runtime modules), `$env/…` (typed env accessors),
+/// `$service-worker` — and user-defined aliases declared under `kit.alias` in
+/// `svelte.config.js`, which are `$`-prefixed by convention (e.g. `$content`,
+/// `$houdini`). All resolve to local project source or generated code, never to
+/// an npm package: a name beginning with `$` is not a valid npm package name, so
+/// a `$`-prefixed specifier is structurally a path alias and never appears in
+/// `package.json`. Gated by the caller on SvelteKit detection so a `$`-prefixed
+/// specifier remains a genuine implicit-dependency error in a non-SvelteKit
+/// project.
 pub(super) fn is_sveltekit_app_alias(spec: &str) -> bool {
-    spec == "$lib"
-        || spec == "$service-worker"
-        || SVELTEKIT_APP_ALIAS_PREFIXES.iter().any(|p| spec.starts_with(p))
+    spec.starts_with('$')
 }
 
 /// True if `spec` is a bare specifier — a candidate npm package name rather
