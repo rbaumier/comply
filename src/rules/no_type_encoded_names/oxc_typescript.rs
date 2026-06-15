@@ -94,4 +94,14 @@ mod tests {
         assert!(run("const PROMPTS_DIR = '/p';").is_empty());
         assert!(run("const PROMPT_FILE = 'p.txt';").is_empty());
     }
+
+    // Regression for #3371: a single all-caps word naming a format (BYTE = the
+    // base64 regex) is not Hungarian for `byt` + `E`.
+    #[test]
+    fn allows_single_all_caps_word_constant() {
+        assert!(run("const BYTE = /^x$/gm;").is_empty());
+        assert!(run("const STRING = /^x$/;").is_empty());
+        // Genuine Hungarian still flags.
+        assert_eq!(run("const bytValue = 1;").len(), 1);
+    }
 }
