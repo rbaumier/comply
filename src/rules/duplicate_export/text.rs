@@ -63,12 +63,22 @@
 //!     direct consumer use. The two paths serve different consumers (bundler
 //!     transform vs. explicit import), so a JSX-runtime barrel adds no ambiguous
 //!     flat import path and is excluded from the count.
+//!   - Gatsby execution-context entries — `gatsby-ssr`/`gatsby-browser` are the
+//!     two Gatsby framework entry files (server-side render vs. browser bundle).
+//!     Gatsby's build pipeline consumes each independently and requires both to
+//!     re-export the same lifecycle hooks (`wrapRootElement`, `wrapPageElement`)
+//!     from a shared module; no user code imports either file. The duplication
+//!     is mandated by the framework, so a Gatsby lifecycle entry adds no
+//!     ambiguous flat import path and is excluded from the count. Gated on Gatsby
+//!     being detected for the file, so an ordinary `gatsby-ssr.js` outside a
+//!     Gatsby project still counts.
 //!
 //! Runs once per project, anchored on the lexicographically smallest indexed
 //! path so that a single pass emits all diagnostics deterministically. Barrel
 //! paths in the message are shown relative to the project root.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::project::ProjectCtx;
 use crate::project::import_index::ExportKind;
 use crate::rules::backend::{CheckCtx, TextCheck};
 use std::collections::{HashMap, HashSet};
@@ -211,6 +221,19 @@ impl TextCheck for Check {
             let independent: Vec<&Path> = independent
                 .into_iter()
                 .filter(|barrel| !is_jsx_runtime_barrel(barrel))
+                .collect();
+            // Gatsby's `gatsby-ssr` and `gatsby-browser` are the two
+            // execution-context entry files: the build pipeline consumes each
+            // independently (server-side render vs. browser bundle), and the
+            // framework requires both to re-export the same lifecycle hooks
+            // (`wrapRootElement`, `wrapPageElement`) from a shared module. The
+            // duplication is mandated, not an accidental ambiguous barrel, so
+            // drop these entries before counting. Gated on Gatsby being detected
+            // for the file so an ordinary `gatsby-ssr.js` outside a Gatsby
+            // project still flags.
+            let independent: Vec<&Path> = independent
+                .into_iter()
+                .filter(|barrel| !is_gatsby_lifecycle_entry(barrel, ctx.project))
                 .collect();
             // Libraries ship dev and prod entry-point variants of one module
             // (`index.ts` / `production.ts`, `foo.dev.ts` / `foo.prod.ts`) that a
@@ -536,6 +559,28 @@ fn is_jsx_runtime_barrel(barrel: &Path) -> bool {
         .file_stem()
         .and_then(|stem| stem.to_str())
         .is_some_and(|stem| stem == "jsx-runtime" || stem == "jsx-dev-runtime")
+}
+
+/// Whether `barrel` is a Gatsby execution-context lifecycle entry — a
+/// `gatsby-ssr` or `gatsby-browser` file in a project where Gatsby is detected.
+/// Gatsby's build pipeline consumes these two files independently (server-side
+/// render vs. browser bundle) and requires both to re-export the same lifecycle
+/// hooks (`wrapRootElement`, `wrapPageElement`) from a shared module, so the
+/// shared symbols are not an ambiguous flat import path. The Gatsby-detection
+/// gate (via the file's nearest `package.json`) keeps an ordinary file that
+/// happens to be named `gatsby-ssr.js` outside a Gatsby project still flagged.
+fn is_gatsby_lifecycle_entry(barrel: &Path, project: &ProjectCtx) -> bool {
+    let is_lifecycle_stem = barrel
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem == "gatsby-ssr" || stem == "gatsby-browser");
+    if !is_lifecycle_stem {
+        return false;
+    }
+    project
+        .frameworks_for_path(barrel)
+        .iter()
+        .any(|fw| fw.name == "gatsby")
 }
 
 /// Collapse dev/prod entry-point variants that share a type-only re-export of
@@ -1330,6 +1375,113 @@ mod tests {
             "icons re-exported from distinct external packages are interchangeable adapters, got: {:?}",
             diags
         );
+    }
+
+    /// #2152: a Gatsby site's `gatsby-ssr.js` and `gatsby-browser.js` are two
+    /// distinct framework entry files (SSR vs. browser execution context) that
+    /// must both re-export the same lifecycle hooks (`wrapRootElement`,
+    /// `wrapPageElement`) from a shared module. Gatsby's build pipeline consumes
+    /// each file independently; no user code imports from either, so the shared
+    /// symbols are not an ambiguous flat import path and must not be flagged.
+    #[test]
+    fn allows_lifecycle_hooks_shared_by_gatsby_ssr_and_browser_entries() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "website/package.json",
+                r#"{"name":"website","dependencies":{"gatsby":"5.0.0"}}"#,
+            ),
+            (
+                "website/gatsby-shared.js",
+                "export const wrapRootElement = () => {};\n\
+                 export const wrapPageElement = () => {};",
+            ),
+            (
+                "website/gatsby-ssr.js",
+                "export { wrapRootElement, wrapPageElement } from './gatsby-shared.js';",
+            ),
+            (
+                "website/gatsby-browser.js",
+                "export { wrapRootElement, wrapPageElement } from './gatsby-shared.js';",
+            ),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert!(
+            diags.is_empty(),
+            "lifecycle hooks shared by gatsby-ssr and gatsby-browser entries are framework-required, got: {:?}",
+            diags
+        );
+    }
+
+    /// Negative space: the Gatsby exemption removes only the `gatsby-ssr` /
+    /// `gatsby-browser` entries from the count (they are consumed by Gatsby's
+    /// pipeline, never imported by user code). Two *ordinary* barrels sharing the
+    /// same symbol alongside a Gatsby entry remain a genuine ambiguous flat import
+    /// path and must still flag.
+    #[test]
+    fn flags_two_plain_barrels_despite_gatsby_exemption() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "website/package.json",
+                r#"{"name":"website","dependencies":{"gatsby":"5.0.0"}}"#,
+            ),
+            (
+                "website/gatsby-shared.js",
+                "export const wrapPageElement = () => {};",
+            ),
+            (
+                "website/gatsby-ssr.js",
+                "export { wrapPageElement } from './gatsby-shared.js';",
+            ),
+            (
+                "website/barrel-a.js",
+                "export { wrapPageElement } from './gatsby-shared.js';",
+            ),
+            (
+                "website/barrel-b.js",
+                "export { wrapPageElement } from './gatsby-shared.js';",
+            ),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert_eq!(
+            diags.len(),
+            1,
+            "two ordinary barrels re-exporting `wrapPageElement` remain ambiguous, got: {:?}",
+            diags
+        );
+        assert!(diags[0].message.contains("wrapPageElement"));
+    }
+
+    /// Negative space: the exemption is gated on Gatsby being detected. A pair of
+    /// barrels named `gatsby-ssr.js` / `gatsby-browser.js` in a project with no
+    /// `gatsby` dependency are ordinary files and their shared symbol still flags.
+    #[test]
+    fn flags_gatsby_named_files_without_gatsby_dependency() {
+        let files: Vec<(&str, &str)> = vec![
+            ("website/package.json", r#"{"name":"website"}"#),
+            (
+                "website/gatsby-shared.js",
+                "export const wrapPageElement = () => {};",
+            ),
+            (
+                "website/gatsby-ssr.js",
+                "export { wrapPageElement } from './gatsby-shared.js';",
+            ),
+            (
+                "website/gatsby-browser.js",
+                "export { wrapPageElement } from './gatsby-shared.js';",
+            ),
+        ];
+        let target = anchor_rel(&files);
+        let (_dir, diags) = run_on_project(&files, target);
+        assert_eq!(
+            diags.len(),
+            1,
+            "gatsby-named files without the gatsby dependency are ordinary barrels, got: {:?}",
+            diags
+        );
+        assert!(diags[0].message.contains("wrapPageElement"));
     }
 
     /// Negative space: two barrels in one directory re-exporting the same name
