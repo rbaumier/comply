@@ -111,12 +111,15 @@ impl OxcCheck for Check {
         if is_virtual_module(spec) {
             return;
         }
-        // SvelteKit virtual specifiers that the framework's own Vite/Rollup
-        // plugins resolve at build time, never installed from npm:
+        // SvelteKit specifiers that the framework's own Vite/Rollup plugins
+        // resolve at build time, never installed from npm:
         //   - adapter virtual modules: bare uppercase names (`HANDLER`, `ENV`,
         //     `SERVER`, `SHIMS`, `MANIFEST`), and
-        //   - reserved app aliases: `$lib`/`$lib/…` (→ `src/lib`), `$app/…`,
-        //     `$env/…`, `$service-worker`.
+        //   - `$`-prefixed app/path aliases: the reserved ones (`$lib`/`$lib/…`
+        //     → `src/lib`, `$app/…`, `$env/…`, `$service-worker`) and any
+        //     user-defined `kit.alias` entry, which are `$`-prefixed by
+        //     convention (`$content`, `$houdini`). A `$` cannot begin an npm
+        //     package name, so a `$`-prefixed specifier is a local path alias.
         // Gate on SvelteKit being detected for this file's package so the same
         // specifiers still fire as implicit dependencies in a non-SvelteKit
         // project.
@@ -1690,8 +1693,8 @@ export default {
     }
 
     // Negative-space guard for #1366: a genuinely undeclared package must still
-    // fire in a SvelteKit project — the exemption is scoped to the reserved
-    // `$`-aliases only, not to arbitrary `$`-prefixed or bare specifiers.
+    // fire in a SvelteKit project — the exemption is scoped to `$`-prefixed path
+    // aliases only, not to ordinary bare specifiers.
     #[test]
     fn flags_unlisted_dep_alongside_sveltekit_aliases_issue_1366() {
         let dir = TempDir::new().unwrap();
@@ -1703,14 +1706,64 @@ export default {
         let src = dir.path().join("src");
         fs::create_dir_all(&src).unwrap();
         let file = src.join("index.ts");
-        // `$custom` is not a reserved SvelteKit alias; `lodash` is undeclared.
-        let source = "import a from '$custom/thing';\nimport b from 'lodash';";
+        let source = "import b from 'lodash';";
         fs::write(&file, source).unwrap();
         let diags = run_oxc_in_project(&file, source);
         assert_eq!(
             diags.len(),
-            2,
-            "non-reserved `$`-specifier and undeclared package must still fire, got {diags:?}"
+            1,
+            "undeclared package must still fire in a SvelteKit project, got {diags:?}"
+        );
+    }
+
+    // Regression #3345 (huntabyte/shadcn-svelte): a user-defined `$`-prefixed
+    // SvelteKit `kit.alias` (`$content`, mapping to the Velite output dir in
+    // `svelte.config.js`) is a local path alias, not an npm package — a name
+    // cannot begin with `$`. Before `svelte-kit sync` generates the tsconfig
+    // `paths` entry it is invisible to the alias reader, yet the import must not
+    // be flagged when SvelteKit is detected for the importing file's package.
+    #[test]
+    fn allows_user_defined_dollar_alias_issue_3345() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"docs","devDependencies":{"@sveltejs/kit":"^2.4.0"}}"#,
+        )
+        .unwrap();
+        let lib = dir.path().join("src").join("lib");
+        fs::create_dir_all(&lib).unwrap();
+        let file = lib.join("navigation.ts");
+        let source =
+            "import { components, forms } from '$content/index.js';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "user-defined `$content` SvelteKit alias must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #3345: a user-defined `$`-alias is exempt only
+    // when SvelteKit is detected — in a non-SvelteKit project the same specifier
+    // is a genuine implicit dependency and must still fire.
+    #[test]
+    fn flags_dollar_alias_without_sveltekit_issue_3345() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"plain-app","dependencies":{}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("index.ts");
+        let source = "import { x } from '$content/index.js';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "a `$`-alias in a non-SvelteKit project must still fire, got {diags:?}"
         );
     }
 
