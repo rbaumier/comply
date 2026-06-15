@@ -104,4 +104,28 @@ mod tests {
     fn allows_err_message_in_log() {
         assert!(run_on("console.error(err.message)").is_empty());
     }
+
+    #[test]
+    fn skips_error_handler_in_test_dir_issue3342() {
+        // Issue #3342: in a `test/` file the error handler deliberately sends
+        // `err.message` to assert error-propagation behavior — the "client" is
+        // the test runner, not a production caller, so the central
+        // `skip_in_test_dir` gate exempts it.
+        let src = "fastify.setErrorHandler((err, req, reply) => {\n  reply.send({ error: err.message })\n})";
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "test/request-error.test.js")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_err_message_in_production_handler() {
+        // The same leak in a production handler is still flagged — the test-dir
+        // exemption must not silence real response leaks.
+        let src = "reply.send({ error: err.message })";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "src/routes/user.ts").len(),
+            1
+        );
+    }
 }
