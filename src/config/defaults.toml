@@ -287,6 +287,13 @@ max_letter_spacing_em = 0.05
 [rules.tailwind-no-restricted-classes]
 classes = []
 
+# Opt-in required-scripts check for package.json. Empty by default — the rule
+# is a no-op until a project lists the npm scripts it expects every package to
+# define, e.g.:
+#   scripts = ["build", "test", "lint"]
+[rules.package-json-required-scripts]
+scripts = []
+
 # ---------------------------------------------------------------
 # React thresholds.
 # ---------------------------------------------------------------
