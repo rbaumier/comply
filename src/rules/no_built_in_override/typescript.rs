@@ -66,20 +66,22 @@ impl crate::rules::backend::AstCheck for Check {
     }
 }
 
-/// Whether the declaration node is a `VariableDeclarator` *with* an
-/// initializer, OR a `Function` / `Class` / parameter binding (those
-/// always introduce a value).
+/// Whether the declaration node overrides the global binding: a
+/// `VariableDeclarator` *with* an initializer, OR a `Function` / `Class`
+/// / parameter binding (those always introduce a value).
+///
+/// Import specifiers are excluded: an `import Set from "./set"` binding is
+/// module-scoped and cannot reach `globalThis.Set`, so it is not an
+/// override regardless of the imported name.
 fn has_initializer(nodes: &oxc_semantic::AstNodes, decl_id: oxc_semantic::NodeId) -> bool {
     let kinds = std::iter::once(nodes.kind(decl_id)).chain(nodes.ancestor_kinds(decl_id));
     for kind in kinds {
         match kind {
             AstKind::VariableDeclarator(decl) => return decl.init.is_some(),
-            AstKind::Function(_)
-            | AstKind::Class(_)
-            | AstKind::FormalParameter(_)
-            | AstKind::ImportSpecifier(_)
+            AstKind::Function(_) | AstKind::Class(_) | AstKind::FormalParameter(_) => return true,
+            AstKind::ImportSpecifier(_)
             | AstKind::ImportDefaultSpecifier(_)
-            | AstKind::ImportNamespaceSpecifier(_) => return true,
+            | AstKind::ImportNamespaceSpecifier(_) => return false,
             AstKind::Program(_) => return false,
             _ => {}
         }
@@ -168,5 +170,25 @@ mod tests {
         // `function f(Array) {}` overrides the global within the
         // function — the previous walker missed parameters entirely.
         assert_eq!(run_on("function f(Array: any) { return Array; }").len(), 1);
+    }
+
+    #[test]
+    fn allows_default_import_named_after_builtin() {
+        // huntabyte/shadcn-svelte field/index.ts: component named after a
+        // built-in. A module import binding cannot clobber the global.
+        let d = run_on(
+            "import Set from \"./field-set.svelte\";\nimport Error from \"./field-error.svelte\";\nexport { Set, Error };",
+        );
+        assert!(d.is_empty(), "default import named after a built-in is not an override: {d:?}");
+    }
+
+    #[test]
+    fn allows_named_import_aliased_to_builtin() {
+        assert!(run_on("import { thing as Map } from \"./m\";\nexport { Map };").is_empty());
+    }
+
+    #[test]
+    fn allows_namespace_import_named_after_builtin() {
+        assert!(run_on("import * as Promise from \"./p\";\nexport { Promise };").is_empty());
     }
 }
