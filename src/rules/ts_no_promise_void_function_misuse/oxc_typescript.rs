@@ -3,7 +3,10 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Argument, Expression};
+use oxc_ast::ast::{
+    Argument, AssignmentOperator, AssignmentTarget, BindingPattern, Expression,
+};
+use oxc_semantic::SymbolId;
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -66,9 +69,9 @@ impl OxcCheck for Check {
             return;
         }
 
-        // `Promise.all(arr.map(async ...))` (and `allSettled`/`race`/`any`) fully
-        // consumes the returned promises, so rejections are not swallowed — the
-        // canonical concurrency idiom this rule's own remediation recommends.
+        // The map results are awaited — inline (`Promise.all(arr.map(async ...))`)
+        // or via a binding that later reaches an awaiting sink. Rejections are not
+        // swallowed, so this is handled rather than a void misuse.
         if is_consumed_by_promise_combinator(node, semantic) {
             return;
         }
@@ -105,10 +108,18 @@ fn is_async_arg(arg: &Argument) -> bool {
     }
 }
 
-/// True when `node` (a `.map()`/`.flatMap()` CallExpression) is itself an
-/// argument of a `Promise.<all|allSettled|race|any>(...)` call. Those
-/// combinators await every promise in the array, so the returned promises are
-/// consumed rather than discarded.
+/// True when the promises produced by a `.map()`/`.flatMap()` CallExpression are
+/// handled rather than discarded. Handled means either:
+///
+/// - the call is itself an argument of a `Promise.<all|allSettled|race|any>(...)`
+///   combinator (the inline idiom `Promise.all(arr.map(async ...))`), or
+/// - the call is the entire right-hand side of a binding (`const xs = arr.map(...)`
+///   or `xs = arr.map(...)`) and the bound variable later reaches an awaiting sink
+///   — passed to one of those combinators, `await`ed, or `return`ed.
+///
+/// The second case is resolved through the semantic model, so it holds whatever
+/// the variable is named, whichever combinator awaits it, and regardless of the
+/// binding sitting in a different (e.g. conditional) block from the sink.
 fn is_consumed_by_promise_combinator(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -123,29 +134,85 @@ fn is_consumed_by_promise_combinator(
         return false;
     }
 
-    let AstKind::CallExpression(parent_call) = semantic.nodes().parent_node(node.id()).kind() else {
+    let parent_kind = semantic.nodes().parent_node(node.id()).kind();
+    if is_awaiting_combinator_argument(parent_kind, call.span) {
+        return true;
+    }
+
+    bound_variable(node, semantic)
+        .is_some_and(|symbol_id| variable_reaches_awaiting_sink(symbol_id, semantic))
+}
+
+/// True when `parent_kind` is a `Promise.<all|allSettled|race|any>(...)` call
+/// that receives the expression spanning `child_span` as one of its arguments.
+fn is_awaiting_combinator_argument(parent_kind: AstKind, child_span: oxc_span::Span) -> bool {
+    let AstKind::CallExpression(call) = parent_kind else {
         return false;
     };
-    let Expression::StaticMemberExpression(parent_member) = &parent_call.callee else {
+    let Expression::StaticMemberExpression(member) = &call.callee else {
         return false;
     };
-    let Expression::Identifier(obj) = &parent_member.object else {
+    let Expression::Identifier(obj) = &member.object else {
         return false;
     };
     if obj.name.as_str() != "Promise" {
         return false;
     }
     if !matches!(
-        parent_member.property.name.as_str(),
+        member.property.name.as_str(),
         "all" | "allSettled" | "race" | "any"
     ) {
         return false;
     }
+    call.arguments.iter().any(|arg| arg.span() == child_span)
+}
 
-    parent_call
-        .arguments
-        .iter()
-        .any(|arg| arg.span() == call.span)
+/// When the `.map`/`.flatMap` call at `node` is the entire right-hand side of a
+/// binding — a `const`/`let` initializer (`const xs = arr.map(...)`) or a plain
+/// `=` reassignment to an identifier (`xs = arr.map(...)`) — return the bound
+/// variable's symbol. Returns `None` when the call is not the head of a binding
+/// (e.g. it is an argument, chained off another call, or a compound assignment).
+fn bound_variable(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> Option<SymbolId> {
+    match semantic.nodes().parent_node(node.id()).kind() {
+        AstKind::VariableDeclarator(declarator) => match &declarator.id {
+            BindingPattern::BindingIdentifier(ident) => ident.symbol_id.get(),
+            _ => None,
+        },
+        AstKind::AssignmentExpression(assign) => {
+            if assign.operator != AssignmentOperator::Assign {
+                return None;
+            }
+            let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left else {
+                return None;
+            };
+            semantic
+                .scoping()
+                .get_reference(target.reference_id())
+                .symbol_id()
+        }
+        _ => None,
+    }
+}
+
+/// True when any reference to `symbol_id` is consumed by an awaiting sink: it is
+/// `await`ed, `return`ed, or passed to a `Promise.<all|allSettled|race|any>(...)`
+/// combinator. Such a sink awaits the collected promises, so they are handled.
+fn variable_reaches_awaiting_sink(
+    symbol_id: SymbolId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    semantic.symbol_references(symbol_id).any(|reference| {
+        let ref_span = nodes.kind(reference.node_id()).span();
+        let parent_kind = nodes.parent_node(reference.node_id()).kind();
+        matches!(
+            parent_kind,
+            AstKind::AwaitExpression(_) | AstKind::ReturnStatement(_)
+        ) || is_awaiting_combinator_argument(parent_kind, ref_span)
+    })
 }
 
 #[cfg(test)]
@@ -207,5 +274,69 @@ mod tests {
     fn allows_promise_race_map_async() {
         let src = "Promise.race(arr.map(async (x) => { await save(x); }));";
         assert!(run(src).is_empty());
+    }
+
+    // --- #3343: `.map(async ...)` bound to a variable then handled later ---
+
+    #[test]
+    fn allows_map_async_bound_then_promise_all() {
+        // Exact issue example: the map results are assigned across conditional
+        // branches and then awaited via `Promise.all(loadItems)`.
+        let src = "export const load = async ({ params, data }) => {\n\
+                       let loadItems;\n\
+                       if (category === \"sidebar\") {\n\
+                           loadItems = data.sidebars.map(async (block) => {\n\
+                               const resp = await fetch(`/api/block/${block}`);\n\
+                               return (await resp.json());\n\
+                           });\n\
+                       } else if (category === \"dashboard\") {\n\
+                           loadItems = data.dashboards.map(async (block) => {\n\
+                               const resp = await fetch(`/api/block/${block}`);\n\
+                               return (await resp.json());\n\
+                           });\n\
+                       }\n\
+                       const blocks = await Promise.all(loadItems);\n\
+                       return { blocks };\n\
+                   };";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_const_map_async_then_promise_allsettled() {
+        // Different variable name + `Promise.allSettled` instead of `all`.
+        let src = "const tasks = items.map(async (x) => fetchOne(x));\n\
+                   const results = await Promise.allSettled(tasks);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_map_async_bound_then_returned() {
+        // The bound array is returned rather than awaited inline.
+        let src = "function run() {\n\
+                       const ps = items.map(async (x) => fetchOne(x));\n\
+                       return ps;\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_map_async_bound_then_awaited_directly() {
+        // The bound variable is `await`ed (not via a combinator).
+        let src = "async function run() {\n\
+                       const ps = items.map(async (x) => fetchOne(x));\n\
+                       await ps;\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_map_async_bound_then_dropped() {
+        // The bound array is never awaited, returned, or passed to a combinator —
+        // the promises genuinely float, so the diagnostic must still fire.
+        let src = "function run() {\n\
+                       const ps = items.map(async (x) => fetchOne(x));\n\
+                       console.log(ps.length);\n\
+                   }";
+        assert_eq!(run(src).len(), 1);
     }
 }
