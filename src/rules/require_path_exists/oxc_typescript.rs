@@ -28,10 +28,12 @@ const EXTENSIONS: &[&str] = &[
     "/index.mjs",
 ];
 
-/// Declaration-file extensions appended to a bare specifier (`./types` →
-/// `./types.d.ts`), matching TypeScript's resolution of an extensionless import
-/// to a declaration-only sibling.
-const DECL_EXTS: &[&str] = &[".d.ts", ".d.mts", ".d.cts"];
+/// Declaration-file extensions resolving a specifier to a declaration-only
+/// sibling, matching TypeScript's resolution. Each is tried two ways: appended
+/// to a bare specifier (`./types` → `./types.d.ts`) and, under `nodeNext`/
+/// `node16`, replacing a JS extension (`./hooks.js` → `./hooks.d.ts`) when only
+/// a declaration file (no `.ts` source) exists.
+const DECL_EXTS: &[&str] = &["d.ts", "d.mts", "d.cts"];
 
 fn is_relative_path(spec: &str) -> bool {
     spec.starts_with("./") || spec.starts_with("../")
@@ -111,11 +113,14 @@ fn resolve_and_check(base_dir: &Path, import_spec: &str) -> bool {
         return true;
     }
 
-    // Declaration-file sibling: `./types` resolves to `./types.d.ts` (or
-    // `.d.mts`/`.d.cts`) when no source file exists, matching TypeScript's
-    // resolution. Appended to the full path so a bare specifier keeps its name.
+    // Declaration-file sibling, matching TypeScript's resolution when no source
+    // file exists. Two forms per extension: appended keeps a bare specifier's
+    // name (`./types` → `./types.d.ts`); replaced maps a `nodeNext`/`node16` JS
+    // specifier back to its declaration (`./hooks.js` → `./hooks.d.ts`).
     let base = resolved.display().to_string();
-    DECL_EXTS.iter().any(|decl| Path::new(&format!("{base}{decl}")).exists())
+    DECL_EXTS.iter().any(|decl| {
+        Path::new(&format!("{base}.{decl}")).exists() || resolved.with_extension(decl).exists()
+    })
 }
 
 fn extract_spec_from_string(source: &str, span: oxc_span::Span) -> &str {
@@ -523,6 +528,28 @@ mod tests {
         let diags = run_in_dir("src/index.ts", source, &[]);
         assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
         assert!(diags[0].message.contains("./nope"));
+    }
+
+    #[test]
+    fn no_fp_for_js_specifier_resolving_to_dts_issue_3338() {
+        // fastify reproducer: a `.tst.ts` type test imports `../../types/hooks.js`
+        // where the only on-disk file is `types/hooks.d.ts` (declaration-only, no
+        // `.ts` source). Under `moduleResolution: nodeNext` the `.js` specifier
+        // resolves to the `.d.ts`, so the import must not be flagged.
+        let source = "import { HookHandlerDoneFunction } from '../../types/hooks.js';";
+        let diags = run_in_dir("test/types/instance.tst.ts", source, &["types/hooks.d.ts"]);
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_js_specifier_without_source_or_dts_issue_3338() {
+        // Negative space: a `.js` specifier with no `.js`/`.ts` source AND no
+        // `.d.ts` declaration sibling on disk is a genuine broken import and must
+        // still fire — the declaration mapping stays precise.
+        let source = "import { Gone } from '../../types/gone.js';";
+        let diags = run_in_dir("test/types/instance.tst.ts", source, &[]);
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("types/gone.js"));
     }
 
     #[test]
