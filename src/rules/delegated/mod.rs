@@ -18,6 +18,7 @@ mod ts;
 pub mod tsgolint;
 pub mod type_aware;
 mod unicorn;
+mod vue;
 
 use crate::rules::RuleDef;
 
@@ -30,6 +31,7 @@ pub fn register_all() -> Vec<RuleDef> {
     rules.extend(unicorn::register_all());
     rules.extend(promise::register_all());
     rules.extend(oxc::register_all());
+    rules.extend(vue::register_all());
     rules
 }
 
