@@ -1,15 +1,17 @@
 //! rust-unbounded-channel backend.
 //!
-//! Flags two patterns:
-//! - Any call whose function path ends in `unbounded_channel`
-//!   (tokio's `tokio::sync::mpsc::unbounded_channel` etc.)
-//! - `std::sync::mpsc::channel()` — note that `std::sync::mpsc`
-//!   has no bounded variant of `channel()`; the bounded one is
-//!   `std::sync::mpsc::sync_channel(N)`. So a bare `mpsc::channel()`
-//!   call is always unbounded.
+//! Matches on the last `::`-separated segment of the called function's
+//! path, so predicate methods like `range.is_unbounded()` are not
+//! mistaken for channel constructors.
 //!
-//! `crossbeam::channel::unbounded()` is the same risk; we catch it
-//! via the `unbounded` suffix match.
+//! Flags:
+//! - `unbounded_channel` (tokio's `tokio::sync::mpsc::unbounded_channel`).
+//! - `unbounded` (crossbeam's `crossbeam::channel::unbounded`).
+//! - `channel` when the file uses `std::sync::mpsc` — `std::sync::mpsc`
+//!   has no bounded `channel()` (the bounded one is `sync_channel(N)`),
+//!   so a zero-arg `mpsc::channel()` is always unbounded. Tokio's
+//!   `mpsc::channel(N)` takes a capacity, so calls with arguments are
+//!   left alone.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -39,11 +41,13 @@ impl AstCheck for Check {
         let Ok(text) = function.utf8_text(source_bytes) else {
             return;
         };
-        // Match by suffix on the dotted/scoped path.
-        let is_unbounded = text.ends_with("unbounded_channel")
-            || text.ends_with("unbounded")
-            || text.ends_with("mpsc::channel")
-            || text == "channel" && is_inside_mpsc_use(node, source_bytes);
+        // Match on the last `::`-separated path segment so a bare predicate
+        // method like `range.is_unbounded()` (a `field_expression` whose text
+        // happens to end in `unbounded`) is not mistaken for a constructor.
+        let last_segment = text.rsplit("::").next().unwrap_or(text);
+        let is_unbounded = last_segment == "unbounded_channel"
+            || last_segment == "unbounded"
+            || last_segment == "channel" && is_inside_mpsc_use(node, source_bytes);
         if !is_unbounded {
             return;
         }
@@ -55,7 +59,7 @@ impl AstCheck for Check {
         // and is the right call. We distinguish by argument count:
         // unbounded variants take zero args, tokio's bounded variant
         // takes one.
-        if text.ends_with("mpsc::channel") || text == "channel" {
+        if last_segment == "channel" {
             let arg_count = node
                 .child_by_field_name("arguments")
                 .map(|args| {
@@ -166,5 +170,25 @@ mod tests {
     fn allows_unbounded_channel_in_tests_dir() {
         let source = "fn f() { let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<u8>(); }";
         assert!(crate::rules::test_helpers::run_rule(&Check, source, "tests/my_test.rs").is_empty());
+    }
+
+    #[test]
+    fn allows_is_unbounded_predicate_method() {
+        // Issue #3219: `range.is_unbounded()` is a predicate, not a constructor.
+        let source =
+            "fn f(num_vals: Option<ValueRange>) -> bool { num_vals.unwrap_or_default().is_unbounded() }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_check_unbounded_predicate_method() {
+        let source = "fn f(x: T) -> bool { x.check_unbounded() }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_unbounded_field_access_method() {
+        let source = "fn f(range: Range) -> bool { range.is_unbounded() }";
+        assert!(run_on(source).is_empty());
     }
 }
