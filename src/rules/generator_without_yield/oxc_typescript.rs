@@ -7,6 +7,38 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// Whether a computed property key names the iterator protocol, i.e.
+/// `[Symbol.iterator]` or `[Symbol.asyncIterator]`.
+fn is_iterator_protocol_key(key: &oxc_ast::ast::PropertyKey) -> bool {
+    let oxc_ast::ast::PropertyKey::StaticMemberExpression(member) = key else {
+        return false;
+    };
+    matches!(&member.object, oxc_ast::ast::Expression::Identifier(id) if id.name == "Symbol")
+        && matches!(member.property.name.as_str(), "iterator" | "asyncIterator")
+}
+
+/// Whether this generator is the empty implementation of a `[Symbol.iterator]`
+/// / `[Symbol.asyncIterator]` protocol member. An empty generator yields
+/// nothing on purpose: it is the idiomatic way to make an object an empty
+/// iterable (`for...of` / spread produce an empty sequence), so the absent
+/// `yield` is the implementation, not a mistake. A non-empty body that merely
+/// forgot to `yield` is still flagged.
+fn is_empty_iterator_protocol_generator<'a>(
+    func: &oxc_ast::ast::Function<'a>,
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let empty_body = func.body.as_ref().is_some_and(|b| b.statements.is_empty());
+    if !empty_body {
+        return false;
+    }
+    match semantic.nodes().parent_kind(node.id()) {
+        AstKind::ObjectProperty(prop) => is_iterator_protocol_key(&prop.key),
+        AstKind::MethodDefinition(method) => is_iterator_protocol_key(&method.key),
+        _ => false,
+    }
+}
+
 /// Walk semantic descendants of a node to check if any is a YieldExpression,
 /// but stop at nested function boundaries (they have their own generator scope).
 fn has_yield_in_body<'a>(
@@ -65,6 +97,9 @@ impl OxcCheck for Check {
             return;
         }
         if has_yield_in_body(node, semantic) {
+            return;
+        }
+        if is_empty_iterator_protocol_generator(func, node, semantic) {
             return;
         }
 
@@ -141,5 +176,51 @@ it('supports returning undefined from generator resolvers', () => {
     #[test]
     fn allows_empty_generator_in_test_d_tsx() {
         assert!(run_at("function* gen() {}", "src/Component.test-d.tsx").is_empty());
+    }
+
+    // Regression for issue #3362: an empty generator assigned to `[Symbol.iterator]`
+    // is the idiomatic empty-iterable implementation, not a missing-yield mistake.
+    #[test]
+    fn allows_empty_symbol_iterator_property_generator() {
+        let src = "\
+module.exports = function noopSet () {
+  return {
+    [Symbol.iterator]: function * () {},
+    add () {},
+    delete () {},
+    has () { return true }
+  }
+}
+";
+        assert!(
+            run_at(src, "lib/noop-set.js").is_empty(),
+            "empty [Symbol.iterator] generator is an intentional empty iterable"
+        );
+    }
+
+    #[test]
+    fn allows_empty_symbol_iterator_method_shorthand() {
+        let src = "const o = {\n  *[Symbol.iterator]() {}\n}";
+        assert!(run_at(src, "src/index.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_empty_symbol_async_iterator_class_method() {
+        let src = "class C {\n  async *[Symbol.asyncIterator]() {}\n}";
+        assert!(run_at(src, "src/index.ts").is_empty());
+    }
+
+    // Over-exemption guard: a `[Symbol.iterator]` generator with a non-empty body
+    // that merely forgot to `yield` is still a real bug and must flag.
+    #[test]
+    fn flags_nonempty_symbol_iterator_generator_without_yield() {
+        let src = "\
+const o = {
+  *[Symbol.iterator]() {
+    return 42;
+  }
+}
+";
+        assert_eq!(run_at(src, "src/index.ts").len(), 1);
     }
 }
