@@ -19,11 +19,24 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// Built-in / standard-library receivers whose `.parse(...)` is not a
-/// schema validator: `JSON.parse` (deserialize JSON), `path.parse`
-/// (split a filesystem path, from `node:path`), `URL.parse` (parse a
-/// URL string). These are never API-boundary validation calls.
-const BUILTIN_PARSE_RECEIVERS: &[&str] = &["JSON", "path", "URL"];
+/// Lowercase built-in receivers whose `.parse(...)` is not a schema
+/// validator: `path.parse` (split a filesystem path, from `node:path`).
+/// Capitalized builtins (`JSON`, `URL`) are covered by the PascalCase
+/// utility-class rule in `is_non_schema_parse_receiver`.
+const BUILTIN_PARSE_RECEIVERS: &[&str] = &["path"];
+
+/// True when the receiver `name` is not a schema validator: either a
+/// lowercase builtin (`path`) or a PascalCase static utility class. Zod
+/// schemas live in camelCase variables (`userSchema`) or PascalCase names
+/// ending in `Schema` (`ConfigSchema`); a PascalCase receiver that does not
+/// end in `Schema` (`SelectorParser`, `ValueParser`, `JSON`, `URL`) is a
+/// static utility class, not a schema.
+fn is_non_schema_parse_receiver(name: &str) -> bool {
+    if BUILTIN_PARSE_RECEIVERS.contains(&name) {
+        return true;
+    }
+    name.chars().next().is_some_and(|c| c.is_ascii_uppercase()) && !name.ends_with("Schema")
+}
 
 fn is_parse_call(callee: tree_sitter::Node, source: &[u8]) -> Option<&'static str> {
     if callee.kind() != "member_expression" {
@@ -32,7 +45,7 @@ fn is_parse_call(callee: tree_sitter::Node, source: &[u8]) -> Option<&'static st
     if let Some(object) = callee.child_by_field_name("object")
         && object.kind() == "identifier"
         && let Ok(recv) = std::str::from_utf8(&source[object.byte_range()])
-        && BUILTIN_PARSE_RECEIVERS.contains(&recv)
+        && is_non_schema_parse_receiver(recv)
     {
         return None;
     }
@@ -320,5 +333,24 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn allows_pascal_case_parser_class_parse() {
+        // Issue #2153: PascalCase static parser utility classes
+        // (`SelectorParser.parse`, `ValueParser.parse`) are not Zod schemas.
+        assert!(
+            run("function f(name: string) { let ast = SelectorParser.parse(name); return ast; }")
+                .is_empty()
+        );
+        assert!(run("function h(x: unknown) { return MyParser.parse(x); }").is_empty());
+    }
+
+    #[test]
+    fn flags_pascal_case_schema_suffix_parse() {
+        // Negative space: a PascalCase receiver ending in `Schema` is a Zod
+        // schema and must still flag inside a non-boundary helper.
+        let d = run("function compute(input: unknown) { return ConfigSchema.parse(input); }");
+        assert_eq!(d.len(), 1);
     }
 }
