@@ -32,6 +32,26 @@ const SECRET_INDICATORS: &[&str] = &[
     "api", "oauth",
 ];
 
+/// Substrings that mark a value as a *content-integrity* fingerprint — a
+/// checksum / digest of file or download content, verified against a known
+/// (typically public) value. These are distinctive enough to match as
+/// substrings after normalization without colliding with credential names
+/// (`sha` alone is excluded because it is a substring of `shared`/`sharedSecret`).
+const INTEGRITY_INDICATORS: &[&str] = &[
+    "sha1",
+    "sha224",
+    "sha256",
+    "sha384",
+    "sha512",
+    "sha3",
+    "md5",
+    "checksum",
+    "crc32",
+    "integrity",
+    "etag",
+    "fingerprint",
+];
+
 /// Returns true if `name` ends with a sensitive word after normalization
 /// (lowercase + remove `_` so both snake_case and camelCase collapse to
 /// the same form). A full-name suffix match captures the convention that
@@ -59,6 +79,41 @@ pub fn is_sensitive_identifier(name: &str) -> bool {
         && SECRET_INDICATORS
             .iter()
             .any(|indicator| normalized.contains(indicator))
+}
+
+/// Returns true when a comparison of operands named `left` / `right` is a
+/// content-integrity check rather than a secret-equality check.
+///
+/// A `hash` / `digest` name is overloaded: in an auth context it names a
+/// stored credential, but in download / file-verification code it names a
+/// SHA-256 (or other) checksum of public content. Such a digest is a
+/// deterministic, public fingerprint — neither operand is secret, and an
+/// attacker who cannot supply the content gains nothing by measuring
+/// comparison time. The check fires when *either* operand name carries a
+/// content-integrity indicator (`sha256`, `md5`, `checksum`, `etag`, …),
+/// covering the idiom where the expected side is named for the algorithm
+/// (`sha256`) and the computed side is a bare `hash`.
+///
+/// A genuine credential comparison (`password === input`, `authToken ==
+/// expected`) carries no integrity indicator and is not exempted.
+pub fn is_content_integrity_comparison(left: Option<&str>, right: Option<&str>) -> bool {
+    [left, right]
+        .into_iter()
+        .flatten()
+        .any(has_integrity_indicator)
+}
+
+/// True if `name`, after normalization (lowercase + strip `_`), contains a
+/// content-integrity indicator.
+fn has_integrity_indicator(name: &str) -> bool {
+    let normalized: String = name
+        .chars()
+        .filter(|c| *c != '_')
+        .flat_map(|c| c.to_lowercase())
+        .collect();
+    INTEGRITY_INDICATORS
+        .iter()
+        .any(|indicator| normalized.contains(indicator))
 }
 
 #[cfg(test)]
@@ -129,5 +184,31 @@ mod tests {
         assert!(!is_sensitive_identifier("other"));
         assert!(!is_sensitive_identifier("value"));
         assert!(!is_sensitive_identifier("index"));
+    }
+
+    /// A checksum indicator on either operand marks the comparison as a
+    /// content-integrity check (the prisma `sha256 !== hash` FP, #3352).
+    #[test]
+    fn integrity_comparison_detected() {
+        assert!(is_content_integrity_comparison(Some("sha256"), Some("hash")));
+        assert!(is_content_integrity_comparison(
+            Some("zippedSha256"),
+            Some("zippedHash")
+        ));
+        assert!(is_content_integrity_comparison(Some("checksum"), Some("expected")));
+        assert!(is_content_integrity_comparison(Some("md5Digest"), Some("computed")));
+        assert!(is_content_integrity_comparison(Some("file_etag"), Some("remote")));
+    }
+
+    /// A genuine credential comparison carries no integrity indicator and is
+    /// not treated as a content-integrity check.
+    #[test]
+    fn credential_comparison_not_integrity() {
+        assert!(!is_content_integrity_comparison(Some("password"), Some("input")));
+        assert!(!is_content_integrity_comparison(Some("authToken"), Some("expected")));
+        assert!(!is_content_integrity_comparison(Some("hash"), Some("input")));
+        // `sha` is a substring of `shared` but is excluded as an indicator, so
+        // a shared secret is still treated as a credential comparison.
+        assert!(!is_content_integrity_comparison(Some("sharedSecret"), Some("x")));
     }
 }

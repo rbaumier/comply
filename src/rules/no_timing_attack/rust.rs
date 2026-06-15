@@ -8,7 +8,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-use super::helpers::is_sensitive_identifier;
+use super::helpers::{is_content_integrity_comparison, is_sensitive_identifier};
 
 crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     if crate::rules::rust_helpers::is_in_test_context(node, source) {
@@ -27,6 +27,12 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
 
     let left_name = operand_name(left, source);
     let right_name = operand_name(right, source);
+    // A content-integrity / checksum comparison (e.g. a file's SHA-256 digest
+    // against its expected value) compares public fingerprints, not secrets,
+    // so it is not a timing-attack target.
+    if is_content_integrity_comparison(left_name, right_name) {
+        return;
+    }
     let left_hit = left_name.is_some_and(is_sensitive_identifier);
     let right_hit = right_name.is_some_and(is_sensitive_identifier);
     if !left_hit && !right_hit {
@@ -330,6 +336,22 @@ impl PartialEq for Thing {
     #[test]
     fn flags_hash_cache_invalidation_outside_partial_eq() {
         let src = "fn process(info: &Info, new_hash: u64) -> bool { info.hash == new_hash }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// A SHA-256 content-integrity check compares public fingerprints, so it
+    /// is exempt even though one operand ends with `hash` (#3352).
+    #[test]
+    fn allows_sha256_integrity_comparison() {
+        let src = "fn verify(sha256: &str, hash: &str) -> bool { sha256 != hash }";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Over-exemption guard: a real credential comparison carries no integrity
+    /// indicator and must still flag.
+    #[test]
+    fn flags_password_despite_integrity_exemption() {
+        let src = "fn f(password: &str, input: &str) -> bool { password == input }";
         assert_eq!(run_on(src).len(), 1);
     }
 }

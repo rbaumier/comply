@@ -41,6 +41,13 @@
 //! byte, so the capability-token idiom (`const secret = Symbol(); arg ===
 //! secret`) cannot leak timing.
 //!
+//! A content-integrity comparison is exempt: when either operand name carries a
+//! checksum / digest indicator (`sha256`, `md5`, `checksum`, `etag`, …), the
+//! comparison verifies a public content fingerprint (e.g. a downloaded file's
+//! SHA-256 digest against its expected value), not a secret, so it is not a
+//! timing-attack target. This keeps a bare `hash` / `digest` name flagged on
+//! its own while exempting `sha256 !== hash`.
+//!
 //! ## Known gap
 //!
 //! No constant propagation. A comparison whose operand is the result
