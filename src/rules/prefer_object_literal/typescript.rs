@@ -1,55 +1,24 @@
-//! prefer-object-literal backend — flag `new Object()` and `Object.create(null)`.
+//! prefer-object-literal backend — flag `new Object()`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["new_expression", "call_expression"] => |node, source, ctx, diagnostics|
-match node.kind() {
+crate::ast_check! { on ["new_expression"] => |node, source, ctx, diagnostics|
+{
         // `new Object()`
-        "new_expression" => {
-            let Some(ctor) = node.child_by_field_name("constructor") else { return };
-            if ctor.kind() != "identifier" { return; }
-            if ctor.utf8_text(source).unwrap_or("") != "Object" { return; }
+        let Some(ctor) = node.child_by_field_name("constructor") else { return };
+        if ctor.kind() != "identifier" { return; }
+        if ctor.utf8_text(source).unwrap_or("") != "Object" { return; }
 
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: std::sync::Arc::clone(&ctx.path_arc),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "prefer-object-literal".into(),
-                message: "Use `{}` instead of `new Object()`.".into(),
-                severity: Severity::Warning,
-                span: None,
-            });
-        }
-        // `Object.create(null)`
-        "call_expression" => {
-            let Some(func) = node.child_by_field_name("function") else { return };
-            if func.kind() != "member_expression" { return; }
-
-            let Some(obj) = func.child_by_field_name("object") else { return };
-            let Some(prop) = func.child_by_field_name("property") else { return };
-
-            if obj.utf8_text(source).unwrap_or("") != "Object" { return; }
-            if prop.utf8_text(source).unwrap_or("") != "create" { return; }
-
-            // Must have exactly one argument: `null`.
-            let Some(args) = node.child_by_field_name("arguments") else { return };
-            if args.named_child_count() != 1 { return; }
-            let arg = args.named_child(0).unwrap();
-            if arg.utf8_text(source).unwrap_or("") != "null" { return; }
-
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: std::sync::Arc::clone(&ctx.path_arc),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "prefer-object-literal".into(),
-                message: "Prefer an object literal over `Object.create(null)`.".into(),
-                severity: Severity::Warning,
-                span: None,
-            });
-        }
-        _ => {}
+        let pos = node.start_position();
+        diagnostics.push(Diagnostic {
+            path: std::sync::Arc::clone(&ctx.path_arc),
+            line: pos.row + 1,
+            column: pos.column + 1,
+            rule_id: "prefer-object-literal".into(),
+            message: "Use `{}` instead of `new Object()`.".into(),
+            severity: Severity::Warning,
+            span: None,
+        });
     }
 }
 
@@ -85,10 +54,10 @@ mod tests {
     }
 
     #[test]
-    fn flags_object_create_null() {
-        let d = run_on("const obj = Object.create(null);");
-        assert_eq!(d.len(), 1);
-        assert!(d[0].message.contains("Object.create(null)"));
+    fn allows_object_create_null() {
+        // `Object.create(null)` builds a null-prototype dictionary, not an
+        // equivalent of `{}` — replacing it would change runtime semantics.
+        assert!(run_on("const lifecycle = Object.create(null);").is_empty());
     }
 
     #[test]
