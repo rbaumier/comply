@@ -39,6 +39,9 @@ impl TextCheck for Check {
         if super::is_nuxt_dynamic_route_file(ctx.path, file_name) {
             return Vec::new();
         }
+        if super::is_tanstack_vue_sfc_route(ctx.path, file_name) {
+            return Vec::new();
+        }
         if stem.is_empty() || is_pascal_case(stem) || super::text::is_kebab_case(stem) {
             return Vec::new();
         }
@@ -147,6 +150,57 @@ mod tests {
     #[test]
     fn flags_bracket_stem_outside_pages_issue_1585() {
         assert_eq!(run("src/components/[id].vue").len(), 1);
+    }
+
+    // Regression for #2149: TanStack Vue Router SFC route files name route
+    // components `{route-name}.component.vue` / `.errorComponent.vue` /
+    // `.notFoundComponent.vue`. The route name is kebab-case, a `$param`, the
+    // `__root`/`_layout` pathless marker, `index`, or dotted path segments —
+    // none of which the framework lets adopt PascalCase. Under a `routes/`
+    // ancestor these must not be flagged.
+    #[test]
+    fn allows_tanstack_vue_kebab_route_component_issue_2149() {
+        let base = "examples/vue/basic-file-based-sfc/src/routes";
+        assert!(run(&format!("{base}/editing-a.component.vue")).is_empty());
+        assert!(run(&format!("{base}/editing-b.component.vue")).is_empty());
+        assert!(run(&format!("{base}/index.component.vue")).is_empty());
+    }
+
+    #[test]
+    fn allows_tanstack_vue_param_route_component_issue_2149() {
+        let base = "examples/vue/basic-file-based-sfc/src/routes";
+        assert!(run(&format!("{base}/posts.$postId.component.vue")).is_empty());
+        assert!(run(&format!("{base}/$postId.component.vue")).is_empty());
+    }
+
+    #[test]
+    fn allows_tanstack_vue_pathless_route_component_issue_2149() {
+        let base = "examples/vue/basic-file-based-sfc/src/routes";
+        assert!(run(&format!("{base}/__root.component.vue")).is_empty());
+        assert!(run(&format!("{base}/__root.notFoundComponent.vue")).is_empty());
+        assert!(run(&format!("{base}/__root.errorComponent.vue")).is_empty());
+        assert!(run(&format!("{base}/_layout.component.vue")).is_empty());
+    }
+
+    // Negative space for #2149: the exemption is gated on the `routes/` ancestor
+    // and on the documented component-role suffix. A `.component.vue` file
+    // outside `routes/` with a non-conforming stem still fires, and a route file
+    // whose suffix is not a documented role is validated normally.
+    #[test]
+    fn flags_component_suffix_outside_routes_issue_2149() {
+        // `__root` stem is neither PascalCase nor kebab-case; outside `routes/`
+        // it gets no exemption and still flags.
+        assert_eq!(run("src/components/__root.component.vue").len(), 1);
+    }
+
+    #[test]
+    fn flags_non_role_dotted_suffix_under_routes_issue_2149() {
+        // `.handler` is not a TanStack component role, so the file is validated
+        // by the normal convention; the snake_case stem still flags.
+        assert_eq!(
+            run("examples/vue/basic-file-based-sfc/src/routes/my_route.handler.vue").len(),
+            1
+        );
     }
 
     #[test]
