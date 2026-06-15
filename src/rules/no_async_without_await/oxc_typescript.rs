@@ -63,6 +63,28 @@ fn is_call_argument(
         .any(|arg| arg.span() == span)
 }
 
+/// Check if the function/arrow node is the value of a JSX attribute, e.g.
+/// `<form action={async () => {}}>`. The parent chain is `Function ->
+/// JSXExpressionContainer -> JSXAttribute`. Like a bare call-argument callback,
+/// the attribute's type contract owns the signature: JSX props such as the
+/// Next.js App Router `<form action>` are typed `() => Promise<void>`, so `async`
+/// is mandatory even when the body fires a bound action without awaiting it. The
+/// author does not control the call site, so the missing `await` is not a smell.
+fn is_jsx_attribute_value(
+    func_node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let container = nodes.parent_node(func_node.id());
+    let AstKind::JSXExpressionContainer(_) = container.kind() else {
+        return false;
+    };
+    matches!(
+        nodes.parent_node(container.id()).kind(),
+        AstKind::JSXAttribute(_)
+    )
+}
+
 /// Check if the async function is a property of an object literal that is passed
 /// as an argument to a call expression, covering both the shorthand-method shape
 /// (`$config({ async run() {} })`) and the arrow-value shape
@@ -236,6 +258,15 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // Async function used as a JSX attribute value (`<form action={async
+            // () => {}}>`). Same rationale as a call argument: the attribute's
+            // prop type owns the contract (Next.js App Router `action` is typed
+            // `() => Promise<void>`), so `async` is required even when the body
+            // fires a bound server action without awaiting it.
+            if is_jsx_attribute_value(node, semantic) {
+                continue;
+            }
+
             // Async property of an object literal passed to a call, whether a
             // shorthand method (`$config({ async run() {} })`) or an arrow value
             // (`useForm({ onSubmit: async () => {} })`). The callback's `async`
@@ -333,6 +364,10 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    fn run_on_tsx(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
     }
 
     #[test]
@@ -480,6 +515,36 @@ mod tests {
         // (not a call argument) has no callee contract — it stays flagged.
         let src = "const handlers = { onSubmit: async () => { doSync(); } };";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_async_arrow_as_jsx_attribute_value() {
+        // Regression for rbaumier/comply#2211 — Next.js App Router progressive
+        // enhancement. The async arrow is a JSX attribute value (`action={...}`);
+        // the `action` prop type contract requires `() => Promise<void>`, so
+        // `async` is mandatory even though the body only fires a bound server
+        // action without awaiting it. The author does not own the call site.
+        let src = r#"function DeleteItemButton() {
+            return (
+                <form
+                    action={async () => {
+                        optimisticUpdate(merchandiseId, "delete");
+                        removeItemAction();
+                    }}
+                >
+                    <button type="submit">Delete</button>
+                </form>
+            );
+        }"#;
+        assert!(run_on_tsx(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_async_arrow_outside_jsx_attribute() {
+        // Negative space for #2211: an ordinary async function with no await that
+        // is not a call argument nor a JSX attribute value has no external
+        // contract — it stays flagged even in a .tsx file.
+        assert_eq!(run_on_tsx("async function f() { return 1; }").len(), 1);
     }
 
     #[test]
