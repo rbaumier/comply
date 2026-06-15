@@ -12,6 +12,7 @@
 
 mod eslint;
 mod import;
+mod jest;
 mod nextjs;
 mod oxc;
 mod promise;
@@ -36,6 +37,7 @@ pub fn register_all() -> Vec<RuleDef> {
     rules.extend(vue::register_all());
     rules.extend(nextjs::register_all());
     rules.extend(react::register_all());
+    rules.extend(jest::register_all());
     rules
 }
 

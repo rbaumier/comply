@@ -36,6 +36,7 @@ pub fn build_table(
 /// - `vue/*` → `eslint-plugin-vue(*)`
 /// - `nextjs/*` → `eslint-plugin-next(*)`
 /// - `react/*` → `eslint-plugin-react(*)`
+/// - `jest/*` → `eslint-plugin-jest(*)`
 /// - `oxc/*` → `oxc(*)`
 /// - bare eslint core → `eslint(*)`
 pub fn config_key_to_oxlint_code(config_key: &str) -> String {
@@ -59,6 +60,9 @@ pub fn config_key_to_oxlint_code(config_key: &str) -> String {
     }
     if let Some(rest) = config_key.strip_prefix("react/") {
         return format!("eslint-plugin-react({rest})");
+    }
+    if let Some(rest) = config_key.strip_prefix("jest/") {
+        return format!("eslint-plugin-jest({rest})");
     }
     if let Some(rest) = config_key.strip_prefix("oxc/") {
         return format!("oxc({rest})");
@@ -99,6 +103,10 @@ mod tests {
         assert_eq!(
             config_key_to_oxlint_code("react/jsx-curly-brace-presence"),
             "eslint-plugin-react(jsx-curly-brace-presence)"
+        );
+        assert_eq!(
+            config_key_to_oxlint_code("jest/no-export"),
+            "eslint-plugin-jest(no-export)"
         );
         assert_eq!(
             config_key_to_oxlint_code("oxc/no-barrel-file"),
