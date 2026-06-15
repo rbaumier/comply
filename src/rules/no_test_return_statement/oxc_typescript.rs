@@ -57,16 +57,22 @@ impl OxcCheck for Check {
                         return;
                     }
 
-                    // Allow call/new expressions — they may return a Promise,
-                    // which is the documented Jest/Mocha/Vitest async pattern.
-                    if let Some(arg) = &ret.argument {
-                        if matches!(
+                    // Allow expression forms that opaquely yield a value the
+                    // runner can await — call/new (`return fetch(url)`,
+                    // `return new Promise(...)`) and property reads
+                    // (`return obj.promise`, `return this.ready`). Returning a
+                    // Promise this way is the documented Jest/Mocha/Vitest/node:test
+                    // async pattern. Bare identifiers and literals still flag.
+                    if let Some(arg) = &ret.argument
+                        && matches!(
                             arg,
                             oxc_ast::ast::Expression::CallExpression(_)
                                 | oxc_ast::ast::Expression::NewExpression(_)
-                        ) {
-                            return;
-                        }
+                                | oxc_ast::ast::Expression::StaticMemberExpression(_)
+                                | oxc_ast::ast::Expression::ComputedMemberExpression(_)
+                        )
+                    {
+                        return;
                     }
 
                     let (line, column) =
@@ -133,6 +139,27 @@ mod tests {
     }
 
     #[test]
+    fn allows_static_member_return_in_test() {
+        // Regression for #3347: a Promise read from a property is the node:test
+        // async-signaling idiom (`return completion.patience`).
+        let d = run("test('x', (t, done) => { return completion.patience; });");
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_this_member_return_in_it() {
+        // Regression for #3347: `return this.<prop>` reads a Promise off `this`.
+        let d = run("it('x', function () { return this.ready; });");
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_computed_member_return_in_test() {
+        let d = run("test('x', () => { return obj['promise']; });");
+        assert!(d.is_empty());
+    }
+
+    #[test]
     fn flags_identifier_return_in_test() {
         let d = run("test('x', () => { return someVariable; });");
         assert_eq!(d.len(), 1);
@@ -141,6 +168,18 @@ mod tests {
     #[test]
     fn flags_literal_return_in_it() {
         let d = run("it('x', () => { return 42; });");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_object_literal_return_in_it() {
+        let d = run("it('x', () => { return { ready: true }; });");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_bare_return_in_test() {
+        let d = run("test('x', () => { return; });");
         assert_eq!(d.len(), 1);
     }
 }
