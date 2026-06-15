@@ -19,6 +19,11 @@
 //!     specifiers and Docusaurus framework aliases (`@theme/`, `@docusaurus/`)
 //!     via `is_virtual_module`, plus the Docusaurus `@site/` source-root alias.
 //!     These are resolved by the bundler, never published as npm packages.
+//!   - the bare `bun` specifier — the Bun runtime's own built-in module
+//!     (`Bun.Server`, `BunFile`, `Serve`, …), injected by the runtime and not
+//!     installable from npm, like `node`/`node:*`. Only the exact `bun` is
+//!     exempt; `bunyan`, `bun-types` and other `bun`-prefixed packages still
+//!     fire. The `bun:` protocol siblings are covered by `is_virtual_module`.
 //!
 //! The rule produces project-wide diagnostics, not per-file ones, so it
 //! fires only on the first indexed path of the run. Every other invocation
@@ -80,6 +85,17 @@ impl TextCheck for Check {
             // so `@site/src/...` resolves to local project source, not an npm
             // package. `@site` is not a publishable npm name.
             if is_docusaurus_site_alias(spec) {
+                continue;
+            }
+            // Bun runtime built-in: the bare `bun` specifier is the Bun
+            // runtime's own module (`Bun.Server`, `BunFile`, `Serve`, …),
+            // injected by the runtime and not installable from npm — analogous
+            // to `node`/`node:*`. The `bun:` protocol siblings (`bun:test`,
+            // `bun:sqlite`) are already covered by `is_virtual_module`'s
+            // colon-scheme handling; the colonless bare `bun` is not, so it is
+            // exempted explicitly. Only the exact `bun` matches — `bunyan`,
+            // `bun-types` and other `bun`-prefixed npm packages still fire.
+            if spec == "bun" {
                 continue;
             }
             if pkg.has_dep_or_engine(spec) {
@@ -372,6 +388,52 @@ mod tests {
             diags.is_empty(),
             "bun: runtime protocol imports must not be flagged: {diags:?}"
         );
+    }
+
+    #[test]
+    fn allows_bare_bun_runtime_builtin_imports() {
+        // Regression for #2098 — the bare `bun` specifier is the Bun runtime's
+        // own built-in module (`Bun.Server`, `BunFile`, `Serve`, …), injected by
+        // the runtime, not installable from npm (analogous to `node`/`node:*`).
+        // Sibling to #1936, which exempted the `bun:` protocol specifiers. The
+        // exact bare `bun` must be exempt even though it is not a declared dep,
+        // for both value and type-only imports.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "a.ts",
+                "import { Serve } from 'bun';\n\
+                 import type { Server } from 'bun';",
+            ),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, Some(r#"{ "dependencies": {} }"#), None);
+        assert!(
+            diags.is_empty(),
+            "bare `bun` is a Bun runtime built-in, not an npm package: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_bun_prefixed_npm_packages() {
+        // Negative-space guard for #2098 — only the EXACT bare `bun` is exempt.
+        // `bunyan` and `bun-types` are real installable npm packages that merely
+        // start with `bun`, so an undeclared import of either must still fire.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "a.ts",
+                "import x from 'bunyan';\n\
+                 import y from 'bun-types';",
+            ),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, Some(r#"{ "dependencies": {} }"#), None);
+        assert_eq!(
+            diags.len(),
+            2,
+            "`bunyan` and `bun-types` are real npm packages and must still fire: {diags:?}"
+        );
+        assert!(diags.iter().any(|d| d.message.contains("bunyan")));
+        assert!(diags.iter().any(|d| d.message.contains("bun-types")));
     }
 
     #[test]
