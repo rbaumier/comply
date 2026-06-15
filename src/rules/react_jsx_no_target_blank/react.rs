@@ -1,7 +1,7 @@
 //! react-jsx-no-target-blank AST backend.
 //!
-//! Flags `target="_blank"` on JSX elements that don't also have
-//! `rel="noreferrer"` or `rel="noopener noreferrer"`.
+//! Flags `target="_blank"` on JSX elements whose `rel` does not contain a
+//! `noopener` or `noreferrer` token (either severs `window.opener`).
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -17,7 +17,7 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_element"] => |node, sou
         opening
     };
 
-    // Scan attributes for target="_blank" and rel containing "noreferrer".
+    // Scan attributes for target="_blank" and a rel that severs `window.opener`.
     let mut cursor = tag_node.walk();
     let mut has_target_blank = false;
     let mut has_safe_rel = false;
@@ -27,19 +27,18 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_element"] => |node, sou
             continue;
         }
         let Some(name_text) = crate::rules::jsx::jsx_attribute_name(child, source) else { continue };
-        let Some(attr_value) = crate::rules::jsx::jsx_attribute_value(child) else { continue };
-        let Ok(value_text) = attr_value.utf8_text(source) else { continue };
+        let Some(value_text) = crate::rules::jsx::jsx_attribute_string_value(child, source) else {
+            continue;
+        };
 
         match name_text {
             "target" => {
-                let lower = value_text.to_ascii_lowercase();
-                if lower.contains("_blank") {
+                if value_text.contains("_blank") {
                     has_target_blank = true;
                 }
             }
             "rel" => {
-                let lower = value_text.to_ascii_lowercase();
-                if lower.contains("noreferrer") {
+                if super::rel_is_safe(value_text) {
                     has_safe_rel = true;
                 }
             }
@@ -54,9 +53,9 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_element"] => |node, sou
             line: pos.row + 1,
             column: pos.column + 1,
             rule_id: "react-jsx-no-target-blank".into(),
-            message: "`target=\"_blank\"` without `rel=\"noreferrer\"` \
+            message: "`target=\"_blank\"` without `rel=\"noopener\"` (or `noreferrer`) \
                       allows the opened page to access `window.opener`. \
-                      Add `rel=\"noreferrer\"`."
+                      Add `rel=\"noopener\"`."
                 .into(),
             severity: Severity::Warning,
             span: None,
@@ -105,6 +104,34 @@ mod tests {
     fn allows_target_blank_with_noopener_noreferrer() {
         let src = r#"const x = <a href="https://example.com" target="_blank" rel="noopener noreferrer">link</a>;"#;
         assert!(run(src).is_empty());
+    }
+
+    // `noopener` alone fully severs `window.opener`, so it closes the vector this
+    // rule targets. Regression for #3379 (`<RouterLink target="_blank" rel="noopener" />`).
+    #[test]
+    fn allows_target_blank_with_noopener_only() {
+        let src =
+            r#"const x = <a href="https://example.com" target="_blank" rel="noopener">link</a>;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_target_blank_with_noreferrer_noopener_reversed() {
+        let src = r#"const x = <a href="https://example.com" target="_blank" rel="noreferrer noopener">link</a>;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_target_blank_with_noopener_among_other_tokens() {
+        let src = r#"const x = <a href="https://example.com" target="_blank" rel="nofollow noopener">link</a>;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_target_blank_with_unsafe_rel_only() {
+        let src =
+            r#"const x = <a href="https://example.com" target="_blank" rel="nofollow">link</a>;"#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]

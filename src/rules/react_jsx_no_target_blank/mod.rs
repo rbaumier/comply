@@ -24,6 +24,18 @@ pub const META: RuleMeta = RuleMeta {
     skip_in_relaxed_dir: false,
 };
 
+/// Whether a `rel` attribute value severs `window.opener` for a `target="_blank"` link.
+///
+/// The value is a space-separated token list (per the HTML spec). Either `noopener`
+/// (which alone nulls `window.opener`) or `noreferrer` (which implies `noopener`)
+/// closes the reverse-tabnabbing vector. Token order and unrelated tokens (e.g.
+/// `nofollow`) are irrelevant; matching is case-insensitive.
+fn rel_is_safe(value: &str) -> bool {
+    value.split_ascii_whitespace().any(|token| {
+        token.eq_ignore_ascii_case("noopener") || token.eq_ignore_ascii_case("noreferrer")
+    })
+}
+
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,

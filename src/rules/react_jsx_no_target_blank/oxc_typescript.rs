@@ -28,7 +28,7 @@ impl OxcCheck for Check {
             return;
         };
 
-        // Scan attributes for target="_blank" and rel containing "noreferrer".
+        // Scan attributes for target="_blank" and a rel that severs `window.opener`.
         let mut has_target_blank = false;
         let mut has_safe_rel = false;
 
@@ -52,7 +52,7 @@ impl OxcCheck for Check {
                     }
                 }
                 "rel" => {
-                    if value.to_ascii_lowercase().contains("noreferrer") {
+                    if super::rel_is_safe(value) {
                         has_safe_rel = true;
                     }
                 }
@@ -78,9 +78,9 @@ impl OxcCheck for Check {
             line,
             column,
             rule_id: super::META.id.into(),
-            message: "`target=\"_blank\"` without `rel=\"noreferrer\"` \
+            message: "`target=\"_blank\"` without `rel=\"noopener\"` (or `noreferrer`) \
                       allows the opened page to access `window.opener`. \
-                      Add `rel=\"noreferrer\"`."
+                      Add `rel=\"noopener\"`."
                 .into(),
             severity: Severity::Warning,
             span: None,
