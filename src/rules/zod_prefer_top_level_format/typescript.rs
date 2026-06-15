@@ -8,8 +8,9 @@
 //! These helpers exist only in zod v4, so the suggestion fires only when the
 //! nearest `package.json` proves zod resolves to v4+ (any dep section, falling
 //! back to the manifest's own `version` when it is the zod package itself).
-//! Files under a `/v3/` path segment — zod's v3-compat sources where the
-//! chained API is correct — are never flagged.
+//! zod's own backward-compat sources are never flagged: files under a `/v3/`
+//! path segment, and files in the `classic/` re-export layer of the zod package
+//! itself, where the chained API is the one being maintained.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::PackageJson;
@@ -45,8 +46,9 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         // Top-level format helpers (`z.email()` etc.) only exist in zod v4.
-        // Skip zod's own v3-compat sources, where the chained API is correct.
-        if path_has_v3_segment(ctx.path) {
+        // Skip zod's own backward-compat sources, where the chained API is the
+        // one being maintained, not a consumer choosing an inferior form.
+        if path_has_v3_segment(ctx.path) || is_zod_classic_compat_source(ctx) {
             return;
         }
         // Only fire when the nearest package.json proves zod resolves to v4+.
@@ -132,6 +134,27 @@ fn is_z_method_call(node: tree_sitter::Node, method: &str, source: &[u8]) -> boo
 fn path_has_v3_segment(path: &std::path::Path) -> bool {
     path.components()
         .any(|c| c.as_os_str().to_str() == Some("v3"))
+}
+
+/// True for a file inside zod's own `classic/` backward-compat layer — the
+/// directory where zod re-exports the chained API so v3 users can upgrade. Such
+/// files (e.g. `v4/classic/from-json-schema.ts`) maintain the chained form
+/// deliberately; `z.number().int()` produces a `ZodNumber`, distinct from
+/// `z.int()`'s `ZodInt`, so the suggested replacement is not type-equivalent.
+///
+/// Gated on the nearest manifest being the zod package itself (`name == "zod"`)
+/// so a consumer's unrelated `classic/` directory is still nudged.
+fn is_zod_classic_compat_source(ctx: &CheckCtx) -> bool {
+    let in_classic_dir = ctx
+        .path
+        .components()
+        .any(|c| c.as_os_str().to_str() == Some("classic"));
+    if !in_classic_dir {
+        return false;
+    }
+    ctx.project
+        .nearest_package_json(ctx.path)
+        .is_some_and(|pkg| pkg.name.as_deref() == Some("zod"))
 }
 
 /// True when the nearest `package.json` proves zod resolves to v4 or later.
@@ -230,13 +253,19 @@ mod tests {
         let config = Config::default();
         let project = ProjectCtx::load(&refs, &config);
 
-        crate::rules::test_helpers::run_rule_with_ctx(
-            &Check,
-            source,
+        // Build the real per-file context and honour the production gate so the
+        // `skip_in_test_dir` exemption is exercised, not bypassed.
+        let file = crate::rules::file_ctx::FileCtx::build(
             &src_path,
+            source,
+            Language::TypeScript,
             &project,
-            crate::rules::file_ctx::default_static_file_ctx(),
-        )
+        );
+        if !super::super::META.applies_to_file(&file) {
+            return vec![];
+        }
+
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, &src_path, &project, &file)
     }
 
     const V4_PKG: &str = r#"{"name":"app","version":"1.0.0","dependencies":{"zod":"^4.0.0"}}"#;
@@ -328,6 +357,63 @@ mod tests {
         assert!(
             run_in_project(Some(pkg), "src/v3/types.ts", "const s = z.string().email();")
                 .is_empty()
+        );
+    }
+
+    const ZOD_PKG: &str = r#"{"name":"zod","version":"4.0.5"}"#;
+
+    // Issue #3369, context 1: zod's v4/classic backward-compat tests
+    // intentionally exercise the chained API to verify it still works. The
+    // central `skip_in_test_dir` gate (`/tests/` + `.test.` path) exempts them.
+    #[test]
+    fn silent_in_classic_compat_tests_issue3369() {
+        assert!(
+            run_in_project(
+                Some(ZOD_PKG),
+                "packages/zod/src/v4/classic/tests/string.test.ts",
+                r#"const uuid = z.string().uuid("custom error");"#,
+            )
+            .is_empty()
+        );
+        assert!(
+            run_in_project(
+                Some(ZOD_PKG),
+                "packages/zod/src/v4/classic/tests/template-literal.test.ts",
+                r#"const email = z.templateLiteral(["", z.string().email()]);"#,
+            )
+            .is_empty()
+        );
+    }
+
+    // Issue #3369, context 2: the zod package's own `classic/` compat-layer
+    // source maintains the chained form deliberately (`z.number().int()` is a
+    // `ZodNumber`, distinct from `z.int()`'s `ZodInt`); it is not a consumer to
+    // nudge.
+    #[test]
+    fn silent_in_classic_compat_source_issue3369() {
+        assert!(
+            run_in_project(
+                Some(ZOD_PKG),
+                "packages/zod/src/v4/classic/from-json-schema.ts",
+                "const numberSchema = z.number().int();",
+            )
+            .is_empty()
+        );
+    }
+
+    // Over-exemption guard: a normal application file that happens to live under
+    // a `classic/` directory is still nudged — the exemption is gated on the
+    // manifest being the zod package itself.
+    #[test]
+    fn nudges_classic_dir_in_consumer_app() {
+        assert_eq!(
+            run_in_project(
+                Some(V4_PKG),
+                "src/classic/schema.ts",
+                "const s = z.string().email();",
+            )
+            .len(),
+            1
         );
     }
 
