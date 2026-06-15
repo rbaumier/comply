@@ -61,20 +61,22 @@ impl OxcCheck for Check {
     }
 }
 
-/// Whether the declaration node is a `VariableDeclarator` *with* an
-/// initializer, OR a `Function` / `Class` / parameter binding (those
-/// always introduce a value).
+/// Whether the declaration node overrides the global binding: a
+/// `VariableDeclarator` *with* an initializer, OR a `Function` / `Class`
+/// / parameter binding (those always introduce a value).
+///
+/// Import specifiers are excluded: an `import Set from "./set"` binding is
+/// module-scoped and cannot reach `globalThis.Set`, so it is not an
+/// override regardless of the imported name.
 fn has_initializer(nodes: &oxc_semantic::AstNodes, decl_id: oxc_semantic::NodeId) -> bool {
     let kinds = std::iter::once(nodes.kind(decl_id)).chain(nodes.ancestor_kinds(decl_id));
     for kind in kinds {
         match kind {
             AstKind::VariableDeclarator(decl) => return decl.init.is_some(),
-            AstKind::Function(_)
-            | AstKind::Class(_)
-            | AstKind::FormalParameter(_)
-            | AstKind::ImportSpecifier(_)
+            AstKind::Function(_) | AstKind::Class(_) | AstKind::FormalParameter(_) => return true,
+            AstKind::ImportSpecifier(_)
             | AstKind::ImportDefaultSpecifier(_)
-            | AstKind::ImportNamespaceSpecifier(_) => return true,
+            | AstKind::ImportNamespaceSpecifier(_) => return false,
             AstKind::Program(_) => return false,
             _ => {}
         }
