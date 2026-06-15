@@ -80,6 +80,14 @@
 //!     `nextLoad` continuation; `globalPreload` rides on a shape-valid sibling),
 //!     so an ordinary `export const resolve = …` in a `.ts`/`.js` file, or one
 //!     without the chained-hook signature, stays subject to the rule.
+//!   - shadcn-style component-registry source files — a file under the
+//!     distribution root of a `registry.json` manifest (the
+//!     shadcn/shadcn-svelte/shadcn-ui convention, identified by the
+//!     `$schema` registry marker and an `items[].files[].path` list). The
+//!     registry CLI (`npx shadcn add …`) copies these source files into a
+//!     consumer's project; the repo's build step reads them as text, never
+//!     importing them as modules, so every export is consumed downstream and the
+//!     whole file is exempt. Detected via `ProjectCtx::is_in_distributed_registry_dir`.
 //!   - Framework file-system-routing entry points (`is_framework_route_export`) —
 //!     a file matching a well-known routing convention exposes reserved exports
 //!     that the framework's router consumes by name, never through a static
@@ -588,6 +596,14 @@ impl TextCheck for Check {
         // `ng-package.json`) — the package entry point for an Angular library;
         // never imported by another source file, so never flagged.
         if ctx.project.is_ng_package_entry_file(&canon) {
+            return Vec::new();
+        }
+        // shadcn-style component-registry source file — listed under a
+        // `registry.json` manifest's distribution root. The registry CLI copies
+        // these files into a consumer's project; they are read as source text by
+        // the registry build step, never imported as modules within the repo, so
+        // every export is consumed downstream and none is dead.
+        if ctx.project.is_in_distributed_registry_dir(&canon) {
             return Vec::new();
         }
         // Framework entry DIR match — bail out only when no user entrypoints are

@@ -2030,6 +2030,16 @@ pub struct ProjectCtx {
     // empty `Vec` caches a missing schema or one with no `output` (default
     // `node_modules/.prisma/client`, already covered by the build-output match).
     prisma_output_dirs_cache: Mutex<HashMap<PathBuf, Arc<Vec<PathBuf>>>>,
+
+    // Distribution root of a shadcn-style component registry — the common
+    // ancestor directory of every file a `registry.json` manifest declares,
+    // keyed by the directory the upward `registry.json` walk started from. The
+    // files under it are source artifacts the registry CLI copies into a user's
+    // project, never imported as modules within the repo, so they have no
+    // in-repo importer. Resolved lazily on first miss and memoized — `None`
+    // caches a directory with no enclosing shadcn registry so the disk walk and
+    // manifest parse run at most once per directory.
+    registry_root_cache: Mutex<HashMap<PathBuf, Option<PathBuf>>>,
 }
 
 impl ProjectCtx {
@@ -2739,6 +2749,47 @@ impl ProjectCtx {
             return true;
         }
         self.is_bazel_ng_package_entry_barrel(path)
+    }
+
+    /// True when `path` lives under the distribution root of a shadcn-style
+    /// component registry — a `registry.json` manifest (the
+    /// shadcn/shadcn-svelte/shadcn-ui convention) found by walking up from
+    /// `path`. Such a manifest lists, under `items[].files[].path`, the source
+    /// files the registry CLI (`npx shadcn add …`) fetches and copies into a
+    /// consumer's project. Those files are distributed as source artifacts, not
+    /// imported as modules within the repo, so their exports have no in-repo
+    /// importer yet are part of the registry's published surface. `path` must be
+    /// absolute.
+    pub fn is_in_distributed_registry_dir(&self, path: &Path) -> bool {
+        let Some(start_dir) = path.parent() else {
+            return false;
+        };
+        let root = self.registry_distribution_root(start_dir);
+        root.is_some_and(|root| path.starts_with(&root))
+    }
+
+    /// Distribution root for `start_dir`: the common-ancestor directory of every
+    /// file the nearest enclosing shadcn `registry.json` declares. Resolved once
+    /// per starting directory and memoized; `None` when no shadcn registry
+    /// manifest encloses `start_dir`.
+    fn registry_distribution_root(&self, start_dir: &Path) -> Option<PathBuf> {
+        if let Ok(cache) = self.registry_root_cache.lock()
+            && let Some(hit) = cache.get(start_dir)
+        {
+            return hit.clone();
+        }
+        let manifest_dir =
+            walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "registry.json");
+        let root = manifest_dir.and_then(|dir| {
+            load_manifest_at(&dir, "registry.json", parse_shadcn_registry_file_paths)
+                .and_then(|rel_paths| common_ancestor_dir(&dir, &rel_paths))
+        });
+        if let Ok(mut cache) = self.registry_root_cache.lock() {
+            cache
+                .entry(start_dir.to_path_buf())
+                .or_insert_with(|| root.clone());
+        }
+        root
     }
 
     /// Walk up from `path` to the directory of the nearest `ng-package.json`.
@@ -3972,6 +4023,71 @@ fn parse_ng_package_entry_file(raw: &str) -> Option<String> {
     Some(rel.replace('\\', "/"))
 }
 
+/// Manifest-relative paths of every file a shadcn-style `registry.json` declares
+/// (each `items[].files[].path`), normalized to forward slashes with any leading
+/// `./` stripped. Returns `None` unless the manifest carries the shadcn schema
+/// marker (`$schema` ending in `schema/registry.json`) AND a non-empty `items`
+/// array yielding at least one file path, so a same-named manifest from an
+/// unrelated tool (a `registry.json` of npm package metadata, a Terraform
+/// registry config) is not mistaken for a shadcn registry.
+fn parse_shadcn_registry_file_paths(raw: &str) -> Option<Vec<String>> {
+    let json: Value = serde_json::from_str(raw).ok()?;
+    let schema = json.get("$schema").and_then(Value::as_str)?;
+    if !schema.ends_with("schema/registry.json") {
+        return None;
+    }
+    let items = json.get("items").and_then(Value::as_array)?;
+    let paths: Vec<String> = items
+        .iter()
+        .filter_map(|item| item.get("files").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|file| file.get("path").and_then(Value::as_str))
+        .map(|p| p.strip_prefix("./").unwrap_or(p).replace('\\', "/"))
+        .filter(|p| !p.is_empty())
+        .collect();
+    if paths.is_empty() {
+        return None;
+    }
+    Some(paths)
+}
+
+/// Deepest directory under `base` that contains every entry of `rel_paths`
+/// (each manifest-relative, forward-slashed). Returns the absolute common
+/// ancestor — for shadcn-svelte's `src/lib/registry/{ui,blocks,…}/…` set this is
+/// `base/src/lib/registry`; for a flat shadcn registry (`button.tsx`, `card.tsx`)
+/// it is `base` itself. `None` when `rel_paths` is empty.
+fn common_ancestor_dir(base: &Path, rel_paths: &[String]) -> Option<PathBuf> {
+    let mut iter = rel_paths.iter();
+    // Seed with the directory segments of the first path (drop the filename).
+    let first = iter.next()?;
+    let mut prefix: Vec<&str> = parent_segments(first);
+    for path in iter {
+        let segs = parent_segments(path);
+        let common = prefix
+            .iter()
+            .zip(segs.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+        prefix.truncate(common);
+        if prefix.is_empty() {
+            break;
+        }
+    }
+    let mut root = base.to_path_buf();
+    for seg in prefix {
+        root.push(seg);
+    }
+    Some(root)
+}
+
+/// Directory segments of a forward-slashed relative file path — the path's
+/// segments with the trailing filename removed.
+fn parent_segments(rel_path: &str) -> Vec<&str> {
+    let mut segs: Vec<&str> = rel_path.split('/').filter(|s| !s.is_empty()).collect();
+    segs.pop();
+    segs
+}
+
 /// True when a `BUILD.bazel`'s raw text invokes the `ng_package` rule —
 /// `ng_package(...)`. Matched as a call site (the identifier immediately
 /// followed by `(`, allowing whitespace) at a word boundary so neither a longer
@@ -4352,6 +4468,92 @@ mod tests {
         std::fs::write(&entry, "export {};").unwrap();
         let ctx = ProjectCtx::empty();
         assert!(!ctx.is_ng_package_entry_file(&entry));
+    }
+
+    #[test]
+    fn is_in_distributed_registry_dir_true_for_shadcn_svelte_layout() {
+        let dir = TempDir::new().unwrap();
+        let docs = dir.path().join("docs");
+        std::fs::create_dir_all(docs.join("src/lib/registry/ui/sidebar")).unwrap();
+        std::fs::write(
+            docs.join("registry.json"),
+            r#"{
+                "$schema": "https://shadcn-svelte.com/schema/registry.json",
+                "name": "r",
+                "homepage": "https://x",
+                "items": [
+                    { "name": "sidebar", "type": "registry:ui",
+                      "files": [ { "path": "src/lib/registry/ui/sidebar/index.ts", "type": "registry:ui" } ] },
+                    { "name": "dialog", "type": "registry:ui",
+                      "files": [ { "path": "src/lib/registry/ui/dialog/index.ts", "type": "registry:ui" } ] }
+                ]
+            }"#,
+        )
+        .unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.is_in_distributed_registry_dir(
+            &docs.join("src/lib/registry/ui/sidebar/index.ts")
+        ));
+        // A file outside the common-ancestor registry root is not exempt.
+        assert!(!ctx.is_in_distributed_registry_dir(&docs.join("src/lib/utils/orphan.ts")));
+    }
+
+    #[test]
+    fn is_in_distributed_registry_dir_false_without_shadcn_schema_marker() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/lib/registry/ui")).unwrap();
+        std::fs::write(
+            dir.path().join("registry.json"),
+            r#"{ "name": "unrelated-tool", "modules": ["a"] }"#,
+        )
+        .unwrap();
+        let ctx = ProjectCtx::empty();
+        assert!(!ctx.is_in_distributed_registry_dir(
+            &dir.path().join("src/lib/registry/ui/index.ts")
+        ));
+    }
+
+    #[test]
+    fn parse_shadcn_registry_file_paths_requires_schema_and_items() {
+        let valid = r#"{
+            "$schema": "https://ui.shadcn.com/schema/registry.json",
+            "name": "r", "homepage": "https://x",
+            "items": [ { "files": [ { "path": "./button.tsx" } ] } ]
+        }"#;
+        assert_eq!(
+            parse_shadcn_registry_file_paths(valid),
+            Some(vec!["button.tsx".to_string()])
+        );
+        // No shadcn schema marker → not a shadcn registry.
+        assert_eq!(
+            parse_shadcn_registry_file_paths(r#"{ "items": [ { "files": [ { "path": "a.ts" } ] } ] }"#),
+            None
+        );
+        // No file paths → None.
+        assert_eq!(
+            parse_shadcn_registry_file_paths(
+                r#"{ "$schema": "https://x/schema/registry.json", "items": [] }"#
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn common_ancestor_dir_returns_shared_prefix() {
+        let base = Path::new("/repo/docs");
+        let paths = vec![
+            "src/lib/registry/ui/sidebar/index.ts".to_string(),
+            "src/lib/registry/blocks/hero/hero.svelte".to_string(),
+        ];
+        assert_eq!(
+            common_ancestor_dir(base, &paths),
+            Some(PathBuf::from("/repo/docs/src/lib/registry"))
+        );
+        // A flat registry collapses to the manifest directory itself.
+        assert_eq!(
+            common_ancestor_dir(base, &["button.tsx".to_string(), "card.tsx".to_string()]),
+            Some(PathBuf::from("/repo/docs"))
+        );
     }
 
     #[test]
