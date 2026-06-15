@@ -28,19 +28,33 @@ const ROUTE_VERBS: &[&str] = &[
     "get", "post", "put", "patch", "delete", "head", "options", "all", "use",
 ];
 
-/// Built-in / standard-library receivers whose `.parse(...)` is not a
-/// schema validator: `JSON.parse` (deserialize JSON), `path.parse`
-/// (split a filesystem path, from `node:path`), `URL.parse` (parse a
-/// URL string). These are never API-boundary validation calls.
-const BUILTIN_PARSE_RECEIVERS: &[&str] = &["JSON", "path", "URL"];
+/// Lowercase built-in receivers whose `.parse(...)` is not a schema
+/// validator: `path.parse` (split a filesystem path, from `node:path`).
+/// Capitalized builtins (`JSON`, `URL`) are covered by the PascalCase
+/// utility-class rule below.
+const BUILTIN_PARSE_RECEIVERS: &[&str] = &["path"];
 
-/// True when the `.parse(...)` receiver is a built-in non-schema object
-/// (e.g. `JSON.parse(...)`, `path.parse(...)`, `URL.parse(...)`).
-fn is_builtin_parse_receiver(object: &Expression) -> bool {
+/// True when the `.parse(...)` receiver is not a schema validator: either
+/// a lowercase builtin (`path.parse(...)`) or a PascalCase static utility
+/// class. Zod schemas live in camelCase variables (`userSchema.parse`) or
+/// PascalCase names ending in `Schema` (`ConfigSchema.parse`); a PascalCase
+/// receiver that does not end in `Schema` (`SelectorParser`, `ValueParser`,
+/// `JSON`, `URL`) is a static utility class, not a schema.
+fn is_non_schema_parse_receiver(object: &Expression) -> bool {
     let Expression::Identifier(ident) = object else {
         return false;
     };
-    BUILTIN_PARSE_RECEIVERS.contains(&ident.name.as_str())
+    let name = ident.name.as_str();
+    if BUILTIN_PARSE_RECEIVERS.contains(&name) {
+        return true;
+    }
+    is_pascal_case(name) && !name.ends_with("Schema")
+}
+
+/// True when `name` starts with an uppercase ASCII letter (PascalCase
+/// identifier — a class/namespace, not a variable).
+fn is_pascal_case(name: &str) -> bool {
+    name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
 impl OxcCheck for Check {
@@ -80,8 +94,10 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Built-in `.parse(...)` (JSON/path/URL) is not schema validation.
-        if is_builtin_parse_receiver(&member.object) {
+        // Non-schema `.parse(...)`: lowercase builtins (`path.parse`) and
+        // PascalCase static utility classes (`SelectorParser.parse`, `JSON.parse`,
+        // `URL.parse`) are not schema validation.
+        if is_non_schema_parse_receiver(&member.object) {
             return;
         }
 
@@ -363,5 +379,31 @@ mod tests {
     #[test]
     fn allows_url_parse_in_internal_function() {
         assert!(run("function f(s: string) { return URL.parse(s); }").is_empty());
+    }
+
+    #[test]
+    fn allows_pascal_case_parser_class_parse() {
+        // Issue #2153: `SelectorParser.parse(...)` / `ValueParser.parse(...)`
+        // are user-defined static parser utility classes (PascalCase receiver
+        // not ending in `Schema`), not Zod schemas. They must not fire.
+        assert!(
+            run("function f(name: string) { let ast = SelectorParser.parse(name); return ast; }")
+                .is_empty()
+        );
+        assert!(
+            run("function g(child: { value: string }) { let ast = ValueParser.parse(child.value); return ast; }")
+                .is_empty()
+        );
+        assert!(run("function h(x: unknown) { return MyParser.parse(x); }").is_empty());
+    }
+
+    #[test]
+    fn flags_pascal_case_schema_suffix_parse() {
+        // Negative space: a PascalCase receiver ending in `Schema`
+        // (`ConfigSchema`, `Schema`) is a Zod schema, not a utility class —
+        // it must still flag inside a non-boundary helper.
+        let d = run("function compute(input: unknown) { return ConfigSchema.parse(input); }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("compute"));
     }
 }
