@@ -34,6 +34,14 @@ impl OxcCheck for Check {
 
         let source = semantic.source_text();
 
+        // Skip files that compute a protocol-mandated digest (e.g. the RFC 1864
+        // `Content-MD5` header or the RFC 6455 WebSocket accept key): there the
+        // algorithm is dictated by the wire format, not chosen for security, so
+        // "use SHA-256" would break interop.
+        if crate::oxc_helpers::references_protocol_mandated_weak_hash(source) {
+            return;
+        }
+
         // Match `createHash('md5')` / `createHash("sha1")` — direct or member call.
         let is_create_hash = match &call.callee {
             Expression::Identifier(id) => &*id.name == "createHash",
@@ -88,5 +96,81 @@ impl OxcCheck for Check {
                 span: None,
             });
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn flags_md5_create_hash() {
+        let d = run_on("const h = crypto.createHash('md5');");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("md5"));
+    }
+
+    #[test]
+    fn flags_bare_md5_call() {
+        assert_eq!(run_on("const hash = MD5(data);").len(), 1);
+    }
+
+    #[test]
+    fn allows_sha256() {
+        assert!(run_on("const h = crypto.createHash('sha256');").is_empty());
+    }
+
+    // RFC 1864: `Content-MD5` mandates MD5, so the digest is a protocol field,
+    // not a security choice. Reproduces fastify/fastify reply-trailers.test.js.
+    #[test]
+    fn allows_md5_for_content_md5_trailer() {
+        let src = r#"
+            reply.trailer('Content-MD5', function (reply, payload, done) {
+              const hash = createHash('md5')
+              hash.update(payload)
+              done(null, hash.digest('hex'))
+            })
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // RFC 6455: the WebSocket accept key is a SHA-1 of the client key — dictated
+    // by the handshake, not chosen for collision resistance.
+    #[test]
+    fn allows_sha1_for_websocket_accept_key() {
+        let src = r#"
+            const accept = createHash('sha1')
+              .update(req.headers['sec-websocket-key'] + GUID)
+              .digest('base64')
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // A genuine weak-crypto use (password hashing) still fires even when the file
+    // is unrelated to any protocol field.
+    #[test]
+    fn still_flags_md5_password_hash() {
+        let src = "const digest = createHash('md5').update(password).digest('hex');";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
