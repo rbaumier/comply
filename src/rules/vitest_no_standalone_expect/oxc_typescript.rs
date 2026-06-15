@@ -12,6 +12,36 @@ pub struct Check;
 /// time — an `expect()` directly in their body is genuinely standalone.
 const COLLECTION_BLOCKS: &[&str] = &["describe", "suite", "fdescribe", "xdescribe"];
 
+/// Type-assertion libraries whose `expect` is a compile-time symbol with no
+/// runtime behavior. Top-level `expect(...).type.toBe<T>()` is by design and
+/// must not be treated as a vitest/jest assertion.
+const TYPE_TESTING_SOURCES: &[&str] = &["tstyche"];
+
+/// True when the local binding `local_name` is a named import from a
+/// compile-time type-testing library (e.g. `import {expect} from 'tstyche'`).
+/// Keys off the import source, not the file path or the `.type` member chain.
+fn is_type_testing_expect(local_name: &str, semantic: &oxc_semantic::Semantic) -> bool {
+    use oxc_ast::ast::ImportDeclarationSpecifier;
+
+    semantic.nodes().iter().any(|node| {
+        let AstKind::ImportDeclaration(decl) = node.kind() else {
+            return false;
+        };
+        if !TYPE_TESTING_SOURCES.contains(&decl.source.value.as_str()) {
+            return false;
+        }
+        let Some(specifiers) = &decl.specifiers else {
+            return false;
+        };
+        specifiers.iter().any(|spec| match spec {
+            ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                named.local.name.as_str() == local_name
+            }
+            _ => false,
+        })
+    })
+}
+
 fn is_test_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
     s.contains(".test.") || s.contains(".spec.") || s.contains("__tests__")
@@ -90,6 +120,9 @@ impl OxcCheck for Check {
             return;
         };
         if id.name.as_str() != "expect" {
+            return;
+        }
+        if is_type_testing_expect(id.name.as_str(), semantic) {
             return;
         }
         if !is_standalone_expect(node, semantic) {
@@ -188,6 +221,49 @@ mod tests {
     #[test]
     fn flags_expect_directly_in_describe_body() {
         let src = r#"describe("group", () => { expect(1).toBe(1); });"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for #2107: top-level `expect()` whose binding is imported from
+    // the compile-time type-testing lib `tstyche` is by design, not a runtime
+    // assertion — must not be flagged.
+    #[test]
+    fn no_fp_tstyche_type_expect_issue_2107() {
+        let src = r#"
+            import {expect} from 'tstyche';
+            expect(formatTestPath(globalConfig, 'some/path')).type.toBe<string>();
+            expect(formatTestPath).type.not.toBeCallableWith();
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    // Negative space for #2107: a global `expect` (no import) is still the
+    // vitest/jest assertion at module scope and stays flagged.
+    #[test]
+    fn flags_global_expect_without_import_issue_2107() {
+        let src = r#"expect(value).toBe(1);"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Negative space for #2107: `expect` imported from vitest is the runtime
+    // assertion — top-level usage stays flagged.
+    #[test]
+    fn flags_top_level_vitest_expect_issue_2107() {
+        let src = r#"
+            import {expect} from 'vitest';
+            expect(value).toBe(1);
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Negative space for #2107: `expect` imported from @jest/globals is the
+    // runtime assertion — top-level usage stays flagged.
+    #[test]
+    fn flags_top_level_jest_globals_expect_issue_2107() {
+        let src = r#"
+            import {expect} from '@jest/globals';
+            expect(value).toBe(1);
+        "#;
         assert_eq!(run(src).len(), 1);
     }
 
