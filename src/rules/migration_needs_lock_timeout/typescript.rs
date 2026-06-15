@@ -81,4 +81,42 @@ mod tests {
         let src = r#"const greeting = "hello world";"#;
         assert!(run(src).is_empty());
     }
+
+    #[test]
+    fn skips_inline_snapshot_in_test_dir_issue3354() {
+        // Issue #3354: the `migrate/src/__tests__/` path contains `migrate`,
+        // so `is_migration_path` matches, but the DDL string is a
+        // `toMatchInlineSnapshot` assertion capturing generated migration
+        // output — never executed. The central `skip_in_test_dir` gate
+        // exempts it.
+        let src = r#"expect(ctx.fs.read(f)).toMatchInlineSnapshot(`
+"-- CreateTable
+CREATE TABLE \"Order\" (\"id\" INTEGER NOT NULL);
+"
+`)"#;
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "packages/migrate/src/__tests__/MigrateDev.test.ts",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_genuine_migration_file() {
+        // Over-exemption guard: a real migration under `migrations/` (not a
+        // test dir) must still flag.
+        let src = r#"const m = "ALTER TABLE users ADD COLUMN age INT";"#;
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "app/migrations/001_add_col.ts",
+            )
+            .len(),
+            1
+        );
+    }
 }

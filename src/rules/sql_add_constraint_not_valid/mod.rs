@@ -1,4 +1,8 @@
 //! sql-add-constraint-not-valid
+//!
+//! Skipped in test dirs, where `ADD CONSTRAINT` DDL strings are inline
+//! snapshots/assertions of generated migration output, not executed
+//! migrations.
 
 mod rust;
 mod sql;
@@ -20,7 +24,7 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["database", "sql"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
