@@ -33,6 +33,7 @@ pub fn build_table(
 /// - `import/*` → `eslint-plugin-import(*)`
 /// - `unicorn/*` → `eslint-plugin-unicorn(*)`
 /// - `promise/*` → `eslint-plugin-promise(*)`
+/// - `vue/*` → `eslint-plugin-vue(*)`
 /// - `oxc/*` → `oxc(*)`
 /// - bare eslint core → `eslint(*)`
 pub fn config_key_to_oxlint_code(config_key: &str) -> String {
@@ -47,6 +48,9 @@ pub fn config_key_to_oxlint_code(config_key: &str) -> String {
     }
     if let Some(rest) = config_key.strip_prefix("promise/") {
         return format!("eslint-plugin-promise({rest})");
+    }
+    if let Some(rest) = config_key.strip_prefix("vue/") {
+        return format!("eslint-plugin-vue({rest})");
     }
     if let Some(rest) = config_key.strip_prefix("oxc/") {
         return format!("oxc({rest})");
@@ -75,6 +79,10 @@ mod tests {
         assert_eq!(
             config_key_to_oxlint_code("promise/catch-or-return"),
             "eslint-plugin-promise(catch-or-return)"
+        );
+        assert_eq!(
+            config_key_to_oxlint_code("vue/no-import-compiler-macros"),
+            "eslint-plugin-vue(no-import-compiler-macros)"
         );
         assert_eq!(
             config_key_to_oxlint_code("oxc/no-barrel-file"),
