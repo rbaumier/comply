@@ -36,7 +36,7 @@ impl TextCheck for Check {
         if super::is_sveltekit_route_file(file_name) {
             return Vec::new();
         }
-        if super::is_nuxt_dynamic_route_file(ctx.path, file_name) {
+        if super::is_file_based_route_segment(ctx.path, file_name) {
             return Vec::new();
         }
         if super::is_tanstack_vue_sfc_route(ctx.path, file_name) {
@@ -201,6 +201,76 @@ mod tests {
             run("examples/vue/basic-file-based-sfc/src/routes/my_route.handler.vue").len(),
             1
         );
+    }
+
+    // Regression for #3376: unplugin-vue-router (vue-router file-based routing)
+    // mandates a richer route-segment grammar than the plain bracket dynamic
+    // segment. Under a `pages/` or `routes/` ancestor these filenames define the
+    // route path and cannot adopt PascalCase/kebab-case without breaking it.
+    #[test]
+    fn allows_vue_router_route_group_issue_3376() {
+        assert!(run("packages/playground-file-based/src/pages/(home).vue").is_empty());
+    }
+
+    #[test]
+    fn allows_vue_router_repeatable_param_issue_3376() {
+        assert!(run("packages/playground-file-based/src/pages/blog/[slug]+.vue").is_empty());
+    }
+
+    #[test]
+    fn allows_vue_router_optional_repeatable_param_issue_3376() {
+        assert!(
+            run("packages/playground-file-based/src/pages/blog/[[slugOptional]]+.vue").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_vue_router_inline_mixed_params_issue_3376() {
+        assert!(
+            run("packages/playground-file-based/src/pages/users/sub-[first]-[second].vue")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_vue_router_layout_file_issue_3376() {
+        assert!(run("packages/playground-file-based/src/pages/with-layout/+layout.vue").is_empty());
+    }
+
+    #[test]
+    fn allows_vue_router_typed_param_issue_3376() {
+        assert!(
+            run("packages/playground-file-based/src/pages/[month=month-valibot].vue").is_empty()
+        );
+    }
+
+    // Plain dynamic segment under a `routes/` ancestor (unplugin-vue-router can be
+    // configured to use `routes/`); the Nuxt-only `pages/` gate previously missed
+    // these.
+    #[test]
+    fn allows_vue_router_param_under_routes_issue_3376() {
+        let base = "packages/router/e2e/unplugin/fixtures/filenames/routes";
+        assert!(run(&format!("{base}/articles/[id].vue")).is_empty());
+        assert!(run(&format!("{base}/optional/[[doc]].vue")).is_empty());
+    }
+
+    // Guard: the route-segment grammar is gated on a `pages/`/`routes/` ancestor.
+    // A route-shaped name elsewhere is not a route module and still fires.
+    #[test]
+    fn flags_route_group_outside_route_dir_issue_3376() {
+        assert_eq!(run("src/components/(home).vue").len(), 1);
+    }
+
+    #[test]
+    fn flags_layout_marker_outside_route_dir_issue_3376() {
+        assert_eq!(run("src/components/+layout.vue").len(), 1);
+    }
+
+    // Guard: an ordinary mis-named SFC under a `pages/` ancestor (no route-segment
+    // shape) still fires — the exemption widens shapes, not the case rule.
+    #[test]
+    fn flags_mis_cased_file_under_pages_issue_3376() {
+        assert_eq!(run("src/pages/user_profile.vue").len(), 1);
     }
 
     #[test]

@@ -33,6 +33,44 @@ fn has_routes_ancestor(path: &std::path::Path) -> bool {
         .any(|c| c.as_os_str() == std::ffi::OsStr::new("routes"))
 }
 
+/// Returns `true` when any ancestor directory of `path` is named `pages` or
+/// `routes` — the directory gate shared by file-based routers. unplugin-vue-router
+/// defaults to `src/pages` but is configurable to `routes`, Nuxt uses `pages`,
+/// Next.js Pages Router uses `pages`, and SolidStart / TanStack use `routes`, so
+/// both names scope the route-segment naming allowance to actual route modules.
+fn has_route_dir_ancestor(path: &std::path::Path) -> bool {
+    path.components()
+        .any(|c| matches!(c.as_os_str().to_str(), Some("pages" | "routes")))
+}
+
+/// Returns `true` for a file-based-routing route-segment filename, recognised by
+/// the routing grammar shared across vue-router (unplugin-vue-router), Nuxt,
+/// Next.js Pages Router, SolidStart, and TanStack Router. The route path is
+/// derived from the filename, so the developer cannot rename it to
+/// kebab/Pascal/camel case without breaking the route. The routing base is the
+/// filename with a single trailing extension stripped (catch-all segments such
+/// as `[...slug].vue` carry dots inside the brackets, so the dot-split stem is
+/// not the routing base). A routing base is a route segment when it:
+/// - contains a bracket-wrapped dynamic param anywhere — plain `[id]`, catch-all
+///   `[...slug]`, optional `[[id]]`, repeatable `[slug]+` / `[[opt]]+`, typed
+///   `[month=month-valibot]`, or inline-mixed `sub-[first]-[second]` — detected
+///   by containing both `[` and `]`;
+/// - is a route group `(name)` — starts with `(` and carries a matching `)`;
+/// - is a layout / server marker starting with `+` (`+layout.vue`).
+///
+/// See https://uvr.esm.is/, https://nuxt.com/docs/guide/directory-structure/pages,
+/// https://docs.solidjs.com/solid-start/building-your-application/routing.
+fn is_file_based_route_segment(path: &std::path::Path, file_name: &str) -> bool {
+    let routing_base = file_name.rsplit_once('.').map_or(file_name, |(base, _)| base);
+    let is_route_shape = (routing_base.contains('[') && routing_base.contains(']'))
+        || (routing_base.starts_with('(') && routing_base[1..].contains(')'))
+        || routing_base.starts_with('+');
+    if !is_route_shape {
+        return false;
+    }
+    has_route_dir_ancestor(path)
+}
+
 /// Returns `true` for TanStack Router pathless layout routes living under any
 /// `routes/` ancestor directory, in either spelling:
 /// - directory-style: the file name starts with `_` (`_authed.tsx`);
@@ -76,65 +114,15 @@ fn is_tanstack_vue_sfc_route(path: &std::path::Path, file_name: &str) -> bool {
     has_routes_ancestor(path)
 }
 
-/// Returns `true` for Next.js Pages Router file-router names that the framework
-/// mandates, living under any `pages/` ancestor directory:
-/// - a bracket-wrapped dynamic segment (`[id].tsx`, `[...slug].tsx`,
-///   `[[...slug]].tsx`), whose routing base starts with `[` and ends with `]`;
-/// - a purely numeric error-page stem (`404.tsx`, `500.tsx`).
-///
-/// Both forms are dictated by Next.js file-based routing and cannot adopt
-/// kebab/camel/Pascal case without breaking the route.
-/// See https://nextjs.org/docs/pages/building-your-application/routing/dynamic-routes.
-fn is_nextjs_pages_router_file(path: &std::path::Path, file_name: &str, stem: &str) -> bool {
-    // Catch-all segments (`[...slug].tsx`) contain dots inside the brackets, so
-    // the routing base is the text before the *file* extension, not the
-    // dot-split stem. Strip a single trailing extension to recover it.
-    let routing_base = file_name.rsplit_once('.').map_or(file_name, |(base, _)| base);
-    let is_dynamic_segment = routing_base.starts_with('[') && routing_base.ends_with(']');
+/// Returns `true` for a Next.js Pages Router numeric error-page stem (`404.tsx`,
+/// `500.tsx`) living under any `pages/` ancestor directory. The stem is dictated
+/// by Next.js file-based routing and cannot adopt kebab/camel/Pascal case without
+/// breaking the error page. Bracket dynamic segments under `pages/` are handled
+/// by the shared `is_file_based_route_segment`.
+/// See https://nextjs.org/docs/pages/building-your-application/routing/custom-error.
+fn is_nextjs_numeric_error_page(path: &std::path::Path, stem: &str) -> bool {
     let is_numeric_page = !stem.is_empty() && stem.bytes().all(|b| b.is_ascii_digit());
-    if !is_dynamic_segment && !is_numeric_page {
-        return false;
-    }
-    path.components()
-        .any(|c| c.as_os_str() == std::ffi::OsStr::new("pages"))
-}
-
-/// Returns `true` for a SolidStart file-router name that the framework mandates,
-/// living under any `routes/` ancestor directory, recognised by the leading
-/// shape of the filename:
-/// - a splat / catch-all segment starting with `[...` (`[...404].tsx`,
-///   `[...stories].tsx`);
-/// - a route group starting with `(` whose name carries a matching `)`, with an
-///   optional name after the close paren (`(home).tsx`, `(group2).tsx`,
-///   `(ignored)route0.tsx`), and any trailing dotted segments
-///   (`(basic).browser.test.tsx`).
-///
-/// Both forms are dictated by SolidStart's file router and cannot adopt
-/// kebab/camel/Pascal case without breaking the route.
-/// See https://docs.solidjs.com/solid-start/building-your-application/routing.
-fn is_solidstart_route_file(path: &std::path::Path, file_name: &str) -> bool {
-    let is_route_shape = file_name.starts_with("[...")
-        || (file_name.starts_with('(') && file_name[1..].contains(')'));
-    if !is_route_shape {
-        return false;
-    }
-    has_routes_ancestor(path)
-}
-
-/// Returns `true` for a Nuxt file-based-routing dynamic-segment Vue SFC living
-/// under any `pages/` ancestor directory: a bracket-wrapped routing base
-/// (`[id].vue`, `[...slug].vue`, `[[id]].vue`), where the segment before the
-/// `.vue` extension starts with `[` and ends with `]`.
-///
-/// Nuxt maps these filenames to dynamic and catch-all URL params, so they cannot
-/// adopt kebab/Pascal case without breaking the route.
-/// See https://nuxt.com/docs/guide/directory-structure/pages#dynamic-routes.
-fn is_nuxt_dynamic_route_file(path: &std::path::Path, file_name: &str) -> bool {
-    // Catch-all segments (`[...slug].vue`) contain dots inside the brackets, so
-    // the routing base is the text before the *file* extension, not the
-    // dot-split stem. Strip a single trailing extension to recover it.
-    let routing_base = file_name.rsplit_once('.').map_or(file_name, |(base, _)| base);
-    if !(routing_base.starts_with('[') && routing_base.ends_with(']')) {
+    if !is_numeric_page {
         return false;
     }
     path.components()
