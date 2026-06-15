@@ -75,7 +75,12 @@ pub fn matched_camel_case(name: &str) -> Option<&'static str> {
         if bytes.len() <= plen {
             continue;
         }
-        if !bytes[..plen].eq_ignore_ascii_case(prefix.as_bytes()) {
+        // The prefix segment of a genuine camelCase Hungarian name is the
+        // lowercase type abbreviation (`str`Name, `byt`Value). A SCREAMING_SNAKE
+        // word like `BYTE`/`ARRAY` has an uppercase prefix segment and is a single
+        // word, not a prefix + Capitalized remainder — require lowercase here so it
+        // is rejected. (`TYPE_PREFIXES` entries are all lowercase.)
+        if bytes[..plen] != *prefix.as_bytes() {
             continue;
         }
         if !bytes[plen].is_ascii_uppercase() {
@@ -121,5 +126,17 @@ mod tests {
         assert_eq!(matched_camel_case("PROMPT_FILE"), None);
         assert_eq!(matched_camel_case("STRATEGY_MAP"), None);
         assert_eq!(matched_camel_case("ARRAY_SIZE"), None);
+    }
+
+    // Regression for #3371: a single all-caps word whose first letters happen to
+    // equal a type abbreviation (`BYT`+`E`, `STR`...) is not Hungarian — the
+    // uppercase prefix segment means there is no lowercase→Capital boundary.
+    #[test]
+    fn ignores_single_all_caps_word() {
+        assert_eq!(matched_camel_case("BYTE"), None);
+        assert_eq!(matched_camel_case("STRING"), None);
+        assert_eq!(matched_camel_case("BOOL"), None);
+        // Still flag genuine camelCase Hungarian sharing the same prefix.
+        assert_eq!(matched_camel_case("bytValue"), Some("byt"));
     }
 }
