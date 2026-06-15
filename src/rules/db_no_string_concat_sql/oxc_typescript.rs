@@ -293,4 +293,59 @@ mod tests {
             "the rule must still fire on production paths"
         );
     }
+
+    // Regression for rbaumier/comply#3358 — a Prisma client code generator
+    // emits JSDoc template strings containing Prisma API method names
+    // (`update`, `where`, `data`) that mirror SQL verbs. With interpolation
+    // but no SQL clause structure (UPDATE needs SET), this is generated
+    // documentation, not a query.
+    #[test]
+    fn does_not_flag_prisma_jsdoc_codegen_template() {
+        let src = r#"
+            const jsdoc = {
+              update: {
+                body: (ctx) =>
+                  `Update one ${ctx.singular}.
+            @param {${getModelArgName(ctx.model.name, ctx.action)}} args - Arguments to update one ${ctx.singular}.
+            @example
+            // Update one ${ctx.singular}
+            const ${uncapitalize(ctx.mapping.model)} = await ${ctx.method}({
+              where: {
+                // ... provide filter here
+              },
+              data: {
+                // ... provide data here
+              }
+            })`,
+              },
+            };
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Regression for #3358 — CLI help text describing a migrate command.
+    // "Update the database schema" pairs `update` with no SET clause.
+    #[test]
+    fn does_not_flag_cli_help_template() {
+        let src = r#"
+            const help = format(`
+            Update the database schema with migrations
+
+            Usage
+              $ prisma migrate [command] [options]
+            `);
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Regression for #3358 — log message: "Would update X from Y" pairs the
+    // word `update` with the English preposition `from`, never SET/FROM in
+    // clause order. Not a SQL statement.
+    #[test]
+    fn does_not_flag_log_message_template() {
+        let src = r#"
+            console.log(`Would update ${pkgJsonPath} from ${packageJson.version} to ${version} now`);
+        "#;
+        assert!(run_on(src).is_empty());
+    }
 }
