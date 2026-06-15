@@ -65,6 +65,69 @@ fn is_function_boundary(kind: AstKind) -> bool {
     )
 }
 
+/// True when `inner` is fully contained within `outer` (byte-span nesting).
+fn span_contains(outer: oxc_span::Span, inner: oxc_span::Span) -> bool {
+    outer.start <= inner.start && inner.end <= outer.end
+}
+
+/// Symbol re-assigned each iteration by a `for (x of …)` / `for (x in …)` whose
+/// left side is a pre-declared target rather than a fresh `const`/`let`/`var`
+/// declaration. The loop mutates this one outer binding every iteration, so a
+/// closure capturing it sees the last value — a stale-binding hazard even though
+/// the binding is declared above the loop.
+fn for_target_reassigned_symbol(
+    loop_kind: AstKind,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> Option<oxc_semantic::SymbolId> {
+    let left = match loop_kind {
+        AstKind::ForOfStatement(stmt) => &stmt.left,
+        AstKind::ForInStatement(stmt) => &stmt.left,
+        _ => return None,
+    };
+    let ForStatementLeft::AssignmentTargetIdentifier(ident) = left else {
+        return None;
+    };
+    let ref_id = ident.reference_id.get()?;
+    semantic.scoping().get_reference(ref_id).symbol_id()
+}
+
+/// True when the function spanning `func_span` closes over at least one binding
+/// the enclosing loop introduces or re-assigns per iteration — a symbol declared
+/// inside the loop (header bindings or `let`/`const`/`var` in the body), or the
+/// pre-declared target of a `for (x of …)`/`for (x in …)` — that the function
+/// references. Such a capture is the stale-shared-binding hazard this rule exists
+/// to catch. A function that only touches its own params and outer-stable values
+/// (globals like `setTimeout`, bindings declared above the loop) captures nothing
+/// loop-scoped and is safe.
+fn captures_loop_binding<'a>(
+    func_span: oxc_span::Span,
+    loop_kind: AstKind<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let loop_span = loop_kind.span();
+    let scoping = semantic.scoping();
+    let nodes = semantic.nodes();
+    let reassigned_target = for_target_reassigned_symbol(loop_kind, semantic);
+    for sym_id in scoping.symbol_ids() {
+        let decl_span = scoping.symbol_span(sym_id);
+        let declared_in_loop = span_contains(loop_span, decl_span);
+        let is_loop_binding = (declared_in_loop || Some(sym_id) == reassigned_target)
+            // The function's own locals/params live inside the function span and
+            // are never a loop-iteration capture.
+            && !span_contains(func_span, decl_span);
+        if !is_loop_binding {
+            continue;
+        }
+        for reference in scoping.get_resolved_references(sym_id) {
+            let ref_span = nodes.kind(reference.node_id()).span();
+            if span_contains(func_span, ref_span) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Returns true when `callee` resolves to a vitest test-registrar (bare ident, static member, or chained `each(...)` form).
 fn callee_is_test_registrar(callee: &Expression<'_>) -> bool {
     match callee {
@@ -154,6 +217,13 @@ impl OxcCheck for Check {
                     AstKind::ArrowFunctionExpression(a) => a.span,
                     _ => return,
                 };
+                // Only a closure that closes over a binding the loop introduces
+                // can suffer the stale-shared-binding bug. A function capturing
+                // nothing loop-scoped (e.g. `(resolve) => setTimeout(resolve, 10)`,
+                // the polling-delay idiom) is sound.
+                if !captures_loop_binding(span, ancestor.kind(), semantic) {
+                    return;
+                }
                 let (line, column) =
                     byte_offset_to_line_col(ctx.source, span.start as usize);
                 diagnostics.push(Diagnostic {
@@ -209,8 +279,10 @@ mod tests {
 
     #[test]
     fn flags_function_in_while_in_prod_code() {
+        // The closure captures `n`, a binding declared in the loop body, so it
+        // sees a stale value across iterations — the hazard this rule targets.
         let d = run(
-            "while (true) { const fn = function() {}; }",
+            "while (true) { const n = next(); const fn = function() { return n; }; }",
             "src/app.ts",
         );
         assert_eq!(d.len(), 1);
@@ -289,10 +361,10 @@ mod tests {
     #[test]
     fn flags_unknown_callee_even_in_test_file() {
         // C-style loop (shared binding): the test-registrar exemption must not
-        // blanket-exempt an unknown callee in a test file.
+        // blanket-exempt an unknown callee whose callback captures the loop var.
         let src = r#"
             for (let i = 0; i < cases.length; i++) {
-                myCustomRegister(cases[i].label, () => {});
+                myCustomRegister(cases[i].label, () => use(i));
             }
         "#;
         let d = run(src, "src/foo.test.ts");
@@ -302,10 +374,10 @@ mod tests {
     #[test]
     fn flags_vitest_pattern_outside_test_file() {
         // C-style loop (shared binding) outside a test file: the test-registrar
-        // exemption is gated on test files, so this stays flagged.
+        // exemption is gated on test files, so a callback capturing `i` stays flagged.
         let src = r#"
             for (let i = 0; i < cases.length; i++) {
-                test(cases[i].label, async () => {});
+                test(cases[i].label, async () => use(i));
             }
         "#;
         let d = run(src, "src/app.ts");
@@ -448,6 +520,73 @@ mod tests {
         "#;
         let d = run(src, "src/app.ts");
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_promise_polling_delay_in_while_with_timeout() {
+        // Issue #2105: the polling-delay idiom. The arrow captures only its own
+        // `resolve` param and the global `setTimeout` — nothing loop-scoped — so
+        // there is no stale-closure hazard.
+        let src = r#"
+            while (!streamStarted) {
+                await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn allows_promise_polling_delay_in_while_no_arg() {
+        let src = r#"
+            while (!aborted) {
+                await new Promise((resolve) => setTimeout(resolve));
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn allows_closure_capturing_only_outer_stable_binding_in_while() {
+        // Captures `outer`, declared above the loop — stable across iterations,
+        // not a loop binding — so no hazard.
+        let src = r#"
+            const outer = compute();
+            while (running) {
+                schedule(() => use(outer));
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert!(d.is_empty(), "expected no diagnostics, got {d:?}");
+    }
+
+    #[test]
+    fn flags_closure_capturing_let_declared_in_while_body() {
+        // Negative-space: the closure captures `n`, a `let` declared inside the
+        // loop body and mutated, so it sees a stale value — must STILL flag.
+        let src = r#"
+            while (running) {
+                let n = next();
+                arr.push(() => n);
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_closure_capturing_loop_var_inside_promise_executor() {
+        // Negative-space: even wrapped in `new Promise(...)`, a closure that
+        // captures the C-style loop binding `i` is the genuine bug — must flag.
+        let src = r#"
+            for (let i = 0; i < n; i++) {
+                await new Promise((resolve) => { arr.push(() => i); resolve(); });
+            }
+        "#;
+        let d = run(src, "src/app.ts");
+        // The inner `() => i` arrow captures `i`; flagged.
+        assert!(!d.is_empty(), "expected a diagnostic, got {d:?}");
     }
 
     #[test]
