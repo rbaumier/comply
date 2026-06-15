@@ -6,6 +6,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use crate::rules::sql_helpers::{contains_word, is_sql_string};
+use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
 pub struct Check;
@@ -19,7 +20,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let (text, span_start, span_len) = match node.kind() {
@@ -59,6 +60,9 @@ impl OxcCheck for Check {
         if is_plpgsql_select_into(&lower) {
             return;
         }
+        if is_passed_to_data_sink(node, semantic) {
+            return;
+        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, span_start as usize);
         diagnostics.push(Diagnostic {
@@ -73,6 +77,59 @@ impl OxcCheck for Check {
             span: Some((span_start as usize, span_len)),
         });
     }
+}
+
+/// Method names that execute a SQL string against a database — the SQL passed
+/// to one of these is a real query. Covers node-postgres / mysql2 (`query`),
+/// better-sqlite3 / node:sqlite (`prepare`, `run`, `all`, `get`, `exec`),
+/// generic drivers (`execute`), and Prisma's raw escape hatches (`$queryRaw`,
+/// `$executeRaw`, and their `*Unsafe` variants).
+const DB_EXEC_METHODS: &[&str] = &[
+    "query",
+    "execute",
+    "exec",
+    "run",
+    "all",
+    "get",
+    "prepare",
+    "$queryRaw",
+    "$queryRawUnsafe",
+    "$executeRaw",
+    "$executeRawUnsafe",
+];
+
+/// True when the SQL literal is an argument to a *method* call whose name is
+/// not a known database-execution method (`obj.setQueryResult(sql, …)`,
+/// `spy.mockResolvedValueOnce(sql)`, `expect(captured).toBe(sql)`). Such a
+/// string is query *data* — a mock-adapter lookup key, a canned mock result, or
+/// an assertion expectation — not a query executed against a database, so
+/// requiring a `LIMIT` on it is a false positive.
+///
+/// A standalone literal (a bare `const q = "SELECT …"`, an array/object element,
+/// or an argument to a recognized DB-execution method or a tagged template) is
+/// treated as a query and still flagged: the nearest enclosing call/tagged
+/// template is inspected, and only a non-execution *method* call exempts.
+fn is_passed_to_data_sink<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            // A tagged template (`sql`...``, `db.$queryRaw`...``) executes its
+            // literal — not a data sink.
+            AstKind::TaggedTemplateExpression(_) => return false,
+            AstKind::CallExpression(call) => {
+                let Expression::StaticMemberExpression(member) = &call.callee else {
+                    // A plain function call (`foo(sql)`) is ambiguous; treat it
+                    // as execution so genuine queries keep flagging.
+                    return false;
+                };
+                return !DB_EXEC_METHODS.contains(&member.property.name.as_str());
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 fn starts_with_select(text: &str) -> bool {
@@ -208,6 +265,46 @@ mod tests {
     fn flags_select_into_table_creation() {
         let source =
             r#"const q = "SELECT * INTO TABLE archived_users FROM users WHERE active = false";"#;
+        assert_eq!(run(source).len(), 1);
+    }
+
+    // Regression for #3359: a SQL string passed as a mock-adapter lookup key
+    // (prisma `bench/bench-utils.ts`) is query *data*, not an executed query —
+    // `setQueryResult` registers a canned result for a query pattern.
+    #[test]
+    fn allows_sql_as_mock_adapter_query_key() {
+        let source = r#"
+            mockAdapter.setQueryResult('SELECT id, email, name FROM User WHERE id', {
+              columnNames: ['id', 'email', 'name'],
+              rows: [[1, 'user1@example.com', 'User 1']],
+            });
+        "#;
+        assert!(run(source).is_empty());
+    }
+
+    // The SQL string passed to an assertion matcher or a mock-return setup is
+    // also data, not an executed query.
+    #[test]
+    fn allows_sql_in_assertion_and_mock_return() {
+        let assertion = r#"expect(captured).toBe('SELECT * FROM users WHERE active = true');"#;
+        assert!(run(assertion).is_empty());
+        let mock = r#"spy.mockResolvedValueOnce('SELECT * FROM users WHERE active = true');"#;
+        assert!(run(mock).is_empty());
+    }
+
+    // Over-exemption guard: a SQL string executed via a database method
+    // (`db.query(...)`) is a real query and must still be flagged.
+    #[test]
+    fn flags_executed_db_query() {
+        let source = r#"const rows = db.query("SELECT * FROM users WHERE active = true");"#;
+        assert_eq!(run(source).len(), 1);
+    }
+
+    // Over-exemption guard: a tagged-template query (`sql`...``) executes its
+    // literal and must still be flagged.
+    #[test]
+    fn flags_tagged_template_query() {
+        let source = r#"const rows = sql`SELECT * FROM users WHERE active = true`;"#;
         assert_eq!(run(source).len(), 1);
     }
 }
