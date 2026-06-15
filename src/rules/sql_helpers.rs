@@ -14,16 +14,21 @@
 //!
 //! ## SQL detection heuristic
 //!
-//! A string is treated as SQL if it contains BOTH:
-//! - at least one DML keyword as a whole word (`SELECT`, `INSERT`,
-//!   `UPDATE`, `DELETE`), and
-//! - a clause keyword (`WHERE`, `FROM`).
+//! A string is treated as SQL only if it contains a recognized DML
+//! statement shape, i.e. a verb followed (in token order) by its
+//! mandatory companion clause:
+//! - `SELECT` … `FROM`
+//! - `DELETE` … `FROM`
+//! - `INSERT` … `INTO`
+//! - `UPDATE` … `SET`
 //!
-//! Both checks are case-insensitive and use word boundaries so
+//! Matching is case-insensitive and word-boundary-aware (so
 //! `selected_at`, `deleted_at`, `from_user`, `where_clause` don't
-//! match. Requiring BOTH a DML and a clause keyword almost
-//! eliminates false positives on prose containing the word "from"
-//! or "select" in an English sentence.
+//! match). Requiring the verb and its companion to appear in the
+//! correct order distinguishes real SQL from prose or generated
+//! code that merely mentions individual keywords — e.g. "Would
+//! update X from Y" (`update` with no `SET`) or Prisma JSDoc
+//! containing `update`/`where`/`create` API method names.
 
 /// Whole-word, case-insensitive substring check. `text` should
 /// already be lowercase. `word` should be lowercase.
@@ -61,19 +66,35 @@ pub fn is_migration_path(path: &std::path::Path) -> bool {
     })
 }
 
-/// Returns true if `text` looks like a SQL query. Requires at least
-/// one DML keyword AND a `WHERE` or `FROM` clause keyword. Uses
-/// whole-word matching so identifiers containing the keywords don't
-/// trigger.
+/// DML statement shapes: a verb and the companion clause keyword that
+/// must follow it (in token order) for the string to be a real query.
+/// `SELECT … FROM`, `DELETE … FROM`, `INSERT … INTO`, `UPDATE … SET`.
+const DML_STATEMENT_SHAPES: &[(&str, &str)] = &[
+    ("select", "from"),
+    ("delete", "from"),
+    ("insert", "into"),
+    ("update", "set"),
+];
+
+/// Returns true if `text` looks like a SQL query. Requires a DML verb
+/// followed (in token order) by its mandatory companion clause keyword
+/// — `SELECT … FROM`, `DELETE … FROM`, `INSERT … INTO`, `UPDATE … SET`.
+/// Word-boundary matching means identifiers containing the keywords
+/// don't trigger, and the ordering requirement rejects prose or
+/// generated code that merely mentions the keywords out of clause
+/// structure.
 pub fn is_sql_string(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
-    let has_dml = ["select", "insert", "update", "delete"]
-        .iter()
-        .any(|kw| contains_word(&lower, kw));
-    if !has_dml {
-        return false;
-    }
-    contains_word(&lower, "where") || contains_word(&lower, "from")
+    let words: Vec<&str> = lower
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty())
+        .collect();
+    DML_STATEMENT_SHAPES.iter().any(|(verb, clause)| {
+        words
+            .iter()
+            .position(|w| w == verb)
+            .is_some_and(|verb_at| words[verb_at + 1..].iter().any(|w| w == clause))
+    })
 }
 
 /// DDL keywords that may legally sit between the verb (`CREATE`/`ALTER`)
@@ -212,13 +233,47 @@ mod tests {
 
     #[test]
     fn rejects_dml_without_clause() {
-        // SELECT alone, no FROM/WHERE.
+        // SELECT alone, no FROM.
         assert!(!is_sql_string("SELECT 1"));
     }
 
     #[test]
     fn rejects_clause_without_dml() {
         assert!(!is_sql_string("from start to end where they came from"));
+    }
+
+    #[test]
+    fn rejects_verb_with_wrong_companion_clause() {
+        // issue #3358: "Would update X from Y" pairs `update` with `from`,
+        // but UPDATE's companion is SET, not FROM — this is English prose.
+        assert!(!is_sql_string(
+            "Would update pkg.json from 1.0.0 to 2.0.0 now"
+        ));
+        // Prisma JSDoc / API surface: `update` + `where` API method names
+        // with no SET clause are not a SQL statement.
+        assert!(!is_sql_string(
+            "Update one user. const u = await prisma.user.update({ where: { id } })"
+        ));
+        // CLI help text describing a migrate command.
+        assert!(!is_sql_string(
+            "Update the database schema with migrations"
+        ));
+    }
+
+    #[test]
+    fn rejects_companion_clause_before_verb() {
+        // The companion clause must follow the verb in token order.
+        assert!(!is_sql_string("from the set of rows, select your favorite"));
+    }
+
+    #[test]
+    fn detects_delete_from() {
+        assert!(is_sql_string("DELETE FROM logs WHERE created_at < now()"));
+    }
+
+    #[test]
+    fn detects_update_set() {
+        assert!(is_sql_string("UPDATE users SET active = false WHERE id = 1"));
     }
 
     #[test]
