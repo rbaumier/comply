@@ -60,6 +60,16 @@ fn safe_boundary(source: &str, pos: usize) -> usize {
     p
 }
 
+/// Whether the `.data` token ending at `after_data` is immediately followed by
+/// a TypeScript non-null assertion (`result.data!`). The `!` is the
+/// developer's explicit "this parse succeeded" annotation, so the access is
+/// not unchecked. A `!=`/`!==` comparison is not an assertion and is ignored.
+fn is_non_null_assertion(source: &str, after_data: usize) -> bool {
+    let rest = source[safe_boundary(source, after_data)..].trim_start();
+    let mut chars = rest.chars();
+    chars.next() == Some('!') && chars.next() != Some('=')
+}
+
 fn find_offenses(source: &str) -> Vec<usize> {
     let mut out = Vec::new();
     let mut from = 0usize;
@@ -75,7 +85,9 @@ fn find_offenses(source: &str) -> Vec<usize> {
             break;
         };
         let safe_end = safe_boundary(source, end);
-        if source[safe_end..].starts_with(".data") {
+        if source[safe_end..].starts_with(".data")
+            && !is_non_null_assertion(source, safe_end + ".data".len())
+        {
             out.push(abs);
             from = end;
             continue;
@@ -121,8 +133,11 @@ fn find_offenses(source: &str) -> Vec<usize> {
             let data_pat = format!("{name}.data");
             let success_pat = format!("{name}.success");
             if let Some(data_pos) = window.find(&data_pat) {
+                let after_data = safe_end + data_pos + data_pat.len();
                 let before_data = &window[..data_pos];
-                if !before_data.contains(&success_pat) {
+                if !before_data.contains(&success_pat)
+                    && !is_non_null_assertion(source, after_data)
+                {
                     let destructure_pat = format!("= {name};");
                     let has_destructure_check =
                         before_data.contains(&destructure_pat) && before_data.contains("success");
@@ -195,6 +210,30 @@ mod tests {
     fn allows_destructured_with_success_check() {
         let src = "const r = Schema.safeParse(input);\nconst { data, success } = r;\nif (success) console.log(data);";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_non_null_assertion_on_var_data() {
+        let src = "const a = Cat.safeParse({ properties: { is_animal: true } });\nexpect(a.data!.properties).toEqual({ is_animal: true });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_non_null_assertion_inside_call() {
+        let src = "const r1 = schema.safeParse({ a: \"asdf\", b: \"qwer\" });\nexpect(Object.keys(r1.data!)).toMatchInlineSnapshot();";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_non_null_assertion_on_chained_data() {
+        let src = "const x = Schema.safeParse(input).data!.foo;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_inequality_not_assertion() {
+        let src = "const r = Schema.safeParse(input);\nif (r.data !== expected) fail();";
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
