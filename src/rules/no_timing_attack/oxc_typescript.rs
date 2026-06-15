@@ -17,7 +17,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         if ctx.file.path_segments.in_test_dir {
@@ -31,6 +31,13 @@ impl OxcCheck for Check {
             return;
         }
         if is_literal_expr(&bin.left) || is_literal_expr(&bin.right) {
+            return;
+        }
+        // A `Symbol` is compared by reference identity (an O(1) pointer/id
+        // check), not byte-by-byte, so a comparison where either operand is a
+        // `Symbol()` / `Symbol.for(...)` value cannot leak timing. This covers
+        // the capability-token idiom (`const secret = Symbol(); arg === secret`).
+        if is_symbol_operand(&bin.left, semantic) || is_symbol_operand(&bin.right, semantic) {
             return;
         }
         let left_name = operand_name(&bin.left);
@@ -116,6 +123,60 @@ fn expr_text(expr: &Expression) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// True when `expr` is a `Symbol(...)` or `Symbol.for(...)` call expression.
+/// These produce JS `Symbol` values, which are compared by reference identity
+/// rather than byte content.
+fn is_symbol_call(expr: &Expression) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    match &call.callee {
+        Expression::Identifier(id) => id.name == "Symbol",
+        Expression::StaticMemberExpression(member) => {
+            matches!(&member.object, Expression::Identifier(id) if id.name == "Symbol")
+                && member.property.name == "for"
+        }
+        _ => false,
+    }
+}
+
+/// True when `expr` is provably a `Symbol` value: either an inline
+/// `Symbol(...)` / `Symbol.for(...)` call, or an identifier whose binding is a
+/// `const`/`let` declarator initialised from such a call. Symbols are compared
+/// by reference identity, so they are immune to timing attacks regardless of
+/// the equality operator used.
+///
+/// Resolves the binding via `reference_id` → symbol → declaration node, then
+/// inspects the `VariableDeclarator` initializer. A binding without a
+/// `Symbol(...)` initializer (a stored secret string, buffer, or token) does
+/// not match and stays flagged.
+fn is_symbol_operand(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bool {
+    use oxc_ast::AstKind;
+
+    if is_symbol_call(expr) {
+        return true;
+    }
+    let Expression::Identifier(ident) = expr else {
+        return false;
+    };
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            return decl.init.as_ref().is_some_and(is_symbol_call);
+        }
+    }
+    false
 }
 
 fn both_from_same_object(bin: &BinaryExpression) -> bool {
@@ -229,5 +290,36 @@ mod tests {
     #[test]
     fn allows_boolean_check() {
         assert!(run_on("if (token === false) {}").is_empty());
+    }
+
+    /// A `Symbol()` capability token (prisma's `Skip` / `nullTypes` idiom) is
+    /// reference-compared, not byte-compared, so it is immune to timing
+    /// attacks even though the identifier ends with `secret`.
+    #[test]
+    fn allows_symbol_capability_token() {
+        assert!(run_on("const secret = Symbol(); function f(arg) { if (arg === secret) {} }").is_empty());
+        assert!(run_on("const secret = Symbol(); function f(param) { if (param !== secret) {} }").is_empty());
+    }
+
+    #[test]
+    fn allows_symbol_for_capability_token() {
+        assert!(
+            run_on("const secret = Symbol.for('x'); function f(arg) { if (arg === secret) {} }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_inline_symbol_comparison() {
+        assert!(run_on("if (arg === Symbol.for('skip')) {}").is_empty());
+    }
+
+    /// A genuine secret bound to a string (not a `Symbol`) must still flag.
+    #[test]
+    fn flags_secret_string_comparison() {
+        assert_eq!(
+            run_on("const secret = getSecret(); function f(arg) { if (arg === secret) {} }").len(),
+            1
+        );
     }
 }
