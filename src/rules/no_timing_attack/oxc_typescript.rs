@@ -4,7 +4,7 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BinaryExpression, Expression};
 use std::sync::Arc;
 
-use super::helpers::is_sensitive_identifier;
+use super::helpers::{is_content_integrity_comparison, is_sensitive_identifier};
 
 pub struct Check;
 
@@ -42,6 +42,12 @@ impl OxcCheck for Check {
         }
         let left_name = operand_name(&bin.left);
         let right_name = operand_name(&bin.right);
+        // A content-integrity / checksum comparison (e.g. a downloaded file's
+        // SHA-256 digest against its expected value) compares public
+        // fingerprints, not secrets, so it is not a timing-attack target.
+        if is_content_integrity_comparison(left_name.as_deref(), right_name.as_deref()) {
+            return;
+        }
         let left_hit = left_name.as_deref().is_some_and(is_sensitive_identifier);
         let right_hit = right_name.as_deref().is_some_and(is_sensitive_identifier);
         if !left_hit && !right_hit {
@@ -321,5 +327,24 @@ mod tests {
             run_on("const secret = getSecret(); function f(arg) { if (arg === secret) {} }").len(),
             1
         );
+    }
+
+    /// prisma/fetch-engine downloadZip.ts:131,135 — comparing a downloaded
+    /// file's computed SHA-256 digest against its expected checksum is a
+    /// content-integrity check on public fingerprints, not a secret check.
+    #[test]
+    fn allows_sha256_integrity_comparison() {
+        assert!(
+            run_on("if (zippedSha256 !== null && zippedSha256 !== zippedHash) {}").is_empty()
+        );
+        assert!(run_on("if (sha256 !== null && sha256 !== hash) {}").is_empty());
+    }
+
+    /// Over-exemption guard: a real password / token comparison carries no
+    /// integrity indicator and must still flag.
+    #[test]
+    fn flags_password_despite_integrity_exemption() {
+        assert_eq!(run_on("if (password === input) {}").len(), 1);
+        assert_eq!(run_on("if (authToken !== expectedAuthToken) {}").len(), 1);
     }
 }
