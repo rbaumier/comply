@@ -6,6 +6,11 @@
 //! body. A TOCTOU race is a check-then-act sequence within one execution path;
 //! a SELECT in one function and an INSERT in a separate function never run in
 //! sequence and are not a race.
+//!
+//! A literal that is an element of an array or object literal is query *data*
+//! (e.g. a fixture or assertion list of expected query strings), not an
+//! executed query, so it is never paired: two strings sitting side by side in a
+//! data structure do not run in sequence against a database.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -51,6 +56,23 @@ impl OxcCheck for Check {
                 }
                 _ => continue,
             };
+            // A literal reached as an element of an array/object literal before
+            // any enclosing call is query data, not an executed query. Skip it:
+            // it cannot participate in a check-then-act sequence.
+            let mut is_data = false;
+            for ancestor in semantic.nodes().ancestors(node.id()) {
+                match ancestor.kind() {
+                    AstKind::CallExpression(_) | AstKind::TaggedTemplateExpression(_) => break,
+                    AstKind::ArrayExpression(_) | AstKind::ObjectExpression(_) => {
+                        is_data = true;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            if is_data {
+                continue;
+            }
             let scope = semantic.nodes().ancestors(node.id()).find_map(|ancestor| {
                 match ancestor.kind() {
                     AstKind::Function(f) => Some(f.span),
@@ -156,6 +178,50 @@ mod tests {
               const existing = await db.query('SELECT id FROM user WHERE email = $1', [email]);
               if (existing) return existing;
               return db.query('INSERT INTO user (email) VALUES ($1)', [email]);
+            }
+        "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_query_strings_in_const_array() {
+        // Issue #3353: a module-top-level const array of expected query strings
+        // is data (a test-assertion fixture), not a sequence of executed queries.
+        let src = r#"
+            const expectedQueries = [
+              "SELECT `main`.`User`.`id` FROM `main`.`User` WHERE 1=1 LIMIT ? OFFSET ?",
+              "INSERT INTO `main`.`User` (`email`, `name`) VALUES (?,?) RETURNING `id`",
+              "SELECT `main`.`User`.`id` FROM `main`.`User` WHERE `main`.`User`.`email` = ? LIMIT ?",
+            ];
+            assert.deepEqual(capturedQueries, expectedQueries);
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_query_strings_in_object_literal() {
+        // Object-literal values are also data, not executed queries.
+        let src = r#"
+            const fixtures = {
+              select: 'SELECT id FROM user WHERE email = $1',
+              insert: 'INSERT INTO user (email) VALUES ($1)',
+            };
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_executed_queries_even_inside_an_array() {
+        // Over-exemption guard: a genuine executed SELECT then INSERT still
+        // flags when the queries are arguments to calls, even if those calls
+        // are collected into an array.
+        let src = r#"
+            async function run(db, email) {
+              const results = [
+                await db.query('SELECT id FROM user WHERE email = $1', [email]),
+                await db.query('INSERT INTO user (email) VALUES ($1)', [email]),
+              ];
+              return results;
             }
         "#;
         assert_eq!(run_on(src).len(), 1);
