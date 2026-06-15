@@ -5,6 +5,19 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// Returns true when an `http://` specifier's host is the local loopback
+/// (`localhost` or `127.0.0.1`, with or without a port). Such imports target a
+/// local test server, never an external host, so unencrypted transport carries
+/// no interception risk and forcing `https://` would break them.
+fn is_loopback_host(specifier: &str) -> bool {
+    let after_scheme = &specifier["http://".len()..];
+    let host = after_scheme
+        .split(['/', ':', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
+    host == "localhost" || host == "127.0.0.1"
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::ImportDeclaration]
@@ -27,6 +40,9 @@ impl OxcCheck for Check {
 
         let specifier = import.source.value.as_str();
         if !specifier.starts_with("http://") {
+            return;
+        }
+        if is_loopback_host(specifier) {
             return;
         }
 
