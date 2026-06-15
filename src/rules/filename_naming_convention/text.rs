@@ -277,6 +277,38 @@ mod tests {
         assert!(run("src/app/routes/dashboard/_layout.tsx").is_empty());
     }
 
+    // Regression for #2147: TanStack Router flat-route files whose first
+    // dot-segment ends with `_` are pathless layout routes (the flat-file
+    // equivalent of `_prefix.tsx`); they must not be flagged inside `routes/`.
+    #[test]
+    fn allows_tanstack_trailing_underscore_layout_route_issue_2147() {
+        assert!(run("src/routes/posts_.$postId.edit.tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_tanstack_trailing_underscore_simple_route_issue_2147() {
+        assert!(run("src/routes/baz_.bar.tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_tanstack_trailing_underscore_nested_route_issue_2147() {
+        assert!(run("src/routes/blog_.$blogId.$slug.route.tsx").is_empty());
+    }
+
+    // Guard: a stem with an underscore in the MIDDLE (not trailing) is not a
+    // pathless layout route and still fires inside `routes/`.
+    #[test]
+    fn flags_underscore_middle_stem_inside_routes_issue_2147() {
+        assert_eq!(run("src/routes/some_invalid_name.tsx").len(), 1);
+    }
+
+    // Guard: the trailing-underscore exemption is gated on `routes/`; the same
+    // stem shape outside any `routes/` dir still fires.
+    #[test]
+    fn flags_trailing_underscore_stem_outside_routes_issue_2147() {
+        assert_eq!(run("src/utils/foo_.ts").len(), 1);
+    }
+
     #[test]
     fn allows_underscore_prefix_valid_remainder_outside_routes() {
         // `_authed` strips to `authed`, a valid camelCase name; the leading
