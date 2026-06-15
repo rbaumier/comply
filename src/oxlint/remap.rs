@@ -34,6 +34,7 @@ pub fn build_table(
 /// - `unicorn/*` → `eslint-plugin-unicorn(*)`
 /// - `promise/*` → `eslint-plugin-promise(*)`
 /// - `vue/*` → `eslint-plugin-vue(*)`
+/// - `nextjs/*` → `eslint-plugin-next(*)`
 /// - `oxc/*` → `oxc(*)`
 /// - bare eslint core → `eslint(*)`
 pub fn config_key_to_oxlint_code(config_key: &str) -> String {
@@ -51,6 +52,9 @@ pub fn config_key_to_oxlint_code(config_key: &str) -> String {
     }
     if let Some(rest) = config_key.strip_prefix("vue/") {
         return format!("eslint-plugin-vue({rest})");
+    }
+    if let Some(rest) = config_key.strip_prefix("nextjs/") {
+        return format!("eslint-plugin-next({rest})");
     }
     if let Some(rest) = config_key.strip_prefix("oxc/") {
         return format!("oxc({rest})");
@@ -83,6 +87,10 @@ mod tests {
         assert_eq!(
             config_key_to_oxlint_code("vue/no-import-compiler-macros"),
             "eslint-plugin-vue(no-import-compiler-macros)"
+        );
+        assert_eq!(
+            config_key_to_oxlint_code("nextjs/no-before-interactive-script-outside-document"),
+            "eslint-plugin-next(no-before-interactive-script-outside-document)"
         );
         assert_eq!(
             config_key_to_oxlint_code("oxc/no-barrel-file"),
