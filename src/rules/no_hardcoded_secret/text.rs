@@ -223,15 +223,27 @@ fn contains_twilio_key(line: &str) -> bool {
     false
 }
 
-const WELL_KNOWN_TEST_CREDENTIALS: &[&str] = &[
-    "postgres:postgres@localhost",
-    "root:root@localhost",
-    "admin:admin@localhost",
-    "user:password@localhost",
-    "sa:sa@localhost",
-    "root:password@localhost",
-    "postgres:password@localhost",
-];
+/// Generic placeholder usernames that no real deployment would use as an
+/// account name — they only appear in docs, examples, and test fixtures.
+const PLACEHOLDER_USERNAMES: &[&str] = &["user", "test", "root", "admin", "postgres", "sa"];
+
+/// Generic placeholder passwords. The literal string `pass`/`password`/etc. is
+/// never a real credential; it marks a `proto://user:pass@host` example.
+const PLACEHOLDER_PASSWORDS: &[&str] =
+    &["pass", "password", "passwd", "test", "root", "admin", "postgres"];
+
+/// True when a `username:password` userinfo pair is a well-known generic
+/// placeholder (e.g. `user:pass`, `postgres:postgres`) rather than a real
+/// credential. The check is decoupled from the hostname: a placeholder pair is
+/// a placeholder whether it points at `localhost` or a demo domain like
+/// `db.example.com`. A genuine secret (`admin:S3cr3tP@ss`) fails because its
+/// password is not in the placeholder set.
+fn is_placeholder_credential_pair(username: &str, password: &str) -> bool {
+    let username = username.to_ascii_lowercase();
+    let password = password.to_ascii_lowercase();
+    PLACEHOLDER_USERNAMES.contains(&username.as_str())
+        && PLACEHOLDER_PASSWORDS.contains(&password.as_str())
+}
 
 fn contains_password_in_url(line: &str) -> bool {
     let Some(proto_end) = line.find("://") else {
@@ -246,17 +258,9 @@ fn contains_password_in_url(line: &str) -> bool {
             // URL-format template in documentation, not a real credential —
             // a real userinfo component would percent-encode `[`/`]`.
             && !after[..colon + 1 + at].contains('[') {
-                let credentials_and_host = &after[..colon
-                    + 1
-                    + at
-                    + 1
-                    + rest[at + 1..]
-                        .find([':', '/'])
-                        .unwrap_or(rest.len() - at - 1)];
-                if WELL_KNOWN_TEST_CREDENTIALS
-                    .iter()
-                    .any(|c| credentials_and_host.contains(c))
-                {
+                let username = &after[..colon];
+                let password = &rest[..at];
+                if is_placeholder_credential_pair(username, password) {
                     return false;
                 }
                 return true;
@@ -634,6 +638,29 @@ mod tests {
     fn still_flags_non_localhost_db_password() {
         assert_eq!(
             run(r#"const db = "mysql://admin:s3cretProd@db.prod.example.com:3306/app";"#).len(),
+            1
+        );
+    }
+
+    // Regression tests for #3355 — generic placeholder credentials (user:pass)
+    // are placeholders regardless of the hostname, not only on localhost.
+    #[test]
+    fn allows_generic_placeholder_credentials_on_non_localhost_host() {
+        assert!(
+            run(r#"pooled: { connectionString: 'postgres://user:pass@db-pool.prisma.io:5432/postgres' },"#)
+                .is_empty()
+        );
+        assert!(
+            run(r#"expect(envContent).toContain("DATABASE_URL='postgres://user:pass@db.prisma.io:5432/postgres'")"#)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_high_entropy_credential_on_placeholder_username() {
+        // Placeholder username but a real high-entropy password must still flag.
+        assert_eq!(
+            run(r#"const db = "postgres://admin:S3cr3tPssw0rdxyz@db.example.com:5432/prod";"#).len(),
             1
         );
     }
