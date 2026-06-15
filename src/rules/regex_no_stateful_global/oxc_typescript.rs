@@ -2,7 +2,9 @@
 //!
 //! Visits `RegExpLiteral` nodes. A regex carrying the `g` flag is flagged
 //! when it is bound to a `const`/`let`/`var` whose binding is later used
-//! as the receiver of `.test()` or `.exec()`.
+//! as the receiver of `.test()` or `.exec()`. Bindings whose `lastIndex` is
+//! manually managed (e.g. `re.lastIndex = 0` before each call) are not
+//! flagged: the author has acknowledged and mitigated the statefulness.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -44,6 +46,12 @@ impl OxcCheck for Check {
             return;
         }
 
+        // If the binding's `lastIndex` is manually managed (e.g. reset to 0
+        // before each call), the statefulness is controlled — not a footgun.
+        if manages_last_index(ctx.source, var_name) {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, regex.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -81,6 +89,14 @@ fn has_stateful_usage(source: &str, var_name: &str) -> bool {
     let test_pattern = format!("{var_name}.test(");
     let exec_pattern = format!("{var_name}.exec(");
     crate::oxc_helpers::source_contains(source, &test_pattern) || crate::oxc_helpers::source_contains(source, &exec_pattern)
+}
+
+/// True if the source assigns `<var_name>.lastIndex`, i.e. the author manually
+/// manages the cursor (typically resetting it before each call). Such code has
+/// already mitigated the `lastIndex` statefulness, so it must not be flagged.
+fn manages_last_index(source: &str, var_name: &str) -> bool {
+    let pattern = format!("{var_name}.lastIndex");
+    crate::oxc_helpers::source_contains(source, &pattern)
 }
 
 #[cfg(test)]
@@ -148,5 +164,24 @@ mod tests {
     fn ignores_scoped_import_path() {
         let src = r#"import X from "@tanstack/react-query";"#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_global_regex_with_manual_last_index_reset() {
+        let src = "const BYTE = /^(?:[A-Za-z0-9+/]{4})*$/gm;\n\
+                   function byte(str) {\n\
+                   \tBYTE.lastIndex = 0;\n\
+                   \treturn BYTE.test(str);\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_global_regex_reused_without_reset() {
+        let src = "const BYTE = /^foo$/gm;\n\
+                   function byte(str) {\n\
+                   \treturn BYTE.test(str);\n\
+                   }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
