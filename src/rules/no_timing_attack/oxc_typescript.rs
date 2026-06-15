@@ -347,4 +347,23 @@ mod tests {
         assert_eq!(run_on("if (password === input) {}").len(), 1);
         assert_eq!(run_on("if (authToken !== expectedAuthToken) {}").len(), 1);
     }
+
+    /// vuejs/router location.ts:187 + defineColadaLoader.ts:748 — a bare
+    /// `.hash` property is the URL fragment (`#section`) of a parsed route
+    /// location, not a cryptographic digest, so comparing route hashes for
+    /// equality is not a timing-attack target.
+    #[test]
+    fn allows_url_route_hash_comparison() {
+        assert!(run_on("if (a.hash === b.hash) {}").is_empty());
+        assert!(run_on("if (tracked.hash.v !== to.hash) {}").is_empty());
+        assert!(run_on("if (location.hash === '#footer') {}").is_empty());
+    }
+
+    /// Over-exemption guard: a qualified cryptographic hash still flags — the
+    /// URL-fragment exemption is scoped to bare/routing `hash`.
+    #[test]
+    fn flags_password_hash_comparison() {
+        assert_eq!(run_on("if (passwordHash === storedHash) {}").len(), 1);
+        assert_eq!(run_on("if (user.password_hash === expectedHash) {}").len(), 1);
+    }
 }

@@ -8,7 +8,6 @@ const SECRET_WORDS: &[&str] = &[
     "secret",
     "apikey",
     "auth",
-    "hash",
     "digest",
     "hmac",
     "credential",
@@ -30,6 +29,19 @@ const AMBIGUOUS_ROLE_WORDS: &[&str] = &["token", "signature"];
 const SECRET_INDICATORS: &[&str] = &[
     "password", "secret", "auth", "access", "refresh", "csrf", "xsrf", "bearer", "jwt", "session",
     "api", "oauth",
+];
+
+/// `hash` names a cryptographic digest in auth code (`passwordHash`,
+/// `expectedHash`) but also names a *URL fragment* — the `#section` part of a
+/// location parsed straight from the address bar (`location.hash`,
+/// `route.hash`, `to.hash`). A bare `hash`, or one on a routing object, is the
+/// public URL fragment, not a credential, so a name ending in `hash` is only
+/// sensitive when it also carries a qualifier that pins it to the
+/// cryptographic sense.
+const HASH_CRYPTO_QUALIFIERS: &[&str] = &[
+    "password", "passwd", "pwd", "secret", "credential", "token", "auth", "pin", "otp", "key",
+    "salt", "digest", "hmac", "sha", "md5", "bcrypt", "scrypt", "argon", "pbkdf", "signature",
+    "checksum", "expected", "computed", "stored", "actual",
 ];
 
 /// Substrings that mark a value as a *content-integrity* fingerprint — a
@@ -64,6 +76,10 @@ const INTEGRITY_INDICATORS: &[&str] = &[
 /// Ambiguous role words (`token`, `signature`) require an extra secret
 /// indicator in the name to fire, so `auth_token` and `api_signature`
 /// match but a lexer's `comment_token` or an LSP `lsp_signature` does not.
+///
+/// A name ending in `hash` requires a cryptographic qualifier
+/// (`passwordHash`, `expectedHash`, `sha256Hash`); a bare `hash` is a URL
+/// fragment (`location.hash`, `route.hash`) and does not match.
 pub fn is_sensitive_identifier(name: &str) -> bool {
     let normalized: String = name
         .chars()
@@ -72,6 +88,11 @@ pub fn is_sensitive_identifier(name: &str) -> bool {
         .collect();
     if SECRET_WORDS.iter().any(|word| normalized.ends_with(word)) {
         return true;
+    }
+    if normalized.ends_with("hash") {
+        return HASH_CRYPTO_QUALIFIERS
+            .iter()
+            .any(|qualifier| normalized.contains(qualifier));
     }
     AMBIGUOUS_ROLE_WORDS
         .iter()
@@ -123,7 +144,25 @@ mod tests {
     #[test]
     fn flat_sensitive_names() {
         assert!(is_sensitive_identifier("password"));
-        assert!(is_sensitive_identifier("hash"));
+        assert!(is_sensitive_identifier("digest"));
+    }
+
+    /// `hash` is overloaded: a cryptographic digest in auth code, a URL
+    /// fragment in routing code. It fires only with a crypto qualifier.
+    #[test]
+    fn hash_needs_crypto_qualifier() {
+        // Genuine crypto hashes still fire.
+        assert!(is_sensitive_identifier("passwordHash"));
+        assert!(is_sensitive_identifier("password_hash"));
+        assert!(is_sensitive_identifier("expected_hash"));
+        assert!(is_sensitive_identifier("expectedHash"));
+        assert!(is_sensitive_identifier("computedHash"));
+        assert!(is_sensitive_identifier("sha256Hash"));
+        assert!(is_sensitive_identifier("token_hash"));
+        // A bare or routing `hash` is the URL fragment, not a credential.
+        assert!(!is_sensitive_identifier("hash"));
+        assert!(!is_sensitive_identifier("locationHash"));
+        assert!(!is_sensitive_identifier("routeHash"));
     }
 
     #[test]

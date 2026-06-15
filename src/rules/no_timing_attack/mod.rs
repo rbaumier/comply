@@ -1,8 +1,9 @@
 //! no-timing-attack — flag direct `==` / `!=` / `===` / `!==` comparison
 //! of a value whose identifier name ends with a sensitive word
-//! (`password`, `passwd`, `secret`, `apikey`, `auth`, `hash`, `digest`,
-//! `hmac`, `credential`, `otp`, `pin`), or with an ambiguous role word
-//! (`token`, `signature`) when the name also carries a secret indicator.
+//! (`password`, `passwd`, `secret`, `apikey`, `auth`, `digest`, `hmac`,
+//! `credential`, `otp`, `pin`), or with an ambiguous role word (`token`,
+//! `signature`, `hash`) when the name also carries the matching secret /
+//! cryptographic qualifier.
 //!
 //! ## Why
 //!
@@ -28,7 +29,11 @@
 //! non-security concepts (lexer / comment-syntax tokens, LSP
 //! function-call signatures), so a name ending with one of those is only
 //! sensitive when it also contains a secret indicator (`auth`, `access`,
-//! `api`, …): `auth_token` is flagged, `comment_token` is not.
+//! `api`, …): `auth_token` is flagged, `comment_token` is not. `hash` is
+//! likewise overloaded — a cryptographic digest in auth code but a URL
+//! fragment (`location.hash`, `route.hash`) in routing code — so it fires
+//! only with a crypto qualifier (`passwordHash`, `expectedHash`), never on
+//! a bare `hash`.
 //!
 //! A comparison inside the `eq` method of an `impl PartialEq for T` (Rust) is
 //! exempt: `self.hash == other.hash` there is a structural-hash short-circuit
