@@ -3,7 +3,7 @@
 //! Each match must be (a) inside a comment (we look for the `//` or `/*`
 //! marker first) and (b) on a word boundary so we don't false-positive on
 //! `simplify` matching `simply` or `understanding` matching nothing. The
-//! word list is closed: 6 entries, all unambiguously dismissive in English.
+//! word list is closed: 8 entries, all unambiguously dismissive in English.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -15,6 +15,8 @@ const BANNED: &[&str] = &[
     "basically",
     "clearly",
     "trivially",
+    "updated",
+    "reloaded",
 ];
 
 #[derive(Debug)]
@@ -131,5 +133,22 @@ mod tests {
     #[test]
     fn flags_block_comment() {
         assert_eq!(run("/* this is basically wrong */").len(), 1);
+    }
+
+    #[test]
+    fn flags_updated() {
+        assert_eq!(run("// updated to use the new API").len(), 1);
+    }
+
+    #[test]
+    fn flags_reloaded() {
+        assert_eq!(run("// config reloaded on each request").len(), 1);
+    }
+
+    #[test]
+    fn allows_updated_as_prefix() {
+        // word boundary: `updatedProduct` references an identifier, not the
+        // banned word — the trailing letter blocks the match.
+        assert!(run("// returns updatedProduct from the cache").is_empty());
     }
 }
