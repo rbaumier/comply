@@ -33,13 +33,17 @@ impl OxcCheck for Check {
         if name != "className" && name != "class" {
             return;
         }
+        let blocklist = ctx.config.string_list(super::META.id, "classes", ctx.lang);
+        if blocklist.is_empty() {
+            return;
+        }
         let Some(oxc_ast::ast::JSXAttributeValue::StringLiteral(lit)) = &attr.value else {
             return;
         };
         for token in lit.value.as_str().split_whitespace() {
             // Strip the variant prefix (`hover:`, `md:`, …) for matching.
             let class = token.rsplit(':').next().unwrap_or(token);
-            if let Some(blocked) = super::class_is_blocked(class) {
+            if let Some(blocked) = blocklist.iter().find(|b| b.as_str() == class) {
                 let (line, column) =
                     byte_offset_to_line_col(ctx.source, attr.span.start as usize);
                 diagnostics.push(Diagnostic {
@@ -78,26 +82,85 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser as OxcParser;
+    use oxc_semantic::SemanticBuilder;
+    use std::fs;
+    use std::path::Path;
+    use tempfile::TempDir;
 
+    /// Run under the default config — no `classes` configured.
     fn run(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, src, "t.tsx")
     }
 
+    /// Build a config that sets `classes = [...]` for the rule, then run the
+    /// OXC check against it so we exercise the real config-reading path.
+    fn run_with_classes(src: &str, classes: &[&str]) -> Vec<Diagnostic> {
+        let tmp = TempDir::new().expect("tempdir");
+        let classes_toml = classes
+            .iter()
+            .map(|c| format!("\"{c}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        fs::write(
+            tmp.path().join("comply.toml"),
+            format!("[rules.tailwind-no-restricted-classes]\nclasses = [{classes_toml}]\n"),
+        )
+        .expect("write cfg");
+        let cfg = Config::load_from(tmp.path()).expect("load cfg");
+
+        let path = Path::new("t.tsx");
+        let source_type = crate::oxc_helpers::source_type_for_path(path);
+        let allocator = Allocator::default();
+        let parse_ret = OxcParser::new(&allocator, src, source_type).parse();
+        let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+        let ctx = CheckCtx {
+            path,
+            path_arc: Arc::from(path),
+            source: src,
+            config: &cfg,
+            project: crate::project::default_static_project_ctx(),
+            file: crate::rules::file_ctx::default_static_file_ctx(),
+            lang: crate::files::Language::Tsx,
+        };
+
+        let mut diagnostics = Vec::new();
+        let kinds = Check.interested_kinds();
+        for node in semantic.nodes().iter() {
+            if kinds.contains(&node.kind().ty()) {
+                Check.run(node, &ctx, &semantic, &mut diagnostics);
+            }
+        }
+        diagnostics
+    }
+
     #[test]
-    fn flags_text_black() {
+    fn no_op_without_configured_blocklist() {
+        // bg-white / text-white / text-black are standard Tailwind utilities;
+        // under the default (empty) blocklist the rule must stay silent.
+        assert!(run(r#"const x = <div className="bg-white dark:bg-zinc-900" />;"#).is_empty());
+        assert!(run(r#"const x = <div className="text-white" />;"#).is_empty());
+        assert!(run(r#"const x = <div className="text-black mt-4" />;"#).is_empty());
+        assert!(run(r#"const x = <div className="space-x-px" />;"#).is_empty());
+    }
+
+    #[test]
+    fn flags_configured_class() {
         let src = r#"const x = <div className="text-black mt-4" />;"#;
-        assert_eq!(run(src).len(), 1);
+        assert_eq!(run_with_classes(src, &["text-black"]).len(), 1);
     }
 
     #[test]
-    fn flags_space_x_px() {
-        let src = r#"const x = <div className="space-x-px" />;"#;
-        assert_eq!(run(src).len(), 1);
+    fn flags_configured_class_through_variant_prefix() {
+        let src = r#"const x = <div className="hover:bg-white" />;"#;
+        assert_eq!(run_with_classes(src, &["bg-white"]).len(), 1);
     }
 
     #[test]
-    fn allows_unrelated_classes() {
+    fn ignores_unconfigured_class_when_blocklist_set() {
         let src = r#"const x = <div className="text-red-500 mt-4" />;"#;
-        assert!(run(src).is_empty());
+        assert!(run_with_classes(src, &["text-black"]).is_empty());
     }
 }
