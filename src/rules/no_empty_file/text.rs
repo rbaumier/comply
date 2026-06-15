@@ -6,12 +6,20 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 pub struct Check;
 
 /// Returns true if the source has no meaningful content — only whitespace,
-/// comments, and `"use strict"` / `'use strict'` directives.
+/// ordinary comments, and `"use strict"` / `'use strict'` directives. Inner
+/// doc comments (`//!`, `/*!`) count as meaningful content.
 fn is_empty(source: &str) -> bool {
     for line in source.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
+        }
+        // Inner doc comments (`//!`, `/*!`) document the enclosing module or
+        // crate and become rustdoc output — a file of only these is a
+        // deliberate documentation module, not empty. Checked before the
+        // generic comment branches so it isn't swallowed by `starts_with("//")`.
+        if trimmed.starts_with("//!") || trimmed.starts_with("/*!") {
+            return false;
         }
         // Single-line comments
         if trimmed.starts_with("//") {
@@ -154,6 +162,32 @@ mod tests {
     fn other_rs_empty_still_flagged() {
         let diags = Check.check(&CheckCtx::for_test(Path::new("utils.rs"), "// nothing\n"));
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn inner_doc_comment_only_rs_not_flagged() {
+        // Issue #3223: a Rust file of only `//!` inner doc comments (clap's
+        // src/_features.rs) is a deliberate documentation module — rustdoc
+        // output, re-exported as `pub mod _features;`, not empty.
+        let source = "//! ## Documentation: Feature Flags\n//!\n//! Available feature flags.\n";
+        let diags = Check.check(&CheckCtx::for_test(Path::new("_features.rs"), source));
+        assert_eq!(diags.len(), 0);
+    }
+
+    #[test]
+    fn inner_block_doc_comment_only_rs_not_flagged() {
+        // The block form `/*! ... */` is also an inner doc comment.
+        let source = "/*! module-level documentation */\n";
+        let diags = Check.check(&CheckCtx::for_test(Path::new("_faq.rs"), source));
+        assert_eq!(diags.len(), 0);
+    }
+
+    #[test]
+    fn inner_doc_comment_plus_code_rs_not_flagged() {
+        // A `//!` doc plus real code is unaffected (not empty, as before).
+        let source = "//! module docs\npub fn answer() -> u8 { 42 }\n";
+        let diags = Check.check(&CheckCtx::for_test(Path::new("module.rs"), source));
+        assert_eq!(diags.len(), 0);
     }
 
     #[test]
