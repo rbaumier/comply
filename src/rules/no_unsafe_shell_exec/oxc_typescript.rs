@@ -111,6 +111,13 @@ impl OxcCheck for Check {
             }
         }
 
+        // Command and args passed as separate values (argv form, no shell) is
+        // safe even with a dynamic command — there is no shell string to
+        // interpolate into.
+        if crate::rules::shell_exec_helpers::is_safe_separate_argv_form(last, call, ctx) {
+            return;
+        }
+
         let Some(first) = call.arguments.first() else { return };
         let Some(expr) = first.as_expression() else { return };
         if !is_unsafe_arg(expr) {
@@ -196,5 +203,42 @@ mod oxc_tests {
     fn allows_new_regexp_binding_exec_issue_2249() {
         let src = "const r = new RegExp('x'); r.exec(src);";
         assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    // Regression for #3349: tinyexec's `exec(cmd, args, opts)` passes the
+    // command and a separate args value (no shell), so a dynamic command is
+    // not an injection vector.
+    #[test]
+    fn allows_tinyexec_exec_with_separate_args_issue_3349() {
+        let src = r#"import { exec } from "tinyexec";
+await exec(cmd.command, cmd.args, { throwOnError: true, nodeOptions: { cwd } });"#;
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    // Regression for #3382: `spawn`/`spawnSync` with a separate argv array
+    // bypasses the shell even when the binary is a variable.
+    #[test]
+    fn allows_spawn_sync_with_argv_array_issue_3382() {
+        let src = r#"const nodeBin = process.argv[0];
+spawnSync(nodeBin, [reactRouterBin, "build"], { cwd });"#;
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    // A genuine `child_process.exec` shell interpolation must still flag — its
+    // second argument is an options object, not an args array, so the
+    // import-source exemption must not apply.
+    #[test]
+    fn still_flags_child_process_exec_interpolated() {
+        let src = r#"import { exec } from "node:child_process";
+exec(`rm -rf ${userInput}`);"#;
+        assert_eq!(run(src).len(), 1, "got {:?}", run(src));
+    }
+
+    // `shell: true` re-enables the shell, so the argv-array form is no longer
+    // safe and a dynamic command must still flag.
+    #[test]
+    fn still_flags_spawn_argv_with_shell_true() {
+        let src = r#"spawn(binary, [arg], { shell: true });"#;
+        assert_eq!(run(src).len(), 1, "got {:?}", run(src));
     }
 }
