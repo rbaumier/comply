@@ -1,7 +1,7 @@
 //! security-detect-possible-timing-attacks oxc backend.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, receiver_root_identifier};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BinaryOperator, Expression};
 use std::sync::Arc;
@@ -43,6 +43,28 @@ fn is_absence_sentinel(expr: &Expression) -> bool {
 /// codes, not secret comparisons.
 fn is_string_literal(expr: &Expression) -> bool {
     matches!(expr, Expression::StringLiteral(_))
+}
+
+/// True when both operands are member accesses rooted on the same object, e.g.
+/// `data.password === data.confirmPassword` or `data.nested.confirm === data.password`.
+/// Both sides are sibling fields of one user-supplied value being checked for a
+/// match (a cross-field form-validation equality, as in a Zod `.refine`), so there
+/// is no server-side secret to leak via timing — the attacker supplies both values.
+/// Bare-identifier operands return `false`, keeping genuine `userInput === storedSecret`
+/// comparisons flagged.
+fn both_members_of_same_object(left: &Expression, right: &Expression) -> bool {
+    let both_members = matches!(left, Expression::StaticMemberExpression(_))
+        && matches!(right, Expression::StaticMemberExpression(_));
+    if !both_members {
+        return false;
+    }
+    match (
+        receiver_root_identifier(left),
+        receiver_root_identifier(right),
+    ) {
+        (Some(l), Some(r)) => l == r,
+        _ => false,
+    }
 }
 
 fn name_is_secret(expr: &Expression) -> bool {
@@ -87,6 +109,9 @@ impl OxcCheck for Check {
             return;
         }
         if is_string_literal(&bin.left) || is_string_literal(&bin.right) {
+            return;
+        }
+        if both_members_of_same_object(&bin.left, &bin.right) {
             return;
         }
         if !name_is_secret(&bin.left) && !name_is_secret(&bin.right) {
@@ -186,6 +211,37 @@ mod tests {
     #[test]
     fn flags_token_vs_runtime_value() {
         let src = r#"if (token === userInput) {}"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for #3365: two sibling fields of the same user-supplied object are
+    // a cross-field form-validation equality (e.g. a Zod `.refine`), not a secret
+    // compared against attacker input. There is no server-side secret to leak.
+    #[test]
+    fn allows_password_vs_confirm_same_object() {
+        let src = r#"baseSchema.refine((data) => data.password === data.confirmPassword);"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_nested_confirm_vs_password_same_root() {
+        let src = r#"schema.refine((data) => data.nested.confirm === data.password);"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Different base objects keep firing: `req.body.password === user.passwordHash`
+    // is the genuine attacker-input-vs-stored-secret comparison the rule targets.
+    #[test]
+    fn flags_secret_member_vs_other_object_member() {
+        let src = r#"if (req.body.password === user.passwordHash) {}"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // A bare-identifier secret compared against another value stays flagged even
+    // when the other side is a member chain rooted elsewhere.
+    #[test]
+    fn flags_secret_identifier_vs_env_member() {
+        let src = r#"if (token === process.env.SECRET) {}"#;
         assert_eq!(run(src).len(), 1);
     }
 }
