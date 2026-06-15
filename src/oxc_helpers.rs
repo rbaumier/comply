@@ -259,9 +259,44 @@ pub fn is_non_react_jsx_file(source: &str, project: &crate::project::ProjectCtx,
         || source_contains(source, "\"vue\"")
         || source_contains(source, "'preact'")
         || source_contains(source, "\"preact\"")
-        || source_contains(source, "jsxImportSource vue")
-        || source_contains(source, "jsxImportSource preact")
+        || has_non_react_jsx_import_source_pragma(source)
         || project.has_non_react_jsx_import_source(path)
+}
+
+/// True when the file declares a `@jsxImportSource` pragma whose value points to
+/// a non-React JSX runtime. The pragma's value is the JSX factory package: any
+/// value other than `react` / `react-dom` (or a `react`/`react-dom` subpath)
+/// names a non-React dialect (`hono/jsx`, a relative `./` or `../../src/jsx`, a
+/// custom package), which intentionally uses native HTML attribute names and its
+/// own `style` semantics. A `react` pragma, or no pragma at all, leaves the file
+/// treated as React.
+#[must_use]
+pub fn has_non_react_jsx_import_source_pragma(source: &str) -> bool {
+    let Some(idx) = memchr::memmem::find(source.as_bytes(), b"@jsxImportSource") else {
+        return false;
+    };
+    let after = &source[idx + "@jsxImportSource".len()..];
+    // The pragma value is the first whitespace-delimited token; it terminates at
+    // whitespace or a comment close (`*/`).
+    let value = after
+        .trim_start()
+        .split([' ', '\t', '\r', '\n'])
+        .next()
+        .map(|tok| tok.trim_end_matches("*/"))
+        .unwrap_or("");
+    if value.is_empty() {
+        return false;
+    }
+    !is_react_jsx_source(value)
+}
+
+/// True when a `@jsxImportSource` value names React's own runtime: `react`,
+/// `react-dom`, or a subpath of either (`react/jsx-runtime`).
+fn is_react_jsx_source(value: &str) -> bool {
+    value == "react"
+        || value == "react-dom"
+        || value.starts_with("react/")
+        || value.starts_with("react-dom/")
 }
 
 /// True if the file is a Web Worker script, where `self` resolves to the

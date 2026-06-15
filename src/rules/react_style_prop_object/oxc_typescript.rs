@@ -123,4 +123,25 @@ mod tests {
         let src = "import type { JSX } from 'solid-js';\nconst x = <svg style=\"width:24px;height:24px\" />;";
         assert!(run(src).is_empty());
     }
+
+    #[test]
+    fn allows_string_style_with_non_react_jsx_import_source_pragma() {
+        // Hono's `src/jsx/index.test.tsx`: a `@jsxImportSource` pragma points at a
+        // relative non-React runtime (Hono's own JSX), which renders a string-valued
+        // `style` as-is. The object-syntax advice is React-only. (Closes #3220)
+        let src = "/** @jsxImportSource ./ */\n\
+                   const template = <h1 style='color:red;font-size:small'>Hello</h1>;";
+        assert!(run(src).is_empty(), "got unexpected diagnostics: {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_string_style_with_react_jsx_import_source_pragma() {
+        // A `@jsxImportSource react` pragma still names React — the object-syntax
+        // suggestion stays. The exemption requires a *non-React* source.
+        let src = "/** @jsxImportSource react */\n\
+                   const x = <div style=\"color:red\">hi</div>;";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
+        assert!(diags[0].message.contains("style={{"));
+    }
 }
