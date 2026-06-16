@@ -5,9 +5,38 @@
 //! servers, clients, and databases live in different zones, `'2024-01-01
 //! 12:00'` can mean three different points in time. `withTimezone: true`
 //! stores an absolute instant and eliminates the ambiguity.
+//!
+//! Scope: PostgreSQL only. `{ withTimezone: true }` is a `pg-core` option;
+//! `mysqlTable` / `sqliteTable` timestamps reject it (it is a TypeScript
+//! type error there), so a `timestamp(...)` enclosed by one of those table
+//! constructors is never flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+
+/// Non-PostgreSQL Drizzle table constructors. Their `timestamp` columns do
+/// not accept `{ withTimezone: true }`, so the advice must not fire there.
+const NON_PG_TABLE_CTORS: &[&str] = &["mysqlTable", "sqliteTable"];
+
+/// Walks up from a `timestamp(...)` call to the nearest enclosing table
+/// constructor and returns `true` when it is a non-PostgreSQL dialect
+/// (`mysqlTable` / `sqliteTable`). A `pgTable` enclosure or no enclosing
+/// table at all returns `false`, leaving the diagnostic active.
+fn in_non_pg_table(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut current = node.parent();
+    while let Some(ancestor) = current {
+        if ancestor.kind() == "call_expression"
+            && let Some(function) = ancestor.child_by_field_name("function")
+            && function.kind() == "identifier"
+            && let Ok(name) = function.utf8_text(source)
+            && NON_PG_TABLE_CTORS.contains(&name)
+        {
+            return true;
+        }
+        current = ancestor.parent();
+    }
+    false
+}
 
 #[derive(Debug)]
 pub struct Check;
@@ -32,6 +61,11 @@ impl AstCheck for Check {
             return;
         };
         if name != "timestamp" {
+            return;
+        }
+        // `withTimezone` is a `pg-core` option; skip `mysqlTable` /
+        // `sqliteTable` columns, where it is not a valid Drizzle option.
+        if in_non_pg_table(node, source_bytes) {
             return;
         }
         let Some(args) = node.child_by_field_name("arguments") else {
@@ -104,5 +138,53 @@ mod tests {
     #[test]
     fn allows_timestamp_options_without_column_name() {
         assert!(run_on("const t = timestamp({ withTimezone: true });").is_empty());
+    }
+
+    #[test]
+    fn allows_mysql_table_timestamp() {
+        // Issue #3313: `withTimezone` is pg-core-only; a mysqlTable timestamp
+        // rejects it, so the advice must not fire here.
+        let src = r#"
+            import { mysqlTable, timestamp } from "drizzle-orm/mysql-core";
+            export const users = mysqlTable("users", {
+                createdAt: timestamp("created_at").notNull().defaultNow(),
+            });
+        "#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_sqlite_table_timestamp() {
+        let src = r#"
+            import { sqliteTable, timestamp } from "drizzle-orm/sqlite-core";
+            export const events = sqliteTable("events", {
+                occurredAt: timestamp("occurred_at"),
+            });
+        "#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn still_flags_pg_table_timestamp_without_timezone() {
+        // Guard: the diagnostic must remain active for PostgreSQL tables.
+        let src = r#"
+            import { pgTable, timestamp } from "drizzle-orm/pg-core";
+            export const users = pgTable("users", {
+                createdAt: timestamp("created_at"),
+            });
+        "#;
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_pg_table_timestamp_with_timezone() {
+        // Guard: correct pg usage with the option present is clean.
+        let src = r#"
+            import { pgTable, timestamp } from "drizzle-orm/pg-core";
+            export const users = pgTable("users", {
+                createdAt: timestamp("created_at", { withTimezone: true }),
+            });
+        "#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
     }
 }
