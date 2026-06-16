@@ -12,21 +12,25 @@ pub fn is_vue_file(path: &Path) -> bool {
     path.extension().is_some_and(|e| e == "vue")
 }
 
-/// Extract the content of the `<template>` block from a Vue SFC.
-/// Returns `None` if no `<template>` block is found.
+/// Extract the inner content of the SFC's root `<template>` block.
+///
+/// A valid Vue SFC has exactly one top-level `<template>` block; any other
+/// `<template>` usage (`<template v-if>`, `<template #slot>`) is nested
+/// inside it. The Vue grammar is parsed to locate that root block, so the
+/// returned slice covers the full root template — including nested
+/// `<template>` blocks — and excludes any `<script>`/`<style>` section
+/// (and any `</template>`/`<script>` substring inside a script string).
+///
+/// Returns `None` if no `<template>` block is found. The returned slice
+/// borrows from `source`, so callers can recover its byte offset via
+/// pointer arithmetic.
 pub fn extract_template(source: &str) -> Option<&str> {
-    let start_tag = "<template";
-    let start_pos = source.find(start_tag)?;
-    // Find the end of the opening tag (handle <template> and <template lang="html">)
-    let after_tag = &source[start_pos + start_tag.len()..];
-    let tag_close = after_tag.find('>')?;
-    let content_start = start_pos + start_tag.len() + tag_close + 1;
-    let end_tag = "</template>";
-    let end_pos = source.rfind(end_tag)?;
-    if end_pos <= content_start {
-        return None;
-    }
-    Some(&source[content_start..end_pos])
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_vue_updated::language())
+        .ok()?;
+    let tree = parser.parse(source, None)?;
+    crate::rules::vue_sfc::template_block(&tree, source)
 }
 
 /// A parsed HTML opening/self-closing tag from a Vue template.
@@ -286,6 +290,37 @@ mod tests {
     fn extract_template_with_lang() {
         let source = "<template lang=\"html\">\n  <p>hi</p>\n</template>";
         assert_eq!(extract_template(source), Some("\n  <p>hi</p>\n"));
+    }
+
+    #[test]
+    fn extract_template_excludes_trailing_script_generics() {
+        // The span must stop at the root template's close, not the file's
+        // last `</template>`, so TS generics in a later <script> are excluded.
+        let source = "<template>\n  <div>hi</div>\n</template>\n\
+            <script setup lang=\"ts\">\nconst x = ref<HTMLElement | null>(null)\n</script>";
+        let template = extract_template(source).unwrap();
+        assert_eq!(template, "\n  <div>hi</div>\n");
+        assert!(!template.contains("HTMLElement"));
+    }
+
+    #[test]
+    fn extract_template_excludes_script_string_with_template_substring() {
+        // A script string literal containing `</template>` must not extend the
+        // template span past the real root close tag.
+        let source = "<template>\n  <div></div>\n</template>\n\
+            <script>\nconst s = '<\\/template><script>x'\n</script>";
+        let template = extract_template(source).unwrap();
+        assert_eq!(template, "\n  <div></div>\n");
+    }
+
+    #[test]
+    fn extract_template_keeps_nested_template() {
+        // A nested `<template v-if>` inside the root template must be included;
+        // the span must not truncate at the first inner `</template>`.
+        let source = "<template>\n  <template v-if=\"x\">\n    <span>a</span>\n  </template>\n  <div></div>\n</template>";
+        let template = extract_template(source).unwrap();
+        assert!(template.contains("<span>a</span>"));
+        assert!(template.contains("<div></div>"));
     }
 
     #[test]

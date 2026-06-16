@@ -161,4 +161,57 @@ mod tests {
         let source = "<template>\n  <div>hello\n</template>";
         assert!(run_named("component.tsx", source).is_empty());
     }
+
+    #[test]
+    fn ignores_ts_generics_in_trailing_script() {
+        // Regression for #3284: TS generics in a `<script setup>` after the
+        // template must not be parsed as unclosed HTML tags.
+        let source = "<template>\n  <div>hi</div>\n</template>\n\
+            <script setup lang=\"ts\">\n\
+            const x = ref<HTMLElement | null>(null)\n\
+            const y = bar satisfies Foo<typeof bar>[]\n\
+            </script>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_script_string_with_escaped_tags() {
+        // Regression for #3284: a script string literal containing
+        // `<script>…</script>` is not template content.
+        let source = "<template>\n  <div></div>\n</template>\n\
+            <script>\n\
+            const s = '<script>window.x=false<\\/script>'\n\
+            </script>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_unclosed_tag_inside_real_template() {
+        // The rule's real purpose: an unclosed `<span>` inside the template
+        // is still flagged.
+        let source = "<template><div><span></div></template>\n\
+            <script>const x = ref<HTMLElement>(null)</script>";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("<span>"));
+    }
+
+    #[test]
+    fn nested_template_all_closed_is_ok() {
+        // A nested `<template v-if>` with everything closed is clean.
+        let source = "<template>\n  <template v-if=\"x\">\n    <span>a</span>\n  </template>\n  <div></div>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn flags_unclosed_tag_after_nested_template() {
+        // The depth match must not truncate the root template at the inner
+        // `</template>`: an unclosed `<span>` AFTER a nested `<template>` block
+        // is still scanned and flagged.
+        let source = "<template>\n  <template v-if=\"x\">a</template>\n  <div></div>\n  <span>\n</template>\n\
+            <script>const x = ref<HTMLElement>(null)</script>";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("<span>"));
+    }
 }

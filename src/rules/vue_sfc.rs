@@ -62,6 +62,44 @@ pub fn extract_scripts<'src>(
     }
 }
 
+/// Return the inner content of the SFC's root `<template>` block.
+///
+/// A valid Vue SFC has exactly one top-level `template_element`; nested
+/// `<template>` usage (`<template v-if>`, `<template #slot>`) lives inside
+/// it. This walks the `component` root's direct children, finds the first
+/// `template_element`, and returns the source slice between its opening
+/// `start_tag` and its matching `end_tag`. Because the grammar makes the
+/// root template's siblings (`script_element`, `style_element`) separate
+/// nodes, script/style content is never part of the returned slice — even
+/// when a script string literal contains `</template>` or `<script>`.
+///
+/// Returns `None` if the file has no `<template>` block, or if the tree
+/// is not from the Vue grammar.
+pub fn template_block<'src>(tree: &tree_sitter::Tree, source: &'src str) -> Option<&'src str> {
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let template = root
+        .children(&mut cursor)
+        .find(|c| c.kind() == "template_element")?;
+
+    let mut inner = template.walk();
+    let children: Vec<_> = template.children(&mut inner).collect();
+    let start_tag = children.iter().find(|c| c.kind() == "start_tag")?;
+    let content_start = start_tag.end_byte();
+    // The closing `</template>` is the root template's `end_tag`. If the
+    // template is unterminated, fall back to the template node's end so the
+    // whole remaining template content is still scanned.
+    let content_end = children
+        .iter()
+        .rev()
+        .find(|c| c.kind() == "end_tag")
+        .map_or_else(|| template.end_byte(), |t| t.start_byte());
+    if content_end <= content_start {
+        return None;
+    }
+    source.get(content_start..content_end)
+}
+
 fn script_block_from_element<'src>(
     node: tree_sitter::Node,
     _source: &'src str,
