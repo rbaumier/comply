@@ -187,6 +187,53 @@ fn allows_fk_with_chained_index_where_clause() {
 }
 
 #[test]
+fn does_not_flag_mysql_table_fk_without_index() {
+    // MySQL InnoDB auto-creates an index on FK referencing columns when no
+    // suitable index exists, so the Postgres-only advice must not fire here.
+    let src = r#"
+        export const Customers = mysqlTable("customers", {
+            id: int("id").autoincrement().primaryKey(),
+            userId: int("user_id").references(() => Users.id).notNull(),
+        });
+    "#;
+    assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+}
+
+#[test]
+fn does_not_flag_sqlite_table_fk_without_index() {
+    let src = r#"
+        export const t = sqliteTable("t", {
+            userId: integer("user_id").references(() => Users.id),
+        });
+    "#;
+    assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+}
+
+#[test]
+fn still_flags_pg_table_fk_without_index() {
+    // Guard: the diagnostic must remain active for PostgreSQL tables.
+    let src = r#"
+        export const customers = pgTable("customers", {
+            userId: integer("user_id").references(() => users.id),
+        });
+    "#;
+    assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+}
+
+#[test]
+fn allows_pg_table_fk_with_explicit_index() {
+    // Guard: a pgTable FK column that DOES have an explicit index is clean.
+    let src = r#"
+        export const customers = pgTable("customers", {
+            userId: integer("user_id").references(() => users.id),
+        }, (t) => [
+            index("idx_customers_user_id").on(t.userId),
+        ]);
+    "#;
+    assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+}
+
+#[test]
 fn does_not_flag_references_in_string_literal() {
     // Regression: a column comment containing ".references(" text must not
     // be mistaken for an actual FK declaration.
