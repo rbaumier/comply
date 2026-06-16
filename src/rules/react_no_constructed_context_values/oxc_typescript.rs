@@ -30,6 +30,14 @@ impl OxcCheck for Check {
             return;
         };
 
+        // Skip non-React JSX (SolidJS, Vue, Preact, Qwik…). The re-render concern
+        // is React-only: those frameworks are signal-based, so an inline object/array
+        // `value` does not re-construct on every render, and the `useMemo` remedy
+        // does not exist there. Mirrors `react-style-prop-object`'s exemption.
+        if crate::oxc_helpers::is_non_react_jsx_file(ctx.source, ctx.project, ctx.path) {
+            return;
+        }
+
         // Tag must contain "Provider".
         let tag_str = match &opening.name {
             JSXElementName::Identifier(id) => id.name.as_str().to_string(),
@@ -80,5 +88,47 @@ impl OxcCheck for Check {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.tsx")
+    }
+
+    #[test]
+    fn flags_inline_object_in_react_file() {
+        // A genuine React file (imports `react`, no Solid markers) must still be
+        // flagged: the inline object reconstructs on every render.
+        let src = "import { createContext } from 'react';\nconst x = <MyContext.Provider value={{ a, b }}>child</MyContext.Provider>;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_inline_array_in_solid_js_file() {
+        // The issue's FP: a `.js` file importing `solid-js`. SolidJS is
+        // signal-based — the re-render concern (and `useMemo` remedy) does not
+        // apply. (Closes #3285)
+        let src = "import { createContext } from 'solid-js';\nconst x = <RouterContext.Provider value={[location, pending]}>child</RouterContext.Provider>;";
+        assert!(run(src).is_empty());
     }
 }
