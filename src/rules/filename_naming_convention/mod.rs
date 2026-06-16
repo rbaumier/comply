@@ -43,32 +43,71 @@ fn has_route_dir_ancestor(path: &std::path::Path) -> bool {
         .any(|c| matches!(c.as_os_str().to_str(), Some("pages" | "routes")))
 }
 
+/// Returns the routing base of `file_name`: the name with a single trailing
+/// extension stripped. Catch-all segments such as `[...slug].vue` carry dots
+/// inside the brackets, so the dot-split stem is not the routing base — only the
+/// final extension is removed.
+fn routing_base(file_name: &str) -> &str {
+    file_name.rsplit_once('.').map_or(file_name, |(base, _)| base)
+}
+
+/// Returns `true` when `routing_base` contains a bracket-wrapped dynamic param
+/// anywhere — plain `[id]`, catch-all `[...slug]`, optional `[[id]]`, repeatable
+/// `[slug]+` / `[[opt]]+`, typed `[month=month-valibot]`, or inline-mixed
+/// `sub-[first]-[second]` — detected by containing both `[` and `]`. This is the
+/// route-segment param grammar shared by vue-router (unplugin-vue-router), Nuxt
+/// `pages/` and `server/` routes, Next.js Pages Router, SolidStart, and TanStack.
+fn has_bracket_param(routing_base: &str) -> bool {
+    routing_base.contains('[') && routing_base.contains(']')
+}
+
 /// Returns `true` for a file-based-routing route-segment filename, recognised by
 /// the routing grammar shared across vue-router (unplugin-vue-router), Nuxt,
 /// Next.js Pages Router, SolidStart, and TanStack Router. The route path is
 /// derived from the filename, so the developer cannot rename it to
-/// kebab/Pascal/camel case without breaking the route. The routing base is the
-/// filename with a single trailing extension stripped (catch-all segments such
-/// as `[...slug].vue` carry dots inside the brackets, so the dot-split stem is
-/// not the routing base). A routing base is a route segment when it:
-/// - contains a bracket-wrapped dynamic param anywhere — plain `[id]`, catch-all
-///   `[...slug]`, optional `[[id]]`, repeatable `[slug]+` / `[[opt]]+`, typed
-///   `[month=month-valibot]`, or inline-mixed `sub-[first]-[second]` — detected
-///   by containing both `[` and `]`;
+/// kebab/Pascal/camel case without breaking the route. A routing base is a route
+/// segment when it:
+/// - contains a bracket-wrapped dynamic param anywhere (see `has_bracket_param`);
 /// - is a route group `(name)` — starts with `(` and carries a matching `)`;
 /// - is a layout / server marker starting with `+` (`+layout.vue`).
 ///
 /// See https://uvr.esm.is/, https://nuxt.com/docs/guide/directory-structure/pages,
 /// https://docs.solidjs.com/solid-start/building-your-application/routing.
 fn is_file_based_route_segment(path: &std::path::Path, file_name: &str) -> bool {
-    let routing_base = file_name.rsplit_once('.').map_or(file_name, |(base, _)| base);
-    let is_route_shape = (routing_base.contains('[') && routing_base.contains(']'))
+    let routing_base = routing_base(file_name);
+    let is_route_shape = has_bracket_param(routing_base)
         || (routing_base.starts_with('(') && routing_base[1..].contains(')'))
         || routing_base.starts_with('+');
     if !is_route_shape {
         return false;
     }
     has_route_dir_ancestor(path)
+}
+
+/// Returns `true` for a Nuxt server-route dynamic-segment file: a bracket-param
+/// filename (see `has_bracket_param`) living under one of Nuxt's server-route
+/// directories — `server/api/`, `server/routes/`, or `server/middleware/`. Nuxt's
+/// Nitro file-system router derives the server route path from these filenames
+/// (`server/api/trpc/[trpc].ts` serves `/api/trpc/:trpc`), so the bracket name is
+/// framework-mandated and renaming it breaks the route. Both signals are required:
+/// the bracket param distinguishes a route segment from an ordinary mis-named file,
+/// and the consecutive `server/<sub>` ancestor scopes the allowance to actual Nuxt
+/// server routes rather than any directory that happens to be named `api`.
+/// See https://nuxt.com/docs/guide/directory-structure/server.
+fn is_nuxt_server_route_file(path: &std::path::Path, file_name: &str) -> bool {
+    if !has_bracket_param(routing_base(file_name)) {
+        return false;
+    }
+    let segments: Vec<&str> = path
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => s.to_str(),
+            _ => None,
+        })
+        .collect();
+    segments
+        .windows(2)
+        .any(|pair| pair[0] == "server" && matches!(pair[1], "api" | "routes" | "middleware"))
 }
 
 /// Returns `true` for TanStack Router pathless layout routes living under any

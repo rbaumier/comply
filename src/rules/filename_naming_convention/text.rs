@@ -188,6 +188,9 @@ impl TextCheck for Check {
         if super::is_file_based_route_segment(ctx.path, file_name) {
             return Vec::new();
         }
+        if super::is_nuxt_server_route_file(ctx.path, file_name) {
+            return Vec::new();
+        }
         if super::is_nextjs_numeric_error_page(ctx.path, stem) {
             return Vec::new();
         }
@@ -752,5 +755,52 @@ mod tests {
     #[test]
     fn flags_non_test_mixed_case_still_fires_issue_3310() {
         assert_eq!(run("src/My_Component.ts").len(), 1);
+    }
+
+    // Regression for #3280: Nuxt's Nitro file-system router derives a server route
+    // path from bracket-param `.ts`/`.js` filenames under `server/api/`,
+    // `server/routes/`, or `server/middleware/`. The bracket name is mandated by
+    // the framework, so it must not be flagged.
+    #[test]
+    fn allows_nuxt_server_api_dynamic_route_issue_3280() {
+        assert!(run("examples/nuxt/server/api/trpc/[trpc].ts").is_empty());
+    }
+
+    #[test]
+    fn allows_nuxt_server_api_param_route_issue_3280() {
+        assert!(run("server/api/[id].ts").is_empty());
+    }
+
+    #[test]
+    fn allows_nuxt_server_routes_param_route_issue_3280() {
+        assert!(run("server/routes/[slug].ts").is_empty());
+    }
+
+    #[test]
+    fn allows_nuxt_server_middleware_param_route_js_issue_3280() {
+        assert!(run("server/middleware/[name].js").is_empty());
+    }
+
+    // Guard: the server-route allowance requires BOTH the bracket param AND the
+    // `server/<api|routes|middleware>` ancestor — a genuinely mis-named non-bracket
+    // file under `server/api/` (snake_case, which `.ts` does not allow) still fires.
+    #[test]
+    fn flags_snake_case_handler_under_server_api_issue_3280() {
+        assert_eq!(run("server/api/my_handler.ts").len(), 1);
+    }
+
+    // Guard: a bracket-named file NOT under any Nuxt route dir is not exempted by
+    // the server-route branch (nor by the `pages/`/`routes/` branch) and still
+    // fires — both signals are required.
+    #[test]
+    fn flags_bracket_stem_outside_nuxt_route_dirs_issue_3280() {
+        assert_eq!(run("src/[weird].ts").len(), 1);
+    }
+
+    // Guard: a directory merely named `api` (not under `server/`) does not qualify;
+    // the consecutive `server/api` pair is required.
+    #[test]
+    fn flags_bracket_stem_under_bare_api_dir_issue_3280() {
+        assert_eq!(run("src/api/[id].ts").len(), 1);
     }
 }
