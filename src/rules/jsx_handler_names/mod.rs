@@ -26,7 +26,10 @@ pub const META: RuleMeta = RuleMeta {
     ),
     categories: &["react"],
 
-    skip_in_test_dir: false,
+    // Test files name handlers after the assertion idiom (`spy`/`mock`/`stub`/
+    // `fn` from `jest.fn()` etc.), not the `handle*`/`on*` convention; the
+    // naming rule targets component definitions, not test setups.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 

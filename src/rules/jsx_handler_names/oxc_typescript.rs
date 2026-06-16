@@ -175,4 +175,30 @@ mod tests {
         assert_eq!(run(src).len(), 1);
     }
 
+    #[test]
+    fn skips_test_mock_handler_in_test_dir() {
+        // Regression for rbaumier/comply#3381 — a `jest.fn()` spy passed to an
+        // event-handler prop in a test file is the assertion idiom, not a
+        // naming violation. The central `skip_in_test_dir` gate exempts it.
+        let src = r#"const x = <RouterProvider router={router} onError={spy} />;"#;
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            src,
+            "packages/react-router/__tests__/dom/client-on-error-test.tsx",
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn still_flags_mock_handler_outside_test_dir() {
+        // Guard: the exemption is scoped to test files only — the same `spy`
+        // identifier in a production file must still be flagged.
+        let src = r#"const x = <RouterProvider router={router} onError={spy} />;"#;
+        let diags = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            src,
+            "packages/react-router/src/dom/client.tsx",
+        );
+        assert_eq!(diags.len(), 1);
+    }
 }
