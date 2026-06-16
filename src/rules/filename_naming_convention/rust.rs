@@ -58,6 +58,12 @@ impl TextCheck for Check {
         if crate::rules::path_utils::is_rust_ui_test_fixture(ctx.path) {
             return Vec::new();
         }
+        // trybuild proc-macro fixtures under `tests/<suite>/pass|fail/` are
+        // compiled as standalone crates whose kebab-case filename is the
+        // test-scenario identifier.
+        if crate::rules::path_utils::is_rust_trybuild_fixture(ctx.path) {
+            return Vec::new();
+        }
         // Cargo example targets under `examples/` compile to `--example <stem>`
         // binaries, so kebab-case stems are the standard Rust convention.
         if crate::rules::path_utils::is_cargo_example_path(ctx.path) {
@@ -180,5 +186,25 @@ mod tests {
     #[test]
     fn allows_snake_case_in_cargo_examples() {
         assert!(run("examples/basic_search.rs").is_empty());
+    }
+
+    #[test]
+    fn allows_kebab_case_in_trybuild_pass_fixture() {
+        assert!(run("axum-macros/tests/from_ref/pass/reference-types.rs").is_empty());
+    }
+
+    #[test]
+    fn allows_kebab_case_in_trybuild_fail_fixture() {
+        assert!(run("axum-macros/tests/from_ref/fail/self-referential.rs").is_empty());
+    }
+
+    #[test]
+    fn still_flags_kebab_case_in_trybuild_suite_without_pass_fail() {
+        assert_eq!(run("axum-macros/tests/from_ref/reference-types.rs").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_kebab_case_outside_any_fixture() {
+        assert_eq!(run("src/my-mod.rs").len(), 1);
     }
 }

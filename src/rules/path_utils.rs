@@ -235,6 +235,27 @@ pub fn is_rust_ui_test_fixture(path: &Path) -> bool {
     false
 }
 
+/// True when `path` is a `trybuild` proc-macro test fixture: an `.rs` file under
+/// a `tests/<suite>/pass/` or `tests/<suite>/fail/` directory sequence (e.g.
+/// `tests/from_ref/pass/reference-types.rs`). `trybuild` compiles each fixture as
+/// a standalone crate and uses its filename as the test-scenario identifier, so
+/// the convention names scenarios in kebab-case to mirror compiler error-message
+/// style. The `tests/<suite>/` prefix is required — a `pass`/`fail` segment must
+/// follow a `tests` segment with exactly one suite component between them — so an
+/// unrelated `src/pass/` or a bare `tests/pass/` (no suite dir) stays checked.
+pub fn is_rust_trybuild_fixture(path: &Path) -> bool {
+    let segments: Vec<&str> = path
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => s.to_str(),
+            _ => None,
+        })
+        .collect();
+    segments.windows(3).any(|window| {
+        window[0] == "tests" && matches!(window[2], "pass" | "fail")
+    })
+}
+
 /// True when `path` lives under a Cargo `examples/` directory: any `examples`
 /// path segment. Files there are compiled as individual Cargo example targets
 /// whose binary name is the file stem (`examples/search-stdin.rs` becomes
@@ -1622,5 +1643,30 @@ mod aux_path_tests {
         assert!(!is_linter_spec_fixture(&PathBuf::from("pkg/tests/myspecs/valid.ts")));
         // A `.snap` outside a spec dir is not exempted by this predicate.
         assert!(!is_linter_spec_fixture(&PathBuf::from("src/__snapshots__/foo.snap")));
+    }
+
+    #[test]
+    fn rust_trybuild_fixture_covers_pass_fail_suites_issue3248() {
+        // The issue's exact reproducer path (axum-macros).
+        assert!(is_rust_trybuild_fixture(&PathBuf::from(
+            "axum-macros/tests/from_ref/pass/reference-types.rs"
+        )));
+        // The `fail` half of the same convention.
+        assert!(is_rust_trybuild_fixture(&PathBuf::from("tests/x/fail/y.rs")));
+        // Anything nested under a pass/fail dir is a fixture.
+        assert!(is_rust_trybuild_fixture(&PathBuf::from(
+            "a/tests/x/pass/deep/nested/y.rs"
+        )));
+    }
+
+    #[test]
+    fn rust_trybuild_fixture_negative_space() {
+        // A fixture directly under the suite, not under pass/fail, stays checked.
+        assert!(!is_rust_trybuild_fixture(&PathBuf::from("tests/from_ref/x.rs")));
+        // A `pass`/`fail` dir with no suite between it and `tests` is not the
+        // trybuild convention.
+        assert!(!is_rust_trybuild_fixture(&PathBuf::from("tests/pass/x.rs")));
+        // A `pass`/`fail` dir not under `tests/` is unrelated source.
+        assert!(!is_rust_trybuild_fixture(&PathBuf::from("src/pass/x.rs")));
     }
 }
