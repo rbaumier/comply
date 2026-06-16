@@ -32,6 +32,13 @@ impl OxcCheck for Check {
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
 
+        // tsd type-test files pass banned types as inputs to the utility under
+        // test (e.g. `ConditionalSimplify<SomeFunction, Function>`), so the
+        // banned type is the test subject, not application code.
+        if ctx.file.is_type_test_file() {
+            return diagnostics;
+        }
+
         for node in semantic.nodes().iter() {
             match node.kind() {
                 // TSTypeReference with a single identifier name matching banned types.
@@ -83,6 +90,17 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
+    fn run_at(source: &str, path: &str) -> Vec<Diagnostic> {
+        let project = crate::project::default_static_project_ctx();
+        let file = crate::rules::file_ctx::FileCtx::build(
+            std::path::Path::new(path),
+            source,
+            crate::files::Language::TypeScript,
+            project,
+        );
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, path, project, &file)
+    }
+
     #[test]
     fn flags_function_type() {
         let d = run_on("const f: Function = () => {};");
@@ -95,5 +113,18 @@ mod tests {
         // `Object` is owned by ts-no-wrapper-object-types; this rule must not
         // also flag it (regression for #1222).
         assert!(run_on("const o: Object = {};").is_empty());
+    }
+
+    #[test]
+    fn exempts_tsd_type_test_file_issue3324() {
+        // type-fest test-d/conditional-simplify.ts: `Function` is the input to
+        // the utility under test, not application code.
+        let src = "type SimplifiedFunctionPass = ConditionalSimplify<SomeFunction, Function>;";
+        assert!(run_at(src, "test-d/conditional-simplify.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_function_type_in_production_issue3324() {
+        assert_eq!(run_at("const f: Function = () => {};", "src/widget.ts").len(), 1);
     }
 }

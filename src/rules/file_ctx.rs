@@ -82,6 +82,13 @@ pub struct PathSegments {
     /// executed — so the engine skips them for every rule. See
     /// [`crate::rules::path_utils::is_linter_spec_fixture`].
     pub is_linter_spec_fixture: bool,
+    /// A tsd/dtslint type-test file: one under a `test-d/`/`test-tsd/`/`dtslint/`
+    /// directory or carrying a `.test-d.`/`.tp.` filename infix. Its purpose is
+    /// to assert type relationships, so banned wrapper/`Function` types named in
+    /// it are deliberately the subjects or inputs of those assertions. Narrower
+    /// than `in_test_dir` — it does NOT cover ordinary `.test.`/`.spec.` unit
+    /// tests. See [`crate::rules::path_utils::is_type_test_file`].
+    pub is_type_test_file: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -105,6 +112,14 @@ impl FileCtx {
     /// setup/teardown.
     pub fn in_benchmark_dir(&self) -> bool {
         self.path_segments.in_benchmark_dir
+    }
+
+    /// True when this file is a tsd/dtslint type-test file (a `test-d/`-family
+    /// directory or a `.test-d.`/`.tp.` filename infix). Opt-in: consulted only
+    /// by the wrapper-/`Function`-type bans, which must not fire on the banned
+    /// types deliberately used as assertion subjects in type tests.
+    pub fn is_type_test_file(&self) -> bool {
+        self.path_segments.is_type_test_file
     }
 
     pub fn build(path: &Path, source: &str, language: Language, project: &ProjectCtx) -> Self {
@@ -529,6 +544,7 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
         in_benchmark_dir: is_benchmark_path(&lower),
         is_framework_hook_file: is_framework_hook_file(path),
         is_linter_spec_fixture: crate::rules::path_utils::is_linter_spec_fixture(path),
+        is_type_test_file: crate::rules::path_utils::is_type_test_file(path),
     }
 }
 
