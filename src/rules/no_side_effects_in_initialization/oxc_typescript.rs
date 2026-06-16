@@ -241,7 +241,28 @@
 //!   wire reactive state together with such calls at module scope; the call must
 //!   run when the composable is first imported, so it is declarative reactive
 //!   registration, not a tree-shaking hazard. The import-source gate keeps a
-//!   same-named local `watch()` (or one imported from `node:fs`) flagged.
+//!   same-named local `watch()` (or one imported from `node:fs`) flagged;
+//! - `Object.defineProperty` wrapper calls: a top-level call `wrap(obj, …)` whose
+//!   callee is a bare identifier resolving to a top-level `function` declaration
+//!   in the same file whose body's only observable effect is property
+//!   registration — `Object.defineProperty(...)` /
+//!   `Object.defineProperties(...)` calls and member-target property assignments
+//!   (`obj.prop = …` / `obj[key] = …`). This is the CommonJS prototype-getter
+//!   idiom (`function defineGetter(obj, name, getter) {
+//!   Object.defineProperty(obj, name, { get: getter }); }` invoked at module
+//!   scope), equivalent to calling `Object.defineProperty` directly. A wrapper
+//!   whose body does anything else observable (a `console.log`, a network call, a
+//!   `throw`), or a callee that does not resolve to such a local function, is
+//!   still flagged;
+//! - property-registration `forEach`: a top-level `<array>.forEach(<cb>)` whose
+//!   callback body performs only property registration — member-target property
+//!   assignments and/or `Object.defineProperty(...)` calls
+//!   (`methods.forEach(method => { app[method] = function () { … }; })`). Bulk
+//!   property assignment is equivalent to writing each `app.get = …` /
+//!   `app.post = …` individually, which the rule already leaves alone, so the
+//!   receiver is unconstrained (it is commonly an imported array). A callback
+//!   that calls a free function, performs I/O, or does any other observable work
+//!   is still flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -1884,6 +1905,130 @@ fn is_data_init_foreach(
         .all(|stmt| is_local_mutation_stmt(stmt, locals))
 }
 
+/// True when `call` is `Object.defineProperty(...)` / `Object.defineProperties(...)`
+/// — a static member call whose object is the `Object` global and whose method is
+/// `defineProperty` or `defineProperties`. These attach properties (and getters /
+/// setters) onto an object, the canonical way CommonJS libraries augment prototype
+/// objects at module load.
+fn is_define_property_call(call: &oxc_ast::ast::CallExpression) -> bool {
+    let Expression::StaticMemberExpression(m) = &call.callee else {
+        return false;
+    };
+    if !matches!(m.property.name.as_str(), "defineProperty" | "defineProperties") {
+        return false;
+    }
+    matches!(&m.object, Expression::Identifier(obj) if obj.name == "Object")
+}
+
+/// True when `stmt` performs only property registration — the same observable
+/// effects the rule already leaves alone when written directly at module scope:
+/// - a member-target assignment `obj.prop = v` / `obj[key] = v` (an
+///   `AssignmentExpression` whose target is a member access, not a bare
+///   reassignment); or
+/// - an `Object.defineProperty(...)` / `Object.defineProperties(...)` call; or
+/// - a `return` whose argument (if any) is an `Object.defineProperty(...)` call.
+///
+/// Any other statement — a free call (`fetch(x)`), `throw`, `console.log`, an
+/// `await`, a control-flow construct — makes the surrounding wrapper / callback
+/// observably impure and is rejected.
+fn is_property_registration_stmt(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::ExpressionStatement(es) => match &es.expression {
+            Expression::AssignmentExpression(assign) => {
+                matches!(
+                    &assign.left,
+                    AssignmentTarget::StaticMemberExpression(_)
+                        | AssignmentTarget::ComputedMemberExpression(_)
+                )
+            }
+            Expression::CallExpression(call) => is_define_property_call(call),
+            _ => false,
+        },
+        Statement::ReturnStatement(ret) => match &ret.argument {
+            None => true,
+            Some(Expression::CallExpression(call)) => is_define_property_call(call),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// True when a top-level `function <name>(…) { … }` declaration whose name is
+/// `name` exists in the module and its body's only observable effect is property
+/// registration (see `is_property_registration_stmt`). Resolves a bare-identifier
+/// callee at module scope to its local definition and inspects the wrapper body.
+fn module_has_property_registration_function(program: &Program, name: &str) -> bool {
+    program.body.iter().any(|stmt| {
+        let Statement::FunctionDeclaration(func) = stmt else {
+            return false;
+        };
+        if func.id.as_ref().map(|id| id.name.as_str()) != Some(name) {
+            return false;
+        }
+        let Some(body) = &func.body else {
+            return false;
+        };
+        !body.statements.is_empty()
+            && body.statements.iter().all(is_property_registration_stmt)
+    })
+}
+
+/// True when `call` is a top-level call to a local helper whose only observable
+/// effect is property registration — the `Object.defineProperty` wrapper pattern:
+/// `defineGetter(req, 'query', getter)` where the module defines
+/// `function defineGetter(obj, name, getter) {
+///     Object.defineProperty(obj, name, { get: getter });
+/// }`.
+///
+/// The callee must be a bare identifier resolving to a top-level `function`
+/// declaration in the same file whose body is entirely property registration (see
+/// `module_has_property_registration_function`). A wrapper whose body does
+/// anything else observable (a `console.log`, a network call, a `throw`), or a
+/// callee that does not resolve to such a local function, is still flagged.
+fn is_define_property_wrapper_call(
+    call: &oxc_ast::ast::CallExpression,
+    program: &Program,
+) -> bool {
+    let Expression::Identifier(callee) = &call.callee else {
+        return false;
+    };
+    module_has_property_registration_function(program, callee.name.as_str())
+}
+
+/// True when `call` is a top-level `<array>.forEach(<cb>)` whose callback body
+/// performs only property registration — bulk property assignment at module
+/// scope, equivalent to writing each `obj.prop = …` / `Object.defineProperty(…)`
+/// individually (which the rule already leaves alone):
+/// `methods.forEach(function (method) { app[method] = function () { … }; })`.
+///
+/// The receiver may be any expression (commonly an imported array such as
+/// `methods` from the `methods` package) — what bounds the exemption is the
+/// callback body: every statement must be a property registration (see
+/// `is_property_registration_stmt`). A callback that calls a free function
+/// (`fetch(x)`), mutates external state through a non-member call, or does any
+/// other observable work is still flagged.
+fn is_property_registration_foreach(call: &oxc_ast::ast::CallExpression) -> bool {
+    let Expression::StaticMemberExpression(m) = &call.callee else {
+        return false;
+    };
+    if m.property.name != "forEach" {
+        return false;
+    }
+    if call.arguments.len() != 1 {
+        return false;
+    }
+    let body = match &call.arguments[0] {
+        Argument::ArrowFunctionExpression(arrow) => &arrow.body,
+        Argument::FunctionExpression(func) => match &func.body {
+            Some(body) => body,
+            None => return false,
+        },
+        _ => return false,
+    };
+    !body.statements.is_empty()
+        && body.statements.iter().all(is_property_registration_stmt)
+}
+
 /// True when the program is a library's public entry barrel by content shape:
 /// it has at least one `export *` re-export (`export * from "./schemas.js"`,
 /// `export * as ns from "..."`) and those star re-exports outnumber its
@@ -2014,6 +2159,8 @@ impl OxcCheck for Check {
                     || is_library_plugin_registration_call(call)
                     || is_commander_subcommand_chain(call)
                     || is_data_init_foreach(call, &module_locals)
+                    || is_property_registration_foreach(call)
+                    || is_define_property_wrapper_call(call, program)
                     || is_local_const_config_call(call, &new_locals)
                     || is_export_object_assign(call, &exported_locals)
                     || is_exported_builder_call(call, &exported_bindings)
@@ -4673,5 +4820,103 @@ mod tests {
 
         let fetch = crate::rules::test_helpers::run_rule(&Check, "fetchData();", "src/d.ts");
         assert_eq!(fetch.len(), 1, "fetchData() must still flag, got {fetch:?}");
+    }
+
+    // --- (n) defineProperty wrapper & property-registration forEach (#3391) -
+
+    // Regression for #3391: Express's `lib/request.js` builds its request
+    // prototype by calling a local `defineGetter` helper at module scope. The
+    // helper's only effect is `Object.defineProperty(...)`, so the call is
+    // equivalent to calling `Object.defineProperty` directly — prototype
+    // augmentation, not a tree-shaking hazard.
+    #[test]
+    fn allows_define_property_wrapper_call() {
+        let src = "\
+            function defineGetter(obj, name, getter) {\n\
+              Object.defineProperty(obj, name, { configurable: true, enumerable: true, get: getter });\n\
+            }\n\
+            defineGetter(req, 'query', function query() { return 1; });\n\
+            defineGetter(req, 'protocol', function protocol() { return 'https'; });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "lib/request.js");
+        assert!(
+            diags.is_empty(),
+            "defineProperty wrapper calls at module scope should be exempt, got {diags:?}"
+        );
+    }
+
+    // Regression for #3391: Express's `lib/application.js` registers HTTP method
+    // handlers by iterating `methods` and assigning to `app[method]`. Bulk
+    // property assignment is equivalent to writing each `app.get = …` directly,
+    // which the rule already leaves alone.
+    #[test]
+    fn allows_property_registration_foreach() {
+        let src = "\
+            methods.forEach(function (method) {\n\
+              app[method] = function (path) { return path; };\n\
+            });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "lib/application.js");
+        assert!(
+            diags.is_empty(),
+            "forEach of property assignments at module scope should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_property_registration_foreach_with_define_property() {
+        // The callback may also register via Object.defineProperty.
+        let src = "\
+            keys.forEach(function (key) {\n\
+              Object.defineProperty(target, key, { get: function () { return key; } });\n\
+            });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "lib/proto.js");
+        assert!(
+            diags.is_empty(),
+            "forEach of Object.defineProperty calls should be exempt, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_wrapper_call_with_real_side_effect() {
+        // Negative-space guard: the wrapper body does observable work beyond
+        // property registration (a network call), so the top-level call to it is
+        // a genuine side effect and must still fire.
+        let src = "\
+            function doSideEffect() { fetch('/x'); }\n\
+            doSideEffect();\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/boot.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a call to a wrapper that does real I/O must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_foreach_callback_with_real_side_effect() {
+        // Negative-space guard: a forEach whose callback calls a free function
+        // (`fetch`) is a genuine side effect, not property registration.
+        let src = "arr.forEach(function (x) { fetch(x); });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/load.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a forEach callback performing I/O must still be flagged, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_call_to_unresolved_wrapper() {
+        // Negative-space guard: a bare top-level call whose callee does not
+        // resolve to a local property-registration function is still flagged,
+        // even when a same-named effect lives elsewhere.
+        let src = "\
+            import { defineGetter } from './helpers';\n\
+            defineGetter(req, 'query', getter);\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/request.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a call to an imported (non-local) helper must still be flagged, got {diags:?}"
+        );
     }
 }
