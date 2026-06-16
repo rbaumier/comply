@@ -2377,14 +2377,27 @@ impl ProjectCtx {
                 .any(|f| f.name == "docusaurus")
     }
 
+    /// True when Nuxt owns `path` — detected either at the project root or via
+    /// the nearest `package.json` (a Nuxt app nested in a monorepo package, e.g.
+    /// `docs/`, is invisible to root-anchored detection).
+    pub fn is_nuxt_for_path(&self, path: &Path) -> bool {
+        self.has_framework("nuxt")
+            || self
+                .frameworks_for_path(path)
+                .iter()
+                .any(|f| f.name == "nuxt")
+    }
+
     /// Add a framework's route-scoped magic exports when `path` matches the file
     /// convention that consumes them. SvelteKit reserves `load`/`ssr`/`csr`/… in
     /// `+page`/`+layout`/`+server` route files and `match` in `src/params/*`;
     /// Vue Router reserves `parser` in `src/params/*`; Remix reserves
-    /// `loader`/`action`/`meta`/… in `app/routes/*` modules. The router calls each
-    /// by exact name, so they have no importer but are live. Each framework's
-    /// `route_files` apply only when `path` matches that framework's own route-file
-    /// convention, keeping a same-named export in an ordinary module flaggable.
+    /// `loader`/`action`/`meta`/… in `app/routes/*` modules; Nuxt reserves
+    /// `default` in `server/api/*` and `server/routes/*` Nitro route modules. The
+    /// router calls each by exact name, so they have no importer but are live.
+    /// Each framework's `route_files` apply only when `path` matches that
+    /// framework's own route-file convention, keeping a same-named export in an
+    /// ordinary module flaggable.
     fn extend_route_magic_exports<'a>(&'a self, path: &Path, names: &mut HashSet<&'a str>) {
         let basename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let is_sveltekit_route = crate::rules::path_utils::is_sveltekit_route_file(basename);
@@ -2393,12 +2406,14 @@ impl ProjectCtx {
         let is_rr_root = crate::rules::path_utils::is_react_router_root_module(path);
         let is_rr_config = crate::rules::path_utils::is_react_router_routes_config(path);
         let is_astro_page = crate::rules::path_utils::is_astro_routed_page(path);
+        let is_nuxt_server_route = crate::rules::path_utils::is_nuxt_server_route_file(path);
         if !is_sveltekit_route
             && !is_param_matcher
             && !is_remix_route
             && !is_rr_root
             && !is_rr_config
             && !is_astro_page
+            && !is_nuxt_server_route
         {
             return;
         }
@@ -2417,6 +2432,7 @@ impl ProjectCtx {
                 "svelte" => is_sveltekit_route,
                 "remix" => is_remix_route || is_rr_root,
                 "astro" => is_astro_page,
+                "nuxt" => is_nuxt_server_route,
                 _ => false,
             };
             if route_file_match {
