@@ -12,10 +12,25 @@ const BUSINESS_DIRS: &[&str] = &["service", "domain", "core", "model", "entity"]
 const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
 const LOG_NAMESPACES: &[&str] = &["log", "tracing"];
 
+/// True if any directory segment of `path` names a DDD business-logic layer.
+///
+/// `core` is special-cased: a Cargo workspace crate literally named `core`
+/// (e.g. `crates/core/flags/config.rs`) is the primary binary, not a DDD layer,
+/// so `core` only counts when it appears under a `src/` ancestor — the layout a
+/// real domain layer (`src/core/`, `crates/app/src/core/`) takes.
 fn is_business_logic_path(path: &std::path::Path) -> bool {
-    let path_str = path.to_string_lossy();
-    BUSINESS_DIRS.iter().any(|dir| {
-        path_str.contains(&format!("/{dir}/")) || path_str.contains(&format!("\\{dir}\\"))
+    let segments: Vec<&str> = path
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .collect();
+    // The file name is not a directory layer, so skip the last segment.
+    let dir_count = segments.len().saturating_sub(1);
+    segments[..dir_count].iter().enumerate().any(|(i, &seg)| {
+        if seg == "core" {
+            segments[..i].contains(&"src")
+        } else {
+            BUSINESS_DIRS.contains(&seg)
+        }
     })
 }
 
@@ -145,5 +160,23 @@ mod tests {
         let src = "fn f() { info!(\"msg\"); }";
         let diags = run_path("src/service/user.rs", src);
         assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_logging_in_crate_named_core() {
+        let diags = run_path("crates/core/flags/config.rs", r#"log::debug!("config");"#);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn flags_log_debug_in_core_layer_under_src() {
+        let diags = run_path("src/core/order_service.rs", r#"log::debug!("order");"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_log_debug_in_core_layer_under_crate_src() {
+        let diags = run_path("crates/app/src/core/service.rs", r#"log::debug!("svc");"#);
+        assert_eq!(diags.len(), 1);
     }
 }
