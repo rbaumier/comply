@@ -165,6 +165,17 @@ max = 500
 threshold_percent = 30
 min_importers = 10
 
+# Near-duplicate comment detection. Flags prose comments that share a verbatim
+# opening — the signature of a copy-pasted explanation that drifts out of sync.
+# `min_words` keeps short comments (TODOs, directives) out of scope; a comment
+# is reported only when it shares at least `shared_prefix_words` opening words
+# with another AND that shared run covers at least `prefix_pct` of the shorter
+# comment.
+[rules.no-duplicate-comments]
+min_words = 15
+shared_prefix_words = 8
+prefix_pct = 0.25
+
 # ---------------------------------------------------------------
 # Disabled by default — opt-in only.
 # ---------------------------------------------------------------

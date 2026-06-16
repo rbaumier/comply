@@ -21,6 +21,7 @@ mod changed_lines;
 mod cli;
 mod clippy;
 mod clone_detection;
+mod comment_dup_detection;
 mod config;
 mod diagnostic;
 mod engine;
@@ -452,6 +453,8 @@ fn collect_all_diagnostics(
 
     let clones_enabled =
         discovered.len() >= 2 && !config.is_rule_globally_disabled(clone_detection::RULE_ID);
+    let dup_comments_enabled = discovered.len() >= 2
+        && !config.is_rule_globally_disabled(comment_dup_detection::RULE_ID);
 
     // Clone detection only needs the file list, not the import index, so its
     // `rayon::join` arm runs concurrently with the other arm's full chain:
@@ -518,11 +521,20 @@ fn collect_all_diagnostics(
         let d = clone_detection::lint_files(&all_refs);
         (d, t.elapsed())
     };
+    let dup_comments_work = || -> Vec<Diagnostic> {
+        if !dup_comments_enabled {
+            return Vec::new();
+        }
+        let all_refs: Vec<&SourceFile> = discovered.iter().collect();
+        comment_dup_detection::lint_files(&all_refs, config)
+    };
 
-    let (engine_res, (clone_diags, clones_elapsed)) = rayon::join(engine_work, clones_work);
+    let (engine_res, ((clone_diags, clones_elapsed), dup_diags)) =
+        rayon::join(engine_work, || rayon::join(clones_work, dup_comments_work));
     let (project, engine_diags) = engine_res?;
     diagnostics.extend(engine_diags);
     diagnostics.extend(clone_diags);
+    diagnostics.extend(dup_diags);
     timings.clones = clones_elapsed;
 
     if project.has_framework("drizzle") {
