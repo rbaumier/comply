@@ -72,6 +72,15 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Only runtime functions can have a mode-flag split out of them. A
+        // type-level callable position (TSFunctionType, TSCallSignatureDeclaration,
+        // TSConstructSignatureDeclaration, TSMethodSignature, …) is a pure type
+        // annotation with no body, so the "split into two functions" advice is
+        // meaningless. Require an actual runtime function parent.
+        if !is_runtime_function_param(node, semantic) {
+            return;
+        }
+
         if is_boolean_transform_subject(node, semantic) {
             return;
         }
@@ -92,6 +101,27 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// True when the parameter's enclosing parameter list belongs to an actual
+/// runtime function (a `Function` — which includes class/object methods, whose
+/// value is a `Function` node — or an `ArrowFunctionExpression`). Every other
+/// parent is a type-level callable signature with no body, which cannot be
+/// split and must not be flagged. The allowlist is positive so that new
+/// type-level node kinds are skipped by default.
+fn is_runtime_function_param<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let params_node = nodes.parent_node(node.id());
+    if !matches!(params_node.kind(), AstKind::FormalParameters(_)) {
+        return false;
+    }
+    matches!(
+        nodes.parent_node(params_node.id()).kind(),
+        AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+    )
 }
 
 /// True when the parameter is the function's subject rather than a mode flag:
@@ -211,5 +241,44 @@ mod tests {
     #[test]
     fn still_flags_first_boolean_param_without_boolean_return() {
         assert_eq!(run("function send(urgent: boolean): void {}").len(), 1);
+    }
+
+    // Regression for #3316: a boolean param inside a `TSFunctionType` (here used
+    // as a generic argument) is a pure type annotation with no body — there is
+    // no runtime function to split, so it must not be flagged.
+    #[test]
+    fn no_fp_boolean_param_in_ts_function_type_issue_3316() {
+        let src =
+            "declare const v: SetReturnType<(foo: string, bar: boolean) => number, void>;";
+        assert!(run(src).is_empty(), "got {:#?}", run(src));
+    }
+
+    // Regression for #3316: a boolean param inside a `TSCallSignatureDeclaration`
+    // is type-level only.
+    #[test]
+    fn no_fp_boolean_param_in_call_signature_issue_3316() {
+        assert!(run("type F = {(a1: boolean, ...a2: string[]): number};").is_empty());
+    }
+
+    // Regression for #3316: a boolean param inside a `TSConstructSignatureDeclaration`
+    // is type-level only.
+    #[test]
+    fn no_fp_boolean_param_in_construct_signature_issue_3316() {
+        assert!(run("type Ctor = { new (flag: boolean): X };").is_empty());
+    }
+
+    // Guard: requiring a runtime-function parent must not exempt class/object
+    // methods — in oxc a method's value is a `Function` node, so the flag still
+    // fires.
+    #[test]
+    fn still_flags_boolean_flag_param_in_method() {
+        assert_eq!(
+            run("class Renderer { render(html: string, pretty: boolean) {} }").len(),
+            1
+        );
+        assert_eq!(
+            run("const o = { render(html: string, pretty: boolean) {} };").len(),
+            1
+        );
     }
 }
