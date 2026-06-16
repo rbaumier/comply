@@ -5,15 +5,7 @@ use std::sync::Arc;
 
 pub struct Check;
 
-fn is_config_or_migration_file(path: &std::path::Path) -> bool {
-    let s = path.to_string_lossy();
-    s.contains("drizzle.config")
-        || s.contains("/migrate")
-        || s.contains("/migrations/")
-        || s.ends_with("migrate.ts")
-        || s.ends_with("migrate.js")
-        || s.ends_with("migrate.mjs")
-}
+use super::is_config_or_migration_file;
 
 fn module_is_drizzle_kit(spec: &str) -> bool {
     spec == "drizzle-kit" || spec.starts_with("drizzle-kit/")

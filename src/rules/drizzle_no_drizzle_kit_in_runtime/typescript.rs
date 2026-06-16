@@ -4,15 +4,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-fn is_config_or_migration_file(path: &std::path::Path) -> bool {
-    let s = path.to_string_lossy();
-    s.contains("drizzle.config")
-        || s.contains("/migrate")
-        || s.contains("/migrations/")
-        || s.ends_with("migrate.ts")
-        || s.ends_with("migrate.js")
-        || s.ends_with("migrate.mjs")
-}
+use super::is_config_or_migration_file;
 
 fn module_is_drizzle_kit(spec: &str) -> bool {
     let trimmed = spec.trim_matches(|c| c == '"' || c == '\'' || c == '`');
@@ -112,6 +104,25 @@ mod tests {
     }
 
     #[test]
+    fn allows_import_in_env_variant_config() {
+        // `drizzle.test-config.ts` is a drizzle-kit config file (issue #3292).
+        let src = "import type { Config } from 'drizzle-kit';";
+        assert!(run_at(src, "drizzle.test-config.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_import_in_staging_variant_config() {
+        let src = "import type { Config } from 'drizzle-kit';";
+        assert!(run_at(src, "drizzle.staging-config.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_import_in_dash_config() {
+        let src = "import type { Config } from 'drizzle-kit';";
+        assert!(run_at(src, "drizzle-config.ts").is_empty());
+    }
+
+    #[test]
     fn allows_import_in_migrate_script() {
         let src = "import { drizzle } from 'drizzle-kit/dist';";
         assert!(run_at(src, "scripts/migrate.ts").is_empty());
@@ -121,5 +132,13 @@ mod tests {
     fn allows_drizzle_orm_import() {
         let src = "import { drizzle } from 'drizzle-orm';";
         assert!(run_at(src, "src/api/handler.ts").is_empty());
+    }
+
+    #[test]
+    fn flags_import_in_drizzle_runtime_helper() {
+        // `useDrizzleConfig.ts` ends with `Config` but has no `-`/`.` separator
+        // before it — it is a runtime helper, not a drizzle-kit config file.
+        let src = "import type { Config } from 'drizzle-kit';";
+        assert_eq!(run_at(src, "src/db/useDrizzleConfig.ts").len(), 1);
     }
 }
