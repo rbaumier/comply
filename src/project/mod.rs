@@ -4205,7 +4205,16 @@ fn strip_trailing_commas(s: &str) -> String {
 #[cfg(test)]
 pub(crate) fn default_static_project_ctx() -> &'static ProjectCtx {
     static DEFAULT: OnceLock<ProjectCtx> = OnceLock::new();
-    DEFAULT.get_or_init(ProjectCtx::empty)
+    DEFAULT.get_or_init(|| {
+        let ctx = ProjectCtx::empty();
+        // The test suite runs from the comply repo, whose fixtures contain
+        // `schema.prisma` files. Left uninitialized, `prisma_soft_delete_models`
+        // would lazily scan the current dir and return `Some(...)`, making the
+        // prisma rule skip queries on models absent from those fixtures. A bare
+        // test project has no schema, so pin the field to `None`.
+        let _ = ctx.prisma_soft_delete_models.set(None);
+        ctx
+    })
 }
 
 #[cfg(test)]
