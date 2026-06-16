@@ -49,12 +49,23 @@ fn is_fresh_array(expr: &Expression, source: &str) -> bool {
             let text = &source[expr.span().start as usize..expr.span().end as usize];
             text.contains("...")
         }
+        // `new Array(n)` constructs a brand-new array with no prior alias.
+        Expression::NewExpression(new_expr) => {
+            matches!(&new_expr.callee, Expression::Identifier(id) if id.name == "Array")
+        }
         Expression::CallExpression(call) => {
             let Expression::StaticMemberExpression(member) = &call.callee else {
                 return false;
             };
+            let method = member.property.name.as_str();
+            // `Array.from(...)` / `Array.of(...)` also return a brand-new array.
+            if matches!(method, "from" | "of")
+                && matches!(&member.object, Expression::Identifier(id) if id.name == "Array")
+            {
+                return true;
+            }
             matches!(
-                member.property.name.as_str(),
+                method,
                 "slice" | "filter" | "map" | "concat" | "flat" | "flatMap"
                     | "toSorted" | "toReversed" | "toSpliced" | "with"
             )
@@ -119,5 +130,63 @@ impl OxcCheck for Check {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod oxc_tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    #[test]
+    fn flags_const_sort() {
+        assert_eq!(run("const x = arr.sort();").len(), 1);
+    }
+
+    #[test]
+    fn allows_spread_then_sort() {
+        assert!(run("const x = [...arr].sort();").is_empty());
+    }
+
+    // === issue #3305: mutating method on a freshly-constructed array ===
+
+    #[test]
+    fn allows_new_array_fill() {
+        assert!(run("const chunks = new Array(n).fill('x');").is_empty());
+    }
+
+    #[test]
+    fn allows_new_array_fill_repeat() {
+        assert!(run("const chunks = new Array(sizeInMB).fill('x'.repeat(chunkSize));").is_empty());
+    }
+
+    #[test]
+    fn allows_array_from_sort() {
+        assert!(run("const x = Array.from(iter).sort();").is_empty());
+    }
+
+    #[test]
+    fn flags_preexisting_array_fill() {
+        // GUARD: a pre-existing receiver is still mutated in place.
+        assert_eq!(run("const x = arr.fill(0);").len(), 1);
     }
 }

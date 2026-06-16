@@ -17,6 +17,36 @@ const MUTATING_METHODS: &[&str] = &["reverse", "sort", "fill", "splice"];
 const FRESH_ARRAY_METHODS: &[&str] =
     &["filter", "map", "slice", "concat", "flat", "flatMap"];
 
+/// Whether the receiver is a freshly-constructed array with no prior alias, so
+/// mutating it in place is not observable through any other reference.
+fn is_fresh_array(expr: &Expression, source: &str) -> bool {
+    match expr {
+        // Spread copy: `[...arr]`
+        Expression::ArrayExpression(arr) => {
+            let text = &source[arr.span.start as usize..arr.span.end as usize];
+            text.contains("...")
+        }
+        // `new Array(n)` constructs a brand-new array with no prior alias.
+        Expression::NewExpression(new_expr) => {
+            matches!(&new_expr.callee, Expression::Identifier(id) if id.name == "Array")
+        }
+        Expression::CallExpression(inner) => {
+            let Expression::StaticMemberExpression(member) = &inner.callee else {
+                return false;
+            };
+            // `Array.from(...)` / `Array.of(...)` return a brand-new array.
+            if matches!(member.property.name.as_str(), "from" | "of")
+                && matches!(&member.object, Expression::Identifier(id) if id.name == "Array")
+            {
+                return true;
+            }
+            // Chaining onto a fresh array, e.g. `arr.filter(p).sort(cmp)`.
+            FRESH_ARRAY_METHODS.contains(&member.property.name.as_str())
+        }
+        _ => false,
+    }
+}
+
 /// Check if a call expression is a mutating array method call (not on a spread
 /// copy nor a fresh array returned by a non-mutating method).
 fn is_mutating_call(expr: &Expression, source: &str) -> bool {
@@ -29,22 +59,7 @@ fn is_mutating_call(expr: &Expression, source: &str) -> bool {
     if !MUTATING_METHODS.contains(&member.property.name.as_str()) {
         return false;
     }
-    // Allow spread copy patterns like `[...arr].reverse()`
-    if let Expression::ArrayExpression(arr) = &member.object {
-        let text = &source[arr.span.start as usize..arr.span.end as usize];
-        if text.contains("...") {
-            return false;
-        }
-    }
-    // Allow chaining onto a fresh array, e.g. `arr.filter(p).sort(cmp)` — the
-    // receiver is a brand-new array, so the mutation is not observable.
-    if let Expression::CallExpression(inner) = &member.object
-        && let Expression::StaticMemberExpression(inner_member) = &inner.callee
-        && FRESH_ARRAY_METHODS.contains(&inner_member.property.name.as_str())
-    {
-        return false;
-    }
-    true
+    !is_fresh_array(&member.object, source)
 }
 
 impl OxcCheck for Check {
@@ -176,5 +191,28 @@ mod oxc_tests {
     #[test]
     fn allows_filter_then_sort_in_return() {
         assert!(run("function f() { return arr.filter((p) => p.active).sort(cmp); }").is_empty());
+    }
+
+    // === issue #3305: mutating method on a freshly-constructed array ===
+
+    #[test]
+    fn allows_new_array_reverse() {
+        assert!(run("const chunks = new Array(n).reverse();").is_empty());
+    }
+
+    #[test]
+    fn allows_new_array_fill() {
+        assert!(run("const chunks = new Array(sizeInMB).fill('x'.repeat(chunkSize));").is_empty());
+    }
+
+    #[test]
+    fn allows_array_from_sort() {
+        assert!(run("const x = Array.from(iter).sort((a, b) => a - b);").is_empty());
+    }
+
+    #[test]
+    fn flags_preexisting_array_sort() {
+        // GUARD: a pre-existing receiver is still mutated in place.
+        assert_eq!(run("const sorted = arr.sort();").len(), 1);
     }
 }
