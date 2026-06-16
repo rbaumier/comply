@@ -1,9 +1,11 @@
 //! no-new-regex-with-variable backend for Rust.
 //!
 //! Flags `Regex::new(variable)` / `RegexBuilder::new(variable)` where the
-//! argument is not a string literal. User-controlled patterns open the
-//! door to ReDoS via exponential backtracking. The fix: use a literal
-//! `Regex::new(r"...")`, or a vetted safe-regex library.
+//! argument is neither a string literal nor a compile-time-constant pattern.
+//! User-controlled patterns open the door to ReDoS via exponential
+//! backtracking. A `const`/`static` argument (conventionally
+//! `SCREAMING_SNAKE_CASE`) is a compile-time constant, as safe as a literal.
+//! The fix: use a literal `Regex::new(r"...")`, or a vetted safe-regex library.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -40,7 +42,7 @@ impl AstCheck for Check {
         let Some(first_arg) = args.named_child(0) else {
             return;
         };
-        if is_string_literal(first_arg) {
+        if is_safe_pattern_arg(first_arg, source_bytes) {
             return;
         }
         let pos = node.start_position();
@@ -59,15 +61,39 @@ impl AstCheck for Check {
     }
 }
 
-fn is_string_literal(node: tree_sitter::Node) -> bool {
-    // Accept `"..."`, `r"..."`, and `&"..."` / `&r"..."`.
+/// A first argument that cannot carry user-controlled input at runtime:
+/// a string literal, or a path naming a compile-time constant.
+fn is_safe_pattern_arg(node: tree_sitter::Node, source: &[u8]) -> bool {
     match node.kind() {
+        // `"..."`, `r"..."`.
         "string_literal" | "raw_string_literal" => true,
+        // `&"..."` / `&r"..."`, and `&SOME_CONST`.
         "reference_expression" => node
             .named_child(0)
-            .is_some_and(|inner| matches!(inner.kind(), "string_literal" | "raw_string_literal")),
+            .is_some_and(|inner| is_safe_pattern_arg(inner, source)),
+        // Bare `SHEBANG`: SCREAMING_SNAKE_CASE signals a `const`/`static`.
+        "identifier" => node
+            .utf8_text(source)
+            .is_ok_and(is_screaming_snake_case),
+        // `consts::SHEBANG` / `crate::SHEBANG`: check the last segment.
+        "scoped_identifier" => node
+            .child_by_field_name("name")
+            .and_then(|name| name.utf8_text(source).ok())
+            .is_some_and(is_screaming_snake_case),
         _ => false,
     }
+}
+
+/// `true` for `SHEBANG`, `MY_CONST`, `A1`; `false` for `user_pattern`,
+/// `input`, `Mixed`. A user-controlled local/param is conventionally
+/// `snake_case`, so this is a strong signal the name binds a constant.
+fn is_screaming_snake_case(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_uppercase()
+        && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
 #[cfg(test)]
@@ -106,5 +132,26 @@ mod tests {
     #[test]
     fn allows_regex_with_plain_string() {
         assert!(run_on("fn f() { let r = Regex::new(\"^foo\"); }").is_empty());
+    }
+
+    #[test]
+    fn allows_regex_with_screaming_snake_const() {
+        // Issue #3269: `const SHEBANG: &str = ...; Regex::new(SHEBANG)`.
+        assert!(run_on("fn f() { let r = Regex::new(SHEBANG); }").is_empty());
+    }
+
+    #[test]
+    fn allows_regex_with_scoped_const() {
+        assert!(run_on("fn f() { let r = Regex::new(consts::SHEBANG); }").is_empty());
+    }
+
+    #[test]
+    fn flags_regex_with_snake_case_variable() {
+        assert_eq!(run_on("fn f() { let r = Regex::new(user_pattern); }").len(), 1);
+    }
+
+    #[test]
+    fn flags_regex_with_lowercase_identifier() {
+        assert_eq!(run_on("fn f() { let r = Regex::new(input); }").len(), 1);
     }
 }
