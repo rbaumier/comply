@@ -33,6 +33,10 @@ fn count_operators(line: &str) -> usize {
             } else if i + 1 < len && bytes[i + 1] == b':' {
                 // TypeScript optional property marker (e.g. `key?: T`), not a ternary.
                 i += 2;
+            } else if i + 1 < len && matches!(bytes[i + 1], b']' | b',' | b')' | b'>') {
+                // TypeScript optional tuple/type element marker (e.g. `'c'?`, `T?>`),
+                // not a ternary — a real ternary's `?` is followed by a consequent.
+                i += 2;
             } else {
                 count += 1;
                 i += 1;
@@ -134,6 +138,34 @@ mod tests {
     fn still_flags_conditional_type_with_three_extra_operators() {
         // Conditional type `?` counts as ternary; adding `&&`, `||`, `??` gives 4 total.
         let src = "type T<X> = X extends string ? A && B || C ?? D : E;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_optional_tuple_element_markers() {
+        // `'c'?` markers are optional tuple elements, not ternaries (issue #3318).
+        let src = "expectType<readonly [undefined, 'c'?]>(getArrayTail(['a', undefined, 'c'] as readonly ['a', undefined, 'c'?]));";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_optional_tuple_and_generic_type_markers() {
+        // `(Set<string>)?`, `Set<string>?`, `number?`, `boolean?` are optional markers.
+        let src = "expectType<[Set<string>, (Set<string>)?, Set<string>?]>({} as Schema<[string, number?, boolean?], Set<string>>);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_runtime_expression_with_four_real_operators() {
+        // Genuine high-complexity runtime ternary/logical chain — must still fire.
+        let src = "const x = a ? b : c || d && e ? f : g;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_real_operators_mixed_with_tuple_optional() {
+        // One `T?` tuple marker is exempt, but the real operators alone still cross 4.
+        let src = "const x = (y as [number?]) ? a && b || c ?? d : e;";
         assert_eq!(run_on(src).len(), 1);
     }
 }
