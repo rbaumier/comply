@@ -44,6 +44,50 @@ fn fn_modifiers_contain_async(function_item: Node, source: &[u8]) -> bool {
     false
 }
 
+/// True if `node` sits in a const-evaluated context, where `for` loops and
+/// iterators are unavailable (`for` desugars to `IntoIterator::into_iter`,
+/// which is not `const`). A manual `while`-index loop is then the only way to
+/// express bounded iteration.
+///
+/// Walks up parents and exempts when the loop is either:
+///
+/// - inside a `const_item` / `static_item` initializer block, or
+/// - inside a `const fn` (a `function_item` whose `function_modifiers` child
+///   carries the `const` keyword).
+///
+/// The walk stops at the first enclosing `function_item` that is NOT a
+/// `const fn` (a normal runtime body re-enables the lint) and at closure
+/// boundaries (`closure_expression`), so a runtime loop nested in a module
+/// alongside a `const` is unaffected.
+pub fn is_in_const_eval_context(node: Node, source: &[u8]) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        match parent.kind() {
+            "const_item" | "static_item" => return true,
+            "function_item" => return fn_modifiers_contain_const(parent, source),
+            "closure_expression" => return false,
+            _ => {}
+        }
+        cur = parent;
+    }
+    false
+}
+
+/// True if a `function_item`'s `function_modifiers` child contains the `const`
+/// keyword. Scans the modifiers node only, so raw identifiers (`fn r#const()`),
+/// parameter names, and types named "const" can't trip the check.
+fn fn_modifiers_contain_const(function_item: Node, source: &[u8]) -> bool {
+    let mut cursor = function_item.walk();
+    for child in function_item.children(&mut cursor) {
+        if child.kind() == "function_modifiers" {
+            return child
+                .utf8_text(source)
+                .is_ok_and(|text| text.split_whitespace().any(|word| word == "const"));
+        }
+    }
+    false
+}
+
 /// True if `node` is inside a closure that is passed directly as an argument
 /// to a thread-spawning function (`thread::spawn`, `spawn_blocking`, etc.).
 /// Those closures execute on a separate OS thread, not on the async runtime
