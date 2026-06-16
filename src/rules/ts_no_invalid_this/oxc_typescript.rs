@@ -62,10 +62,43 @@ fn has_this_typed_jsdoc(
     false
 }
 
-/// True when `expr` is a `*.prototype` member access (e.g. `Foo.prototype`),
-/// or an identifier bound to such an access (e.g. `var proto = Foo.prototype`).
-/// These are the receivers of the prototype-patching idiom, where a function
-/// assigned to one of their members gains the instance as `this` at call time.
+/// True when `expr` is a call to the global `Object.create(...)`, whatever its
+/// argument. `Object.create(proto)` yields a plain object that inherits from
+/// `proto` and is conventionally used as a prototype itself, so a function
+/// assigned to one of its members is a method whose `this` is the instance at
+/// call time. Matches only `Object.create`, not a local `create()` or some
+/// other `foo.create()`.
+fn is_object_create_call(expr: &Expression) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    matches!(
+        &call.callee,
+        Expression::StaticMemberExpression(member)
+            if member.property.name == "create"
+                && matches!(
+                    &member.object,
+                    Expression::Identifier(ident) if ident.name == "Object"
+                )
+    )
+}
+
+/// True when `expr` is a prototype-object initializer — either a `*.prototype`
+/// member access (`Foo.prototype`) or an `Object.create(...)` call. A binding
+/// initialized from one of these is a receiver of the prototype-patching idiom.
+fn is_prototype_initializer(expr: &Expression) -> bool {
+    matches!(
+        expr,
+        Expression::StaticMemberExpression(member) if member.property.name == "prototype"
+    ) || is_object_create_call(expr)
+}
+
+/// True when `expr` is a `*.prototype` member access (e.g. `Foo.prototype`), or
+/// an identifier bound to a prototype-object initializer — a `*.prototype`
+/// access (`var proto = Foo.prototype`) or an `Object.create(...)` call
+/// (`var res = Object.create(http.ServerResponse.prototype)`). These are the
+/// receivers of the prototype-patching idiom, where a function assigned to one
+/// of their members gains the instance as `this` at call time.
 fn is_prototype_object(
     expr: &Expression,
     semantic: &oxc_semantic::Semantic,
@@ -86,11 +119,10 @@ fn is_prototype_object(
             else {
                 return false;
             };
-            matches!(
-                &declarator.init,
-                Some(Expression::StaticMemberExpression(member))
-                    if member.property.name == "prototype"
-            )
+            declarator
+                .init
+                .as_ref()
+                .is_some_and(is_prototype_initializer)
         }
         _ => false,
     }
@@ -596,6 +628,35 @@ mod tests {
         // A function assigned to a plain (non-prototype) object member is still
         // a standalone function — `this` is unbound and must fire.
         let diags = run_on("obj.m = function () { return this.x; };");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_object_create_prototype_patch() {
+        // Regression for #3386: express builds its response prototype with
+        // `Object.create(SomeClass.prototype)` and assigns methods as properties.
+        // The object inherits from a prototype and its methods are invoked as
+        // `res.status(200)`, so `this` is the instance at call time.
+        let src = "var res = Object.create(http.ServerResponse.prototype);\nres.status = function status(code) {\n  this.statusCode = code;\n  return this;\n};";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_non_object_create_member_assignment() {
+        // Negative-space guard for #3386: the `Object.create` exemption keys on
+        // the global `Object.create`. A method assigned to a binding initialized
+        // by some other `create()` call is not recognized — `this` stays unbound
+        // and must fire.
+        let src = "var obj = factory.create();\nobj.m = function () { return this.x; };";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_this_in_free_function_not_assigned_as_method() {
+        // Negative-space guard for #3386: a free-floating `function` not assigned
+        // as any object's method has an unbound `this` and must still fire.
+        let diags = run_on("function foo() { this.x = 1; }");
         assert_eq!(diags.len(), 1);
     }
 
