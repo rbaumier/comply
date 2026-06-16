@@ -51,6 +51,10 @@ impl OxcCheck for Check {
             return;
         }
 
+        if base_is_import_meta_url(new_expr) {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, new_expr.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -95,6 +99,37 @@ fn arg_is_trusted(new_expr: &oxc_ast::ast::NewExpression) -> bool {
         Expression::CallExpression(call) if is_request_url_call(call) => true,
         _ => false,
     }
+}
+
+/// True when the base URL of `new URL(...)` is `import.meta.url`, the URL the
+/// engine assigns when it loads the module. It is structurally guaranteed to be
+/// a valid absolute URL, so the constructor cannot throw on the base.
+///
+/// Covers both ESM idioms:
+/// * single-arg `new URL(import.meta.url)` — the sole argument is the base;
+/// * two-arg `new URL(<relative>, import.meta.url)` — the second argument is
+///   the base. A dynamic base (any non-`import.meta.url` second argument) still
+///   flags.
+fn base_is_import_meta_url(new_expr: &oxc_ast::ast::NewExpression) -> bool {
+    let base = match new_expr.arguments.len() {
+        1 => new_expr.arguments.first(),
+        2 => new_expr.arguments.get(1),
+        _ => None,
+    };
+    base.and_then(|a| a.as_expression())
+        .is_some_and(is_import_meta_url)
+}
+
+/// True for the `import.meta.url` member read: a `.url` access whose object is
+/// the `import.meta` meta-property. Matches only `import.meta.url`, not an
+/// arbitrary `.url` access.
+fn is_import_meta_url(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+    let Expression::StaticMemberExpression(member) = expr else {
+        return false;
+    };
+    member.property.name.as_str() == "url"
+        && matches!(&member.object, Expression::MetaProperty(_))
 }
 
 /// True for `<request-like>.url` accesses whose receiver is named
@@ -394,5 +429,34 @@ mod tests {
     #[test]
     fn still_flags_plain_variable() {
         assert_eq!(run_on("const u = new URL(someString);").len(), 1);
+    }
+
+    // Regression for #3388: `import.meta.url` is the URL the engine assigns when
+    // it loads the module — structurally always a valid absolute URL, so the
+    // constructor cannot throw.
+    #[test]
+    fn allows_import_meta_url_single_arg() {
+        assert!(run_on("const u = new URL(import.meta.url);").is_empty());
+    }
+
+    #[test]
+    fn allows_relative_with_import_meta_url_base() {
+        assert!(run_on("const u = new URL('../playground-tmp', import.meta.url);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_dynamic_single_arg() {
+        assert_eq!(run_on("const u = new URL(someVar);").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_dynamic_base() {
+        assert_eq!(run_on("const u = new URL(someVar, otherDynamicBase);").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_arbitrary_dot_url_object() {
+        // `meta.url` is a plain member read, not the `import.meta` meta-property.
+        assert_eq!(run_on("const u = new URL(meta.url);").len(), 1);
     }
 }
