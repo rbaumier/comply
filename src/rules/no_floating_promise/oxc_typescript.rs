@@ -126,12 +126,6 @@ fn is_async_looking_member_call(call: &CallExpression, ctx: &CheckCtx) -> bool {
     if receiver_is_cast(member) {
         return false;
     }
-    if is_redux_store_dispatch(member) {
-        return false;
-    }
-    if is_editor_view_dispatch(member) {
-        return false;
-    }
     if is_diagnostics_channel_publish(member) {
         return false;
     }
@@ -145,9 +139,6 @@ fn is_async_looking_member_call(call: &CallExpression, ctx: &CheckCtx) -> bool {
         return false;
     }
     if is_threejs_sync_method(member, ctx) {
-        return false;
-    }
-    if is_express_route_dispatch(call, member) {
         return false;
     }
     let method = member.property.name.as_str();
@@ -253,10 +244,10 @@ fn chain_is_rooted_in_chain_call(expr: &Expression) -> bool {
     }
 }
 
-/// True when the call receiver is a type assertion, e.g. `(api as any).dispatch(...)`.
+/// True when the call receiver is a type assertion, e.g. `(api as any).save(...)`.
 /// A cast erases any type basis the heuristic could rely on, so the purely
-/// speculative async-looking-method match must not fire — `(foo as Bar).dispatch(x)`
-/// could be a synchronous Redux/zustand-style `dispatch`.
+/// speculative async-looking-method match must not fire — `(foo as Bar).fetch(x)`
+/// could resolve to a synchronous method.
 fn receiver_is_cast(member: &StaticMemberExpression) -> bool {
     matches!(peel_parens(&member.object), Expression::TSAsExpression(_))
 }
@@ -268,94 +259,6 @@ fn peel_parens<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
         current = &p.expression;
     }
     current
-}
-
-/// Redux's `Store.dispatch(action)` and NgRx's `Store#dispatch(action)` both
-/// return synchronously (the dispatched `Action`, or `void` in NgRx) — there is
-/// no Promise to await or catch.
-/// Matches when the `.dispatch(...)` receiver reads as a store, either as a bare
-/// identifier (`store`, `reduxStore`, `appStore`) or as a member access whose
-/// terminal property reads as a store (`this.store`, `this.appStore` — the NgRx
-/// idiom where the `Store` is an injected field).
-fn is_redux_store_dispatch(member: &StaticMemberExpression) -> bool {
-    if member.property.name.as_str() != "dispatch" {
-        return false;
-    }
-    match &member.object {
-        Expression::Identifier(id) => name_reads_as_store(id.name.as_str()),
-        Expression::StaticMemberExpression(inner) => {
-            name_reads_as_store(inner.property.name.as_str())
-        }
-        _ => false,
-    }
-}
-
-/// Does an identifier or property name (case-insensitive) read as a store handle?
-fn name_reads_as_store(name: &str) -> bool {
-    name.to_lowercase().contains("store")
-}
-
-/// ProseMirror's `EditorView.dispatch(tr)` synchronously commits a transaction and
-/// returns `void` — there is nothing to await or catch.
-/// Matches `.dispatch(...)` whose receiver is a bare identifier named `view` or
-/// `editorView` (`view.dispatch(tr)`), or a member access ending in `.view`
-/// (`editor.view.dispatch(tr)`, `this.editor.view.dispatch(tr)`).
-fn is_editor_view_dispatch(member: &StaticMemberExpression) -> bool {
-    if member.property.name.as_str() != "dispatch" {
-        return false;
-    }
-    match &member.object {
-        Expression::Identifier(id) => {
-            let name = id.name.as_str().to_lowercase();
-            name == "view" || name == "editorview"
-        }
-        Expression::StaticMemberExpression(inner) => {
-            inner.property.name.as_str().to_lowercase() == "view"
-        }
-        _ => false,
-    }
-}
-
-/// Express's `Route.prototype.dispatch(req, res, done)` (and the equivalent
-/// `Router`/`Layer` dispatch) is continuation-passing: it threads the request
-/// through the middleware stack and delivers its outcome via the trailing `done`
-/// callback — it returns `void`, never a Promise.
-/// Matches a `.dispatch(...)` call with the Express dispatch shape: exactly three
-/// arguments, whose first argument reads as a request (`req`/`request`) and whose
-/// last argument is a callback (a function/arrow expression, or a bare identifier
-/// reading as a continuation), e.g. `route.dispatch(req, {}, done)` /
-/// `route.dispatch(req, {}, (err) => {})`. The request-shaped head plus a trailing
-/// callback rules out a Promise return, so the call must not be flagged.
-fn is_express_route_dispatch(call: &CallExpression, member: &StaticMemberExpression) -> bool {
-    if member.property.name.as_str() != "dispatch" || call.arguments.len() != 3 {
-        return false;
-    }
-    let Some(first) = call.arguments.first().and_then(Argument::as_expression) else {
-        return false;
-    };
-    if !matches!(peel_parens(first), Expression::Identifier(id) if name_reads_as_request(id.name.as_str()))
-    {
-        return false;
-    }
-    let Some(last) = call.arguments.last().and_then(Argument::as_expression) else {
-        return false;
-    };
-    matches!(
-        peel_parens(last),
-        Expression::FunctionExpression(_) | Expression::ArrowFunctionExpression(_)
-    ) || matches!(peel_parens(last), Expression::Identifier(id) if name_reads_as_callback(id.name.as_str()))
-}
-
-/// Does an identifier name (case-insensitive) read as an HTTP request handle?
-fn name_reads_as_request(name: &str) -> bool {
-    let name = name.to_lowercase();
-    name == "req" || name == "request"
-}
-
-/// Does an identifier name (case-insensitive) read as a continuation callback?
-fn name_reads_as_callback(name: &str) -> bool {
-    let name = name.to_lowercase();
-    matches!(name.as_str(), "done" | "cb" | "callback" | "next")
 }
 
 /// `node:diagnostics_channel` `Channel.prototype.publish(message)` returns `void`
@@ -573,30 +476,44 @@ channel.asyncEnd.publish(context);
     }
 
     // Regression tests for issue #1978: a method call whose receiver is a type
-    // assertion (`(api as any).dispatch(...)`) gives the heuristic no type basis
-    // to infer a Promise return — Redux/zustand-style `dispatch(action)` on a cast
-    // receiver is synchronous — so it must not be flagged.
+    // assertion (`(api as any).save(...)`) gives the heuristic no type basis to
+    // infer a Promise return, so an async-looking method on a cast receiver must
+    // not be flagged.
 
     #[test]
-    fn allows_dispatch_on_cast_receiver() {
-        assert!(run_on(";(api as any).dispatch({ type: 'INCREMENT' })").is_empty());
+    fn allows_method_on_cast_receiver() {
+        assert!(run_on(";(api as any).save({ id: 1 })").is_empty());
     }
 
     #[test]
     fn allows_method_on_named_cast_receiver() {
-        assert!(run_on("(foo as Bar).dispatch(x);").is_empty());
+        assert!(run_on("(foo as Bar).fetch(x);").is_empty());
     }
 
     #[test]
     fn still_flags_method_on_non_cast_receiver() {
-        let d = run_on("emitter.dispatch(action);");
+        let d = run_on("repo.save(entity);");
         assert_eq!(d.len(), 1);
     }
 
-    // Regression tests for issue #1859: Redux's `store.dispatch(action)` returns
-    // the dispatched Action synchronously for a plain action object — there is no
-    // Promise to await — so a `.dispatch(...)` on a store-named receiver must not
-    // be flagged.
+    // Regression tests for issue #3246: `dispatch` is too common and ambiguous a
+    // method name to reliably signal an async call — across Redux, NgRx, zustand,
+    // ProseMirror's `EditorView`, and Express's `Route` it is a synchronous
+    // action / transaction / middleware dispatch returning the action, `void`, or
+    // `boolean`, not a Promise. It was dropped from the heuristic, so no
+    // statement-level `.dispatch(...)` is flagged regardless of receiver.
+
+    #[test]
+    fn allows_zustand_api_dispatch() {
+        // The issue's exact example from zustand's devtools middleware: `api` is
+        // narrowed to `{ dispatch: (...args) => void }`, so there is no Promise.
+        let src = "\
+if (shouldDispatchFromDevtools(api)) {
+  api.dispatch(action);
+}
+";
+        assert!(run_on(src).is_empty());
+    }
 
     #[test]
     fn allows_redux_store_dispatch() {
@@ -614,24 +531,6 @@ store.dispatch(
     }
 
     #[test]
-    fn allows_named_store_dispatch() {
-        assert!(run_on("reduxStore.dispatch(addTodo());").is_empty());
-    }
-
-    #[test]
-    fn still_flags_non_store_dispatch() {
-        // Control: `.dispatch(...)` on a non-store receiver (e.g. a message broker)
-        // stays flagged.
-        let d = run_on("emitter.dispatch(event);");
-        assert_eq!(d.len(), 1);
-    }
-
-    // Regression tests for issue #1598: NgRx's `Store#dispatch(action)` returns
-    // `void` — the dominant call in Angular/NgRx apps is `this.store.dispatch(...)`,
-    // where the `Store` is an injected field, so a `.dispatch(...)` on a member
-    // access whose terminal property reads as a store must not be flagged.
-
-    #[test]
     fn allows_ngrx_this_store_dispatch() {
         let src = "\
 closeSidenav() {
@@ -642,41 +541,32 @@ closeSidenav() {
     }
 
     #[test]
-    fn allows_ngrx_named_injected_store_dispatch() {
-        assert!(run_on("this.appStore.dispatch(AuthActions.logoutConfirmation());").is_empty());
-    }
-
-    #[test]
-    fn still_flags_genuine_floating_promise_dispatch() {
-        // Negative-space guard: a real Promise-returning `.dispatch(...)` on a
-        // non-store member access (e.g. a job queue) stays flagged.
-        let d = run_on("this.queue.dispatch(job);");
-        assert_eq!(d.len(), 1);
-    }
-
-    // Regression tests for issue #1818: ProseMirror's `EditorView.dispatch(tr)`
-    // synchronously commits a transaction and returns void — there is nothing to
-    // await — so a `.dispatch(...)` on a `view`/`editorView` receiver, or one
-    // hanging off a `.view` member access, must not be flagged.
-
-    #[test]
     fn allows_editor_view_dispatch() {
         let src = "\
 view.dispatch(tr);
 this.editor.view.dispatch(tr);
-view.dispatch(transaction);
 ";
         assert!(run_on(src).is_empty());
     }
 
     #[test]
-    fn allows_editor_dot_view_dispatch() {
-        assert!(run_on("editor.view.dispatch(tr);").is_empty());
+    fn allows_express_route_dispatch() {
+        assert!(run_on("route.dispatch(req, {}, done);").is_empty());
     }
 
     #[test]
-    fn allows_named_editor_view_dispatch() {
-        assert!(run_on("editorView.dispatch(tr);").is_empty());
+    fn allows_arbitrary_dispatch() {
+        // A `.dispatch(...)` on any other receiver (job queue, message broker) is
+        // no longer flagged — the name alone is too weak an async signal.
+        assert!(run_on("this.queue.dispatch(job);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_genuine_floating_promise_after_dispatch_drop() {
+        // Negative-space guard: dropping `dispatch` must not weaken the strong
+        // async signals — a discarded `.save(...)` still fires.
+        let d = run_on("repo.save(entity);");
+        assert_eq!(d.len(), 1);
     }
 
     // Regression tests for issue #1817: tiptap's fluent command builder
@@ -904,50 +794,6 @@ import Database from 'better-sqlite3';
 repo.save(entity);
 ";
         let d = run_on(src);
-        assert_eq!(d.len(), 1);
-    }
-
-    // Regression tests for issue #2364: Express's `Route.dispatch(req, res, done)`
-    // is continuation-passing — it delivers its outcome through the trailing `done`
-    // callback and returns void, never a Promise. A `.dispatch(...)` call with the
-    // Express dispatch shape (three args, trailing callback) must not be flagged.
-    // (`res.send()` / `res.json()` were already exempt — `send`/`json` are not in
-    // the heuristic list.)
-
-    #[test]
-    fn allows_express_route_dispatch_identifier_callback() {
-        // The issue's exact example: `route.dispatch(req, {}, done)`.
-        assert!(run_on("route.dispatch(req, {}, done);").is_empty());
-    }
-
-    #[test]
-    fn allows_express_route_dispatch_arrow_callback() {
-        assert!(run_on("route.dispatch(req, {}, (err) => { if (err) throw err; });").is_empty());
-    }
-
-    #[test]
-    fn allows_express_route_dispatch_function_callback() {
-        let src = "\
-route.dispatch(req, {}, function (err) {
-  assert.ifError(err);
-});
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_dispatch_without_trailing_callback() {
-        // Negative-space guard: a `.dispatch(...)` with three non-callback args is
-        // not the Express dispatch shape and stays flagged.
-        let d = run_on("worker.dispatch(a, b, c);");
-        assert_eq!(d.len(), 1);
-    }
-
-    #[test]
-    fn still_flags_single_arg_dispatch() {
-        // Negative-space guard: a genuine Promise-returning `.dispatch(job)` on a
-        // non-store, non-view receiver stays flagged.
-        let d = run_on("worker.dispatch(job);");
         assert_eq!(d.len(), 1);
     }
 
