@@ -76,3 +76,40 @@ impl OxcCheck for Check {
         });
     }
 }
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod gated_tests {
+    use super::*;
+    use crate::rules::test_helpers::run_rule_gated;
+
+    /// #3392: `res.json([...])` in a `test/` middleware verifies framework
+    /// serialization, not a production endpoint — the gate must suppress it.
+    #[test]
+    fn skips_array_response_in_test_dir() {
+        let src = "app.use(function (req, res) { res.json(['foo', 'bar', 'baz']); });";
+        assert!(run_rule_gated(&Check, src, "test/res.json.js").is_empty());
+    }
+
+    /// The same root-level array in a production handler must still fire.
+    #[test]
+    fn flags_array_response_in_production() {
+        let src = "export async function GET() { return Response.json(['foo', 'bar']); }";
+        assert_eq!(run_rule_gated(&Check, src, "src/app/route.ts").len(), 1);
+    }
+}
