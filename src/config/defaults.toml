@@ -367,3 +367,15 @@ style = "block"
 # Component names whose static `id` is intentional (e.g. an i18n message id, not
 # a DOM id). Matched against the element's unqualified name.
 excluded_components = []
+
+# ---------------------------------------------------------------
+# React Native platform components.
+#
+# A file is treated as platform-specific when its path matches one
+# of these globs. An `*Android`/`*IOS` component imported from
+# `react-native` is only allowed in a file of the matching platform.
+# ---------------------------------------------------------------
+
+[rules.use-react-native-platform-components]
+android_path_patterns = ["**/*.android.{js,jsx,ts,tsx}"]
+ios_path_patterns = ["**/*.ios.{js,jsx,ts,tsx}"]
