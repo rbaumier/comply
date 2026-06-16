@@ -2,6 +2,10 @@
 //!
 //! Flag iterator method closures with block body but no return/expression.
 //! In Rust: `.map(|x| { ... })` with block body missing a trailing expression.
+//!
+//! Exempt the idiomatic `Option`/`Result` side-effect form, which produces a
+//! deliberate unit return: a bare `_` wildcard parameter (explicit value
+//! discard) or a `?`-suffixed map (receiver is provably `Option`/`Result`).
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -60,6 +64,44 @@ fn expression_statement_has_semicolon(stmt: tree_sitter::Node) -> bool {
         .is_some_and(|last| last.kind() == ";")
 }
 
+/// True when the closure's parameter list is the single bare `_` wildcard.
+///
+/// `.map(|_| { side_effect(); })` explicitly discards the mapped value, which
+/// signals the author wants the side effect rather than a transform — the
+/// idiomatic `Option<T>`/`Result<T, E>` "do this only if Some/Ok" form. A
+/// named-but-unused parameter (`|_x|`) is NOT this signal. In tree-sitter-rust
+/// the bare `_` appears as an unnamed child of `closure_parameters`, whereas a
+/// named parameter is a named `identifier` child.
+fn closure_param_is_wildcard(closure: tree_sitter::Node) -> bool {
+    let Some(params) = closure.child_by_field_name("parameters") else {
+        return false;
+    };
+    let mut cursor = params.walk();
+    let mut named = params.named_children(&mut cursor);
+    if named.next().is_some() {
+        // A named parameter (e.g. `identifier`) is present, so not a bare `_`.
+        return false;
+    }
+    // No named parameters: the only candidate is the unnamed `_` wildcard token.
+    let mut cursor = params.walk();
+    params
+        .children(&mut cursor)
+        .filter(|c| c.kind() == "_")
+        .count()
+        == 1
+}
+
+/// True when the `.map(...)` call is the operand of a `?` try operator.
+///
+/// The `?` operator only applies to `Option`/`Result`/`Try` receivers, never a
+/// lazy `Iterator`, so a `?`-suffixed map proves the side-effecting unit return
+/// is intentional. In tree-sitter-rust the `.map(...)` `call_expression` is the
+/// direct child of a `try_expression`.
+fn map_is_try_operand(call: tree_sitter::Node) -> bool {
+    call.parent()
+        .is_some_and(|parent| parent.kind() == "try_expression")
+}
+
 fn has_return(node: tree_sitter::Node) -> bool {
     if node.kind() == "return_expression" {
         return true;
@@ -85,6 +127,14 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     }
     let Some(body) = callback.child_by_field_name("body") else { return };
     if body.kind() != "block" {
+        return;
+    }
+
+    // Exempt the idiomatic Option/Result side-effect form, detected via
+    // type-free structural signals: a bare `_` wildcard parameter (explicit
+    // value discard) or a `?`-suffixed map (receiver is provably Option/Result,
+    // never a lazy Iterator).
+    if closure_param_is_wildcard(callback) || map_is_try_operand(node) {
         return;
     }
 
@@ -184,6 +234,44 @@ mod tests {
     fn flags_block_ending_in_semicolon_statement() {
         // Negative space: a `;`-terminated final statement produces no value.
         let src = "fn f() { vec![1].iter().map(|x| { foo(x); }); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_wildcard_param_side_effect() {
+        // Issue #3268: `.map(|_| { ... })` discards the value — intentional
+        // Option/Result side-effect form, not a forgotten return.
+        let src = "fn f() { opt.map(|_| { do_side_effect(); }); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_param_with_try_suffix() {
+        // Issue #3268: helix typed.rs:1511 — wildcard param AND `?`-suffixed.
+        let src = "fn f() { doc.reload(view, providers).map(|_| { ensure(); })?; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_try_suffixed_map_with_named_param() {
+        // Issue #3268: `?` only applies to Option/Result, never a lazy Iterator,
+        // so the side-effecting unit return is intentional even with a named param.
+        let src = "fn f() { result.map(|x| { log(x); })?; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_iterator_map_named_param_no_try() {
+        // Guard: bound param, block ending in `;`, NO `?` — classic Iterator
+        // forgot-return bug, must STILL flag.
+        let src = "fn f() { items.iter().map(|x| { compute(x); }); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_iterator_map_collected() {
+        // Guard: bound param, no `?`, result collected — still a forgot-return bug.
+        let src = "fn f() { xs.iter().map(|x| { transform(x); }).collect::<Vec<_>>(); }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
