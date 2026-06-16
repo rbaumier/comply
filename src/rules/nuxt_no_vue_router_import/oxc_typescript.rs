@@ -8,9 +8,15 @@ use std::sync::Arc;
 pub struct Check;
 
 fn is_nuxt_source(src: &str) -> bool {
-    source_contains(src, "#imports")
+    // `#imports` and `#app` are Nuxt virtual modules that only ever appear as a
+    // quoted import specifier after `from`. A bare substring match would also
+    // hit arbitrary strings such as the CSS selector in `app.mount('#app')`, so
+    // require the import-specifier context (both quote styles).
+    source_contains(src, "from '#imports'")
+        || source_contains(src, "from \"#imports\"")
+        || source_contains(src, "from '#app'")
+        || source_contains(src, "from \"#app\"")
         || source_contains(src, "nuxt/app")
-        || source_contains(src, "#app")
         || source_contains(src, "defineNuxtConfig")
         || source_contains(src, "defineNuxtPlugin")
         || source_contains(src, "defineNuxtRouteMiddleware")
@@ -183,6 +189,45 @@ mod tests {
         let src = "import { useRouter } from 'vue-router';\n\
             const app = useNuxtApp();\n\
             export function setup() { const r = useRouter(); return r; }";
+        assert_eq!(run_on(src).len(), 1, "got: {:?}", run_on(src));
+    }
+
+    /// Regression for issue #3306: a plain Vue SPA imports `vue-router` directly
+    /// and mounts with `app.mount('#app')`. The `'#app'` is a CSS selector, not
+    /// the Nuxt virtual module, so the rule must not fire.
+    #[test]
+    fn ignores_app_mount_css_selector_issue_3306() {
+        let src = "import { createRouter, createWebHistory } from 'vue-router';\n\
+            import { createApp } from 'vue';\n\
+            const app = createApp({});\n\
+            app.mount('#app');";
+        assert!(run_on(src).is_empty(), "unexpected: {:?}", run_on(src));
+    }
+
+    /// Guard: a real Nuxt file importing a composable from the `#app` virtual
+    /// module alongside `vue-router` must STILL fire.
+    #[test]
+    fn still_flags_nuxt_app_virtual_import() {
+        let src = "import { useRouter } from 'vue-router';\n\
+            import { useRuntimeConfig } from '#app';";
+        assert_eq!(run_on(src).len(), 1, "got: {:?}", run_on(src));
+    }
+
+    /// Guard: same as above but with double-quoted `from "#app"` — the marker
+    /// must be detected regardless of quote style.
+    #[test]
+    fn still_flags_nuxt_app_virtual_import_double_quoted() {
+        let src = "import { useRouter } from \"vue-router\";\n\
+            import { useRuntimeConfig } from \"#app\";";
+        assert_eq!(run_on(src).len(), 1, "got: {:?}", run_on(src));
+    }
+
+    /// Guard: the `#imports` virtual module marker must STILL fire when present
+    /// as an import specifier.
+    #[test]
+    fn still_flags_nuxt_imports_virtual_import() {
+        let src = "import { useRouter } from 'vue-router';\n\
+            import { useState } from '#imports';";
         assert_eq!(run_on(src).len(), 1, "got: {:?}", run_on(src));
     }
 }
