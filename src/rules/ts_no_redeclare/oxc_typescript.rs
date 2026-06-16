@@ -27,9 +27,14 @@
 //! function, or enum (e.g. `interface Foo` + `declare namespace Foo`,
 //! the Standard Schema V1 pattern) — skipped when one declaration is a
 //! namespace and another is a type or value declaration.
+//!
+//! `@ts-expect-error` opt-in: a redeclaration immediately preceded by a
+//! `// @ts-expect-error` (or `/* @ts-expect-error */`) comment is deliberate —
+//! TypeScript already reports it and the author opted in. Idiomatic in tsd
+//! `test-d/` files that reuse short test-local type names across fixtures.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, has_ts_expect_error_above};
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::VariableDeclarationKind;
 use oxc_ast::AstKind;
@@ -154,6 +159,17 @@ impl OxcCheck for Check {
             let name = scoping.symbol_name(symbol_id);
             for &decl_id in &decl_ids[1..] {
                 let span = nodes.kind(decl_id).span();
+                // A redeclaration the author marked `@ts-expect-error` is
+                // intentional — TypeScript already reports it and the author has
+                // opted in (idiomatic in tsd `test-d/` files that reuse short
+                // test-local names across fixtures).
+                if has_ts_expect_error_above(
+                    semantic.comments(),
+                    ctx.source,
+                    span.start as usize,
+                ) {
+                    continue;
+                }
                 let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),
@@ -417,6 +433,45 @@ function SortFilterItem({ item }: { item: SortFilterItem }) {
             "export type PaginateReturn<TResult> = TResult extends\n  | { body: { value?: infer TPage } }\n  | { body: { Value?: infer TPage } }\n  ? GetArrayType<TPage> : Array<unknown>;",
         );
         assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_type_alias_redeclaration_under_ts_expect_error() {
+        // Regression for #3323: type-fest's test-d files reuse short test-local
+        // type names across fixtures, each redeclaration under
+        // `// @ts-expect-error`. The author opted into the TS error — not a bug.
+        let d = run(
+            "// @ts-expect-error\ntype NoSplice = First['splice'];\n// @ts-expect-error\ntype NoSplice = Second['splice'];",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_type_alias_redeclaration_under_block_ts_expect_error() {
+        // The opt-in applies to block-comment `/* @ts-expect-error */` form too.
+        let d = run(
+            "/* @ts-expect-error */\ntype Dup = First['x'];\n/* @ts-expect-error */\ntype Dup = Second['x'];",
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn flags_type_alias_redeclaration_without_ts_expect_error() {
+        // Guard: a genuine accidental redeclaration with no `@ts-expect-error`
+        // marker must still fire.
+        let d = run("type Dup = First['x'];\ntype Dup = Second['x'];");
+        assert_eq!(d.len(), 1, "expected 1 diagnostic, got: {d:?}");
+        assert!(d[0].message.contains("`Dup`"));
+    }
+
+    #[test]
+    fn flags_redeclaration_when_ts_expect_error_only_on_first_decl() {
+        // The marker exempts only the declaration it directly precedes. A
+        // marker above the *first* declaration does not license a later
+        // unmarked redeclaration.
+        let d = run("// @ts-expect-error\ntype Dup = First['x'];\ntype Dup = Second['x'];");
+        assert_eq!(d.len(), 1, "expected 1 diagnostic, got: {d:?}");
+        assert!(d[0].message.contains("`Dup`"));
     }
 
     #[test]
