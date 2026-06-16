@@ -3,9 +3,35 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::Expression;
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
+
+/// True if `node` is the second argument of a `new URL(path, base)` call.
+/// In that position the string is only a parsing base — its host never
+/// receives traffic — so a `http://` literal there is not a clear-text
+/// endpoint regardless of the host (e.g. `new URL(req, 'http://dummy')`).
+fn is_url_base_argument<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let parent = semantic.nodes().parent_node(node.id());
+    let AstKind::NewExpression(new_expr) = parent.kind() else {
+        return false;
+    };
+    let Expression::Identifier(callee) = &new_expr.callee else {
+        return false;
+    };
+    if callee.name.as_str() != "URL" {
+        return false;
+    }
+    let Some(base_arg) = new_expr.arguments.get(1) else {
+        return false;
+    };
+    base_arg.span() == node.kind().span()
+}
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
@@ -20,7 +46,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         if ctx.file.path_segments.in_test_dir {
@@ -46,6 +72,9 @@ impl OxcCheck for Check {
         let Some(prefix) = super::is_clear_text_url(&quoted) else {
             return;
         };
+        if is_url_base_argument(node, semantic) {
+            return;
+        }
         let offset = match node.kind() {
             AstKind::StringLiteral(lit) => lit.span.start as usize,
             AstKind::TemplateLiteral(tpl) => tpl.span.start as usize,
@@ -158,5 +187,37 @@ mod tests {
     fn does_not_flag_ipv6_url_constructor_validator() {
         let src = r"new URL(`http://[${payload.value}]`);";
         assert!(run(src).is_empty());
+    }
+
+    // #3247 — the second argument of `new URL(path, base)` is only a parsing
+    // base; its host never receives traffic, so a `http://` literal there is
+    // exempt regardless of the hostname. A dotted host that would otherwise
+    // fire confirms the exemption is the call-site context, not the hostname.
+    #[test]
+    fn does_not_flag_url_base_argument() {
+        let src = r#"const { pathname } = new URL(original_url, 'http://parse-base.example-host.com');"#;
+        assert!(run(src).is_empty());
+    }
+
+    // #3247 — the exact reported sveltekit FP: `http://dummy` as the parsing base.
+    #[test]
+    fn does_not_flag_sveltekit_url_dummy_base() {
+        let src = r#"const { pathname, search } = new URL(original_url, 'http://dummy');"#;
+        assert!(run(src).is_empty());
+    }
+
+    // #3247 — only the second argument is the base. A `http://` host as the
+    // first/only argument is a real endpoint and must still fire.
+    #[test]
+    fn still_flags_url_first_argument() {
+        let src = r#"const u = new URL('http://insecure.example.com');"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // #3247 — a real cleartext fetch endpoint must still fire.
+    #[test]
+    fn still_flags_real_fetch_endpoint() {
+        let src = r#"fetch('http://api.real-site.com');"#;
+        assert_eq!(run(src).len(), 1);
     }
 }

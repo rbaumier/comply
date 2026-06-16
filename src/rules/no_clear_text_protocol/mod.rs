@@ -147,12 +147,21 @@ pub(super) fn is_clear_text_url(content: &str) -> Option<&'static str> {
     None
 }
 
-// Reserved/fictional example hosts that never name a real endpoint.
-// `contoso.com` / `fabrikam.com` are Microsoft's documented stand-ins for
-// `example.com`, used throughout the Azure SDK samples. Matched after a
-// leading `www.` is stripped, so both bare and `www.`-prefixed forms apply.
-const DUMMY_HOSTS: &[&str] =
-    &["example.com", "example.org", "example.net", "test.local", "contoso.com", "fabrikam.com"];
+// Reserved/fictional example hosts that never name a real endpoint, matched by
+// exact hostname (after a leading `www.` is stripped, so both bare and
+// `www.`-prefixed forms apply). `contoso.com` / `fabrikam.com` are Microsoft's
+// documented stand-ins for `example.com`, used throughout the Azure SDK samples.
+// `sveltekit-prerender` is SvelteKit's synthetic prerender-origin host, baked
+// into framework code as a placeholder and never connected to.
+const DUMMY_HOSTS: &[&str] = &[
+    "example.com",
+    "example.org",
+    "example.net",
+    "test.local",
+    "contoso.com",
+    "fabrikam.com",
+    "sveltekit-prerender",
+];
 
 // Canonical public demo endpoints that appear verbatim in API tutorials —
 // Swagger's Petstore and Azure API Management's echo API. They are illustrative
@@ -330,6 +339,30 @@ mod helper_tests {
     #[test]
     fn still_flags_hardcoded_ipv6_endpoint() {
         assert_eq!(is_clear_text_url("\"http://[2001:db8::1]/api\""), Some("http://"));
+    }
+
+    // #3247 — `sveltekit-prerender` is SvelteKit's synthetic prerender-origin
+    // placeholder host, exempt via the curated `DUMMY_HOSTS` allowlist.
+    #[test]
+    fn does_not_flag_sveltekit_prerender_host() {
+        assert!(is_clear_text_url("\"http://sveltekit-prerender\"").is_none());
+    }
+
+    // #3247 — a bare-label intranet host is a real cleartext endpoint, the most
+    // common class of internal endpoint, and must fire. Not exempt by any
+    // allowlist; the hostname parse stops at `:` so a port does not hide it.
+    #[test]
+    fn flags_bare_label_internal_endpoints() {
+        assert_eq!(is_clear_text_url("\"http://internal-server\""), Some("http://"));
+        assert_eq!(is_clear_text_url("\"http://gateway\""), Some("http://"));
+        assert_eq!(is_clear_text_url("\"http://api-gateway:8080\""), Some("http://"));
+    }
+
+    // #3247 — a dotted hostname that is not on any allowlist is a real endpoint
+    // and must still fire.
+    #[test]
+    fn still_flags_dotted_non_allowlisted_host() {
+        assert_eq!(is_clear_text_url("\"http://api.real-site.com\""), Some("http://"));
     }
 
     // #1102 — a real `*.cloudapp.net` / `*.microsoft.com` endpoint that is NOT
