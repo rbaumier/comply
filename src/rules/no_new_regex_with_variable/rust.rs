@@ -6,9 +6,14 @@
 //! backtracking. A `const`/`static` argument (conventionally
 //! `SCREAMING_SNAKE_CASE`) is a compile-time constant, as safe as a literal.
 //! The fix: use a literal `Regex::new(r"...")`, or a vetted safe-regex library.
+//!
+//! Test code is exempted: in a `#[test]` context or under a `tests/`
+//! directory the developer controls both program and input, so there is no
+//! ReDoS attack surface.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
 
 #[derive(Debug)]
 pub struct Check;
@@ -43,6 +48,11 @@ impl AstCheck for Check {
             return;
         };
         if is_safe_pattern_arg(first_arg, source_bytes) {
+            return;
+        }
+        // Test code has no external attack surface: the developer controls
+        // both the program and the pattern, so ReDoS does not apply.
+        if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
             return;
         }
         let pos = node.start_position();
@@ -153,5 +163,34 @@ mod tests {
     #[test]
     fn flags_regex_with_lowercase_identifier() {
         assert_eq!(run_on("fn f() { let r = Regex::new(input); }").len(), 1);
+    }
+
+    #[test]
+    fn allows_regex_with_variable_in_tests_dir() {
+        // Issue #3287: ripgrep's crates/matcher/tests/test_matcher.rs.
+        let source = "fn matcher(pattern: &str) { let r = Regex::new(pattern).unwrap(); }";
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                source,
+                "crates/matcher/tests/test_matcher.rs"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_regex_with_variable_in_test_function() {
+        let source = "#[test]\nfn it_works() { let r = Regex::new(pattern); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_regex_with_variable_in_production() {
+        let source = "pub fn f() { let r = Regex::new(user_input); }";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, source, "crates/foo/src/lib.rs").len(),
+            1
+        );
     }
 }
