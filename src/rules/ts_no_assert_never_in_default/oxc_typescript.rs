@@ -2,16 +2,17 @@
 //! without an exhaustive `never` check.
 //!
 //! Suppressed when the switch discriminant cannot be narrowed to `never`: a
-//! `for...of` / `for...in` loop element, or a binding annotated with a plain
-//! primitive type (`string`, `number`, `boolean`, ...). On those, the `default:
-//! throw` is runtime input validation, and `const _: never = x` would itself be
-//! a TypeScript error — the exhaustiveness check is only meaningful for a union
-//! or enum discriminant.
+//! `for...of` / `for...in` loop element, a binding annotated with a plain
+//! primitive type (`string`, `number`, `boolean`, ...), or a binding whose
+//! initializer calls a same-file function declared to return such a primitive.
+//! On those, the `default: throw` is runtime input validation, and
+//! `const _: never = x` would itself be a TypeScript error — the exhaustiveness
+//! check is only meaningful for a union or enum discriminant.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, TSType};
+use oxc_ast::ast::{Expression, IdentifierReference, TSType};
 use std::sync::Arc;
 
 pub struct Check;
@@ -79,8 +80,10 @@ impl OxcCheck for Check {
 
 /// True when `discriminant` resolves to a binding whose type can never narrow
 /// to `never`, so an exhaustive `const _: never = x` check would not compile:
-/// a `for...of`/`for...in` loop element, or a binding annotated with a plain
-/// primitive keyword type.
+/// a `for...of`/`for...in` loop element, a binding annotated with a plain
+/// primitive keyword type, or a binding initialized by a same-file function
+/// call whose declared return type is such a primitive (inferred-primitive
+/// binding).
 fn discriminant_cannot_be_never<'a>(
     discriminant: &Expression<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
@@ -110,14 +113,13 @@ fn discriminant_cannot_be_never<'a>(
                     .as_ref()
                     .is_some_and(|ann| is_primitive_type(&ann.type_annotation));
             }
-            // A primitive-annotated binding settles it; otherwise keep walking
-            // so an enclosing for-of/for-in is still detected.
+            // A primitive-annotated binding settles it; otherwise an
+            // initializer calling a same-file function declared to return a
+            // primitive gives the binding an inferred primitive type, which is
+            // equally un-narrowable to `never`. Either way, keep walking so an
+            // enclosing for-of/for-in is still detected.
             AstKind::VariableDeclarator(decl) => {
-                if decl
-                    .type_annotation
-                    .as_ref()
-                    .is_some_and(|ann| is_primitive_type(&ann.type_annotation))
-                {
+                if declarator_is_primitive(decl, semantic) {
                     return true;
                 }
             }
@@ -129,6 +131,61 @@ fn discriminant_cannot_be_never<'a>(
         }
     }
     false
+}
+
+/// True when the `let`/`const` binding has a primitive type: either an explicit
+/// primitive type annotation, or no annotation but an initializer calling a
+/// same-file function declared to return a primitive (inferred primitive).
+fn declarator_is_primitive<'a>(
+    decl: &oxc_ast::ast::VariableDeclarator<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    if let Some(ann) = decl.type_annotation.as_ref() {
+        return is_primitive_type(&ann.type_annotation);
+    }
+    if let Some(Expression::CallExpression(call)) = decl.init.as_ref()
+        && let Expression::Identifier(callee) = &call.callee
+    {
+        return callee_returns_primitive(callee, semantic);
+    }
+    false
+}
+
+/// True when `callee` resolves to a same-file function (declaration, arrow, or
+/// function expression) whose explicit return-type annotation is a plain
+/// primitive keyword. The symbol table picks the binding in scope at the call
+/// site, so shadowing is respected. Returns false when the callee resolves to
+/// no in-file binding, or the return type is absent or a union/literal/named
+/// type — those still narrow to `never` and keep firing.
+fn callee_returns_primitive<'a>(
+    callee: &IdentifierReference,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let scoping = semantic.scoping();
+    let Some(ref_id) = callee.reference_id.get() else {
+        return false;
+    };
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let nodes = semantic.nodes();
+    let decl_id = scoping.symbol_declaration(sym_id);
+    let decl_kind = std::iter::once(nodes.kind(decl_id))
+        .chain(nodes.ancestor_kinds(decl_id))
+        .find(|kind| matches!(kind, AstKind::Function(_) | AstKind::VariableDeclarator(_)));
+
+    let return_type = match decl_kind {
+        // `function f(): string { ... }`
+        Some(AstKind::Function(func)) => func.return_type.as_ref(),
+        // `const f = (): string => ...` / `const f = function (): string {}`
+        Some(AstKind::VariableDeclarator(decl)) => match decl.init.as_ref() {
+            Some(Expression::ArrowFunctionExpression(arrow)) => arrow.return_type.as_ref(),
+            Some(Expression::FunctionExpression(func)) => func.return_type.as_ref(),
+            _ => return false,
+        },
+        _ => return false,
+    };
+    return_type.is_some_and(|ann| is_primitive_type(&ann.type_annotation))
 }
 
 /// True for primitive keyword types that can hold infinitely many values and so
@@ -224,6 +281,63 @@ mod tests {
     fn still_flags_switch_over_union_local() {
         // A union-typed local binding stays flagged — it can go stale.
         let src = "function f() { const x: 'a' | 'b' = 'a' as 'a' | 'b'; switch (x) { case 'a': return 1; case 'b': return 2; default: throw new Error('x'); } }";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #3291: discriminant is a `const` initialized by a same-file
+    // function declared to return `string` (inferred-primitive). `const _: never
+    // = version` would be a TypeScript error, so the `default: throw` is runtime
+    // validation, not a stale exhaustiveness check.
+    #[test]
+    fn no_fp_inferred_primitive_from_function_return_issue_3291() {
+        let src = "function determinePayloadFormat(event: object): string { return '1.0'; }\n\
+                   const version = determinePayloadFormat({});\n\
+                   switch (version) {\n\
+                   case '1.0': break;\n\
+                   case '2.0': break;\n\
+                   default: throw new Error(`Unsupported version: ${version}`);\n\
+                   }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn no_fp_inferred_primitive_from_arrow_return() {
+        let src = "const detect = (): string => '1.0';\n\
+                   const version = detect();\n\
+                   switch (version) {\n\
+                   case '1.0': break;\n\
+                   default: throw new Error(version);\n\
+                   }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // A plain `.js` file has no TypeScript types, so the rule is not registered
+    // for JavaScript and must produce no diagnostics.
+    #[test]
+    fn no_fp_in_js_file_issue_3291() {
+        let src = "function determinePayloadFormat(event) { return '1.0'; }\n\
+                   const version = determinePayloadFormat({});\n\
+                   switch (version) {\n\
+                   case '1.0': break;\n\
+                   default: throw new Error('Unsupported version: ' + version);\n\
+                   }";
+        let diags =
+            crate::rules::test_helpers::run_rule_by_id(crate::rules::ts_no_assert_never_in_default::META.id, src, "env.js");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    // A same-file function returning a string-literal union IS narrowable to
+    // `never` after the cases are handled, so the suppression must NOT apply —
+    // the rule still fires (the genuine stale-exhaustiveness case).
+    #[test]
+    fn still_flags_inferred_literal_union_from_function_return() {
+        let src = "function detect(): '1.0' | '2.0' { return '1.0'; }\n\
+                   const version = detect();\n\
+                   switch (version) {\n\
+                   case '1.0': break;\n\
+                   case '2.0': break;\n\
+                   default: throw new Error(version);\n\
+                   }";
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }

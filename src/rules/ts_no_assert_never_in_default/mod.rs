@@ -29,9 +29,11 @@ pub const META: RuleMeta = RuleMeta {
 pub fn register() -> RuleDef {
     RuleDef {
         meta: META,
+        // TS-family only: a plain `.js`/`.mjs` file has no TypeScript types, so
+        // there is no union-exhaustiveness concept and `const _: never = x`
+        // would never apply — the rule must not fire there.
         backends: vec![
             (Language::TypeScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
-            (Language::JavaScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
             (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
         ],
     }
