@@ -379,3 +379,22 @@ excluded_components = []
 [rules.use-react-native-platform-components]
 android_path_patterns = ["**/*.android.{js,jsx,ts,tsx}"]
 ios_path_patterns = ["**/*.ios.{js,jsx,ts,tsx}"]
+
+# ---------------------------------------------------------------
+# use-qwik-loader-location
+# Qwik route loaders/actions only run when declared in a route
+# boundary file. A "route boundary" is an `index`/`layout`/`plugin`
+# file under `src/routes`; these globs define which files qualify.
+# ---------------------------------------------------------------
+
+# Each glob's last segment uses a `index*`/`layout*`/`plugin*` prefix to mirror
+# Biome's filename `starts_with` check (e.g. `index.tsx`, `layout@auth.tsx`).
+[rules.use-qwik-loader-location]
+route_boundary_patterns = [
+  "**/src/routes/**/index*",
+  "**/src/routes/**/layout*",
+  "**/src/routes/**/plugin*",
+  "src/routes/**/index*",
+  "src/routes/**/layout*",
+  "src/routes/**/plugin*",
+]
