@@ -2380,15 +2380,15 @@ impl ProjectCtx {
     /// Add a framework's route-scoped magic exports when `path` matches the file
     /// convention that consumes them. SvelteKit reserves `load`/`ssr`/`csr`/… in
     /// `+page`/`+layout`/`+server` route files and `match` in `src/params/*`;
-    /// Remix reserves `loader`/`action`/`meta`/… in `app/routes/*` modules. The
-    /// router calls each by exact name, so they have no importer but are live.
-    /// Each framework's `route_files` apply only when `path` matches that
-    /// framework's own route-file convention, keeping a same-named export in an
-    /// ordinary module flaggable.
+    /// Vue Router reserves `parser` in `src/params/*`; Remix reserves
+    /// `loader`/`action`/`meta`/… in `app/routes/*` modules. The router calls each
+    /// by exact name, so they have no importer but are live. Each framework's
+    /// `route_files` apply only when `path` matches that framework's own route-file
+    /// convention, keeping a same-named export in an ordinary module flaggable.
     fn extend_route_magic_exports<'a>(&'a self, path: &Path, names: &mut HashSet<&'a str>) {
         let basename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let is_sveltekit_route = crate::rules::path_utils::is_sveltekit_route_file(basename);
-        let is_param_matcher = crate::rules::path_utils::is_sveltekit_param_matcher_file(path);
+        let is_param_matcher = crate::rules::path_utils::is_param_dir_file(path);
         let is_remix_route = crate::rules::path_utils::is_remix_route_file(path);
         let is_rr_root = crate::rules::path_utils::is_react_router_root_module(path);
         let is_rr_config = crate::rules::path_utils::is_react_router_routes_config(path);

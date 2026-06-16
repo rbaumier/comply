@@ -1,0 +1,21 @@
+[detection]
+dependencies = ["unplugin-vue-router", "vue-router"]
+
+[entry_points]
+dirs = []
+files = []
+
+[magic_exports]
+names = []
+
+# Vue Router's file-based routing plugin discovers param-parser files under the
+# `paramParsers.dir` directory (default `src/params/`) at build time and consumes
+# their `parser` export by file path, never through a static import. The export
+# is scoped to the `params/` directory convention so a same-named export in an
+# ordinary module stays flaggable.
+[route_magic_exports]
+# `src/params/*.{js,ts}` route-parameter parsers.
+param_matchers = ["parser"]
+
+[tooling_deps]
+names = []

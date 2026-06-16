@@ -107,6 +107,7 @@ const RAW: &[(&str, &str)] = &[
     ("gatsby", include_str!("gatsby.toml")),
     ("docusaurus", include_str!("docusaurus.toml")),
     ("astro", include_str!("astro.toml")),
+    ("vue-router", include_str!("vue-router.toml")),
 ];
 
 fn registry() -> &'static [FrameworkDef] {
