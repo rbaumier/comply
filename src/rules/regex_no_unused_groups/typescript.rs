@@ -6,7 +6,9 @@
 //! false-positive as regex named capturing groups.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::oxc_helpers::groups_destructure_keys;
 use crate::rules::regex_ast::pattern_and_flags;
+use rustc_hash::FxHashSet;
 
 /// Extract named capturing group names and their byte offset within
 /// `pattern`. Skips lookbehind constructs `(?<=...)` and `(?<!...)`.
@@ -48,8 +50,12 @@ fn extract_named_groups(pattern: &str) -> Vec<(String, usize)> {
 
 /// Checks whether a named group `name` is referenced somewhere in the
 /// file — through `.groups.name`, `groups["name"]`, `groups['name']`,
-/// or `$<name>` inside a replacement string.
-fn is_group_referenced(name: &str, source: &str) -> bool {
+/// `$<name>` inside a replacement string, or as a key destructured from a
+/// `.groups` object (`destructured_keys`, precomputed once per file).
+fn is_group_referenced(name: &str, source: &str, destructured_keys: &FxHashSet<String>) -> bool {
+    if destructured_keys.contains(name) {
+        return true;
+    }
     let dot_access = format!(".groups.{name}");
     let bracket_access_dq = format!("groups[\"{name}\"]");
     let bracket_access_sq = format!("groups['{name}']");
@@ -66,8 +72,9 @@ crate::ast_check! { on ["regex"] => |node, source, ctx, diagnostics|
     if groups.is_empty() {
         return;
     }
+    let destructured_keys = groups_destructure_keys(ctx.source);
     for (name, _offset) in groups {
-        if is_group_referenced(&name, ctx.source) {
+        if is_group_referenced(&name, ctx.source, &destructured_keys) {
             continue;
         }
         diagnostics.push(Diagnostic::at_node(
@@ -172,5 +179,31 @@ mod tests {
         // be treated as a regex.
         let src = r#"import X from "@scope/(?<x>pkg)";"#;
         assert!(run_on(src).is_empty());
+    }
+
+    // --- Regression tests for `.groups` destructuring usage (#3320). ---
+
+    #[test]
+    fn allows_groups_destructure_shorthand() {
+        let src = "const CODEBLOCK_REGEX = /(?<openingFence>(?<indent>^[ \\t]*))(?<code>[\\s\\S]*?)/gmv;\nconst {code, openingFence, indent} = match.groups ?? {};";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_groups_destructure_exec_optional_chain() {
+        let src = "const { year } = /(?<year>\\d{4})/.exec(s)?.groups ?? {};";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_groups_destructure_renamed_key() {
+        let src = "const re = /(?<year>\\d{4})/;\nconst { year: y } = m.groups;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_group_with_no_reference_or_destructure() {
+        let src = r#"const re = /(?<unusedGroup>\d+)/;"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
