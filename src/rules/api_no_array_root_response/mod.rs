@@ -24,7 +24,9 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["api"],
 
-    skip_in_test_dir: false,
+    // Test middleware calling `res.json([...])` exercises framework
+    // serialization, not a production endpoint; response-shape rules don't apply.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: true,
 };
 
