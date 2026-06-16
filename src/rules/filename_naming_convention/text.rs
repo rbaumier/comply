@@ -111,6 +111,24 @@ fn is_public_api_barrel_file(path: &std::path::Path) -> bool {
         )
 }
 
+/// Returns `true` for the JS/TS `{subject}-test` / `{subject}-spec` test-file
+/// stem, where the trailing `-test` / `-spec` segment marks the file as a test
+/// and the preceding subject names the API under test. Each dash-separated
+/// subject segment may independently use any casing (camelCase or PascalCase) so
+/// the name can mirror the exact function, hook, or component being exercised —
+/// e.g. `Router-test`, `matchRoutes-test`, `hook-useSubmit-test`,
+/// `Router-basename-test`. The trailing `-test`/`-spec` suffix is itself the
+/// test-file gate, so the allowance applies wherever such a file lives.
+fn is_test_subject_stem(stem: &str) -> bool {
+    let subject = match stem.strip_suffix("-test").or_else(|| stem.strip_suffix("-spec")) {
+        Some(subject) if !subject.is_empty() => subject,
+        _ => return false,
+    };
+    subject
+        .split('-')
+        .all(|segment| is_camel_case(segment) || is_pascal_case(segment))
+}
+
 fn is_ts_or_jsx_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
     s.ends_with(".ts")
@@ -167,7 +185,9 @@ impl TextCheck for Check {
             return Vec::new();
         }
         if is_ts_or_jsx_file(ctx.path)
-            && (is_pascal_case(convention_stem) || is_camel_case(convention_stem))
+            && (is_pascal_case(convention_stem)
+                || is_camel_case(convention_stem)
+                || is_test_subject_stem(convention_stem))
         {
             return Vec::new();
         }
@@ -609,5 +629,65 @@ mod tests {
     #[test]
     fn flags_mis_cased_file_under_routes_issue_2223() {
         assert_eq!(run("src/routes/my_component.tsx").len(), 1);
+    }
+
+    // Regression for #3380: the `{subject}-test` / `{subject}-spec` convention
+    // names the test after the API it exercises, so the subject may use any
+    // casing (camelCase or PascalCase) to mirror that name.
+    #[test]
+    fn allows_hook_use_submit_test_issue_3380() {
+        assert!(run("integration/hook-useSubmit-test.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_pascal_component_test_issue_3380() {
+        assert!(run("packages/react-router/__tests__/Router-test.tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_camel_api_test_issue_3380() {
+        assert!(run("packages/react-router/__tests__/matchRoutes-test.tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_camel_api_test_ts_issue_3380() {
+        assert!(
+            run(
+                "packages/react-router-remix-routes-option-adapter/__tests__/defineRoutes-test.ts"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_pascal_kebab_subject_test_issue_3380() {
+        // `Router-basename` is a multi-segment subject: PascalCase + kebab word.
+        assert!(run("packages/react-router/__tests__/Router-basename-test.tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_subject_spec_issue_3380() {
+        assert!(run("spec/operators/matchRoutes-spec.ts").is_empty());
+    }
+
+    // Guard: the allowance is scoped to the `-test`/`-spec` suffix — a genuinely
+    // mis-cased non-test file still fires.
+    #[test]
+    fn flags_non_test_pascal_kebab_hybrid_issue_3380() {
+        assert_eq!(run("src/Router-basename.ts").len(), 1);
+    }
+
+    // Guard: a snake_cased subject is not a valid case token and still fires
+    // even with the `-test` suffix.
+    #[test]
+    fn flags_snake_subject_test_issue_3380() {
+        assert_eq!(run("src/some_file-test.ts").len(), 1);
+    }
+
+    // Guard: a `someFile-test.ts` whose convention is already satisfied stays
+    // clean (the subject `someFile` is plain camelCase).
+    #[test]
+    fn allows_already_valid_camel_subject_test_issue_3380() {
+        assert!(run("src/someFile-test.ts").is_empty());
     }
 }
