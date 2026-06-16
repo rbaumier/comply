@@ -3464,11 +3464,11 @@ impl ProjectCtx {
     pub fn prisma_soft_delete_models(&self) -> Option<&HashSet<String>> {
         self.prisma_soft_delete_models
             .get_or_init(|| {
-                let start: PathBuf = self
-                    .project_root
-                    .clone()
-                    .or_else(|| std::env::current_dir().ok())?;
-                collect_prisma_soft_delete_models(&start)
+                // Anchored on the detected project root only — never the process
+                // CWD. An unknown root yields `None` (fire on all models), the
+                // same outcome as a project with no `schema.prisma`.
+                let root = self.project_root.as_deref()?;
+                collect_prisma_soft_delete_models(root)
             })
             .as_ref()
     }
@@ -4205,16 +4205,7 @@ fn strip_trailing_commas(s: &str) -> String {
 #[cfg(test)]
 pub(crate) fn default_static_project_ctx() -> &'static ProjectCtx {
     static DEFAULT: OnceLock<ProjectCtx> = OnceLock::new();
-    DEFAULT.get_or_init(|| {
-        let ctx = ProjectCtx::empty();
-        // The test suite runs from the comply repo, whose fixtures contain
-        // `schema.prisma` files. Left uninitialized, `prisma_soft_delete_models`
-        // would lazily scan the current dir and return `Some(...)`, making the
-        // prisma rule skip queries on models absent from those fixtures. A bare
-        // test project has no schema, so pin the field to `None`.
-        let _ = ctx.prisma_soft_delete_models.set(None);
-        ctx
-    })
+    DEFAULT.get_or_init(ProjectCtx::empty)
 }
 
 #[cfg(test)]
