@@ -294,6 +294,12 @@ classes = []
 [rules.package-json-required-scripts]
 scripts = []
 
+# Required order of Vue `<script setup>` compiler macros. A macro found out of
+# this order (or after non-skippable non-macro content) is flagged. Names not
+# listed are treated as non-macro statements.
+[rules.use-vue-define-macros-order]
+order = ["defineModel", "defineProps", "defineEmits"]
+
 # ---------------------------------------------------------------
 # React thresholds.
 # ---------------------------------------------------------------
