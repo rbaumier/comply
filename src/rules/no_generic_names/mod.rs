@@ -1,6 +1,8 @@
-//! no-generic-names — reject vague/meaningless identifier names along
-//! two axes: exact banned words (`temp`, `result`, `val`, `foo`, …) and
-//! banned prefixes (`process`, `data`, `do`, `execute`, `run`,
+//! no-generic-names — reject vague/meaningless identifier names along three
+//! axes: exact banned words matched on the whole identifier (`temp`, `result`,
+//! `val`, `foo`, …); filler nouns matched as a word segment anywhere on a
+//! camelCase/`_` boundary (`data` → `updatedData`, `getUserData`); and generic
+//! verbs matched only as a leading prefix (`process`, `do`, `execute`, `run`,
 //! `perform`). `handle` is excluded because `handleXxx` is a React idiom.
 
 mod oxc_typescript;

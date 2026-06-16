@@ -9,14 +9,37 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// Filler words flagged only when the *entire* identifier (case-insensitive)
+/// equals one of them: `result`/`Result`/`RESULT` fire, but `parsedResult` and
+/// `resultData` do not. These read as vague on their own yet are legitimate
+/// segments of a descriptive compound (`rowIndex`, `cellValue`), so they never
+/// match as a prefix or suffix.
 const BANNED_WORDS: &[&str] = &[
     "info", "temp", "result", "obj", "item", "thing", "stuff", "val", "retval", "value", "foo",
-    "bar", "row", "rows", "cell", "cells",
+    "bar", "row", "rows", "cell", "cells", "baz", "qux", "tmp", "dummy", "placeholder", "arr",
+    "str", "num", "output", "input", "payload", "flag", "stub", "fake", "foobar", "quux", "corge",
+    "blah", "bleh", "asdf", "qwerty", "zzz", "xxx", "aaa", "bbb", "scratch", "junk", "garbage",
+    "something", "anything", "whatever", "dict", "vec", "tup", "bool", "int", "float", "char",
+    "byte", "ptr", "ret", "out", "vars", "response", "request", "entity", "dto", "resource",
+    "entry", "chunk", "blob", "evt", "el", "elem", "comp", "func", "widget", "record", "body",
+    "doc", "idx", "curr", "opts", "cfg",
 ];
 
 const PARAM_ALLOWED_WORDS: &[&str] = &["value", "item"];
 
-const BANNED_PREFIXES: &[&str] = &["process", "data", "do", "execute", "run", "perform"];
+/// Filler nouns flagged whenever they appear as a standalone word *segment* of
+/// an identifier — a segment being a run delimited by `_` or a camelCase /
+/// PascalCase boundary. `data` fires in `data`, `dataValue`, `data_value`,
+/// `updatedData`, `getUserData`, `DataSource`; it does not fire in
+/// `dataset`/`database`/`metadata`, where no boundary isolates `data`. Unlike a
+/// verb, a filler noun reads as vague in any position, so it matches anywhere.
+const BANNED_SEGMENTS: &[&str] = &["data"];
+
+/// Generic action verbs flagged only as a leading prefix on a word boundary
+/// (`processOrder`, `do_thing`, `RUN_HOOK`). A verb names *what is done* only at
+/// the head of an identifier; as a trailing segment it usually carries meaning
+/// (`dryRun`, `childProcess`), so it never matches as a suffix.
+const BANNED_PREFIXES: &[&str] = &["process", "do", "execute", "run", "perform"];
 
 const GLOBAL_IDENTIFIER_ALLOWLIST: &[&str] = &[
     "process",
@@ -35,7 +58,7 @@ const DESCRIPTIVE_SUFFIXES: &[&str] = &[
     "_LEN", "_COUNT", "_MAX", "_MIN", "_TIMEOUT", "_INTERVAL", "_LIMIT", "_TTL", "_ROOT", "_BASE",
 ];
 
-/// camelCase/PascalCase suffixes that turn a banned prefix into a specific
+/// camelCase/PascalCase suffixes that turn a banned word into a specific
 /// domain noun rather than a generic action. `run` is a generic verb but
 /// `runId`/`RunStatus` name a concrete run identifier/state; `data` is filler
 /// but `dataType`/`dataKey` name a concrete field. The suffix must sit on a
@@ -142,6 +165,73 @@ fn is_grafana_datasource_class_name<'a>(
 }
 
 /// Return the banned prefix matching `name` on a word boundary, or None.
+/// Visits each camelCase/snake_case word segment of `name`, calling `f` once
+/// per segment. Segments are delimited by `_` and by camelCase boundaries — an
+/// uppercase letter that begins a new word, i.e. one preceded by a
+/// lowercase/digit, or the final letter of an acronym that precedes a
+/// lowercase. `getUserData` → `get`,`User`,`Data`; `data_value` → `data`,`value`;
+/// `parseJSONData` → `parse`,`JSON`,`Data`.
+fn for_each_segment(name: &str, mut f: impl FnMut(&str)) {
+    let bytes = name.as_bytes();
+    let mut start = 0usize;
+    for i in 0..=bytes.len() {
+        let boundary = i == bytes.len()
+            || bytes[i] == b'_'
+            || (i > start
+                && bytes[i].is_ascii_uppercase()
+                && {
+                    let prev = bytes[i - 1];
+                    prev.is_ascii_lowercase()
+                        || prev.is_ascii_digit()
+                        || (prev.is_ascii_uppercase()
+                            && bytes.get(i + 1).is_some_and(|b| b.is_ascii_lowercase()))
+                });
+        if boundary {
+            if i > start {
+                f(&name[start..i]);
+            }
+            // The `_` delimiter is dropped; a camelCase boundary starts the
+            // next segment at the boundary character itself.
+            start = if i < bytes.len() && bytes[i] == b'_' { i + 1 } else { i };
+        }
+    }
+}
+
+/// The `BANNED_SEGMENTS` noun occurring as a standalone segment of `name`, after
+/// the exemptions that turn a domain-suffixed compound (`dataType`, `DATA_DIR`)
+/// into a specific name.
+fn matched_banned_segment(name: &str) -> Option<&'static str> {
+    // A domain-identifying suffix (`dataType`, `dataKey`, `dataJson`) makes the
+    // compound a specific field, not a generic blob.
+    if ends_with_descriptive_camel_suffix(name) {
+        return None;
+    }
+    // A SCREAMING_SNAKE_CASE constant whose tail is a descriptive suffix
+    // (`DATA_DIR`, `DATA_PATH`) names a concrete resource.
+    if name
+        .bytes()
+        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+        && DESCRIPTIVE_SUFFIXES.iter().any(|s| {
+            name.len() > s.len() && name[name.len() - s.len()..].eq_ignore_ascii_case(s)
+        })
+    {
+        return None;
+    }
+    let mut hit: Option<&'static str> = None;
+    for_each_segment(name, |seg| {
+        if hit.is_none() {
+            hit = BANNED_SEGMENTS
+                .iter()
+                .copied()
+                .find(|w| seg.eq_ignore_ascii_case(w));
+        }
+    });
+    hit
+}
+
+/// The first `BANNED_PREFIXES` verb leading `name` on a word boundary, after the
+/// refinements that turn a leading generic verb into a specific name (`runId`,
+/// `runWithX`, `runBeforeUnload`, `RUN_TIMEOUT`).
 fn matched_banned_prefix(name: &str) -> Option<&'static str> {
     let bytes = name.as_bytes();
     for &prefix in BANNED_PREFIXES {
@@ -181,8 +271,8 @@ fn matched_banned_prefix(name: &str) -> Option<&'static str> {
             if prefix == "run" && capitalized_word_count(&name[plen..]) >= 2 {
                 continue;
             }
-            // A domain-identifying suffix (`runId`, `RunStatus`, `dataType`)
-            // makes the compound a specific noun, not a generic action.
+            // A domain-identifying suffix (`runId`, `RunStatus`) makes the
+            // compound a specific noun, not a generic action.
             if ends_with_descriptive_camel_suffix(name) {
                 continue;
             }
@@ -928,14 +1018,14 @@ impl OxcCheck for Check {
             return;
         }
 
-        if let Some(prefix) = matched_banned_prefix(name) {
+        if let Some(word) = matched_banned_segment(name).or_else(|| matched_banned_prefix(name)) {
             // An identifier mirroring a standard DOM/Web API type name in
             // camelCase (`dataTransfer` for `DataTransfer`) refers to the web
             // platform object, not a generic `data*` compound.
             if mirrors_dom_api_name(name) {
                 return;
             }
-            if prefix == "data" && DATA_PASCAL_CASE_ALLOWED_COMPOUNDS.iter().any(|allowed| match name.strip_prefix(allowed) {
+            if word == "data" && DATA_PASCAL_CASE_ALLOWED_COMPOUNDS.iter().any(|allowed| match name.strip_prefix(allowed) {
                 Some("") => true,
                 Some(rest) => rest.as_bytes().first().is_some_and(|b| b.is_ascii_uppercase()),
                 None => false,
@@ -945,7 +1035,7 @@ impl OxcCheck for Check {
             // A class extending a Grafana datasource SDK base
             // (`class DataSource extends DataSourceApi<…>`) is a
             // framework-mandated plugin entry name, not a lazy `data*` compound.
-            if prefix == "data" && is_grafana_datasource_class_name(node, ctx, semantic) {
+            if word == "data" && is_grafana_datasource_class_name(node, ctx, semantic) {
                 return;
             }
             // A descriptive type annotation (e.g. `data: TData`) carries
@@ -962,7 +1052,7 @@ impl OxcCheck for Check {
             // The `data` parameter of a message-event handler (`self.onmessage =
             // (data) => …`, `addEventListener('message', (data) => …)`) mirrors
             // the platform `MessageEvent.data` contract — the idiomatic name.
-            if prefix == "data"
+            if word == "data"
                 && is_function_param(node, semantic)
                 && is_message_handler_param(node, semantic)
             {
@@ -975,10 +1065,10 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: format!(
-                    "Identifier '{name}' uses banned prefix '{prefix}' — use \
+                    "Identifier '{name}' contains the generic word '{word}' — use \
                      intent over implementation. Try: what does this actually \
-                     accomplish? (`processOrder` → `fulfillOrder`, `doPayment` → \
-                     `chargeCustomer`)."
+                     represent? (`processOrder` → `fulfillOrder`, `updatedData` → \
+                     `revisedInvoice`)."
                 ),
                 severity: Severity::Warning,
                 span: None,
@@ -1149,7 +1239,7 @@ mod tests {
         // fp-ts/Effect terms for the `dual()` calling conventions, not generic
         // `data` names.
         let src = r#"
-            function dual<DataLast extends (...args: any[]) => any, DataFirst extends (...args: any[]) => any>(body: DataFirst): DataLast & DataFirst { return body as any; }
+            function dual<DataLast extends (...args: any[]) => any, DataFirst extends (...args: any[]) => any>(target: DataFirst): DataLast & DataFirst { return target as any; }
         "#;
         assert!(run(src).is_empty());
     }
@@ -1470,7 +1560,7 @@ mod tests {
     fn still_flags_item_declared_in_for_of_loop_body_issue_1163() {
         // Negative: the exemption is for the loop *binding* only — a generic
         // name declared inside the loop body is still flagged.
-        let src = r#"for (const entity of entities) { const item = entity.x; use(item); }"#;
+        let src = r#"for (const product of products) { const item = product.x; use(item); }"#;
         assert_eq!(run(src).len(), 1);
     }
 
@@ -1648,6 +1738,68 @@ mod tests {
             const item: string = "x";
         "#;
         assert_eq!(run(src).len(), 4);
+    }
+
+    #[test]
+    fn flags_newly_added_whole_name_fillers() {
+        // A sample across the new whole-name additions — placeholders,
+        // type-stub abbreviations, and backend fillers all fire as bare names.
+        for name in [
+            "stub", "response", "entity", "dict", "idx", "opts", "cfg", "body", "doc", "record",
+            "vec", "blob", "comp",
+        ] {
+            let src = format!("function f() {{ const {name} = compute(); return {name}; }}");
+            assert_eq!(run(&src).len(), 1, "'{name}' should be flagged");
+        }
+    }
+
+    #[test]
+    fn newly_added_fillers_are_whole_name_only() {
+        // The additions are exact-name bans — they must not fire as a prefix or
+        // suffix of a descriptive compound.
+        for name in [
+            "responseBody",
+            "entityManager",
+            "outFile",
+            "docComment",
+            "recordCount",
+            "elementRef",
+        ] {
+            let src = format!("const {name} = 1;");
+            assert!(run(&src).is_empty(), "'{name}' must NOT be flagged");
+        }
+    }
+
+    #[test]
+    fn flags_banned_segment_anywhere_not_just_prefix() {
+        // A `BANNED_SEGMENTS` word fires as a standalone segment wherever it
+        // sits: as a suffix (`updatedData`), in the middle (`getUserData`), and
+        // across a snake_case boundary (`user_data`).
+        assert_eq!(run("const updatedData = 1;").len(), 1);
+        assert_eq!(run("function getUserData() { return 1; }").len(), 1);
+        assert_eq!(run("const user_data = 1;").len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_banned_segment_without_a_word_boundary() {
+        // A `BANNED_SEGMENTS` word fires only as a *whole* segment:
+        // `dataset`/`database`/`metadata` are single lowercase words that
+        // merely contain the letters "data".
+        for name in ["dataset", "database", "metadata"] {
+            let src = format!("const {name} = compute();");
+            assert!(run(&src).is_empty(), "'{name}' must NOT be flagged");
+        }
+    }
+
+    #[test]
+    fn whole_name_words_do_not_fire_as_segments() {
+        // The `BANNED_WORDS` list is exact-name only — `result`/`value`/`item`
+        // are legitimate segments of a descriptive compound and must not fire
+        // as a prefix or suffix.
+        for name in ["parsedResult", "defaultValue", "rawValue", "currentItem"] {
+            let src = format!("const {name} = 1;");
+            assert!(run(&src).is_empty(), "'{name}' must NOT be flagged");
+        }
     }
 
     #[test]
