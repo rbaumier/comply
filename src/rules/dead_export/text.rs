@@ -1902,6 +1902,74 @@ mod tests {
     }
 
     #[test]
+    fn ignores_vue_router_param_parser_export_issue_3383() {
+        // Regression for #3383 (vuejs/router) — every `.ts` file under
+        // `src/params/` exports a `parser` that Vue Router's file-based routing
+        // plugin discovers by file path at build time, never through a static
+        // import. With the Vue Router dependency present, the `parser` export is
+        // framework-consumed and must not be flagged dead.
+        let pkg = r#"{ "dependencies": { "vue-router": "^5.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/params/date.ts",
+                "import { defineParamParser } from 'vue-router/experimental';\n\
+                 export const parser = defineParamParser({ get: (v) => new Date(v), set: (d) => d.toISOString() });\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/params/date.ts");
+        assert!(
+            diags.is_empty(),
+            "Vue Router param parser `parser` is framework-consumed: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_parser_export_without_vue_router_dep_issue_3383() {
+        // Negative-space guard for #3383 — the exemption is dep-gated. The same
+        // `parser` export in a `src/params/` file of a project with no Vue Router
+        // dependency is an ordinary unused export and must still be flagged.
+        let pkg = r#"{ "dependencies": { "lodash": "^4.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/params/date.ts",
+                "export const parser = (v) => new Date(v);\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/params/date.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a `parser` export without the Vue Router dep must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("parser"));
+    }
+
+    #[test]
+    fn still_flags_parser_export_outside_params_dir_issue_3383() {
+        // Negative-space guard for #3383 — the exemption is scoped to the
+        // `params/` directory convention. A `parser` export in an ordinary module
+        // of a Vue Router project, with no importer, is genuinely dead and must
+        // still be flagged.
+        let pkg = r#"{ "dependencies": { "vue-router": "^5.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/lib/format.ts",
+                "export const parser = (v) => new Date(v);\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/lib/format.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a `parser` export outside `params/` must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("parser"));
+    }
+
+    #[test]
     fn ignores_vitest_global_setup_exports_issue_1550() {
         // Regression for #1550 — a Vitest `globalSetup` module's `setup`/`teardown`
         // exports are invoked by the Vitest runtime by name (configured via

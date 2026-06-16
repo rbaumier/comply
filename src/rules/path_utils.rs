@@ -808,11 +808,13 @@ pub fn is_sveltekit_route_file(file_name: &str) -> bool {
     )
 }
 
-/// True when `path` is a SvelteKit route-parameter matcher: a `.js`/`.ts` file
-/// directly under a `params/` directory (`src/params/integer.ts`). Each such
-/// file exports a `match` function the router calls to validate a `[x=name]`
-/// route segment — consumed by file convention, never imported.
-pub fn is_sveltekit_param_matcher_file(path: &Path) -> bool {
+/// True when `path` is a route-parameter file: a `.js`/`.ts` file directly under
+/// a `params/` directory (`src/params/integer.ts`). Both SvelteKit (which
+/// consumes a `match` export) and Vue Router (which consumes a `parser` export)
+/// place route-parameter files here, and each framework's router consumes the
+/// reserved export by file convention, never through a static import. The
+/// per-framework export name is supplied by `RouteMagicExports::param_matchers`.
+pub fn is_param_dir_file(path: &Path) -> bool {
     let is_script = matches!(
         path.extension().and_then(|e| e.to_str()),
         Some("js" | "ts")
