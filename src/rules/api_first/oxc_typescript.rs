@@ -199,6 +199,25 @@ const exposeHeaders = res.headers.get("access-control-expose-headers");
     }
 
     #[test]
+    fn skips_route_in_flat_test_dir_issue3302() {
+        // Issue #3302 — ky uses a flat `test/` directory whose files are named
+        // `test/bytes.ts`, `tests/context.ts` etc., without a `.test.`/`.spec.`
+        // suffix. They register ephemeral test servers, not deployed routes.
+        // The central `skip_in_test_dir` gate (`FileCtx::in_test_dir` covers a
+        // top-level `test/`/`tests/` directory) exempts them; the same handler
+        // in a production route file still fires.
+        let src = r#"server.get('/', (request, response) => { response.end(Buffer.from([0, 1, 2, 255])); });"#;
+        assert!(crate::rules::test_helpers::run_rule_gated(&Check, src, "test/bytes.ts").is_empty());
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "tests/context.ts").is_empty()
+        );
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "src/server/routes.ts").len(),
+            1
+        );
+    }
+
+    #[test]
     fn ignores_headers_get_outside_test_file() {
         // Even outside test files, `.get("name")` with a non-`/`
         // string argument is not a route registration.
