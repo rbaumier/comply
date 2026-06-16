@@ -38,6 +38,20 @@ fn is_semantic_grouping_prefix(prefix: &str) -> bool {
     matches!(prefix, "defa" | "ente" | "leav")
 }
 
+/// Whether `type_name` follows a configuration naming convention
+/// (`FooConfig`, `BarOptions`, `BazSettings`, …). A configuration type is
+/// a bag of independent tunable knobs, each optional because it has a
+/// default and can be set in any combination — there is no mutual
+/// exclusion and no encoded state machine. Optional fields there may share
+/// a vocabulary prefix (`customResolveInfo`/`customResolverFn` → `cust`)
+/// without modeling a variant, so prefix-clustering carries no signal and
+/// the cluster heuristic is suppressed.
+fn is_configuration_type_name(type_name: &str) -> bool {
+    const CONFIG_SUFFIXES: [&str; 8] =
+        ["Config", "Configuration", "Options", "Opts", "Settings", "Props", "Params", "Args"];
+    CONFIG_SUFFIXES.iter().any(|suffix| type_name.ends_with(suffix))
+}
+
 /// Axis / direction suffixes that, appended to a bare base field, name a
 /// CSS-inspired shorthand + per-axis property family: axes (`X`/`Y`/`Z`/
 /// `3d`), box sides (`Top`/`Right`/`Bottom`/`Left`) and logical edges
@@ -162,6 +176,9 @@ fn check_optional_clusters(
     ctx: &CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    if is_configuration_type_name(type_name) {
+        return;
+    }
     let mut hits: Vec<(&String, usize)> = buckets
         .iter()
         .map(|(prefix, names)| (prefix, variant_field_count(names)))
@@ -376,6 +393,53 @@ mod tests {
         // suffixes; neither is a prefix of the other, so the cluster is a
         // genuine discriminated-union smell and stays flagged.
         let src = "interface Order { id: string; cancelledAt?: string; cancelledReason?: string }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_config_interface_vocabulary_prefix_cluster() {
+        // Regression for #3270: in a configuration interface (`*Config`),
+        // optional fields are independent tunable knobs that legitimately
+        // share a vocabulary prefix (`customResolveInfo`/`customResolverFn`
+        // → `cust`; a heterogeneous `resolver…` cluster → `reso`). They are
+        // not variants of a state machine, so the prefix cluster must not be
+        // flagged. The `reso` cluster mixes string/string/boolean, so a pure
+        // type-homogeneity test would not clear it — config-name suppression
+        // is the load-bearing rule.
+        let src = r#"export interface TypeScriptResolversPluginConfig {
+  customResolveInfo?: string;
+  customResolverFn?: string;
+  futureProofEnums?: boolean;
+  futureProofUnions?: boolean;
+  resolverTypeWrapperSignature?: string;
+  resolverTypeSuffix?: string;
+  resolversNonOptionalTypename?: boolean;
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_options_type_alias_vocabulary_prefix_cluster() {
+        // Regression for #3270: the config-name convention covers type
+        // aliases ending in `Options` too — independent knobs, not variants.
+        let src = r#"type DocumentOptions = {
+  documentMode?: string;
+  documentTransformTypeName?: string;
+};"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_domain_state_cluster_in_non_config_interface() {
+        // Guardrail for #3270: a genuine heterogeneous domain-state cluster
+        // in a NON-config interface (`Order`, not `*Config`/`*Options`) must
+        // still be flagged — the config-name suppression must not leak into
+        // ordinary domain types.
+        let src = r#"interface Order {
+  cancelReason?: string;
+  cancelledAt?: Date;
+  cancelledBy?: User;
+}"#;
         assert_eq!(run_on(src).len(), 1);
     }
 
