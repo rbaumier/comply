@@ -366,6 +366,49 @@ fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
+/// The nearest enclosing `function_item` ancestor of `node`, or `None` when
+/// `node` is not inside any function body (e.g. a free `const`/`static`
+/// initializer at module scope).
+///
+/// Walks up via `node.parent()` and returns the first `function_item` found.
+/// Rules that need to inspect the surrounding function as a whole — its name,
+/// body, or the literals it contains — use this instead of re-implementing the
+/// walk.
+pub fn enclosing_fn(node: Node) -> Option<Node> {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "function_item" {
+            return Some(parent);
+        }
+        cur = parent;
+    }
+    None
+}
+
+/// True if any string, raw-string, or byte-string literal in the subtree rooted
+/// at `node` contains `needle` as a substring, matched case-insensitively.
+///
+/// In tree-sitter-rust a byte-string literal (`b"…"`) is a `string_literal`
+/// node whose `utf8_text` still includes the literal's payload, so scanning
+/// `string_literal` / `raw_string_literal` node text covers byte strings too.
+pub fn subtree_string_literal_contains(node: Node, source: &[u8], needle: &str) -> bool {
+    let needle_lower = needle.to_ascii_lowercase();
+    let mut cursor = node.walk();
+    let mut stack = vec![node];
+    while let Some(current) = stack.pop() {
+        if matches!(current.kind(), "string_literal" | "raw_string_literal")
+            && let Ok(text) = current.utf8_text(source)
+            && text.to_ascii_lowercase().contains(&needle_lower)
+        {
+            return true;
+        }
+        for child in current.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
 /// True if `node` sits inside a trait implementation (`impl Trait for Type`).
 ///
 /// Walks up via `node.parent()` to the *nearest* enclosing `impl_item` and
@@ -766,6 +809,49 @@ mod tests {
                 is_inside_async_fn(call, src.as_bytes()),
                 expected,
                 "is_inside_async_fn mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn enclosing_fn_finds_nearest_function_or_none() {
+        // Inside a function body: the call's enclosing fn is found.
+        let src = "fn outer() { inner(); }";
+        let tree = parse(src);
+        let call = first_call_expression(tree.root_node())
+            .expect("snippet should contain a call_expression");
+        assert!(enclosing_fn(call).is_some_and(|f| f.kind() == "function_item"));
+
+        // At module scope (a const initializer): no enclosing function.
+        let src = "const X: u32 = compute();";
+        let tree = parse(src);
+        let call = first_call_expression(tree.root_node())
+            .expect("snippet should contain a call_expression");
+        assert!(enclosing_fn(call).is_none());
+    }
+
+    #[test]
+    fn subtree_string_literal_contains_matches_byte_and_raw_strings() {
+        let cases = [
+            // Plain string literal.
+            (r#"fn f() { let _ = "needle here"; }"#, "needle", true),
+            // Byte-string literal (`b"…"`) — still a `string_literal` node.
+            (r#"fn f() { g(&b"abc-NEEDLE-def"[..]); }"#, "needle", true),
+            // Raw string literal.
+            (r##"fn f() { let _ = r#"a needle b"#; }"##, "needle", true),
+            // Case-insensitive match.
+            (r#"fn f() { let _ = "ABC123"; }"#, "abc123", true),
+            // The needle is an identifier, not a literal → no match.
+            (r#"fn f() { let needle = 1; }"#, "needle", false),
+            // Absent.
+            (r#"fn f() { let _ = "other"; }"#, "needle", false),
+        ];
+        for (src, needle, expected) in cases {
+            let tree = parse(src);
+            assert_eq!(
+                subtree_string_literal_contains(tree.root_node(), src.as_bytes(), needle),
+                expected,
+                "subtree_string_literal_contains mismatch for `{src}` / `{needle}`"
             );
         }
     }
