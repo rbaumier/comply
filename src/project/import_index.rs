@@ -465,7 +465,7 @@ impl ImportIndex {
         // Fourth pass: propagate re-exports. When barrel.ts does
         // `export { X } from './impl'`, usages on barrel flow to impl; the same
         // applies to `export * from './impl'` for whichever name `impl` exports.
-        propagate_reexports(&exports, &imports, &star_edges, &mut symbol_usages);
+        propagate_reexports(&exports, &reexport_targets, &star_edges, &mut symbol_usages);
 
         // Fifth pass: collect bare specifiers (npm packages).
         let bare_specifiers = collect_bare_specifiers(&imports);
@@ -765,56 +765,39 @@ impl ImportIndex {
 /// makes `import { X } from './barrel'` resolve.
 fn propagate_reexports(
     exports: &HashMap<PathBuf, Vec<ExportedSymbol>>,
-    imports: &HashMap<PathBuf, Vec<ImportedSymbol>>,
+    reexport_targets: &HashMap<(PathBuf, String), PathBuf>,
     star_edges: &HashMap<PathBuf, Vec<PathBuf>>,
     symbol_usages: &mut HashMap<(PathBuf, String), Vec<Usage>>,
 ) {
-    // Build re-export edges: for each `export { X } from './m'` or
-    // `export { X as Y } from './m'`, find the matching import and link
-    // (barrel, exported_name) → (origin, origin_name).
+    // Build re-export edges from the `export { X } from './m'` records directly:
+    // link (barrel, exported_name) → (origin, origin_name). The origin file is
+    // the resolved specifier in `reexport_targets`; the origin name is the
+    // `local` side of `export { local as exported } from './m'` (so an alias
+    // propagates to the ORIGINAL name in `./m`), or the exported name for the
+    // plain `export { X } from './m'` form.
     //
-    // Matching strategy: the re-export's `reexport_source` specifier
-    // must match the import's `specifier`, AND the names must align.
-    // This avoids false edges when a barrel imports the same name from
-    // multiple modules.
+    // Driving off the export records (not a matching import) is what lets a
+    // re-export-in-place — `export { X } from './m'` with NO accompanying
+    // `import { X } from './m'` statement — still propagate usage to `./m`. The
+    // resolved origin already lives in `reexport_targets` regardless of whether
+    // a sibling import exists.
     let mut reexport_edges: Vec<(PathBuf, String, PathBuf, String)> = Vec::new();
     for (barrel_path, exps) in exports {
-        let Some(imps) = imports.get(barrel_path) else {
-            continue;
-        };
         for exp in exps {
             if !matches!(exp.kind, ExportKind::ReExport) {
                 continue;
             }
-            let Some(reexport_spec) = &exp.reexport_source else {
+            let Some(origin) = reexport_targets.get(&(barrel_path.clone(), exp.name.clone()))
+            else {
                 continue;
             };
-            for imp in imps {
-                if imp.specifier != *reexport_spec {
-                    continue;
-                }
-                let Some(origin) = &imp.source_path else {
-                    continue;
-                };
-                let name_matches = match imp.kind {
-                    ImportKind::Named => imp.local_name == exp.name,
-                    ImportKind::Default => exp.name == "default",
-                    _ => false,
-                };
-                if name_matches {
-                    let origin_name = match imp.kind {
-                        ImportKind::Default => "default".to_string(),
-                        _ => imp.imported_name.clone(),
-                    };
-                    reexport_edges.push((
-                        barrel_path.clone(),
-                        exp.name.clone(),
-                        origin.clone(),
-                        origin_name,
-                    ));
-                    break;
-                }
-            }
+            let origin_name = exp.local_name.clone().unwrap_or_else(|| exp.name.clone());
+            reexport_edges.push((
+                barrel_path.clone(),
+                exp.name.clone(),
+                origin.clone(),
+                origin_name,
+            ));
         }
     }
 
@@ -4620,6 +4603,89 @@ mod tests {
         let exports = index.get_exports(&paths[1]);
         assert_eq!(exports.len(), 1);
         assert_eq!(exports[0].kind, ExportKind::StarReExport);
+    }
+
+    #[test]
+    fn reexport_without_import_propagates_usage_to_origin() {
+        // Regression for #3277: `a.ts` exports `foo`; `b.js` re-exports it in
+        // place — `export { foo } from './a'` with NO matching `import { foo }`
+        // statement; `c.ts` consumes it through the barrel. The chain is real,
+        // so `foo` on `a.ts` must register a usage even though `b.js` has no
+        // import edge to drive the old import-matching propagation.
+        let (_dir, index, paths) = build_index(&[
+            ("a.ts", "export const foo = 1;"),
+            ("b.js", "export { foo } from './a.ts';"),
+            ("c.ts", "import { foo } from './b.js';\nfoo + 1;"),
+        ]);
+        let usages = index.get_usages(&paths[0], "foo");
+        assert_eq!(
+            usages.len(),
+            1,
+            "usage of `foo` on the consumer must flow back to its origin: {usages:?}"
+        );
+        assert_eq!(&usages[0].importer, &paths[2]);
+    }
+
+    #[test]
+    fn aliased_reexport_without_import_propagates_to_original_name() {
+        // `export { foo as bar } from './a'` (no import) consumed as `bar`
+        // propagates to the ORIGINAL name `foo` in `./a`, not `bar`.
+        let (_dir, index, paths) = build_index(&[
+            ("a.ts", "export const foo = 1;"),
+            ("b.js", "export { foo as bar } from './a.ts';"),
+            ("c.ts", "import { bar } from './b.js';\nbar + 1;"),
+        ]);
+        assert_eq!(
+            index.get_usages(&paths[0], "foo").len(),
+            1,
+            "usage must propagate to the original name `foo`"
+        );
+        assert!(
+            index.get_usages(&paths[0], "bar").is_empty(),
+            "the alias `bar` is not an export name on the origin"
+        );
+    }
+
+    #[test]
+    fn import_then_reexport_still_propagates_usage() {
+        // The import-then-reexport form — `import { foo } from './a'` followed
+        // by `export { foo } from './a'` — must keep propagating. The barrel
+        // both imports `foo` directly (one usage of the origin) and re-exports
+        // it; the consumer's usage flows through the re-export (a second usage).
+        let (_dir, index, paths) = build_index(&[
+            ("a.ts", "export const foo = 1;"),
+            (
+                "barrel.ts",
+                "import { foo } from './a';\nexport { foo } from './a';",
+            ),
+            ("c.ts", "import { foo } from './barrel';\nfoo + 1;"),
+        ]);
+        let usages = index.get_usages(&paths[0], "foo");
+        assert!(
+            usages.iter().any(|u| u.importer == paths[1]),
+            "barrel's own direct import is a usage of the origin: {usages:?}"
+        );
+        assert!(
+            usages.iter().any(|u| u.importer == paths[2]),
+            "consumer's usage must flow through the re-export to the origin: {usages:?}"
+        );
+    }
+
+    #[test]
+    fn genuinely_dead_export_stays_unused_through_reexport_machinery() {
+        // Guardrail: a barrel that re-exports `used` (no import) does NOT make
+        // the origin's sibling `orphan` look used. `orphan` is exported, never
+        // imported, never re-exported — it must stay with zero usages.
+        let (_dir, index, paths) = build_index(&[
+            ("a.ts", "export const used = 1;\nexport const orphan = 2;"),
+            ("b.js", "export { used } from './a.ts';"),
+            ("c.ts", "import { used } from './b.js';\nused + 1;"),
+        ]);
+        assert_eq!(index.get_usages(&paths[0], "used").len(), 1);
+        assert!(
+            index.get_usages(&paths[0], "orphan").is_empty(),
+            "an export reached by no import and no re-export must stay unused"
+        );
     }
 
     #[test]

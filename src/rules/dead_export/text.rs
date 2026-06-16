@@ -2748,6 +2748,68 @@ mod tests {
     }
 
     #[test]
+    fn no_fp_for_symbol_used_via_reexport_without_import_issue_3277() {
+        // Regression for #3277: `entrypoints.ts` exports `generateEntrypoints`;
+        // `entrypoints.js` re-exports it in place — `export { … } from
+        // './entrypoints.ts'` with NO matching import statement; a consumer
+        // imports it through the `.js` barrel. The usage chain is real, so the
+        // origin export must not be flagged dead.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "scripts/entrypoints.ts",
+                "export type PackageJson = { name: string };\n\
+                 export async function generateEntrypoints(inputs: string[]) { return inputs; }\n",
+            ),
+            (
+                "scripts/entrypoints.js",
+                "export { generateEntrypoints, PackageJson } from './entrypoints.ts';\n",
+            ),
+            (
+                "packages/a/build.ts",
+                "import { generateEntrypoints, PackageJson } from '../../scripts/entrypoints.js';\n\
+                 const p: PackageJson = { name: 'x' };\n\
+                 generateEntrypoints([]);\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "scripts/entrypoints.ts");
+        assert!(
+            diags.is_empty(),
+            "symbols re-exported in place (no import) and consumed downstream must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_orphan_beside_reexported_symbol_issue_3277() {
+        // Negative-space guard for #3277: a genuinely dead `orphan` export
+        // sitting next to a re-exported (and consumed) symbol stays flagged.
+        // The re-export-without-import propagation must not blanket-exempt the
+        // origin file.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "scripts/entrypoints.ts",
+                "export function generateEntrypoints() {}\n\
+                 export const orphan = 1;\n",
+            ),
+            (
+                "scripts/entrypoints.js",
+                "export { generateEntrypoints } from './entrypoints.ts';\n",
+            ),
+            (
+                "packages/a/build.ts",
+                "import { generateEntrypoints } from '../../scripts/entrypoints.js';\n\
+                 generateEntrypoints();\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "scripts/entrypoints.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "only the unused `orphan` export must be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("orphan"));
+    }
+
+    #[test]
     fn flags_multiple_dead_exports_independently() {
         let files: Vec<(&str, &str)> = vec![
             ("m.ts", "export const a = 1;\nexport const b = 2;"),
