@@ -345,3 +345,14 @@ min_replicas = 3
 [rules.security-no-cors-reflect-origin]
 
 [rules.security-no-password-in-log]
+
+# ---------------------------------------------------------------
+# GraphQL — description style.
+#
+# `block` requires triple-quoted (`"""…"""`) descriptions; `inline`
+# requires single-quoted (`"…"`) ones. Either way the whole schema
+# must use the one configured style.
+# ---------------------------------------------------------------
+
+[rules.use-consistent-graphql-descriptions]
+style = "block"

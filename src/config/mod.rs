@@ -241,6 +241,19 @@ impl Config {
         b
     }
 
+    /// String-valued config option for `rule_id` (e.g. an enum-like
+    /// `style = "block"`). Panics if the key is absent from the merged
+    /// config — add it to `src/config/defaults.toml` as the authoritative
+    /// default.
+    #[must_use]
+    pub fn string(&self, rule_id: &str, key: &str, lang: Language) -> &str {
+        let value = self.extra_value(rule_id, key, lang);
+        let Some(s) = value.as_str() else {
+            panic!("config key `[rules.\"{rule_id}\"] {key}` must be a string, got {value:?}");
+        };
+        s
+    }
+
     /// Shared lookup for `threshold` / `float`. Panics with a
     /// uniform "missing key" message so the two public APIs don't
     /// duplicate the same boilerplate.
