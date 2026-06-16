@@ -414,6 +414,21 @@ fn has_integration_fixture_app_shape(normalized: &str) -> bool {
     segments[integration_idx + 1..].iter().any(|seg| *seg == "src")
 }
 
+/// True for a file under a top-level `integration/` directory — the flat
+/// integration-test infrastructure shape (e.g. `integration/helpers/server.js`)
+/// used by Playwright/e2e suites to spin up ephemeral servers and fixtures. The
+/// `integration/` segment may sit at the path root or after a monorepo package
+/// path. A production `src/integration/` module (where `src` directly precedes
+/// `integration`, an "integration with service X") is excluded: those are
+/// shipped code, not test scaffolding.
+fn is_top_level_integration_dir(normalized: &str) -> bool {
+    let Some(idx) = normalized.find("/integration/") else {
+        return normalized.starts_with("integration/");
+    };
+    let before = &normalized[..idx];
+    !(before == "src" || before.ends_with("/src"))
+}
+
 /// Test-root directory names that pair with an `internal/` child to form the
 /// `test/internal/` convention — matched as exact path segments.
 const TEST_ROOT_SEGMENTS: &[&str] = &["test", "tests", "__tests__", "_tests_"];
@@ -483,6 +498,7 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
             || lower.starts_with("__tests__/")
             || lower.contains("/fixtures/")
             || has_integration_fixture_app_shape(&lower)
+            || is_top_level_integration_dir(&lower)
             || lower.contains("/__mocks__/")
             || lower.contains("/mocks/")
             || lower.starts_with("mocks/")
@@ -740,6 +756,23 @@ mod tests {
         // A production `src/integration/` module (no nested `src/` after the
         // `integration/` segment) is not the fixture-app shape.
         assert!(!scan_path(&PathBuf::from("src/integration/payment-gateway.ts")).in_test_dir);
+        // Flat `integration/helpers/` test-infra scripts (issue #3389): a
+        // top-level `integration/` directory with no nested `src/` — ephemeral
+        // Express servers spun up by Playwright e2e suites, never deployed.
+        assert!(scan_path(&PathBuf::from("integration/helpers/rsc-vite/server.js")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("integration/helpers/create-fixture.ts")).in_test_dir);
+        assert!(
+            scan_path(&PathBuf::from("integration/helpers/rsc-vite-framework/start.js")).in_test_dir
+        );
+        // The `integration/` segment after a monorepo package path is still
+        // test infra, even without a nested `src/`.
+        assert!(scan_path(&PathBuf::from("packages/foo/integration/helpers/db.ts")).in_test_dir);
+        // Guard: a production `src/integration/` module — whether at the path
+        // root or nested under a package — stays non-test (`src` precedes
+        // `integration`, an "integration with service X" module).
+        assert!(!scan_path(&PathBuf::from("packages/foo/src/integration/client.ts")).in_test_dir);
+        // A normal source file is not a test dir.
+        assert!(!scan_path(&PathBuf::from("src/server.ts")).in_test_dir);
     }
 
     #[test]
