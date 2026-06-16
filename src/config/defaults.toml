@@ -362,3 +362,8 @@ min_replicas = 3
 
 [rules.use-consistent-graphql-descriptions]
 style = "block"
+
+[rules.use-unique-element-ids]
+# Component names whose static `id` is intentional (e.g. an i18n message id, not
+# a DOM id). Matched against the element's unqualified name.
+excluded_components = []
