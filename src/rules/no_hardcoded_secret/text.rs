@@ -230,7 +230,7 @@ const PLACEHOLDER_USERNAMES: &[&str] = &["user", "test", "root", "admin", "postg
 /// Generic placeholder passwords. The literal string `pass`/`password`/etc. is
 /// never a real credential; it marks a `proto://user:pass@host` example.
 const PLACEHOLDER_PASSWORDS: &[&str] =
-    &["pass", "password", "passwd", "test", "root", "admin", "postgres"];
+    &["pass", "password", "passwd", "test", "root", "admin", "postgres", "mysql"];
 
 /// True when a `username:password` userinfo pair is a well-known generic
 /// placeholder (e.g. `user:pass`, `postgres:postgres`) rather than a real
@@ -672,6 +672,46 @@ mod tests {
         assert!(
             run(r#"let msg = "URLs must be in the form `mysql://[[user]:[password]@]host[:port][/database]`";"#)
                 .is_empty()
+        );
+    }
+
+    // Regression tests for #3301 — `mysql` is the official MySQL Docker image's
+    // default root password (`MYSQL_ROOT_PASSWORD=mysql`), so `root:mysql` is a
+    // well-known dummy credential like `root:root` or `admin:admin`. The host is
+    // not part of the placeholder decision, so loopback IPs and named hosts are
+    // treated identically.
+    #[test]
+    fn allows_mysql_docker_root_credential_on_loopback_ip() {
+        assert!(
+            run(r#"const u = `mysql://root:mysql@127.0.0.1:${port}/drizzle`;"#).is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_mysql_docker_root_credential_on_localhost() {
+        assert!(run(r#"const u = "mysql://root:mysql@localhost:3306/drizzle";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_postgres_placeholder_on_loopback_ip() {
+        assert!(
+            run(r#"const u = "postgres://postgres:password@127.0.0.1:5432/db";"#).is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_real_password_on_non_loopback_host() {
+        assert_eq!(
+            run(r#"const u = "mysql://admin:S3cretPassword@prod.db.example.com:3306/app";"#).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn still_flags_real_password_on_non_loopback_ip() {
+        assert_eq!(
+            run(r#"const u = "postgres://user:hunter2@10.0.0.5/db";"#).len(),
+            1
         );
     }
 }
