@@ -39,33 +39,33 @@ impl OxcCheck for Check {
         }
 
         let nodes = semantic.nodes();
+        let scoping = semantic.scoping();
         let mut diagnostics = Vec::new();
 
-        // Pass 1: collect interface/type property names
-        let mut prop_types: HashMap<String, Vec<PropInfo>> = HashMap::new();
+        // Pass 1: collect the props declared by each interface/type-alias,
+        // keyed by the declaration's own `NodeId`. Keying by node (not by type
+        // name) keeps two same-named declarations in different scopes distinct,
+        // so a component is matched against the specific `Props` it references.
+        let mut prop_types: HashMap<oxc_semantic::NodeId, Vec<PropInfo>> = HashMap::new();
         for node in nodes.iter() {
             match node.kind() {
                 AstKind::TSInterfaceDeclaration(decl) => {
-                    let name = decl.id.name.to_string();
                     let props = collect_ts_signature_props(&decl.body.body);
                     if !props.is_empty() {
-                        prop_types.insert(name, props);
+                        prop_types.insert(node.id(), props);
                     }
                 }
                 AstKind::TSTypeAliasDeclaration(decl) => {
                     if let TSType::TSTypeLiteral(lit) = &decl.type_annotation {
-                        let name = decl.id.name.to_string();
                         let props = collect_ts_signature_props(&lit.members);
                         if !props.is_empty() {
-                            prop_types.insert(name, props);
+                            prop_types.insert(node.id(), props);
                         }
                     }
                 }
                 _ => {}
             }
         }
-
-        let scoping = semantic.scoping();
 
         // Pass 2: find functions with typed props parameter
         for node in nodes.iter() {
@@ -86,7 +86,7 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            let declared_props = match resolve_props(param, &prop_types) {
+            let declared_props = match resolve_props(param, scoping, &prop_types) {
                 Some(p) => p,
                 None => continue,
             };
@@ -249,9 +249,17 @@ fn collect_ts_signature_props(sigs: &[TSSignature]) -> Vec<PropInfo> {
         .collect()
 }
 
+/// Resolve the props declared for a component's typed parameter.
+///
+/// An inline object-literal annotation (`{ ... }: { a: number }`) yields its own
+/// members directly. A named reference (`{ ... }: Props`) is resolved through the
+/// semantic symbol table — `reference_id` → symbol → declaration node — so the
+/// reference points at the *specific* `Props` declaration in its own/enclosing
+/// scope, not whichever same-named declaration was collected last.
 fn resolve_props<'a>(
     param: &oxc_ast::ast::FormalParameter<'a>,
-    prop_types: &HashMap<String, Vec<PropInfo>>,
+    scoping: &oxc_semantic::Scoping,
+    prop_types: &HashMap<oxc_semantic::NodeId, Vec<PropInfo>>,
 ) -> Option<Vec<PropInfo>> {
     let ta = param.type_annotation.as_ref()?;
     match &ta.type_annotation {
@@ -259,8 +267,10 @@ fn resolve_props<'a>(
             let TSTypeName::IdentifierReference(ident) = &tref.type_name else {
                 return None;
             };
-            let type_name = ident.name.as_str();
-            prop_types.get(type_name).cloned()
+            let ref_id = ident.reference_id.get()?;
+            let sym_id = scoping.get_reference(ref_id).symbol_id()?;
+            let decl_node_id = scoping.symbol_declaration(sym_id);
+            prop_types.get(&decl_node_id).cloned()
         }
         TSType::TSTypeLiteral(lit) => {
             let props = collect_ts_signature_props(&lit.members);
@@ -550,6 +560,49 @@ export const BlocksCommand = new Command("blocks")
   });
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    /// Regression for #3243: two same-named `type Props` declared in separate
+    /// inner scopes must not collide. Each component is matched against the
+    /// `Props` it actually references (resolved by symbol), so every prop is read
+    /// and nothing is flagged.
+    #[test]
+    fn allows_same_name_prop_types_in_separate_scopes() {
+        let src = r#"
+it('first', () => {
+  type Props = {
+    selector?: (state: State) => number
+    equalityFn?: (a: number, b: number) => boolean
+  }
+  function Component({ selector, equalityFn }: Props) {
+    return useBoundStore(selector, equalityFn);
+  }
+})
+
+it('second', () => {
+  type Props = { id: string }
+  function Child({ id }: Props) {
+    const text = useBoundStore((s) => s.childItems[id]?.text)
+    return text;
+  }
+})
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// A genuinely unused prop in a single-declaration file must still fire even
+    /// after scope-aware resolution: `dead` is never read.
+    #[test]
+    fn flags_unused_prop_single_declaration() {
+        let src = r#"
+type Props = { used: string; dead: string };
+function App({ used }: Props) {
+  return used;
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`dead`"));
     }
 
     /// Regression for #2032: a body-less `declare`d PascalCase function inside a
