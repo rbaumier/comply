@@ -172,6 +172,34 @@ fn is_rest_sibling_destructure(
     walk(root, symbol_span)
 }
 
+/// True when the binding declared at `decl_node` belongs to an ambient
+/// `declare const` / `declare let` / `declare var` statement. Ambient variable
+/// declarations are type-only: they are erased at compile time and have no
+/// runtime presence, so they can never be referenced at runtime and "unused" is
+/// meaningless for them. They exist purely to assert a type — e.g. a tsd-style
+/// type probe `declare const x: Foo<Bar>;` whose type annotation *is* the
+/// assertion.
+///
+/// `decl_node` is the `VariableDeclarator`; the `declare` modifier lives on its
+/// enclosing `VariableDeclaration`. Only the immediate declaration is checked so
+/// a non-ambient `const x = 5;` stays reportable.
+fn is_ambient_declare_variable(
+    decl_node: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    if !matches!(nodes.kind(decl_node), AstKind::VariableDeclarator(_)) {
+        return false;
+    }
+    nodes
+        .ancestor_kinds(decl_node)
+        .find_map(|kind| match kind {
+            AstKind::VariableDeclaration(decl) => Some(decl.declare),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
 /// True when `decl_node` is a class declaration carrying a decorator that
 /// registers it as a custom element (`@customElement('tag')`). The decorated
 /// class is reached through its HTML tag name rather than a JavaScript reference,
@@ -413,6 +441,14 @@ impl OxcCheck for Check {
             let symbol_span = scoping.symbol_span(symbol_id);
 
             if is_named_function_expression_id(decl_node, semantic) {
+                continue;
+            }
+
+            // An ambient `declare const`/`declare let`/`declare var` binding is
+            // type-only and erased at compile time, so it can never have a
+            // runtime reference — "unused" is meaningless for it (e.g. tsd-style
+            // type probes `declare const x: Foo<Bar>;`).
+            if is_ambient_declare_variable(decl_node, semantic) {
                 continue;
             }
 
@@ -1309,6 +1345,48 @@ export {};
         assert!(
             diags.iter().any(|d| d.message.contains("`unusedParam`")),
             "expected unused param in a standalone function to be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_ambient_declare_type_probe() {
+        // tsd-style type probes: `declare const x: T` exists purely to assert
+        // that `T` is a valid type expression. The binding is ambient (erased at
+        // compile time) and never referenced at runtime — the type-check IS the
+        // use. (Closes #3322)
+        let src = r#"
+type ExtractStrict<T, U extends T> = Extract<T, U>;
+type ShirtSize = 'small' | 'medium' | 'large';
+// @ts-expect-error
+declare const allInvalidShirtSizes: ExtractStrict<ShirtSize, 'skyscraper-large' | 'atom-small'>;
+declare const never: never;
+declare let probe: string;
+declare var ambientVar: number;
+export {};
+"#;
+        let diags = run(src);
+        for name in ["allInvalidShirtSizes", "never", "probe", "ambientVar"] {
+            assert!(
+                !diags.iter().any(|d| d.message.contains(&format!("`{name}`"))),
+                "FP on ambient declare type-probe `{name}`: {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_non_ambient_unused_const() {
+        // Negative-space guard for #3322 — a non-ambient `const x = 5;` has a
+        // real runtime binding and stays reportable. The exemption is scoped to
+        // the `declare` modifier, not to all type-annotated consts.
+        let src = "const unusedReal = 5;\nconst unusedTyped: number = 7;\nexport {};";
+        let diags = run(src);
+        assert!(
+            diags.iter().any(|d| d.message.contains("`unusedReal`")),
+            "expected unused non-ambient `unusedReal` to be flagged: {diags:?}"
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("`unusedTyped`")),
+            "expected unused non-ambient `unusedTyped` to be flagged: {diags:?}"
         );
     }
 
