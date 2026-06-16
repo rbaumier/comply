@@ -2,9 +2,15 @@
 //!
 //! Walks `call_expression` nodes whose function is
 //! `<expr>.into_iter` and whose receiver expression is itself a
-//! `call_expression` ending in `.collect`. Flags the chain because
-//! the `collect` allocates a `Vec` (or similar) only for `into_iter`
-//! to consume it again — a no-op round-trip.
+//! `call_expression` ending in `.collect::<Vec<_>>()`. Flags the chain
+//! because the `Vec` is allocated only for `into_iter` to consume it
+//! again — a no-op round-trip.
+//!
+//! The `collect` turbofish must name `Vec`. A `collect` without a
+//! turbofish, or one that names another collection (`HashSet`,
+//! `BTreeSet`, `IndexMap`, …), is left alone: those either cannot be
+//! proven to be a `Vec` or carry semantics (dedup, ordering, keying)
+//! that the round-trip preserves.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -57,7 +63,7 @@ impl AstCheck for Check {
             &node,
             "rust-collect-then-into-iter",
             format!(
-                "`.collect::<...>().{method}()` round-trips through a \
+                "`.collect::<Vec<_>>().{method}()` round-trips through a \
                  `Vec` for nothing. Drop both calls — the preceding chain \
                  is already an iterator."
             ),
@@ -66,6 +72,14 @@ impl AstCheck for Check {
     }
 }
 
+/// True when `node` is a `<expr>.collect::<Vec<_>>()` call.
+///
+/// Requires the `generic_function` (turbofish) form whose first type
+/// argument names `Vec`. A bare `.collect()` is not matched: without an
+/// explicit type the collected type is inferred and cannot be proven to
+/// be a `Vec`. Any other named collection (`HashSet`, `BTreeMap`, …) is
+/// not matched either, since dropping the round-trip would change
+/// semantics.
 fn receiver_is_collect_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "call_expression" {
         return false;
@@ -73,19 +87,49 @@ fn receiver_is_collect_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(func) = node.child_by_field_name("function") else {
         return false;
     };
-    // `.collect()` (field_expression) or `.collect::<Vec<_>>()` (generic_function).
-    let field_expr = match func.kind() {
-        "field_expression" => func,
-        "generic_function" => match func.child_by_field_name("function") {
-            Some(inner) if inner.kind() == "field_expression" => inner,
-            _ => return false,
-        },
-        _ => return false,
+    // Only `.collect::<Vec<_>>()` — a `generic_function` carrying a turbofish.
+    if func.kind() != "generic_function" {
+        return false;
+    }
+    let Some(field_expr) = func.child_by_field_name("function") else {
+        return false;
     };
+    if field_expr.kind() != "field_expression" {
+        return false;
+    }
     let Some(field) = field_expr.child_by_field_name("field") else {
         return false;
     };
-    field.utf8_text(source).unwrap_or("") == "collect"
+    if field.utf8_text(source).unwrap_or("") != "collect" {
+        return false;
+    }
+    turbofish_names_vec(func, source)
+}
+
+/// True when the turbofish on `generic_function` names `Vec` as its
+/// outermost type — `collect::<Vec<_>>()`, `collect::<Vec<String>>()`,
+/// or a path-qualified `collect::<std::vec::Vec<_>>()` (final segment
+/// `Vec`).
+fn turbofish_names_vec(generic_function: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(args) = generic_function.child_by_field_name("type_arguments") else {
+        return false;
+    };
+    let mut cursor = args.walk();
+    let Some(first_type) = args.named_children(&mut cursor).next() else {
+        return false;
+    };
+    // `Vec<_>` parses as `generic_type` whose `type` field is the name.
+    let type_name = match first_type.kind() {
+        "generic_type" => match first_type.child_by_field_name("type") {
+            Some(name) => name,
+            None => return false,
+        },
+        // A bare `Vec` without arguments would be a plain identifier.
+        "type_identifier" | "scoped_type_identifier" => first_type,
+        _ => return false,
+    };
+    let text = type_name.utf8_text(source).unwrap_or("");
+    text == "Vec" || text.rsplit("::").next() == Some("Vec")
 }
 
 #[cfg(test)]
@@ -112,15 +156,36 @@ mod tests {
     }
 
     #[test]
-    fn flags_collect_then_into_iter() {
+    fn flags_collect_vec_then_into_iter() {
         let source = "fn f() { let _: Vec<_> = it.collect::<Vec<_>>().into_iter().collect(); }";
         assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
-    fn flags_plain_collect_then_into_iter() {
-        let source = "fn f() { let _: Vec<_> = it.collect().into_iter().collect(); }";
+    fn flags_collect_vec_with_concrete_arg() {
+        let source = "fn f() { let _ = xs.iter().map(f).collect::<Vec<String>>().into_iter(); }";
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_plain_collect_then_into_iter() {
+        // No turbofish: the collected type is inferred and cannot be proven
+        // to be a `Vec`, so dropping the round-trip may change semantics.
+        let source = "fn f() { let _: Vec<_> = it.collect().into_iter().collect(); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_collect_hashset_then_into_iter() {
+        // The HashSet deduplicates; the round-trip is meaningful (issue #3265).
+        let source = "fn f() { let _ = xs.iter().map(f).collect::<HashSet<_>>().into_iter().collect::<Vec<_>>().join(\"|\"); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_collect_btreeset_then_into_iter() {
+        let source = "fn f() { let _ = xs.into_iter().collect::<BTreeSet<_>>().into_iter(); }";
+        assert!(run_on(source).is_empty());
     }
 
     #[test]
