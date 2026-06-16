@@ -64,4 +64,15 @@ mod tests {
     fn ignores_banned_word_in_code() {
         assert!(run("fn obviously_works() {}").is_empty());
     }
+
+    #[test]
+    fn flags_crucially() {
+        assert_eq!(run("// crucially this runs first\nfn f() {}").len(), 1);
+    }
+
+    #[test]
+    fn allows_actually_and_inherently() {
+        // Both words are excluded as too false-positive-prone in code.
+        assert!(run("// actually safe because inherently single-threaded\nfn f() {}").is_empty());
+    }
 }

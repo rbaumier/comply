@@ -121,4 +121,28 @@ mod tests {
         // banned word — the trailing letter blocks the match.
         assert!(run("// returns updatedProduct from the cache").is_empty());
     }
+
+    #[test]
+    fn flags_crucially() {
+        assert_eq!(run("// crucially, this must run before flush").len(), 1);
+    }
+
+    #[test]
+    fn flags_really() {
+        assert_eq!(run("// really only needed on the cold path").len(), 1);
+    }
+
+    #[test]
+    fn allows_actually() {
+        // `actually` is excluded: in code it commonly contrasts expectation
+        // with reality (`actually computed lazily`) — too many false positives.
+        assert!(run("// the value is actually computed lazily").is_empty());
+    }
+
+    #[test]
+    fn allows_deeply_and_inherently() {
+        // `deeply nested` and `inherently unsafe` are legitimate technical
+        // descriptions, so both words stay off the list.
+        assert!(run("// deeply nested loop, inherently unsafe access").is_empty());
+    }
 }
