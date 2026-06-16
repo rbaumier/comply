@@ -85,10 +85,72 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::files::{Language, SourceFile};
 
     #[test]
     fn rayon_worker_stack_size_covers_deep_project_walks() {
         assert!(RAYON_WORKER_STACK_SIZE_BYTES >= 32 * 1024 * 1024);
+    }
+
+    fn write_ts(dir: &tempfile::TempDir, name: &str, content: &str) -> SourceFile {
+        let path = dir.path().join(name);
+        std::fs::write(&path, content).unwrap();
+        SourceFile { path, language: Language::TypeScript }
+    }
+
+    #[test]
+    fn rules_subcommand_recognizes_all_rule_families() {
+        // A real engine rule — whichever the registry lists first.
+        assert!(is_known_rule_id(rules::all_rule_defs()[0].meta.id));
+        // In-process cross-file detectors (absent from `all_rule_defs`).
+        assert!(is_known_rule_id(clone_detection::RULE_ID));
+        assert!(is_known_rule_id(comment_dup_detection::RULE_ID));
+        // Cargo subprocess detectors (also absent from `all_rule_defs`).
+        assert!(is_known_rule_id(cargo_modules::RULE_ID));
+        assert!(is_known_rule_id(cargo_shear::RULE_ID));
+        // Unknown IDs are still rejected so the subcommand keeps erroring on typos.
+        assert!(!is_known_rule_id("not-a-real-rule"));
+    }
+
+    #[test]
+    fn subprocess_routing_special_cases_standalone_rules() {
+        // Cargo-backed rules live outside the engine and need a subprocess,
+        // so `comply rules` must route them through the full pipeline.
+        assert!(rule_requires_subprocess(cargo_modules::RULE_ID));
+        assert!(rule_requires_subprocess(cargo_shear::RULE_ID));
+        // In-process cross-file detectors run on the fast path instead.
+        assert!(!rule_requires_subprocess(clone_detection::RULE_ID));
+        assert!(!rule_requires_subprocess(comment_dup_detection::RULE_ID));
+    }
+
+    #[test]
+    fn run_cross_file_rules_dispatches_only_requested_detectors() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write_ts(
+            &dir,
+            "a.ts",
+            "// Defaults derived from the canonical schema definition and kept in sync \
+             with the database migration layer manually.\nexport const a = 1;\n",
+        );
+        let b = write_ts(
+            &dir,
+            "b.ts",
+            "// Defaults derived from the canonical schema definition and kept in sync \
+             with the database migration layer by hand.\nexport const b = 2;\n",
+        );
+        let cfg = Config::default();
+        let requested = vec![comment_dup_detection::RULE_ID.to_string()];
+
+        let diags = run_cross_file_rules(&requested, &[&a, &b], &cfg);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule_id, comment_dup_detection::RULE_ID);
+
+        // A detector not named in the filter is not dispatched.
+        let unrelated = vec!["boolean-naming".to_string()];
+        assert!(run_cross_file_rules(&unrelated, &[&a, &b], &cfg).is_empty());
+
+        // Cross-file detectors need at least two files.
+        assert!(run_cross_file_rules(&requested, &[&a], &cfg).is_empty());
     }
 }
 
@@ -125,10 +187,9 @@ fn run() -> Result<bool> {
                 eprintln!("comply: no rule IDs provided");
                 return Ok(true);
             }
-            let all_defs = rules::all_rule_defs();
             let unknown: Vec<&str> = filter
                 .iter()
-                .filter(|id| !all_defs.iter().any(|r| r.meta.id == id.as_str()))
+                .filter(|id| !is_known_rule_id(id))
                 .map(String::as_str)
                 .collect();
             if !unknown.is_empty() {
@@ -243,10 +304,86 @@ fn print_timings(t: &Timings) {
     eprintln!("  TOTAL         {}", fmt_ms(t.total));
 }
 
+/// Cross-file detectors that run in-process outside the rule engine, so they
+/// are absent from `all_rule_defs()`. `comply rules` dispatches these directly
+/// when their ID is requested.
+const CROSS_FILE_RULE_IDS: &[&str] = &[clone_detection::RULE_ID, comment_dup_detection::RULE_ID];
+
+/// Cargo-backed subprocess detectors, also absent from `all_rule_defs()`.
+/// Producing them requires shelling out to cargo, so a `comply rules` filter
+/// naming one routes through the full `collect_all_diagnostics` pipeline.
+const CARGO_SUBPROCESS_RULE_IDS: &[&str] = &[cargo_modules::RULE_ID, cargo_shear::RULE_ID];
+
+/// Whether `id` names a rule comply can emit — an engine rule, an in-process
+/// cross-file detector, or a subprocess-backed rule.
+fn is_known_rule_id(id: &str) -> bool {
+    rules::all_rule_defs().iter().any(|r| r.meta.id == id)
+        || CROSS_FILE_RULE_IDS.contains(&id)
+        || CARGO_SUBPROCESS_RULE_IDS.contains(&id)
+}
+
+/// Whether producing `id` requires an external subprocess (oxlint, clippy,
+/// tsgolint, tsc, cargo-shear, cargo-modules). The in-process engine returns
+/// nothing for these backends, so `comply rules` must run the full pipeline.
+fn rule_requires_subprocess(id: &str) -> bool {
+    use crate::rules::backend::Backend;
+    CARGO_SUBPROCESS_RULE_IDS.contains(&id)
+        || rules::all_rule_defs().iter().any(|r| {
+            r.meta.id == id
+                && r.backends.iter().any(|(_, b)| {
+                    matches!(
+                        b,
+                        Backend::Oxlint { .. }
+                            | Backend::Clippy { .. }
+                            | Backend::Tsc { .. }
+                            | Backend::Tsgolint { .. }
+                            | Backend::TypeAware
+                    )
+                })
+        })
+}
+
+/// Whether `id` is enforced through the type-aware sidecar (tsgolint / the
+/// type-aware backend), which the full pipeline only runs when asked.
+fn rule_requires_type_aware(id: &str) -> bool {
+    use crate::rules::backend::Backend;
+    rules::all_rule_defs().iter().any(|r| {
+        r.meta.id == id
+            && r.backends
+                .iter()
+                .any(|(_, b)| matches!(b, Backend::Tsgolint { .. } | Backend::TypeAware))
+    })
+}
+
+/// Run the in-process cross-file detectors named in `filter`. They need the
+/// full file set (≥2 files) and live outside the engine, so they are
+/// dispatched here rather than through `engine::lint_files_with_project`.
+fn run_cross_file_rules(
+    filter: &[String],
+    files: &[&SourceFile],
+    config: &Config,
+) -> Vec<Diagnostic> {
+    let wants = |id: &str| filter.iter().any(|f| f.as_str() == id);
+    let mut out = Vec::new();
+    if files.len() >= 2 {
+        if wants(clone_detection::RULE_ID) {
+            out.extend(clone_detection::lint_files(files));
+        }
+        if wants(comment_dup_detection::RULE_ID) {
+            out.extend(comment_dup_detection::lint_files(files, config));
+        }
+    }
+    out
+}
+
 /// Lint only the rules whose IDs are in `filter`.
 ///
-/// Skips external tools (oxlint, clippy, cargo-shear, cargo-modules) and
-/// runs only the in-process engine with the filtered rule set.
+/// In-process rules (engine rules plus the `no-clones` / `no-duplicate-comments`
+/// cross-file detectors) run through the filtered engine and a direct
+/// cross-file dispatch, keeping per-rule runs fast. When the filter names a
+/// subprocess-backed rule (oxlint, clippy, tsgolint, cargo-shear,
+/// cargo-modules) the full pipeline runs and the result is narrowed to the
+/// requested rules afterwards.
 fn lint_with_rules(
     filter: &[String],
     path: std::path::PathBuf,
@@ -270,13 +407,28 @@ fn lint_with_rules(
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     let config = Config::load_from(&config_anchor)?;
 
-    let all_refs: Vec<&SourceFile> = discovered.iter().collect();
-    let project = std::sync::Arc::new(crate::project::ProjectCtx::load(&all_refs, &config));
-    let diagnostics = engine::lint_files_with_project(&all_refs, &config, &project, Some(filter))?;
+    let (diagnostics, clean_files) = if filter.iter().any(|id| rule_requires_subprocess(id)) {
+        let type_aware = filter.iter().any(|id| rule_requires_type_aware(id));
+        let mut timings = Timings::default();
+        collect_all_diagnostics(&discovered, &config, &mut timings, false, type_aware, false)?
+    } else {
+        let all_refs: Vec<&SourceFile> = discovered.iter().collect();
+        let project = std::sync::Arc::new(crate::project::ProjectCtx::load(&all_refs, &config));
+        let mut diags =
+            engine::lint_files_with_project(&all_refs, &config, &project, Some(filter))?;
+        diags.extend(run_cross_file_rules(filter, &all_refs, &config));
+        (diags, project.clean_files_snapshot())
+    };
 
-    let after_overrides = apply_config_filters(diagnostics, &config);
+    // The full-pipeline branch emits every rule; narrow to what was requested.
+    let requested: Vec<Diagnostic> = diagnostics
+        .into_iter()
+        .filter(|d| filter.iter().any(|id| id.as_str() == d.rule_id.as_ref()))
+        .collect();
+
+    let after_overrides = apply_config_filters(requested, &config);
     let after_suppressions =
-        ignore_comments::apply_to_all(after_overrides, &discovered, &project.clean_files_snapshot());
+        ignore_comments::apply_to_all(after_overrides, &discovered, &clean_files);
     let has_violations = !after_suppressions.is_empty();
 
     if should_emit_json {
