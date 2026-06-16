@@ -363,6 +363,14 @@ min_replicas = 3
 [rules.use-consistent-graphql-descriptions]
 style = "block"
 
+# Disallowed GraphQL root types. Empty by default — the rule is a no-op until a
+# project lists the object types it forbids (matched case-insensitively against
+# `type Foo`/`extend type Foo` names), e.g. to forbid mutations and
+# subscriptions:
+#   disallow = ["mutation", "subscription"]
+[rules.no-root-type]
+disallow = []
+
 [rules.use-unique-element-ids]
 # Component names whose static `id` is intentional (e.g. an i18n message id, not
 # a DOM id). Matched against the element's unqualified name.
