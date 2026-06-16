@@ -58,6 +58,11 @@ impl TextCheck for Check {
         if crate::rules::path_utils::is_rust_ui_test_fixture(ctx.path) {
             return Vec::new();
         }
+        // Cargo example targets under `examples/` compile to `--example <stem>`
+        // binaries, so kebab-case stems are the standard Rust convention.
+        if crate::rules::path_utils::is_cargo_example_path(ctx.path) {
+            return Vec::new();
+        }
         if is_snake_case(strip_ordering_prefix(stem)) {
             return Vec::new();
         }
@@ -165,5 +170,15 @@ mod tests {
     #[test]
     fn still_flags_kebab_case_outside_tests_ui() {
         assert_eq!(run("src/my-module.rs").len(), 1);
+    }
+
+    #[test]
+    fn allows_kebab_case_in_cargo_examples() {
+        assert!(run("crates/searcher/examples/search-stdin.rs").is_empty());
+    }
+
+    #[test]
+    fn allows_snake_case_in_cargo_examples() {
+        assert!(run("examples/basic_search.rs").is_empty());
     }
 }
