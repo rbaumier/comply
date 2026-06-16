@@ -129,6 +129,35 @@ fn is_test_subject_stem(stem: &str) -> bool {
         .all(|segment| is_camel_case(segment) || is_pascal_case(segment))
 }
 
+/// Returns `true` for the cross-ecosystem regression-test stem
+/// `issue-<digits>-<apiName>`: the literal `issue-` prefix, one or more ASCII
+/// digits naming the GitHub issue, then a `-` introducing the API-name segment.
+/// That segment intentionally mirrors the exact function/hook/type under test
+/// (e.g. `useInfiniteQuery`, `TRPCError`), so it carries camelCase/PascalCase
+/// that no single case convention can classify. Used by vitest/zod/react-query/
+/// tRPC and others. Gated to test files by the caller so production code keeping
+/// an `issue-NNNN-` prefix is still validated.
+fn is_regression_test_name(stem: &str) -> bool {
+    let Some(rest) = stem.strip_prefix("issue-") else {
+        return false;
+    };
+    let digits = rest.bytes().take_while(|b| b.is_ascii_digit()).count();
+    digits > 0 && rest.as_bytes().get(digits) == Some(&b'-')
+}
+
+/// Returns `true` when `path` is a test file by path alone: a `.test.`/`.spec.`
+/// filename infix or a `regression/` ancestor directory. The signal the
+/// regression-test-name allowance is gated on, so an `issue-NNNN-` stem in
+/// production code is still validated.
+fn is_test_context_path(path: &std::path::Path) -> bool {
+    let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    if file_name.contains(".test.") || file_name.contains(".spec.") {
+        return true;
+    }
+    path.components()
+        .any(|c| c.as_os_str() == std::ffi::OsStr::new("regression"))
+}
+
 fn is_ts_or_jsx_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
     s.ends_with(".ts")
@@ -189,6 +218,9 @@ impl TextCheck for Check {
                 || is_camel_case(convention_stem)
                 || is_test_subject_stem(convention_stem))
         {
+            return Vec::new();
+        }
+        if is_test_context_path(ctx.path) && is_regression_test_name(convention_stem) {
             return Vec::new();
         }
         vec![Diagnostic {
@@ -689,5 +721,36 @@ mod tests {
     #[test]
     fn allows_already_valid_camel_subject_test_issue_3380() {
         assert!(run("src/someFile-test.ts").is_empty());
+    }
+
+    // Regression for #3310: the cross-ecosystem `issue-NNNN-apiName.test.*`
+    // regression-test convention names the file after the GitHub issue plus the
+    // exact API under test, so the API-name segment is intentionally
+    // camelCase/PascalCase. The allowance is gated to test files.
+    #[test]
+    fn allows_regression_test_camel_api_issue_3310() {
+        assert!(
+            run("packages/react-query/test/regression/issue-2942-useInfiniteQuery-setData.test.tsx")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_regression_test_pascal_api_issue_3310() {
+        assert!(run("packages/tests/server/regression/issue-3351-TRPCError.test.ts").is_empty());
+    }
+
+    // Guard (scope proof): an `issue-NNNN-` stem in PRODUCTION code (not a test
+    // file, not under `regression/`) must still fire — the prefix alone must not
+    // bypass production files.
+    #[test]
+    fn flags_issue_prefix_production_file_issue_3310() {
+        assert_eq!(run("src/issue-1234-FooBar.ts").len(), 1);
+    }
+
+    // Guard: a non-test mixed-case file where kebab-case is expected still fires.
+    #[test]
+    fn flags_non_test_mixed_case_still_fires_issue_3310() {
+        assert_eq!(run("src/My_Component.ts").len(), 1);
     }
 }
