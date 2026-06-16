@@ -22,9 +22,10 @@ pub const META: RuleMeta = RuleMeta {
     id: "banned-comment-words",
     description: "Dismissive filler words in comments hide complexity instead of explaining it.",
     remediation: "Remove the filler word and rewrite the comment to explain the actual \
-                  subtlety. If the line is genuinely obvious, delete the comment instead. \
+                  subtlety. If the line needs no explanation, delete the comment instead. \
                   Banned: obviously, simply, just, basically, clearly, trivially, updated, \
-                  reloaded.",
+                  reloaded, really, literally, genuinely, honestly, truly, fundamentally, \
+                  inevitably, interestingly, importantly, crucially.",
     severity: Severity::Error,
     doc_url: None,
     categories: &["comments"],
@@ -42,6 +43,16 @@ const BANNED: &[&str] = &[
     "trivially",
     "updated",
     "reloaded",
+    "really",
+    "literally",
+    "genuinely",
+    "honestly",
+    "truly",
+    "fundamentally",
+    "inevitably",
+    "interestingly",
+    "importantly",
+    "crucially",
 ];
 
 /// Return the first banned word found in `text` at a word boundary,
