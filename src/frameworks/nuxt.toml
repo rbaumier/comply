@@ -9,5 +9,13 @@ files = []
 [magic_exports]
 names = []
 
+# Nuxt Nitro's file-system server router consumes a server route module's
+# `export default` (`defineEventHandler(...)`) under `server/api/` or
+# `server/routes/` by file path at build time, never through a static import.
+# Scoped to those server route files so a same-named `default` export in an
+# ordinary module stays flaggable.
+[route_magic_exports]
+route_files = ["default"]
+
 [tooling_deps]
 names = []

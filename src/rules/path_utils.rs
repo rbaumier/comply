@@ -930,6 +930,39 @@ pub fn is_nuxt_module_runtime_file(path: &Path, project: &ProjectCtx) -> bool {
         .is_some_and(|pkg| NUXT_MODULE_DEPS.iter().any(|dep| pkg.has_dep_or_engine(dep)))
 }
 
+/// True when `path` is a Nuxt Nitro server route module: a file directly or
+/// transitively under a `server/api/` or `server/routes/` directory. Nitro's
+/// file-system server router consumes the module's `export default`
+/// (`defineEventHandler(...)`) by path at build time, never through a static
+/// import, so it has no importer but is live. The consecutive `server/api` /
+/// `server/routes` ancestor scopes the exemption to server route modules,
+/// keeping a same-named `default` export in an ordinary module flaggable.
+/// Detection-gated by the caller.
+pub fn is_nuxt_server_route_file(path: &Path) -> bool {
+    let mut components = path.components();
+    while let Some(component) = components.next() {
+        if component.as_os_str() == std::ffi::OsStr::new("server")
+            && components.clone().next().is_some_and(|next| {
+                matches!(next.as_os_str().to_str(), Some("api" | "routes"))
+            })
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when `path` is a Nuxt auto-imported composable: a file under a
+/// `composables/` directory. Nuxt auto-imports every export of these files
+/// across the app, so they are consumed by the auto-import mechanism, never
+/// through a static import — every named export is live despite having no
+/// importer. The `composables/` ancestor scopes the exemption (a same-named
+/// export elsewhere stays flaggable) and the caller's Nuxt-detection gate keeps
+/// a non-Nuxt `composables/` directory subject to the rule.
+pub fn is_nuxt_auto_imported_file(path: &Path) -> bool {
+    has_path_segment(path, &["composables"])
+}
+
 /// True when `path` is a Docusaurus theme swizzle component — a file under a
 /// `src/theme/` directory (consecutive `src` then `theme` segments, e.g.
 /// `src/theme/MDXComponents/index.tsx`). Docusaurus's theme system discovers
