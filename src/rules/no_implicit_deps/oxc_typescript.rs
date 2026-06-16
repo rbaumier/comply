@@ -518,6 +518,37 @@ mod tests {
         assert_eq!(diags.len(), 1, "real scoped package must still be flagged, got {diags:?}");
     }
 
+    // Regression #3303: Nuxt's `~~/` double-tilde alias resolves to the project
+    // root. `~` can never start an npm package name, so any `~`-rooted specifier
+    // is a local alias, not a missing dependency.
+    #[test]
+    fn allows_double_tilde_path_alias_issue_3303() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"app","dependencies":{}}"#).unwrap();
+        let src = dir.path().join("server");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("t.ts");
+        let source = "import { normalizeComponentName } from '~~/server/utils/normalizeComponentName';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(diags.is_empty(), "`~~/` path alias must not be flagged, got {diags:?}");
+    }
+
+    // Negative space for #3303: the `~`-rooted exemption must not over-reach to a
+    // genuine unlisted npm package, which stays flagged.
+    #[test]
+    fn still_flags_unlisted_package_not_tilde_alias() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"app","dependencies":{}}"#).unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("t.ts");
+        let source = "import x from 'some-unlisted-package';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(diags.len(), 1, "unlisted npm package must still be flagged, got {diags:?}");
+    }
+
     // Regression #1385: Node.js subpath imports (`#`-prefixed aliases from the
     // package.json `imports` field) are not npm packages and must not be flagged.
     #[test]
