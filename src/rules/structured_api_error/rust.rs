@@ -1,10 +1,14 @@
 //! structured-api-error Rust backend.
 //!
-//! Flags `panic!` in HTTP routing files.
-//! In Rust, route handlers typically use Actix-web, Axum, or Rocket.
+//! Flags a bare `panic!` inside an HTTP request handler — an `async fn` in a
+//! file that registers routes (Axum/Actix/Rocket). Synchronous route-builder
+//! methods and `#[track_caller]` precondition guards are not handlers and are
+//! left alone: their panics signal caller programming errors at app build time.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
+use crate::rules::rust_helpers::{
+    enclosing_fn, fn_is_async, has_outer_attribute, is_in_test_context, is_under_tests_dir,
+};
 use tree_sitter::Node;
 
 /// Web-framework route-registration attribute macros (`#[get(...)]`, …).
@@ -72,6 +76,33 @@ fn is_route_attr_macro(attr_text: &str) -> bool {
     })
 }
 
+/// True if `node` (a `panic!` invocation) sits inside a function shaped like an
+/// HTTP request handler, as opposed to route-registration / builder / precondition
+/// machinery.
+///
+/// The rule scopes handler detection to `async fn` deliberately. Request
+/// handlers are idiomatically `async`, while the panics that drove false
+/// positives — route-builder methods (`route_layer`, `merge`, `set_endpoint`),
+/// `const fn` path validators, `#[track_caller]` precondition guards — are
+/// synchronous and run at app build time, where `panic!` is the idiomatic
+/// signal for a caller programming error. Keying on `async` clears those
+/// without per-crate carve-outs. The trade-off is a deliberate false negative:
+/// a `panic!` in a synchronous handler (legal but rare) is not flagged. A
+/// `panic!` only counts as a handler panic when its enclosing function is:
+///
+/// - an `async fn`, AND
+/// - not annotated `#[track_caller]` (that attribute exists to point a panic at
+///   the *caller*, marking the function a precondition guard, never a handler).
+///
+/// A `panic!` outside any function body (e.g. a module-scope initializer) is not
+/// a handler panic either.
+fn is_in_request_handler(node: Node, source: &[u8]) -> bool {
+    let Some(function) = enclosing_fn(node) else {
+        return false;
+    };
+    fn_is_async(function, source) && !has_outer_attribute(function, source, "track_caller")
+}
+
 crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     let Some(mac) = node.child_by_field_name("macro") else { return };
     let Ok(mac_name) = mac.utf8_text(source) else { return };
@@ -81,6 +112,10 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     }
 
     if mac_name != "panic" {
+        return;
+    }
+
+    if !is_in_request_handler(node, source) {
         return;
     }
 
@@ -130,7 +165,7 @@ mod tests {
 
     #[test]
     fn flags_panic_in_route() {
-        let src = "fn setup() { let _ = Router::new(); panic!(\"oops\"); }\n";
+        let src = "fn setup() { let _ = Router::new(); }\nasync fn handler() { panic!(\"oops\"); }\n";
         assert_eq!(run_on(src).len(), 1);
     }
 
@@ -222,6 +257,98 @@ async fn handler() {
         let src = r#"
 #[get("/foo")]
 async fn handler() {
+    panic!("boom");
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_track_caller_builder_precondition_panic() {
+        // Regression for #3245: axum method_routing.rs:887. A `#[track_caller]`
+        // builder guard in route-registration machinery — not a handler.
+        let src = r#"
+use axum::{routing::get, Router};
+
+fn build() -> Router {
+    Router::new().route("/x", get(handler))
+}
+
+#[track_caller]
+fn set_endpoint(out: &mut Endpoint, endpoint: &Endpoint) {
+    if out.is_some() {
+        panic!(
+            "Overlapping method route. Cannot add two method routes that both handle `GET`",
+        );
+    }
+}
+
+async fn handler() {}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_non_async_builder_method_panic() {
+        // Regression for #3245: axum method_routing.rs:1063. A synchronous
+        // route-builder method without `#[track_caller]` — still not a handler.
+        let src = r#"
+use axum::{routing::get, Router};
+
+fn build() -> Router {
+    Router::new().route("/x", get(handler))
+}
+
+pub fn route_layer<L>(mut self, layer: L) -> Self {
+    if self.routes.is_empty() {
+        panic!(
+            "Adding a route_layer before any routes is a no-op. \
+             Add the routes you want the layer to apply to first."
+        );
+    }
+    self
+}
+
+async fn handler() {}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_const_fn_path_validator_panic() {
+        // Regression for #3245: axum-extra routing/mod.rs:34. A `const fn` path
+        // validator runs at compile time and can never be a request handler.
+        let src = r#"
+use axum::{routing::get, Router};
+
+fn build() -> Router {
+    Router::new().route("/x", get(handler))
+}
+
+pub const fn validate_static_path(path: &'static str) -> &'static str {
+    if path.as_bytes()[0] != b'/' {
+        panic!("Paths must start with a `/`. Use \"/\" for root routes")
+    }
+    path
+}
+
+async fn handler() {}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_panic_in_async_handler_returning_impl_into_response() {
+        // True positive: a bare `panic!` in a genuine async handler registered
+        // via `.route(...)` must still fire.
+        let src = r#"
+use axum::{response::IntoResponse, routing::get, Router};
+
+fn build() -> Router {
+    Router::new().route("/x", get(handler))
+}
+
+async fn handler() -> impl IntoResponse {
     panic!("boom");
 }
 "#;
