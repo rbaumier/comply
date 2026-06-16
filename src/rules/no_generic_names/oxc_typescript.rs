@@ -22,7 +22,7 @@ const BANNED_WORDS: &[&str] = &[
     "something", "anything", "whatever", "dict", "vec", "tup", "bool", "int", "float", "char",
     "byte", "ptr", "ret", "out", "vars", "response", "request", "entity", "dto", "resource",
     "entry", "chunk", "blob", "evt", "el", "elem", "comp", "func", "widget", "record", "body",
-    "doc", "idx", "curr", "opts", "cfg",
+    "doc", "idx", "curr", "opts", "cfg", "found",
 ];
 
 const PARAM_ALLOWED_WORDS: &[&str] = &["value", "item"];

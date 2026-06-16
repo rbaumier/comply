@@ -28,7 +28,7 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 /// use.
 const BANNED_WORDS: &[&str] = &[
     "info", "temp", "result", "obj", "item", "thing", "stuff", "val", "retval", "value", "foo",
-    "bar", "row", "rows", "lookup", "cell", "cells",
+    "bar", "row", "rows", "lookup", "cell", "cells", "found",
 ];
 
 const PARAM_ALLOWED_WORDS: &[&str] = &["value", "item"];
@@ -371,6 +371,18 @@ mod tests {
     }
 
     #[test]
+    fn flags_found_lookup_result() {
+        // `found` names existence, not what the value IS — the same smell as
+        // `result`/`row` for a lookup binding.
+        assert_eq!(
+            run_on("const found = await db.query.gamme.findFirst({ where: { id } });").len(),
+            1
+        );
+        assert_eq!(run_on("const Found = 1;").len(), 1);
+        assert_eq!(run_on("const FOUND = 1;").len(), 1);
+    }
+
+    #[test]
     fn allows_descriptive_names() {
         assert!(run_on("const parsedOrder = 1;").is_empty());
         assert!(run_on("const userProfile = {};").is_empty());
@@ -452,6 +464,19 @@ mod tests {
             assert!(
                 run_on(&source).is_empty(),
                 "'{name}' must NOT be flagged — `handle` is a React idiom"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_found_compounds_whole_word_only() {
+        // `found` is a whole-word ban (case-insensitive); it must not fire on
+        // identifiers where `found` is only a substring/compound segment.
+        for name in ["foundation", "notFound", "NotFoundError", "foundUser", "userFound"] {
+            let source = format!("const {name} = 1;");
+            assert!(
+                run_on(&source).is_empty(),
+                "'{name}' must NOT be flagged — `found` is a whole-word ban"
             );
         }
     }
