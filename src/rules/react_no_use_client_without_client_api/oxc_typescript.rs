@@ -208,7 +208,8 @@ impl OxcCheck for Check {
                 // module even with no direct hook usage.
                 AstKind::CallExpression(call) => {
                     if let Expression::Identifier(callee) = &call.callee
-                        && CLIENT_COMPONENT_FACTORY_CALLS.contains(&callee.name.as_str())
+                        && (CLIENT_COMPONENT_FACTORY_CALLS.contains(&callee.name.as_str())
+                            || is_client_react_factory_call(callee.name.as_str()))
                     {
                         found_client_api = true;
                         break;
@@ -327,6 +328,38 @@ fn is_client_only_package(pkg: &str) -> bool {
 /// (`useState`, `useSuspenseQuery`, …).
 fn is_hook_name(name: &str) -> bool {
     name.starts_with("use") && name.len() > 3 && name.as_bytes()[3].is_ascii_uppercase()
+}
+
+/// True for React-integration factory names following the `create*React*`
+/// convention: a camelCase identifier starting with `create` and containing
+/// `React` as a capitalized word segment (`createTRPCReact`,
+/// `createReactQueryHooks`). These factories return hook-powered objects
+/// (query/mutation hooks, context utilities) that only run in client
+/// components, so a file calling one legitimately needs `"use client"`. The
+/// `React` segment must be bounded — preceded by an uppercase letter (or
+/// directly by `create`) and followed by an uppercase letter or the end of the
+/// name — so `createReactor` (`React` + lowercase `or`) does not match.
+fn is_client_react_factory_call(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("create") else {
+        return false;
+    };
+    // Require a capitalized segment right after `create` (camelCase), so
+    // `createserver` or `created` do not match.
+    if !rest.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+        return false;
+    }
+    let bytes = rest.as_bytes();
+    let mut i = 0;
+    while let Some(pos) = rest[i..].find("React") {
+        let start = i + pos;
+        let end = start + "React".len();
+        let after_is_boundary = bytes.get(end).is_none_or(|b| b.is_ascii_uppercase());
+        if after_is_boundary {
+            return true;
+        }
+        i = start + 1;
+    }
+    false
 }
 
 /// True for DOM event-handler names: `on` followed by an uppercase letter
@@ -848,6 +881,71 @@ export const wait = debounce(() => {}, 100);
 import { thing } from "radix-ui-foo"
 
 export const value = thing
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression tests for #3283 — `create*React*` factories (`createTRPCReact`,
+    // `createReactQueryHooks`) return hook-powered objects that only run in
+    // client components, so a file calling one legitimately needs `"use client"`.
+    #[test]
+    fn no_fp_for_create_trpc_react_factory_oxc() {
+        let src = r#"'use client';
+
+import { createTRPCReact } from '@trpc/react-query';
+import type { AppRouter } from './basic.trpc';
+
+export const trpc = createTRPCReact<AppRouter>();
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_create_react_query_hooks_factory_oxc() {
+        let src = r#"'use client';
+
+import { createReactQueryHooks } from '@some/lib';
+
+export const hooks = createReactQueryHooks();
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Negative space: a `create*` call that is not a React factory
+    // (`createServer`, `createStore`) carries no client signal and is still
+    // flagged — the pattern is anchored to a capitalized `React` segment.
+    #[test]
+    fn still_flags_create_server_call_oxc() {
+        let src = r#"'use client';
+
+import { createServer } from 'http';
+
+export const server = createServer();
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_create_store_call_oxc() {
+        let src = r#"'use client';
+
+import { createStore } from 'zustand/vanilla';
+
+export const store = createStore(() => ({}));
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Negative space: `createReactor` contains `React` only as a prefix of a
+    // lowercase-continued word, so it is not a `create*React*` factory and is
+    // still flagged.
+    #[test]
+    fn still_flags_create_reactor_call_oxc() {
+        let src = r#"'use client';
+
+import { createReactor } from 'some-lib';
+
+export const r = createReactor();
 "#;
         assert_eq!(run(src).len(), 1);
     }
