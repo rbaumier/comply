@@ -235,6 +235,16 @@ pub fn is_rust_ui_test_fixture(path: &Path) -> bool {
     false
 }
 
+/// True when `path` lives under a Cargo `examples/` directory: any `examples`
+/// path segment. Files there are compiled as individual Cargo example targets
+/// whose binary name is the file stem (`examples/search-stdin.rs` becomes
+/// `cargo run --example search-stdin`), so kebab-case stems are the standard
+/// Rust community convention and filename-convention checks exempt them. Segment
+/// match keeps an unrelated `src/examplesHelper.rs` from matching.
+pub fn is_cargo_example_path(path: &Path) -> bool {
+    has_path_segment(path, &["examples"])
+}
+
 /// True when `path` lives under an Angular `schematics/` or `migrations/`
 /// directory. These hold Angular CLI schematic and `ng update` migration entry
 /// points: each is an `index.ts` exporting a default factory function that the
