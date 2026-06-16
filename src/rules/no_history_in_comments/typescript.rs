@@ -72,4 +72,39 @@ mod tests {
         assert!(run("// non-string — should not be rewritten or crash").is_empty());
         assert!(run("// the URL will be rewritten to strip query params").is_empty());
     }
+
+    #[test]
+    fn allows_runtime_filesystem_condition() {
+        // Regression for issue #3242: "was deleted" with an indefinite/domain
+        // subject describes a runtime filesystem event, not code history.
+        assert!(run("// some file was deleted").is_empty());
+        assert!(run("// if the record was removed").is_empty());
+    }
+
+    #[test]
+    fn flags_ambiguous_verb_with_code_subject() {
+        // The ambiguous verb still fires when the subject is a code artifact.
+        assert_eq!(run("// the validateUser function was removed").len(), 1);
+    }
+
+    #[test]
+    fn flags_ambiguous_verb_with_camelcase_subject() {
+        // A bare camelCase/PascalCase identifier is a code artifact even without
+        // an artifact noun like "function".
+        assert_eq!(run("// validateUser was removed").len(), 1);
+        assert_eq!(run("// MyComponent was renamed").len(), 1);
+        assert_eq!(run("// fetchData was updated").len(), 1);
+    }
+
+    #[test]
+    fn flags_in_favor_of_marker() {
+        assert_eq!(run("// The old cache layer was removed in favor of Redis").len(), 1);
+    }
+
+    #[test]
+    fn handles_non_ascii_before_ambiguous_verb() {
+        // Multi-byte chars shift lowercase byte offsets; the subject slice must
+        // not panic. Indefinite subject => no diagnostic.
+        assert!(run("// café — a file was deleted").is_empty());
+    }
 }
