@@ -30,17 +30,24 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Get the full source text of the type annotation to check for
-        // conditional/mapped types and self-references.
-        let ann_text =
-            &ctx.source[alias.type_annotation.span().start as usize..alias.type_annotation.span().end as usize];
-
-        // Must be a conditional or mapped type (heuristic: check text).
-        let is_conditional_or_mapped =
-            ann_text.contains(" extends ") || ann_text.contains("[") && ann_text.contains(" in ");
-        if !is_conditional_or_mapped {
+        // A type with no type parameters cannot be the unbounded recursive
+        // conditional generic this rule targets: there is nowhere to add the
+        // depth accumulator the remediation asks for. Structural self-reference
+        // in a non-generic object alias (like a recursive interface) is fine.
+        if alias.type_parameters.as_ref().is_none_or(|tp| tp.params.is_empty()) {
             return;
         }
+
+        // Must be a conditional or mapped type, decided on the AST node so that
+        // comment text or method-signature brackets never trigger it.
+        if !is_conditional_or_mapped(&alias.type_annotation) {
+            return;
+        }
+
+        // Get the full source text of the type annotation for the textual
+        // self-reference check below.
+        let ann_text =
+            &ctx.source[alias.type_annotation.span().start as usize..alias.type_annotation.span().end as usize];
 
         // Must reference itself.
         if !references_name(ann_text, name) {
@@ -78,6 +85,18 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+/// Return true if `ty` is a conditional or mapped type, looking through
+/// parenthesized wrappers. These are the only type forms that can blow up the
+/// TypeScript type-checker through unbounded recursion.
+fn is_conditional_or_mapped(ty: &oxc_ast::ast::TSType) -> bool {
+    use oxc_ast::ast::TSType;
+    match ty {
+        TSType::TSConditionalType(_) | TSType::TSMappedType(_) => true,
+        TSType::TSParenthesizedType(paren) => is_conditional_or_mapped(&paren.type_annotation),
+        _ => false,
     }
 }
 
@@ -357,6 +376,31 @@ export type PathParameters<
     #[test]
     fn flags_non_accumulator_default() {
         let src = "type Loop<T, Fallback = string> = T extends any ? Loop<T, Fallback> : never;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn exempts_non_generic_self_referential_alias() {
+        let src = r#"
+export type KyInstance = {
+    get: <T>(url: string) => T;
+    /** Will be undefined in case ky.stop is returned, see options[0]. */
+    create: (defaultOptions?: Options) => KyInstance;
+    extend: (defaultOptions: Options) => KyInstance;
+};
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn exempts_non_generic_recursive_object_alias() {
+        let src = "type Node = { children: Node[] };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_unbounded_recursive_conditional_generic() {
+        let src = "type Deep<T> = T extends object ? Deep<T[keyof T]> : T;";
         assert_eq!(run_on(src).len(), 1);
     }
 }
