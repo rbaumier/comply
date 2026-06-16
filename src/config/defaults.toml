@@ -113,6 +113,10 @@ max = 5
 [rules.playwright-max-expects]
 max = 5
 
+# Maximum number of class selectors allowed in a single CSS selector.
+[rules.no-excessive-selector-classes]
+max = 3
+
 [rules.template-indent]
 min_indent = 4
 
