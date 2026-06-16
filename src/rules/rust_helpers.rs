@@ -203,11 +203,11 @@ pub fn is_in_test_context(node: Node, source: &[u8]) -> bool {
 /// A file qualifies when either:
 ///
 /// - any path SEGMENT (exact component match) is `tests`, `property_tests`,
-///   `test_utils`, `test_helpers`, or `testing` — covers Cargo's `tests/`
-///   integration directory, `property_tests/` generators, and shared
+///   `test_utils`, `test_helpers`, `testing`, or `testutil` — covers Cargo's
+///   `tests/` integration directory, `property_tests/` generators, and shared
 ///   test-helper modules at any nesting depth; OR
-/// - the file NAME is exactly `testing.rs`, `test_utils.rs`, or
-///   `test_helpers.rs`.
+/// - the file NAME is exactly `testing.rs`, `test_utils.rs`, `test_helpers.rs`,
+///   or `testutil.rs`.
 ///
 /// Cross-crate test helpers cannot be `#[cfg(test)]` (that gate hides them
 /// from integration tests in *other* crates), so their test-only nature is
@@ -225,8 +225,10 @@ pub fn is_under_tests_dir(path: &std::path::Path) -> bool {
         "test_utils",
         "test_helpers",
         "testing",
+        "testutil",
     ];
-    const TEST_FILE_NAMES: &[&str] = &["testing.rs", "test_utils.rs", "test_helpers.rs"];
+    const TEST_FILE_NAMES: &[&str] =
+        &["testing.rs", "test_utils.rs", "test_helpers.rs", "testutil.rs"];
 
     if path
         .components()
@@ -698,10 +700,12 @@ mod tests {
             ("crates/foo/src/test_utils/db.rs", true),
             ("crates/foo/src/test_helpers/mod.rs", true),
             ("crates/foo/src/testing/mod.rs", true),
+            ("crates/foo/src/testutil/mod.rs", true),
             // New exact file names (cross-crate test helpers, no #[cfg(test)]).
             ("crates/foo/src/testing.rs", true),
             ("crates/foo/src/test_utils.rs", true),
             ("crates/foo/src/test_helpers.rs", true),
+            ("crates/searcher/src/testutil.rs", true),
             // Negative space: non-exact segments / file names are production.
             ("crates/foo/src/lib.rs", false),
             ("crates/foo/src/my_testing.rs", false),
