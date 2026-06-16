@@ -26,8 +26,6 @@ const OAUTH_OIDC_PATHS: &[&str] = &[
     "/me",
     "/introspect",
     "/revoke",
-    "/.well-known/openid-configuration",
-    "/.well-known/oauth-authorization-server",
 ];
 
 /// Test, fixture, and mock infrastructure files are exempt: their route-shaped
@@ -47,6 +45,14 @@ fn is_infra_path(path: &str) -> bool {
 
 fn is_oauth_oidc_path(path: &str) -> bool {
     OAUTH_OIDC_PATHS.contains(&path)
+}
+
+/// IANA-reserved "well-known" URI namespace (RFC 5785). Sub-paths such as
+/// `/.well-known/openid-configuration`, `/.well-known/security.txt`, and
+/// `/.well-known/appspecific/...` are registered at fixed standardized paths;
+/// a version prefix like `/v1/.well-known/...` would break discovery.
+fn is_well_known_path(path: &str) -> bool {
+    path.starts_with("/.well-known/")
 }
 
 fn has_version_prefix(path: &str) -> bool {
@@ -163,7 +169,11 @@ impl OxcCheck for Check {
         if name != "route" && !call.arguments[1..].iter().any(is_handler_arg) {
             return;
         }
-        if has_version_prefix(route_path) || is_infra_path(route_path) || is_oauth_oidc_path(route_path) {
+        if has_version_prefix(route_path)
+            || is_infra_path(route_path)
+            || is_oauth_oidc_path(route_path)
+            || is_well_known_path(route_path)
+        {
             return;
         }
 
@@ -384,8 +394,6 @@ mod tests {
         assert!(run("routes.get('/me', handler);").is_empty());
         assert!(run("routes.post('/introspect', handler);").is_empty());
         assert!(run("routes.post('/revoke', handler);").is_empty());
-        assert!(run("app.get('/.well-known/openid-configuration', handler);").is_empty());
-        assert!(run("app.get('/.well-known/oauth-authorization-server', handler);").is_empty());
     }
 
     #[test]
@@ -394,5 +402,26 @@ mod tests {
         // differently-named route still requires a version prefix.
         assert_eq!(run("app.get('/token/refresh', handler);").len(), 1);
         assert_eq!(run("app.get('/authorized', handler);").len(), 1);
+    }
+
+    #[test]
+    fn allows_well_known_discovery_paths() {
+        // Issue #3384 — `/.well-known/` is the IANA-reserved discovery namespace
+        // (RFC 5785). Its sub-paths are registered at fixed standardized paths and
+        // cannot carry a version prefix without breaking discovery.
+        assert!(
+            run("app.get('/.well-known/appspecific/com.chrome.devtools.json', (_, res) => res.send('x'));")
+                .is_empty()
+        );
+        assert!(run("app.get('/.well-known/security.txt', handler);").is_empty());
+        assert!(run("app.get('/.well-known/openid-configuration', handler);").is_empty());
+        assert!(run("app.get('/.well-known/oauth-authorization-server', handler);").is_empty());
+    }
+
+    #[test]
+    fn flags_normal_versionless_route_alongside_well_known_exemption() {
+        // Negative space: the `/.well-known/` exemption must not broaden to ordinary
+        // unversioned API routes.
+        assert_eq!(run("app.get('/users', handler);").len(), 1);
     }
 }
