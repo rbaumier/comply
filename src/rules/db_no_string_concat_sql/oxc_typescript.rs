@@ -92,6 +92,12 @@ impl OxcCheck for Check {
                     && (combined.contains("$1") || combined.contains("$2")) {
                         return;
                     }
+                // Skip diagnostic strings: a concatenation consumed by an
+                // error constructor (`new Error(...)`) or a `console.*` call
+                // is a message, never a query.
+                if concat_feeds_diagnostic_sink(node, semantic) {
+                    return;
+                }
                 let (line, column) = byte_offset_to_line_col(ctx.source, start);
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),
@@ -132,6 +138,68 @@ fn expr_is_sql_string(expr: &Expression) -> bool {
         }
         _ => false,
     }
+}
+
+/// True when the flagged `+`-concatenation is consumed by a diagnostic
+/// sink — an error constructor (`new Error(...)`, `new ValidationError(...)`,
+/// …) or a `console.*` call. These build messages, never SQL queries, so a
+/// SQL-keyword match in them is a false positive.
+///
+/// Walks up from the concat node through the enclosing `+`-chain and
+/// parentheses to the nearest consuming expression, then inspects only that
+/// immediate consumer — an Error `new` elsewhere in the function does not
+/// exempt an unrelated query string.
+fn concat_feeds_diagnostic_sink(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            // Still inside the concatenation: keep climbing to the consumer.
+            AstKind::ParenthesizedExpression(_) => continue,
+            AstKind::BinaryExpression(bin)
+                if bin.operator == oxc_ast::ast::BinaryOperator::Addition =>
+            {
+                continue;
+            }
+            AstKind::NewExpression(new_expr) => {
+                return callee_is_error_constructor(&new_expr.callee);
+            }
+            AstKind::CallExpression(call) => {
+                return callee_is_console_method(&call.callee);
+            }
+            // Any other consumer (assignment, return, query call, …): not a
+            // diagnostic sink, so the SQL-injection finding stands.
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// True when `callee` is an `Error`-like constructor: a known built-in
+/// (`Error`, `TypeError`, …) or — following the ubiquitous convention for
+/// custom error classes — any identifier whose name ends in `Error`.
+fn callee_is_error_constructor(callee: &Expression) -> bool {
+    matches!(
+        callee.without_parentheses(),
+        Expression::Identifier(ident) if ident.name.ends_with("Error")
+    )
+}
+
+/// True when `callee` is a `console.<method>(...)` member access for one of
+/// the standard logging methods.
+fn callee_is_console_method(callee: &Expression) -> bool {
+    let Expression::StaticMemberExpression(member) = callee.without_parentheses() else {
+        return false;
+    };
+    let Expression::Identifier(obj) = &member.object else {
+        return false;
+    };
+    obj.name == "console"
+        && matches!(
+            member.property.name.as_str(),
+            "log" | "warn" | "error" | "info" | "debug" | "trace"
+        )
 }
 
 #[cfg(test)]
@@ -347,5 +415,39 @@ mod tests {
             console.log(`Would update ${pkgJsonPath} from ${packageJson.version} to ${version} now`);
         "#;
         assert!(run_on(src).is_empty());
+    }
+
+    // Regression for #3312 — an error message built by concatenating string
+    // operands that coincidentally contain SQL-shaped wording ("select
+    // from …") is a diagnostic string, not a query. The concat is consumed
+    // by `new Error(...)`, so it must not fire.
+    #[test]
+    fn does_not_flag_error_constructor_message_concat() {
+        let src = r#"throw new Error(`select from the registry` + ` was removed`);"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // #3312 — same for a `console.*` call: the concatenation feeds a log
+    // method, never a database method.
+    #[test]
+    fn does_not_flag_console_call_message_concat() {
+        let src = r#"console.error("select from " + table + " were deleted");"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // #3312 — custom error classes follow the `*Error` naming convention;
+    // `new ValidationError(...)` is an error constructor too.
+    #[test]
+    fn does_not_flag_custom_error_constructor_message_concat() {
+        let src = r#"throw new ValidationError("select from " + field);"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // #3312 guard — a genuine query string concatenated into a variable (not
+    // an Error/console argument) is still an injection risk and must fire.
+    #[test]
+    fn still_flags_query_concat_assigned_to_variable() {
+        let src = r#"const q = "SELECT * FROM t WHERE x = " + v;"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
