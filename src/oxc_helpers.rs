@@ -403,6 +403,34 @@ where
     f(&semantic)
 }
 
+/// True when the node starting at byte offset `span_start` is immediately
+/// preceded by a `@ts-expect-error` directive comment — only whitespace
+/// separates the comment's end from the node. The comment may be a `//` line
+/// comment or a `/* … */` block comment; either form carrying the
+/// `@ts-expect-error` directive marks the following declaration as a TypeScript
+/// error the author has deliberately opted into.
+///
+/// `comments` is the file's comment list from `semantic.comments()`; using the
+/// real comment spans (rather than a raw text scan) keeps a `@ts-expect-error`
+/// that merely appears inside a string literal from counting.
+pub fn has_ts_expect_error_above(
+    comments: &[oxc_ast::ast::Comment],
+    source: &str,
+    span_start: usize,
+) -> bool {
+    comments.iter().any(|comment| {
+        let end = comment.span.end as usize;
+        if end > span_start {
+            return false;
+        }
+        let gap = &source[end..span_start];
+        if !gap.chars().all(char::is_whitespace) {
+            return false;
+        }
+        source[comment.span.start as usize..end].contains("@ts-expect-error")
+    })
+}
+
 /// Convert an oxc byte offset into 1-based `(line, column)`.
 ///
 /// Shared across all `OxcCheck` rules that emit diagnostics. Rules call this
@@ -1727,7 +1755,7 @@ mod oxc_helpers_tests {
     }
 
     use super::{
-        ClassShape, file_imports_db_library, is_as_unknown_double_cast,
+        ClassShape, file_imports_db_library, has_ts_expect_error_above, is_as_unknown_double_cast,
         is_outer_as_unknown_double_cast, peel_parens, type_annotation_is_type_predicate,
         with_semantic,
     };
@@ -1967,5 +1995,43 @@ mod oxc_helpers_tests {
         assert_eq!(masked.len(), src.len());
         assert!(masked.contains("let y = 2;"));
         assert!(!masked.contains("café"));
+    }
+
+    /// Byte offset of the `type Dup` declaration in `src`.
+    fn type_dup_start(src: &str) -> usize {
+        src.find("type Dup").expect("a `type Dup` declaration")
+    }
+
+    #[test]
+    fn ts_expect_error_above_detects_line_and_block_forms() {
+        for src in [
+            "// @ts-expect-error\ntype Dup = X;",
+            "/* @ts-expect-error */\ntype Dup = X;",
+        ] {
+            with_semantic(src, SourceType::ts(), |sem| {
+                assert!(
+                    has_ts_expect_error_above(sem.comments(), src, type_dup_start(src)),
+                    "directive directly above should match: {src:?}"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn ts_expect_error_above_rejects_when_code_intervenes() {
+        // A non-blank line between the directive and the declaration breaks the
+        // adjacency — the directive applies to `type Other`, not `type Dup`.
+        let src = "// @ts-expect-error\ntype Other = X;\ntype Dup = Y;";
+        with_semantic(src, SourceType::ts(), |sem| {
+            assert!(!has_ts_expect_error_above(sem.comments(), src, type_dup_start(src)));
+        });
+    }
+
+    #[test]
+    fn ts_expect_error_above_rejects_plain_comment() {
+        let src = "// just a note\ntype Dup = X;";
+        with_semantic(src, SourceType::ts(), |sem| {
+            assert!(!has_ts_expect_error_above(sem.comments(), src, type_dup_start(src)));
+        });
     }
 }
