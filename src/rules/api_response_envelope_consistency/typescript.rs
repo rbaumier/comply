@@ -181,6 +181,22 @@ impl TextCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        self.check(&CheckCtx::for_test_full(path, src, project, file))
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
@@ -217,5 +233,40 @@ mod tests {
     fn ignores_non_api_files() {
         let src = "function a() { return { data: 1 }; }\nfunction b() { return { id: 2 }; }";
         assert!(run_at(src, "src/lib/util.ts").is_empty());
+    }
+
+    #[test]
+    fn skips_test_route_definitions_issue3385() {
+        // Issue #3385: react-router SSR test route loaders intentionally return
+        // divergent shapes (envelope vs raw) to exercise router behavior. The
+        // `__tests__/` path must suppress the rule via the skip_in_test_dir gate.
+        let src = "let h = createStaticHandler([\
+            { id: \"root\", loader: () => Response.json({ data: \"ROOT\" }), \
+              children: [{ id: \"child\", loader: () => Response.json({ id: 2 }) }] }]);";
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "packages/react-router/__tests__/router/ssr-test.ts",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_mixed_shapes_in_production_routes_issue3385() {
+        // Guard: the same divergent shapes in a production route module must
+        // still be flagged — the gate only suppresses inside test dirs.
+        let src = "let h = createStaticHandler([\
+            { id: \"root\", loader: () => Response.json({ data: \"ROOT\" }), \
+              children: [{ id: \"child\", loader: () => Response.json({ id: 2 }) }] }]);";
+        assert!(
+            !crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "packages/react-router/src/router/ssr.ts",
+            )
+            .is_empty()
+        );
     }
 }

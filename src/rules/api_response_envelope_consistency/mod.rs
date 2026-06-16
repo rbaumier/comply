@@ -18,7 +18,10 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["api-design"],
 
-    skip_in_test_dir: false,
+    // Test route definitions deliberately return varied shapes (success,
+    // error, thrown, redirect, varied status codes) to exercise router
+    // behavior — they are not a production API surface to keep consistent.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
