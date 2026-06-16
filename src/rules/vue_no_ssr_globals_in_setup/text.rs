@@ -10,6 +10,24 @@ const SSR_GLOBALS: &[&str] = &[
     "navigator",
 ];
 
+/// Vite/Nuxt compile-time SSR guards. When one of these appears before an SSR
+/// global on the same line, the bundler statically replaces it (`false` during
+/// SSR), so the guarded branch is never evaluated server-side and is SSR-safe.
+const SSR_GUARDS: &[&str] = &[
+    "import.meta.client",
+    "import.meta.server",
+    "process.client",
+    "process.server",
+];
+
+/// True when a static SSR guard token appears on `line` before byte offset `abs`.
+fn guarded_before(line: &str, abs: usize) -> bool {
+    SSR_GUARDS
+        .iter()
+        .filter_map(|guard| line.find(guard))
+        .any(|guard_at| guard_at < abs)
+}
+
 fn script_setup_range(source: &str) -> Option<(usize, usize)> {
     for (i, _) in source.match_indices("<script") {
         let close = source[i..].find('>')?;
@@ -45,7 +63,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
                     let after = line.as_bytes().get(abs + g.len()).map(|b| *b as char).unwrap_or(' ');
                     let is_word = before.is_alphanumeric() || before == '_' || before == '.';
                     let is_word_after = after.is_alphanumeric() || after == '_';
-                    if !is_word && !is_word_after {
+                    if !is_word && !is_word_after && !guarded_before(line, abs) {
                         diagnostics.push(Diagnostic {
                             path: std::sync::Arc::clone(&ctx.path_arc),
                             line: base_line + idx + 1,
@@ -110,5 +128,41 @@ mod tests {
     fn ignores_plain_script() {
         let sfc = "<script>\nconst w = window.innerWidth\n</script>";
         assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_import_meta_client_ternary() {
+        // Issue #3308: import.meta.client is a compile-time SSR guard; the
+        // truthy branch is never evaluated server-side.
+        let sfc = "<script setup>\nconst appendToBody = import.meta.client ? () => document.body : undefined\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_import_meta_server_ternary() {
+        // window access sits in the false (CSR) branch; the line-level guard
+        // still recognizes it as SSR-safe.
+        let sfc = "<script setup>\nconst x = import.meta.server ? undefined : window.innerWidth\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_process_client_ternary() {
+        let sfc = "<script setup>\nconst w = process.client ? window.scrollY : 0\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn flags_unguarded_window() {
+        let sfc = "<script setup>\nconst w = window.innerWidth\n</script>";
+        assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn flags_window_when_guard_comes_after() {
+        // The global access precedes the guard token on the line, so it is not
+        // protected by it.
+        let sfc = "<script setup>\nconst w = window.innerWidth // import.meta.client\n</script>";
+        assert_eq!(run(sfc).len(), 1);
     }
 }
