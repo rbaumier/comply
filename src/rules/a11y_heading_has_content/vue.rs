@@ -53,4 +53,28 @@ mod tests {
         let source = "<template>\n  <h1>Welcome</h1>\n</template>";
         assert!(run(source).is_empty());
     }
+
+    #[test]
+    fn allows_multiline_interpolation_content() {
+        let source = "<template>\n  <h2 class=\"font-medium\">\n    {{ post.title }}\n  </h2>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_multiline_slot_content() {
+        let source = "<template>\n  <h3>\n    <slot />\n  </h3>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_multiline_plain_text_content() {
+        let source = "<template>\n  <h2>\n    Section title\n  </h2>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn flags_multiline_empty_heading() {
+        let source = "<template>\n  <h2>\n\n  </h2>\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
 }

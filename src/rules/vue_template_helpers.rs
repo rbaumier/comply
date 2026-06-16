@@ -171,16 +171,24 @@ pub fn attr_value<'a>(attrs: &'a str, attr_name: &str) -> Option<&'a str> {
     None
 }
 
+/// Maximum number of lines scanned after the opening tag while looking for
+/// the matching close tag. Bounds the cost and avoids crossing into unrelated
+/// sibling elements when the close tag is missing.
+const TEXT_CONTENT_LOOKAHEAD: usize = 10;
+
 /// Get the text content between opening and closing tags for a given line.
 ///
-/// This is a best-effort helper: it looks for `>content</tag>` on the
-/// same or following lines. Returns empty string if not found.
+/// This is a best-effort helper. It looks for `>content</tag>` on the same
+/// line, then scans up to [`TEXT_CONTENT_LOOKAHEAD`] following lines for the
+/// close tag, returning the first non-whitespace content found in between.
+/// A Vue interpolation (`{{`) or a `<slot` count as content, since they always
+/// render. Returns an empty string if no content is found before the close tag.
 pub fn element_text_content<'a>(source: &'a str, line_idx_0based: usize, tag: &str) -> &'a str {
     let lines: Vec<&str> = source.lines().collect();
     if line_idx_0based >= lines.len() {
         return "";
     }
-    // Try to find >...</tag> on the same line
+    // Try to find >...</tag> on the same line.
     let line = lines[line_idx_0based];
     let close_tag = format!("</{tag}>");
     if let Some(close_pos) = line.find(&close_tag)
@@ -189,11 +197,16 @@ pub fn element_text_content<'a>(source: &'a str, line_idx_0based: usize, tag: &s
     {
         return line[gt + 1..close_pos].trim();
     }
-    // Check next line for close tag
-    if line_idx_0based + 1 < lines.len() {
-        let next = lines[line_idx_0based + 1];
+    // Scan following lines for the close tag, treating any non-whitespace text
+    // (including `{{` interpolations and `<slot`) before it as content.
+    let last = (line_idx_0based + TEXT_CONTENT_LOOKAHEAD).min(lines.len() - 1);
+    for &next in &lines[line_idx_0based + 1..=last] {
         if let Some(close_pos) = next.find(&close_tag) {
             return next[..close_pos].trim();
+        }
+        let trimmed = next.trim();
+        if !trimmed.is_empty() {
+            return trimmed;
         }
     }
     ""
@@ -304,5 +317,48 @@ mod tests {
     fn collect_attr_names_works() {
         let names = collect_attr_names("class=\"foo\" aria-label=\"bar\" disabled");
         assert_eq!(names, vec!["class", "aria-label", "disabled"]);
+    }
+
+    #[test]
+    fn element_text_content_same_line() {
+        let source = "  <h1>Welcome</h1>\n";
+        assert_eq!(element_text_content(source, 0, "h1"), "Welcome");
+    }
+
+    #[test]
+    fn element_text_content_same_line_empty() {
+        let source = "  <h1></h1>\n";
+        assert_eq!(element_text_content(source, 0, "h1"), "");
+    }
+
+    #[test]
+    fn element_text_content_next_line() {
+        let source = "  <h2 class=\"x\">\n    Title\n  </h2>\n";
+        assert_eq!(element_text_content(source, 0, "h2"), "Title");
+    }
+
+    #[test]
+    fn element_text_content_multiline_interpolation() {
+        let source = "  <h2 class=\"x\">\n    {{ post.title }}\n  </h2>\n";
+        assert_eq!(element_text_content(source, 0, "h2"), "{{ post.title }}");
+    }
+
+    #[test]
+    fn element_text_content_multiline_slot() {
+        let source = "  <h3>\n    <slot />\n  </h3>\n";
+        assert_eq!(element_text_content(source, 0, "h3"), "<slot />");
+    }
+
+    #[test]
+    fn element_text_content_multiline_empty() {
+        let source = "  <h2>\n\n  </h2>\n";
+        assert_eq!(element_text_content(source, 0, "h2"), "");
+    }
+
+    #[test]
+    fn element_text_content_unclosed_within_bound() {
+        // No close tag within the lookahead window: empty leading lines only.
+        let source = "  <h2>\n\n\n\n\n\n\n\n\n\n\n  text\n";
+        assert_eq!(element_text_content(source, 0, "h2"), "");
     }
 }
