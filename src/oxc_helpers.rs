@@ -917,6 +917,65 @@ pub fn is_local_object_builder_binding(
     false
 }
 
+/// True when `ident` resolves to the setter slot of a React state hook — the
+/// second element of an array-destructuring binding whose initializer is a
+/// `useState` or `useReducer` call (`const [value, setValue] = useState(...)`).
+/// These are the only identifiers that schedule a React render when called;
+/// every other `set`-prefixed callee (`setTimeout`, `setInterval`, `setHeaders`,
+/// …) resolves to a different declaration shape, or to no local binding at all,
+/// and is rejected.
+///
+/// Resolves the binding via `reference_id` → symbol → declaration node, then
+/// confirms the declaration is a `VariableDeclarator` whose id is an
+/// `ArrayPattern` whose second slot is this identifier and whose initializer
+/// calls `useState`/`useReducer` (bare or member-qualified, e.g. `React.useState`).
+#[must_use]
+pub fn is_use_state_setter_binding(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{BindingPattern, Expression};
+    use oxc_span::GetSpan;
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            let Some(Expression::CallExpression(call)) = &decl.init else {
+                return false;
+            };
+            let callee_span = call.callee.span();
+            let callee_text = semantic.source_text()
+                [callee_span.start as usize..callee_span.end as usize]
+                .rsplit('.')
+                .next()
+                .unwrap_or("");
+            if callee_text != "useState" && callee_text != "useReducer" {
+                return false;
+            }
+            let BindingPattern::ArrayPattern(arr) = &decl.id else {
+                return false;
+            };
+            return matches!(
+                arr.elements.get(1),
+                Some(Some(BindingPattern::BindingIdentifier(setter_id)))
+                    if setter_id.name == ident.name
+            );
+        }
+    }
+    false
+}
+
 /// True when `ident` resolves to the **accumulator** parameter of an
 /// `Array.prototype.reduce` callback — the first parameter of an arrow or
 /// function expression passed as the first argument to a `.reduce(...)` call.
