@@ -873,6 +873,36 @@ pub fn is_react_router_routes_config(path: &Path) -> bool {
     )
 }
 
+/// Dependencies that mark a package as a Nuxt *module* (as opposed to a Nuxt
+/// *application*): `@nuxt/kit` provides `defineNuxtModule`, the module authoring
+/// API, and `@nuxt/module-builder` is the build tool that compiles a module's
+/// `src/runtime/` into shipped library code. Either declared in any dependency
+/// section identifies the package as a module.
+const NUXT_MODULE_DEPS: &[&str] = &["@nuxt/kit", "@nuxt/module-builder"];
+
+/// True when `path` is Nuxt-module runtime library code: a file under a
+/// `runtime/` directory of a package that depends on `@nuxt/kit` or
+/// `@nuxt/module-builder`. By the Nuxt module convention these files (e.g.
+/// `src/runtime/composables/usePrefix.ts`) are compiled by `@nuxt/module-builder`
+/// and shipped as library code with the module. Nuxt's auto-import is not
+/// available at the module's own build time, so they import composables
+/// explicitly from `#imports`/`#app`/`nuxt/app` — the Nuxt-blessed virtual
+/// modules — and removing those imports breaks compilation.
+///
+/// Both signals are required: the `runtime/` segment alone would exempt every
+/// `runtime/` directory in any project, and the Nuxt-module dependency alone
+/// would exempt the module's application-shaped source. Together they scope the
+/// exemption to module runtime code, keeping a Nuxt *application* (which has no
+/// `@nuxt/kit`/`@nuxt/module-builder` dependency) subject to the rule.
+pub fn is_nuxt_module_runtime_file(path: &Path, project: &ProjectCtx) -> bool {
+    if !has_path_segment(path, &["runtime"]) {
+        return false;
+    }
+    project
+        .nearest_package_json(path)
+        .is_some_and(|pkg| NUXT_MODULE_DEPS.iter().any(|dep| pkg.has_dep_or_engine(dep)))
+}
+
 /// True when `path` is a Docusaurus theme swizzle component — a file under a
 /// `src/theme/` directory (consecutive `src` then `theme` segments, e.g.
 /// `src/theme/MDXComponents/index.tsx`). Docusaurus's theme system discovers
