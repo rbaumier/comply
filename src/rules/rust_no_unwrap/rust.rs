@@ -201,6 +201,33 @@ mod tests {
     }
 
     #[test]
+    fn allows_unwrap_in_testutil_rs() {
+        // ripgrep's crates/searcher/src/testutil.rs — the FP from #3282.
+        let source = "pub fn h() { let x = y.unwrap(); }";
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                source,
+                "crates/searcher/src/testutil.rs"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_unwrap_under_testutil_dir() {
+        let source = "pub fn h() { let x = y.unwrap(); }";
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                source,
+                "crates/foo/src/testutil/mod.rs"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
     fn allows_unwrap_under_property_tests_dir() {
         let source = "pub fn gen() { let x = y.unwrap(); }";
         assert!(
