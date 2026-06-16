@@ -198,6 +198,63 @@ fn is_promise_like_callback_param(
     false
 }
 
+// `type T = { foo: void }` — `void` as the type annotation of a property in a
+// type literal or interface body is valid TypeScript: it is a type-level
+// position, not a value annotation. Scoped via span containment to the
+// property's own `type_annotation`, and a function/parameter boundary crossed
+// first disqualifies it (so `{ foo: (x: void) => string }` still fires on the
+// parameter).
+fn is_type_literal_property_type(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    void_start: u32,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::TSPropertySignature(sig) => {
+                return sig.type_annotation.as_ref().is_some_and(|annotation| {
+                    void_start >= annotation.span.start && void_start < annotation.span.end
+                });
+            }
+            AstKind::FormalParameter(_)
+            | AstKind::TSFunctionType(_)
+            | AstKind::TSConstructorType(_)
+            | AstKind::TSMethodSignature(_)
+            | AstKind::TSCallSignatureDeclaration(_)
+            | AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Class(_) => return false,
+            _ => continue,
+        }
+    }
+    false
+}
+
+// `type T = [void, number]` — `void` as a tuple element type is valid
+// TypeScript: tuple positions are type-level. A function/parameter boundary
+// crossed before the `TSTupleType` disqualifies it (so `[(x: void) => string]`
+// still fires on the parameter).
+fn is_tuple_element_type(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::TSTupleType(_) => return true,
+            AstKind::FormalParameter(_)
+            | AstKind::TSFunctionType(_)
+            | AstKind::TSConstructorType(_)
+            | AstKind::TSMethodSignature(_)
+            | AstKind::TSCallSignatureDeclaration(_)
+            | AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Class(_) => return false,
+            _ => continue,
+        }
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::TSVoidKeyword]
@@ -227,6 +284,12 @@ impl OxcCheck for Check {
             return;
         }
         if is_promise_like_callback_param(node, semantic) {
+            return;
+        }
+        if is_type_literal_property_type(node, semantic, kw.span.start) {
+            return;
+        }
+        if is_tuple_element_type(node, semantic) {
             return;
         }
 
@@ -403,6 +466,53 @@ mod tests {
         // plain `let x: void` inside the class body still fires.
         let src = "class PromiseGroup implements PromiseLike<void> {\
                    run() { let x: void; } }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_void_as_type_literal_property() {
+        // Regression for rbaumier/comply#3325 — sindresorhus/type-fest
+        // readonly-deep: `void` as a property type (bare and in a union) in a
+        // type literal.
+        let src = "type VoidType = { foo: void; bar: string | void };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_void_as_interface_property() {
+        let src = "interface VoidType { foo: void }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_void_as_tuple_element() {
+        // Regression for rbaumier/comply#3325 — sindresorhus/type-fest
+        // split-on-rest-element: `void` as a tuple element type.
+        let src = "type T = [void, number];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_void_as_tuple_element_with_rest() {
+        let src = "type T = SplitOnRestElement<[void, ...never[], 1]>;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_void_param_in_type_literal_property_function() {
+        // Negative space: the property exemption is type-position-scoped — a
+        // `void` parameter of a function-typed property still fires.
+        let src = "type T = { foo: (x: void) => string };";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_void_param_in_tuple_function_element() {
+        // Negative space: the tuple exemption is type-position-scoped — a
+        // `void` parameter of a function-typed tuple element still fires.
+        let src = "type T = [(x: void) => string];";
         let diags = run_on(src);
         assert_eq!(diags.len(), 1);
     }
