@@ -1789,70 +1789,63 @@ pub fn callback_first_param_name(call: &oxc_ast::ast::CallExpression) -> Option<
 /// still guarded, so `enforce-delete-with-where` / `enforce-update-with-where`
 /// gate on the absence of such a reassignment before reporting.
 ///
-/// The scan is scoped to the variable's enclosing block / function body and
-/// matched on the binding identifier name; a `.where(...)` reassignment of a
-/// different variable does not count. A reassignment that never applies
-/// `.where(...)` (e.g. `query = query.returning(cols)`) does not suppress.
+/// The binding is resolved by symbol, so a `.where(...)` reassignment of a
+/// shadowing inner binding that happens to share the name does not count. A
+/// reassignment that never applies `.where(...)` (e.g. `query =
+/// query.returning(cols)`) does not suppress.
 #[must_use]
 pub fn where_applied_via_variable_reassignment(
     call: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
     use oxc_ast::AstKind;
-    use oxc_ast::ast::{AssignmentTarget, BindingPattern, VariableDeclarationKind};
+    use oxc_ast::ast::{BindingPattern, VariableDeclarationKind};
+    use oxc_semantic::ReferenceFlags;
 
     // The call must be the initializer of a `let`/`var` binding identifier.
-    // Walk outward to the nearest declarator, then to its enclosing block.
-    let mut var_name: Option<&str> = None;
-    let mut block_span: Option<oxc_span::Span> = None;
+    // Walk outward to the nearest declarator and resolve its symbol.
+    let mut symbol_id = None;
     for ancestor in semantic.nodes().ancestors(call.id()) {
         match ancestor.kind() {
-            AstKind::VariableDeclaration(decl)
-                if var_name.is_none()
-                    && matches!(
-                        decl.kind,
-                        VariableDeclarationKind::Let | VariableDeclarationKind::Var
-                    ) =>
-            {
-                if decl.declarations.len() != 1 {
+            AstKind::VariableDeclaration(decl) => {
+                if !matches!(
+                    decl.kind,
+                    VariableDeclarationKind::Let | VariableDeclarationKind::Var
+                ) || decl.declarations.len() != 1
+                {
                     return false;
                 }
                 let BindingPattern::BindingIdentifier(id) = &decl.declarations[0].id else {
                     return false;
                 };
-                var_name = Some(id.name.as_str());
-            }
-            AstKind::BlockStatement(block) if var_name.is_some() => {
-                block_span = Some(block.span);
+                symbol_id = id.symbol_id.get();
                 break;
             }
-            AstKind::FunctionBody(body) if var_name.is_some() => {
-                block_span = Some(body.span);
-                break;
-            }
-            AstKind::Program(prog) if var_name.is_some() => {
-                block_span = Some(prog.span);
-                break;
-            }
+            // Stop at any scope or statement boundary above the call: a chain
+            // not directly initialising a declarator is not a stored query.
+            AstKind::BlockStatement(_)
+            | AstKind::FunctionBody(_)
+            | AstKind::Program(_)
+            | AstKind::ExpressionStatement(_) => return false,
             _ => {}
         }
     }
-    let (Some(var_name), Some(block_span)) = (var_name, block_span) else {
+    let Some(symbol_id) = symbol_id else {
         return false;
     };
 
-    // Scan the enclosing block for `var_name = <rhs containing .where(...)>`.
-    semantic.nodes().iter().any(|node| {
-        let AstKind::AssignmentExpression(assign) = node.kind() else {
-            return false;
-        };
-        if assign.span.start < block_span.start || assign.span.end > block_span.end {
+    // Look at every write reference to this exact binding for a reassignment
+    // whose right-hand side applies `.where(...)`.
+    semantic.symbol_references(symbol_id).any(|reference| {
+        if !reference.flags().contains(ReferenceFlags::Write) {
             return false;
         }
-        let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left else {
-            return false;
-        };
-        target.name.as_str() == var_name && chain_calls_where(&assign.right)
+        for kind in semantic.nodes().ancestor_kinds(reference.node_id()) {
+            if let AstKind::AssignmentExpression(assign) = kind {
+                return chain_calls_where(&assign.right);
+            }
+        }
+        false
     })
 }
 

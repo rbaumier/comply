@@ -225,4 +225,20 @@ mod tests {
         "#;
         assert_eq!(run(src).len(), 1);
     }
+
+    #[test]
+    fn flags_outer_update_when_where_applies_to_shadowing_inner_binding() {
+        let src = r#"
+            function run(input, columns) {
+                let query = db.update(users).set(input);
+                {
+                    let query = db.select(other);
+                    query = query.where(filters) as any;
+                }
+                query = query.returning(columns) as any;
+                const result = await query;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
 }
