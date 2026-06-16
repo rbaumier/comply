@@ -45,6 +45,13 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A `.where(...)` applied imperatively to a stored `let query = …`
+        // binding (`query = query.where(filters)`) guards the query even though
+        // it is absent from the static chain.
+        if crate::oxc_helpers::where_applied_via_variable_reassignment(node, semantic) {
+            return;
+        }
+
         // Report on the outermost call in the chain.
         let outer_span = outermost_call_span(node, semantic, ctx.source);
         let (line, column) = byte_offset_to_line_col(ctx.source, outer_span as usize);
@@ -218,6 +225,50 @@ mod tests {
     #[test]
     fn flags_tx_suffix_receiver_without_where() {
         let src = r#"const r = await userTx.delete(users);"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_where_applied_via_conditional_reassignment() {
+        let src = r#"
+            function run(where, columns) {
+                let query = db.delete(users);
+                if (where) {
+                    const filters = extractFilters(users, "users", where);
+                    query = query.where(filters) as any;
+                }
+                query = query.returning(columns) as any;
+                const result = await query;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_stored_variable_reassigned_without_where() {
+        let src = r#"
+            function run(columns) {
+                let query = db.delete(users);
+                query = query.returning(columns) as any;
+                const result = await query;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_where_reassignment_of_other_variable() {
+        let src = r#"
+            function run(where, columns) {
+                let query = db.delete(users);
+                let other = db.select();
+                if (where) {
+                    other = other.where(filters) as any;
+                }
+                query = query.returning(columns) as any;
+                const result = await query;
+            }
+        "#;
         assert_eq!(run(src).len(), 1);
     }
 }

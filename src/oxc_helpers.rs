@@ -1778,6 +1778,108 @@ pub fn callback_first_param_name(call: &oxc_ast::ast::CallExpression) -> Option<
     Some(id.name.to_string())
 }
 
+/// True when the chain rooted at `call` is the initializer of a `let`/`var`
+/// declaration whose binding is later reassigned with a `.where(...)` member
+/// call applied to the same variable (`let query = db.delete(t); … query =
+/// query.where(f);`).
+///
+/// The builder pattern assembles a query imperatively: the `.where(...)` clause
+/// is applied through a reassignment of the stored variable rather than chained
+/// onto the original call, so a static chain walk never sees it. The query is
+/// still guarded, so `enforce-delete-with-where` / `enforce-update-with-where`
+/// gate on the absence of such a reassignment before reporting.
+///
+/// The scan is scoped to the variable's enclosing block / function body and
+/// matched on the binding identifier name; a `.where(...)` reassignment of a
+/// different variable does not count. A reassignment that never applies
+/// `.where(...)` (e.g. `query = query.returning(cols)`) does not suppress.
+#[must_use]
+pub fn where_applied_via_variable_reassignment(
+    call: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{AssignmentTarget, BindingPattern, VariableDeclarationKind};
+
+    // The call must be the initializer of a `let`/`var` binding identifier.
+    // Walk outward to the nearest declarator, then to its enclosing block.
+    let mut var_name: Option<&str> = None;
+    let mut block_span: Option<oxc_span::Span> = None;
+    for ancestor in semantic.nodes().ancestors(call.id()) {
+        match ancestor.kind() {
+            AstKind::VariableDeclaration(decl)
+                if var_name.is_none()
+                    && matches!(
+                        decl.kind,
+                        VariableDeclarationKind::Let | VariableDeclarationKind::Var
+                    ) =>
+            {
+                if decl.declarations.len() != 1 {
+                    return false;
+                }
+                let BindingPattern::BindingIdentifier(id) = &decl.declarations[0].id else {
+                    return false;
+                };
+                var_name = Some(id.name.as_str());
+            }
+            AstKind::BlockStatement(block) if var_name.is_some() => {
+                block_span = Some(block.span);
+                break;
+            }
+            AstKind::FunctionBody(body) if var_name.is_some() => {
+                block_span = Some(body.span);
+                break;
+            }
+            AstKind::Program(prog) if var_name.is_some() => {
+                block_span = Some(prog.span);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let (Some(var_name), Some(block_span)) = (var_name, block_span) else {
+        return false;
+    };
+
+    // Scan the enclosing block for `var_name = <rhs containing .where(...)>`.
+    semantic.nodes().iter().any(|node| {
+        let AstKind::AssignmentExpression(assign) = node.kind() else {
+            return false;
+        };
+        if assign.span.start < block_span.start || assign.span.end > block_span.end {
+            return false;
+        }
+        let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left else {
+            return false;
+        };
+        target.name.as_str() == var_name && chain_calls_where(&assign.right)
+    })
+}
+
+/// True when the call chain in `expr` contains a `.where(...)` member call,
+/// looking through `as`/`satisfies`/`!`/parenthesis wrappers and earlier links
+/// (`query.where(f).returning(c)` counts).
+fn chain_calls_where(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+    match expr {
+        Expression::TSAsExpression(e) => chain_calls_where(&e.expression),
+        Expression::TSSatisfiesExpression(e) => chain_calls_where(&e.expression),
+        Expression::TSNonNullExpression(e) => chain_calls_where(&e.expression),
+        Expression::ParenthesizedExpression(e) => chain_calls_where(&e.expression),
+        Expression::CallExpression(call) => {
+            if let Expression::StaticMemberExpression(member) = &call.callee {
+                if member.property.name.as_str() == "where" {
+                    return true;
+                }
+                return chain_calls_where(&member.object);
+            }
+            false
+        }
+        Expression::StaticMemberExpression(member) => chain_calls_where(&member.object),
+        _ => false,
+    }
+}
+
 /// Packages whose `useForm` export is React Hook Form's. `react-hook-form`
 /// itself plus the `@hookform/*` resolver/devtools scope, which re-export it.
 fn is_react_hook_form_package(specifier: &str) -> bool {
