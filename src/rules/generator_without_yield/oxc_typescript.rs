@@ -71,6 +71,73 @@ fn has_yield_in_body<'a>(
     false
 }
 
+/// Whether the generator's own body, ignoring no-op `EmptyStatement`s, consists
+/// solely of a `ThrowStatement`. Such a generator can only throw and never
+/// yields on purpose: it is the idiomatic way to build a failing
+/// `AsyncIterable<never>`, so the absent `yield` is the implementation. String
+/// directive prologues (e.g. `"use strict"`) live in `body.directives`, not in
+/// `statements`, so they do not affect this check.
+fn is_throw_only_generator(func: &oxc_ast::ast::Function) -> bool {
+    let Some(body) = func.body.as_ref() else {
+        return false;
+    };
+    let mut executable = body
+        .statements
+        .iter()
+        .filter(|stmt| !matches!(stmt, oxc_ast::ast::Statement::EmptyStatement(_)));
+    matches!(executable.next(), Some(oxc_ast::ast::Statement::ThrowStatement(_)))
+        && executable.next().is_none()
+}
+
+/// Whether this generator performs an `await` inside a loop that belongs to its
+/// own async work. An async generator awaiting in a loop (commonly until an
+/// abort signal) is a deliberate long-running / wait pattern that defers any
+/// `yield` to the loop, so the absent `yield` is not a mistake.
+///
+/// An `AwaitExpression` counts only when, walking up from it to the nearest
+/// function ancestor, that ancestor is this generator (the await is THIS
+/// generator's work, not an inner closure's) and a loop statement is crossed on
+/// the way (the await runs inside the loop, not merely beside it).
+fn has_await_in_loop<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let node_id = node.id();
+    for snode in semantic.nodes().iter() {
+        if !matches!(snode.kind(), AstKind::AwaitExpression(_)) {
+            continue;
+        }
+        let mut cur = snode.id();
+        let mut crossed_loop = false;
+        loop {
+            let parent_id = semantic.nodes().parent_id(cur);
+            if parent_id == cur {
+                break;
+            }
+            if parent_id == node_id {
+                if crossed_loop {
+                    return true;
+                }
+                break;
+            }
+            let parent = semantic.nodes().get_node(parent_id);
+            match parent.kind() {
+                // Stop at nested function boundaries: this await is an inner
+                // closure's work, not this generator's.
+                AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => break,
+                AstKind::WhileStatement(_)
+                | AstKind::DoWhileStatement(_)
+                | AstKind::ForStatement(_)
+                | AstKind::ForInStatement(_)
+                | AstKind::ForOfStatement(_) => crossed_loop = true,
+                _ => {}
+            }
+            cur = parent_id;
+        }
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::Function]
@@ -100,6 +167,14 @@ impl OxcCheck for Check {
             return;
         }
         if is_empty_iterator_protocol_generator(func, node, semantic) {
+            return;
+        }
+        // A throw-only generator is an intentional failing `AsyncIterable<never>`.
+        if is_throw_only_generator(func) {
+            return;
+        }
+        // An await inside a loop is a deliberate long-running / wait pattern.
+        if has_await_in_loop(node, semantic) {
             return;
         }
 
@@ -221,6 +296,62 @@ const o = {
   }
 }
 ";
+        assert_eq!(run_at(src, "src/index.ts").len(), 1);
+    }
+
+    // Regression for issue #3319, Pattern A: a generator whose body only throws
+    // is an intentional failing `AsyncIterable<never>`.
+    #[test]
+    fn allows_throw_only_async_generator() {
+        let src = "async function* () {\n  throw err;\n}";
+        assert!(run_at(src, "src/index.ts").is_empty());
+    }
+
+    // Regression for issue #3319, Pattern A: the tRPC production case —
+    // a throw-only generator wrapping an error into an AsyncIterable.
+    #[test]
+    fn allows_throw_only_generator_in_run_call() {
+        let src = "run(async function* () {\n  throw new TRPCError('x');\n});";
+        assert!(run_at(src, "src/index.ts").is_empty());
+    }
+
+    // Regression for issue #3319, Pattern B: an await inside a `while` loop that
+    // runs until an abort signal is a deliberate long-running subscription.
+    #[test]
+    fn allows_await_in_while_loop_generator() {
+        let src = "async function* (opts) {\n  while (!opts.signal.aborted) {\n    await sleep(10);\n  }\n}";
+        assert!(run_at(src, "src/index.ts").is_empty());
+    }
+
+    // Regression for issue #3319, Pattern B: a `for await` loop with an await in
+    // its body is also a deliberate wait pattern.
+    #[test]
+    fn allows_for_await_loop_generator() {
+        let src = "async function* () {\n  for await (const x of src) {\n    await handle(x);\n  }\n}";
+        assert!(run_at(src, "src/index.ts").is_empty());
+    }
+
+    // Over-exemption guard (issue #3319): a generator that returns instead of
+    // yielding — no throw, no loop — is the classic forgot-to-yield bug.
+    #[test]
+    fn flags_generator_that_returns_array() {
+        let src = "function* range() {\n  return [1, 2, 3];\n}";
+        assert_eq!(run_at(src, "src/index.ts").len(), 1);
+    }
+
+    // Over-exemption guard (issue #3319): a straight-line body with no yield,
+    // throw, or loop is still flagged.
+    #[test]
+    fn flags_straight_line_generator() {
+        let src = "function* foo() {\n  const a = compute();\n  doStuff(a);\n}";
+        assert_eq!(run_at(src, "src/index.ts").len(), 1);
+    }
+
+    // Over-exemption guard (issue #3319): a single await NOT inside a loop is
+    // still flagged — Pattern B requires the await to be inside a loop.
+    #[test]
+    fn flags_async_generator_with_await_not_in_loop() {
+        let src = "async function* bar() {\n  await setup();\n}";
         assert_eq!(run_at(src, "src/index.ts").len(), 1);
     }
 }
