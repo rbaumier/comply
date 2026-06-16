@@ -32,39 +32,53 @@ fn imports_route_framework(line: &str) -> bool {
     })
 }
 
-/// Whether `line` contains a route registration `<router>.<method>(` for a
-/// conventional router receiver name. The receiver must be a whole identifier
-/// token (not a suffix of a longer name) so `clear.get(` does not match the
-/// single-letter `r` receiver, nor `myapp.get(` the `app` receiver.
-fn has_router_method_call(line: &str) -> bool {
-    ROUTER_RECEIVERS.iter().any(|recv| {
-        ROUTE_METHODS
-            .iter()
-            .any(|m| contains_router_call(line, recv, m))
+/// Whether the file registers a route, i.e. contains a `<router>.<method>(...)`
+/// call on a conventional receiver whose first argument is a path-like string
+/// literal (starting with `/`). Walking the AST ignores comments and excludes
+/// settings accessors such as `app.get('etag fn')` whose argument is a settings
+/// key, not a route path.
+fn has_route_registration(semantic: &oxc_semantic::Semantic, source: &str) -> bool {
+    semantic.nodes().iter().any(|node| {
+        let AstKind::CallExpression(call) = node.kind() else {
+            return false;
+        };
+        let Expression::StaticMemberExpression(member) = &call.callee else {
+            return false;
+        };
+        if !ROUTE_METHODS.contains(&member.property.name.as_str()) {
+            return false;
+        }
+        let Expression::Identifier(recv) = &member.object else {
+            return false;
+        };
+        if !ROUTER_RECEIVERS.contains(&recv.name.as_str()) {
+            return false;
+        }
+        call.arguments
+            .first()
+            .is_some_and(|arg| first_arg_is_route_path(arg, source))
     })
 }
 
-/// Whether `line` contains `<recv>.<method>(` with `recv` standing alone (the
-/// preceding character is not part of an identifier).
-fn contains_router_call(line: &str, recv: &str, method: &str) -> bool {
-    let needle = format!("{recv}.{method}(");
-    line.match_indices(&needle).any(|(idx, _)| {
-        line[..idx]
-            .chars()
-            .next_back()
-            .is_none_or(|c| !is_identifier_char(c))
-    })
+/// Whether a call's first argument is a path-like string — a string or template
+/// literal whose first character is `/`. Distinguishes a route registration
+/// `app.get('/users', h)` from a settings accessor `app.get('etag fn')`.
+fn first_arg_is_route_path(arg: &oxc_ast::ast::Argument, source: &str) -> bool {
+    use oxc_ast::ast::Argument;
+    match arg {
+        Argument::StringLiteral(lit) => lit.value.as_str().starts_with('/'),
+        Argument::TemplateLiteral(tpl) => tpl
+            .quasis
+            .first()
+            .and_then(|q| source.get(q.span.start as usize..q.span.end as usize))
+            .is_some_and(|raw| raw.starts_with('/')),
+        _ => false,
+    }
 }
 
-fn is_identifier_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_' || c == '$'
-}
-
-fn is_route_file(source: &str) -> bool {
-    source.lines().any(|line| {
-        let t = line.trim();
-        has_router_method_call(t) || imports_route_framework(t)
-    })
+fn is_route_file(semantic: &oxc_semantic::Semantic, source: &str) -> bool {
+    has_route_registration(semantic, source)
+        || source.lines().any(|line| imports_route_framework(line.trim()))
 }
 
 pub struct Check;
@@ -78,7 +92,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::NewExpression(new_expr) = node.kind() else { return };
@@ -92,7 +106,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        if !is_route_file(ctx.source) {
+        if !is_route_file(semantic, ctx.source) {
             return;
         }
 
@@ -289,5 +303,39 @@ function client(request: Request, response: Response) {
 }
 "#;
         assert!(run_on(src).is_empty(), "got: {:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_error_with_comment_and_settings_accessor() {
+        // Issue #3390: Express `lib/application.js` — the only `app.get(`
+        // occurrences are a comment and a settings lookup, not a route.
+        let src = r#"
+function set(setting, val) {
+    if (arguments.length === 1) {
+        // app.get(setting)
+        return this.settings[setting];
+    }
+}
+function engine(ext, fn) {
+    var etagFn = app.get('etag fn');
+    if (typeof fn !== 'function') {
+        throw new Error('callback function required');
+    }
+}
+"#;
+        assert!(run_on(src).is_empty(), "got: {:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_bare_error_in_route_file_with_settings_accessor_present() {
+        // A real route registration with a path arg still marks the file, even
+        // when a settings accessor (`app.get('etag fn')`) is also present.
+        let src = r#"
+const etagFn = app.get('etag fn');
+app.get('/users', (req, res) => {
+    throw new Error('boom');
+});
+"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
