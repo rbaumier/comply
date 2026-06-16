@@ -86,7 +86,14 @@ impl OxcCheck for Check {
                     return None;
                 }
                 let exports = index.get_exports(src);
-                if exports.iter().any(|e| e.kind == ExportKind::StarReExport) {
+                // `export *` re-exports and a non-enumerable CJS
+                // `module.exports = <expr>` both leave the export set
+                // unknowable from this file alone — skip rather than report a
+                // name as missing.
+                if exports
+                    .iter()
+                    .any(|e| matches!(e.kind, ExportKind::StarReExport | ExportKind::OpaqueCjs))
+                {
                     return None;
                 }
                 let mut names: HashSet<String> =
@@ -798,6 +805,88 @@ mod tests {
             diags.is_empty(),
             "type-only named imports backed by the package \"types\" .d.ts must not be flagged: {diags:?}"
         );
+    }
+
+    #[test]
+    fn no_fp_on_cjs_module_exports_object_issue_3315() {
+        // Regression for #3315 — trpc/trpc www pattern: `env.js` declares
+        // `parseEnv` and exposes it via `module.exports = { parseEnv }`. A named
+        // import of it from a `.ts` file must not be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/utils/env.js",
+                "function parseEnv(input) { return input; }\nmodule.exports = { parseEnv };\n",
+            ),
+            (
+                "src/useEnv.ts",
+                "import { parseEnv } from './utils/env';\nconst x = parseEnv;\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/useEnv.ts");
+        assert!(
+            diags.is_empty(),
+            "named import from a CJS `module.exports = {{ … }}` must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_cjs_exports_property_issue_3315() {
+        // `exports.foo = …` (the other enumerable CJS form) names `foo` as a
+        // named export; importing it must not be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            ("m.js", "exports.foo = 1;\n"),
+            ("app.ts", "import { foo } from './m';\nconst x = foo;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "app.ts");
+        assert!(
+            diags.is_empty(),
+            "named import from `exports.foo = …` must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_non_enumerable_cjs_module_exports_issue_3315() {
+        // `module.exports = someFn` — the export set is not statically
+        // enumerable, so import-named must skip rather than report any name as
+        // missing (Part B opaque-CJS guard).
+        let files: Vec<(&str, &str)> = vec![
+            ("m.js", "function someFn() {}\nmodule.exports = someFn;\n"),
+            ("app.ts", "import { anything } from './m';\nconst x = anything;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "app.ts");
+        assert!(
+            diags.is_empty(),
+            "named import from a non-enumerable `module.exports = <expr>` must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_missing_name_from_es_module_issue_3315() {
+        // Guard: a genuine ES module with a real export still gets a bogus name
+        // flagged — the opaque-CJS guard must be narrow.
+        let files: Vec<(&str, &str)> = vec![
+            ("m.ts", "export const a = 1;\n"),
+            ("app.ts", "import { doesNotExist } from './m';\nconst x = doesNotExist;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "app.ts");
+        assert_eq!(diags.len(), 1, "absent name in an ES module must still be flagged: {diags:?}");
+        assert!(diags[0].message.contains("doesNotExist"));
+    }
+
+    #[test]
+    fn still_flags_missing_name_from_cjs_object_exports_issue_3315() {
+        // Guard: `module.exports = { parseEnv }` enumerates only `parseEnv`, so a
+        // name genuinely absent from the object literal is still flagged.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "env.js",
+                "function parseEnv(input) { return input; }\nmodule.exports = { parseEnv };\n",
+            ),
+            ("app.ts", "import { notThere } from './env';\nconst x = notThere;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "app.ts");
+        assert_eq!(diags.len(), 1, "absent name in an enumerable CJS object must still be flagged: {diags:?}");
+        assert!(diags[0].message.contains("notThere"));
     }
 
     #[test]

@@ -10,7 +10,10 @@
 //!   tree-sitter. TS/JS/TSX are walked for `import_statement` /
 //!   `export_statement`; Rust files are walked for `pub` items and `use`
 //!   declarations.
-//! - Exports are keyed by the absolute file path.
+//! - Exports are keyed by the absolute file path. For TS/JS both ES `export`
+//!   declarations and CommonJS exports (`module.exports = { … }`,
+//!   `exports.foo = …`) are indexed; a non-enumerable `module.exports = <expr>`
+//!   records an opaque marker instead of named entries.
 //! - For TS/JS: imports record the resolved absolute source path when the
 //!   specifier is relative (`./foo`, `../bar`). Bare specifiers (`react`)
 //!   are kept as-is.
@@ -74,6 +77,12 @@ pub enum ExportKind {
     /// TS/JS analogue (module declarations don't re-export symbols on their
     /// own; they expose the submodule as a namespace).
     Module,
+    /// CommonJS `module.exports = <non-enumerable>` (an identifier, call,
+    /// function, class, `require(...)`, spread, …). The module's named-export
+    /// set cannot be enumerated statically, so consumers that verify a named
+    /// import against the export set must skip verification rather than treat
+    /// the set as empty. Carries no name.
+    OpaqueCjs,
 }
 
 /// One exported symbol at a source location.
@@ -2203,6 +2212,12 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
                     local_name: None,
                 });
             }
+            // CommonJS exports: `module.exports = { … }`, `exports.foo = …`,
+            // `module.exports.foo = …`. Node and TS (`esModuleInterop`) treat
+            // these property names as named exports, so they are indexed too.
+            AstKind::AssignmentExpression(assign) => {
+                oxc_extract_cjs_export(&lines, assign, &mut exports);
+            }
             AstKind::NewExpression(new_expr) => {
                 oxc_extract_call_new(&lines, new_expr, &mut calls);
             }
@@ -2575,6 +2590,100 @@ fn oxc_extract_export_named(
         }
         _ => {}
     }
+}
+
+/// Record named exports declared via CommonJS assignment expressions:
+///
+/// - `module.exports = { a, b: … }` → each object-literal property key (`a`,
+///   `b`) is a `Named` export.
+/// - `exports.foo = …` / `module.exports.foo = …` → `foo` is a `Named` export.
+/// - `module.exports = <non-enumerable>` (identifier, call, function, class,
+///   `require(...)`, spread, …) → a single `OpaqueCjs` marker: the named-export
+///   set cannot be enumerated, so consumers must skip verification.
+///
+/// Other assignment forms (locals, unrelated member writes) are ignored.
+fn oxc_extract_cjs_export(
+    lines: &[usize],
+    assign: &oxc_ast::ast::AssignmentExpression,
+    out: &mut Vec<ExportedSymbol>,
+) {
+    use oxc_ast::ast::{AssignmentTarget, Expression};
+
+    let AssignmentTarget::StaticMemberExpression(member) = &assign.left else {
+        return;
+    };
+    let line = oxc_line_at(lines, assign.span.start as usize);
+    let push = |out: &mut Vec<ExportedSymbol>, name: String, kind: ExportKind| {
+        out.push(ExportedSymbol {
+            name,
+            kind,
+            line,
+            reexport_source: None,
+            params: Vec::new(),
+            is_type_only: false,
+            local_name: None,
+        });
+    };
+
+    // `module.exports = …`: object == `module`, property == `exports`.
+    if member.property.name.as_str() == "exports"
+        && matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == "module")
+    {
+        match &assign.right {
+            Expression::ObjectExpression(obj) => {
+                for name in cjs_object_export_names(obj) {
+                    push(out, name, ExportKind::Named);
+                }
+            }
+            // A non-enumerable whole-module export (identifier, call, function,
+            // class, `require(...)`, spread, …): names can't be listed
+            // statically, so mark the module opaque rather than empty.
+            _ => push(out, String::new(), ExportKind::OpaqueCjs),
+        }
+        return;
+    }
+
+    // `exports.foo = …` / `module.exports.foo = …` → `foo` is a named export.
+    if is_cjs_exports_target(&member.object) {
+        push(out, member.property.name.as_str().to_string(), ExportKind::Named);
+    }
+}
+
+/// True when `expr` is the CommonJS exports object on the LHS of a member
+/// assignment: the bare global `exports`, or `module.exports`.
+fn is_cjs_exports_target(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+    match expr {
+        Expression::Identifier(id) => id.name.as_str() == "exports",
+        Expression::StaticMemberExpression(member) => {
+            member.property.name.as_str() == "exports"
+                && matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == "module")
+        }
+        _ => false,
+    }
+}
+
+/// Enumerable named-export keys of a `module.exports = { … }` object literal.
+/// Shorthand (`{ a }`) and explicit (`{ a: … }`) properties contribute their
+/// static key name; computed keys, methods with non-static keys, getters, and
+/// spreads contribute nothing.
+fn cjs_object_export_names(obj: &oxc_ast::ast::ObjectExpression) -> Vec<String> {
+    use oxc_ast::ast::{ObjectPropertyKind, PropertyKey};
+    let mut names = Vec::new();
+    for prop in &obj.properties {
+        let ObjectPropertyKind::ObjectProperty(prop) = prop else {
+            continue;
+        };
+        if prop.computed {
+            continue;
+        }
+        match &prop.key {
+            PropertyKey::StaticIdentifier(id) => names.push(id.name.as_str().to_string()),
+            PropertyKey::StringLiteral(s) => names.push(s.value.as_str().to_string()),
+            _ => {}
+        }
+    }
+    names
 }
 
 fn oxc_extract_export_all(
