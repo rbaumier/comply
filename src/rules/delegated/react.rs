@@ -40,5 +40,20 @@ pub fn register_all() -> Vec<RuleDef> {
             "react/exhaustive-deps",
             TS_FAMILY,
         ),
+        oxlint_delegate(
+            RuleMeta {
+                id: "react-jsx-boolean-value",
+                description: "Omit the value on JSX boolean attributes set to `true`.",
+                remediation: "Write `<input disabled />` instead of `<input disabled={true} />`. \
+                              An explicit `={true}` on a boolean attribute is redundant noise.",
+                severity: Severity::Warning,
+                doc_url: None,
+                categories: &["react"],
+                skip_in_test_dir: false,
+                skip_in_relaxed_dir: false,
+            },
+            "react/jsx-boolean-value",
+            TS_FAMILY,
+        ),
     ]
 }
