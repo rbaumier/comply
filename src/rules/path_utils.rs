@@ -673,16 +673,20 @@ pub fn is_build_output_specifier(spec: &str) -> bool {
     })
 }
 
-/// True for an import specifier traversing into a `+types` directory (e.g.
-/// `./+types/root.ts`, `../+types/login.ts`). React Router v7 code-generates a
-/// per-route type module here, emitted to `.react-router/types/` at dev/build
-/// time and resolved through the tsconfig `rootDirs` remap; the file never lives
-/// in the source tree. The leading `+` is distinctive — ordinary source
-/// directories don't start with `+` — so a literal `+types` segment match won't
-/// over-reach. Segment match over the `/`-split specifier (so a hypothetical
-/// `./my+types` is NOT a match).
-pub fn is_react_router_types_specifier(spec: &str) -> bool {
-    spec.split('/').any(|seg| seg == "+types")
+/// True for an import specifier targeting a framework-generated per-route type
+/// module — code-generated at dev/build time, gitignored, and never present in a
+/// clean checkout, so resolving it on disk at lint time is expected to fail.
+/// Matched by a single `/`-split segment, so both leading markers (`+`, `$`) stay
+/// distinctive — ordinary source directories don't start with them, and a
+/// substring like `./my+types` or `./$typesfoo` does NOT over-reach. Covers two
+/// frameworks:
+/// - React Router v7: a `+types` segment (e.g. `./+types/root.ts`), emitted to
+///   `.react-router/types/` and resolved through the tsconfig `rootDirs` remap.
+/// - SvelteKit: a `$types` segment (e.g. `./$types`, `../foo/$types`), emitted by
+///   `svelte-kit sync` to `.svelte-kit/types/<route>/$types.d.ts` and resolved
+///   through tsconfig path aliases.
+pub fn is_framework_generated_route_types_specifier(spec: &str) -> bool {
+    spec.split('/').any(|seg| seg == "+types" || seg == "$types")
 }
 
 /// Collapse `.`/`..` segments in `path` without touching the filesystem. `..`
@@ -1448,15 +1452,19 @@ mod aux_path_tests {
     }
 
     #[test]
-    fn react_router_types_specifier_segments() {
+    fn framework_generated_route_types_specifier_segments() {
         // Issue #2221: React Router v7's code-generated `+types/` directory.
-        assert!(is_react_router_types_specifier("./+types/root.ts"));
-        assert!(is_react_router_types_specifier("./+types/login.ts"));
-        assert!(is_react_router_types_specifier("../+types/about"));
-        // Segment (not substring) match — a `+` elsewhere must not match.
-        assert!(!is_react_router_types_specifier("./my+types/x.ts"));
-        assert!(!is_react_router_types_specifier("./types/root.ts"));
-        assert!(!is_react_router_types_specifier("./does-not-exist.ts"));
+        assert!(is_framework_generated_route_types_specifier("./+types/root.ts"));
+        assert!(is_framework_generated_route_types_specifier("./+types/login.ts"));
+        assert!(is_framework_generated_route_types_specifier("../+types/about"));
+        // Issue #3244: SvelteKit's code-generated `$types` module.
+        assert!(is_framework_generated_route_types_specifier("./$types"));
+        assert!(is_framework_generated_route_types_specifier("../foo/$types"));
+        // Segment (not substring) match — a `+`/`$` elsewhere must not match.
+        assert!(!is_framework_generated_route_types_specifier("./my+types/x.ts"));
+        assert!(!is_framework_generated_route_types_specifier("./types/root.ts"));
+        assert!(!is_framework_generated_route_types_specifier("./$typesfoo"));
+        assert!(!is_framework_generated_route_types_specifier("./does-not-exist.ts"));
     }
 
     #[test]

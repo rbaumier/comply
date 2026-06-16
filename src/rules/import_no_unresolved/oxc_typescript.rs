@@ -58,12 +58,13 @@ impl OxcCheck for Check {
             {
                 continue;
             }
-            // React Router v7 code-generates a per-route type module under a
-            // `+types/` directory (emitted to `.react-router/types/`, resolved via
-            // tsconfig `rootDirs`). The file never lives in the source tree, so an
-            // import of `./+types/<route>.ts` is expected to be unresolved at lint
+            // Frameworks code-generate a per-route type module that never lives in
+            // the source tree (React Router v7's `./+types/<route>`, SvelteKit's
+            // `./$types`), so an import of it is expected to be unresolved at lint
             // time.
-            if crate::rules::path_utils::is_react_router_types_specifier(&imp.specifier) {
+            if crate::rules::path_utils::is_framework_generated_route_types_specifier(
+                &imp.specifier,
+            ) {
                 continue;
             }
             // A relative import resolving into a Prisma `generator { output = … }`
@@ -984,7 +985,7 @@ mod directory_import_tests {
 }
 
 #[cfg(test)]
-mod react_router_types_tests {
+mod framework_generated_route_types_tests {
     use super::Check;
     use crate::config::Config;
     use crate::files::{Language, SourceFile};
@@ -1033,6 +1034,19 @@ mod react_router_types_tests {
         let diags = run_in_dir(
             "app/root.tsx",
             "import type { Route } from './+types/root.ts';",
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn no_fp_for_sveltekit_dollar_types_import_issue_3244() {
+        // SvelteKit reproducer: a route file imports its code-generated `Actions`
+        // type from `./$types`. SvelteKit emits these under `.svelte-kit/types/`
+        // via `svelte-kit sync`, resolved through tsconfig path aliases; the file
+        // is absent from the source tree, so the import must not be flagged.
+        let diags = run_in_dir(
+            "src/routes/remote/server-action/+page.server.ts",
+            "import type { Actions } from './$types';",
         );
         assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
     }
