@@ -398,3 +398,12 @@ route_boundary_patterns = [
   "src/routes/**/layout*",
   "src/routes/**/plugin*",
 ]
+
+# ---------------------------------------------------------------
+# no-unknown-pseudo-class
+# Unknown pseudo-class names to allow (case-insensitive), e.g.
+# framework-specific custom pseudo-classes. Empty by default.
+# Example: ignore = ["custom-pseudo-class"]
+# ---------------------------------------------------------------
+[rules.no-unknown-pseudo-class]
+ignore = []
