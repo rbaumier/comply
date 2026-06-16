@@ -1,11 +1,13 @@
 //! redundant-type-aliases oxc backend — flag `type X = Y` where Y is a single type.
 //!
 //! Skip when the alias is `export`ed (public API surface), carries a leading
-//! `/** … */` JSDoc block (the comment proves documentation value), or is a
-//! `$`-prefixed escape-hatch marker (`$FixMe`, `$TODO`, `$FlowFixMe`, …).
+//! `/** … */` JSDoc block (the comment proves documentation value), sits
+//! directly under a `// @ts-expect-error` directive (a tsd-style error
+//! assertion, not a real alias), or is a `$`-prefixed escape-hatch marker
+//! (`$FixMe`, `$TODO`, `$FlowFixMe`, …).
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, has_ts_expect_error_above};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::TSType;
 use oxc_ast::CommentKind;
@@ -43,6 +45,13 @@ impl OxcCheck for Check {
 
         // Skip aliases preceded by a JSDoc (`/** … */`) block — the comment is documentation.
         if has_leading_jsdoc(ctx.source, semantic, alias.span.start as usize) {
+            return;
+        }
+
+        // Skip aliases written directly under `// @ts-expect-error` — in tsd-style
+        // type-test files such an alias intentionally omits a required generic
+        // argument to assert TypeScript errors; it is never used as a real alias.
+        if has_ts_expect_error_above(semantic.comments(), ctx.source, alias.span.start as usize) {
             return;
         }
 
@@ -285,5 +294,37 @@ function resetFilter(v: ListFilterValues) {}
             crate::rules::test_helpers::run_rule(&Check, "type FixMe = any;", "t.ts").len(),
             1
         );
+    }
+
+    #[test]
+    fn skips_ts_expect_error_missing_generic_regression_3317() {
+        // Regression for https://github.com/rbaumier/comply/issues/3317 — in tsd
+        // type-test files `type A = IsAny;` (generic arg deliberately omitted)
+        // under `// @ts-expect-error` asserts a TypeScript error; it is never a
+        // real alias. Both the blank-line and directly-above forms are exempt.
+        let with_note = "// Missing generic parameter\n// @ts-expect-error\ntype A = IsAny;";
+        assert!(crate::rules::test_helpers::run_rule(&Check, with_note, "test-d/is-any.ts").is_empty());
+
+        let direct = "// @ts-expect-error\ntype A = IsAny;";
+        assert!(crate::rules::test_helpers::run_rule(&Check, direct, "test-d/is-any.ts").is_empty());
+
+        let includes = "// @ts-expect-error\ntype A0 = Includes;";
+        assert!(crate::rules::test_helpers::run_rule(&Check, includes, "test-d/includes.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_rename_without_ts_expect_error() {
+        // No `@ts-expect-error` directive — a genuinely redundant alias still fires.
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, "type Foo = Bar;", "t.ts").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn still_flags_rename_with_unrelated_comment() {
+        // Only `@ts-expect-error` exempts — an unrelated leading `//` comment does not.
+        let src = "// just an alias\ntype Foo = Bar;";
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
     }
 }
