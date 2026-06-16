@@ -65,6 +65,13 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Non-React JSX runtimes (Solid, Vue, Preact, Qwik, Stencil) give a
+        // fragment its own semantics — e.g. a Solid control-flow render prop
+        // `{item => <>{item()}</>}` wraps a signal call so the reactive system
+        // tracks it as a DOM node. "Useless fragment" is a React-only premise.
+        if crate::oxc_helpers::is_non_react_jsx_file(ctx.source, ctx.project, ctx.path) {
+            return;
+        }
         match node.kind() {
             AstKind::JSXOpeningElement(opening) => {
                 if !is_fragment_tag(&opening.name) {
@@ -193,5 +200,25 @@ mod tests {
         // The named empty `<Fragment></Fragment>` placeholder is exempt too.
         let src = "const X = () => <Fragment></Fragment>;";
         assert!(run_at(src, "src/types.test-d.tsx").is_empty());
+    }
+
+    #[test]
+    fn allows_single_child_fragment_in_solid_pragma_file_issue3281() {
+        // Issue #3281: a `@jsxImportSource solid-js` file uses `<>{item()}</>`
+        // in a control-flow render prop so Solid's reactive system tracks the
+        // signal call as a DOM node. "Useless fragment" is a React-only premise.
+        let src = "/** @jsxImportSource solid-js */\n\
+            const C = () => (\n  \
+                <Index each={list()}>{item => <>{item()}</>}</Index>\n\
+            );";
+        assert!(run_at(src, "packages/solid/web/test/index.spec.tsx").is_empty());
+    }
+
+    #[test]
+    fn flags_single_child_fragment_in_plain_react_file() {
+        // A plain React file (no non-React pragma) with a single-child fragment
+        // is still flagged — the rule's real purpose must not regress.
+        let src = "const X = () => <>{x}</>;";
+        assert_eq!(run_at(src, "src/App.tsx").len(), 1);
     }
 }
