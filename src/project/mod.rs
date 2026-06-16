@@ -2190,11 +2190,24 @@ impl ProjectCtx {
     /// API servers; CLI tools and pure libraries have no such boundary.
     pub fn is_http_api_server(&self) -> bool {
         const HTTP_SERVER_FRAMEWORKS: &[&str] = &[
-            "express", "hono", "elysia", "nestjs", "nextjs", "remix", "nuxt", "svelte",
+            "express", "hono", "elysia", "nestjs", "nextjs", "remix", "nuxt",
         ];
-        self.detected_frameworks
+        if self
+            .detected_frameworks
             .iter()
             .any(|f| HTTP_SERVER_FRAMEWORKS.contains(&f.name.as_str()))
+        {
+            return true;
+        }
+        // The `svelte` framework def is detected on both the bare `svelte`
+        // compiler package and a SvelteKit app. Only SvelteKit serves HTTP
+        // routes, and those come from `@sveltejs/kit`; the bare `svelte`
+        // compiler is a build tool with no HTTP boundary. Gate the SvelteKit
+        // classification on that package directly rather than on the shared
+        // `svelte` framework name.
+        self.package_json
+            .as_ref()
+            .is_some_and(|pkg| pkg.has_dep_or_engine("@sveltejs/kit"))
     }
 
     /// True when the project root contains a Cloudflare marker file —
@@ -4745,6 +4758,45 @@ mod tests {
         assert!(pkg.has_dep_or_engine("fsevents"));
         assert!(pkg.has_dep_or_engine("vscode"));
         assert!(!pkg.has_dep_or_engine("react"));
+    }
+
+    /// Build a `ProjectCtx` carrying the `svelte` framework def (which is
+    /// detected on both the bare `svelte` compiler and a SvelteKit app) plus
+    /// the given `package.json` body.
+    #[cfg(test)]
+    fn svelte_ctx_with_pkg(pkg_body: &str) -> ProjectCtx {
+        let mut ctx = ProjectCtx::default();
+        if let Some(fw) = crate::frameworks::get_framework("svelte") {
+            ctx.detected_frameworks = vec![fw];
+        }
+        ctx.package_json = Some(Arc::new(PackageJson::parse(pkg_body).unwrap()));
+        ctx
+    }
+
+    #[test]
+    fn svelte_compiler_is_not_http_api_server() {
+        // Issue #3275: the bare `svelte` compiler package is a build tool with
+        // no HTTP boundary. It triggers the `svelte` framework def but is not a
+        // SvelteKit app, so it must not be classified as an HTTP API server.
+        let ctx = svelte_ctx_with_pkg(r#"{"name":"svelte","dependencies":{"acorn":"^8"}}"#);
+        assert!(!ctx.is_http_api_server());
+    }
+
+    #[test]
+    fn sveltekit_app_is_http_api_server() {
+        // A genuine SvelteKit app (depends on `@sveltejs/kit`) serves HTTP
+        // routes and must be classified as an HTTP API server.
+        let ctx = svelte_ctx_with_pkg(
+            r#"{"name":"app","devDependencies":{"@sveltejs/kit":"^2","svelte":"^5"}}"#,
+        );
+        assert!(ctx.is_http_api_server());
+    }
+
+    #[test]
+    fn express_app_is_http_api_server() {
+        // Framework-name path stays intact for dedicated HTTP servers.
+        let ctx = ProjectCtx::for_test_with_framework("express");
+        assert!(ctx.is_http_api_server());
     }
 
     #[test]

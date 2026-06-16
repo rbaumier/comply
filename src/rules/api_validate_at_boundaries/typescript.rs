@@ -19,23 +19,24 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// Lowercase built-in receivers whose `.parse(...)` is not a schema
-/// validator: `path.parse` (split a filesystem path, from `node:path`).
-/// Capitalized builtins (`JSON`, `URL`) are covered by the PascalCase
-/// utility-class rule in `is_non_schema_parse_receiver`.
-const BUILTIN_PARSE_RECEIVERS: &[&str] = &["path"];
+/// Suffixes that, by convention, name a schema/validator object whose
+/// `.parse(...)` validates external input (`userSchema`, `BodySchema`,
+/// `emailValidator`, `RequestValidator`). Matched case-insensitively on the
+/// final segment so both PascalCase and camelCase spellings count.
+const SCHEMA_RECEIVER_SUFFIXES: &[&str] = &["schema", "validator"];
 
-/// True when the receiver `name` is not a schema validator: either a
-/// lowercase builtin (`path`) or a PascalCase static utility class. Zod
-/// schemas live in camelCase variables (`userSchema`) or PascalCase names
-/// ending in `Schema` (`ConfigSchema`); a PascalCase receiver that does not
-/// end in `Schema` (`SelectorParser`, `ValueParser`, `JSON`, `URL`) is a
-/// static utility class, not a schema.
-fn is_non_schema_parse_receiver(name: &str) -> bool {
-    if BUILTIN_PARSE_RECEIVERS.contains(&name) {
-        return true;
-    }
-    name.chars().next().is_some_and(|c| c.is_ascii_uppercase()) && !name.ends_with("Schema")
+/// True when the `.parse(...)` receiver named `name` is a schema validator.
+/// Only receivers whose name ends in a schema-convention suffix
+/// (`userSchema`, `BodySchema`, `emailValidator`) are treated as schemas.
+/// Every other receiver — lowercase third-party parsers (`acorn`, `babel`),
+/// built-ins (`path`, `JSON`, `URL`), and static utility classes
+/// (`SelectorParser`, `ValueParser`) — parses something other than a schema
+/// and must not be flagged.
+fn is_schema_parse_receiver(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    SCHEMA_RECEIVER_SUFFIXES
+        .iter()
+        .any(|suffix| lower.ends_with(suffix))
 }
 
 fn is_parse_call(callee: tree_sitter::Node, source: &[u8]) -> Option<&'static str> {
@@ -45,7 +46,7 @@ fn is_parse_call(callee: tree_sitter::Node, source: &[u8]) -> Option<&'static st
     if let Some(object) = callee.child_by_field_name("object")
         && object.kind() == "identifier"
         && let Ok(recv) = std::str::from_utf8(&source[object.byte_range()])
-        && is_non_schema_parse_receiver(recv)
+        && !is_schema_parse_receiver(recv)
     {
         return None;
     }
@@ -351,6 +352,33 @@ mod tests {
         // Negative space: a PascalCase receiver ending in `Schema` is a Zod
         // schema and must still flag inside a non-boundary helper.
         let d = run("function compute(input: unknown) { return ConfigSchema.parse(input); }");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_acorn_parse_in_internal_function() {
+        // Issue #3275: `acorn.parse(...)` is the Acorn JS parser (a third-party
+        // AST parser), not a schema validator. A lowercase-camelCase receiver
+        // that does not follow the schema naming convention must not fire.
+        let src = "function parse(source: string, options: unknown) { \
+            const ast = acorn.parse(source, options); return ast; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_camel_case_schema_receiver() {
+        // Receiver guardrail: a genuine schema call in a non-boundary helper
+        // (camelCase name ending in `Schema`) must still flag.
+        let d = run("function getRawConfig(json: unknown) { return userSchema.parse(json); }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("getRawConfig"));
+    }
+
+    #[test]
+    fn flags_validator_suffix_receiver() {
+        // A receiver ending in `Validator` follows the schema-validator naming
+        // convention and must flag inside a non-boundary helper.
+        let d = run("function compute(input: unknown) { return emailValidator.parse(input); }");
         assert_eq!(d.len(), 1);
     }
 }
