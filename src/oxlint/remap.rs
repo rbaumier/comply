@@ -35,6 +35,7 @@ pub fn build_table(
 /// - `promise/*` → `eslint-plugin-promise(*)`
 /// - `vue/*` → `eslint-plugin-vue(*)`
 /// - `nextjs/*` → `eslint-plugin-next(*)`
+/// - `react/exhaustive-deps` → `eslint-plugin-react-hooks(exhaustive-deps)`
 /// - `react/*` → `eslint-plugin-react(*)`
 /// - `jest/*` → `eslint-plugin-jest(*)`
 /// - `oxc/*` → `oxc(*)`
@@ -57,6 +58,11 @@ pub fn config_key_to_oxlint_code(config_key: &str) -> String {
     }
     if let Some(rest) = config_key.strip_prefix("nextjs/") {
         return format!("eslint-plugin-next({rest})");
+    }
+    // React Hooks rules live under `react/` in comply's config namespace but
+    // oxlint reports them under the `eslint-plugin-react-hooks` plugin code.
+    if config_key == "react/exhaustive-deps" {
+        return "eslint-plugin-react-hooks(exhaustive-deps)".to_string();
     }
     if let Some(rest) = config_key.strip_prefix("react/") {
         return format!("eslint-plugin-react({rest})");
@@ -103,6 +109,10 @@ mod tests {
         assert_eq!(
             config_key_to_oxlint_code("react/jsx-curly-brace-presence"),
             "eslint-plugin-react(jsx-curly-brace-presence)"
+        );
+        assert_eq!(
+            config_key_to_oxlint_code("react/exhaustive-deps"),
+            "eslint-plugin-react-hooks(exhaustive-deps)"
         );
         assert_eq!(
             config_key_to_oxlint_code("jest/no-export"),
