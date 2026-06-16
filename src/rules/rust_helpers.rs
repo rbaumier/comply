@@ -21,7 +21,7 @@ pub fn is_inside_async_fn(node: Node, source: &[u8]) -> bool {
     let mut cur = node;
     while let Some(parent) = cur.parent() {
         if parent.kind() == "function_item" {
-            return fn_modifiers_contain_async(parent, source);
+            return fn_is_async(parent, source);
         }
         cur = parent;
     }
@@ -32,7 +32,7 @@ pub fn is_inside_async_fn(node: Node, source: &[u8]) -> bool {
 /// `async` keyword. Scans the modifiers node only, so raw identifiers
 /// (`fn r#async()`), parameter types, and return types named "async"
 /// can't trip the check.
-fn fn_modifiers_contain_async(function_item: Node, source: &[u8]) -> bool {
+pub fn fn_is_async(function_item: Node, source: &[u8]) -> bool {
     let mut cursor = function_item.walk();
     for child in function_item.children(&mut cursor) {
         if child.kind() == "function_modifiers" {
@@ -383,6 +383,45 @@ pub fn enclosing_fn(node: Node) -> Option<Node> {
         cur = parent;
     }
     None
+}
+
+/// True if `item` carries the outer attribute named `attr_path` (e.g.
+/// `"track_caller"`) as a preceding `attribute_item` sibling.
+///
+/// In tree-sitter-rust, outer attributes on an item appear as `attribute_item`
+/// nodes immediately before the item they decorate, optionally separated by
+/// `line_comment`/`block_comment` siblings; those comment siblings are skipped
+/// so a comment between the attribute and the item does not defeat the match.
+/// The match keys on the attribute's last path segment bounded by `[`/`::` on
+/// the left (`#[track_caller]`, `#[core::track_caller]`), so an unrelated
+/// attribute whose name merely ends in the segment (`#[my_track_caller]`) does
+/// not match.
+pub fn has_outer_attribute(item: Node, source: &[u8], attr_path: &str) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "line_comment" | "block_comment" => {}
+            "attribute_item" => {
+                if let Ok(text) = s.utf8_text(source)
+                    && attr_names_path(text, attr_path)
+                {
+                    return true;
+                }
+            }
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+/// True if an `attribute_item`'s source text names `attr_path` as its last path
+/// segment, matched on the bracketed token so `#[track_caller]` and
+/// `#[core::track_caller]` both count. The segment is bounded by `[`/`::` on the
+/// left so `#[my_track_caller]` does not match.
+fn attr_names_path(attr_text: &str, attr_path: &str) -> bool {
+    attr_text.contains(&format!("[{attr_path}]"))
+        || attr_text.contains(&format!("::{attr_path}]"))
 }
 
 /// True if any string, raw-string, or byte-string literal in the subtree rooted
@@ -828,6 +867,53 @@ mod tests {
         let call = first_call_expression(tree.root_node())
             .expect("snippet should contain a call_expression");
         assert!(enclosing_fn(call).is_none());
+    }
+
+    #[test]
+    fn has_outer_attribute_matches_path_segment_only() {
+        let cases = [
+            ("#[track_caller]\nfn f() {}", "track_caller", true),
+            ("#[core::track_caller]\nfn f() {}", "track_caller", true),
+            ("#[inline]\n#[track_caller]\nfn f() {}", "track_caller", true),
+            // A comment between the attribute and the item must not defeat it.
+            ("#[track_caller]\n// note\nfn f() {}", "track_caller", true),
+            // No such attribute.
+            ("#[inline]\nfn f() {}", "track_caller", false),
+            ("fn f() {}", "track_caller", false),
+            // A different attribute whose name merely ends in the path.
+            ("#[my_track_caller]\nfn f() {}", "track_caller", false),
+        ];
+        for (src, attr, expected) in cases {
+            let tree = parse(src);
+            let item = first_function_item(tree.root_node())
+                .expect("snippet should contain a function_item");
+            assert_eq!(
+                has_outer_attribute(item, src.as_bytes(), attr),
+                expected,
+                "has_outer_attribute mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn fn_is_async_distinguishes_async_from_sync() {
+        let cases = [
+            ("async fn f() {}", true),
+            ("fn f() {}", false),
+            ("const fn f() {}", false),
+            // Raw identifier named `async` is a sync fn.
+            ("fn r#async() {}", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let item = first_function_item(tree.root_node())
+                .expect("snippet should contain a function_item");
+            assert_eq!(
+                fn_is_async(item, src.as_bytes()),
+                expected,
+                "fn_is_async mismatch for `{src}`"
+            );
+        }
     }
 
     #[test]
