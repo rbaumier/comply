@@ -32,6 +32,13 @@ impl OxcCheck for Check {
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
 
+        // tsd type-test files deliberately use wrapper types as assertion
+        // subjects (e.g. `declare const number: Number` to prove `Jsonify`
+        // turns it into `number`), so replacing them would change the test.
+        if ctx.file.is_type_test_file() {
+            return diagnostics;
+        }
+
         for node in semantic.nodes().iter() {
             let AstKind::TSTypeReference(type_ref) = node.kind() else {
                 continue;
@@ -90,6 +97,17 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
+    fn run_at(source: &str, path: &str) -> Vec<Diagnostic> {
+        let project = crate::project::default_static_project_ctx();
+        let file = crate::rules::file_ctx::FileCtx::build(
+            std::path::Path::new(path),
+            source,
+            crate::files::Language::TypeScript,
+            project,
+        );
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, path, project, &file)
+    }
+
     #[test]
     fn flags_string_type() {
         let d = run_on("const x: String = 'hello';");
@@ -121,5 +139,22 @@ mod tests {
     #[test]
     fn ignores_runtime_usage() {
         assert!(run_on("const x = String(y);").is_empty());
+    }
+
+    #[test]
+    fn exempts_tsd_type_test_file_issue3324() {
+        // type-fest test-d/jsonify.ts: wrapper types are the assertion subjects
+        // (proving `Jsonify<Number>` → `number`), so replacing them would
+        // change the test.
+        let src = "declare const number: Number;\n\
+                   declare const string: String;\n\
+                   declare const boolean: Boolean;\n";
+        assert!(run_at(src, "test-d/jsonify.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_wrapper_type_in_production_issue3324() {
+        // The same wrapper types in a production src/ file must still be flagged.
+        assert_eq!(run_at("declare const number: Number;", "src/widget.ts").len(), 1);
     }
 }

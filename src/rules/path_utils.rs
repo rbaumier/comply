@@ -544,6 +544,33 @@ pub fn has_type_probe_infix(path: &Path) -> bool {
         .is_some_and(|name| name.to_ascii_lowercase().contains(".tp."))
 }
 
+/// Directory-segment conventions for tsd/dtslint type-test files — matched as
+/// exact path segments (between `/` delimiters). These directories hold files
+/// whose sole purpose is asserting type relationships with `expectType` /
+/// `expectAssignable` and friends, so the types under test are deliberately the
+/// subjects of assertions.
+const TYPE_TEST_DIR_SEGMENTS: &[&str] = &[
+    "test-d",
+    "test-tsd",
+    "dtslint",
+    "spec-dtslint",
+    "__tests_dts__",
+];
+
+/// True when `path` is a tsd/dtslint type-test file: one under a type-test
+/// directory ([`TYPE_TEST_DIR_SEGMENTS`]) or carrying a `.test-d.`/`.tp.`
+/// filename infix. A type-test file exists to assert type relationships
+/// (`expectType<number>(jsonify(value))`, `ConditionalSimplify<T, Function>`),
+/// so the banned wrapper/`Function` types it names are deliberately the subjects
+/// or inputs of those assertions — replacing them would change what is tested.
+/// Narrower than `in_test_dir`: it does NOT cover ordinary `.test.`/`.spec.`
+/// unit tests, where the wrapper-/`Function`-type bans still apply.
+pub fn is_type_test_file(path: &Path) -> bool {
+    has_test_d_infix(path)
+        || has_type_probe_infix(path)
+        || has_path_segment(path, TYPE_TEST_DIR_SEGMENTS)
+}
+
 /// True when the file name carries a `.actual.` or `.expected.` infix (e.g.
 /// `theme.actual.js`, `color-imports.expected.ts`), the jscodeshift/babel
 /// codemod snapshot convention. These files are input/output fixture snapshots
@@ -1116,6 +1143,30 @@ mod aux_path_tests {
         assert!(!is_sample_dir_path(&PathBuf::from("src/myexamples/foo.ts")));
         // Segment (not substring) match — `demonstration` must not match `demo`.
         assert!(!is_sample_dir_path(&PathBuf::from("src/demonstration/index.ts")));
+    }
+
+    #[test]
+    fn type_test_file_covers_tsd_conventions_issue3324() {
+        // The issue's exact reproducer paths.
+        assert!(is_type_test_file(&PathBuf::from("test-d/jsonify.ts")));
+        assert!(is_type_test_file(&PathBuf::from("test-d/conditional-simplify.ts")));
+        assert!(is_type_test_file(&PathBuf::from("test-d/structured-cloneable.ts")));
+        // Other tsd/dtslint directory and filename conventions.
+        assert!(is_type_test_file(&PathBuf::from("src/test-d/types.ts")));
+        assert!(is_type_test_file(&PathBuf::from("test-tsd/common.ts")));
+        assert!(is_type_test_file(&PathBuf::from("dtslint/Array.ts")));
+        assert!(is_type_test_file(&PathBuf::from("spec-dtslint/index.d.ts")));
+        assert!(is_type_test_file(&PathBuf::from("__tests_dts__/config.ts")));
+        assert!(is_type_test_file(&PathBuf::from("src/schema.test-d.ts")));
+        assert!(is_type_test_file(&PathBuf::from("src/addDays/test.tp.ts")));
+        // Narrower than `in_test_dir`: ordinary unit-test files are NOT type
+        // tests, so the wrapper-/`Function`-type bans still apply to them.
+        assert!(!is_type_test_file(&PathBuf::from("src/widget.test.ts")));
+        assert!(!is_type_test_file(&PathBuf::from("src/widget.spec.ts")));
+        assert!(!is_type_test_file(&PathBuf::from("__tests__/widget.ts")));
+        assert!(!is_type_test_file(&PathBuf::from("src/widget.ts")));
+        // Segment (not substring) match — `test-data/` is not a type-test dir.
+        assert!(!is_type_test_file(&PathBuf::from("test-data/widget.ts")));
     }
 
     #[test]
