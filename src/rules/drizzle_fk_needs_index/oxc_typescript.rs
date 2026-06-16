@@ -10,7 +10,11 @@ use oxc_ast::ast::{
 use std::collections::HashSet;
 use std::sync::Arc;
 
-const TABLE_CTORS: &[&str] = &["pgTable", "mysqlTable", "sqliteTable"];
+/// The diagnostic only holds for PostgreSQL. MySQL InnoDB auto-creates an
+/// index on FK referencing columns when no suitable index exists, and SQLite
+/// does not benefit from the same FK-index performance argument — so the
+/// "FK columns are not auto-indexed" advice is restricted to `pgTable`.
+const PG_TABLE_CTOR: &str = "pgTable";
 
 pub struct Check;
 
@@ -32,7 +36,7 @@ impl OxcCheck for Check {
         let Expression::Identifier(id) = &call.callee else {
             return;
         };
-        if !TABLE_CTORS.contains(&id.name.as_str()) {
+        if id.name.as_str() != PG_TABLE_CTOR {
             return;
         }
 
