@@ -12,11 +12,6 @@ const SCHEMA_INDICATORS: &[&str] = &["z", "createRoute", "openapi", "schema", "z
 
 pub struct Check;
 
-fn is_test_file(path: &std::path::Path) -> bool {
-    let s = path.to_string_lossy();
-    s.contains(".test.") || s.contains(".spec.") || s.contains("__tests__")
-}
-
 /// True when `arg` is a string literal whose value begins with `/`.
 /// Route registrations always take a path-string as the first argument;
 /// `Headers#get("name")`, `Map#get(key)`, `URLSearchParams#get("q")` do not.
@@ -71,11 +66,6 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        // Test files frequently call non-route `.get(...)` (Headers, Map, etc.)
-        // and don't define route schemas — exclude them.
-        if is_test_file(ctx.path) {
-            return Vec::new();
-        }
         // Quick check: if any schema indicator appears in source, skip.
         if SCHEMA_INDICATORS.iter().any(|s| ctx.source_contains(s)) {
             return Vec::new();
@@ -179,16 +169,33 @@ app.get("/users", zodValidator("query", querySchema), (c) => { return c.json([])
     }
 
     #[test]
-    fn ignores_headers_get_in_test_file() {
+    fn ignores_headers_get_non_route() {
         // Regression for #87 — `Response#headers.get("name")` is the
-        // Web Platform `Headers.get()` method, not a route registration.
-        // Test files routinely call it on response objects from
-        // `app.handle(new Request(...))` and don't define route schemas.
+        // Web Platform `Headers.get()` method, not a route registration: the
+        // argument does not start with `/`, so it is never a route.
         let src = r#"
 const res = await app.handle(new Request("http://example.test/"));
 const exposeHeaders = res.headers.get("access-control-expose-headers");
 "#;
-        assert!(run_on(src, "src/api/middleware/composition.test.ts").is_empty());
+        assert!(run_on(src, "src/api/middleware/composition.ts").is_empty());
+    }
+
+    #[test]
+    fn skips_route_in_integration_helpers_issue3389() {
+        // Issue #3389 — ephemeral Express servers under a top-level
+        // `integration/helpers/` directory are Playwright test infra, never
+        // deployed. The engine gate (`skip_in_test_dir` + `FileCtx::in_test_dir`)
+        // exempts them; the raw check still fires on the same code in src/.
+        let src = r#"const app = express(); app.get("/users", (req, res) => res.json([]));"#;
+        assert_eq!(run_on(src, "src/api/users.ts").len(), 1);
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "integration/helpers/rsc-vite/server.js"
+            )
+            .is_empty()
+        );
     }
 
     #[test]
