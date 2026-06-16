@@ -32,6 +32,13 @@ crate::ast_check! { on ["while_expression"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    // Exempt loops in a const-evaluated context (`const`/`static` initializer
+    // or `const fn` body): `for` desugars to `IntoIterator::into_iter`, which
+    // is not `const`, so a manual index loop is the only valid iteration there.
+    if crate::rules::rust_helpers::is_in_const_eval_context(node, source) {
+        return;
+    }
+
     // Exempt loops that remove elements from the indexed collection during
     // traversal: `remove(i)`/`swap_remove(i)` shifts the remaining elements,
     // so the index is advanced conditionally and no `for`/iterator rewrite is
@@ -279,6 +286,58 @@ mod tests {
         let src = "fn f(v: &[i32], sum: &mut i32) { \
                    let mut i = 0; \
                    while i < v.len() { *sum += v[i]; i += 1; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_while_index_loop_in_const_initializer_issue_3266() {
+        // helix match_brackets.rs: a `for` loop is forbidden in const eval, so
+        // the manual while-index loop is the only valid iteration.
+        let src = "const PAIRS: [(char, char); 4] = { \
+                   let mut pairs = [(' ', ' '); 4]; \
+                   let mut idx = 0; \
+                   while idx < 4 { pairs[idx] = (' ', ' '); idx += 1; } \
+                   pairs };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_while_index_loop_in_static_initializer() {
+        let src = "static TABLE: [u8; 4] = { \
+                   let mut a = [0u8; 4]; \
+                   let mut i = 0; \
+                   while i < 4 { a[i] = i as u8; i += 1; } \
+                   a };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_while_index_loop_in_const_fn() {
+        let src = "const fn build() -> u8 { \
+                   let mut i = 0; let mut s = 0; \
+                   while i < 4 { s += i; i += 1; } \
+                   s }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_while_index_loop_in_runtime_fn() {
+        // A normal runtime `fn` re-enables the lint: the walk stops at its body.
+        let src = "fn build(xs: &[i32]) { \
+                   let mut i = 0; \
+                   while i < xs.len() { use_it(xs[i]); i += 1; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_runtime_loop_in_module_alongside_const() {
+        // The runtime loop is still flagged even when a `const` sits nearby:
+        // the const-eval walk stops at the enclosing runtime `fn` boundary.
+        let src = "mod m { \
+                   const N: usize = 4; \
+                   fn build(xs: &[i32]) { \
+                   let mut i = 0; \
+                   while i < xs.len() { use_it(xs[i]); i += 1; } } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
