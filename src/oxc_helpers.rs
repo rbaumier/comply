@@ -10,7 +10,7 @@
 use std::cell::RefCell;
 use std::path::Path;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
@@ -183,6 +183,161 @@ pub fn source_contains(source: &str, needle: &str) -> bool {
         c.hits.insert(needle.to_string(), hit);
         hit
     })
+}
+
+/// Collect every property key destructured from a `<expr>.groups` object
+/// pattern anywhere in `source`, e.g. `code`/`openingFence` from
+/// `const {code, openingFence} = match.groups ?? {}`.
+///
+/// A regex's named capturing groups are consumed not only through direct
+/// property access (`match.groups.name`) but also through object
+/// destructuring of the `.groups` object. This returns the destructured
+/// keys so callers can treat them as references.
+///
+/// Conservative (zero false negatives): keys from any `.groups` destructure
+/// are returned without tying them back to a specific regex, since the
+/// source expression of the `.groups` access isn't resolved to its
+/// originating pattern. For a renamed binding (`{ year: y }`) the KEY
+/// (`year`, the group name) is collected, not the local binding.
+#[must_use]
+pub fn groups_destructure_keys(source: &str) -> FxHashSet<String> {
+    let mut keys = FxHashSet::default();
+    let bytes = source.as_bytes();
+    let needle = b".groups";
+    let mut search_from = 0;
+    while let Some(rel) = memchr::memmem::find(&bytes[search_from..], needle) {
+        let dot = search_from + rel;
+        let after = dot + needle.len();
+        search_from = after;
+        // Require `.groups` to be a member access, not a prefix of a longer
+        // identifier such as `.groupsCount`.
+        if bytes.get(after).is_some_and(|&b| is_ident_byte(b)) {
+            continue;
+        }
+        // The destructuring shape is `{ ... } = <expr>.groups`, so the
+        // object pattern sits to the LEFT of the `<expr>.groups` access.
+        let Some(brace_close) = object_pattern_before_groups(bytes, dot) else {
+            continue;
+        };
+        let Some(brace_open) = matching_open_brace(bytes, brace_close) else {
+            continue;
+        };
+        collect_destructured_keys(&source[brace_open + 1..brace_close], &mut keys);
+    }
+    keys
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
+}
+
+/// Given the byte offset of the `.` in a `.groups` access, find the closing
+/// `}` of the object pattern that destructures it, i.e. the `}` in
+/// `{ ... } = <expr>.groups`. Returns `None` if the access isn't the RHS of
+/// a destructuring assignment.
+fn object_pattern_before_groups(bytes: &[u8], groups_dot: usize) -> Option<usize> {
+    let mut i = groups_dot;
+    // Walk left over the source expression `<expr>` (`match`, `re.exec(s)?`,
+    // …) back to the top-level (`depth == 0`) `=` that assigns it.
+    let mut depth: i32 = 0;
+    while i > 0 {
+        i -= 1;
+        match bytes[i] {
+            b')' | b']' | b'}' => depth += 1,
+            b'(' | b'[' | b'{' if depth > 0 => depth -= 1,
+            b'{' | b';' if depth == 0 => return None,
+            b'=' if depth == 0 => {
+                // Reject `==`, `===`, `<=`, `>=`, `!=`, `=>`.
+                let prev = bytes[..i].iter().rev().find(|&&b| !b.is_ascii_whitespace());
+                if matches!(prev, Some(b'=' | b'!' | b'<' | b'>')) {
+                    return None;
+                }
+                if bytes.get(i + 1) == Some(&b'>') {
+                    return None;
+                }
+                // To the left of `=`, skipping whitespace, must be `}`.
+                let mut j = i;
+                while j > 0 {
+                    j -= 1;
+                    if bytes[j].is_ascii_whitespace() {
+                        continue;
+                    }
+                    return (bytes[j] == b'}').then_some(j);
+                }
+                return None;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Find the `{` matching the closing `}` at `brace_close`, scanning left and
+/// honouring nested braces.
+fn matching_open_brace(bytes: &[u8], brace_close: usize) -> Option<usize> {
+    let mut depth: i32 = 0;
+    let mut i = brace_close;
+    loop {
+        match bytes[i] {
+            b'}' => depth += 1,
+            b'{' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        if i == 0 {
+            return None;
+        }
+        i -= 1;
+    }
+}
+
+/// Parse the destructured property keys out of an object-pattern body (the
+/// text between `{` and `}`). For shorthand `code` the key is `code`; for
+/// renamed `code: c` the key is `code`. Skips rest (`...x`) and computed
+/// (`[expr]`) properties, and ignores default values (`= …`).
+fn collect_destructured_keys(pattern_body: &str, keys: &mut FxHashSet<String>) {
+    for segment in split_top_level_commas(pattern_body) {
+        let segment = segment.trim();
+        if segment.is_empty() || segment.starts_with("...") || segment.starts_with('[') {
+            continue;
+        }
+        // The key is the identifier before `:` (renamed) or `=` (default),
+        // whichever comes first.
+        let key_part = segment.split([':', '=']).next().unwrap_or(segment).trim();
+        let key: String = key_part
+            .chars()
+            .take_while(|&c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+            .collect();
+        if !key.is_empty() {
+            keys.insert(key);
+        }
+    }
+}
+
+/// Split an object-pattern body on commas that sit at bracket depth 0, so a
+/// nested pattern (`{ a: { b } }`) or default object (`= {}`) doesn't split
+/// mid-property.
+fn split_top_level_commas(body: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let mut depth: i32 = 0;
+    let mut start = 0;
+    for (i, b) in body.bytes().enumerate() {
+        match b {
+            b'{' | b'[' | b'(' => depth += 1,
+            b'}' | b']' | b')' => depth -= 1,
+            b',' if depth == 0 => {
+                segments.push(&body[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    segments.push(&body[start..]);
+    segments
 }
 
 /// HTTP/WebSocket protocol fields whose digest algorithm is fixed by an RFC.
@@ -2033,5 +2188,57 @@ mod oxc_helpers_tests {
         with_semantic(src, SourceType::ts(), |sem| {
             assert!(!has_ts_expect_error_above(sem.comments(), src, type_dup_start(src)));
         });
+    }
+
+    fn destructured_keys(source: &str) -> Vec<String> {
+        let mut keys: Vec<String> = super::groups_destructure_keys(source).into_iter().collect();
+        keys.sort();
+        keys
+    }
+
+    #[test]
+    fn groups_destructure_collects_shorthand_keys() {
+        assert_eq!(
+            destructured_keys("const {code, openingFence, indent} = match.groups ?? {};"),
+            vec!["code", "indent", "openingFence"]
+        );
+    }
+
+    #[test]
+    fn groups_destructure_collects_from_exec_optional_chain() {
+        assert_eq!(
+            destructured_keys("const { year } = /(?<year>\\d{4})/.exec(s)?.groups ?? {};"),
+            vec!["year"]
+        );
+    }
+
+    #[test]
+    fn groups_destructure_collects_renamed_key_not_binding() {
+        assert_eq!(destructured_keys("const { year: y } = m.groups;"), vec!["year"]);
+    }
+
+    #[test]
+    fn groups_destructure_collects_optional_chained() {
+        assert_eq!(destructured_keys("const { a, b } = m?.groups;"), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn groups_destructure_skips_rest_property() {
+        assert_eq!(destructured_keys("const { a, ...rest } = m.groups;"), vec!["a"]);
+    }
+
+    #[test]
+    fn groups_destructure_ignores_non_groups_source() {
+        assert!(destructured_keys("const { a, b } = obj.fields;").is_empty());
+    }
+
+    #[test]
+    fn groups_destructure_ignores_groups_prefix_identifier() {
+        assert!(destructured_keys("const { a } = obj.groupsCount;").is_empty());
+    }
+
+    #[test]
+    fn groups_destructure_ignores_direct_property_access() {
+        assert!(destructured_keys("const x = match.groups.year;").is_empty());
     }
 }
