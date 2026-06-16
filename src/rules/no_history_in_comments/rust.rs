@@ -72,4 +72,29 @@ mod tests {
     fn allows_doc_comment_with_was() {
         assert!(run("/// Track which source stream the value was received from\nfn f() {}").is_empty());
     }
+
+    #[test]
+    fn allows_runtime_filesystem_condition() {
+        // Regression for issue #3242: "was deleted" with an indefinite/domain
+        // subject describes a runtime filesystem event, not code history.
+        assert!(run("// some file was deleted\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn flags_ambiguous_verb_with_code_subject() {
+        assert_eq!(run("// the validateUser function was removed\nfn f() {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_ambiguous_verb_with_camelcase_subject() {
+        // A bare camelCase/PascalCase identifier is a code artifact even without
+        // an artifact noun like "function".
+        assert_eq!(run("// validateUser was removed\nfn f() {}").len(), 1);
+        assert_eq!(run("// MyComponent was renamed\nfn f() {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_in_favor_of_marker() {
+        assert_eq!(run("// The old cache layer was removed in favor of Redis\nfn f() {}").len(), 1);
+    }
 }
