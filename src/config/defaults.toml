@@ -415,3 +415,12 @@ route_boundary_patterns = [
 # ---------------------------------------------------------------
 [rules.no-unknown-pseudo-class]
 ignore = []
+
+# ---------------------------------------------------------------
+# no-unknown-pseudo-element
+# Unknown pseudo-element names to allow (case-insensitive), e.g.
+# framework-specific custom pseudo-elements. Empty by default.
+# Example: ignore = ["custom-pseudo-element"]
+# ---------------------------------------------------------------
+[rules.no-unknown-pseudo-element]
+ignore = []
