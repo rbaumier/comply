@@ -163,6 +163,26 @@ fn is_console_call_expr(call: &oxc_ast::ast::CallExpression) -> bool {
     false
 }
 
+/// Log-level method names of the conventional `logger.<level>(...)` shape.
+const LOGGER_LEVELS: &[&str] = &["log", "warn", "error", "debug", "info", "verbose", "trace"];
+
+/// True when `call` is a `logger.<level>(...)` invocation, where the receiver
+/// is `logger` directly (`logger.warn(...)`) or a `.logger` member access
+/// (`this.logger.warn(...)`, `someService.logger.warn(...)`).
+fn is_logger_call_expr(call: &oxc_ast::ast::CallExpression) -> bool {
+    let Expression::StaticMemberExpression(member) = &call.callee else { return false };
+    if !LOGGER_LEVELS.contains(&member.property.name.as_str()) {
+        return false;
+    }
+    match &member.object {
+        Expression::Identifier(obj) => obj.name.as_str() == "logger",
+        Expression::StaticMemberExpression(receiver) => {
+            receiver.property.name.as_str() == "logger"
+        }
+        _ => false,
+    }
+}
+
 /// True when `var_start` is the span-start of a `VariableDeclaration` that is
 /// immediately followed by a `ThrowStatement` in the same statement list.
 fn is_var_decl_followed_by_throw(stmts: &[Statement], var_start: u32) -> bool {
@@ -176,7 +196,7 @@ fn is_var_decl_followed_by_throw(stmts: &[Statement], var_start: u32) -> bool {
 
 /// True when the join sits in a developer-only context:
 /// - direct ancestor is a `throw` statement
-/// - direct ancestor is a `console.*` call
+/// - direct ancestor is a `console.*` or `logger.<level>` call
 /// - result is assigned to a variable immediately before a `throw` statement
 fn is_developer_facing_join<'a>(
     node: &oxc_semantic::AstNode<'a>,
@@ -187,7 +207,11 @@ fn is_developer_facing_join<'a>(
     for ancestor in semantic.nodes().ancestors(node.id()) {
         match ancestor.kind() {
             AstKind::ThrowStatement(_) => return true,
-            AstKind::CallExpression(call) if is_console_call_expr(call) => return true,
+            AstKind::CallExpression(call)
+                if is_console_call_expr(call) || is_logger_call_expr(call) =>
+            {
+                return true
+            }
             AstKind::VariableDeclaration(decl) => {
                 pending_var_decl_start = Some(decl.span.start);
             }
@@ -489,6 +513,43 @@ mod tests {
             console.log(`Invalid rows: ${rows.map((r) => r.id).join(", ")}`);
         "#;
         assert!(run(src).is_empty());
+    }
+
+    // #3993 — FP on developer-facing log sinks: `logger.<level>(...)` output is
+    // operator-facing diagnostic text, never localized, like the `console.*` case.
+
+    #[test]
+    fn no_fp_join_in_this_logger_warn_issue_3993() {
+        let src = r#"
+            this.logger.warn(`Failed commands: ${failures.join(', ')}`);
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_join_in_bare_logger_log_issue_3993() {
+        let src = r#"
+            logger.log(`x ${a.join(', ')}`);
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_join_in_service_logger_error_issue_3993() {
+        let src = r#"
+            someService.logger.error(`${xs.join(', ')}`);
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_join_in_non_logger_sink_issue_3993() {
+        // Receiver is `notifier`, not `logger`: exemption is keyed on the
+        // `logger` receiver, not just the method name — still user-facing.
+        let src = r#"
+            this.notifier.warn(`${xs.join(', ')}`);
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
