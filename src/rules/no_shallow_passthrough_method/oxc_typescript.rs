@@ -41,10 +41,25 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::MethodDefinition(method) = node.kind() else { return };
+
+        // A method in a class with a heritage clause (`extends` or `implements`)
+        // may be a polymorphic override that the superclass invokes by name, so
+        // it cannot be inlined (the call sites live in the base class) or removed
+        // (that reverts to base behaviour). This backend cannot resolve the base
+        // class to prove the method is not such an override, so it stays
+        // conservative and skips the whole class.
+        for ancestor in semantic.nodes().ancestors(node.id()) {
+            if let AstKind::Class(class) = ancestor.kind() {
+                if class.super_class.is_some() || !class.implements.is_empty() {
+                    return;
+                }
+                break;
+            }
+        }
 
         // A decorated method carries external significance beyond its body: the
         // decorator binds it to a framework (e.g. NestJS `@MessagePattern` /
@@ -154,6 +169,33 @@ mod tests {
 
         let not_chain = "class QB { whereNotExists(callback) { return this._not(true).whereExists(callback); } }";
         assert!(run(not_chain).is_empty(), "expected no diagnostics, got: {:?}", run(not_chain));
+    }
+
+    #[test]
+    fn allows_override_in_class_with_heritage_clause() {
+        // Regression for #3921: a method in a class that `extends` or
+        // `implements` may be a polymorphic override the superclass invokes by
+        // name. It cannot be inlined (call sites live in the base) or removed
+        // (reverts to base behaviour), so the class is skipped entirely.
+        let extends = "class C extends Base { foo(x) { return this.bar(x); } }";
+        assert!(run(extends).is_empty(), "expected no diagnostics, got: {:?}", run(extends));
+
+        let implements = "class C implements I { foo(x) { return this.bar(x); } }";
+        assert!(run(implements).is_empty(), "expected no diagnostics, got: {:?}", run(implements));
+
+        // The babel ESTree mixin shape: the override name deliberately differs
+        // from the callee because it is an override hook, not a rename alias.
+        let babel_mixin = "class M extends superClass implements Parser { parseStringLiteral(v) { return this.estreeParseLiteral(v); } }";
+        assert!(run(babel_mixin).is_empty(), "expected no diagnostics, got: {:?}", run(babel_mixin));
+    }
+
+    #[test]
+    fn flags_passthrough_in_standalone_class() {
+        // A standalone class (no `extends`, no `implements`) has no base class to
+        // invoke the method polymorphically, so a shallow pass-through is still a
+        // deletable wrapper and must flag.
+        let src = "class C { foo(x) { return this.bar(x); } }";
+        assert_eq!(run(src).len(), 1, "expected one diagnostic, got: {:?}", run(src));
     }
 
     #[test]
