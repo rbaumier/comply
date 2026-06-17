@@ -265,6 +265,13 @@ pub struct ImportIndex {
     /// submodule file in its module tree, which `mod foo;` (unlike a `use`
     /// import) does not record as an import edge.
     mod_edges: HashMap<PathBuf, Vec<PathBuf>>,
+    /// `true` when any indexed TS/JS/TSX file declares a class method named
+    /// `removeChild`. Signals the project owns a tree type whose nodes are
+    /// detached via `parent.removeChild(child)` rather than the DOM `Node` API,
+    /// so `prefer-dom-node-remove` must not suggest the DOM-only
+    /// `child.remove()` anywhere in the project (the call site and the class
+    /// definition routinely live in different files).
+    defines_remove_child_method: bool,
 }
 
 impl ImportIndex {
@@ -348,7 +355,9 @@ impl ImportIndex {
             .collect();
 
         let mut dynamic_import_dirs: Vec<PathBuf> = Vec::new();
+        let mut defines_remove_child_method = false;
         for (path, extract, dyn_dirs) in resolved {
+            defines_remove_child_method |= extract.defines_remove_child;
             exports.insert(path.clone(), extract.exports);
             imports.insert(path.clone(), extract.imports);
             file_calls.insert(path, extract.calls);
@@ -511,7 +520,15 @@ impl ImportIndex {
             reexport_edges,
             dynamic_import_dirs,
             mod_edges,
+            defines_remove_child_method,
         }
+    }
+
+    /// `true` when any indexed file declares a class method named `removeChild`.
+    /// See [`ImportIndex::defines_remove_child_method`].
+    #[must_use]
+    pub fn project_defines_remove_child_method(&self) -> bool {
+        self.defines_remove_child_method
     }
 
     /// Exports declared in `path`, or empty slice if the file isn't indexed.
@@ -1153,6 +1170,12 @@ struct FileExtract {
     /// import, so reachability needs these to follow the module tree from a
     /// crate root down to `mod.rs` and submodule files.
     mod_decls: Vec<String>,
+    /// `true` when this file declares a class method named `removeChild`. A
+    /// user-defined `removeChild` means the project has its own tree type whose
+    /// nodes are removed via `parent.removeChild(child)`, not the DOM `Node`
+    /// API — so `prefer-dom-node-remove` (which suggests the DOM-only
+    /// `child.remove()`) must not fire anywhere in the project.
+    defines_remove_child: bool,
 }
 
 /// A `new X(...)` / `X(...)` site captured during per-file extract. The
@@ -1186,6 +1209,7 @@ fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileE
                 calls: Vec::new(),
                 dynamic_dirs: Vec::new(),
                 mod_decls,
+                defines_remove_child: false,
             },
         ));
     }
@@ -1298,6 +1322,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
             calls,
             dynamic_dirs,
             mod_decls: Vec::new(),
+            defines_remove_child: false,
         },
     ))
 }
@@ -2141,6 +2166,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
     let mut imports = Vec::new();
     let mut calls = Vec::new();
     let mut dynamic_dirs = Vec::new();
+    let mut defines_remove_child = false;
     let lines = oxc_line_starts(source);
 
     // Pre-order over `nodes().iter()` (NodeId order == SemanticBuilder visit
@@ -2211,6 +2237,20 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
             AstKind::ImportExpression(import_expr) => {
                 oxc_extract_dynamic_import(&lines, import_expr, &mut imports, &mut dynamic_dirs);
             }
+            // A class method named `removeChild` marks a project-defined tree
+            // type (HTML/XML AST, vdom, scene graph, …). See
+            // `FileExtract::defines_remove_child`.
+            AstKind::MethodDefinition(method) => {
+                use oxc_ast::ast::PropertyKey;
+                let is_remove_child = match &method.key {
+                    PropertyKey::StaticIdentifier(id) => id.name.as_str() == "removeChild",
+                    PropertyKey::StringLiteral(s) => s.value.as_str() == "removeChild",
+                    _ => false,
+                };
+                if is_remove_child {
+                    defines_remove_child = true;
+                }
+            }
             _ => {}
         }
     }
@@ -2221,6 +2261,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
         calls,
         dynamic_dirs,
         mod_decls: Vec::new(),
+        defines_remove_child,
     })
 }
 
@@ -5475,10 +5516,21 @@ mod tests {
         let mut imports = Vec::new();
         let mut calls = Vec::new();
         let mut dynamic_dirs = Vec::new();
+        let mut defines_remove_child = false;
         walk_tree(&tree, |node| match node.kind() {
             "import_statement" => extract_import(node, bytes, &mut imports),
             "export_statement" => extract_export(node, bytes, &mut exports),
             "new_expression" => extract_call(node, bytes, CallKind::New, &mut calls),
+            "method_definition" => {
+                if node
+                    .child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(bytes).ok())
+                    .map(|n| n.trim_matches(['\'', '"', '`']))
+                    == Some("removeChild")
+                {
+                    defines_remove_child = true;
+                }
+            }
             "call_expression" => {
                 if node
                     .child_by_field_name("function")
@@ -5498,6 +5550,7 @@ mod tests {
             calls,
             dynamic_dirs,
             mod_decls: Vec::new(),
+            defines_remove_child,
         }
     }
 
@@ -5552,6 +5605,9 @@ mod tests {
         "export function destructured({ a, b }, [c], ...rest) { return a; }",
         "export class Klass {}",
         "export abstract class AbstractK {}",
+        // a class method named `removeChild` sets `defines_remove_child` on both
+        // extractors (custom tree type — `prefer-dom-node-remove` must not fire)
+        "export class Node { removeChild(c) { this.children.splice(0, 1); } }",
         "export const single = 1;",
         "export const a1 = 1, b1 = 2, c1 = 3;",
         "export let mutable = 0;",
