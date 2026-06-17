@@ -112,8 +112,14 @@ fn is_in_return_type_position(
                 current_id = parent_id;
                 continue;
             }
-            AstKind::FormalParameter(_) | AstKind::FormalParameters(_) => {
-                // We're in a parameter type, not return type
+            AstKind::FormalParameter(_)
+            | AstKind::FormalParameters(_)
+            | AstKind::VariableDeclarator(_)
+            | AstKind::VariableDeclaration(_)
+            | AstKind::PropertyDefinition(_)
+            | AstKind::TSPropertySignature(_) => {
+                // Binding or property type annotation (parameter, local `let`/`const`,
+                // class field, interface property), not a function return type.
                 return false;
             }
             _ => {
@@ -343,6 +349,34 @@ mod tests {
     #[test]
     fn flags_concrete_function_body_mixing_returns() {
         let src = "function f(c: boolean): Promise<number> | number { if (c) return 1; return Promise.resolve(2); }";
+        assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_local_let_variable_annotation_mixing_promise_and_undefined() {
+        // The union is the type of a local `let` binding inside an async
+        // function, not the function's return type (issue #3902).
+        let src = "async function run(): Promise<void> { let releasePrerequisite: Promise<unknown> | undefined; releasePrerequisite = Promise.resolve(1); await releasePrerequisite; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_class_field_annotation_mixing_promise_and_non_promise() {
+        let src = "class C { x: number | Promise<number>; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_top_level_const_annotation_mixing_promise_and_non_promise() {
+        let src = "const y: string | Promise<string> = foo();";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_function_return_type_mixing_sync_and_promise() {
+        // Genuine mixed sync/async RETURN type — must still flag (issue #3902
+        // must not over-suppress).
+        let src = "function f(cond: boolean): string | Promise<string> { return cond ? \"x\" : Promise.resolve(\"y\"); }";
         assert!(!run(src).is_empty());
     }
 
