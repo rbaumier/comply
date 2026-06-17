@@ -53,6 +53,7 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
             && let Some(body) = for_node.child_by_field_name("body")
             && body_directly_pushes(body, var_name, source)
             && !body_has_continue(body)
+            && !body_extends_or_appends(body, var_name, source)
         {
             has_for_with_push = true;
             break;
@@ -124,6 +125,27 @@ fn is_push_call(node: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
     false
 }
 
+/// Whether `node` is a `<var>.extend(...)` or `<var>.append(...)` call. Both add
+/// a statically-unknown number of elements, so the Vec's final length stops
+/// equalling the iteration count and `with_capacity(n)` would under-allocate.
+fn is_extend_or_append_call(node: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
+    if node.kind() == "call_expression"
+        && let Some(fn_node) = node.child_by_field_name("function")
+        && fn_node.kind() == "field_expression"
+    {
+        let val = fn_node
+            .child_by_field_name("value")
+            .and_then(|n| n.utf8_text(source).ok())
+            .unwrap_or("");
+        let field = fn_node
+            .child_by_field_name("field")
+            .and_then(|n| n.utf8_text(source).ok())
+            .unwrap_or("");
+        return val == var && (field == "extend" || field == "append");
+    }
+    false
+}
+
 fn body_directly_pushes(body: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
     let mut cursor = body.walk();
     for child in body.named_children(&mut cursor) {
@@ -150,6 +172,18 @@ fn body_has_continue(node: tree_sitter::Node) -> bool {
     }
     let mut cursor = node.walk();
     node.children(&mut cursor).any(body_has_continue)
+}
+
+/// Whether the loop body contains any `<var>.extend(...)`/`<var>.append(...)`
+/// anywhere — including nested inside an `if`/`if let` — using the same
+/// whole-subtree walk as `body_has_continue` so a conditional extend is caught.
+fn body_extends_or_appends(node: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
+    if is_extend_or_append_call(node, var, source) {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| body_extends_or_appends(child, var, source))
 }
 
 
@@ -245,6 +279,30 @@ mod tests {
     #[test]
     fn flags_reference_iterable() {
         let src = "fn f(v: &Vec<i32>) {\n    let mut out = Vec::new();\n    for x in &v {\n        out.push(*x);\n    }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_push_with_extend_same_vec_issue_3947() {
+        let src = "fn f(xs: Vec<i32>, other: Vec<i32>) {\n    let mut v = Vec::new();\n    for x in xs {\n        v.push(x);\n        v.extend(other.clone());\n    }\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_push_with_append_same_vec_issue_3947() {
+        let src = "fn f(xs: Vec<i32>) {\n    let mut v = Vec::new();\n    let mut more = vec![1];\n    for x in xs {\n        v.push(x);\n        v.append(&mut more);\n    }\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_push_with_conditional_extend_same_vec_issue_3947() {
+        let src = "fn f(summaries: Vec<S>) {\n    let mut ids = Vec::new();\n    for summary in summaries {\n        ids.push(summary.package_id());\n        if let Some(lock) = summary.lock {\n            ids.extend(lock.alt);\n        }\n    }\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_extend_on_different_var_issue_3947() {
+        let src = "fn f(xs: Vec<i32>, z: Vec<i32>) {\n    let mut v = Vec::new();\n    let mut other = Vec::new();\n    for x in xs {\n        v.push(x);\n        other.extend(z.clone());\n    }\n}";
         assert_eq!(run(src).len(), 1);
     }
 }
