@@ -1,8 +1,15 @@
 //! rust-serde-deny-unknown-fields backend.
 //!
-//! For every `struct_item` with a `#[derive(..., Deserialize, ...)]`
-//! attribute, scan the preceding attribute siblings for
-//! `#[serde(deny_unknown_fields)]`. If absent, flag the struct.
+//! For every named-field `struct_item` with a
+//! `#[derive(..., Deserialize, ...)]` attribute, scan the preceding
+//! attribute siblings for `#[serde(deny_unknown_fields)]`. If absent,
+//! flag the struct.
+//!
+//! Only named-field structs (`field_declaration_list` body) are checked.
+//! Tuple / newtype structs (`ordered_field_declaration_list`) and unit
+//! structs (no body) deserialize via the inner type's deserializer with
+//! no field-name map, so `deny_unknown_fields` is inert and they are
+//! never flagged.
 //!
 //! **Exception:** a struct with any `#[serde(flatten)]` field is
 //! deliberately NOT flagged. `deny_unknown_fields` and `flatten` are
@@ -70,6 +77,15 @@ impl AstCheck for Check {
         //   "external api response"
         //   "versioned protocol"
         if has_forward_compat_marker(node, source_bytes) {
+            return;
+        }
+        // `deny_unknown_fields` only affects structs deserialized from a
+        // map of named fields. A tuple / newtype struct
+        // (`struct Foo(T)`, body = `ordered_field_declaration_list`) or a
+        // unit struct (`struct Foo;`, no body) delegates to the inner
+        // type's deserializer and has no field-name map — the attribute is
+        // inert there, so flagging it is a false positive.
+        if !has_named_fields(node) {
             return;
         }
         let name = node
@@ -185,6 +201,16 @@ fn has_forward_compat_marker(item: tree_sitter::Node, source: &[u8]) -> bool {
         sibling = s.prev_named_sibling();
     }
     false
+}
+
+/// True only for a struct with a named-field body
+/// (`field_declaration_list`). Tuple / newtype structs
+/// (`ordered_field_declaration_list`) and unit structs (no body) return
+/// false — `deny_unknown_fields` is inert on them.
+fn has_named_fields(struct_node: tree_sitter::Node) -> bool {
+    struct_node
+        .child_by_field_name("body")
+        .is_some_and(|body| body.kind() == "field_declaration_list")
 }
 
 /// True if any field inside the struct body carries a
@@ -381,6 +407,36 @@ mod tests {
         // `deny_unknown_fields` is still flagged.
         let source = "#[derive(Deserialize)]\nstruct Input { foo: String }";
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_newtype_struct() {
+        // A newtype struct deserializes via the inner type's deserializer —
+        // there is no field-name map, so `deny_unknown_fields` is inert and
+        // flagging it is a false positive (bevy `EntityHashSet`). (Closes #3935)
+        let source = "#[derive(Deserialize)]\npub struct EntityHashSet(HashSet<Entity>);";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: newtype struct flagged despite deny_unknown_fields being inert"
+        );
+    }
+
+    #[test]
+    fn allows_multi_field_tuple_struct() {
+        let source = "#[derive(Deserialize)]\nstruct Pair(u32, u32);";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: tuple struct flagged despite deny_unknown_fields being inert"
+        );
+    }
+
+    #[test]
+    fn allows_unit_struct() {
+        let source = "#[derive(Deserialize)]\nstruct Unit;";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: unit struct flagged despite deny_unknown_fields being inert"
+        );
     }
 
     #[test]
