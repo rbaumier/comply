@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BinaryOperator, Expression};
+use oxc_ast::ast::{BinaryOperator, Expression, UnaryOperator};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -103,6 +103,51 @@ fn key_indexes_same_object<'a>(
     })
 }
 
+/// Whether the in-tested key `lhs_name` is guarded as a number by a sibling
+/// `typeof <lhs_name> == "number"` (or `===`) comparison in the enclosing
+/// condition. A numeric key makes `K in arr` a sparse-array index-existence
+/// check — exactly what `in` is for on arrays — so `.includes()` (a value
+/// check) would change semantics and the array-hint heuristic must not fire.
+fn key_guarded_as_number<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    lhs_name: &str,
+) -> bool {
+    let scope = enclosing_condition_span(node, semantic);
+    semantic.nodes().iter().any(|n| {
+        let AstKind::BinaryExpression(cmp) = n.kind() else {
+            return false;
+        };
+        if !matches!(
+            cmp.operator,
+            BinaryOperator::Equality | BinaryOperator::StrictEquality
+        ) {
+            return false;
+        }
+        if cmp.span.start < scope.start || cmp.span.end > scope.end {
+            return false;
+        }
+        // One side is `typeof <lhs_name>`, the other the string "number".
+        let (typeof_arg, number_str) = match (&cmp.left, &cmp.right) {
+            (Expression::UnaryExpression(unary), other)
+            | (other, Expression::UnaryExpression(unary))
+                if unary.operator == UnaryOperator::Typeof =>
+            {
+                (Some(&unary.argument), is_number_string(other))
+            }
+            _ => (None, false),
+        };
+        let Some(Expression::Identifier(id)) = typeof_arg else {
+            return false;
+        };
+        number_str && id.name.as_str() == lhs_name
+    })
+}
+
+fn is_number_string(expr: &Expression) -> bool {
+    matches!(expr, Expression::StringLiteral(lit) if lit.value == "number")
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -142,8 +187,13 @@ impl OxcCheck for Check {
         // Map-membership idiom: when the in-tested key `K` is then used to index
         // the same object `Y` (`K in Y && Y[K]...`), `Y` is a keyed object/map,
         // not an array, so the array-hint heuristic is a false positive.
+        // Numeric-index existence check: when the in-tested key `K` is guarded
+        // as a number (`typeof K == "number" && K in arr`), `in` correctly
+        // tests whether index slot `K` exists, so `.includes()` (a value check)
+        // would change semantics. Both signals key off the in-tested LHS ident.
         if let Expression::Identifier(lhs) = &bin.left
-            && key_indexes_same_object(node, semantic, rhs_text, lhs.name.as_str(), ctx.source)
+            && (key_indexes_same_object(node, semantic, rhs_text, lhs.name.as_str(), ctx.source)
+                || key_guarded_as_number(node, semantic, lhs.name.as_str()))
         {
             return;
         }
@@ -261,5 +311,41 @@ mod tests {
     fn flags_in_when_other_object_indexed_by_key() {
         // `cache[x]` indexes a different object than the in-tested `items`.
         assert_eq!(run_on(r#"if (x in items && cache[x]) {}"#).len(), 1);
+    }
+
+    // Regression for #3952: terser `lib/compress/common.js`. `elements` is a
+    // genuine array, but `typeof key == "number" && key in elements` is a
+    // numeric index-existence check — exactly what `in` is for on arrays — and
+    // `.includes()` (a value check) would change semantics.
+    #[test]
+    fn allows_in_when_key_guarded_as_number_loose() {
+        let src = r#"if (typeof key == "number" && key in elements) value = elements[key];"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_in_when_key_guarded_as_number_strict() {
+        let src = r#"if (typeof i === "number" && i in arr) {}"#;
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // Negative space: a `typeof key == "string"` guard is not a numeric-index
+    // signal, so `key in obj` must still flag.
+    #[test]
+    fn flags_in_when_guard_is_string_not_number() {
+        assert_eq!(
+            run_on(r#"if (typeof key == "string" && key in items) {}"#).len(),
+            1
+        );
+    }
+
+    // Negative space: the numeric guard must be on the SAME identifier as the
+    // `in` LHS — a guard on a different variable does not exempt.
+    #[test]
+    fn flags_in_when_number_guard_is_other_identifier() {
+        assert_eq!(
+            run_on(r#"if (typeof other == "number" && key in items) {}"#).len(),
+            1
+        );
     }
 }
