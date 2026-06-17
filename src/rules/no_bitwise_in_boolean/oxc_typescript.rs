@@ -66,6 +66,24 @@ fn is_bitmask_test(bin: &oxc_ast::ast::BinaryExpression) -> bool {
     is_flag_operand(&bin.left) || is_flag_operand(&bin.right)
 }
 
+/// Membership-finding methods that return an index (`-1` when absent), making
+/// `~call(...)` the classic pre-`Array#includes` "is present?" idiom.
+const MEMBERSHIP_FIND_METHODS: &[&str] = &["indexOf", "lastIndexOf", "search"];
+
+/// Whether an expression is `<obj>.indexOf(...)` / `.lastIndexOf(...)` /
+/// `.search(...)` — the deliberate `~find()` membership idiom. Unlike a bare
+/// `~foo` (a possible `!foo` typo), this `~` is intentional, so it is not a
+/// likely logical-operator mistake.
+fn is_membership_find_call(expr: &Expression) -> bool {
+    let inner = match expr {
+        Expression::ParenthesizedExpression(paren) => &paren.expression,
+        other => other,
+    };
+    let Expression::CallExpression(call) = inner else { return false };
+    let Expression::StaticMemberExpression(member) = &call.callee else { return false };
+    MEMBERSHIP_FIND_METHODS.contains(&member.property.name.as_str())
+}
+
 /// Check whether an expression contains a bitwise operator likely standing in
 /// for a logical operator. Deliberate bitmask flag tests are not flagged.
 fn has_bitwise_op(expr: &Expression) -> bool {
@@ -86,7 +104,9 @@ fn has_bitwise_op(expr: &Expression) -> bool {
         }
         Expression::UnaryExpression(un) => {
             if un.operator == UnaryOperator::BitwiseNot {
-                return true;
+                // `~arr.indexOf(x)` / `~str.search(re)` is the deliberate
+                // membership idiom, not a `!foo` typo — leave it unflagged.
+                return !is_membership_find_call(&un.argument);
             }
             false
         }
@@ -202,5 +222,30 @@ mod tests {
     #[test]
     fn allows_numeric_literal_bitmask_test() {
         assert!(run_on("if (flags & 4) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_membership_find_idiom() {
+        // Regression for #3951: `~find()` is the canonical pre-`includes`
+        // membership idiom — unary `~` here is deliberate, not a `!` typo.
+        assert!(run_on(r#"if (~program.rawArgs.indexOf("--rename")) {}"#).is_empty());
+        assert!(run_on("if (~str.search(/x/)) {}").is_empty());
+        assert!(run_on("if (~arr.lastIndexOf(x)) {}").is_empty());
+        assert!(run_on("if (~(arr.indexOf(x))) {}").is_empty());
+    }
+
+    #[test]
+    fn flags_bare_identifier_bitwise_not() {
+        // A bare `~foo` is a possible `!foo` typo and must stay flagged.
+        assert_eq!(run_on("if (~foo) {}").len(), 1);
+        assert_eq!(run_on("if (~someValue) {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_bitwise_not_on_non_find_member() {
+        // Only `.indexOf/.lastIndexOf/.search` *calls* are exempt: a member
+        // access that is not such a call stays flagged.
+        assert_eq!(run_on("if (~obj.value) {}").len(), 1);
+        assert_eq!(run_on("if (~arr.length) {}").len(), 1);
     }
 }
