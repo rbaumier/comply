@@ -12,9 +12,11 @@
 //! - "enum-like": node kind is one of `scoped_identifier`,
 //!   `tuple_struct_pattern`, `struct_pattern`, or the pattern text
 //!   contains `::`, or it is a bare PascalCase identifier (uppercase
-//!   lead with at least one lowercase letter). Range patterns
+//!   lead with at least one lowercase letter). Literal patterns
+//!   (`"AltLeft"`, `'r'`, `1`, `-2`, `true`), range patterns
 //!   (`'a'..='z'`, `0..=9`) and SCREAMING_SNAKE_CASE constants
-//!   (`EOF_CHAR`) apply only to scalar types and are never enum-like.
+//!   (`EOF_CHAR`) apply only to scalar/string types and are never
+//!   enum-like.
 //!   Or-patterns (`Foo::A | Foo::B`) are unwrapped and any disjunct
 //!   that qualifies makes the whole arm enum-like.
 //!
@@ -187,6 +189,13 @@ fn pattern_is_enum_like(pattern: tree_sitter::Node, source: &[u8]) -> bool {
 
     match pattern.kind() {
         "scoped_identifier" | "tuple_struct_pattern" | "struct_pattern" => return true,
+        // Literal patterns match scalar/string values, never enum variants.
+        // A `match key: &str { "AltLeft" => …, _ => … }` has an infinite
+        // domain, so its `_` arm is compiler-mandated. Bail out before the
+        // textual PascalCase fallback, which would otherwise skip the
+        // opening quote of `"AltLeft"` and misread the literal as a variant.
+        "string_literal" | "raw_string_literal" | "char_literal" | "integer_literal"
+        | "float_literal" | "boolean_literal" | "negative_literal" => return false,
         _ => {}
     }
 
@@ -439,6 +448,38 @@ mod tests {
         // (lexer sentinels like `EOF_CHAR`/`NUL`), not enum variants.
         let src = "fn lex(c: char) -> i32 { match c { \
                    EOF_CHAR => 0, NUL => 1, '0'..='9' => 2, _ => 3 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_on_str_literal_arms_with_enum_bodies() {
+        // Issue #3973: scrutinee is a `&str` (egui `Key::from_name`); the
+        // arm patterns are string literals whose content starts uppercase
+        // (`"AltLeft"`, `"Exclamationmark"`), not enum variants. A `&str`
+        // has an infinite domain, so the `_ => return None` arm is
+        // compiler-mandated and must not be flagged.
+        let src = "fn from_name(key: &str) -> Option<Self> { Some(match key { \
+                   \"AltLeft\" => Self::AltLeft, \
+                   \"!\" | \"Exclamationmark\" => Self::Exclamationmark, \
+                   \"IntlBackslash\" => Self::IntlBackslash, \
+                   _ => return None, }) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_on_raw_str_literal_arms() {
+        // Issue #3973: raw string literals are also literal patterns, never
+        // enum variants.
+        let src = "fn f(s: &str) -> i32 { match s { \
+                   r#\"Alpha\"# => 1, r#\"Beta\"# => 2, _ => 0 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_on_negative_integer_arms() {
+        // Issue #3973: negative integer literals are scalar patterns over
+        // an unbounded domain; the `_` arm is required.
+        let src = "fn f(n: i32) -> i32 { match n { -1 => 1, 0 => 2, 1 => 3, _ => 0 } }";
         assert!(run_on(src).is_empty());
     }
 
