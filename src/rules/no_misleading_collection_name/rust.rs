@@ -23,21 +23,19 @@ impl Shape {
     }
 }
 
-/// Map a binding name's suffix to its claimed shape.
+/// Map a binding name's trailing type word to its claimed shape.
 ///
 /// `list` is a general collection term (`allow_list`, `deny_list`) that does
-/// not promise a `Vec`, so it claims no shape. Only suffixes naming a specific
-/// backing type make a contract: `array`/`vec`, `set`, `map`/`dict`.
+/// not promise a `Vec`, so it claims no shape. Only a trailing word naming a
+/// specific backing type makes a contract: `array`/`vec`, `set`, `map`/`dict`.
+/// The match is on the trailing token (exact equality), so `list_offset` claims
+/// no shape (last token `offset`, not `set`).
 fn name_suffix_shape(name: &str) -> Option<Shape> {
-    let lower = name.to_ascii_lowercase();
-    if lower.ends_with("array") || lower.ends_with("vec") {
-        Some(Shape::Vec)
-    } else if lower.ends_with("set") {
-        Some(Shape::Set)
-    } else if lower.ends_with("map") || lower.ends_with("dict") {
-        Some(Shape::Map)
-    } else {
-        None
+    match super::last_token(name).as_str() {
+        "array" | "vec" => Some(Shape::Vec),
+        "set" => Some(Shape::Set),
+        "map" | "dict" => Some(Shape::Map),
+        _ => None,
     }
 }
 
@@ -147,5 +145,32 @@ mod tests {
     fn allows_list_holding_set() {
         let src = "fn f() { let allow_list = HashSet::new(); }";
         assert!(run_on(src).is_empty());
+    }
+
+    // Mid-word fragments must not read as a type token (issue #3953):
+    // `offset` ends in `set`, `bitmap` ends in `map`, but neither names a Set/Map.
+    #[test]
+    fn allows_offset_holding_vec() {
+        let src = "fn f(n: usize) { let mut list_offset = Vec::with_capacity(n); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bitmap_holding_vec() {
+        let src = "fn f() { let bitmap = vec![]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_dataset_holding_map() {
+        let src = "fn f() { let dataset = HashMap::new(); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // A genuine trailing `set` token still flags a Vec mismatch.
+    #[test]
+    fn flags_set_token_holding_vec() {
+        let src = "fn f() { let user_set = Vec::new(); }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }

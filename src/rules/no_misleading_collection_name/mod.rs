@@ -54,22 +54,39 @@ pub(super) fn article(label: &str) -> &'static str {
     }
 }
 
-/// Map a binding name's suffix to its claimed shape.
+/// Lowercased trailing word of an identifier, tokenizing both snake_case
+/// (`list_offset` -> `offset`) and camelCase (`listOffset`/`userSet` ->
+/// `offset`/`set`) by splitting on `_` and on lower->upper boundaries.
 ///
-/// Only suffixes that name a specific backing type make a contract: `Array`
-/// asserts an Array, `Set` a `Set`, `Map` a `Map`. The `List` suffix is a
-/// general English collection term (`allowList`, `denyList`, `blockList`) that
+/// Matching the trailing *word* — not a raw suffix substring — is what stops
+/// `offset` from reading as `set`, `bitmap` as `map`, `predict` as `dict`.
+pub(super) fn last_token(name: &str) -> String {
+    let mut start = 0;
+    let bytes = name.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'_' {
+            start = i + 1;
+        } else if i > 0 && b.is_ascii_uppercase() && !bytes[i - 1].is_ascii_uppercase() {
+            start = i;
+        }
+    }
+    name[start..].to_ascii_lowercase()
+}
+
+/// Map a binding name's trailing type word to its claimed shape.
+///
+/// Only a trailing word that names a specific backing type makes a contract:
+/// `Array` asserts an Array, `Set` a `Set`, `Map` a `Map`. The `List` suffix is
+/// a general English collection term (`allowList`, `denyList`, `blockList`) that
 /// does not promise an Array, so it claims no shape and never conflicts with a
-/// `Set`/`Map` initializer.
+/// `Set`/`Map` initializer. The match is on the trailing token (exact equality),
+/// so `listOffset` claims no shape (last token `offset`, not `set`).
 pub(super) fn name_suffix_shape(name: &str) -> Option<Shape> {
-    if name.ends_with("Array") {
-        Some(Shape::Array)
-    } else if name.ends_with("Set") {
-        Some(Shape::Set)
-    } else if name.ends_with("Map") {
-        Some(Shape::Map)
-    } else {
-        None
+    match last_token(name).as_str() {
+        "array" => Some(Shape::Array),
+        "set" => Some(Shape::Set),
+        "map" => Some(Shape::Map),
+        _ => None,
     }
 }
 
