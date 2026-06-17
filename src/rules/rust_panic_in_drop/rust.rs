@@ -7,9 +7,10 @@
 //! during unwinding aborts the process — `Drop` runs on every error
 //! path and must be infallible.
 //!
-//! A panic guarded by `if !std::thread::panicking() { ... }` is exempt:
-//! when unwinding is already in progress the guarded block is skipped, so
-//! `drop` returns normally and no double-panic abort occurs.
+//! A panic guarded by `if !std::thread::panicking() { ... }` (or the
+//! equivalent `if std::thread::panicking() { ... } else { panic!() }`) is
+//! exempt: the panic only runs when unwinding is not in progress, so `drop`
+//! returns normally and no double-panic abort occurs.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -26,10 +27,11 @@ const PANIC_MACROS: &[&str] = &[
     "unreachable",
 ];
 
-/// True when `node` sits inside the consequence block of an enclosing
-/// `if !…panicking() { … }` guard, walking ancestors up to `body` (the
-/// `drop` body). Only the negated form guards the panic: when unwinding is
-/// already in progress the block is skipped, so `drop` returns normally.
+/// True when `node` sits inside a branch that only runs while the thread is
+/// not unwinding, walking ancestors up to `body` (the `drop` body). Two
+/// equivalent guards qualify, both reached when `panicking()` is `false`:
+/// the consequence of `if !panicking() { … }` and the `else` branch of
+/// `if panicking() { … } else { … }`.
 fn is_guarded_by_not_panicking(
     node: tree_sitter::Node,
     body: tree_sitter::Node,
@@ -41,21 +43,29 @@ fn is_guarded_by_not_panicking(
             return false;
         }
         if parent.kind() == "if_expression"
-            && let Some(consequence) = parent.child_by_field_name("consequence")
-            && consequence == cur
             && let Some(condition) = parent.child_by_field_name("condition")
-            && is_negated_panicking_call(condition, source)
         {
-            return true;
+            if let Some(consequence) = parent.child_by_field_name("consequence")
+                && consequence == cur
+                && is_negated_panicking_call(condition, source)
+            {
+                return true;
+            }
+            if let Some(alternative) = parent.child_by_field_name("alternative")
+                && alternative == cur
+                && alternative.kind() == "else_clause"
+                && is_bare_panicking_call(condition, source)
+            {
+                return true;
+            }
         }
         cur = parent;
     }
     false
 }
 
-/// True when `condition` is `!<expr>` and `<expr>` is a call whose function
-/// path ends in the `panicking` segment (`std::thread::panicking()`,
-/// `thread::panicking()`, or an imported `panicking()`).
+/// True when `condition` is `!<expr>` and `<expr>` is a bare `panicking()`
+/// call (see [`is_bare_panicking_call`]).
 fn is_negated_panicking_call(condition: tree_sitter::Node, source: &[u8]) -> bool {
     if condition.kind() != "unary_expression" {
         return false;
@@ -69,10 +79,17 @@ fn is_negated_panicking_call(condition: tree_sitter::Node, source: &[u8]) -> boo
     let Some(operand) = condition.named_child(0) else {
         return false;
     };
-    if operand.kind() != "call_expression" {
+    is_bare_panicking_call(operand, source)
+}
+
+/// True when `expr` is a call whose function path ends in the `panicking`
+/// segment (`std::thread::panicking()`, `thread::panicking()`, or an
+/// imported `panicking()`).
+fn is_bare_panicking_call(expr: tree_sitter::Node, source: &[u8]) -> bool {
+    if expr.kind() != "call_expression" {
         return false;
     }
-    let Some(func) = operand.child_by_field_name("function") else {
+    let Some(func) = expr.child_by_field_name("function") else {
         return false;
     };
     let last_segment = match func.kind() {
@@ -279,5 +296,20 @@ mod tests {
         let source = "struct A; impl Drop for A { fn drop(&mut self) { \
                       if std::thread::panicking() { panic!(); } } }";
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_panic_in_else_of_non_negated_panicking_guard() {
+        let source = "struct C; impl Drop for C { fn drop(&mut self) { \
+                      if panicking() { eprintln!(\"x\"); } else { panic!(\"y\"); } } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_panic_in_else_of_qualified_panicking_guard() {
+        let source = "struct C; impl Drop for C { fn drop(&mut self) { \
+                      if std::thread::panicking() { eprintln!(\"x\"); } \
+                      else { panic!(\"y\"); } } }";
+        assert!(run_on(source).is_empty());
     }
 }
