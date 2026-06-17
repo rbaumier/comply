@@ -3,8 +3,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, Statement};
-use oxc_span::GetSpan;
+use oxc_ast::ast::{Argument, Expression, Statement};
+use oxc_span::{GetSpan, Span};
 use std::sync::Arc;
 
 pub struct Check;
@@ -67,6 +67,18 @@ impl OxcCheck for Check {
             // An awaited call is structurally not a fire-and-forget Node error-first
             // callback, so a trailing `return` is neither expected nor correct.
             AstKind::AwaitExpression(_) => return,
+            // `push(callback(key))` / `new Wrapper(cb(x))` — the call's result is
+            // passed as an argument to an enclosing call, so it is consumed
+            // downstream, not dropped. A trailing `return` is impossible (the value
+            // must flow into the outer call). Only exempt the arguments position:
+            // for `callback(x)(y)` the inner call is the outer call's callee, whose
+            // span matches no argument, so it stays flagged.
+            AstKind::CallExpression(outer) if is_argument(call.span, &outer.arguments) => {
+                return;
+            }
+            AstKind::NewExpression(outer) if is_argument(call.span, &outer.arguments) => {
+                return;
+            }
             AstKind::ExpressionStatement(expr_stmt) => {
                 let grandparent = semantic.nodes().parent_node(parent.id());
                 if let AstKind::FunctionBody(block) = grandparent.kind() {
@@ -134,6 +146,14 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// Return true if `call_span` matches one of the enclosing call's arguments,
+/// i.e. the flagged call sits in arguments position rather than being the
+/// callee. Spread arguments do not reach here (their semantic parent is the
+/// `SpreadElement`, not the call), so a direct span match is exact.
+fn is_argument(call_span: Span, arguments: &[Argument<'_>]) -> bool {
+    arguments.iter().any(|arg| arg.span() == call_span)
 }
 
 /// Walk up from `node`; return true only if we reach an
@@ -373,6 +393,43 @@ mod tests {
     #[test]
     fn still_flags_next_with_error() {
         let src = "function f(next) { next(error); doMore(); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_when_callback_result_pushed_into_array() {
+        // Issue #3958: `values.push(callback(key))` — the callback's result is
+        // passed as an argument to `push`, so it is consumed, not dropped. A
+        // trailing `return` is impossible (the value must be pushed and iteration
+        // must continue).
+        let src = "objectForEachKey(obj, key => { values.push(callback(key)); });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_callback_result_is_call_argument() {
+        // The callback's result flows as an argument into an enclosing call.
+        let src = "function f(cb) { arr.push(cb(x)); doMore(); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_callback_result_wrapped_in_call() {
+        let src = "function f(next) { wrap(next(y)); doMore(); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_callback_result_is_new_argument() {
+        let src = "function f(callback) { const e = new Error(callback(x)); throw e; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_callback_as_callee_of_outer_call() {
+        // `cb(x)(y)` — the inner `cb(x)` is the OUTER call's callee, not an
+        // argument; its result is dropped, so it stays flagged.
+        let src = "function f(cb) { cb(err)(y); doMore(); }";
         assert_eq!(run(src).len(), 1);
     }
 }
