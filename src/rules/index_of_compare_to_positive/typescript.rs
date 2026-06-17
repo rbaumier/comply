@@ -1,13 +1,13 @@
-//! index-of-compare-to-positive backend — `.indexOf(…) > 0` misses index 0.
+//! index-of-compare-to-positive backend — `.indexOf(…) < 1` matches index 0 and absence.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["binary_expression"] prefilter = ["indexOf"] => |node, source, ctx, diagnostics|
-    // Match binary expressions: `expr > 0` or `expr < 1`.
+    // Match binary expressions: `expr < 1`.
     let Some(op_node) = node.child_by_field_name("operator") else { return };
     let op = op_node.utf8_text(source).unwrap_or("");
 
-    if op != ">" && op != "<" {
+    if op != "<" {
         return;
     }
 
@@ -16,9 +16,10 @@ crate::ast_check! { on ["binary_expression"] prefilter = ["indexOf"] => |node, s
 
     let right_text = right.utf8_text(source).unwrap_or("").trim();
 
-    // `.indexOf(…) > 0` or `.indexOf(…) < 1`
-    let is_bad = (op == ">" && right_text == "0") || (op == "<" && right_text == "1");
-    if !is_bad {
+    // `.indexOf(…) < 1` is ambiguously `=== 0 || === -1` — a likely forgotten
+    // `-1` bug. `> 0` is intentionally excluded: it is a valid "present at a
+    // non-leading position" check, not a bug.
+    if right_text != "1" {
         return;
     }
 
@@ -42,7 +43,7 @@ crate::ast_check! { on ["binary_expression"] prefilter = ["indexOf"] => |node, s
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "index-of-compare-to-positive".into(),
-        message: "`.indexOf(…) > 0` misses index 0 — use `>= 0` or `!== -1`.".into(),
+        message: "`.indexOf(…) < 1` matches both index 0 and absence — use `< 0` or `!== -1`.".into(),
         severity: Severity::Error,
         span: None,
     });
@@ -73,8 +74,9 @@ mod tests {
     }
 
     #[test]
-    fn flags_indexof_gt_zero() {
-        assert_eq!(run_on("if (arr.indexOf(x) > 0) {}").len(), 1);
+    fn allows_indexof_gt_zero() {
+        // #3840: `> 0` is a valid "present at a non-leading position" check.
+        assert!(run_on("if (arr.indexOf(x) > 0) {}").is_empty());
     }
 
     #[test]
