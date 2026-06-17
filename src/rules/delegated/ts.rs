@@ -73,15 +73,6 @@ pub fn register_all() -> Vec<RuleDef> {
             "Replace `const x = require('x')` with `import x from 'x'`. \
              require() bypasses the type system and tree-shaking.",
         ),
-        entry(
-            "typescript/explicit-member-accessibility",
-            "typescript/explicit-member-accessibility",
-            Severity::Warning,
-            "Class members should declare their accessibility explicitly.",
-            "Add an explicit `public`/`private`/`protected` modifier to \
-             class properties and methods. Stating visibility documents the \
-             intended API surface.",
-        ),
     ]
 }
 
