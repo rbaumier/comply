@@ -41,6 +41,42 @@ fn raw_ptr_to_c_void(ty: tree_sitter::Node, source: &[u8]) -> bool {
     leaf.utf8_text(source).is_ok_and(|name| name == "c_void")
 }
 
+/// Bit width of a primitive integer type by its `primitive_type` node text.
+/// `isize`/`usize` map to 64: pointer width is target-dependent, but 64-bit is
+/// the dominant target, and the truncate-then-widen carve-out only needs a
+/// consistent ordering between the intermediate and final types.
+fn int_width(name: &str) -> Option<u8> {
+    Some(match name {
+        "i8" | "u8" => 8,
+        "i16" | "u16" => 16,
+        "i32" | "u32" => 32,
+        "i64" | "u64" | "isize" | "usize" => 64,
+        "i128" | "u128" => 128,
+        _ => return None,
+    })
+}
+
+/// The integer truncate-then-widen chain `x as u16 as u32`: cast to a strictly
+/// narrower intermediate (a deliberate, lossy truncation) then widen for
+/// bit-packing. `x as u16 as u32 != x as u32` whenever the source exceeds the
+/// intermediate width, so the chain is load-bearing, not redundant — and it
+/// cannot be expressed with `From`/`Into` (those are infallible and non-lossy).
+/// Only a strictly narrower intermediate qualifies: same-width (`u32 as u32`)
+/// and widen-then-truncate (`u32 as u16`) chains are not this idiom.
+fn int_truncate_then_widen(inner_ty: tree_sitter::Node, outer_ty: tree_sitter::Node, source: &[u8]) -> bool {
+    if inner_ty.kind() != "primitive_type" || outer_ty.kind() != "primitive_type" {
+        return false;
+    }
+    let (Ok(inner_name), Ok(outer_name)) = (inner_ty.utf8_text(source), outer_ty.utf8_text(source))
+    else {
+        return false;
+    };
+    let (Some(inner_w), Some(outer_w)) = (int_width(inner_name), int_width(outer_name)) else {
+        return false;
+    };
+    inner_w < outer_w
+}
+
 /// The alignment-preserving FFI erasure chain `&x as *mut _ as *mut c_void`:
 /// a reference coerced to a typed raw pointer, then type-erased to a void
 /// pointer. Rust forbids casting `&T`/`&mut T` straight to `*mut c_void`, so the
@@ -87,6 +123,16 @@ crate::ast_check! { on ["type_cast_expression"] => |node, source, ctx, diagnosti
         return;
     }
 
+    // Exempt the integer truncate-then-widen chain `x as u16 as u32`: the inner
+    // cast to a strictly narrower type is a deliberate, lossy truncation, so the
+    // chain is not collapsible to a single `as`.
+    if let (Some(inner_ty), Some(outer_ty)) =
+        (inner.child_by_field_name("type"), node.child_by_field_name("type"))
+        && int_truncate_then_widen(inner_ty, outer_ty, source)
+    {
+        return;
+    }
+
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -126,7 +172,8 @@ mod tests {
 
     #[test]
     fn flags_double_as_cast() {
-        assert_eq!(run_on("fn f(x: i8) { let _ = x as u32 as u64; }").len(), 1);
+        // Same-width chain: genuinely redundant, the intermediate adds nothing.
+        assert_eq!(run_on("fn f(x: i8) { let _ = x as u32 as u32; }").len(), 1);
     }
 
     #[test]
@@ -140,8 +187,41 @@ mod tests {
 
     #[test]
     fn flags_redundant_numeric_double_cast() {
-        // Negative-space guard: a genuinely redundant numeric double cast still fires.
-        assert_eq!(run_on("fn f(x: u16) { let _ = x as u32 as u64; }").len(), 1);
+        // Negative-space guard: a same-width numeric double cast still fires.
+        assert_eq!(run_on("fn f(x: u16) { let _ = x as u32 as u32; }").len(), 1);
+    }
+
+    #[test]
+    fn allows_truncate_then_widen_chain() {
+        // rust-analyzer output.rs: `kind as u16 as u32` truncates an enum/wide
+        // integer to the bitfield width, then widens for bit-packing. The u16 is
+        // load-bearing (`x as u16 as u32 != x as u32` past u16), so this is exempt.
+        assert!(run_on("fn f(kind: u32) -> u32 { kind as u16 as u32 }").is_empty());
+    }
+
+    #[test]
+    fn allows_enum_truncate_then_widen_chain() {
+        let src = "enum E { A } fn f() -> u32 { E::A as u16 as u32 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_u8_to_u64_truncate_then_widen() {
+        assert!(run_on("fn f(x: u32) -> u64 { x as u8 as u64 }").is_empty());
+    }
+
+    #[test]
+    fn flags_same_width_integer_chain() {
+        // Same width (32 == 32): the intermediate truncates nothing, so the
+        // chain is genuinely redundant and still fires.
+        assert_eq!(run_on("fn f(x: u32) { let _ = x as u32 as u32; }").len(), 1);
+    }
+
+    #[test]
+    fn flags_widen_then_truncate_integer_chain() {
+        // Inner wider than outer (32 > 16): not the truncate-then-widen idiom,
+        // so it still fires.
+        assert_eq!(run_on("fn f(x: u32) { let _ = x as u32 as u16; }").len(), 1);
     }
 
     #[test]
@@ -185,7 +265,9 @@ mod tests {
 
     #[test]
     fn flags_triple_cast() {
-        let d = run_on("fn f(x: i8) { let _ = x as i16 as u32 as u64; }");
+        // Each adjacent pair is same-width or widen-then-truncate (never the
+        // narrowing-then-widen idiom), so the chain stays flagged.
+        let d = run_on("fn f(x: i8) { let _ = x as u32 as u32 as u16; }");
         // The outer cast and the middle cast are both flagged.
         assert!(!d.is_empty());
     }
