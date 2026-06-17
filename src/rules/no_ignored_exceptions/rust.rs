@@ -40,6 +40,13 @@
 //!   resulting `Result` is intentionally discarded. The closure argument is
 //!   required, so a `map_err(some_fn)` taking a bare function (which may swallow
 //!   the error) still fires. The method may sit anywhere in the call chain.
+//! - `let _ = expr.<method>(..)` where `<method>` is a curated std-collection
+//!   method that returns `Option`/`bool`/`()` and never `Result`
+//!   (`remove`, `insert`, `pop`, `push`, `take`, …; see `NON_RESULT_METHODS`).
+//!   These carry no error, so discarding the return value ignores nothing
+//!   (e.g. `let _ = values.remove("inherits")` drops the previous `Option<V>`).
+//!   Scoped to the method-call shape on a receiver, so the free function
+//!   `let _ = std::fs::remove_file(p)` (returns `io::Result`) still fires.
 //! - `let _ = fallible()` inside the `fn drop` of an `impl Drop for ...` block:
 //!   `Drop::drop` returns `()`, so an error has no way to be propagated to the
 //!   caller (no `?`, no `Result` return). `let _ =` is the idiomatic best-effort
@@ -121,6 +128,12 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
     // the error is observed inside the `map_err`/`inspect_err` closure before
     // the now-trivial `Result` is intentionally dropped.
     if chain_has_error_handling_closure(value, source) {
+        return;
+    }
+
+    // Skip discards of std-collection methods that return `Option`/`bool`/`()`
+    // (`let _ = map.remove(k)`): these carry no error, so nothing is ignored.
+    if is_non_result_std_method(value, source) {
         return;
     }
 
@@ -238,6 +251,63 @@ fn is_channel_send(value: Node, source: &[u8]) -> bool {
         return false;
     };
     matches!(field.utf8_text(source), Ok("send"))
+}
+
+/// Std-collection method names whose return type is `Option`/`bool`/`()` and
+/// never `Result`, so discarding the value with `let _ =` ignores no error:
+/// - `remove`     — `HashMap`/`BTreeMap` → `Option<V>`, sets → `bool`, `Vec` → `T`
+/// - `remove_entry`— `HashMap`/`BTreeMap` → `Option<(K, V)>`
+/// - `insert`     — maps → `Option<V>`, sets → `bool`
+/// - `pop`        — `Vec`/`VecDeque`/`String` → `Option<_>`
+/// - `pop_front` / `pop_back` — `VecDeque` → `Option<_>`
+/// - `push`       — `Vec`/`String`/`VecDeque` → `()`
+/// - `take`       — `Option`/`Cell`/`mem::take` → the owned value
+/// - `replace`    — `Option`/`Cell`/`mem::replace`/`str` → the prior/new value
+///
+/// Curated and tight on purpose: ambiguous names that commonly return `Result`
+/// in std or the wider ecosystem (`read`, `write`, `next`, `recv`, `get`,
+/// `get_mut`) are deliberately excluded — exempting them would mask genuinely
+/// ignored errors. Worst case for a name listed here is a benign false-negative
+/// (a same-named user method that does return `Result` goes unflagged), never a
+/// new false positive: a conservative lint should err toward under-flagging.
+const NON_RESULT_METHODS: &[&str] = &[
+    "remove",
+    "remove_entry",
+    "insert",
+    "pop",
+    "pop_front",
+    "pop_back",
+    "push",
+    "take",
+    "replace",
+];
+
+/// True if `value` is a method call `expr.<method>(..)` whose `<method>` is in
+/// the curated [`NON_RESULT_METHODS`] set — a std-collection method that
+/// returns `Option`/`bool`/`()` and never `Result`.
+///
+/// Matched on the method-call shape (`call_expression` → `field_expression`
+/// `field`), so it only exempts a method invoked on a receiver. The free
+/// function `let _ = std::fs::remove_file(p)` — which returns `io::Result`
+/// despite sharing the `remove*` stem — is a `call_expression` whose function
+/// is a `scoped_identifier`, not a `field_expression`, so it still fires.
+fn is_non_result_std_method(value: Node, source: &[u8]) -> bool {
+    if value.kind() != "call_expression" {
+        return false;
+    }
+    let Some(function) = value.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    let Some(field) = function.child_by_field_name("field") else {
+        return false;
+    };
+    let Ok(name) = field.utf8_text(source) else {
+        return false;
+    };
+    NON_RESULT_METHODS.contains(&name)
 }
 
 /// True if `value` is a `core::fmt::Write` method call (`write_str`/
@@ -660,6 +730,44 @@ mod tests {
         "#;
         assert_eq!(run_on(inherent_drop).len(), 1);
         assert_eq!(run_on(other_method_in_drop_impl).len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_non_result_std_method() {
+        // Regression for #1458: `let _ = receiver.<method>(..)` where the
+        // method is a std collection method returning `Option`/`bool`/`()`
+        // (never `Result`) carries no error to ignore. The issue's exact helix
+        // `theme.rs` example plus the other non-fallible discards it lists.
+        let remove = r#"fn f() { let _ = values.remove("inherits"); }"#;
+        let insert_map = "fn f() { let _ = map.insert(key, value); }";
+        let insert_set = "fn f() { let _ = set.insert(value); }";
+        let pop = "fn f() { let _ = vec.pop(); }";
+        let push = "fn f() { let _ = vec.push(value); }";
+        let pop_front = "fn f() { let _ = deque.pop_front(); }";
+        let take = "fn f() { let _ = self.field.take(); }";
+        assert!(run_on(remove).is_empty());
+        assert!(run_on(insert_map).is_empty());
+        assert!(run_on(insert_set).is_empty());
+        assert!(run_on(pop).is_empty());
+        assert!(run_on(push).is_empty());
+        assert!(run_on(pop_front).is_empty());
+        assert!(run_on(take).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_non_curated_method_and_free_fn() {
+        // Negative space for #1458: the exemption is keyed on the method-call
+        // SHAPE (a curated method on a receiver). A method NOT in the curated
+        // set still fires, and the FREE function `fs::remove_file` (which
+        // returns `io::Result`, unlike the `.remove()` METHOD) must still fire
+        // even though it shares the `remove_file` stem — it is not a method on
+        // a receiver.
+        let io_write = "fn f(mut file: File) { let _ = file.write_all(buf); }";
+        let parse = "fn f() { let _ = something.parse::<i32>(); }";
+        let free_remove_file = "fn f(p: &Path) { let _ = std::fs::remove_file(p); }";
+        assert_eq!(run_on(io_write).len(), 1);
+        assert_eq!(run_on(parse).len(), 1);
+        assert_eq!(run_on(free_remove_file).len(), 1);
     }
 
     #[test]
