@@ -8,13 +8,36 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Expression, FormalParameters};
 use std::sync::Arc;
 
+/// Returns `true` when a callee's formal parameter list cannot bind the extra
+/// `(index, array)` arguments an iterator method injects after `element` to a
+/// *positional* parameter — so passing it bare is identical to wrapping it:
+///   - zero positional params with a rest (`(...rest) => …`) is a sink that
+///     ignores everything (#825);
+///   - zero positional params (`() => x`) ignore every argument;
+///   - one positional param and no rest (`(str) => …`) binds only `element`
+///     and silently drops `index`/`array`, so `arr.map(f)` is identical to
+///     `arr.map(e => f(e))` (#3901).
+/// A positional parameter *followed* by a rest (`(x, ...rest)`) captures
+/// `index` in `rest`, and two or more positional params expose the genuine
+/// `parseInt(string, radix)` footgun where `index` becomes the second
+/// argument — neither is exempt.
+fn callee_ignores_extra_args(params: &FormalParameters) -> bool {
+    match params.items.len() {
+        0 => true,
+        1 => params.rest.is_none(),
+        _ => false,
+    }
+}
+
 /// Returns `true` when `ident` resolves to a locally-declared function whose
-/// formal parameter list has zero named items (covers `() => x` and
-/// `(...rest) => x` alike — rest-only functions safely ignore extra arguments).
-fn is_zero_arity_local<'a>(
+/// formal parameter list ignores the extra iterator arguments
+/// (see [`callee_ignores_extra_args`]). Cross-file imports do not resolve here
+/// (`symbol_id() == None`) and stay flagged, matching the rule's conservative
+/// default.
+fn is_low_arity_local<'a>(
     ident: &oxc_ast::ast::IdentifierReference<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
@@ -25,11 +48,13 @@ fn is_zero_arity_local<'a>(
     let nodes = semantic.nodes();
     match nodes.kind(decl_node_id) {
         AstKind::VariableDeclarator(decl) => match decl.init.as_ref() {
-            Some(Expression::ArrowFunctionExpression(f)) => f.params.items.is_empty(),
-            Some(Expression::FunctionExpression(f)) => f.params.items.is_empty(),
+            Some(Expression::ArrowFunctionExpression(f)) => {
+                callee_ignores_extra_args(&f.params)
+            }
+            Some(Expression::FunctionExpression(f)) => callee_ignores_extra_args(&f.params),
             _ => false,
         },
-        AstKind::Function(f) => f.params.items.is_empty(),
+        AstKind::Function(f) => callee_ignores_extra_args(&f.params),
         _ => false,
     }
 }
@@ -118,7 +143,7 @@ impl OxcCheck for Check {
                 if is_pascal_case(name) {
                     return;
                 }
-                if is_zero_arity_local(ident, semantic) {
+                if is_low_arity_local(ident, semantic) {
                     return;
                 }
                 let (line, column) =
@@ -253,10 +278,56 @@ mod tests {
         .is_empty());
     }
 
+    // #3901: a single-parameter callee binds only `element` and silently drops
+    // the injected `index`/`array` args, so `arr.map(c)` is identical to
+    // `arr.map(e => c(e))` — exempt, exactly like the zero-arity case.
     #[test]
-    fn flags_function_with_explicit_param() {
+    fn allows_single_param_callback() {
+        assert!(
+            run_on("const c = (x: number) => x * 2; const arr: number[] = []; arr.map(c);")
+                .is_empty()
+        );
+    }
+
+    // #3901 repro: a single-parameter function declaration passed to `.map`.
+    #[test]
+    fn allows_single_param_function_declaration() {
+        assert!(run_on(
+            "function trim(s: string): string { return s.trim(); } const from: string = ''; from.split('.').map(trim);"
+        )
+        .is_empty());
+    }
+
+    // #3901 repro: kysely `.some(isExpressionOrFactory)` single-param type-guard.
+    #[test]
+    fn allows_single_param_type_guard() {
+        assert!(run_on(
+            "function isExpressionOrFactory(o: unknown): o is string { return typeof o === 'string'; } const arg: unknown[] = []; arg.some(isExpressionOrFactory);"
+        )
+        .is_empty());
+    }
+
+    // #3901 negative space: a two-parameter callee CAN receive `index` as a
+    // second positional argument (the `parseInt(string, radix)` footgun) —
+    // it must stay flagged.
+    #[test]
+    fn flags_two_param_function_declaration() {
         assert_eq!(
-            run_on("const c = (x: number) => x * 2; const arr: number[] = []; arr.map(c);").len(),
+            run_on("function f(a: number, b: number) { return a + b; } const arr: number[] = []; arr.map(f);").len(),
+            1
+        );
+    }
+
+    // #3901 negative space: a rest parameter following a positional one
+    // (`(x, ...rest)`) captures the injected `index`/`array` in `rest`, so the
+    // footgun applies — keep it flagged (`rest.is_some()` → not exempt).
+    #[test]
+    fn flags_param_plus_rest_function() {
+        assert_eq!(
+            run_on(
+                "const c = (_x: number, ..._r: number[]) => 0; const arr: number[] = []; arr.map(c);"
+            )
+            .len(),
             1
         );
     }
