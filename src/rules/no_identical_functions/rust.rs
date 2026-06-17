@@ -10,12 +10,17 @@
 //! whose receivers differ in ownership/mutability (`self` vs `&self` vs
 //! `&mut self`) are exempt too: the idiomatic `as_x`/`as_x_mut` and
 //! `into_x`/`as_x` variants have syntactically identical bodies but
-//! incompatible types, so no shared helper can serve both. Functions in
-//! different `mod` blocks are exempt as well: Rust's path system makes
-//! `a::f` and `b::f` distinct, and co-located test suites routinely repeat
-//! the same assertions in sibling modules. Free functions, and inherent
-//! methods on the same type with the same receiver and in the same module,
-//! are still flagged.
+//! incompatible types, so no shared helper can serve both. Free-function
+//! pairs whose bodies match but whose signatures differ (parameter list or
+//! `where`-clause / generic bounds) are exempt for the same reason: the
+//! immutable/mutable free-function pair (`visit_relations`/`visit_relations_mut`,
+//! the `iter`/`iter_mut` shape) has a textually identical body but dispatches
+//! through different traits and borrows, so no single generic helper can serve
+//! both. Functions in different `mod` blocks are exempt as well: Rust's path
+//! system makes `a::f` and `b::f` distinct, and co-located test suites
+//! routinely repeat the same assertions in sibling modules. Free functions
+//! with identical signatures, and inherent methods on the same type with the
+//! same receiver and in the same module, are still flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -25,6 +30,13 @@ fn normalize_body(text: &str) -> String {
         .filter(|l| !l.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Collapse all whitespace (including newlines) into single spaces so that a
+/// formatting-only difference in a signature fragment doesn't read as a real
+/// signature difference.
+fn normalize_signature(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The receiver shape of a function, classified from its `self` parameter.
@@ -42,15 +54,17 @@ enum Receiver {
     None,
 }
 
-/// A collected function: name, 1-based line, normalized body, the receiver
-/// shape, the text of its enclosing inherent-impl self-type (`None` for free
-/// functions), and a `module_key` identifying the enclosing `mod` scope. The
-/// file top level is key `0`; each `mod` block (sibling or nested) gets a
-/// distinct id, so only functions sharing a key are compared.
+/// A collected function: name, 1-based line, normalized body, normalized
+/// signature (parameter list + generic params + `where`-clause text), the
+/// receiver shape, the text of its enclosing inherent-impl self-type (`None`
+/// for free functions), and a `module_key` identifying the enclosing `mod`
+/// scope. The file top level is key `0`; each `mod` block (sibling or nested)
+/// gets a distinct id, so only functions sharing a key are compared.
 struct CollectedFn {
     name: String,
     line: usize,
     body: String,
+    signature: String,
     receiver: Receiver,
     inherent_type: Option<String>,
     module_key: usize,
@@ -90,6 +104,19 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
             // other, which never trips this guard.
             let (ri, rj) = (functions[i].receiver, functions[j].receiver);
             if ri != Receiver::None && rj != Receiver::None && ri != rj {
+                continue;
+            }
+            // Free functions carry no `self`, so the receiver guard above never
+            // reaches them. A free-function pair whose bodies match but whose
+            // signatures (parameters / generic bounds / `where`-clause) differ
+            // is the forced borrow-variant case at free-function scope (the
+            // `visit_relations`/`visit_relations_mut` shape: `&V`/`&mut V`,
+            // `Visit`/`VisitMut`). No single generic helper can serve both, so
+            // skip it. Identical signature *and* body remains a true duplicate.
+            if ri == Receiver::None
+                && rj == Receiver::None
+                && functions[i].signature != functions[j].signature
+            {
                 continue;
             }
             if functions[i].body == functions[j].body {
@@ -137,6 +164,7 @@ fn collect_functions(
                         name,
                         line,
                         body: normalized,
+                        signature: extract_signature(node, source),
                         receiver: extract_receiver(node, source),
                         inherent_type: inherent_type.map(str::to_string),
                         module_key,
@@ -212,6 +240,34 @@ fn extract_function_info(
     let body = body_node.utf8_text(source).ok()?;
     let line = name_node.start_position().row + 1;
     Some((name.to_string(), line, body.to_string()))
+}
+
+/// Build a normalized signature from the parameter list, generic parameters,
+/// and `where`-clause. `parameters` and `type_parameters` are grammar fields;
+/// `where_clause` is a (non-field) named child of `function_item`, so it is
+/// found by scanning the named children. The three fragments capture the
+/// `&V`/`&mut V` parameter difference and the `Visit`/`VisitMut` bound
+/// difference that distinguish a forced borrow-variant free-function pair from
+/// a genuine duplicate. Whitespace is collapsed so formatting-only differences
+/// don't register as signature differences.
+fn extract_signature(node: tree_sitter::Node, source: &[u8]) -> String {
+    let params = node
+        .child_by_field_name("parameters")
+        .and_then(|n| n.utf8_text(source).ok())
+        .unwrap_or_default();
+    let type_params = node
+        .child_by_field_name("type_parameters")
+        .and_then(|n| n.utf8_text(source).ok())
+        .unwrap_or_default();
+    let mut where_clause = "";
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "where_clause" {
+            where_clause = child.utf8_text(source).unwrap_or_default();
+            break;
+        }
+    }
+    normalize_signature(&format!("{type_params} {params} {where_clause}"))
 }
 
 /// Classify a function's receiver from its `self_parameter`. The
@@ -462,6 +518,61 @@ impl<N> Wrapper<N> {
 }
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_borrow_variant_free_function_pair() {
+        // Issue #3908: `visit_relations` / `visit_relations_mut` — two free
+        // functions with a textually identical body but signatures differing in
+        // `&V`/`&mut V`, `Visit`/`VisitMut`, and `FnMut(&X)`/`FnMut(&mut X)`.
+        // `v.visit(..)` dispatches to two different traits; no single generic
+        // helper satisfies both, so this is forced duplication, not a refactor.
+        let src = r#"
+pub fn visit_relations<V, E, F>(v: &V, f: F) -> ControlFlow<E>
+where
+    V: Visit,
+    F: FnMut(&ObjectName) -> ControlFlow<E>,
+{
+    let mut visitor = RelationVisitor(f);
+    v.visit(&mut visitor)?;
+    ControlFlow::Continue(())
+}
+
+pub fn visit_relations_mut<V, E, F>(v: &mut V, f: F) -> ControlFlow<E>
+where
+    V: VisitMut,
+    F: FnMut(&mut ObjectName) -> ControlFlow<E>,
+{
+    let mut visitor = RelationVisitor(f);
+    v.visit(&mut visitor)?;
+    ControlFlow::Continue(())
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_free_functions_identical_body_and_signature() {
+        // Negative-space guard: two free functions with identical body AND
+        // identical signature are genuine duplication and must still be flagged.
+        // Without this the #3908 exemption would over-suppress.
+        let src = r#"
+fn foo(x: i32) -> i32 {
+    let a = x + 1;
+    let b = a * 2;
+    println!("{}", b);
+    b
+}
+
+fn bar(x: i32) -> i32 {
+    let a = x + 1;
+    let b = a * 2;
+    println!("{}", b);
+    b
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
     }
 
     #[test]
