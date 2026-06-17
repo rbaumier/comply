@@ -3935,7 +3935,7 @@ fn deeper_dir(a: PathBuf, b: PathBuf) -> PathBuf {
 /// including the conditional `#![cfg_attr(not(test), no_std)]` form. Matches on
 /// an inner-attribute line (`#![`) mentioning `no_std`, so an identifier or
 /// comment that merely contains the text `no_std` does not trigger it.
-fn source_declares_no_std(src: &str) -> bool {
+pub(crate) fn source_declares_no_std(src: &str) -> bool {
     src.lines().any(|line| {
         let line = line.trim_start();
         line.starts_with("#![") && line.contains("no_std")
@@ -5622,6 +5622,55 @@ tokio = "1"
         );
         assert!(first.has_async_runtime(), "tokio is declared");
         assert!(first.is_no_std(), "categories lists no-std");
+    }
+
+    #[test]
+    fn source_declares_no_std_recognizes_inner_attr_and_ignores_comments() {
+        // Unconditional and conditional (feature-gated) no_std → true.
+        assert!(source_declares_no_std("#![no_std]\n"));
+        assert!(source_declares_no_std("    #![no_std]\n"));
+        assert!(source_declares_no_std(
+            "#![cfg_attr(not(feature = \"std\"), no_std)]\nfn main() {}"
+        ));
+        // A plain std crate root → false.
+        assert!(!source_declares_no_std("fn main() {}\n"));
+        // A commented-out attribute is not an inner attribute → false.
+        assert!(!source_declares_no_std("// #![no_std]\nfn main() {}"));
+    }
+
+    #[test]
+    fn crate_root_is_no_std_reads_lib_rs_and_caches() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"c\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "#![no_std]\n").unwrap();
+
+        let ctx = ProjectCtx::empty();
+        let nested = dir.path().join("src").join("pool.rs");
+        assert!(ctx.crate_root_is_no_std(&nested));
+        // Cached: a sibling file in the same crate resolves to the same answer.
+        assert!(ctx.crate_root_is_no_std(&dir.path().join("src").join("other.rs")));
+    }
+
+    #[test]
+    fn crate_root_is_no_std_false_for_std_crate_and_no_manifest() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"c\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "pub fn f() {}\n").unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(!ctx.crate_root_is_no_std(&dir.path().join("src").join("a.rs")));
+        // No manifest on the path → fail safe to false (rule keeps firing).
+        assert!(!ctx.crate_root_is_no_std(Path::new("/nonexistent/x.rs")));
     }
 
     const SCHEMA_WITH_ENVELOPE: &str = r#"
