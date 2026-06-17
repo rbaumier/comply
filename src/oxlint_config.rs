@@ -61,8 +61,17 @@ fn build_config_json(rules: &[RuleEntry<'_>]) -> Value {
         rule_map.insert((*key).to_string(), entry);
     }
 
+    // oxlint turns the `correctness` category on by default, so listing a
+    // plugin (to enable one or two of its rules explicitly) drags in every
+    // other `correctness`-category rule that plugin ships. Those extras leak
+    // out as un-remapped `eslint-plugin-foo(bar)` diagnostics with no comply
+    // RuleMeta, remediation, or FP post-filter behind them. Disabling the
+    // default category pins oxlint to exactly the rules comply registered;
+    // an explicit `rules` entry overrides the category, so the rules we do
+    // enable still run.
     json!({
         "plugins": plugins,
+        "categories": { "correctness": "off" },
         "rules": rule_map,
     })
 }
@@ -122,6 +131,21 @@ mod tests {
             json!("error")
         );
         assert_eq!(config["rules"]["eqeqeq"], json!("warn"));
+    }
+
+    #[test]
+    fn build_config_disables_default_correctness_category() {
+        // Regression for #4010: enabling a plugin (e.g. `jest`, for the two
+        // jest rules comply delegates) must NOT drag in the plugin's whole
+        // `correctness` category. oxlint runs that category by default, so the
+        // generated config has to switch it off — otherwise rules like
+        // `jest/no-standalone-expect` fire as un-remapped FPs (1734 on a
+        // Vitest + @fast-check/vitest repo).
+        let rules: [RuleEntry; 1] = [("jest/no-export", Severity::Error, None)];
+        let config = build_config_json(&rules);
+        assert_eq!(config["categories"]["correctness"], json!("off"));
+        // The explicitly-listed rule survives the category being off.
+        assert_eq!(config["rules"]["jest/no-export"], json!("error"));
     }
 
     #[test]
