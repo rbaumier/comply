@@ -57,10 +57,26 @@ impl OxcCheck for Check {
         // value (e.g. `Effect.flatMap(effect, fn)`) or a node type
         // (e.g. jscodeshift `root.find(j.Type, filter)`); those are not
         // `thisArg` calls and must not be flagged.
-        use oxc_ast::ast::Argument;
+        use oxc_ast::ast::{Argument, Expression};
         if !matches!(
             call.arguments[0],
             Argument::ArrowFunctionExpression(_) | Argument::FunctionExpression(_)
+        ) {
+            return;
+        }
+
+        // A real `Array#method` thisArg is an object/value; a string, numeric,
+        // or template literal can never be a meaningful `this` binding — it's
+        // the visitor-style `.map(callback, propertyKey)` API (e.g. prettier
+        // `AstPath#map`), where arg1 selects which child collection to recurse
+        // into. Not the `Array#map` shape.
+        if matches!(
+            call.arguments[1].as_expression(),
+            Some(
+                Expression::StringLiteral(_)
+                    | Expression::NumericLiteral(_)
+                    | Expression::TemplateLiteral(_)
+            )
         ) {
             return;
         }
@@ -134,5 +150,29 @@ mod oxc_tests {
         // jscodeshift Collection.find(NodeType, filter): arg0 is a node
         // type, arg1 is a filter object — not the Array#find shape.
         assert!(run("root.find(j.ExportNamedDeclaration, { x: 1 });").is_empty());
+    }
+
+    #[test]
+    fn allows_visitor_map_with_string_literal_property_key() {
+        // prettier AstPath#map(callback, propertyKey): arg1 is a string
+        // selecting the child property to recurse into — not a thisArg.
+        assert!(run(r#"path.map((x) => x, "children");"#).is_empty());
+    }
+
+    #[test]
+    fn allows_visitor_map_with_numeric_literal_key() {
+        assert!(run("path.map((x) => x, 0);").is_empty());
+    }
+
+    #[test]
+    fn allows_visitor_map_with_template_literal_key() {
+        assert!(run("path.map((x) => x, `children`);").is_empty());
+    }
+
+    #[test]
+    fn flags_map_with_object_this_arg() {
+        // An object literal thisArg is a real `Array#map(callback, thisArg)`
+        // binding and must still flag.
+        assert_eq!(run("arr.map((x) => x, { ctx: 1 });").len(), 1);
     }
 }
