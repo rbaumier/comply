@@ -13,13 +13,15 @@
 //! `Option<String>` are deliberately not flagged — keeping the match
 //! shallow mirrors the other conservative Rust rules in this crate.
 //!
-//! A parameter is also left alone when the body moves it by value into a
-//! struct or enum-variant literal (`Thing { name }` / `Variant { error }` /
-//! `Thing { name: name }`). There the function genuinely needs ownership,
-//! so taking `String` is the correct API — switching to `&str` would only
-//! shift the allocation into the body. A borrow (`&name`) or a clone
-//! (`name.clone()`) does not consume the owned value and still warrants the
-//! warning.
+//! A parameter is also left alone when the body moves it by value, either
+//! into a struct/enum-variant literal (`Thing { name }` / `Variant { error }`
+//! / `Thing { name: name }`) or as a bare argument of a call — a function
+//! call, a method call, or an enum tuple-variant constructor
+//! (`some_fn(name)` / `Variant::String(name)`). There the function genuinely
+//! needs ownership, so taking `String` is the correct API — switching to
+//! `&str` would only shift the allocation into the body. A borrow (`&name`)
+//! or a clone (`name.clone()`) does not consume the owned value and still
+//! warrants the warning.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::is_in_test_context;
@@ -44,13 +46,13 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
             .any(|c| c.kind() == "mutable_specifier");
         if has_mut { continue; }
 
-        // Skip params the body moves by value into a struct/enum literal —
-        // ownership is genuinely needed there.
+        // Skip params the body moves by value (into a struct/enum literal or
+        // as a bare call argument) — ownership is genuinely needed there.
         let Some(pattern) = param.child_by_field_name("pattern") else { continue; };
         if pattern.kind() != "identifier" { continue; }
         let Ok(param_name) = pattern.utf8_text(source) else { continue; };
         if let Some(body) = body
-            && param_moved_into_struct(body, source, param_name)
+            && param_is_moved(body, source, param_name)
         {
             continue;
         }
@@ -78,43 +80,68 @@ fn is_pub(item: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-/// Whether `param_name` is moved by value into a struct or enum-variant
-/// literal anywhere in `node`'s subtree. A field value that is a bare
-/// `identifier` equal to the param (`{ x }` shorthand, or `{ x: x }`)
-/// consumes the owned value; `&x` (`reference_expression`) or `x.clone()`
-/// (`call_expression`) do not and are ignored.
-fn param_moved_into_struct(node: tree_sitter::Node, source: &[u8], param_name: &str) -> bool {
-    if node.kind() == "struct_expression"
-        && let Some(fields) = node.child_by_field_name("body")
-    {
-        let mut cursor = fields.walk();
-        for field in fields.named_children(&mut cursor) {
-            let value = match field.kind() {
-                "shorthand_field_initializer" => {
-                    let mut field_cursor = field.walk();
-                    field
-                        .named_children(&mut field_cursor)
-                        .find(|c| c.kind() == "identifier")
+/// Whether `param_name` is moved by value anywhere in `node`'s subtree, either
+/// as a bare `identifier` field value of a struct/enum-variant literal
+/// (`{ x }` shorthand, or `{ x: x }`) or as a bare `identifier` argument of a
+/// call (`some_fn(x)`, `obj.method(x)`, `Variant::String(x)`). A bare
+/// identifier consumes the owned value; `&x` (`reference_expression`) and
+/// `x.clone()` (a method call whose `arguments` list does not contain `x`) do
+/// not, so they are ignored and still warrant the warning.
+fn param_is_moved(node: tree_sitter::Node, source: &[u8], param_name: &str) -> bool {
+    match node.kind() {
+        "struct_expression" => {
+            if let Some(fields) = node.child_by_field_name("body") {
+                let mut cursor = fields.walk();
+                for field in fields.named_children(&mut cursor) {
+                    let value = match field.kind() {
+                        "shorthand_field_initializer" => {
+                            let mut field_cursor = field.walk();
+                            field
+                                .named_children(&mut field_cursor)
+                                .find(|c| c.kind() == "identifier")
+                        }
+                        "field_initializer" => field.child_by_field_name("value"),
+                        _ => None,
+                    };
+                    if is_param_identifier(value, source, param_name) {
+                        return true;
+                    }
                 }
-                "field_initializer" => field.child_by_field_name("value"),
-                _ => None,
-            };
-            if let Some(value) = value
-                && value.kind() == "identifier"
-                && value.utf8_text(source) == Ok(param_name)
-            {
-                return true;
             }
         }
+        "call_expression" => {
+            // A bare `identifier` argument transfers ownership. `&x` is a
+            // `reference_expression` (borrow) and `x.method()` puts `x` under
+            // a `field_expression` callee, not in this `arguments` list, so
+            // neither matches.
+            if let Some(args) = node.child_by_field_name("arguments") {
+                let mut cursor = args.walk();
+                for arg in args.named_children(&mut cursor) {
+                    if is_param_identifier(Some(arg), source, param_name) {
+                        return true;
+                    }
+                }
+            }
+        }
+        _ => {}
     }
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        if param_moved_into_struct(child, source, param_name) {
+        if param_is_moved(child, source, param_name) {
             return true;
         }
     }
     false
+}
+
+/// Whether `node` is a bare `identifier` whose text equals `param_name`.
+fn is_param_identifier(
+    node: Option<tree_sitter::Node>,
+    source: &[u8],
+    param_name: &str,
+) -> bool {
+    node.is_some_and(|n| n.kind() == "identifier" && n.utf8_text(source) == Ok(param_name))
 }
 
 
@@ -233,5 +260,38 @@ mod tests {
             run("pub fn make(name: String) -> Thing { Thing { name: name.clone() } }").len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_param_moved_into_enum_tuple_variant() {
+        assert!(
+            run("pub(crate) fn unrecognized_subcommand(subcmd: String) -> Self { let mut err = Self::new(); err = err.extend([(ContextKind::InvalidSubcommand, ContextValue::String(subcmd))]); err }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_param_forwarded_into_call() {
+        assert!(run("pub fn f(s: String) { some_fn(s) }").is_empty());
+    }
+
+    #[test]
+    fn allows_param_moved_into_method_call() {
+        assert!(run("pub fn f(s: String) { self.push(s) }").is_empty());
+    }
+
+    #[test]
+    fn flags_param_borrowed_into_call() {
+        assert_eq!(run("pub fn f(s: String) { g(&s) }").len(), 1);
+    }
+
+    #[test]
+    fn flags_param_read_via_method_into_call() {
+        assert_eq!(run("pub fn f(s: String) { g(s.len()) }").len(), 1);
+    }
+
+    #[test]
+    fn flags_param_cloned_into_call() {
+        assert_eq!(run("pub fn f(s: String) { g(s.clone()) }").len(), 1);
     }
 }
