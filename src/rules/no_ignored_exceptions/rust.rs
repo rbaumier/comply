@@ -26,7 +26,11 @@
 //!   paths (panic/signal handlers, `Drop`, fallback loggers) where an I/O error
 //!   has nowhere to be propagated or reported, so `let _ =` intentionally drops
 //!   it. Scoped to receiver chains rooted at `stderr()`/`stdout()` so a plain
-//!   `let _ = file.write_all(..)` still fires.
+//!   `let _ = file.write_all(..)` still fires. The macro spellings of the same
+//!   idiom are also exempt: `print!`/`println!`/`eprint!`/`eprintln!` target a
+//!   standard stream by definition, and `write!`/`writeln!` only when their
+//!   first argument (the writer) roots at `stderr()`/`stdout()` — so a plain
+//!   `let _ = writeln!(file, ..)` to an ordinary writer still fires.
 //! - `let _ = expr.write_str(..)` / `let _ = expr.write_char(..)`: the
 //!   `core::fmt::Write` trait methods. Writing to an in-memory buffer (`String`,
 //!   `fmt::Formatter`, a `Vec<u8>` wrapper) yields a `fmt::Result` that is
@@ -398,18 +402,29 @@ fn call_has_closure_argument(call: Node) -> bool {
         .any(|arg| arg.kind() == "closure_expression")
 }
 
-/// True if `value` is a write method call (`write_all`/`write`/`write_fmt`/
-/// `flush`) whose receiver chain roots at `stderr()` or `stdout()` — the
-/// best-effort standard-stream write idiom. The error has nowhere to be
-/// propagated in an error-reporting path, so `let _ =` drops it intentionally.
+/// True if `value` is a best-effort write to a standard stream — the error has
+/// nowhere to be propagated in an error-reporting path, so `let _ =` drops it
+/// intentionally. Recognizes two spellings:
 ///
-/// Anchoring on the root receiver (not just the method name) keeps the
-/// exemption tight: `let _ = file.write_all(..)` to an ordinary writer still
-/// fires, since its chain does not root at a standard stream.
+/// - Method form `stderr()/stdout().write_all(..)` (also `write`/`write_fmt`/
+///   `flush`): a write method whose receiver chain roots at `stderr()`/
+///   `stdout()`. Anchoring on the root receiver (not just the method name) keeps
+///   it tight: `let _ = file.write_all(..)` to an ordinary writer still fires.
+/// - Macro form: `print!`/`println!`/`eprint!`/`eprintln!` target a standard
+///   stream by definition, so they are unconditionally exempt; `write!`/
+///   `writeln!` only when the writer (their first argument) roots at
+///   `stderr()`/`stdout()`, so `let _ = writeln!(file, ..)` still fires.
 fn is_std_stream_write(value: Node, source: &[u8]) -> bool {
-    if value.kind() != "call_expression" {
-        return false;
+    match value.kind() {
+        "call_expression" => is_std_stream_write_method(value, source),
+        "macro_invocation" => is_std_stream_write_macro(value, source),
+        _ => false,
     }
+}
+
+/// Method form: `stderr()/stdout().write_all(..)` (also `write`/`write_fmt`/
+/// `flush`) whose receiver chain roots at a standard stream.
+fn is_std_stream_write_method(value: Node, source: &[u8]) -> bool {
     let Some(function) = value.child_by_field_name("function") else {
         return false;
     };
@@ -430,6 +445,68 @@ fn is_std_stream_write(value: Node, source: &[u8]) -> bool {
         return false;
     };
     receiver_roots_at_std_stream(receiver, source)
+}
+
+/// Macro form: `print!`/`println!`/`eprint!`/`eprintln!` are unconditionally a
+/// std-stream write; `write!`/`writeln!` only when their first token-tree
+/// argument (the writer) heads at a `stderr()`/`stdout()` call.
+fn is_std_stream_write_macro(value: Node, source: &[u8]) -> bool {
+    let Some(macro_name_node) = value.child_by_field_name("macro") else {
+        return false;
+    };
+    let Ok(macro_name) = macro_name_node.utf8_text(source) else {
+        return false;
+    };
+    // Last segment for a qualified `std::writeln!` style invocation.
+    let name = macro_name.rsplit("::").next().unwrap_or(macro_name);
+    match name {
+        "print" | "println" | "eprint" | "eprintln" => true,
+        "write" | "writeln" => {
+            // The token tree is an unnamed child (no `token_tree` field exists).
+            let mut cursor = value.walk();
+            let Some(token_tree) = value
+                .children(&mut cursor)
+                .find(|child| child.kind() == "token_tree")
+            else {
+                return false;
+            };
+            macro_first_arg_heads_at_std_stream(token_tree, source)
+        }
+        _ => false,
+    }
+}
+
+/// True if the first argument of a `write!`/`writeln!` `token_tree` heads at a
+/// `stderr()`/`stdout()` call. tree-sitter parses macro bodies as opaque token
+/// streams, so the writer `std::io::stdout()` appears as a run of token nodes
+/// (`std`, `::`, `io`, `::`, `stdout`, then a `token_tree` `()`), not a parsed
+/// `call_expression`. The writer is the first comma-delimited segment; we scan
+/// the token_tree's direct children up to the first top-level `,` for an
+/// `identifier` named `stderr`/`stdout` immediately followed by a `token_tree`
+/// (the call parens) — matching `stdout()`, `io::stdout()`, `std::io::stdout()`
+/// (the `::` separators never sit between the `stdout` identifier and its call
+/// parens). Iterating all children (not just named ones) is required because
+/// the comma boundary is an anonymous node; only direct children are scanned,
+/// so a comma nested in a deeper `token_tree` does not end the writer segment
+/// early. Inspecting token node kinds/text (not a raw-source substring search)
+/// keeps the writer arg anchored at an actual call.
+fn macro_first_arg_heads_at_std_stream(token_tree: Node, source: &[u8]) -> bool {
+    let mut cursor = token_tree.walk();
+    let mut prev_is_std_stream_ident = false;
+    for child in token_tree.children(&mut cursor) {
+        match child.kind() {
+            // First top-level comma ends the writer argument.
+            "," => break,
+            // The call parens following a `stderr`/`stdout` identifier.
+            "token_tree" if prev_is_std_stream_ident => return true,
+            "identifier" => {
+                prev_is_std_stream_ident =
+                    matches!(child.utf8_text(source), Ok("stderr" | "stdout"));
+            }
+            _ => prev_is_std_stream_ident = false,
+        }
+    }
+    false
 }
 
 /// True if the receiver chain bottoms out at a `stderr()`/`stdout()` call,
@@ -635,6 +712,45 @@ mod tests {
         let business = "fn f() { let _ = persist_to_disk(record); }";
         assert_eq!(run_on(file).len(), 1);
         assert_eq!(run_on(business).len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_std_stream_write_macro() {
+        // Regression for #3997: the macro spelling of the best-effort std-stream
+        // write. `print!`/`println!`/`eprint!`/`eprintln!` target a standard
+        // stream by definition; `write!`/`writeln!` when their first argument
+        // (the writer) roots at `stderr()`/`stdout()`. The issue's exact nushell
+        // `report_error.rs` fallback is `writeln!(std::io::stdout(), ..)`.
+        let writeln_stdout = r#"fn p() { let _ = writeln!(std::io::stdout(), "{report}"); }"#;
+        let writeln_stderr = r#"fn p() { let _ = writeln!(std::io::stderr(), "x"); }"#;
+        let write_stdout = r#"fn p() { let _ = write!(stdout(), "x"); }"#;
+        let write_io_stderr = r#"fn p() { let _ = write!(io::stderr(), "x"); }"#;
+        let println = r#"fn p() { let _ = println!("x"); }"#;
+        let eprintln = r#"fn p() { let _ = eprintln!("x"); }"#;
+        let print = r#"fn p() { let _ = print!("x"); }"#;
+        let eprint = r#"fn p() { let _ = eprint!("x"); }"#;
+        assert!(run_on(writeln_stdout).is_empty());
+        assert!(run_on(writeln_stderr).is_empty());
+        assert!(run_on(write_stdout).is_empty());
+        assert!(run_on(write_io_stderr).is_empty());
+        assert!(run_on(println).is_empty());
+        assert!(run_on(eprintln).is_empty());
+        assert!(run_on(print).is_empty());
+        assert!(run_on(eprint).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_non_std_stream_write_macro() {
+        // Negative space for #3997: `write!`/`writeln!` are exempt ONLY when
+        // their first argument roots at a std stream. A write to an ordinary
+        // writer (file, buffer) genuinely swallows the error and must fire. A
+        // non-write macro (`some_macro!`, `vec!`) is likewise not exempt.
+        let writeln_file = r#"fn f(mut file: File) { let _ = writeln!(file, "{x}"); }"#;
+        let write_buf = r#"fn f(buf: &mut String) { let _ = write!(buf, "x"); }"#;
+        let other_macro = "fn f() { let _ = some_macro!(x); }";
+        assert_eq!(run_on(writeln_file).len(), 1);
+        assert_eq!(run_on(write_buf).len(), 1);
+        assert_eq!(run_on(other_macro).len(), 1);
     }
 
     #[test]
