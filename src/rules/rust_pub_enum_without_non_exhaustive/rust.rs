@@ -33,6 +33,14 @@ impl AstCheck for Check {
         if has_non_exhaustive(node, source_bytes) {
             return;
         }
+        // C-ABI enum (`#[repr(C)]` or `#[repr(<int>)]`): the fixed, complete set
+        // of integer-valued variants *is* the cross-language ABI contract the C
+        // side switches on. `#[non_exhaustive]` is a Rust-only construct that C
+        // cannot see and that contradicts the `#[repr(C)]` intent, so it is not
+        // the right fix here.
+        if has_c_repr(node, source_bytes) {
+            return;
+        }
         // Test-helper enum: `#[non_exhaustive]` would force wildcard match
         // arms in tests, defeating exhaustiveness checking. Not an external API.
         if is_in_test_context(node, source_bytes) {
@@ -187,6 +195,64 @@ fn has_non_exhaustive(item: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
+/// Integer-primitive reprs that fix an enum's discriminant set as an FFI/ABI
+/// contract, exactly like `#[repr(C)]`.
+const C_ABI_INT_REPRS: &[&str] = &[
+    "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize",
+];
+
+fn has_c_repr(item: tree_sitter::Node, source: &[u8]) -> bool {
+    // Mirror `has_non_exhaustive`'s preceding-sibling walk through interleaved
+    // comments; return true for `#[repr(C)]` or a C-style integer `#[repr(<int>)]`.
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "attribute_item" => {
+                if attribute_is_c_repr(s, source) {
+                    return true;
+                }
+            }
+            "line_comment" | "block_comment" => {
+                // Interleaved comment — keep walking.
+            }
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+/// True when an `attribute_item` is `#[repr(C)]` or `#[repr(<int-primitive>)]`.
+/// Keys on the `repr` path *and* a `C`/integer-primitive argument, so unrelated
+/// reprs such as `#[repr(align(...))]`/`#[repr(packed)]` are not matched.
+fn attribute_is_c_repr(attribute_item: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(attribute) = attribute_item.named_child(0) else {
+        return false;
+    };
+    if attribute.kind() != "attribute" {
+        return false;
+    }
+    let is_repr = attribute
+        .named_child(0)
+        .filter(|path| path.kind() == "identifier")
+        .and_then(|path| path.utf8_text(source).ok())
+        .is_some_and(|text| text == "repr");
+    if !is_repr {
+        return false;
+    }
+    let Some(args) = attribute.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut cursor = args.walk();
+    args.named_children(&mut cursor).any(|arg| match arg.kind() {
+        "identifier" => arg.utf8_text(source).is_ok_and(|text| text == "C"),
+        "primitive_type" => arg
+            .utf8_text(source)
+            .is_ok_and(|text| C_ABI_INT_REPRS.contains(&text)),
+        _ => false,
+    })
+}
+
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
     fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
@@ -228,6 +294,44 @@ mod tests {
     #[test]
     fn does_not_flag_private_enum() {
         assert!(run_on("enum Status { Ok, Err }").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_repr_c_enum() {
+        // #3971: a `#[repr(C)]` enum is a C-ABI type; its fixed integer-valued
+        // variant set is the cross-language contract, so `#[non_exhaustive]`
+        // (Rust-only, invisible to C) is the wrong fix.
+        assert!(run_on("#[repr(C)]\npub enum E { A, B }").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_repr_int_enum() {
+        // #3971: a C-style integer repr fixes the discriminant set just like
+        // `#[repr(C)]`.
+        assert!(run_on("#[repr(u8)]\npub enum E { A, B }").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_hyper_repr_c_ffi_enum() {
+        // #3971: the hyper FFI return-code enum shape.
+        let source = "#[repr(C)]\npub enum hyper_code { HYPERE_OK, HYPERE_ERROR }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_repr_c_enum_with_interleaved_comment_and_derive() {
+        // #3971: comments and an unrelated `#[derive]` between the `#[repr(C)]`
+        // attribute and the enum must not defeat the C-ABI detection.
+        let source =
+            "#[repr(C)]\n#[derive(Debug)]\n// tag values mirror the C header\npub enum E { A, B }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_pub_enum_with_unrelated_attribute() {
+        // #3971: only `#[repr(C)]`/`#[repr(<int>)]` exempts — an unrelated
+        // attribute such as `#[derive(Debug)]` leaves the enum flagged.
+        assert_eq!(run_on("#[derive(Debug)]\npub enum E { A, B }").len(), 1);
     }
 
     #[test]
