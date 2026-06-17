@@ -21,11 +21,18 @@
 //!
 //! Output gated behind a runtime verbosity flag is opt-in diagnostics,
 //! not unconditional library noise: the consumer only sees it after
-//! turning the flag on. The guard is recognised only when the `if`
-//! condition is a *simple* flag reference — a bare identifier, a field
-//! access, or a no-argument method call — whose final segment names a
-//! known flag (`verbose`, `debug`, `quiet`, `trace`, …). Negated,
-//! compared, or compound conditions stay flagged.
+//! turning the flag on. The guard is recognised when the `if` condition
+//! is either:
+//!
+//! - a *simple* flag reference — a bare identifier, a field access, or a
+//!   no-argument method call — whose final segment names a known flag
+//!   (`verbose`, `debug`, `quiet`, `trace`, …), or
+//! - an environment-variable-presence check — `env::var(KEY).is_ok()` or
+//!   `env::var_os(KEY).is_some()` (with or without a `std::` prefix). The
+//!   `eprintln!` is unreachable unless the consumer has set the variable,
+//!   so it is a runtime opt-in just like a verbosity flag.
+//!
+//! Negated, compared, or compound conditions stay flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -153,13 +160,85 @@ fn is_descendant_of(node: tree_sitter::Node, ancestor: tree_sitter::Node) -> boo
     false
 }
 
-/// True when `cond` is a *simple* flag reference: a bare identifier, a
-/// field access, or a no-argument method call, whose final path segment
-/// is a known verbose/debug flag name. Negation (`!self.verbose()`),
-/// comparison, or any compound expression returns false — those are not
-/// plain "is the flag on" guards and stay flagged.
+/// True when `cond` is a recognised runtime opt-in guard: either a
+/// *simple* flag reference (a bare identifier, a field access, or a
+/// no-argument method call) whose final path segment is a known
+/// verbose/debug flag name, or an environment-variable-presence check
+/// (`env::var(KEY).is_ok()` / `env::var_os(KEY).is_some()`). Negation
+/// (`!self.verbose()`), comparison, or any other compound expression
+/// returns false — those are not plain "is the flag on" guards and stay
+/// flagged.
 fn is_verbose_flag_condition(cond: tree_sitter::Node, source: &[u8]) -> bool {
     flag_segment(cond, source).is_some_and(|seg| VERBOSE_FLAG_NAMES.contains(&seg))
+        || is_env_var_presence_condition(cond, source)
+}
+
+/// True when `cond` is an environment-variable-presence check:
+/// `env::var(KEY).is_ok()` or `env::var_os(KEY).is_some()`, with or
+/// without a `std::` prefix. The shape is a `.is_ok()` / `.is_some()`
+/// method call whose receiver is a call to `env::var` / `env::var_os`.
+/// Such an `eprintln!` only runs when the consumer has set the variable,
+/// so it is a runtime opt-in like a verbosity flag.
+fn is_env_var_presence_condition(cond: tree_sitter::Node, source: &[u8]) -> bool {
+    // `<receiver>.is_ok()` / `<receiver>.is_some()`
+    if cond.kind() != "call_expression" {
+        return false;
+    }
+    let Some(func) = cond.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "field_expression" {
+        return false;
+    }
+    let presence_ok = func
+        .child_by_field_name("field")
+        .and_then(|f| f.utf8_text(source).ok())
+        .is_some_and(|m| m == "is_ok" || m == "is_some");
+    if !presence_ok {
+        return false;
+    }
+    // The receiver must be a call to `env::var` / `env::var_os`.
+    func.child_by_field_name("value")
+        .is_some_and(|recv| is_env_var_call(recv, source))
+}
+
+/// True when `node` is a call whose callee path ends in `env::var` or
+/// `env::var_os` — i.e. the final segment is `var`/`var_os` and the
+/// segment before it is `env` (matches `std::env::var_os`, `env::var`, …).
+fn is_env_var_call(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    let Some(func) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "scoped_identifier" {
+        return false;
+    }
+    let Some(name) = func
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source).ok())
+    else {
+        return false;
+    };
+    if name != "var" && name != "var_os" {
+        return false;
+    }
+    // The qualifier directly before `var`/`var_os` must be `env`.
+    func.child_by_field_name("path")
+        .is_some_and(|path| trailing_path_segment(path, source) == Some("env"))
+}
+
+/// The final segment of a path: the `name` of a `scoped_identifier`
+/// (`std::env` → `env`) or the text of a bare `identifier` (`env` → `env`).
+fn trailing_path_segment<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    match node.kind() {
+        "identifier" => node.utf8_text(source).ok(),
+        "scoped_identifier" => node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok()),
+        _ => None,
+    }
 }
 
 /// Extract the final segment of a simple flag reference, or `None` if
@@ -331,6 +410,44 @@ path = "src/main.rs"
     fn allows_eprintln_under_field_verbose_guard() {
         let source = "fn f(&self) { if self.verbose { eprintln!(\"trace\"); } }";
         assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// Regression for #3941 (uv `uv-resolver/src/error.rs:789`): an
+    /// `eprintln!` gated behind `std::env::var_os(KEY).is_some()` only runs
+    /// when the consumer sets the variable — opt-in diagnostics, not noise.
+    #[test]
+    fn allows_eprintln_under_env_var_os_is_some_guard() {
+        let source =
+            "pub fn f() { if std::env::var_os(\"KEY\").is_some() { eprintln!(\"x\"); } }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    #[test]
+    fn allows_eprintln_under_env_var_is_ok_guard() {
+        let source = "pub fn f() { if std::env::var(\"KEY\").is_ok() { eprintln!(\"x\"); } }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// The `std::` prefix is optional — `env::var_os(..)` is the same gate.
+    #[test]
+    fn allows_eprintln_under_bare_env_var_os_guard() {
+        let source = "pub fn f() { if env::var_os(\"KEY\").is_some() { eprintln!(\"x\"); } }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// The issue's exact key shape: an associated const as the key arg.
+    #[test]
+    fn allows_eprintln_under_env_var_os_const_key_guard() {
+        let source = "pub fn f() { if std::env::var_os(EnvVars::UV_INTERNAL__SHOW_DERIVATION_TREE).is_some() { eprintln!(\"x\"); } }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// A non-`env::var` presence check is not a runtime opt-in: a plain
+    /// `.is_some()` on some other call stays flagged.
+    #[test]
+    fn flags_eprintln_under_non_env_is_some_guard() {
+        let source = "pub fn f(o: Option<u8>) { if o.is_some() { eprintln!(\"x\"); } }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
     }
 
     /// Bare, un-gated `eprintln!` in library code stays flagged even when a
