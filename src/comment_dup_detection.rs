@@ -103,19 +103,38 @@ fn is_excluded_comment(lower: &str) -> bool {
 /// Source-file extensions that mark a relative path as a citation target.
 const SOURCE_EXTS: &[&str] = &[".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".rs"];
 
-/// Words that, placed immediately before a doc/file/URL reference (optionally
-/// across one connector like `in`/`at`), mark that reference as a *citation* —
-/// `see X`, `rationale in X`, `documented at X` — as opposed to prose that
-/// merely happens to name a path.
-const CITATION_CUES: &[&str] = &[
-    "see", "cf", "voir", "ref", "reference", "referenced", "rationale", "convention", "documented",
-    "defined", "described", "detailed", "noted", "specified", "explained",
-];
+/// Cues that introduce a citation to *any* reference — `see X`, `cf X`,
+/// `rationale in X`, `convention in X`. These words rarely appear except to
+/// point at a canonical source, so they exempt a pointer to a doc or to a
+/// sibling source file alike (the latter is what `rationale in head.ts` needs).
+const STRONG_CUES: &[&str] =
+    &["see", "cf", "voir", "ref", "reference", "referenced", "rationale", "convention"];
+
+/// Verb cues that mark a citation only when the reference is a *documentation*
+/// target. `documented in docs/x.md` is a pointer; `defined in app.ts` /
+/// `described in cache.ts` is ordinary prose naming where code lives — so those
+/// must not exempt a duplicated rationale that merely names a source file.
+const WEAK_CUES: &[&str] =
+    &["documented", "described", "explained", "defined", "detailed", "noted", "specified"];
 
 /// Connectors allowed between a cue and its reference (`convention in X`,
 /// `documented at X`, `convention dans X`). Kept tiny on purpose: a wider window
-/// would let a cue verb elsewhere in the sentence latch onto an incidental path.
-const CITATION_CONNECTORS: &[&str] = &["in", "at", "the", "under", "dans", "à"];
+/// would let a cue word elsewhere in the sentence latch onto an incidental path.
+const CITATION_CONNECTORS: &[&str] = &["in", "at", "dans"];
+
+#[derive(Clone, Copy)]
+enum CueKind {
+    Strong,
+    Weak,
+}
+
+#[derive(Clone, Copy)]
+enum RefKind {
+    /// A documentation target: a URL or a `docs/…` / `*.md` path.
+    Doc,
+    /// A relative source path (`dir/file.ts`).
+    Source,
+}
 
 /// A "pointer" comment whose job is to cite a single canonical source — a doc,
 /// ADR, URL, or sibling file — rather than restate a rationale. Such comments
@@ -127,34 +146,48 @@ const CITATION_CONNECTORS: &[&str] = &["in", "at", "the", "under", "dans", "à"]
 /// Detection is by *adjacency*, matching the "a path introduced by `see` /
 /// `rationale in` / …" framing: a reference is a citation only when a cue word
 /// sits immediately before it (across at most one connector). Requiring the cue
-/// next to the reference — rather than merely present somewhere — keeps a long
-/// duplicated rationale that happens to name a path flagged, and prevents a cue
-/// verb used in ordinary prose (`we see a race in worker/pool.ts`) from
-/// exempting it.
+/// next to the reference — not merely present somewhere — keeps a long
+/// duplicated rationale that happens to name a path flagged, and stops a cue
+/// word used in ordinary prose (`we see a race in worker/pool.ts`) from
+/// exempting it. A weak verb cue only counts against a doc reference, since
+/// `defined in app.ts` describes code rather than citing it.
 fn is_citation_comment(lower: &str) -> bool {
     let tokens: Vec<&str> = lower.split_whitespace().collect();
     for (j, raw) in tokens.iter().enumerate() {
-        if !is_reference_token(raw) {
+        let Some(reference) = reference_kind(raw) else {
             continue;
-        }
-        if j >= 1 && is_cue(tokens[j - 1]) {
-            return true;
-        }
-        if j >= 2 && is_connector(tokens[j - 1]) && is_cue(tokens[j - 2]) {
-            return true;
+        };
+        match (preceding_cue(&tokens, j), reference) {
+            (Some(CueKind::Strong), _) | (Some(CueKind::Weak), RefKind::Doc) => return true,
+            _ => {}
         }
     }
     false
 }
 
-/// A whitespace token that names a canonical source: a URL, a documentation
-/// path (`docs/…`, `*.md`/`*.mdx`), or a relative source path (`dir/file.ts`).
-fn is_reference_token(raw: &str) -> bool {
+/// The cue introducing the reference at `j`: the token immediately before it,
+/// or the one before a single connector (`see X`, `documented at X`).
+fn preceding_cue(tokens: &[&str], j: usize) -> Option<CueKind> {
+    if j == 0 {
+        return None;
+    }
+    if let Some(kind) = cue_kind(tokens[j - 1]) {
+        return Some(kind);
+    }
+    if j >= 2 && is_connector(tokens[j - 1]) {
+        return cue_kind(tokens[j - 2]);
+    }
+    None
+}
+
+/// Classify a whitespace token that names a canonical source: a URL or a
+/// `docs/…` / `*.md` doc, versus a relative source path (`dir/file.ts`).
+fn reference_kind(raw: &str) -> Option<RefKind> {
     let core = raw.trim_matches(|c: char| {
         !c.is_alphanumeric() && !matches!(c, '/' | '.' | '-' | '_' | ':')
     });
     if core.starts_with("http://") || core.starts_with("https://") {
-        return true;
+        return Some(RefKind::Doc);
     }
     let core = core.trim_end_matches('.');
     if core.starts_with("docs/")
@@ -162,17 +195,27 @@ fn is_reference_token(raw: &str) -> bool {
         || core.ends_with(".md")
         || core.ends_with(".mdx")
     {
-        return true;
+        return Some(RefKind::Doc);
     }
-    core.contains('/') && SOURCE_EXTS.iter().any(|e| core.ends_with(e))
+    if core.contains('/') && SOURCE_EXTS.iter().any(|e| core.ends_with(e)) {
+        return Some(RefKind::Source);
+    }
+    None
 }
 
 fn word_core(tok: &str) -> &str {
     tok.trim_matches(|c: char| !c.is_alphanumeric())
 }
 
-fn is_cue(tok: &str) -> bool {
-    CITATION_CUES.contains(&word_core(tok))
+fn cue_kind(tok: &str) -> Option<CueKind> {
+    let word = word_core(tok);
+    if STRONG_CUES.contains(&word) {
+        Some(CueKind::Strong)
+    } else if WEAK_CUES.contains(&word) {
+        Some(CueKind::Weak)
+    } else {
+        None
+    }
 }
 
 fn is_connector(tok: &str) -> bool {
@@ -757,6 +800,34 @@ export const labSection = 2;
         let a = write(&dir, "a.ts", line);
         let b = write(&dir, "b.ts", line);
         assert_eq!(run(&[&a, &b]).len(), 1, "distant cue verb must not exempt");
+    }
+
+    #[test]
+    fn still_flags_rationale_describing_where_source_code_lives() {
+        // A weak verb cue (`defined`/`described`/`noted`) before a *source* path
+        // describes where code lives — ordinary prose, not a citation — so a
+        // copy-pasted rationale using it must still be flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let defined = "// Default theme values defined in config/app.ts are then merged with the user overrides before the very first paint.\nexport const t = 1;\n";
+        let a = write(&dir, "a.ts", defined);
+        let b = write(&dir, "b.ts", defined);
+        assert_eq!(run(&[&a, &b]).len(), 1, "`defined in <src>` is prose, not a citation");
+
+        let dir = tempfile::tempdir().unwrap();
+        let described = "// The eviction policy described in lib/cache.ts drops the oldest entry once the lease window has fully closed.\nexport const c = 1;\n";
+        let a = write(&dir, "a.ts", described);
+        let b = write(&dir, "b.ts", described);
+        assert_eq!(run(&[&a, &b]).len(), 1, "`described in <src>` is prose, not a citation");
+    }
+
+    #[test]
+    fn ignores_weak_cue_pointing_at_a_doc() {
+        // The same weak verb cue against a *doc* reference is a real pointer.
+        let dir = tempfile::tempdir().unwrap();
+        let line = "// Auth handshake ordering is documented in docs/security/auth.md so the client and server stay in lockstep across releases.\nexport const h = 1;\n";
+        let a = write(&dir, "a.ts", line);
+        let b = write(&dir, "b.ts", line);
+        assert!(run(&[&a, &b]).is_empty());
     }
 
     #[test]
