@@ -25,6 +25,11 @@
 //! or `std::io::ErrorKind` — are exempt: the wildcard there is idiomatic
 //! or compiler-mandated, and all arms of a `match` share one type.
 //!
+//! Matches with a non-wildcard arm carrying a match guard (`pat if cond`)
+//! are exempt as a whole: a guarded arm never counts toward exhaustiveness
+//! (the guard may be false at runtime), so the `_` arm is compiler-mandated
+//! and listing every variant explicitly does not remove it.
+//!
 //! A wildcard arm whose body is a single diverging or error expression —
 //! a `unreachable!`/`panic!`/`unimplemented!`/`todo!`/`bail!` macro
 //! invocation, or `return Err(...)` (optionally wrapped in a
@@ -84,6 +89,18 @@ impl AstCheck for Check {
             let Some(pattern) = child.child_by_field_name("pattern") else {
                 continue;
             };
+            // A match guard (`pat if cond => …`) on a non-wildcard arm
+            // never counts toward exhaustiveness — the guard may be false
+            // at runtime — so the compiler mandates a `_` arm regardless of
+            // how many variants are listed. Listing every variant
+            // explicitly does not remove that `_`, so flagging it is a
+            // false positive: skip the whole match, like the other
+            // whole-match exemptions.
+            if !pattern_is_wildcard(pattern, source_bytes)
+                && pattern_has_guard(pattern)
+            {
+                return;
+            }
             if pattern_is_wildcard(pattern, source_bytes) {
                 wildcard_arms.push(child);
             } else if pattern_is_enum_like(pattern, source_bytes) {
@@ -150,6 +167,13 @@ fn pattern_is_wildcard(pattern: tree_sitter::Node, source: &[u8]) -> bool {
     // Fallback: some grammar versions may surface `_` as an identifier
     // or similar — trust the textual form only when it's exactly `_`.
     matches!(pattern.utf8_text(source), Ok("_"))
+}
+
+/// True if the arm's pattern carries a match guard (`pat if cond`).
+/// tree-sitter-rust wraps the arm pattern in a `match_pattern` node whose
+/// optional `condition` field is present exactly when a guard is written.
+fn pattern_has_guard(pattern: tree_sitter::Node) -> bool {
+    pattern.kind() == "match_pattern" && pattern.child_by_field_name("condition").is_some()
 }
 
 /// True if `pattern` looks like it matches an enum variant. See module
@@ -568,6 +592,46 @@ mod tests {
         // constructed value over an enum still needs explicit variants.
         let src = "fn f(x: Foo) -> Bar { match x { \
                    Foo::A => Bar::One, _ => Bar::build(x, 7) } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_wildcard_with_guarded_enum_arm() {
+        // Issue #3957: a non-wildcard arm carrying a match guard never
+        // counts toward exhaustiveness, so the `_` arm is compiler-mandated
+        // regardless of how many variants are listed.
+        let src = "fn f(m: Foo) -> i32 { match m { \
+                   Foo::Bar(x) if cond(x) => a(), _ => b() } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_prost_name_value_guarded_arm() {
+        // Issue #3957: prost-derive `get_prost_path` shape — a guarded
+        // `Meta::NameValue(..)` arm followed by `_ => continue`.
+        let src = "fn g(attr: Meta) { match attr { \
+                   Meta::NameValue(MetaNameValue { path, .. }) if path.is_ident(\"prost_path\") => take(), \
+                   _ => continue, } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_prost_lit_guarded_arms() {
+        // Issue #3957: prost-derive `DefaultValue::from_lit` shape — guarded
+        // `Lit::Int(..)` arms followed by `_ => ()`.
+        let src = "fn h(lit: Lit, ty: Ty) { match lit { \
+                   Lit::Int(ref lit) if ty == Ty::Float && lit.suffix().is_empty() => f(), \
+                   Lit::Int(ref lit) if ty == Ty::Double && lit.suffix().is_empty() => d(), \
+                   _ => (), } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_unguarded_enum_match_with_wildcard() {
+        // Issue #3957 negative space: only a match guard exempts. An
+        // unguarded enum match (variants + `_`) must still flag.
+        let src = "fn f(d: Direction) -> i32 { match d { \
+                   Direction::North => 1, Direction::South => 2, _ => 0 } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
