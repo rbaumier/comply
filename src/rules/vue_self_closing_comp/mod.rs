@@ -16,7 +16,7 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["vue"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 

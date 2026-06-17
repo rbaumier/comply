@@ -68,8 +68,25 @@ impl TextCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        self.check(&CheckCtx::for_test_full(path, src, project, file))
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::test_helpers::run_rule_gated;
     use std::path::Path;
 
     fn run(source: &str) -> Vec<Diagnostic> {
@@ -86,5 +103,27 @@ mod tests {
     fn allows_element_with_content() {
         let source = "<template>\n  <div>Hello</div>\n</template>";
         assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn skips_syntax_test_fixture() {
+        // Issue #852: a `.vue` syntax-highlighting fixture (e.g. bat's
+        // `tests/syntax-tests/`) is not a real component. The engine's
+        // `skip_in_test_dir` gate suppresses the rule on test-dir paths.
+        let source = "<template>\n  <AppHeader></AppHeader>\n</template>";
+        assert!(
+            run_rule_gated(&Check, source, "tests/syntax-tests/highlighted/Vue/example.vue")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_real_component() {
+        // Control: an empty element in a real component path survives the gate.
+        let source = "<template>\n  <AppHeader></AppHeader>\n</template>";
+        assert_eq!(
+            run_rule_gated(&Check, source, "src/components/AppHeader.vue").len(),
+            1
+        );
     }
 }
