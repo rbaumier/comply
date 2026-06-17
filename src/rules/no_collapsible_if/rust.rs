@@ -48,6 +48,17 @@ crate::ast_check! { on ["if_expression"] => |node, _source, ctx, diagnostics|
         return;
     }
 
+    // Skip when either condition is an `if let` (a `let_condition`): pattern
+    // bindings cannot be combined with `&&` (only via a let-chain, which is
+    // not the suggested `a && b` form and requires Rust 1.88+ / edition 2024).
+    let outer_cond = node.child_by_field_name("condition");
+    let inner_cond = inner_if.child_by_field_name("condition");
+    if outer_cond.is_some_and(|c| c.kind() == "let_condition")
+        || inner_cond.is_some_and(|c| c.kind() == "let_condition")
+    {
+        return;
+    }
+
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -153,6 +164,48 @@ fn f() {
         setup();
         if b {
             do_something();
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_nested_if_let() {
+        let src = r#"
+fn f(&mut self) {
+    if let Some(ch) = self.ch.take() {
+        if let Some(buf) = &mut self.raw_buffer {
+            buf.push(ch);
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_outer_plain_inner_if_let() {
+        let src = r#"
+fn f() {
+    if cond {
+        if let Some(v) = y {
+            do_something(v);
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_outer_if_let_inner_plain() {
+        let src = r#"
+fn f() {
+    if let Some(v) = x {
+        if cond {
+            do_something(v);
         }
     }
 }
