@@ -125,8 +125,9 @@ impl OxcCheck for Check {
         };
         let arg_name = arg_ident.name.as_str();
 
-        // `default*` props are initial-value props (controlled/uncontrolled pattern) — not derived state.
-        if arg_name.starts_with("default") {
+        // `default*` and `initial*` props are initial-value props (controlled/uncontrolled
+        // pattern) — they seed state once and are not re-synced, so they are not derived state.
+        if arg_name.starts_with("default") || arg_name.starts_with("initial") {
             return;
         }
 
@@ -147,5 +148,54 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::diagnostic::Diagnostic;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_by_id("react-no-derived-use-state", source, "t.tsx")
+    }
+
+    // Regression test for #3934 (mantine DirectionProvider): an `initial*`-prefixed prop seeds
+    // state once and is not derived — must not flag on the live oxc backend.
+    #[test]
+    fn allows_initial_prefix_prop_as_initial_value() {
+        assert!(
+            run(r#"
+function DirectionProvider({ initialDirection = 'ltr' }) {
+    const [dir, setDir] = useState(initialDirection);
+    return <div>{dir}</div>;
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_default_prefix_prop_as_initial_value() {
+        assert!(
+            run(r#"
+function Input({ defaultValue }) {
+    const [val, setVal] = useState(defaultValue);
+    return <input value={val} />;
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    // True-positive guard for #3934: a plain prop (not `initial*`/`default*`) still flags.
+    #[test]
+    fn flags_plain_prop_not_initial_prefixed() {
+        let diags = run(r#"
+function Card({ value }) {
+    const [v, setV] = useState(value);
+    return <div>{v}</div>;
+}
+"#);
+        assert_eq!(diags.len(), 1);
     }
 }
