@@ -43,6 +43,7 @@ pub mod playwright;
 pub mod react_leak_helpers;
 #[cfg(test)]
 pub mod regex_ast;
+pub mod regex_helpers;
 mod registry;
 pub use registry::build_rust_only_rule;
 pub mod rust_helpers;

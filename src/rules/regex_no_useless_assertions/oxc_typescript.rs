@@ -6,50 +6,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::regex_helpers::is_inside_char_class;
 use std::sync::Arc;
-
-/// Returns true if byte at `i` is inside a `[...]` character class.
-/// Tracks `[` / `]` while respecting `\` escapes and the JavaScript/POSIX rule
-/// that the first `]` after `[` (or `[^`) is a literal character, not a closer.
-fn is_inside_char_class(bytes: &[u8], target: usize) -> bool {
-    let mut inside = false;
-    // When `just_opened` is true, the next `]` is treated as a literal.
-    let mut just_opened = false;
-    let mut i = 0;
-    while i < target {
-        match bytes[i] {
-            b'\\' => {
-                // Fix: guard against trailing backslash to avoid OOB panic.
-                i = i.saturating_add(2).min(bytes.len());
-                just_opened = false;
-            }
-            b'[' if !inside => {
-                inside = true;
-                just_opened = true;
-                i += 1;
-                // Skip optional `^` at the start of a negated class.
-                if i < target && i < bytes.len() && bytes[i] == b'^' {
-                    i += 1;
-                }
-            }
-            b']' if inside => {
-                if just_opened {
-                    // First `]` after `[` or `[^` is a literal in JS regex.
-                    just_opened = false;
-                    i += 1;
-                } else {
-                    inside = false;
-                    i += 1;
-                }
-            }
-            _ => {
-                just_opened = false;
-                i += 1;
-            }
-        }
-    }
-    inside
-}
 
 fn has_useless_dollar(pattern: &str) -> bool {
     let bytes = pattern.as_bytes();
