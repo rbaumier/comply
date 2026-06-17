@@ -1,9 +1,12 @@
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::rust_helpers::is_in_test_context;
 
 crate::ast_check! { on ["call_expression"] prefilter = ["Regex::new"] => |node, source, ctx, diagnostics|
     let Some(func_node) = node.child_by_field_name("function") else { return };
     let Ok(func_text) = func_node.utf8_text(source) else { return };
     if func_text != "Regex::new" { return; }
+
+    if is_in_test_context(node, source) { return; }
 
     let Ok(text) = node.utf8_text(source) else { return };
 
@@ -104,5 +107,23 @@ mod tests {
     fn allows_inline_comment() {
         let src = "fn f() { let re = Regex::new(r\"^P(?:\\d+Y)?(?:\\d+M)?(?:\\d+D)?$\").unwrap(); // duration\n}";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_undocumented_regex_in_cfg_test_module() {
+        let src = "#[cfg(test)]\nmod test {\nfn sanitize(s: String) -> String {\nlet re = Regex::new(r\"^P(?:\\d+Y)?(?:\\d+M)?(?:\\d+D)?$\").unwrap();\nre.replace_all(s.as_str(), \"x\").to_string()\n}\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_undocumented_regex_in_test_fn() {
+        let src = "#[test]\nfn it_works() {\nlet re = Regex::new(r\"^P(?:\\d+Y)?(?:\\d+M)?(?:\\d+D)?$\").unwrap();\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_undocumented_regex_in_production_code() {
+        let src = "fn parse() {\nlet re = Regex::new(r\"^P(?:\\d+Y)?(?:\\d+M)?(?:\\d+D)?$\").unwrap();\n}";
+        assert_eq!(run(src).len(), 1);
     }
 }
