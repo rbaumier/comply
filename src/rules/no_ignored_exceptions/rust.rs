@@ -56,6 +56,14 @@
 //!   caller (no `?`, no `Result` return). `let _ =` is the idiomatic best-effort
 //!   cleanup for an RAII destructor. Scoped to a `fn drop` directly inside a
 //!   `Drop` trait impl, so a `let _ =` in any other method still fires.
+//! - `let _ = f::<Infallible, _>(..)`: a turbofish call whose type arguments fix
+//!   the error type to `Infallible`. `Result<_, Infallible>` is uninhabited on
+//!   its `Err` side, so the result can never be `Err` — discarding it ignores no
+//!   error. Recognized purely syntactically on the turbofish: any type argument
+//!   whose final path segment is `Infallible` (`Infallible`,
+//!   `std::convert::Infallible`, `core::convert::Infallible`). A turbofish with a
+//!   real error type (`let _ = f::<MyError, _>(..)`) or no turbofish at all still
+//!   fires.
 //!
 //! NOTE: This rule uses a heuristic (call-like pattern matching) rather than
 //! type awareness. It may flag `let _ = infallible_fn()` where the function
@@ -107,6 +115,13 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
     // Skip the intentional-drop idiom `let _ = Arc/Box::from_raw(p)`: the
     // reconstruction is infallible and exists only to run the value's `Drop`.
     if is_from_raw_reconstruction(value, source) {
+        return;
+    }
+
+    // Skip a turbofish call fixing the error type to `Infallible`
+    // (`let _ = f::<Infallible, _>(..)`): the `Err` side is uninhabited, so the
+    // result can never be `Err` — there is no error to handle.
+    if has_infallible_turbofish(value, source) {
         return;
     }
 
@@ -235,6 +250,40 @@ fn is_from_raw_reconstruction(value: Node, source: &[u8]) -> bool {
     };
     let name = callee.rsplit("::").next().unwrap_or(callee);
     name == "from_raw"
+}
+
+/// True if `value` is a turbofish call whose type arguments fix the error type
+/// to `Infallible` (`let _ = f::<Infallible, _>(..)` /
+/// `f::<std::convert::Infallible, _>(..)`). `Result<_, Infallible>` has an
+/// uninhabited `Err` side, so the result can never be `Err` — discarding it
+/// ignores no error.
+///
+/// Matched purely on the turbofish: the `call_expression`'s function must be a
+/// `generic_function` carrying `type_arguments`, and at least one type argument
+/// must have a final path segment of `Infallible` (matching `Infallible`,
+/// `std::convert::Infallible`, and `core::convert::Infallible` via
+/// `rsplit("::")`). The inferred `_` placeholder and a real error type
+/// (`f::<MyError, _>(..)`) do not match, so those still fire.
+fn has_infallible_turbofish(value: Node, source: &[u8]) -> bool {
+    if value.kind() != "call_expression" {
+        return false;
+    }
+    let Some(function) = value.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "generic_function" {
+        return false;
+    }
+    let Some(type_arguments) = function.child_by_field_name("type_arguments") else {
+        return false;
+    };
+    let mut cursor = type_arguments.walk();
+    type_arguments.named_children(&mut cursor).any(|arg| {
+        let Ok(text) = arg.utf8_text(source) else {
+            return false;
+        };
+        text.rsplit("::").next().unwrap_or(text).trim() == "Infallible"
+    })
 }
 
 /// True if `value` is a method call `expr.send(..)` — the best-effort channel
@@ -907,5 +956,33 @@ mod tests {
         let diagnostics =
             crate::rules::test_helpers::run_rule(&Check, src, "src/fail/handler.rs");
         assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_infallible_turbofish() {
+        // Regression for #3962: a turbofish fixing the error type to
+        // `Infallible` yields a `Result<_, Infallible>` whose `Err` side is
+        // uninhabited — the result can never be `Err`, so `let _ =` ignores no
+        // error. The issue's exact async-graphql `context.rs` example, plus the
+        // bare and `core::convert::` spellings.
+        let async_graphql =
+            "fn f() { let _ = self.try_for_each::<std::convert::Infallible, _>(|x| Ok(())); }";
+        let bare = "fn f() { let _ = g::<Infallible, _>(x); }";
+        let core = "fn f() { let _ = h::<core::convert::Infallible, _>(x); }";
+        assert!(run_on(async_graphql).is_empty());
+        assert!(run_on(bare).is_empty());
+        assert!(run_on(core).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_non_infallible_turbofish() {
+        // Negative space for #3962: the exemption is keyed on an `Infallible`
+        // final segment. A turbofish with a real error type still genuinely
+        // swallows the error, and a fallible call with no turbofish at all is
+        // unaffected by this exemption.
+        let real_error = "fn f() { let _ = f::<MyError, _>(x); }";
+        let no_turbofish = "fn f() { let _ = fallible(); }";
+        assert_eq!(run_on(real_error).len(), 1);
+        assert_eq!(run_on(no_turbofish).len(), 1);
     }
 }
