@@ -22,6 +22,13 @@ fn count_params(params: &FormalParameters) -> (usize, bool) {
 /// lexical scope. Returns `None` when the binding is not a statically known
 /// function-shaped value, so shadowing is respected: the symbol table picks the
 /// declaration actually in scope at the call site, never an outer same-named one.
+///
+/// A binding that resolves through a formal parameter (a function-typed
+/// parameter, or a prop destructured in a parameter pattern) is also `None`: its
+/// arity is governed by the parameter's annotation — optional params, rest
+/// params, library type aliases, overloads — which this syntactic check cannot
+/// expand. Counting the enclosing function's parameters instead would flag every
+/// valid call that passes such optional/trailing arguments.
 fn resolve_arity<'a>(
     callee: &oxc_ast::ast::IdentifierReference,
     semantic: &'a oxc_semantic::Semantic<'a>,
@@ -41,11 +48,22 @@ fn resolve_arity<'a>(
 
     let nodes = semantic.nodes();
     let decl_id = scoping.symbol_declaration(sym_id);
-    let decl_kind = std::iter::once(nodes.kind(decl_id))
-        .chain(nodes.ancestor_kinds(decl_id))
-        .find(|kind| {
-            matches!(kind, AstKind::Function(_) | AstKind::VariableDeclarator(_))
-        })?;
+
+    // Walk from the binding up to its declaring node. Reaching a FormalParameter(s)
+    // first means the binding is a parameter, not a local function — bail so its
+    // (un-expandable) annotated arity is never derived from the enclosing function.
+    let mut decl_kind = None;
+    for kind in std::iter::once(nodes.kind(decl_id)).chain(nodes.ancestor_kinds(decl_id)) {
+        match kind {
+            AstKind::FormalParameter(_) | AstKind::FormalParameters(_) => return None,
+            AstKind::Function(_) | AstKind::VariableDeclarator(_) => {
+                decl_kind = Some(kind);
+                break;
+            }
+            _ => continue,
+        }
+    }
+    let decl_kind = decl_kind?;
 
     match decl_kind {
         AstKind::Function(func) => {
@@ -228,6 +246,48 @@ mod tests {
             function helper() {
                 const test = async () => {};
                 return test;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_function_typed_parameter() {
+        // `setValue` is a parameter typed by a library alias whose signature has
+        // optional params (react-hook-form's `(name, value, options?)`). Its call
+        // arity must not be derived from the enclosing function's 1-param count
+        // (#4039).
+        let src = r#"
+            function useFlow(setValue: UseFormSetValue<Form>) {
+                setValue("categoryId", created.id, { shouldDirty: true });
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_destructured_function_prop_parameter() {
+        // `search` is destructured from props and typed `(query, signal?) => …`;
+        // a 2-arg call passing the optional `signal` must not be flagged against
+        // the component's single props parameter (#4039).
+        let src = r#"
+            function Combobox({ search }: { search: (query: string, signal?: AbortSignal) => Promise<unknown> }) {
+                return search(query, signal);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_callback_parameter_in_factory() {
+        // `predicate` is the parameter of an arrow used as an object-literal
+        // property inside a zero-param factory; resolving its arity must stop at
+        // that parameter, not climb to the factory's (zero) param count (#4039).
+        let src = r#"
+            function createSender() {
+                return {
+                    findOne: (predicate) => list.find((email) => predicate(email)),
+                };
             }
         "#;
         assert!(run(src).is_empty());
