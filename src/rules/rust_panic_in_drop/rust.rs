@@ -21,9 +21,6 @@ const PANIC_MACROS: &[&str] = &[
     "assert",
     "assert_eq",
     "assert_ne",
-    "debug_assert",
-    "debug_assert_eq",
-    "debug_assert_ne",
     "unimplemented",
     "todo",
     "unreachable",
@@ -226,6 +223,34 @@ mod tests {
     fn allows_panic_in_other_impl() {
         let source = "struct A; impl A { fn f(&self) { panic!(\"x\"); } }";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_debug_assert_in_drop() {
+        let source = "struct G; impl Drop for G { fn drop(&mut self) { \
+                      debug_assert!(self.x.is_empty()); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_debug_assert_eq_in_drop() {
+        let source = "struct G; impl Drop for G { fn drop(&mut self) { \
+                      debug_assert_eq!(self.x, 0); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_debug_assert_ne_in_drop() {
+        let source = "struct G; impl Drop for G { fn drop(&mut self) { \
+                      debug_assert_ne!(self.x, 0); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_non_debug_assert_eq_in_drop() {
+        let source = "struct G; impl Drop for G { fn drop(&mut self) { \
+                      assert_eq!(self.x, 0); } }";
+        assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
