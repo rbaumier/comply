@@ -3,8 +3,15 @@
 use super::oxc_typescript::Check;
 use crate::diagnostic::Diagnostic;
 
+/// Runs the rule for a React Native project (the framework gate is satisfied).
 fn run(src: &str) -> Vec<Diagnostic> {
-    crate::rules::test_helpers::run_rule(&Check, src, "t.tsx")
+    crate::rules::test_helpers::run_rule_with_ctx(
+        &Check,
+        src,
+        "t.tsx",
+        &crate::project::ProjectCtx::for_test_with_framework("react-native"),
+        crate::rules::file_ctx::default_static_file_ctx(),
+    )
 }
 
 // ── invalid.jsx — each color literal in an RN style context fires ──────────
@@ -154,6 +161,23 @@ fn allows_create_on_non_stylesheet_object() {
 fn allows_color_literal_in_non_style_jsx_attribute() {
     let src = "const N = () => (\n\t<View data={{ backgroundColor: '#fff' }}>hello</View>\n);";
     assert!(run(src).is_empty());
+}
+
+// ── Framework gate — web React DOM `style={{...}}` must not fire (#3998) ───
+
+#[test]
+fn ignores_dom_inline_style_on_web_project() {
+    // Plain web React (no `react-native` framework): a DOM `<div style={{...}}>`
+    // with a color literal is normal CSS, not a React Native style.
+    let src = "const ButtonSeparator = () => <div style={{ backgroundColor: '#fff' }} />;";
+    assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty());
+}
+
+#[test]
+fn flags_dom_inline_style_on_react_native_project() {
+    // Same shape, but on a React Native project — the rule fires.
+    let src = "const ButtonSeparator = () => <div style={{ backgroundColor: '#fff' }} />;";
+    assert_eq!(run(src).len(), 1);
 }
 
 // ── validCustomStyleSheet.jsx — StyleSheet from another package ────────────

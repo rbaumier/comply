@@ -1,10 +1,11 @@
 //! OxcCheck backend for rn-no-literal-colors.
 //!
-//! Flags object properties whose name contains "color" (case-insensitive) and
-//! whose value is a string literal — when they appear inside a React Native
-//! style context: a JSX attribute whose name contains "style", or a
-//! `StyleSheet.create(...)` call where `StyleSheet` is either an unresolved
-//! global or imported from `react-native` / `react-native-web`.
+//! Only runs on projects that use the `react-native` framework. Flags object
+//! properties whose name contains "color" (case-insensitive) and whose value is
+//! a string literal — when they appear inside a React Native style context: a
+//! JSX attribute whose name contains "style", or a `StyleSheet.create(...)`
+//! call where `StyleSheet` is either an unresolved global or imported from
+//! `react-native` / `react-native-web`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -124,6 +125,9 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if !ctx.project.has_framework("react-native") {
+            return;
+        }
         let AstKind::ObjectProperty(prop) = node.kind() else {
             return;
         };
