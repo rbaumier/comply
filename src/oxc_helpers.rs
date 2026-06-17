@@ -1833,6 +1833,25 @@ pub fn type_annotation_is_type_predicate(
     annotation.is_some_and(|ann| matches!(ann.type_annotation, TSType::TSTypePredicate(_)))
 }
 
+/// True when `annotation` is a return-type that admits both `return;` (yields
+/// `undefined`) and `return expr;`: a bare `void`/`undefined` keyword, or a union
+/// that includes either. Mixing bare and value returns under such a contract is
+/// the canonical TypeScript idiom (e.g. `: T | undefined`, void tail-calls), not
+/// an inconsistency.
+#[must_use]
+pub fn return_type_admits_void_or_undefined(
+    annotation: Option<&oxc_ast::ast::TSTypeAnnotation>,
+) -> bool {
+    use oxc_ast::ast::TSType;
+    fn is_void_or_undefined(ty: &TSType) -> bool {
+        matches!(ty, TSType::TSVoidKeyword(_) | TSType::TSUndefinedKeyword(_))
+    }
+    annotation.is_some_and(|ann| match &ann.type_annotation {
+        TSType::TSUnionType(union) => union.types.iter().any(is_void_or_undefined),
+        ty => is_void_or_undefined(ty),
+    })
+}
+
 /// True when any enclosing function/arrow of `node_id` declares a type-predicate
 /// (`value is T`) return type. Such a function IS a hand-written type guard: the
 /// `as` casts in its body are needed to read discriminant properties off the
