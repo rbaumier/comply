@@ -2,7 +2,7 @@
 //! single `return` forwarding the exact parameters to another callee.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, node_has_preceding_deprecated_tag};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Expression, FormalParameters, Statement};
 use std::sync::Arc;
@@ -68,6 +68,18 @@ impl OxcCheck for Check {
         // removed without breaking that registration, so the passthrough is
         // intentional and required.
         if !method.decorators.is_empty() {
+            return;
+        }
+
+        // A method whose own leading JSDoc carries an `@deprecated` tag is a
+        // deliberately-retained public-API alias: the name is an external
+        // contract that outlives its trivial forwarding body (e.g. graphql-js
+        // `GraphQLEnumType.serialize` forwarding to `coerceOutputValue` during a
+        // deprecation window). Inlining is impossible (call sites are external
+        // consumers) and removal is the breaking change the deprecation defers,
+        // so the passthrough is intentional — the same class of external
+        // significance as a decorator above.
+        if node_has_preceding_deprecated_tag(semantic.comments(), ctx.source, method.span.start as usize) {
             return;
         }
 
@@ -195,6 +207,38 @@ mod tests {
         // invoke the method polymorphically, so a shallow pass-through is still a
         // deletable wrapper and must flag.
         let src = "class C { foo(x) { return this.bar(x); } }";
+        assert_eq!(run(src).len(), 1, "expected one diagnostic, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_deprecated_forwarding_alias() {
+        // Regression for #3905: graphql-js `GraphQLEnumType.serialize` /
+        // `parseValue` are `@deprecated` public-API aliases forwarding to their
+        // renamed replacements during a deprecation window. The method name is
+        // an external contract — it cannot be inlined (call sites are external
+        // consumers) nor removed (that is the breaking change the deprecation
+        // defers), so the forwarding body is intentional.
+        let serialize = "class GraphQLEnumType { /** @deprecated use `coerceOutputValue()` instead, `serialize()` will be removed in v18 */ serialize(outputValue) { return this.coerceOutputValue(outputValue); } }";
+        assert!(run(serialize).is_empty(), "expected no diagnostics, got: {:?}", run(serialize));
+
+        let parse_value = "class GraphQLEnumType { /** @deprecated use `coerceInputValue()` instead, `parseValue()` will be removed in v18 */ parseValue(inputValue, hideSuggestions) { return this.coerceInputValue(inputValue, hideSuggestions); } }";
+        assert!(run(parse_value).is_empty(), "expected no diagnostics, got: {:?}", run(parse_value));
+    }
+
+    #[test]
+    fn flags_passthrough_with_non_deprecated_jsdoc() {
+        // A leading JSDoc that does NOT carry `@deprecated` does not mark the
+        // name as an external contract, so a shallow pass-through still flags.
+        let src = "class A { /** does a thing */ foo(a, b) { return this.bar(a, b); } }";
+        assert_eq!(run(src).len(), 1, "expected one diagnostic, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_passthrough_when_deprecated_tag_belongs_to_another_method() {
+        // The `@deprecated` tag here is the leading JSDoc of `other`, not of the
+        // pass-through `foo` below it. Only the method's OWN immediately-
+        // preceding comment exempts it, so `foo` must still flag.
+        let src = "class A { /** @deprecated */ other() { return 1; } foo(a, b) { return this.bar(a, b); } }";
         assert_eq!(run(src).len(), 1, "expected one diagnostic, got: {:?}", run(src));
     }
 

@@ -586,6 +586,38 @@ pub fn has_ts_expect_error_above(
     })
 }
 
+/// True when the node starting at byte offset `span_start` is immediately
+/// preceded by a JSDoc/leading comment carrying an `@deprecated` tag — only
+/// whitespace separates the comment's end from the node. The comment may be a
+/// `//` line comment or a `/* … */` (incl. `/** … */`) block comment.
+///
+/// An `@deprecated` tag marks the declaration's name as part of an external
+/// contract retained past its useful body: removing or inlining it is the
+/// breaking change the deprecation window exists to defer. Matching against the
+/// real comment spans from `semantic.comments()` (rather than a raw text scan)
+/// keeps an `@deprecated` that merely appears inside a string literal from
+/// counting, and the whitespace-only gap check keeps a far-above comment that
+/// belongs to a different declaration from leaking onto this node. The tag is
+/// matched case-sensitively, mirroring the sibling `deprecation_without_alternative`
+/// rule and the JSDoc canonical lowercase `@deprecated`.
+pub fn node_has_preceding_deprecated_tag(
+    comments: &[oxc_ast::ast::Comment],
+    source: &str,
+    span_start: usize,
+) -> bool {
+    comments.iter().any(|comment| {
+        let end = comment.span.end as usize;
+        if end > span_start {
+            return false;
+        }
+        let gap = &source[end..span_start];
+        if !gap.chars().all(char::is_whitespace) {
+            return false;
+        }
+        source[comment.span.start as usize..end].contains("@deprecated")
+    })
+}
+
 /// Convert an oxc byte offset into 1-based `(line, column)`.
 ///
 /// Shared across all `OxcCheck` rules that emit diagnostics. Rules call this
@@ -2266,7 +2298,8 @@ mod oxc_helpers_tests {
     use super::{
         ClassShape, expression_is_or_resolves_to_literal, file_imports_db_library,
         has_ts_expect_error_above, is_as_unknown_double_cast, is_outer_as_unknown_double_cast,
-        peel_parens, type_annotation_is_type_predicate, with_semantic,
+        node_has_preceding_deprecated_tag, peel_parens, type_annotation_is_type_predicate,
+        with_semantic,
     };
     use oxc_ast::AstKind;
     use oxc_span::SourceType;
@@ -2603,6 +2636,43 @@ mod oxc_helpers_tests {
         let src = "// just a note\ntype Dup = X;";
         with_semantic(src, SourceType::ts(), |sem| {
             assert!(!has_ts_expect_error_above(sem.comments(), src, type_dup_start(src)));
+        });
+    }
+
+    /// Byte offset of the `foo` method name in `src`.
+    fn foo_method_start(src: &str) -> usize {
+        src.find("foo").expect("a `foo` method")
+    }
+
+    #[test]
+    fn deprecated_tag_above_detects_jsdoc_and_line_forms() {
+        for src in [
+            "class A { /** @deprecated use bar instead */ foo() {} }",
+            "class A {\n  // @deprecated\n  foo() {}\n}",
+        ] {
+            with_semantic(src, SourceType::ts(), |sem| {
+                assert!(
+                    node_has_preceding_deprecated_tag(sem.comments(), src, foo_method_start(src)),
+                    "tag directly above should match: {src:?}"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn deprecated_tag_above_rejects_when_another_member_intervenes() {
+        // The tag is the leading comment of `other`, not of `foo` below it.
+        let src = "class A { /** @deprecated */ other() {} foo() {} }";
+        with_semantic(src, SourceType::ts(), |sem| {
+            assert!(!node_has_preceding_deprecated_tag(sem.comments(), src, foo_method_start(src)));
+        });
+    }
+
+    #[test]
+    fn deprecated_tag_above_rejects_plain_comment() {
+        let src = "class A { /** does a thing */ foo() {} }";
+        with_semantic(src, SourceType::ts(), |sem| {
+            assert!(!node_has_preceding_deprecated_tag(sem.comments(), src, foo_method_start(src)));
         });
     }
 
