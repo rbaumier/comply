@@ -50,6 +50,35 @@ fn is_string_literal(expr: &Expression) -> bool {
     matches!(expr, Expression::StringLiteral(_))
 }
 
+/// True when `expr` is an enum/constant member access, e.g.
+/// `AnnotationEditorType.SIGNATURE` or `Limits.MAX_LEN`: the chain is rooted on a
+/// PascalCase type/enum identifier and the accessed property is SCREAMING_SNAKE_CASE
+/// (the idiomatic JS/TS enum-member convention). That marks a compile-time constant
+/// — its value is fixed at the call site, so, like a string literal, there is
+/// nothing for timing to leak. A runtime secret read keeps a lowercase root: a
+/// camelCase member (`user.token`, `req.body.password`) or a namespace accessor
+/// (`process.env.SECRET`, whose property is also all-caps) stays flagged.
+fn is_const_member(expr: &Expression) -> bool {
+    let Expression::StaticMemberExpression(m) = expr else {
+        return false;
+    };
+    is_screaming_snake(m.property.name.as_str())
+        && receiver_root_identifier(expr).is_some_and(|root| {
+            root.as_bytes().first().is_some_and(u8::is_ascii_uppercase)
+        })
+}
+
+/// SCREAMING_SNAKE_CASE / all-uppercase constant name: at least one ASCII
+/// uppercase letter, no ASCII lowercase letter, and a leading uppercase letter
+/// (so a leading `_` or digit is rejected); interior `_` and digits are allowed.
+fn is_screaming_snake(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    bytes.first().is_some_and(u8::is_ascii_uppercase)
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || *b == b'_')
+}
+
 /// True when both operands are member accesses rooted on the same object, e.g.
 /// `data.password === data.confirmPassword` or `data.nested.confirm === data.password`.
 /// Both sides are sibling fields of one user-supplied value being checked for a
@@ -114,6 +143,9 @@ impl OxcCheck for Check {
             return;
         }
         if is_string_literal(&bin.left) || is_string_literal(&bin.right) {
+            return;
+        }
+        if is_const_member(&bin.left) || is_const_member(&bin.right) {
             return;
         }
         // An operand bound to a primitive literal (`const defaultApiKey = "9f7d…";
@@ -188,6 +220,33 @@ mod tests {
     fn allows_non_secret_equality() {
         let src = r#"if (status === "active") {}"#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression for #3978: pdf.js compares a UI editor-mode against an enum
+    // constant (`AnnotationEditorType.SIGNATURE` === 101). The SCREAMING_SNAKE
+    // property is a compile-time constant — like a string literal, it leaks
+    // nothing via timing — so enum-member dispatch must not be flagged. The
+    // member only matched `SECRET_NAMES` because `SIGNATURE` lowercases to
+    // `signature`.
+    #[test]
+    fn allows_enum_constant_member_equality() {
+        assert!(run(r#"if (mode === AnnotationEditorType.SIGNATURE) {}"#).is_empty());
+        assert!(run(r#"if (currentMode === AnnotationEditorType.SIGNATURE) {}"#).is_empty());
+        assert!(run(r#"if (x === Foo.MAX_LEN) {}"#).is_empty());
+    }
+
+    // The enum constant on the left operand is exempted symmetrically.
+    #[test]
+    fn allows_enum_constant_member_on_left() {
+        assert!(run(r#"if (AnnotationEditorType.SIGNATURE === mode) {}"#).is_empty());
+    }
+
+    // Narrowness guard: only the all-uppercase member convention is exempt. A
+    // lowercase/camelCase member is a genuine runtime secret access and stays
+    // flagged — `user.signature`/`user.token` are not enum constants.
+    #[test]
+    fn flags_lowercase_signature_member_equality() {
+        assert_eq!(run(r#"if (obj.signature === sig) {}"#).len(), 1);
     }
 
     // Regression for #262: comparing a secret-looking field against an absence
