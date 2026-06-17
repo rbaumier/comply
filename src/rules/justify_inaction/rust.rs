@@ -14,7 +14,12 @@
 //!   An `Err(…)` arm is also exempt when every variable it binds is
 //!   underscore-prefixed (e.g. `Err(_frame) => {}`): the `_` prefix is
 //!   Rust's signal that the value is intentionally discarded, so the
-//!   empty body is already documented by the binding name.
+//!   empty body is already documented by the binding name. It is likewise
+//!   exempt when its payload is a const/path that binds nothing
+//!   (`Err(Self::REGISTERED) => {}`, `Err(MAX_RETRIES) => {}`): the arm
+//!   pins itself to one specific known value — the self-documenting
+//!   lock-free CAS "already in this exact state" no-op — just like a
+//!   named-variant arm.
 //! - `for_expression.body` / `while_expression.body` /
 //!   `loop_expression.body` — empty loop body.
 //!
@@ -45,6 +50,7 @@
 //! would be pure noise.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::rust_helpers::tuple_struct_pattern_binds_const;
 
 fn block_is_empty(node: tree_sitter::Node) -> bool {
     node.kind() == "block" && node.named_child_count() == 0
@@ -74,6 +80,13 @@ fn pattern_needs_justification(node: tree_sitter::Node, source: &[u8]) -> bool {
                 return false;
             };
             if !(text.starts_with("Err(") || text.contains("::Err(")) {
+                return false;
+            }
+            // `Err(Self::REGISTERED) => {}` / `Err(MAX_RETRIES) => {}` pins the arm
+            // to one specific known value and binds nothing — the self-documenting
+            // lock-free CAS "already in this exact state" no-op, exactly like the
+            // `Progress::None => {}` named-variant arm exempted above.
+            if tuple_struct_pattern_binds_const(node, source) {
                 return false;
             }
             !all_bindings_underscore_prefixed(node, source)
@@ -335,6 +348,36 @@ mod tests {
     fn flags_empty_scoped_err_arm_with_named_binding() {
         let src = "fn f(r: Result<u8, E>) { match r { Ok(v) => go(v), my::Err(e) => {} } }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_empty_err_arm_scoped_const_issue_3986() {
+        // Lock-free CAS idiom: `Err(Self::REGISTERED) => {}` pins the arm to
+        // one specific const value and binds nothing — self-documenting no-op.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Ok(v) => go(v), \
+                   Err(Self::REGISTERED) => {} \
+                   Err(_state) => { other(); } \
+                   } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_err_arm_screaming_snake_const_issue_3986() {
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Ok(v) => go(v), \
+                   Err(MAX_RETRIES) => {} \
+                   Err(_state) => { other(); } \
+                   } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_err_arm_lowercase_binding_issue_3986() {
+        // Narrowness guard: a lowercase identifier is a FRESH BINDING, not a
+        // const — `Err(frame) => {}` still needs justification and must fire.
+        let src = "fn f(r: Result<u8, E>) { match r { Ok(v) => go(v), Err(frame) => {} } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 
     #[test]

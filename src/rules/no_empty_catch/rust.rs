@@ -8,9 +8,15 @@
 //! A body is considered "empty" when it is a `block` with zero named
 //! children AND contains no comment. Comments act as an explicit
 //! justification for swallowing the error.
+//!
+//! An empty `Err(CONST_PATH) => {}` arm is exempt: a payload that is a
+//! const/path binding nothing (`Err(Self::REGISTERED)`, `Err(MAX_RETRIES)`)
+//! pins the arm to one specific known error value — the lock-free CAS
+//! "already in this exact state, nothing to do" no-op, not a swallow. A
+//! wildcard (`Err(_)`) or fresh binding (`Err(e)`) stays flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::arm_body_is_diverging;
+use crate::rules::rust_helpers::{arm_body_is_diverging, tuple_struct_pattern_binds_const};
 
 crate::ast_check! { on ["match_arm", "let_condition", "let_chain", "if_expression"] => |node, source, ctx, diagnostics|
 match node.kind() {
@@ -21,6 +27,13 @@ match node.kind() {
             }
             let Some(value) = node.child_by_field_name("value") else { return };
             if !is_empty_block(&value, source) {
+                return;
+            }
+            // A value-specific no-op: `Err(Self::REGISTERED) => {}` /
+            // `Err(MAX_RETRIES) => {}` matches one specific const error
+            // value and binds nothing — the lock-free CAS "already in this
+            // exact state, nothing to do" arm, not silent error-swallowing.
+            if pattern_is_const_err(&pattern, source) {
                 return;
             }
             // A controlled assertion: `Err(Foo) => {}` paired with a
@@ -128,6 +141,17 @@ fn pattern_is_err(node: &tree_sitter::Node, source: &[u8]) -> bool {
         return head == "Err" || head.ends_with("::Err");
     }
     false
+}
+
+/// True if `node` is `Err(CONST_PATH)` — an `Err(...)` whose payload is a
+/// const/path pattern that binds nothing (`Err(Self::REGISTERED)`,
+/// `Err(MAX_RETRIES)`). Such an arm pins itself to one specific known error
+/// value, so an empty body is a deliberate value-specific no-op, not a swallow.
+/// A wildcard (`Err(_)`) or a fresh binding (`Err(e)`) is NOT a const pattern
+/// and stays flagged.
+fn pattern_is_const_err(node: &tree_sitter::Node, source: &[u8]) -> bool {
+    let inner = unwrap_match_pattern(*node);
+    inner.kind() == "tuple_struct_pattern" && tuple_struct_pattern_binds_const(inner, source)
 }
 
 fn unwrap_match_pattern(node: tree_sitter::Node) -> tree_sitter::Node {
@@ -243,5 +267,49 @@ mod tests {
                    Err(_) => {} \
                    } }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_empty_err_arm_scoped_const_issue_3986() {
+        // Lock-free CAS idiom: `Err(Self::REGISTERED) => {}` matches one
+        // specific const value and binds nothing — the "already done" no-op.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Ok(v) => go(v), \
+                   Err(Self::REGISTERED) => {} \
+                   Err(_state) => { other(); } \
+                   } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_err_arm_screaming_snake_const_issue_3986() {
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Ok(v) => go(v), \
+                   Err(MAX_RETRIES) => {} \
+                   Err(_state) => { other(); } \
+                   } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_err_arm_lowercase_binding_issue_3986() {
+        // Narrowness guard: a lowercase identifier is a FRESH BINDING, not a
+        // const — `Err(frame) => {}` still swallows the error and must fire.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Ok(v) => go(v), \
+                   Err(frame) => {} \
+                   } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_err_arm_underscore_binding_issue_3986() {
+        // Narrowness guard: an underscore-prefixed binding is still a binding,
+        // not a const — `Err(_state) => {}` with an empty body still swallows.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Ok(v) => go(v), \
+                   Err(_state) => {} \
+                   } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 }
