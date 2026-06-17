@@ -38,6 +38,15 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A zero-argument call carries no error and no result, so there is
+        // nothing for a missing `return` to drop. `next()`/`cb()` with no
+        // arguments is a side-effecting continuation/notification, not a Node
+        // error-first callback (`cb(err)`, `callback(err, data)`), so there's
+        // no propagation hazard.
+        if call.arguments.is_empty() {
+            return;
+        }
+
         // If the call sits inside an arrow function whose body is an
         // expression (e.g. `(x) => cb(x)` or `(x) => wrap(cb(x))`), the
         // value is implicitly returned — there's no "forgot return" risk.
@@ -335,6 +344,35 @@ mod tests {
         // Negative space: a genuine non-awaited, non-returned Node error-first
         // callback followed by more work is still flagged.
         let src = "function f(cb) { cb(err); doMore(); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_zero_arg_next_continuation() {
+        // Issue #3968: a Zimmerframe visitor continuation `next()` is called for
+        // its side effect with zero arguments, then the function does dependent
+        // work. A no-arg call propagates nothing, so a missing `return` is fine.
+        let src = "function v(node, { next }) { next(); const x = []; doWork(x); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_zero_arg_cb_then_work() {
+        // A bare `cb();` (no arguments) followed by more work carries no
+        // error/result, so there is no propagation hazard.
+        let src = "function f(cb) { cb(); doMore(); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_callback_with_err_and_data() {
+        let src = "function f(callback) { callback(err, data); doMore(); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_next_with_error() {
+        let src = "function f(next) { next(error); doMore(); }";
         assert_eq!(run(src).len(), 1);
     }
 }
