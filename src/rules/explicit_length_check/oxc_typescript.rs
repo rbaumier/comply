@@ -67,11 +67,14 @@ fn is_inside_expect_argument(trimmed: &str, prop_pos: usize) -> bool {
 }
 
 /// True when the `.length`/`.size` whose `.` is at `prop_pos` is consumed as a
-/// numeric value rather than coerced to boolean. Two shapes:
+/// numeric value rather than coerced to boolean. Shapes:
 ///   * right-hand operand of a comparison — `found.length !== other.length`
 ///     (`prefix.length` reached after a `===`/`!==`/`<`/`>`/`<=`/`>=`);
 ///   * a non-leading call/bracket argument — `slice(0, prefix.length)`
 ///     (the base is preceded by a `,` at the same nesting level).
+///   * a ternary branch — `cond ? arr.length : 0` / `cond ? 0 : arr.length`
+///     (the base is preceded by `?` or `:`), or an object-property value
+///     (`{ k: arr.length }`); both are value positions, never boolean coercion.
 /// A plain `=` assignment RHS (`x = arr.length`) is also a value position.
 fn length_is_numeric_operand(trimmed: &str, prop_pos: usize) -> bool {
     let bytes = trimmed.as_bytes();
@@ -110,8 +113,17 @@ fn length_is_numeric_operand(trimmed: &str, prop_pos: usize) -> bool {
         return false;
     }
     // Comparison RHS (`===`, `!==`, `==`, `<`, `>`, `<=`, `>=`) or `=` assignment
-    // RHS, or a non-leading argument separated by `,`.
-    matches!(bytes[j - 1], b'=' | b'<' | b'>' | b',')
+    // RHS, a non-leading argument separated by `,`, or a ternary branch /
+    // object-property value preceded by `?`/`:`.
+    match bytes[j - 1] {
+        b'=' | b'<' | b'>' | b',' | b':' => true,
+        // `?` is a ternary delimiter only when not part of optional chaining:
+        // `obj?.length` puts a `?` immediately left of the base chain too, but
+        // there it is followed by `.` (`?.`) and the access stays a boolean
+        // coercion. A ternary `?` is followed by whitespace/the value.
+        b'?' => bytes[j] != b'.',
+        _ => false,
+    }
 }
 
 /// Check if a line has a bare `.length`/`.size` in a boolean context
@@ -374,5 +386,49 @@ mod tests {
     #[test]
     fn still_flags_bare_length_in_boolean_call_issue_589() {
         assert_eq!(run_on("if (Boolean(arr.length)) {}").len(), 1);
+    }
+
+    // Regression #3914 — a ternary branch is a numeric value position, not a
+    // boolean coercion. The consequent / alternate can sit on its own line.
+    #[test]
+    fn allows_length_as_ternary_consequent_issue_3914() {
+        assert!(run_on("const n = cond ? obj.length : 0;").is_empty());
+    }
+
+    #[test]
+    fn allows_length_as_ternary_alternate_issue_3914() {
+        assert!(run_on("const n = cond ? 0 : obj.length;").is_empty());
+    }
+
+    #[test]
+    fn allows_length_as_split_ternary_consequent_issue_3914() {
+        // prettier src/language-yaml/utilities.js:221 shape.
+        let src = "x = matches\n  ? matches.groups.leadingSpace.length\n  : Number.POSITIVE_INFINITY;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_length_as_split_ternary_alternate_issue_3914() {
+        let src = "x = cond\n  ? 0\n  : obj.length;";
+        assert!(run_on(src).is_empty());
+    }
+
+    // `:` also marks an object-property value — a value position, not coercion.
+    #[test]
+    fn allows_length_as_object_property_value_brace_issue_3914() {
+        assert!(run_on("{ k: arr.length }").is_empty());
+    }
+
+    // Optional chaining in a boolean test MUST STILL FLAG: the `?` allow-list
+    // addition is gated on the next char not being `.`, so `obj?.length`'s
+    // optional-chaining `?` is not mistaken for a ternary delimiter.
+    #[test]
+    fn still_flags_optional_chain_length_in_if_issue_3914() {
+        assert_eq!(run_on("if (a?.b.length) {}").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_optional_chain_length_as_call_arg_issue_3914() {
+        assert_eq!(run_on("notExpect(a?.b.length);").len(), 1);
     }
 }
