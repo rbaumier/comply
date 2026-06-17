@@ -59,6 +59,16 @@ fn is_mutating_call(expr: &Expression, source: &str) -> bool {
     if !MUTATING_METHODS.contains(&member.property.name.as_str()) {
         return false;
     }
+    // A receiver whose name starts with an uppercase letter (all-caps `MAP`/`BIT`
+    // or PascalCase `Foo`/`Immutable`) names a namespace / class / constant
+    // object, not an array instance. `reverse`/`sort`/`fill`/`splice` are
+    // `Array.prototype` instance methods; an uppercase-first receiver is a
+    // method-name collision with a user-defined static (e.g. `MAP.splice(body)`).
+    if let Expression::Identifier(obj) = &member.object
+        && obj.name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+    {
+        return false;
+    }
     !is_fresh_array(&member.object, source)
 }
 
@@ -214,5 +224,42 @@ mod oxc_tests {
     fn flags_preexisting_array_sort() {
         // GUARD: a pre-existing receiver is still mutated in place.
         assert_eq!(run("const sorted = arr.sort();").len(), 1);
+    }
+
+    // === issue #3950: uppercase-first receiver is a namespace/class, not an array ===
+
+    #[test]
+    fn allows_uppercase_namespace_splice() {
+        // `MAP.splice` is a user-defined static factory, not `Array.prototype.splice`.
+        assert!(run("function a() { return MAP.splice(body); }").is_empty());
+    }
+
+    #[test]
+    fn allows_pascalcase_class_reverse() {
+        assert!(run("function c() { return Foo.reverse(x); }").is_empty());
+    }
+
+    #[test]
+    fn allows_pascalcase_namespace_sort() {
+        assert!(run("const x = Immutable.sort(x);").is_empty());
+    }
+
+    #[test]
+    fn flags_lowercase_receiver_splice() {
+        // GUARD: a lowercase receiver is an array instance — still misleading.
+        assert_eq!(run("function f() { return arr.splice(0, 1); }").len(), 1);
+    }
+
+    #[test]
+    fn flags_lowercase_receiver_reverse() {
+        // GUARD: a lowercase receiver is an array instance — still misleading.
+        assert_eq!(run("function f() { return items.reverse(); }").len(), 1);
+    }
+
+    #[test]
+    fn flags_member_chain_receiver_sort() {
+        // GUARD: a member-access-chain receiver (`obj.items`) is not an
+        // Identifier, so the uppercase guard does not apply — still flags.
+        assert_eq!(run("function f() { return obj.items.sort(); }").len(), 1);
     }
 }
