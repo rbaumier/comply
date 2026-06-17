@@ -135,8 +135,9 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     }
     let Ok(arg_name) = first_arg.utf8_text(source) else { return };
 
-    // `default*` props are initial-value props (controlled/uncontrolled pattern) — not derived state.
-    if arg_name.starts_with("default") {
+    // `default*` and `initial*` props are initial-value props (controlled/uncontrolled
+    // pattern) — they seed state once and are not re-synced, so they are not derived state.
+    if arg_name.starts_with("default") || arg_name.starts_with("initial") {
         return;
     }
 
@@ -295,5 +296,44 @@ function Input({ defaultValue }) {
 "#)
             .is_empty()
         );
+    }
+
+    // Regression test for #3934: `initial*` props are initial-value props, same as `default*`.
+    #[test]
+    fn allows_initial_prefix_prop_as_initial_value() {
+        assert!(
+            run(r#"
+function DirectionProvider({ initialDirection = 'ltr' }) {
+    const [dir, setDir] = useState(initialDirection);
+    return <div>{dir}</div>;
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_initial_value_prop() {
+        assert!(
+            run(r#"
+function Field({ initialValue }) {
+    const [value, setValue] = useState(initialValue);
+    return <input value={value} />;
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    // True-positive guard for #3934: a plain prop (not `initial*`/`default*`) still flags.
+    #[test]
+    fn flags_plain_prop_not_initial_prefixed() {
+        let diags = run(r#"
+function Card({ value }) {
+    const [v, setV] = useState(value);
+    return <div>{v}</div>;
+}
+"#);
+        assert_eq!(diags.len(), 1);
     }
 }
