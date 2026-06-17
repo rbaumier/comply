@@ -84,13 +84,13 @@ fn check_return_types(
     if return_types.contains("unknown") {
         return None;
     }
-    let has_null_or_undefined =
-        return_types.contains("null") || return_types.contains("undefined");
-    let non_nullish: Vec<_> = return_types
-        .iter()
-        .filter(|&&t| t != "null" && t != "undefined")
-        .collect();
-    if has_null_or_undefined && non_nullish.len() <= 1 {
+    // Absence sentinels: `null`/`undefined` and a `false` literal (the
+    // find-or-`false` idiom). Exactly one concrete type alongside any of
+    // these is a deliberate value-or-absence union, not a defect.
+    let is_sentinel = |t: &str| t == "null" || t == "undefined" || t == "false";
+    let has_sentinel = return_types.iter().any(|t| is_sentinel(t));
+    let non_sentinel: Vec<_> = return_types.iter().filter(|t| !is_sentinel(t)).collect();
+    if has_sentinel && non_sentinel.len() <= 1 {
         return None;
     }
     let (line, column) = byte_offset_to_line_col(ctx.source, span_start);
@@ -190,7 +190,17 @@ fn infer_type(expr: &Expression) -> &'static str {
     match expr {
         Expression::NumericLiteral(_) => "number",
         Expression::StringLiteral(_) | Expression::TemplateLiteral(_) => "string",
-        Expression::BooleanLiteral(_) => "boolean",
+        // A `false` literal is the find-or-`false` negative sentinel — the
+        // same value-or-absence role `null`/`undefined` play. Tag it distinctly
+        // so `check_return_types` can fold it into the absence-sentinel set.
+        // `true` stays a concrete `"boolean"` value.
+        Expression::BooleanLiteral(lit) => {
+            if lit.value {
+                "boolean"
+            } else {
+                "false"
+            }
+        }
         Expression::NullLiteral(_) => "null",
         Expression::ArrayExpression(_) => "array",
         Expression::ObjectExpression(_) => "object",
@@ -301,5 +311,74 @@ mod tests {
             }, []);
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_find_or_false_string_sentinel() {
+        // Regression for #3966 — svelte's get_directive_type: several string
+        // literals or `false` when no match. `false` is an absence sentinel,
+        // same role as `null`/`undefined`.
+        let src = r#"
+            function get_directive_type(name) {
+                if (name === 'use') return 'UseDirective';
+                if (name === 'animate') return 'AnimateDirective';
+                if (name === 'bind') return 'BindDirective';
+                return false;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_find_or_false_number_sentinel() {
+        // {number, false} — find-or-false returning an index.
+        let src = r#"
+            function indexOf(x: number) {
+                if (x === 1) return 0;
+                if (x === 2) return 1;
+                return false;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_one_concrete_with_false_and_null() {
+        // {string, false, null} — one concrete type plus two sentinels.
+        let src = r#"
+            function lookup(x: number) {
+                if (x === 1) return "a";
+                if (x === 2) return false;
+                return null;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_two_concrete_with_false() {
+        // {number, string, false} — two concrete types plus false still flags;
+        // `false` doesn't rescue a genuine mixed-concrete union.
+        let src = r#"
+            function f(x: number) {
+                if (x === 1) return 1;
+                if (x === 2) return "two";
+                return false;
+            }
+        "#;
+        assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_string_with_true() {
+        // {string, boolean} via `true` — `true` is a concrete value, not a
+        // sentinel, so a string/true union still flags.
+        let src = r#"
+            function f(x: number) {
+                if (x === 1) return "one";
+                return true;
+            }
+        "#;
+        assert!(!run(src).is_empty());
     }
 }
