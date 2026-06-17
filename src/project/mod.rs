@@ -1765,6 +1765,8 @@ pub struct CargoManifest {
     manifest_dir: PathBuf,
     /// `[lib]` table is present.
     has_lib_table: bool,
+    /// `[lib] proc-macro = true` — the crate builds a procedural-macro target.
+    proc_macro: bool,
     /// One or more `[[bin]]` tables are present.
     has_bin_table: bool,
     /// An async runtime (`tokio`, `async-std`, `futures`) is declared in any
@@ -1788,6 +1790,12 @@ impl CargoManifest {
 
         let has_lib_table = value.get("lib").is_some();
 
+        let proc_macro = value
+            .get("lib")
+            .and_then(|lib| lib.get("proc-macro"))
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(false);
+
         let has_bin_table = value.get("bin").is_some();
 
         let async_runtime = ["dependencies", "dev-dependencies", "build-dependencies"]
@@ -1808,6 +1816,7 @@ impl CargoManifest {
         Some(CargoManifest {
             manifest_dir,
             has_lib_table,
+            proc_macro,
             has_bin_table,
             async_runtime,
             no_std_category,
@@ -1844,6 +1853,14 @@ impl CargoManifest {
     /// True when the crate depends on an async runtime.
     pub fn has_async_runtime(&self) -> bool {
         self.async_runtime
+    }
+
+    /// True when the crate declares `[lib] proc-macro = true`. By Rust's
+    /// compilation model a proc-macro crate can export only procedural macros;
+    /// downstream crates cannot import any other item, so its `pub` types are
+    /// reachable only inside the crate itself.
+    pub fn is_proc_macro(&self) -> bool {
+        self.proc_macro
     }
 
     /// True when `[package].categories` lists `"no-std"`.
@@ -5622,6 +5639,41 @@ tokio = "1"
         );
         assert!(first.has_async_runtime(), "tokio is declared");
         assert!(first.is_no_std(), "categories lists no-std");
+    }
+
+    #[test]
+    fn cargo_manifest_classifies_proc_macro_crate() {
+        let dir = PathBuf::from("/crate");
+
+        let proc_macro = CargoManifest::parse(
+            "[package]\nname = \"derive\"\nversion = \"0.1.0\"\n\n[lib]\nproc-macro = true\n",
+            dir.clone(),
+        )
+        .unwrap();
+        assert!(
+            proc_macro.is_proc_macro(),
+            "[lib] proc-macro = true => proc-macro crate"
+        );
+
+        let lib_only = CargoManifest::parse(
+            "[package]\nname = \"libonly\"\nversion = \"0.1.0\"\n\n[lib]\nname = \"libonly\"\n",
+            dir.clone(),
+        )
+        .unwrap();
+        assert!(
+            !lib_only.is_proc_macro(),
+            "[lib] without proc-macro = true => not a proc-macro crate"
+        );
+
+        let no_lib = CargoManifest::parse(
+            "[package]\nname = \"nolib\"\nversion = \"0.1.0\"\n",
+            dir,
+        )
+        .unwrap();
+        assert!(
+            !no_lib.is_proc_macro(),
+            "no [lib] table => not a proc-macro crate"
+        );
     }
 
     #[test]

@@ -7,7 +7,8 @@
 //!
 //! Suppressed for: `pub(crate)`/`pub(super)`/`pub(in …)` visibility,
 //! files under `tests/` or `benches/`, items in a `#[cfg(test)]` module,
-//! items with `#[doc(hidden)]`, items carrying
+//! items in a `proc-macro = true` crate (whose `pub` types are unreachable by
+//! consumers), items with `#[doc(hidden)]`, items carrying
 //! `#[allow(missing_debug_implementations)]` or
 //! `#[expect(missing_debug_implementations)]` (the rustc lint this rule
 //! mirrors — the author has explicitly opted out), and types with
@@ -48,6 +49,16 @@ impl AstCheck for Check {
             return;
         }
         if is_in_test_context(node, source_bytes) || has_test_attribute(node, source_bytes) {
+            return;
+        }
+        // A `proc-macro = true` crate can export only procedural macros; its
+        // `pub` types are unreachable by any consumer, so "consumers can't
+        // debug it" is structurally inapplicable.
+        if ctx
+            .project
+            .nearest_cargo_manifest(ctx.path)
+            .is_some_and(|m| m.is_proc_macro())
+        {
             return;
         }
         if has_doc_hidden(node, source_bytes) {
@@ -257,6 +268,20 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, fake_path)
     }
 
+    /// Run on a file in `dir/src/x.rs` next to the given `Cargo.toml`, so
+    /// `nearest_cargo_manifest` resolves the temp crate's manifest (e.g. for
+    /// the `proc-macro = true` exemption).
+    fn run_on_with_cargo(cargo_toml_contents: &str, source: &str) -> Vec<Diagnostic> {
+        use std::fs;
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("Cargo.toml"), cargo_toml_contents).unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        let src_path = dir.path().join("src/x.rs");
+        fs::write(&src_path, source).unwrap();
+        crate::rules::test_helpers::run_rule(&Check, source, &src_path)
+    }
+
     #[test]
     fn flags_pub_struct_without_debug() {
         assert_eq!(run_on("pub struct User { name: String }").len(), 1);
@@ -384,6 +409,54 @@ mod tests {
     fn still_flags_with_unrelated_allow() {
         // `#[allow(dead_code)]` is unrelated; suppression is lint-specific.
         assert_eq!(run_on("#[allow(dead_code)]\npub struct X { name: String }").len(), 1);
+    }
+
+    const PROC_MACRO_CARGO_TOML: &str = r#"
+[package]
+name = "prost-derive-like"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+"#;
+
+    const LIB_CARGO_TOML: &str = r#"
+[package]
+name = "normal-lib"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "normal_lib"
+"#;
+
+    /// Closes #3960: a `pub` type in a `proc-macro = true` crate is unreachable
+    /// by any consumer (prost-derive `field/scalar.rs:585` etc.), so it must
+    /// not be flagged.
+    #[test]
+    fn suppresses_pub_type_in_proc_macro_crate() {
+        assert!(
+            run_on_with_cargo(PROC_MACRO_CARGO_TOML, "pub enum Kind { Bool, Int }").is_empty(),
+            "must not flag pub types in a proc-macro crate"
+        );
+        assert!(
+            run_on_with_cargo(PROC_MACRO_CARGO_TOML, "pub struct Field { name: String }")
+                .is_empty(),
+            "must not flag pub structs in a proc-macro crate"
+        );
+    }
+
+    /// A normal library crate (`[lib]` without `proc-macro = true`) exposes its
+    /// `pub` types to consumers — the exemption is proc-macro-only, so it must
+    /// still flag.
+    #[test]
+    fn still_flags_pub_type_in_normal_lib_crate() {
+        assert_eq!(
+            run_on_with_cargo(LIB_CARGO_TOML, "pub struct Api { name: String }").len(),
+            1,
+            "a normal lib crate's pub type with no Debug must still flag"
+        );
     }
 
     #[test]
