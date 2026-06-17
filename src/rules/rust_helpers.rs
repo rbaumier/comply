@@ -630,6 +630,65 @@ pub fn cast_operand_is_collection_size(cast: Node, source: &[u8]) -> bool {
         .is_some_and(|name| SIZE_METHODS.contains(&name))
 }
 
+/// True if `node` is a const-or-path pattern that binds nothing — it pins a
+/// match arm to one specific known value rather than capturing it.
+///
+/// Used on the inner payload of an `Err(...)` `tuple_struct_pattern` to tell the
+/// self-documenting lock-free CAS idiom (`Err(Self::REGISTERED) => {}` — "already
+/// in this exact state, nothing to do") apart from genuine error-swallowing
+/// (`Err(e) => {}`). Two arms qualify:
+///
+/// - `scoped_identifier` (`Self::REGISTERED`, `Foo::BAR`) — a qualified path is
+///   always a const/associated-item reference, never a fresh binding.
+/// - `identifier` in SCREAMING_SNAKE_CASE (`REGISTERED`, `MAX_RETRIES`) — Rust
+///   convention reserves all-uppercase names for consts. The heuristic requires
+///   at least two characters, at least one ASCII uppercase letter, and no ASCII
+///   lowercase letter. This rejects a single-uppercase-letter name (`X`) and any
+///   mixed-case name (`Frame`, a unit-variant pattern) as not-a-const, and — by
+///   definition — a lowercase `identifier` (`e`, `state`, `frame`), which is a
+///   FRESH BINDING and must stay flagged.
+fn is_const_or_path_pattern(node: Node, source: &[u8]) -> bool {
+    match node.kind() {
+        "scoped_identifier" => true,
+        "identifier" => node.utf8_text(source).is_ok_and(is_screaming_snake),
+        _ => false,
+    }
+}
+
+/// True if `name` follows Rust's SCREAMING_SNAKE_CASE const convention: at least
+/// two characters, at least one ASCII uppercase letter, and no ASCII lowercase
+/// letter. Interior digits and underscores are allowed alongside the uppercase
+/// letters, but a leading underscore is rejected: in pattern position a
+/// `_`-prefixed identifier (`_FOO`) is an intentionally-unused binding, not a
+/// const reference, so it must not be classified as a const.
+fn is_screaming_snake(name: &str) -> bool {
+    name.len() >= 2
+        && !name.starts_with('_')
+        && name.bytes().any(|b| b.is_ascii_uppercase())
+        && !name.bytes().any(|b| b.is_ascii_lowercase())
+}
+
+/// True if `tuple_struct_pattern` (e.g. `Err(Self::REGISTERED)`) wraps a single
+/// payload that is a const-or-path pattern — see [`is_const_or_path_pattern`].
+///
+/// The payload is the lone named child that is not the constructor path (the
+/// `type` field, i.e. the `Err`/`Result::Err` head). A pattern with zero or more
+/// than one payload (`Err()`, `Foo(a, b)`) is not a single-value const match and
+/// returns false.
+pub fn tuple_struct_pattern_binds_const(tuple_struct_pattern: Node, source: &[u8]) -> bool {
+    let mut cursor = tuple_struct_pattern.walk();
+    let payloads: Vec<Node> = tuple_struct_pattern
+        .children(&mut cursor)
+        .enumerate()
+        .filter(|(i, child)| {
+            child.is_named()
+                && tuple_struct_pattern.field_name_for_child(*i as u32) != Some("type")
+        })
+        .map(|(_, child)| child)
+        .collect();
+    matches!(payloads.as_slice(), [payload] if is_const_or_path_pattern(*payload, source))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -670,6 +729,45 @@ mod tests {
             }
         }
         None
+    }
+
+    #[test]
+    fn tuple_struct_pattern_binds_const_distinguishes_const_from_binding() {
+        let cases = [
+            // scoped_identifier payload — always a path/const, never a binding.
+            ("fn f(r: R) { match r { Err(Self::REGISTERED) => {} } }", true),
+            ("fn f(r: R) { match r { Err(Foo::BAR) => {} } }", true),
+            // A qualified `Result::Err` head must not be mistaken for the payload.
+            ("fn f(r: R) { match r { Result::Err(Self::REGISTERED) => {} } }", true),
+            // SCREAMING_SNAKE identifier — a const by convention.
+            ("fn f(r: R) { match r { Err(MAX_RETRIES) => {} } }", true),
+            ("fn f(r: R) { match r { Err(REGISTERED) => {} } }", true),
+            // Fresh lowercase bindings — must NOT be exempted.
+            ("fn f(r: R) { match r { Err(e) => {} } }", false),
+            ("fn f(r: R) { match r { Err(frame) => {} } }", false),
+            ("fn f(r: R) { match r { Err(_state) => {} } }", false),
+            // A leading-underscore SCREAMING name is an intentionally-unused
+            // binding in pattern position, not a const reference.
+            ("fn f(r: R) { match r { Err(_FOO) => {} } }", false),
+            // Wildcard is the `_` token, not a binding identifier.
+            ("fn f(r: R) { match r { Err(_) => {} } }", false),
+            // Mixed-case identifier (a unit-variant pattern) is not a const.
+            ("fn f(r: R) { match r { Err(Frame) => {} } }", false),
+            // Single uppercase letter is rejected by the boundary rule.
+            ("fn f(r: R) { match r { Err(X) => {} } }", false),
+            // A multi-arg tuple struct is not a single-value const match.
+            ("fn f(r: R) { match r { Err(A, B) => {} } }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let pat = first_of_kind(tree.root_node(), "tuple_struct_pattern")
+                .expect("snippet should contain a tuple_struct_pattern");
+            assert_eq!(
+                tuple_struct_pattern_binds_const(pat, src.as_bytes()),
+                expected,
+                "tuple_struct_pattern_binds_const mismatch for `{src}`"
+            );
+        }
     }
 
     #[test]
