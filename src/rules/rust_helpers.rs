@@ -1061,6 +1061,174 @@ pub fn tuple_struct_pattern_binds_const(tuple_struct_pattern: Node, source: &[u8
     matches!(payloads.as_slice(), [payload] if is_const_or_path_pattern(*payload, source))
 }
 
+/// Returns the text between a macro invocation's outer delimiter pair. `text`
+/// is the whole invocation (`name!( .. )` / `name![ .. ]` / `name!{ .. }`); we
+/// find the first delimiter after `!` and its match.
+///
+/// tree-sitter-rust models macro arguments as an opaque `token_tree`, so rules
+/// that need the individual arguments parse the token-tree text directly. This
+/// is the shared entry point for that parsing.
+pub(crate) fn macro_body(text: &str) -> Option<&str> {
+    let bytes = text.as_bytes();
+    let open = bytes.iter().position(|&b| matches!(b, b'(' | b'[' | b'{'))?;
+    let close = matching_close(bytes, open)?;
+    text.get(open + 1..close)
+}
+
+/// Index of the delimiter closing the one opened at `open`, skipping nested
+/// delimiters and string/char literal contents.
+pub(crate) fn matching_close(bytes: &[u8], open: usize) -> Option<usize> {
+    let mut depth: i32 = 0;
+    let mut i = open;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                i = skip_string_literal(bytes, i);
+                continue;
+            }
+            b'\'' if is_char_literal(bytes, i) => {
+                i = skip_char_literal(bytes, i);
+                continue;
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Splits a macro body into its top-level arguments (separated by commas at
+/// depth 0 of the body), skipping commas inside nested delimiters and
+/// string/char literals. A trailing comma yields no empty final argument.
+pub(crate) fn split_top_level_args(body: &str) -> Vec<&str> {
+    let bytes = body.as_bytes();
+    let mut args = Vec::new();
+    let mut depth: i32 = 0;
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                i = skip_string_literal(bytes, i);
+                continue;
+            }
+            b'\'' if is_char_literal(bytes, i) => {
+                i = skip_char_literal(bytes, i);
+                continue;
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b',' if depth == 0 => {
+                args.push(&body[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let tail = body[start..].trim();
+    if !tail.is_empty() {
+        args.push(&body[start..]);
+    }
+    args
+}
+
+/// If `arg` is exactly a plain (`"..."`) or raw (`r"..."` / `r#"..."#`) string
+/// literal, returns its raw inner content (escapes left intact). Returns `None`
+/// when the argument is anything else (a `concat!`, a constant, an expression, a
+/// byte string, …).
+pub(crate) fn string_literal_content(arg: &str) -> Option<String> {
+    let bytes = arg.as_bytes();
+    let open = bytes.iter().position(|&b| b == b'"')?;
+    // Only a raw-string prefix (`r`, `r#`, `r##`, …) or nothing may precede the
+    // opening quote. Anything else means the argument is not a bare string
+    // literal.
+    let prefix = &arg[..open];
+    let is_raw = match prefix {
+        "" => false,
+        _ if prefix.starts_with('r') && prefix[1..].bytes().all(|b| b == b'#') => true,
+        _ => return None,
+    };
+    let end = skip_string_literal(bytes, open);
+    // The literal must span the entire argument.
+    if end != bytes.len() {
+        return None;
+    }
+    let hashes = prefix.bytes().filter(|&b| b == b'#').count();
+    let inner_start = open + 1;
+    let inner_end = end - 1 - if is_raw { hashes } else { 0 };
+    arg.get(inner_start..inner_end).map(str::to_owned)
+}
+
+/// Advances past a string literal starting at the opening `"` at `start`.
+/// Detects raw strings (`r"..."` / `r#"..."#`) by walking back over the `#`s and
+/// the `r` prefix: in a raw string backslashes do not escape and the literal
+/// ends at `"` followed by the same number of `#`s. In a plain string, `\"` is
+/// an escaped quote.
+pub(crate) fn skip_string_literal(bytes: &[u8], start: usize) -> usize {
+    let mut hashes = 0;
+    let mut j = start;
+    while j > 0 && bytes[j - 1] == b'#' {
+        j -= 1;
+        hashes += 1;
+    }
+    let is_raw = j > 0 && bytes[j - 1] == b'r';
+    let hashes = if is_raw { hashes } else { 0 };
+    let mut i = start + 1;
+    if is_raw {
+        while i < bytes.len() {
+            if bytes[i] == b'"' && closing_hashes_match(bytes, i + 1, hashes) {
+                return i + 1 + hashes;
+            }
+            i += 1;
+        }
+    } else {
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' => i += 2,
+                b'"' => return i + 1,
+                _ => i += 1,
+            }
+        }
+    }
+    i
+}
+
+fn closing_hashes_match(bytes: &[u8], at: usize, hashes: usize) -> bool {
+    (0..hashes).all(|k| bytes.get(at + k) == Some(&b'#'))
+}
+
+/// Distinguishes a char literal `'c'` / `'\n'` from a lifetime tick. A char
+/// literal has a closing `'` within a few bytes; a lifetime (`'a`) does not, so
+/// we conservatively require a closing quote.
+pub(crate) fn is_char_literal(bytes: &[u8], start: usize) -> bool {
+    // `'\X'` or `'X'` — closing quote within 4 bytes accounts for escapes.
+    let mut i = start + 1;
+    if bytes.get(i) == Some(&b'\\') {
+        i += 1;
+    }
+    i += 1;
+    bytes.get(i) == Some(&b'\'')
+}
+
+pub(crate) fn skip_char_literal(bytes: &[u8], start: usize) -> usize {
+    let mut i = start + 1;
+    if bytes.get(i) == Some(&b'\\') {
+        i += 2;
+    } else {
+        i += 1;
+    }
+    // Now at the closing quote.
+    i + 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
