@@ -221,6 +221,181 @@ fn collect_post_mount_effect_only_refs<'a>(
         .collect()
 }
 
+/// True if `expr` is the member expression `<ref_name>.current`.
+fn is_ref_current_read(expr: &oxc_ast::ast::Expression, ref_name: &str) -> bool {
+    let oxc_ast::ast::Expression::StaticMemberExpression(member) = expr else {
+        return false;
+    };
+    if member.property.name.as_str() != "current" {
+        return false;
+    }
+    let oxc_ast::ast::Expression::Identifier(obj) = &member.object else {
+        return false;
+    };
+    obj.name.as_str() == ref_name
+}
+
+/// True if `expr` is a nullish literal: `null`, `undefined`, or `void 0`.
+fn is_nullish_literal(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::{Expression, UnaryOperator};
+    match expr {
+        Expression::NullLiteral(_) => true,
+        Expression::Identifier(ident) => ident.name.as_str() == "undefined",
+        Expression::UnaryExpression(unary) => unary.operator == UnaryOperator::Void,
+        _ => false,
+    }
+}
+
+/// True if `expr` is a nullish guard on `<ref_name>.current` — i.e. it tests
+/// that the ref is still unset before the lazy write runs. Recognizes:
+/// - `!ref.current` (logical-not),
+/// - `ref.current === null`/`== null`/`=== undefined`/`=== void 0` (and the
+///   mirrored `null === ref.current`),
+/// - a `||` `LogicalExpression` where EVERY operand is itself a nullish guard
+///   on the same ref (e.g. `!ref.current || ref.current === undefined`).
+///
+/// A `||` test gates a one-time init only when all disjuncts are nullish
+/// self-guards: `A || B` runs the consequent when either is true, so a single
+/// non-guard operand (`cond || !ref.current`) lets the write run on later
+/// renders and would not gate the init.
+///
+/// Deliberately does NOT match the truthy test `if (ref.current)` — that is the
+/// opposite condition (write when already set) and would not gate a one-time
+/// init.
+fn is_nullish_guard_on_ref(expr: &oxc_ast::ast::Expression, ref_name: &str) -> bool {
+    use oxc_ast::ast::{BinaryOperator, Expression, LogicalOperator, UnaryOperator};
+    match expr {
+        Expression::ParenthesizedExpression(paren) => {
+            is_nullish_guard_on_ref(&paren.expression, ref_name)
+        }
+        Expression::UnaryExpression(unary) => {
+            unary.operator == UnaryOperator::LogicalNot
+                && is_ref_current_read(&unary.argument, ref_name)
+        }
+        Expression::BinaryExpression(bin) => {
+            let is_eq = matches!(
+                bin.operator,
+                BinaryOperator::Equality | BinaryOperator::StrictEquality
+            );
+            if !is_eq {
+                return false;
+            }
+            (is_ref_current_read(&bin.left, ref_name) && is_nullish_literal(&bin.right))
+                || (is_ref_current_read(&bin.right, ref_name) && is_nullish_literal(&bin.left))
+        }
+        Expression::LogicalExpression(logical) => {
+            // `A || B` runs the consequent when EITHER operand is true, so it
+            // gates a one-time init only when EVERY operand is itself a nullish
+            // self-guard on the same ref. A single non-guard disjunct (e.g.
+            // `cond || !ref.current`) lets the write run on later renders →
+            // not lazy-init, so the render read can still tear.
+            logical.operator == LogicalOperator::Or
+                && is_nullish_guard_on_ref(&logical.left, ref_name)
+                && is_nullish_guard_on_ref(&logical.right, ref_name)
+        }
+        _ => false,
+    }
+}
+
+/// Collect the names of refs that follow React's sanctioned lazy-init pattern:
+/// every render-time write to `ref.current` sits inside the consequent of an
+/// `if` whose test nullish-guards THAT SAME ref (`if (!ref.current) { ref.current = make(); }`).
+///
+/// React's docs ("Avoiding recreating the ref contents") allow reading such a
+/// ref during render: the write runs only on the first render (the guard is
+/// false thereafter), so every subsequent read returns the same stable object —
+/// no tearing.
+///
+/// The classification requires (a) at least one write to `ref.current`, and
+/// (b) that EVERY such write be nullish-self-guarded. The guard guarantees the
+/// write runs at most once regardless of where it sits, so a guarded ref is
+/// stable after init. A ref written unconditionally (`ref.current = compute()`)
+/// has an unguarded write and is therefore NOT lazy-init — its read still
+/// flags, guarding against the tearing false-negative.
+fn collect_lazy_init_refs<'a>(
+    body_span: oxc_span::Span,
+    refs: &HashSet<String>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> HashSet<String> {
+    // Consequent spans of `if`-statements whose test nullish-guards a given ref,
+    // keyed by the guarded ref name.
+    let mut guarded_consequents: Vec<(String, oxc_span::Span)> = Vec::new();
+    for node in semantic.nodes().iter() {
+        let AstKind::IfStatement(if_stmt) = node.kind() else {
+            continue;
+        };
+        if if_stmt.span.start < body_span.start || if_stmt.span.end > body_span.end {
+            continue;
+        }
+        // Only guards in the component's own render scope gate render-time
+        // reads; a guard inside a nested closure says nothing about render.
+        if is_inside_nested_function(node.id(), body_span, semantic) {
+            continue;
+        }
+        for name in refs {
+            if is_nullish_guard_on_ref(&if_stmt.test, name) {
+                guarded_consequents.push((name.clone(), if_stmt.consequent.span()));
+            }
+        }
+    }
+
+    // Classify each write to `ref.current`: is it inside the consequent of an
+    // `if` that nullish-guards THAT SAME ref?
+    let mut has_any_write: HashSet<String> = HashSet::new();
+    let mut has_unguarded_write: HashSet<String> = HashSet::new();
+
+    for node in semantic.nodes().iter() {
+        let member = match node.kind() {
+            AstKind::AssignmentExpression(assign) => {
+                let oxc_ast::ast::AssignmentTarget::StaticMemberExpression(member) = &assign.left
+                else {
+                    continue;
+                };
+                member.as_ref()
+            }
+            AstKind::UpdateExpression(update) => {
+                let oxc_ast::ast::SimpleAssignmentTarget::StaticMemberExpression(member) =
+                    &update.argument
+                else {
+                    continue;
+                };
+                member.as_ref()
+            }
+            _ => continue,
+        };
+        if member.property.name.as_str() != "current" {
+            continue;
+        }
+        if member.span.start < body_span.start || member.span.end > body_span.end {
+            continue;
+        }
+        let oxc_ast::ast::Expression::Identifier(obj) = &member.object else {
+            continue;
+        };
+        let name = obj.name.as_str();
+        if !refs.contains(name) {
+            continue;
+        }
+        // Only render-scope writes bear on lazy-init; a write inside a nested
+        // closure (handler/effect) runs outside render and is irrelevant here.
+        if is_inside_nested_function(node.id(), body_span, semantic) {
+            continue;
+        }
+        has_any_write.insert(name.to_string());
+        let guarded = guarded_consequents.iter().any(|(guarded_name, span)| {
+            guarded_name == name && member.span.start >= span.start && member.span.end <= span.end
+        });
+        if !guarded {
+            has_unguarded_write.insert(name.to_string());
+        }
+    }
+
+    has_any_write
+        .into_iter()
+        .filter(|name| !has_unguarded_write.contains(name))
+        .collect()
+}
+
 /// Check if a `ref.current` member expression is the LHS of an
 /// assignment (`ref.current = x`, `ref.current += x`, `ref.current ??= x`,
 /// etc.) or the operand of an `UpdateExpression` (`ref.current++`,
@@ -359,6 +534,12 @@ impl OxcCheck for Check {
                 ctx.source,
             );
 
+            // Refs following React's sanctioned lazy-init pattern: every
+            // render-time write to `ref.current` is gated by `if (!ref.current)`
+            // (or an equivalent nullish guard) on that same ref, so the write
+            // runs once and subsequent render reads are stable — no tearing.
+            let lazy_init_refs = collect_lazy_init_refs(body_span, &refs, semantic);
+
             // Walk semantic nodes for `.current` member accesses inside this body
             for inner_node in semantic.nodes().iter() {
                 let AstKind::StaticMemberExpression(member) = inner_node.kind() else {
@@ -381,6 +562,12 @@ impl OxcCheck for Check {
                 // Skip refs written only in a post-mount effect with a safe
                 // default init — the render-time read cannot tear.
                 if post_mount_only_refs.contains(obj.name.as_str()) {
+                    continue;
+                }
+                // Skip refs following the sanctioned lazy-init pattern — every
+                // render-time write is gated by a nullish guard on the ref, so
+                // the read is stable after the one-time init.
+                if lazy_init_refs.contains(obj.name.as_str()) {
                     continue;
                 }
                 // Must NOT be inside a nested function
@@ -699,5 +886,182 @@ mod tests {
                    return null; \
                    }";
         assert!(run(src).is_empty());
+    }
+
+    // Regression for issue #3990 — React's sanctioned lazy-ref-init pattern:
+    // the write to `ref.current` is gated by `if (!ref.current)`, so it runs
+    // once and the subsequent render read is stable. No tearing, no flag.
+    #[test]
+    fn allows_lazy_init_with_logical_not_guard() {
+        let src = "function C() { \
+                   const ref = useRef(null); \
+                   if (!ref.current) { ref.current = make(); } \
+                   return <div>{ref.current}</div>; \
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_lazy_init_with_strict_null_guard() {
+        let src = "function C() { \
+                   const ref = useRef(null); \
+                   if (ref.current === null) { ref.current = make(); } \
+                   return <div>{ref.current}</div>; \
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_lazy_init_with_strict_undefined_guard() {
+        let src = "function C() { \
+                   const ref = useRef(undefined); \
+                   if (ref.current === undefined) { ref.current = make(); } \
+                   return <div>{ref.current}</div>; \
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_lazy_init_with_loose_null_guard() {
+        let src = "function C() { \
+                   const ref = useRef(null); \
+                   if (ref.current == null) { ref.current = make(); } \
+                   return <div>{ref.current}</div>; \
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_lazy_init_with_void_guard() {
+        let src = "function C() { \
+                   const ref = useRef(undefined); \
+                   if (ref.current === void 0) { ref.current = make(); } \
+                   return <div>{ref.current}</div>; \
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    // Regression for #3990 (tearing FN) — a `||` guard with a non-nullish
+    // operand (`!ref.current || other`) is NOT lazy-init: `other` lets the
+    // write run on later renders, so the render read can tear. The ref is not
+    // exempt; both reads (the `!ref.current` guard test and the render read)
+    // flag.
+    #[test]
+    fn flags_or_guard_with_non_nullish_operand() {
+        let src = "function C({ other }) { \
+                   const ref = useRef(null); \
+                   if (!ref.current || other) { ref.current = make(); } \
+                   return <div>{ref.current}</div>; \
+                   }";
+        assert_eq!(run(src).len(), 2);
+    }
+
+    // A `||` guard whose operands are BOTH nullish self-guards on the same ref
+    // (`!ref.current || ref.current === undefined`) still gates a one-time
+    // init, so the ref is exempt.
+    #[test]
+    fn allows_lazy_init_with_all_nullish_or_guard() {
+        let src = "function C() { \
+                   const ref = useRef(null); \
+                   if (!ref.current || ref.current === undefined) { ref.current = make(); } \
+                   return <div>{ref.current}</div>; \
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    // Regression for #3990 (tearing FN) — order-independent: a non-nullish
+    // first operand (`cond || !ref.current`) also defeats the one-time gate.
+    // Both reads (the `!ref.current` guard test and the render read) flag.
+    #[test]
+    fn flags_or_guard_with_non_nullish_operand_first() {
+        let src = "function C({ cond }) { \
+                   const ref = useRef(null); \
+                   if (cond || !ref.current) { ref.current = compute(); } \
+                   return <div>{ref.current}</div>; \
+                   }";
+        assert_eq!(run(src).len(), 2);
+    }
+
+    // Negative-space guard for #3990 — a write guarded by an UNRELATED
+    // condition (not a nullish guard on the ref) is not lazy-init: the write
+    // may run on later renders, so the render read can still tear. Flag it.
+    #[test]
+    fn still_flags_read_when_write_guarded_by_unrelated_condition() {
+        let src = "function C({ someProp }) { \
+                   const ref = useRef(null); \
+                   if (someProp) { ref.current = make(); } \
+                   return <div>{ref.current}</div>; \
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Negative-space guard for #3990 — a TRUTHY test `if (ref.current)` is the
+    // OPPOSITE of a nullish guard (it writes only when already set), so it does
+    // not gate a one-time init. The ref is not exempt: both reads (the `if`
+    // test and the render read) still flag.
+    #[test]
+    fn still_flags_read_when_guarded_by_truthy_test() {
+        let src = "function C() { \
+                   const ref = useRef(null); \
+                   if (ref.current) { ref.current = make(); } \
+                   return <div>{ref.current}</div>; \
+                   }";
+        assert_eq!(run(src).len(), 2);
+    }
+
+    // Regression for issue #3990 — the react-hook-form `useForm` repro. The
+    // `||`-combined guard `if (!_formControl.current || (props.formControl &&
+    // _formControlProp.current !== props.formControl))` has a non-nullish
+    // second operand (a prop-change detector), so it is NOT a valid one-time
+    // gate on `_formControl`: the write can re-run when the prop changes, so a
+    // render read can tear. The safe AST rule cannot distinguish RHF's
+    // controlled re-init from the tearing counterexample, so both refs flag:
+    // `_formControl`'s four render reads and `_formControlProp`'s one read.
+    // (Clearing this controlled-re-init variant would reopen the tearing FN;
+    // it is tracked as a separate follow-up.)
+    #[test]
+    fn rhf_useform_flags_prop_change_reinit_refs() {
+        let src = "function useForm(props) { \
+                   const _formControl = React.useRef(undefined); \
+                   const _formControlProp = React.useRef(props.formControl); \
+                   if (!_formControl.current || (props.formControl && _formControlProp.current !== props.formControl)) { \
+                     _formControlProp.current = props.formControl; \
+                     _formControl.current = { ...rest, formState }; \
+                   } \
+                   const control = _formControl.current.control; \
+                   _formControl.current.formState = React.useMemo(() => x, []); \
+                   return _formControl.current; \
+                   }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 5);
+        assert_eq!(
+            diags
+                .iter()
+                .filter(|d| d.message.contains("`_formControl.current`"))
+                .count(),
+            4
+        );
+        assert_eq!(
+            diags
+                .iter()
+                .filter(|d| d.message.contains("`_formControlProp.current`"))
+                .count(),
+            1
+        );
+    }
+
+    // Negative-space guard for #3990 — a ref written BOTH unconditionally and
+    // inside a nullish-guarded `if` is mutated every render, so it is not
+    // lazy-init. The ref is not exempt: both reads (the `!ref.current` guard
+    // and the render read) still flag; only the write is suppressed.
+    #[test]
+    fn still_flags_read_when_ref_also_written_unconditionally() {
+        let src = "function C() { \
+                   const ref = useRef(null); \
+                   if (!ref.current) { ref.current = make(); } \
+                   ref.current = compute(); \
+                   return <div>{ref.current}</div>; \
+                   }";
+        assert_eq!(run(src).len(), 2);
     }
 }
