@@ -1,7 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Argument, Expression};
 use std::sync::Arc;
 
 pub struct Check;
@@ -72,6 +72,20 @@ impl OxcCheck for Check {
             return;
         }
 
+        // For the coercing globals (`isNaN`/`isFinite`), the `Number.*` swap is
+        // only semantics-preserving when the argument is statically a `number`.
+        // A `... as T` cast erases the operand's static type (e.g. `value as any`
+        // is the idiomatic invalid-`Date` probe `!isNaN(date as any)`), so the
+        // coercion is load-bearing and `Number.isNaN(date)` would always be
+        // `false`. Suppress the suggestion there. `parseInt`/`parseFloat`/`NaN`
+        // have no coercion semantics and are unaffected.
+        if matches!(name, "isNaN" | "isFinite")
+            && let Some(Expression::TSAsExpression(_)) =
+                call.arguments.first().and_then(Argument::as_expression)
+        {
+            return;
+        }
+
         let (line, column) =
             byte_offset_to_line_col(ctx.source, callee.span.start as usize);
         diagnostics.push(Diagnostic {
@@ -126,5 +140,96 @@ impl OxcCheck for Check {
             });
         }
         diagnostics
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    // True positives: globals on a plain argument must still flag.
+
+    #[test]
+    fn flags_global_is_nan() {
+        let d = run("if (isNaN(value)) {}");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Number.isNaN"));
+    }
+
+    #[test]
+    fn flags_global_is_finite() {
+        assert_eq!(run("if (isFinite(n)) {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_global_parse_int() {
+        let d = run("const n = parseInt('10', 10);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Number.parseInt"));
+    }
+
+    #[test]
+    fn flags_global_parse_float() {
+        assert_eq!(run("const n = parseFloat('3.14');").len(), 1);
+    }
+
+    // The coercion guard only exempts coercing globals on a cast argument;
+    // `parseInt`/`parseFloat` keep coercion-free semantics, so a cast does
+    // not exempt them. (Bare `NaN` is detected in `run_on_semantic`, which the
+    // per-node test harness does not drive; it stays covered by the tree-sitter
+    // backend's `flags_global_nan`.)
+
+    #[test]
+    fn flags_parse_int_on_cast() {
+        assert_eq!(run("const n = parseInt(s as any, 10);").len(), 1);
+    }
+
+    #[test]
+    fn flags_parse_float_on_cast() {
+        assert_eq!(run("const n = parseFloat(s as any);").len(), 1);
+    }
+
+    // Regression for #3969: `isNaN`/`isFinite` on a `... as T` cast is the
+    // invalid-`Date` probe whose coercion the `Number.*` swap would break.
+
+    #[test]
+    fn allows_is_nan_on_cast() {
+        // rxjs isValidDate: `!isNaN(value as any)`.
+        assert!(run("function f(value: any) { return value instanceof Date && !isNaN(value as any); }").is_empty());
+    }
+
+    #[test]
+    fn allows_is_finite_on_cast() {
+        assert!(run("if (isFinite(x as any)) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_number_is_nan() {
+        assert!(run("if (Number.isNaN(value)) {}").is_empty());
+    }
+
+    #[test]
+    fn ignores_member_access() {
+        assert!(run("foo.isNaN(value);").is_empty());
     }
 }
