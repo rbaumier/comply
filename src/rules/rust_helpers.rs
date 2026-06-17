@@ -512,6 +512,76 @@ fn attribute_is_doc_hidden(attribute_item: Node, source: &[u8]) -> bool {
         .any(|tok| tok.kind() == "identifier" && tok.utf8_text(source) == Ok("hidden"))
 }
 
+/// Collect the trait names from the top-level `#[derive(...)]` attributes
+/// applied to `item`, an item node (`struct_item` / `enum_item`).
+///
+/// Walks `item`'s preceding `attribute_item` siblings and, for each whose
+/// `attribute` path is exactly `derive`, extracts the comma-separated trait
+/// names from its `token_tree` argument list (`Ord`, `PartialEq`, …).
+///
+/// Only a *top-level* `#[derive(...)]` counts — the gate is the attribute's
+/// path child being `derive`. A `derive(` token nested inside another
+/// attribute's arguments (`#[cfg_attr(feature = "rkyv", rkyv(derive(Ord)))]`,
+/// `#[cfg_attr(test, derive(Debug))]`) is NOT collected: those generate impls
+/// on a companion type or under a cfg gate, not unconditionally on `item`.
+/// This avoids attributing `rkyv(derive(...))`-style nested derives to the
+/// host type.
+///
+/// Shared by `rust-ord-partial-ord-inconsistent` and
+/// `rust-hash-partial-eq-mismatch`, which compare derived against manual
+/// trait impls and must not be fooled by a nested `derive(`.
+pub fn collect_top_level_derives(item: Node, source: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "line_comment" | "block_comment" => {}
+            "attribute_item" => collect_derive_traits(s, source, &mut out),
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    out
+}
+
+/// If `attribute_item` is a top-level `#[derive(...)]` (its `attribute` path is
+/// exactly `derive`), push each comma-separated trait name from its argument
+/// `token_tree` into `out`. Any other attribute (`cfg_attr`, `repr`, …) is
+/// ignored, so a `derive(` nested inside its arguments is never collected.
+fn collect_derive_traits(attribute_item: Node, source: &[u8], out: &mut Vec<String>) {
+    let mut item_cursor = attribute_item.walk();
+    let Some(attribute) = attribute_item
+        .children(&mut item_cursor)
+        .find(|child| child.kind() == "attribute")
+    else {
+        return;
+    };
+
+    let Some(path) = attribute.named_child(0) else {
+        return;
+    };
+    if path.utf8_text(source) != Ok("derive") {
+        return;
+    }
+
+    let Some(token_tree) = attribute.child_by_field_name("arguments") else {
+        return;
+    };
+    let Ok(text) = token_tree.utf8_text(source) else {
+        return;
+    };
+    // `token_tree` text is the full `( ... )` group; strip the delimiters and
+    // split the trait list on commas, mirroring how trait names are compared
+    // downstream (bare names like `Ord`, `PartialEq`).
+    let inner = text.trim().trim_start_matches('(').trim_end_matches(')');
+    for trait_name in inner.split(',') {
+        let trimmed = trait_name.trim();
+        if !trimmed.is_empty() {
+            out.push(trimmed.to_string());
+        }
+    }
+}
+
 /// True if any string, raw-string, or byte-string literal in the subtree rooted
 /// at `node` contains `needle` as a substring, matched case-insensitively.
 ///
@@ -1369,6 +1439,41 @@ mod tests {
                 fn_is_async(item, src.as_bytes()),
                 expected,
                 "fn_is_async mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn collect_top_level_derives_only_reads_top_level_derive() {
+        let cases: [(&str, &[&str]); 6] = [
+            // Plain top-level derive.
+            ("#[derive(Ord, PartialEq, Eq)]\nstruct A;", &["Ord", "PartialEq", "Eq"]),
+            // Several top-level derives accumulate (collected nearest-first,
+            // walking preceding siblings in reverse; order is irrelevant to
+            // callers, which use `.iter().any(...)`).
+            ("#[derive(Clone)]\n#[derive(Hash)]\nstruct A;", &["Hash", "Clone"]),
+            // A nested `derive(` inside `rkyv(...)` inside `cfg_attr(...)` is
+            // NOT a top-level derive on the host — issue #3944.
+            (
+                "#[derive(Clone)]\n#[cfg_attr(feature = \"rkyv\", rkyv(derive(Debug, Eq, PartialEq, PartialOrd, Ord)))]\nstruct A;",
+                &["Clone"],
+            ),
+            // A cfg-gated `derive(` is conditional, not unconditional top-level:
+            // collected only when its path is `derive`, and here the path is
+            // `cfg_attr`, so it is ignored (the conservative #3944 direction).
+            ("#[cfg_attr(feature = \"x\", derive(Hash))]\nstruct A;", &[]),
+            // No derives at all.
+            ("#[repr(C)]\nstruct A;", &[]),
+            ("struct A;", &[]),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let item = first_of_kind(tree.root_node(), "struct_item")
+                .expect("snippet should contain a struct_item");
+            assert_eq!(
+                collect_top_level_derives(item, src.as_bytes()),
+                expected,
+                "collect_top_level_derives mismatch for `{src}`"
             );
         }
     }
