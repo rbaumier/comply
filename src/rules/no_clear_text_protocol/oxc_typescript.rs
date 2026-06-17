@@ -3,11 +3,55 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{BinaryOperator, Expression};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
+
+/// String-matching methods (`String.prototype`) whose argument is a value
+/// being compared, not a network endpoint. A `http://` literal passed to one
+/// of these is an opaque identifier matched verbatim (e.g. an XML namespace
+/// URI), never dereferenced.
+const STRING_MATCHING_METHODS: &[&str] = &["startsWith", "endsWith", "includes", "match"];
+
+/// True when `node` is a clear-text URL literal used in a string-matching or
+/// equality-comparison context rather than a network/connection context. In
+/// such positions the literal is a value being *matched* (an opaque token),
+/// not an endpoint that receives traffic, so it must not flag:
+///   - an argument of `x.startsWith/endsWith/includes/match("http://…")`, or
+///   - an operand of an equality `BinaryExpression` (`===`/`!==`/`==`/`!=`),
+///     e.g. `ns === "http://…"`.
+/// Connection contexts — `fetch("http://…")`, `new URL("http://…")`,
+/// `el.src = "http://…"` — are not matched here and still flag.
+fn is_string_matching_context<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let parent = semantic.nodes().parent_node(node.id());
+    match parent.kind() {
+        AstKind::CallExpression(call) => {
+            let Expression::StaticMemberExpression(member) = &call.callee else {
+                return false;
+            };
+            if !STRING_MATCHING_METHODS.contains(&member.property.name.as_str()) {
+                return false;
+            }
+            let node_span = node.kind().span();
+            call.arguments.iter().any(|arg| arg.span() == node_span)
+        }
+        AstKind::BinaryExpression(bin) => {
+            matches!(
+                bin.operator,
+                BinaryOperator::Equality
+                    | BinaryOperator::StrictEquality
+                    | BinaryOperator::Inequality
+                    | BinaryOperator::StrictInequality
+            )
+        }
+        _ => false,
+    }
+}
 
 /// True if `node` is the second argument of a `new URL(path, base)` call.
 /// In that position the string is only a parsing base — its host never
@@ -73,6 +117,9 @@ impl OxcCheck for Check {
             return;
         };
         if is_url_base_argument(node, semantic) {
+            return;
+        }
+        if is_string_matching_context(node, semantic) {
             return;
         }
         let offset = match node.kind() {
@@ -218,6 +265,66 @@ mod tests {
     #[test]
     fn still_flags_real_fetch_endpoint() {
         let src = r#"fetch('http://api.real-site.com');"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // #3979 — an `http://` literal matched against a value via
+    // `String.prototype.startsWith` is an opaque namespace identifier
+    // (pdf.js XFA namespaces), not a network endpoint.
+    #[test]
+    fn does_not_flag_startswith_namespace_uri() {
+        let src = r#"const check = ns => ns.startsWith("http://www.xfa.org/schema/xci/");"#;
+        assert!(run(src).is_empty());
+    }
+
+    // #3979 — an equality comparison against an `http://` namespace literal is
+    // verbatim identity matching, not a connection.
+    #[test]
+    fn does_not_flag_equality_namespace_uri() {
+        let src = r#"const check = ns => ns === "http://ns.adobe.com/xdp/pdf/";"#;
+        assert!(run(src).is_empty());
+    }
+
+    // #3979 — the other string-matching predicates are equally non-connection.
+    #[test]
+    fn does_not_flag_endswith_includes_match() {
+        assert!(run(r#"const f = s => s.endsWith("http://x.adobe.com");"#).is_empty());
+        assert!(run(r#"const f = s => s.includes("http://x.adobe.com");"#).is_empty());
+        assert!(run(r#"const f = s => s.match("http://x.adobe.com");"#).is_empty());
+    }
+
+    // #3979 — loose / strict inequality and equality operands are all matching.
+    #[test]
+    fn does_not_flag_inequality_and_loose_equality() {
+        assert!(run(r#"const f = url => url !== "http://x.adobe.com";"#).is_empty());
+        assert!(run(r#"const f = url => url == "http://x.adobe.com";"#).is_empty());
+        assert!(run(r#"const f = url => "http://x.adobe.com" === url;"#).is_empty());
+    }
+
+    // #3979 — the matching-context exemption must NOT leak into connection
+    // contexts. A `fetch(...)` endpoint, a `new URL(...)` first argument, and a
+    // `.src` assignment all still fire.
+    #[test]
+    fn still_flags_connection_contexts() {
+        assert_eq!(run(r#"fetch("http://api.real-site.com");"#).len(), 1);
+        assert_eq!(run(r#"const u = new URL("http://insecure.example-host.com");"#).len(), 1);
+        assert_eq!(run(r#"el.src = "http://insecure.example-host.com";"#).len(), 1);
+    }
+
+    // #3979 — a non-matching method that merely takes the literal as an argument
+    // (e.g. `.connect(...)`) is not a string-matching predicate and still fires.
+    #[test]
+    fn still_flags_non_matching_method_argument() {
+        let src = r#"socket.connect("http://api.real-site.com");"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // #3979 — only equality operators are matching contexts. A non-equality
+    // `BinaryExpression` (string concatenation building a real endpoint) still
+    // fires.
+    #[test]
+    fn still_flags_concatenated_endpoint() {
+        let src = r#"const u = "http://api.real-site.com" + path;"#;
         assert_eq!(run(src).len(), 1);
     }
 }
