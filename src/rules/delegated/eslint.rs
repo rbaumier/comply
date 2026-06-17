@@ -212,15 +212,6 @@ pub fn register_all() -> Vec<RuleDef> {
              obscures which variables are declared and which are mutated.",
         ),
         entry(
-            "curly",
-            "curly",
-            Severity::Warning,
-            "Always wrap control-flow bodies in braces.",
-            "Wrap every `if`/`else`/`for`/`while` body in `{ }`, even a \
-             single statement. Brace-less bodies silently break the moment \
-             a second line is added.",
-        ),
-        entry(
             "no-console",
             "no-console",
             Severity::Error,
