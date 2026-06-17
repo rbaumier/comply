@@ -48,6 +48,7 @@ impl OxcCheck for Check {
                     }
                     if is_intentional_thenable(is_canonical_then_value(&prop.value), || {
                         object_is_promise_like(obj)
+                            || object_returned_from_thenable_typed_fn(parent.id(), semantic)
                     }) {
                         return;
                     }
@@ -93,7 +94,10 @@ impl OxcCheck for Check {
                         });
                     }
                     AstKind::ObjectExpression(obj) => {
-                        if is_intentional_thenable(canonical, || object_is_promise_like(obj)) {
+                        if is_intentional_thenable(canonical, || {
+                            object_is_promise_like(obj)
+                                || object_returned_from_thenable_typed_fn(parent.id(), semantic)
+                        }) {
                             return;
                         }
                         let span = method.key.span();
@@ -216,8 +220,10 @@ fn key_name<'a>(key: &'a PropertyKey) -> Option<&'a str> {
 
 /// A `then` is intentional — not an accidental thenable — when it carries the
 /// canonical `then(onfulfilled, onrejected)` signature (e.g. an awaitable
-/// `StreamableMethod`), or when its host also declares `catch` and `finally`
-/// (a full Promise-like interface, e.g. an Azure LRO `PollerLike`).
+/// `StreamableMethod`), or when its host is promise-like: it declares `catch`
+/// and `finally` (a full Promise-like interface, e.g. an Azure LRO `PollerLike`)
+/// or is an object literal returned from a function whose return type is
+/// declared `Thenable` (e.g. zustand's `toThenable` sync-to-async bridge).
 fn is_intentional_thenable(canonical_signature: bool, host_is_promise_like: impl FnOnce() -> bool) -> bool {
     canonical_signature || host_is_promise_like()
 }
@@ -263,6 +269,125 @@ fn object_is_promise_like(obj: &ObjectExpression) -> bool {
         }
     }
     has_catch && has_finally
+}
+
+/// Whether the object literal at `object_id` *is the returned value* of the
+/// nearest enclosing function/arrow whose return-type annotation references
+/// `Thenable`. Such a function explicitly declares it produces a thenable, so a
+/// minimal `then`-bearing object it returns is intentional — e.g. zustand's
+/// `(input): Thenable<Result> => { ... return { then(onFulfilled) {…} } }`.
+///
+/// The object qualifies only when it is the direct returned operand: either the
+/// `argument` of a `return` statement or the expression body of an arrow. It may
+/// be reached through transparent wrappers — `as`/`satisfies` casts, non-null
+/// `!`, parentheses, and `ConditionalExpression` consequent/alternate branches.
+/// The walk stops (not in return position) at the first non-transparent parent:
+/// a call argument (`return wrap({ then })`), a nested object/array property or
+/// element (`return { a: { then } }`, `return [{ then }]`), or a conditional
+/// `test`. The type reference is matched inside unions (`A | Thenable<B>`) and
+/// parentheses, so those return types still qualify.
+fn object_returned_from_thenable_typed_fn(
+    object_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let mut current_id = object_id;
+    loop {
+        let parent_id = nodes.parent_id(current_id);
+        if parent_id == current_id {
+            return false;
+        }
+        match nodes.kind(parent_id) {
+            // Transparent expression wrappers — keep climbing toward the return.
+            AstKind::TSAsExpression(_)
+            | AstKind::TSSatisfiesExpression(_)
+            | AstKind::TSNonNullExpression(_)
+            | AstKind::ParenthesizedExpression(_) => {}
+            // A ternary is transparent only through its result branches; if the
+            // object is the `test`, it is not the returned value.
+            AstKind::ConditionalExpression(cond) => {
+                if cond.test.span() == nodes.kind(current_id).span() {
+                    return false;
+                }
+            }
+            // The object is the `return` argument (modulo transparent wrappers).
+            AstKind::ReturnStatement(_) => {
+                return enclosing_fn_return_type_is_thenable(parent_id, nodes);
+            }
+            // Arrow expression body: `(): Thenable<T> => ({ then })`.
+            AstKind::ExpressionStatement(_) => {
+                return arrow_expression_body_return_type_is_thenable(parent_id, nodes);
+            }
+            // Any other parent (call argument, object/array property/element,
+            // declarator, …) means the object is not the returned value.
+            _ => return false,
+        }
+        current_id = parent_id;
+    }
+}
+
+/// Whether the function/arrow enclosing the return statement at `return_id`
+/// declares a `Thenable` return type.
+fn enclosing_fn_return_type_is_thenable(
+    return_id: oxc_semantic::NodeId,
+    nodes: &oxc_semantic::AstNodes,
+) -> bool {
+    for ancestor in nodes.ancestors(return_id) {
+        match ancestor.kind() {
+            AstKind::Function(f) => return fn_return_type_is_thenable(f.return_type.as_deref()),
+            AstKind::ArrowFunctionExpression(a) => {
+                return fn_return_type_is_thenable(a.return_type.as_deref());
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Whether the expression statement at `stmt_id` is the implicit-return body of
+/// an arrow (`() => ({ … })`) whose return type references `Thenable`. The
+/// statement must sit directly in a `FunctionBody` that is the body of an arrow
+/// with an expression body, otherwise it is an incidental statement, not a
+/// return.
+fn arrow_expression_body_return_type_is_thenable(
+    stmt_id: oxc_semantic::NodeId,
+    nodes: &oxc_semantic::AstNodes,
+) -> bool {
+    let body_id = nodes.parent_id(stmt_id);
+    if !matches!(nodes.kind(body_id), AstKind::FunctionBody(_)) {
+        return false;
+    }
+    let arrow_id = nodes.parent_id(body_id);
+    let AstKind::ArrowFunctionExpression(arrow) = nodes.kind(arrow_id) else {
+        return false;
+    };
+    arrow.expression && fn_return_type_is_thenable(arrow.return_type.as_deref())
+}
+
+/// Whether a function/arrow return-type annotation references `Thenable`.
+fn fn_return_type_is_thenable(annotation: Option<&TSTypeAnnotation>) -> bool {
+    annotation.is_some_and(|ann| type_references_thenable(&ann.type_annotation))
+}
+
+/// Whether a type annotation is, or (within a union or parentheses) contains, a
+/// reference to the `Thenable` type.
+fn type_references_thenable(ty: &TSType) -> bool {
+    match ty {
+        TSType::TSTypeReference(r) => type_name_is_thenable(&r.type_name),
+        TSType::TSUnionType(u) => u.types.iter().any(type_references_thenable),
+        TSType::TSParenthesizedType(p) => type_references_thenable(&p.type_annotation),
+        _ => false,
+    }
+}
+
+/// Whether a type name's trailing identifier is `Thenable` (covers both
+/// `Thenable` and a qualified `ns.Thenable`).
+fn type_name_is_thenable(name: &TSTypeName) -> bool {
+    match name {
+        TSTypeName::IdentifierReference(id) => id.name.as_str() == "Thenable",
+        TSTypeName::QualifiedName(q) => q.right.name.as_str() == "Thenable",
+        TSTypeName::ThisExpression(_) => false,
+    }
 }
 
 /// Whether a class body also declares `catch` and `finally` members.
@@ -461,5 +586,213 @@ const obj = {
         let d = run_on("const obj = { then: () => {} };");
         assert_eq!(d.len(), 1, "arrow-valued `then` must still flag: {d:?}");
         assert!(d[0].message.contains("object"));
+    }
+
+    // ── Issue #3249: minimal thenable returned from a `Thenable`-typed fn ──
+
+    #[test]
+    fn allows_zustand_to_thenable_bridge() {
+        // zustand `toThenable`: a sync-to-async bridge whose inner arrow declares
+        // the return type `Thenable<Result>`. Both branches return a minimal
+        // thenable (`then` with one param, `catch`, no `finally`) — intentional.
+        let src = r#"
+const toThenable =
+  <Result, Input>(fn: (input: Input) => Result | Promise<Result> | Thenable<Result>) =>
+  (input: Input): Thenable<Result> => {
+    try {
+      const result = fn(input);
+      if (result instanceof Promise) {
+        return result as Thenable<Result>;
+      }
+      return {
+        then(onFulfilled) {
+          return toThenable(onFulfilled)(result as Result);
+        },
+        catch(_onRejected) {
+          return this as Thenable<any>;
+        },
+      };
+    } catch (e: any) {
+      return {
+        then(_onFulfilled) {
+          return this as Thenable<any>;
+        },
+        catch(onRejected) {
+          return toThenable(onRejected)(e);
+        },
+      };
+    }
+  };
+"#;
+        let d = run_on(src);
+        assert!(d.is_empty(), "Thenable-typed bridge must be allowed: {d:?}");
+    }
+
+    #[test]
+    fn allows_minimal_thenable_returned_from_thenable_fn() {
+        // Directly returned minimal thenable from a `Thenable`-typed arrow.
+        let src = r#"
+const make = (): Thenable<number> => {
+  return {
+    then(onFulfilled) { return onFulfilled(1); },
+  };
+};
+"#;
+        let d = run_on(src);
+        assert!(d.is_empty(), "minimal thenable from Thenable fn must be allowed: {d:?}");
+    }
+
+    #[test]
+    fn flags_then_object_returned_from_non_thenable_fn() {
+        // Same minimal-thenable shape, but the function's return type is NOT
+        // `Thenable` — no declaration of thenable intent, still an accidental
+        // thenable.
+        let src = r#"
+const make = (): Foo => {
+  return {
+    then(onFulfilled) { return onFulfilled(1); },
+  };
+};
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1, "non-Thenable return type must still flag: {d:?}");
+        assert!(d[0].message.contains("object"));
+    }
+
+    #[test]
+    fn flags_incidental_then_object_not_returned() {
+        // An ordinary config object with a `then` method, not returned from a
+        // `Thenable`-typed function — still an accidental thenable.
+        let src = r#"
+const config = {
+  then(onFulfilled) { return onFulfilled(); },
+};
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1, "incidental `then` object must still flag: {d:?}");
+        assert!(d[0].message.contains("object"));
+    }
+
+    #[test]
+    fn flags_then_object_declared_but_not_returned_in_thenable_fn() {
+        // The object is NOT in return position — it is bound to a local inside a
+        // `Thenable`-typed function. The return-type intent applies to the
+        // returned value, not to incidental objects, so this still flags.
+        let src = r#"
+const make = (): Thenable<number> => {
+  const incidental = { then(onFulfilled) { return onFulfilled(1); } };
+  use(incidental);
+  return real;
+};
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1, "declared-but-not-returned `then` must still flag: {d:?}");
+        assert!(d[0].message.contains("object"));
+    }
+
+    #[test]
+    fn flags_then_object_as_call_argument_in_thenable_fn() {
+        // The object is an argument to `wrap(...)`, not the returned value, so
+        // the `Thenable` return-type intent does not cover it.
+        let src = r#"
+const make = (): Thenable<number> => {
+  return wrap({ then(onFulfilled) { return onFulfilled(1); } });
+};
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1, "object as call argument must still flag: {d:?}");
+        assert!(d[0].message.contains("object"));
+    }
+
+    #[test]
+    fn flags_then_object_as_register_argument_in_thenable_fn() {
+        let src = r#"
+const make = (): Thenable<number> => {
+  return register({ then(onFulfilled) { return onFulfilled(1); } });
+};
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1, "object as register argument must still flag: {d:?}");
+        assert!(d[0].message.contains("object"));
+    }
+
+    #[test]
+    fn flags_then_object_nested_data_property_in_thenable_fn() {
+        // The `then` is buried as a nested data property of the returned object,
+        // not the returned value itself.
+        let src = r#"
+const make = (): Thenable<number> => {
+  return { a: { b: { then(onFulfilled) { return onFulfilled(1); } } } };
+};
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1, "nested-property `then` must still flag: {d:?}");
+        assert!(d[0].message.contains("object"));
+    }
+
+    #[test]
+    fn flags_then_object_as_array_element_in_thenable_fn() {
+        // The object is an array element, not the returned value.
+        let src = r#"
+const make = (): Thenable<number> => {
+  return [{ then(onFulfilled) { return onFulfilled(1); } }];
+};
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1, "object as array element must still flag: {d:?}");
+        assert!(d[0].message.contains("object"));
+    }
+
+    #[test]
+    fn allows_minimal_thenable_arrow_expression_body() {
+        // Implicit arrow return: `(): Thenable<T> => ({ then })`.
+        let src = r#"
+const make = (): Thenable<number> => ({
+  then(onFulfilled) { return onFulfilled(1); },
+});
+"#;
+        let d = run_on(src);
+        assert!(d.is_empty(), "thenable as arrow expression body must be allowed: {d:?}");
+    }
+
+    #[test]
+    fn allows_minimal_thenable_from_conditional_branch_return() {
+        // The object is a ternary result branch of the returned value — a
+        // transparent wrapper — so the `Thenable` intent still covers it.
+        let src = r#"
+const make = (flag: boolean): Thenable<number> => {
+  return flag
+    ? { then(onFulfilled) { return onFulfilled(1); } }
+    : { then(onFulfilled) { return onFulfilled(2); } };
+};
+"#;
+        let d = run_on(src);
+        assert!(d.is_empty(), "conditional-branch return must be allowed: {d:?}");
+    }
+
+    #[test]
+    fn allows_minimal_thenable_from_cast_return() {
+        // The returned object is wrapped in an `as` cast — transparent.
+        let src = r#"
+const make = (): Thenable<number> => {
+  return { then(onFulfilled) { return onFulfilled(1); } } as Thenable<number>;
+};
+"#;
+        let d = run_on(src);
+        assert!(d.is_empty(), "cast-wrapped return must be allowed: {d:?}");
+    }
+
+    #[test]
+    fn allows_minimal_thenable_from_union_return_type() {
+        // Union return type `T | Thenable<T>` still declares thenable intent.
+        let src = r#"
+function make(): number | Thenable<number> {
+  return {
+    then(onFulfilled) { return onFulfilled(1); },
+  };
+}
+"#;
+        let d = run_on(src);
+        assert!(d.is_empty(), "union Thenable return type must be allowed: {d:?}");
     }
 }
