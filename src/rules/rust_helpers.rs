@@ -691,6 +691,151 @@ pub fn cast_operand_is_collection_size(cast: Node, source: &[u8]) -> bool {
         .is_some_and(|name| SIZE_METHODS.contains(&name))
 }
 
+/// Resolve the declared type of a local binding named `name` that is visible at
+/// `node`. Walks up each enclosing scope (`function_item`, `closure_expression`,
+/// `block`, `source_file`) and, within it, finds the nearest `parameter` or
+/// `let_declaration` *before* `node` whose pattern binds `name` and carries an
+/// explicit `type` annotation, returning that type's source text (trimmed).
+///
+/// Only annotated bindings are resolved — an inferred `let x = ...;` yields
+/// `None`. Shared by the numeric-cast rules, which use it to learn a cast
+/// operand's source type from the AST.
+pub fn find_identifier_type(node: Node, name: &str, source: &[u8]) -> Option<String> {
+    let mut current = Some(node);
+    while let Some(n) = current {
+        if matches!(
+            n.kind(),
+            "function_item" | "closure_expression" | "block" | "source_file"
+        ) && let Some(found) = find_binding_type_before(n, node.start_byte(), name, source)
+        {
+            return Some(found);
+        }
+        current = n.parent();
+    }
+    None
+}
+
+fn find_binding_type_before(node: Node, limit: usize, name: &str, source: &[u8]) -> Option<String> {
+    if node.start_byte() >= limit {
+        return None;
+    }
+    if matches!(node.kind(), "parameter" | "let_declaration")
+        && let Some(pattern) = node.child_by_field_name("pattern")
+        && pattern_contains_identifier(pattern, name, source)
+        && let Some(type_node) = node.child_by_field_name("type")
+        && let Ok(type_text) = type_node.utf8_text(source)
+    {
+        return Some(type_text.trim().to_string());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(found) = find_binding_type_before(child, limit, name, source) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn pattern_contains_identifier(pattern: Node, name: &str, source: &[u8]) -> bool {
+    if pattern.kind() == "identifier" {
+        return pattern.utf8_text(source).is_ok_and(|text| text == name);
+    }
+
+    let mut cursor = pattern.walk();
+    pattern
+        .children(&mut cursor)
+        .any(|child| pattern_contains_identifier(child, name, source))
+}
+
+/// True if `cast` (a `type_cast_expression`) casts a boolean-producing operand
+/// to an integer. `bool as <integer>` is always lossless and total
+/// (`false` → 0, `true` → 1; a `bool` is a single bit that fits every integer
+/// target), so suggesting `try_into()` there only manufactures an error path
+/// that can never be reached.
+///
+/// The operand (the `value` field of the cast) is recognized as boolean when it
+/// is one of:
+/// - a `boolean_literal` (`true` / `false`);
+/// - a `binary_expression` with a comparison (`==`, `!=`, `<`, `<=`, `>`, `>=`)
+///   or logical (`&&`, `||`) operator — these always yield `bool`;
+/// - a `unary_expression` `!<operand>` whose operand is itself boolean (`!` on
+///   an integer is bitwise NOT and stays integer, so the operand is checked
+///   recursively);
+/// - a `parenthesized_expression` wrapping any of the above (peeled, so
+///   `(3 > 2) as u8` is covered);
+/// - a method `call_expression` whose method name follows the established
+///   bool-returning convention: an `is_`/`has_` prefix, or exactly `contains`,
+///   `starts_with`, or `ends_with` (covers `value.is_some() as u8`);
+/// - a bare `identifier` whose local binding is annotated `bool` (`b as u8`).
+///
+/// The method-name set is a deliberately narrow heuristic; it must not be
+/// broadened, since an arbitrary method may return any integer type.
+///
+/// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`, which both
+/// otherwise flag `bool as u8` because the operand type is not resolved from the
+/// AST.
+pub fn cast_operand_is_bool(cast: Node, source: &[u8]) -> bool {
+    let Some(value) = cast.child_by_field_name("value") else {
+        return false;
+    };
+    operand_is_bool(value, source)
+}
+
+fn operand_is_bool(node: Node, source: &[u8]) -> bool {
+    match node.kind() {
+        "boolean_literal" => true,
+        "parenthesized_expression" => node
+            .named_child(0)
+            .is_some_and(|inner| operand_is_bool(inner, source)),
+        "binary_expression" => node
+            .child_by_field_name("operator")
+            .and_then(|op| op.utf8_text(source).ok())
+            .is_some_and(|op| {
+                matches!(op, "==" | "!=" | "<" | "<=" | ">" | ">=" | "&&" | "||")
+            }),
+        "unary_expression" => {
+            // `!` is logical NOT only when its operand is bool; on an integer it
+            // is bitwise NOT and stays integer, so recurse into the operand.
+            let is_not = node
+                .child(0)
+                .and_then(|op| op.utf8_text(source).ok())
+                .is_some_and(|op| op == "!");
+            is_not
+                && node
+                    .named_child(0)
+                    .is_some_and(|operand| operand_is_bool(operand, source))
+        }
+        "call_expression" => call_method_returns_bool(node, source),
+        "identifier" => node
+            .utf8_text(source)
+            .ok()
+            .and_then(|name| find_identifier_type(node, name, source))
+            .is_some_and(|type_text| type_text == "bool"),
+        _ => false,
+    }
+}
+
+/// True if `call` is a method call (`<receiver>.method(...)`) whose method name
+/// follows the bool-returning convention: an `is_`/`has_` prefix, or exactly
+/// `contains` / `starts_with` / `ends_with`.
+fn call_method_returns_bool(call: Node, source: &[u8]) -> bool {
+    const BOOL_METHODS: &[&str] = &["contains", "starts_with", "ends_with"];
+
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    function
+        .child_by_field_name("field")
+        .and_then(|field| field.utf8_text(source).ok())
+        .is_some_and(|name| {
+            name.starts_with("is_") || name.starts_with("has_") || BOOL_METHODS.contains(&name)
+        })
+}
+
 /// True if `node` is a const-or-path pattern that binds nothing — it pins a
 /// match arm to one specific known value rather than capturing it.
 ///
@@ -1042,6 +1187,53 @@ mod tests {
                 cast_operand_is_collection_size(cast, src.as_bytes()),
                 expected,
                 "cast_operand_is_collection_size mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn cast_operand_is_bool_recognizes_bool_producing_operands() {
+        let cases = [
+            // Boolean literal.
+            ("fn f() -> u8 { true as u8 }", true),
+            // Comparison operators always yield bool.
+            ("fn f() -> u8 { (3 > 2) as u8 }", true),
+            ("fn f(a: i32, b: i32) -> u8 { (a == b) as u8 }", true),
+            // Logical operators yield bool.
+            ("fn f(a: bool, b: bool) -> u8 { (a && b) as u8 }", true),
+            // `!` on a bool operand yields bool.
+            ("fn f(b: bool) -> u8 { (!b) as u8 }", true),
+            ("fn f() -> u8 { !true as u8 }", true),
+            // `!` on an integer is bitwise NOT and stays integer — NOT bool.
+            ("fn f(x: u32) -> u8 { !x as u8 }", false),
+            ("fn f() -> u8 { !5 as u8 }", false),
+            // Convention-named bool methods.
+            ("fn f(o: Option<i32>) -> u8 { o.is_some() as u8 }", true),
+            ("fn f(m: M) -> u8 { m.has_key() as u8 }", true),
+            ("fn f(s: &str) -> u8 { s.contains(\"x\") as u8 }", true),
+            ("fn f(s: &str) -> u8 { s.starts_with(\"x\") as u8 }", true),
+            ("fn f(s: &str) -> u8 { s.ends_with(\"x\") as u8 }", true),
+            // Identifier whose binding is annotated bool.
+            ("fn f(b: bool) -> u8 { b as u8 }", true),
+            // A plain integer cast is not a bool operand.
+            ("fn f(x: u32) -> u8 { x as u8 }", false),
+            // `.len()` returns usize, not bool.
+            ("fn f(v: V) -> u8 { v.len() as u8 }", false),
+            // An arbitrary method (not in the convention) is not bool.
+            ("fn f(v: V) -> u8 { v.count_things() as u8 }", false),
+            // Arithmetic binary op is not a comparison/logical op.
+            ("fn f(a: i32, b: i32) -> u8 { (a + b) as u8 }", false),
+            // A non-bool identifier is not a bool operand.
+            ("fn f(x: u32) -> u8 { x as u8 }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_of_kind(tree.root_node(), "type_cast_expression")
+                .expect("snippet should contain a type_cast_expression");
+            assert_eq!(
+                cast_operand_is_bool(cast, src.as_bytes()),
+                expected,
+                "cast_operand_is_bool mismatch for `{src}`"
             );
         }
     }
