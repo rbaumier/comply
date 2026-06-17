@@ -78,4 +78,32 @@ mod tests {
     fn ignores_non_stylesheet_link() {
         assert!(run(r#"const x = <link rel="preload" as="style" href="/a.css" />;"#).is_empty());
     }
+
+    // Regression for #3250: render-blocking CSS is a runtime browser concern,
+    // so JSX component output tests that assert on `.toString()` output must
+    // not be flagged — they never reach a browser.
+    #[test]
+    fn skips_test_file() {
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                r#"const x = <link rel="stylesheet" href="style.css" precedence="default" />;"#,
+                "src/jsx/intrinsic-element/components.test.tsx",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_non_test_file() {
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                r#"const x = <link rel="stylesheet" href="style.css" precedence="default" />;"#,
+                "src/jsx/intrinsic-element/components.tsx",
+            )
+            .len(),
+            1
+        );
+    }
 }
