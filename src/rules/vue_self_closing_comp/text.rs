@@ -87,4 +87,39 @@ mod tests {
         let source = "<template>\n  <div>Hello</div>\n</template>";
         assert!(run(source).is_empty());
     }
+
+    #[test]
+    fn skips_syntax_test_fixture() {
+        // Issue #852: a `.vue` syntax-highlighting fixture (e.g. bat's
+        // `tests/syntax-tests/`) is not a real component. The engine's
+        // `skip_in_test_dir` gate suppresses the rule on test-dir paths.
+        use crate::files::Language;
+        let path =
+            std::path::Path::new("tests/syntax-tests/highlighted/Vue/example.vue");
+        let file = crate::rules::file_ctx::FileCtx::build(
+            path,
+            "<template>\n  <AppHeader></AppHeader>\n</template>",
+            Language::Vue,
+            crate::project::default_static_project_ctx(),
+        );
+        assert!(file.path_segments.in_test_dir);
+        assert!(!crate::rules::vue_self_closing_comp::META.applies_to_file(&file));
+    }
+
+    #[test]
+    fn still_flags_real_component() {
+        // Control: an empty element in a real component path is still flagged.
+        use crate::files::Language;
+        let path = std::path::Path::new("src/components/AppHeader.vue");
+        let source = "<template>\n  <AppHeader></AppHeader>\n</template>";
+        let file = crate::rules::file_ctx::FileCtx::build(
+            path,
+            source,
+            Language::Vue,
+            crate::project::default_static_project_ctx(),
+        );
+        assert!(!file.path_segments.in_test_dir);
+        assert!(crate::rules::vue_self_closing_comp::META.applies_to_file(&file));
+        assert_eq!(Check.check(&CheckCtx::for_test(path, source)).len(), 1);
+    }
 }
