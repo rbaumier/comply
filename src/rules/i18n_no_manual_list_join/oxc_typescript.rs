@@ -10,12 +10,16 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// True for separators `Intl.ListFormat` actually emits, which is what a
+/// manual join would be reimplementing. The format always puts a space after
+/// the comma (`"a, b, and c"`, `"a, b et c"`) and surrounds the conjunction
+/// word with spaces, so the trailing/surrounding space is required: a bare
+/// `","` is structural CSV/array/wire joining (e.g. a Postgres `{a,b,c}`
+/// literal) that `Intl.ListFormat` can never produce, and is not flagged.
 fn is_locale_separator(inner: &str) -> bool {
-    let trimmed = inner.trim();
-    trimmed == ","
-        || trimmed == ", "
-        || trimmed.eq_ignore_ascii_case("and")
-        || trimmed.eq_ignore_ascii_case(", and")
+    inner == ", "
+        || inner.eq_ignore_ascii_case(", and ")
+        || inner.eq_ignore_ascii_case(" and ")
 }
 
 /// True for files whose entire purpose is producing URL/wire-format strings.
@@ -602,5 +606,24 @@ mod tests {
             return parts.join(" and ");
         "#;
         assert!(run_with_path(src, "src/app/hooks/use-media-query.ts").is_empty());
+    }
+
+    // #3994 — a bare `,` (no trailing space) is structural CSV/array/wire
+    // joining; `Intl.ListFormat` always emits a space after the comma, so a
+    // bare comma can never be a manual list-format reimplementation.
+
+    #[test]
+    fn no_fp_bare_comma_join_pg_array_literal_issue_3994() {
+        let src = r#"
+            function formatPgArray(formattedElements) {
+              return `{${formattedElements.join(',')}}`;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_bare_comma_join_issue_3994() {
+        assert!(run("xs.join(',')").is_empty());
     }
 }
