@@ -2,7 +2,7 @@
 //! `return expr;` with bare `return;`.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, return_type_admits_void_or_undefined};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use oxc_span::GetSpan;
@@ -22,17 +22,17 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        let (body, span_start) = match node.kind() {
+        let (body, span_start, return_type) = match node.kind() {
             AstKind::Function(f) => {
                 let Some(ref body) = f.body else { return };
-                (body, f.span().start)
+                (body, f.span().start, f.return_type.as_deref())
             }
             AstKind::ArrowFunctionExpression(arrow) => {
                 // Only block-body arrows can have return statements.
                 if arrow.expression {
                     return;
                 }
-                (&arrow.body, arrow.span().start)
+                (&arrow.body, arrow.span().start, arrow.return_type.as_deref())
             }
             _ => return,
         };
@@ -68,6 +68,14 @@ impl OxcCheck for Check {
         // `return;` ("no cleanup") and `return () => {…}` ("here is the cleanup")
         // are both valid and intentional. Not an inconsistency.
         if has_value && has_bare && is_effect_callback(node_id, nodes) {
+            return;
+        }
+
+        // An explicit `: void` / `: undefined` / `: T | void` / `: T | undefined`
+        // return type admits both a bare `return;` (yields `undefined`) and a
+        // value return (e.g. a void tail-call, or the `undefined` arm of the
+        // declared union). That is the canonical idiom, not an inconsistency.
+        if has_value && has_bare && return_type_admits_void_or_undefined(return_type) {
             return;
         }
 
@@ -272,6 +280,73 @@ useMemo(() => {
     if (x) return;
     return compute();
 }, [x]);
+"#;
+        assert_eq!(run_on(code).len(), 1);
+    }
+
+    #[test]
+    fn allows_union_with_undefined_return_type() {
+        // Regression for issue #3948: `: PluginFilter | undefined` — bare `return;`
+        // is the `undefined` arm of the declared union.
+        let code = r#"
+function createFilter(exclude, include): PluginFilter | undefined {
+    if (!exclude && !include) {
+        return;
+    }
+    return input => input;
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn allows_void_return_type_with_void_tail_call() {
+        // Regression for issue #3948: `: void` — `return voidCall();` is a void
+        // tail-call, mixed with bare `return;` returns void on every path.
+        let code = r#"
+function deoptimizePath(path): void {
+    if (path.lost) {
+        return;
+    }
+    return voidCall();
+}
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn allows_arrow_with_union_undefined_return_type() {
+        // Regression for issue #3948: block-body arrow annotated `: string | undefined`.
+        let code = r#"
+const f = (c, s): string | undefined => {
+    if (c) return;
+    return s;
+};
+"#;
+        assert!(run_on(code).is_empty());
+    }
+
+    #[test]
+    fn still_flags_unannotated_mixed_returns() {
+        // No return-type annotation: genuine inconsistency, must still flag.
+        let code = r#"
+function h(x) {
+    if (x) return 1;
+    return;
+}
+"#;
+        assert_eq!(run_on(code).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_non_void_annotated_mixed_returns() {
+        // `: number` — bare `return;` yields `undefined`, not the declared type.
+        // Genuine inconsistency, must still flag.
+        let code = r#"
+function n(x): number {
+    if (x) return 1;
+    return;
+}
 "#;
         assert_eq!(run_on(code).len(), 1);
     }
