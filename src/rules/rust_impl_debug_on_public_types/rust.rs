@@ -7,7 +7,11 @@
 //!
 //! Suppressed for: `pub(crate)`/`pub(super)`/`pub(in …)` visibility,
 //! files under `tests/` or `benches/`, items in a `#[cfg(test)]` module,
-//! items with `#[doc(hidden)]`, and types with raw-pointer fields.
+//! items with `#[doc(hidden)]`, items carrying
+//! `#[allow(missing_debug_implementations)]` or
+//! `#[expect(missing_debug_implementations)]` (the rustc lint this rule
+//! mirrors — the author has explicitly opted out), and types with
+//! raw-pointer fields.
 //!
 //! We accept manual impls because libraries with closure or PhantomData
 //! fields legitimately can't derive — they hand-roll the impl. The
@@ -47,6 +51,9 @@ impl AstCheck for Check {
             return;
         }
         if has_doc_hidden(node, source_bytes) {
+            return;
+        }
+        if has_allow_missing_debug(node, source_bytes) {
             return;
         }
         if has_raw_pointer_field(node) {
@@ -151,6 +158,75 @@ fn has_doc_hidden(item: tree_sitter::Node, source: &[u8]) -> bool {
         sibling = s.prev_named_sibling();
     }
     false
+}
+
+/// True if a preceding `attribute_item` sibling is
+/// `#[allow(missing_debug_implementations)]` or
+/// `#[expect(missing_debug_implementations)]`. That is the exact rustc lint
+/// this rule mirrors, so an explicit allow/expect of it means the author has
+/// deliberately opted out and we defer to that.
+///
+/// Walks preceding siblings like `has_doc_hidden`/`has_debug_derive`, skipping
+/// interleaved comment siblings. The match is specific: the attribute path must
+/// be `allow` or `expect` AND its argument list must contain
+/// `missing_debug_implementations`, so an unrelated `#[allow(dead_code)]` does
+/// not suppress.
+fn has_allow_missing_debug(item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "attribute_item" => {
+                if attribute_allows_lint(s, source, "missing_debug_implementations") {
+                    return true;
+                }
+            }
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+/// True if `attribute_item` is an `allow`/`expect` attribute whose argument list
+/// names `lint`, bare or tool-scoped (`rustc::<lint>`).
+///
+/// `attribute_item` parses as `attribute_item > attribute`, where the
+/// `attribute` is `seq($._path, optional(arguments: token_tree))`: its first
+/// named child is the path (`allow`/`expect`) and its arguments live in the
+/// `token_tree` as a flat sequence of `identifier` tokens. We match on the AST
+/// path child (`allow`/`expect`) and on the `identifier` tokens inside the
+/// token tree rather than scanning raw text, so a lint merely ending in
+/// `_missing_debug_implementations`, or the name appearing inside an unrelated
+/// string, does not match. A tool-scoped `rustc::missing_debug_implementations`
+/// still tokenizes the final segment as its own `identifier`, so it matches too.
+fn attribute_allows_lint(attribute_item: tree_sitter::Node, source: &[u8], lint: &str) -> bool {
+    let mut item_cursor = attribute_item.walk();
+    let Some(attribute) = attribute_item
+        .children(&mut item_cursor)
+        .find(|child| child.kind() == "attribute")
+    else {
+        return false;
+    };
+
+    let Some(path) = attribute.named_child(0) else {
+        return false;
+    };
+    let Ok(path_text) = path.utf8_text(source) else {
+        return false;
+    };
+    if path_text != "allow" && path_text != "expect" {
+        return false;
+    }
+
+    let Some(token_tree) = attribute.child_by_field_name("arguments") else {
+        return false;
+    };
+
+    let mut tree_cursor = token_tree.walk();
+    token_tree
+        .children(&mut tree_cursor)
+        .any(|tok| tok.kind() == "identifier" && tok.utf8_text(source) == Ok(lint))
 }
 
 fn has_raw_pointer_field(item: tree_sitter::Node) -> bool {
@@ -288,6 +364,45 @@ mod tests {
     #[test]
     fn still_flags_plain_pub_struct() {
         assert_eq!(run_on("pub struct Api { name: String }").len(), 1);
+    }
+
+    #[test]
+    fn suppresses_allow_missing_debug_implementations() {
+        // tokio net/addr.rs:269-270 — author explicitly opted out of the
+        // rustc lint this rule mirrors.
+        assert!(
+            run_on("#[allow(missing_debug_implementations)]\npub struct Internal;").is_empty()
+        );
+    }
+
+    #[test]
+    fn suppresses_expect_missing_debug_implementations() {
+        assert!(run_on("#[expect(missing_debug_implementations)]\npub struct X;").is_empty());
+    }
+
+    #[test]
+    fn suppresses_allow_missing_debug_with_interleaved_cfg_attr() {
+        // tokio runtime/task_hooks.rs:57-59 — a `#[cfg_attr(...)]` sits
+        // between the allow and the item; the walk must traverse it.
+        let source = "#[allow(missing_debug_implementations)]\n\
+                      #[cfg_attr(not(tokio_unstable), allow(unreachable_pub))]\n\
+                      pub struct TaskMeta<'a> { id: &'a str }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn suppresses_tool_scoped_allow_missing_debug() {
+        // rustc accepts a tool-scoped lint path; the final segment still
+        // tokenizes as a bare identifier inside the token tree.
+        assert!(
+            run_on("#[allow(rustc::missing_debug_implementations)]\npub struct X;").is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_with_unrelated_allow() {
+        // `#[allow(dead_code)]` is unrelated; suppression is lint-specific.
+        assert_eq!(run_on("#[allow(dead_code)]\npub struct X { name: String }").len(), 1);
     }
 
     #[test]
