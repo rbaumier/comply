@@ -2,16 +2,23 @@
 //!
 //! Walks every `struct_item` / `enum_item` and reads its outer
 //! attributes plus any sibling `impl PartialEq for T` / `impl Eq
-//! for T` blocks in the same file. If `PartialEq` is present
-//! (derived or manually implemented) but `Eq` is missing, we emit
-//! a diagnostic at the type definition.
+//! for T` blocks in the same file. If `PartialEq` is *derived* but
+//! `Eq` is missing, we emit a diagnostic at the type definition.
 //!
-//! Types whose fields are (or transitively wrap) `f32` / `f64` are
-//! out of scope: floats are only `PartialEq`, so such a type cannot
-//! implement `Eq`. Float detection walks the field-type AST for
-//! `f32` / `f64` `primitive_type` nodes (covering arrays, tuples,
-//! references and generic arguments) and resolves locally-defined
-//! newtypes that themselves wrap a float.
+//! Two cases are out of scope because `Eq` is not safely addable:
+//!
+//! * A *manual* `impl PartialEq` is the author's explicit opt-out
+//!   from standard reflexive equality (a hand-written `eq` may be
+//!   non-reflexive), so we never demand `Eq` for it.
+//! * A field type that cannot itself implement `Eq` makes
+//!   `#[derive(Eq)]` a hard compile error. This covers floats
+//!   (`f32` / `f64`, which are only `PartialEq`) and any
+//!   locally-defined type that is itself `PartialEq`-but-not-`Eq`.
+//!
+//! Field detection walks the field-type AST for `f32` / `f64`
+//! `primitive_type` nodes (covering arrays, tuples, references and
+//! generic arguments) and resolves locally-defined type names known
+//! to force partial-only equality.
 
 use std::collections::HashSet;
 
@@ -20,9 +27,11 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 
 const KINDS: &[&str] = &["struct_item", "enum_item"];
 
-/// Per-file memo of type names defined in the file whose fields are
-/// (transitively) float-bearing. Computed once on the first visit.
-type FloatTypeNames = Option<HashSet<String>>;
+/// Per-file memo of type names defined in the file that cannot
+/// implement `Eq` — either because a field is (transitively)
+/// float-bearing, or because the type is itself `PartialEq` without
+/// `Eq`. Computed once on the first visit.
+type EqIncapableTypeNames = Option<HashSet<String>>;
 
 #[derive(Debug)]
 pub struct Check;
@@ -33,7 +42,7 @@ impl AstCheck for Check {
     }
 
     fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
-        let memo: FloatTypeNames = None;
+        let memo: EqIncapableTypeNames = None;
         Some(Box::new(memo))
     }
 
@@ -51,15 +60,21 @@ impl AstCheck for Check {
         let Ok(type_name) = name_node.utf8_text(source_bytes) else {
             return;
         };
-        let float_names = state.and_then(|s| s.downcast_mut::<FloatTypeNames>());
-        // Skip types that hold floats — partial equality is correct there.
-        if is_float_bearing_type(node, source_bytes, float_names) {
+        let eq_incapable_names = state.and_then(|s| s.downcast_mut::<EqIncapableTypeNames>());
+        // Skip types holding a field that itself cannot implement `Eq`
+        // (float, or a local `PartialEq`-without-`Eq` type): adding `Eq`
+        // here would be a hard compile error.
+        if has_eq_incapable_field(node, source_bytes, eq_incapable_names) {
             return;
         }
         let derives = collect_derives(node, source_bytes);
-        let (has_partial_eq, has_eq) =
-            search_traits_in_root(node, source_bytes, type_name, &derives);
-        if has_partial_eq && !has_eq {
+        let traits = search_traits_in_root(node, source_bytes, type_name, &derives);
+        // A hand-written `impl PartialEq` is the author's explicit opt-out
+        // from standard reflexive equality; "add `Eq`" is not automatable.
+        if traits.partial_eq_is_manual {
+            return;
+        }
+        if traits.has_partial_eq && !traits.has_eq {
             diagnostics.push(Diagnostic::at_node(
                 std::sync::Arc::clone(&ctx.path_arc),
                 &name_node,
@@ -76,37 +91,38 @@ impl AstCheck for Check {
     }
 }
 
-/// Returns `true` when the type definition holds a float — either a
-/// direct `f32` / `f64` field type, or a field whose type names a
-/// locally-defined newtype that itself transitively wraps a float.
+/// Returns `true` when the type definition holds a field that cannot
+/// implement `Eq` — a direct `f32` / `f64`, or a field whose type names
+/// a locally-defined type already known to force partial-only equality
+/// (float-bearing, or itself `PartialEq` without `Eq`).
 ///
-/// `float_names` memoizes the set of float-bearing local type names so
-/// it is computed once per file rather than per visited type.
-fn is_float_bearing_type(
+/// `eq_incapable_names` memoizes the set of such local type names so it
+/// is computed once per file rather than per visited type.
+fn has_eq_incapable_field(
     node: tree_sitter::Node,
     source: &[u8],
-    float_names: Option<&mut FloatTypeNames>,
+    eq_incapable_names: Option<&mut EqIncapableTypeNames>,
 ) -> bool {
-    match float_names {
+    match eq_incapable_names {
         Some(memo) => {
-            let names = memo.get_or_insert_with(|| collect_float_type_names(node, source));
-            type_def_has_float_field(node, source, names)
+            let names = memo.get_or_insert_with(|| collect_eq_incapable_type_names(node, source));
+            type_def_has_eq_incapable_field(node, source, names)
         }
         // No state available (defensive): fall back to direct floats only.
-        None => type_def_has_float_field(node, source, &HashSet::new()),
+        None => type_def_has_eq_incapable_field(node, source, &HashSet::new()),
     }
 }
 
-/// Whether any field type of the struct/enum is float-bearing given the
-/// set of known float-bearing local type names.
-fn type_def_has_float_field(
+/// Whether any field type of the struct/enum forces partial-only equality
+/// given the set of known Eq-incapable local type names.
+fn type_def_has_eq_incapable_field(
     node: tree_sitter::Node,
     source: &[u8],
-    float_names: &HashSet<String>,
+    eq_incapable_names: &HashSet<String>,
 ) -> bool {
     field_type_nodes(node)
         .iter()
-        .any(|ty| type_node_is_float_bearing(*ty, source, float_names))
+        .any(|ty| type_node_forces_partial_eq(*ty, source, eq_incapable_names))
 }
 
 /// Collects the field-type nodes of a struct/enum definition. Covers
@@ -149,13 +165,14 @@ fn field_type_nodes(node: tree_sitter::Node) -> Vec<tree_sitter::Node> {
     out
 }
 
-/// Whether a field-type AST node is float-bearing: it contains an
-/// `f32` / `f64` `primitive_type` anywhere (arrays, tuples, references,
-/// generic arguments) or names a known float-bearing local type.
-fn type_node_is_float_bearing(
+/// Whether a field-type AST node forces partial-only equality: it
+/// contains an `f32` / `f64` `primitive_type` anywhere (arrays, tuples,
+/// references, generic arguments) or names a known Eq-incapable local
+/// type.
+fn type_node_forces_partial_eq(
     ty: tree_sitter::Node,
     source: &[u8],
-    float_names: &HashSet<String>,
+    eq_incapable_names: &HashSet<String>,
 ) -> bool {
     let mut stack = vec![ty];
     while let Some(n) = stack.pop() {
@@ -169,7 +186,7 @@ fn type_node_is_float_bearing(
             }
             "type_identifier" => {
                 if let Ok(text) = n.utf8_text(source)
-                    && float_names.contains(text)
+                    && eq_incapable_names.contains(text)
                 {
                     return true;
                 }
@@ -185,10 +202,12 @@ fn type_node_is_float_bearing(
 }
 
 /// Computes, via fixpoint, the set of type names defined in the file
-/// whose fields transitively wrap a float. A type is float-bearing if
-/// any field is a direct `f32` / `f64`, or names another type already
-/// known to be float-bearing.
-fn collect_float_type_names(node: tree_sitter::Node, source: &[u8]) -> HashSet<String> {
+/// that cannot implement `Eq`, so a field of such a type makes
+/// `#[derive(Eq)]` uncompilable. A type is Eq-incapable when it is
+/// itself `PartialEq` without `Eq` (a manual `impl PartialEq`, or a
+/// derived `PartialEq` with no `Eq`), or when any field is a direct
+/// `f32` / `f64` or names another type already known to be Eq-incapable.
+fn collect_eq_incapable_type_names(node: tree_sitter::Node, source: &[u8]) -> HashSet<String> {
     let mut root = node;
     while let Some(p) = root.parent() {
         root = p;
@@ -210,15 +229,24 @@ fn collect_float_type_names(node: tree_sitter::Node, source: &[u8]) -> HashSet<S
         }
     }
 
-    let mut float_names = HashSet::new();
+    let mut eq_incapable_names = HashSet::new();
+    // Seed: any local type that is `PartialEq` without `Eq` cannot gain
+    // `Eq`, so it taints any type that holds it as a field.
+    for (name, def) in &defs {
+        let derives = collect_derives(*def, source);
+        let traits = search_traits_in_root(*def, source, name, &derives);
+        if traits.has_partial_eq && !traits.has_eq {
+            eq_incapable_names.insert(name.clone());
+        }
+    }
     loop {
         let mut changed = false;
         for (name, def) in &defs {
-            if float_names.contains(name) {
+            if eq_incapable_names.contains(name) {
                 continue;
             }
-            if type_def_has_float_field(*def, source, &float_names) {
-                float_names.insert(name.clone());
+            if type_def_has_eq_incapable_field(*def, source, &eq_incapable_names) {
+                eq_incapable_names.insert(name.clone());
                 changed = true;
             }
         }
@@ -226,7 +254,7 @@ fn collect_float_type_names(node: tree_sitter::Node, source: &[u8]) -> HashSet<S
             break;
         }
     }
-    float_names
+    eq_incapable_names
 }
 
 fn collect_derives(node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
@@ -263,16 +291,28 @@ fn collect_derives(node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
     out
 }
 
-/// Returns `(has_partial_eq, has_eq)` by combining derives + any
-/// `impl Trait for TypeName` blocks at the file root.
+/// How `PartialEq` / `Eq` are provided for a type, combining derives
+/// with any `impl Trait for TypeName` blocks at the file root.
+struct TraitInfo {
+    has_partial_eq: bool,
+    has_eq: bool,
+    /// `PartialEq` is provided by a hand-written `impl` block (not a
+    /// `#[derive]`). Such equality may be non-reflexive, so `Eq` is not
+    /// safely addable.
+    partial_eq_is_manual: bool,
+}
+
 fn search_traits_in_root(
     node: tree_sitter::Node,
     source: &[u8],
     type_name: &str,
     derives: &[String],
-) -> (bool, bool) {
-    let mut has_partial_eq = derives.iter().any(|d| d == "PartialEq");
-    let mut has_eq = derives.iter().any(|d| d == "Eq");
+) -> TraitInfo {
+    let mut info = TraitInfo {
+        has_partial_eq: derives.iter().any(|d| d == "PartialEq"),
+        has_eq: derives.iter().any(|d| d == "Eq"),
+        partial_eq_is_manual: false,
+    };
     // Walk the entire tree for `impl_item` blocks targeting this type.
     let mut root = node;
     while let Some(p) = root.parent() {
@@ -290,9 +330,10 @@ fn search_traits_in_root(
                 if target_text == type_name {
                     let bare = trait_text.rsplit("::").next().unwrap_or(trait_text);
                     if bare == "PartialEq" {
-                        has_partial_eq = true;
+                        info.has_partial_eq = true;
+                        info.partial_eq_is_manual = true;
                     } else if bare == "Eq" {
-                        has_eq = true;
+                        info.has_eq = true;
                     }
                 }
             }
@@ -301,7 +342,7 @@ fn search_traits_in_root(
             stack.push(child);
         }
     }
-    (has_partial_eq, has_eq)
+    info
 }
 
 #[cfg(test)]
@@ -398,5 +439,87 @@ struct A(Inner);";
         // A `f64` mention in a doc comment must not silence the rule.
         let source = "#[derive(PartialEq)]\nstruct A {\n    /// holds an f64-ish count\n    n: i32,\n}";
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_enum_with_manual_partial_eq_impl() {
+        // Issue #3911 case 1: a hand-written, non-reflexive `impl PartialEq`
+        // (diesel's `Error`) is the author's explicit opt-out — adding `Eq`
+        // would lie about reflexivity.
+        let source = "\
+#[derive(Debug)]
+enum Error {
+    A(i32),
+    NotFound,
+    Other,
+}
+impl PartialEq for Error {
+    fn eq(&self, other: &Error) -> bool {
+        match (self, other) {
+            (Error::A(a), Error::A(b)) => a == b,
+            (&Error::NotFound, &Error::NotFound) => true,
+            _ => false,
+        }
+    }
+}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_struct_with_manual_partial_eq_impl() {
+        let source = "\
+struct S {
+    x: i32,
+}
+impl PartialEq for S {
+    fn eq(&self, other: &S) -> bool {
+        self.x == other.x
+    }
+}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_enum_with_field_of_manual_partial_eq_type() {
+        // Issue #3911 case 2: diesel's `ConnectionError` derives `PartialEq`
+        // but holds an `Error` whose `Eq` is unimplementable, so `#[derive(Eq)]`
+        // on `ConnectionError` would be a hard compile error (E0277).
+        let source = "\
+#[derive(Debug)]
+enum Error {
+    A(i32),
+    NotFound,
+}
+impl PartialEq for Error {
+    fn eq(&self, _other: &Error) -> bool {
+        false
+    }
+}
+#[derive(Debug, PartialEq)]
+enum ConnectionError {
+    BadConnection(String),
+    CouldntSetupConfiguration(Error),
+}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_struct_with_field_of_derived_partial_eq_only_type() {
+        // A field whose local type derives `PartialEq` but not `Eq` also
+        // makes `#[derive(Eq)]` uncompilable; the right fix is on `Inner`,
+        // which the rule still flags directly.
+        let source = "\
+#[derive(PartialEq)]
+struct Inner {
+    x: i32,
+}
+#[derive(PartialEq)]
+struct Outer {
+    inner: Inner,
+}";
+        // Only `Inner` (the directly-fixable derived-PartialEq type) is flagged.
+        let diags = run_on(source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`Inner`"));
     }
 }
