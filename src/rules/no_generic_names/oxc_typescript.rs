@@ -15,14 +15,16 @@ pub struct Check;
 /// segments of a descriptive compound (`rowIndex`, `cellValue`), so they never
 /// match as a prefix or suffix.
 const BANNED_WORDS: &[&str] = &[
-    "info", "temp", "result", "obj", "item", "thing", "stuff", "val", "retval", "value", "foo",
-    "bar", "row", "rows", "cell", "cells", "baz", "qux", "tmp", "dummy", "placeholder", "arr",
-    "str", "num", "output", "input", "payload", "flag", "stub", "fake", "foobar", "quux", "corge",
-    "blah", "bleh", "asdf", "qwerty", "zzz", "xxx", "aaa", "bbb", "scratch", "junk", "garbage",
-    "something", "anything", "whatever", "dict", "vec", "tup", "bool", "int", "float", "char",
-    "byte", "ptr", "ret", "out", "vars", "response", "request", "entity", "dto", "resource",
-    "entry", "chunk", "blob", "evt", "el", "elem", "comp", "func", "widget", "record", "body",
-    "doc", "idx", "curr", "opts", "cfg", "found",
+    "info", "temp", "result", "results", "obj", "objs", "item", "items", "thing", "stuff", "val",
+    "retval", "value", "values", "foo", "bar", "row", "rows", "cell", "cells", "baz", "qux", "tmp",
+    "dummy", "placeholder", "arr", "list", "lists", "str", "num", "output", "outputs", "input",
+    "inputs", "payload", "payloads", "flag", "stub", "fake", "foobar", "quux", "corge", "blah",
+    "bleh", "asdf", "qwerty", "zzz", "xxx", "aaa", "bbb", "scratch", "junk", "garbage", "something",
+    "anything", "whatever", "dict", "vec", "tup", "bool", "int", "float", "char", "byte", "ptr",
+    "ret", "out", "vars", "response", "responses", "request", "requests", "entity", "entities",
+    "dto", "resource", "resources", "entry", "entries", "chunk", "chunks", "blob", "evt", "el",
+    "elem", "comp", "func", "widget", "record", "records", "body", "doc", "idx", "curr", "opts",
+    "cfg", "found",
 ];
 
 const PARAM_ALLOWED_WORDS: &[&str] = &["value", "item"];
@@ -1260,6 +1262,32 @@ mod tests {
         // Negative: the banned-word list stays intact apart from `lookup`.
         let src = r#"const obj = 1; const temp = 2;"#;
         assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn flags_bare_items_and_entries_whole_identifier() {
+        // `items`/`entries` are as vague as their already-banned singulars
+        // (`item`/`entry`) — flag them only as the *whole* identifier.
+        assert_eq!(run("const items = [];").len(), 1);
+        assert_eq!(run("const entries = Object.entries(o);").len(), 1);
+    }
+
+    #[test]
+    fn flags_generic_plurals_and_list() {
+        // Plurals of already-banned singulars (`result`→`results`,
+        // `value`→`values`, …) and `list`/`lists` are equally vague.
+        let src = r#"const results = []; const values = []; const responses = [];
+                     const requests = []; const entities = []; const records = [];
+                     const list = []; const lists = [];"#;
+        assert_eq!(run(src).len(), 8);
+    }
+
+    #[test]
+    fn no_fp_items_entries_as_compound_segment() {
+        // Whole-identifier match only: descriptive compounds stay clean, and
+        // `items` referenced as the iterated collection is not a binding.
+        assert!(run("const lineItems = []; const auditEntries = [];").is_empty());
+        assert!(run("for (const item of items) { use(item); }").is_empty());
     }
 
     #[test]
