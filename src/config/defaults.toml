@@ -271,6 +271,12 @@ min_normalized_chars = 51
 [rules.no-small-switch]
 min_cases = 3
 
+# Minimum element count before a const array `.includes()` is worth a `Set`.
+# Below this, a linear scan beats constructing a `Set` + hashing + the extra
+# allocation, so suggesting `Set#has()` is a net pessimization.
+[rules.prefer-set-has]
+min_array_len = 4
+
 # ---------------------------------------------------------------
 # UI / CSS thresholds.
 # ---------------------------------------------------------------
