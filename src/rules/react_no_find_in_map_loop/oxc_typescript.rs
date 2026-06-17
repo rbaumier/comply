@@ -7,6 +7,7 @@ use crate::oxc_helpers::{
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -73,6 +74,14 @@ impl OxcCheck for Check {
 }
 
 /// Walk up from `node` to determine if it's inside a loop or `.map()` callback.
+///
+/// The find/filter runs per-iteration only when its nearest enclosing function
+/// is directly the callback of the loop/`.map()`. An intervening nested function
+/// (event handler such as `onRemove`, a `useCallback`, any deferred closure
+/// stored in a prop/variable) means the call is deferred — it runs once on user
+/// interaction, not once per `.map()` iteration — so there is no O(n²) render
+/// cost. We bail the moment the walk crosses a function boundary that is not the
+/// loop/map's own callback.
 fn flagged_inside_loop_or_map(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -92,6 +101,15 @@ fn flagged_inside_loop_or_map(
             | AstKind::ForOfStatement(_)
             | AstKind::WhileStatement(_)
             | AstKind::DoWhileStatement(_) => return true,
+            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
+                // Crossing a function boundary that is itself a loop/`.map()`
+                // callback is the expected per-iteration case — keep walking up.
+                // Any other enclosing function (handler, deferred closure) means
+                // the find/filter is deferred, not per-iteration: stop.
+                if !is_loop_or_map_callback(current, semantic) {
+                    return false;
+                }
+            }
             AstKind::CallExpression(call) => {
                 if is_map_call(call) {
                     // If the find/filter receiver root matches the map callback param,
@@ -108,6 +126,28 @@ fn flagged_inside_loop_or_map(
             _ => {}
         }
     }
+}
+
+/// True when the function node `func_id` is the callback argument of a `.map()`
+/// call — i.e. its parent is a `.map()` CallExpression and the function sits in
+/// that call's arguments. This is the one function boundary that runs per
+/// iteration; every other enclosing function defers execution.
+fn is_loop_or_map_callback(
+    func_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let func_span = semantic.nodes().get_node(func_id).kind().span();
+    let parent = semantic.nodes().parent_node(func_id);
+    let AstKind::CallExpression(call) = parent.kind() else {
+        return false;
+    };
+    if !is_map_call(call) {
+        return false;
+    }
+    call.arguments
+        .iter()
+        .filter_map(oxc_ast::ast::Argument::as_expression)
+        .any(|arg| arg.span() == func_span)
 }
 
 fn is_map_call(call: &oxc_ast::ast::CallExpression) -> bool {
@@ -162,5 +202,54 @@ mod tests {
     #[test]
     fn does_not_panic_on_spread_arg_in_map() {
         assert!(crate::rules::test_helpers::run_rule(&Check, "arr.map(...fns)", "t.tsx").is_empty());
+    }
+
+    // True positive: a `.filter()` directly in the map callback body (no
+    // intervening function) is per-iteration — must still flag.
+    #[test]
+    fn flags_filter_directly_in_map_callback() {
+        let src = "items.map(i => others.filter(o => o.id === i.id));";
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").len(), 1);
+    }
+
+    // Regression for #3936: a `.filter()` inside a nested deferred event handler
+    // (`onClick`) defined within the map callback runs once per user click, not
+    // once per `.map()` iteration — no O(n²) render cost, so it must not flag.
+    #[test]
+    fn allows_filter_in_nested_event_handler() {
+        let src = "arr.map((item) => <X onClick={() => other.filter((i) => i !== item)} />);";
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty());
+    }
+
+    // True positive: a `.filter()` directly in a `for`-loop body (no
+    // intervening function) is per-iteration — must still flag.
+    #[test]
+    fn flags_filter_directly_in_for_loop() {
+        let src = "for (const x of xs) { others.filter(o => o.id === x.id); }";
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").len(), 1);
+    }
+
+    // Regression for #3936: a `.filter()` inside a deferred closure defined in a
+    // `for`-loop body runs on later invocation, not per-iteration — must not flag.
+    #[test]
+    fn allows_filter_in_deferred_closure_in_for_loop() {
+        let src = "for (const x of xs) { register(() => others.filter(o => o.id === x.id)); }";
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty());
+    }
+
+    // Regression for #3936: the mantine MultiSelect shape — a `.filter()` inside
+    // an `onRemove` arrow nested in the map callback. Deferred, must not flag.
+    #[test]
+    fn allows_filter_in_nested_onremove_handler() {
+        let src = r#"
+            const values = _value.map((item, index) => (
+              <Pill
+                onRemove={() => {
+                  setValue(_value.filter((i) => item !== i));
+                }}
+              />
+            ));
+        "#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty());
     }
 }
