@@ -144,7 +144,9 @@ fn collect_exported_type_names(
         if child.kind() != "export_statement" {
             continue;
         }
-        // Inline `export interface X` / `export type X = …`.
+        // Inline `export interface X` / `export type X = …`. This also
+        // covers `export default interface X {}`, whose interface still sits
+        // in the `declaration` field.
         if let Some(decl) = child.child_by_field_name("declaration")
             && matches!(
                 decl.kind(),
@@ -152,6 +154,14 @@ fn collect_exported_type_names(
             )
             && let Some(name_node) = decl.child_by_field_name("name")
             && let Ok(name) = std::str::from_utf8(&source[name_node.byte_range()])
+        {
+            exported.insert(name.to_string());
+        }
+        // `export default X;` where `X` references a separately-declared
+        // type — a valid public surface for an API DTO.
+        if let Some(value) = child.child_by_field_name("value")
+            && value.kind() == "identifier"
+            && let Ok(name) = std::str::from_utf8(&source[value.byte_range()])
         {
             exported.insert(name.to_string());
         }
@@ -439,6 +449,17 @@ mod tests {
         assert!(
             run("export interface User { id: string; name: string; createdAt: string }").is_empty()
         );
+    }
+
+    #[test]
+    fn flags_default_exported_interface_used_as_both_input_and_output() {
+        // `export default interface X {}` is a valid public API DTO and must
+        // stay flagged when mixing server fields across input/output.
+        let d = run(
+            "export default interface User { id: string; name: string; createdAt: string }\n\
+             function save(u: User): User { return u; }",
+        );
+        assert_eq!(d.len(), 1);
     }
 
     #[test]
