@@ -76,6 +76,15 @@ fn is_version_like(line: &str, ip_end: usize, ip_len: usize) -> bool {
     if ip_end < bytes.len() && bytes[ip_end] == b'.' && bytes.get(ip_end + 1) == Some(&b'*') {
         return true;
     }
+    // A fifth numeric segment (`.` + digit) means the dotted-quad is the prefix
+    // of a multi-segment version (PEP 440 `1.2.3.4.5`), not an IPv4 address —
+    // a valid IPv4 has exactly four octets.
+    if ip_end < bytes.len()
+        && bytes[ip_end] == b'.'
+        && bytes.get(ip_end + 1).is_some_and(|b| b.is_ascii_digit())
+    {
+        return true;
+    }
     if ip_end < bytes.len()
         && bytes[ip_end] == b'-'
         && bytes.get(ip_end + 1).is_some_and(|b| b.is_ascii_alphabetic())
@@ -332,6 +341,23 @@ mod tests {
     fn allows_version_with_wildcard_suffix() {
         assert!(run(r#"let cases = ["3.9.0.0.*", "3.9.1.0.*"];"#).is_empty());
         assert!(run(r#"const version = "1.2.3.4.*";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_multi_segment_version_issue_3943() {
+        // Issue #3943: a dotted-quad followed by `.digit` is the prefix of a
+        // multi-segment PEP 440 version (`1.2.3.4.5`), not an IPv4 address.
+        assert!(run(r#"const version = "1.2.3.4.5";"#).is_empty());
+        assert!(run(r#"const v2 = "10.20.30.40.50";"#).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_quad_not_followed_by_digit_issue_3943() {
+        // Negative space: a real four-octet IP with no trailing `.digit` still
+        // flags — at end-of-string, before a non-digit, etc.
+        assert_eq!(run(r#"const realip = "10.0.0.5";"#).len(), 1);
+        assert_eq!(run(r#"const host = "192.168.1.1";"#).len(), 1);
+        assert_eq!(run(r#"let endpoint = "10.0.0.5:8080";"#).len(), 1);
     }
 
     #[test]
