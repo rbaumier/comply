@@ -216,6 +216,21 @@ function C() {
         assert_eq!(run(src).len(), 1);
     }
 
+    // Regression for #4015: a state-slot hole (`const [, setX] = useState(...)`)
+    // still binds a render-scheduling setter, so a high-frequency handler calling
+    // it must flag. `is_use_state_setter_binding` matches the setter slot only and
+    // must not require slot 0 to be a plain identifier.
+    #[test]
+    fn flags_usestate_setter_with_state_slot_hole_in_mousemove() {
+        let src = r#"
+function C() {
+    const [, setX] = useState(0);
+    el.addEventListener("mousemove", (e) => { setX(e.clientX); });
+}
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
     #[test]
     fn flags_usereducer_dispatch_in_scroll_listener() {
         let src = r#"
