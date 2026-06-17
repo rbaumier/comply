@@ -451,6 +451,67 @@ fn attr_names_path(attr_text: &str, attr_path: &str) -> bool {
         || attr_text.contains(&format!("::{attr_path}]"))
 }
 
+/// True if `item` carries a `#[doc(hidden)]` outer attribute as a preceding
+/// `attribute_item` sibling. `#[doc(hidden)]` is the universal author signal
+/// that an item is excluded from the documented public API.
+///
+/// Walks preceding `attribute_item` siblings (skipping interleaved
+/// `line_comment`/`block_comment` siblings, and traversing past unrelated
+/// attributes such as `#[cfg(...)]`) and matches on the AST: the `attribute`'s
+/// path child must be `doc` and its `token_tree` arguments must contain a
+/// `hidden` identifier token. Keying on the path child and the argument token —
+/// rather than scanning raw text — means `#[doc = "hidden"]` (a doc string
+/// reading "hidden") and a comment mentioning `doc(hidden)` do not match.
+pub fn has_doc_hidden(item: Node, source: &[u8]) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "line_comment" | "block_comment" => {}
+            "attribute_item" => {
+                if attribute_is_doc_hidden(s, source) {
+                    return true;
+                }
+            }
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+/// True if `attribute_item` is `#[doc(hidden)]`: its `attribute` child has path
+/// `doc` and a `token_tree` argument list containing a `hidden` identifier.
+///
+/// `attribute_item > attribute` parses as `seq($._path, optional(arguments:
+/// token_tree))`. We read the path from the attribute's first named child and
+/// scan the `token_tree` for an `identifier` token equal to `hidden`, so
+/// `#[doc(inline)]`, `#[doc = "…"]`, and unrelated attributes do not match.
+fn attribute_is_doc_hidden(attribute_item: Node, source: &[u8]) -> bool {
+    let mut item_cursor = attribute_item.walk();
+    let Some(attribute) = attribute_item
+        .children(&mut item_cursor)
+        .find(|child| child.kind() == "attribute")
+    else {
+        return false;
+    };
+
+    let Some(path) = attribute.named_child(0) else {
+        return false;
+    };
+    if path.utf8_text(source) != Ok("doc") {
+        return false;
+    }
+
+    let Some(token_tree) = attribute.child_by_field_name("arguments") else {
+        return false;
+    };
+
+    let mut tree_cursor = token_tree.walk();
+    token_tree
+        .children(&mut tree_cursor)
+        .any(|tok| tok.kind() == "identifier" && tok.utf8_text(source) == Ok("hidden"))
+}
+
 /// True if any string, raw-string, or byte-string literal in the subtree rooted
 /// at `node` contains `needle` as a substring, matched case-insensitively.
 ///
@@ -810,6 +871,35 @@ mod tests {
                 is_in_trait_impl(func),
                 expected,
                 "is_in_trait_impl mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn has_doc_hidden_matches_doc_hidden_past_cfg_and_comments() {
+        let cases = [
+            ("#[doc(hidden)]\npub use x::*;", true),
+            // doc(hidden) sits beside a cfg — must traverse past it.
+            ("#[cfg(feature = \"derive\")]\n#[doc(hidden)]\npub use x::*;", true),
+            // interleaved comment between attribute and item.
+            ("#[doc(hidden)]\n// note\npub use x::*;", true),
+            // bare, no doc(hidden).
+            ("pub use x::*;", false),
+            // cfg only — not doc(hidden).
+            ("#[cfg(feature = \"derive\")]\npub use x::*;", false),
+            // doc string reading "hidden" is not doc(hidden).
+            ("#[doc = \"hidden\"]\npub use x::*;", false),
+            // a different doc argument.
+            ("#[doc(inline)]\npub use x::*;", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let item = first_of_kind(tree.root_node(), "use_declaration")
+                .expect("snippet should contain a use_declaration");
+            assert_eq!(
+                has_doc_hidden(item, src.as_bytes()),
+                expected,
+                "has_doc_hidden mismatch for `{src}`"
             );
         }
     }

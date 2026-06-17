@@ -58,6 +58,15 @@ impl AstCheck for Check {
         {
             return;
         }
+        // `#[doc(hidden)]` removes the re-export from the documented public
+        // surface, so it cannot "quietly mirror" a dependency's API — the
+        // author has marked it internal plumbing. This is the canonical derive
+        // companion-crate pattern (`#[doc(hidden)] pub use foo_derive::*;`, as
+        // serde/thiserror/prost do). The attribute may sit beside `#[cfg(...)]`,
+        // which the helper traverses past.
+        if crate::rules::rust_helpers::has_doc_hidden(node, source_bytes) {
+            return;
+        }
         // Prelude modules exist to be glob-imported (`use crate::prelude::*`,
         // like `std::prelude`); wholesale re-export is their purpose.
         if is_prelude_module(ctx.path) {
@@ -230,5 +239,28 @@ mod tests {
     fn still_flags_bare_glob_without_local_mod() {
         // No `mod external_thing;` in the file -> not local flattening.
         assert_eq!(run_on("pub use external_thing::*;").len(), 1);
+    }
+
+    #[test]
+    fn exempts_doc_hidden_glob_issue_3961() {
+        // Issue #3961: prost re-exports its derive companion crate via a
+        // `#[doc(hidden)]` glob — excluded from the documented public surface.
+        assert!(run_on("#[doc(hidden)]\npub use prost_derive::*;").is_empty());
+    }
+
+    #[test]
+    fn exempts_doc_hidden_glob_beside_cfg_issue_3961() {
+        // The exact prost shape: `#[cfg(...)]` interleaved before the
+        // `#[doc(hidden)]`. The exemption must traverse past the cfg.
+        let src = "#[cfg(feature = \"derive\")]\n#[doc(hidden)]\npub use prost_derive::*;";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn still_flags_cfg_only_glob_without_doc_hidden() {
+        // A `#[cfg(...)]` attribute alone does not remove the re-export from
+        // the public API -> still flagged.
+        let src = "#[cfg(feature = \"derive\")]\npub use serde::*;";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
