@@ -154,4 +154,23 @@ mod tests {
         assert!(run("const userList = [];").is_empty());
         assert!(run("const userList = new Map();").is_empty());
     }
+
+    // Mid-word fragments must not read as a type token (issue #3953):
+    // `listOffset` ends in `set`, `bitmap` ends in `map`, but neither claims a shape.
+    #[test]
+    fn allows_offset_holding_array() {
+        assert!(run("const listOffset = [];").is_empty());
+    }
+
+    #[test]
+    fn allows_bitmap_holding_array() {
+        assert!(run("const bitmap = [];").is_empty());
+    }
+
+    // A genuine trailing `Set` token still flags an Array mismatch.
+    #[test]
+    fn flags_set_token_holding_array() {
+        let d = run("const userSet: number[] = [];");
+        assert_eq!(d.len(), 1);
+    }
 }
