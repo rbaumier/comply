@@ -9,6 +9,13 @@
 //! it avoids the log2(n) reallocation chain from doubling. A conditional
 //! push or a `continue` makes the final length unknowable up front, so
 //! `with_capacity` would mis-size.
+//!
+//! The iterable itself must be length-bearing — a bare binding or field of a
+//! collection type (`v`, `self.items`), optionally behind one reference
+//! (`&v`). Every other iterable shape is skipped: lazy/fallible ones in
+//! particular (`make_items()`, `Iter::new(r)?`, `v.iter().filter(..)`) have no
+//! cheaply known length to size the capacity from, so `with_capacity(n)` can't
+//! be written.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -42,7 +49,8 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
         } else {
             continue;
         };
-        if let Some(body) = for_node.child_by_field_name("body")
+        if iterable_has_known_length(for_node)
+            && let Some(body) = for_node.child_by_field_name("body")
             && body_directly_pushes(body, var_name, source)
             && !body_has_continue(body)
         {
@@ -75,6 +83,27 @@ fn extract_var_name<'a>(pattern: tree_sitter::Node<'a>, source: &'a [u8]) -> Opt
         }
     }
     None
+}
+
+/// Whether the `for_expression`'s iterable is a value whose length is cheaply
+/// known, so `Vec::with_capacity(n)` has an `n` to supply. Length-bearing means
+/// a bare `identifier` or `field_expression` (`v`, `self.items`), optionally
+/// behind a single `reference_expression` (`&v`). Every other shape is skipped,
+/// notably the lazy/fallible iterators that have no cheaply available length: a
+/// `call_expression` (`make_items()`), a `try_expression` (`Iter::new(r)?`), or
+/// an iterator-adaptor chain (`v.iter().filter(..)`, parsed as a
+/// `call_expression` whose function is a `field_expression`).
+fn iterable_has_known_length(for_node: tree_sitter::Node) -> bool {
+    let Some(value) = for_node.child_by_field_name("value") else { return false; };
+    let inner = if value.kind() == "reference_expression" {
+        match value.child_by_field_name("value") {
+            Some(n) => n,
+            None => return false,
+        }
+    } else {
+        value
+    };
+    matches!(inner.kind(), "identifier" | "field_expression")
 }
 
 fn is_push_call(node: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
@@ -186,6 +215,36 @@ mod tests {
     #[test]
     fn flags_unconditional_push_with_unrelated_if() {
         let src = "fn f(items: Vec<i32>) {\n    let mut out = Vec::new();\n    for x in items {\n        if x > 0 { println!(\"{x}\"); }\n        out.push(x);\n    }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn skips_fallible_iterator_iterable_issue_3983() {
+        let src = "fn read<'a>(r: &mut Reader<'a>) -> Result<Vec<CertificateDer<'a>>, InvalidMessage> {\n    let mut ret = Vec::new();\n    for item in TlsListIter::<CertificateDer<'a>>::new(r)? {\n        ret.push(item?);\n    }\n    Ok(ret)\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_iterator_adaptor_chain_iterable() {
+        let src = "fn f(v: Vec<i32>) {\n    let mut out = Vec::new();\n    for x in v.iter().filter(|x| **x > 0) {\n        out.push(*x);\n    }\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_plain_call_iterable() {
+        let src = "fn f() {\n    let mut out = Vec::new();\n    for x in make_items() {\n        out.push(x);\n    }\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_field_iterable() {
+        let src = "struct S { items: Vec<i32> }\nimpl S {\n    fn f(&self) {\n        let mut out = Vec::new();\n        for x in self.items {\n            out.push(x);\n        }\n    }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_reference_iterable() {
+        let src = "fn f(v: &Vec<i32>) {\n    let mut out = Vec::new();\n    for x in &v {\n        out.push(*x);\n    }\n}";
         assert_eq!(run(src).len(), 1);
     }
 }
