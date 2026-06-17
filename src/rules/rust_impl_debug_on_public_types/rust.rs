@@ -19,7 +19,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{has_test_attribute, is_in_test_context};
+use crate::rules::rust_helpers::{has_doc_hidden, has_test_attribute, is_in_test_context};
 
 #[derive(Debug)]
 pub struct Check;
@@ -134,25 +134,6 @@ fn has_debug_derive(item: tree_sitter::Node, source: &[u8]) -> bool {
                 // Comments interleaved with attributes don't end the
                 // attribute block. Keep walking.
             }
-            _ => break,
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
-}
-
-fn has_doc_hidden(item: tree_sitter::Node, source: &[u8]) -> bool {
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "attribute_item" => {
-                if let Ok(text) = s.utf8_text(source)
-                    && text.contains("doc(hidden)")
-                {
-                    return true;
-                }
-            }
-            "line_comment" | "block_comment" => {}
             _ => break,
         }
         sibling = s.prev_named_sibling();
