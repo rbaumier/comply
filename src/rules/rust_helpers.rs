@@ -512,6 +512,102 @@ fn attribute_is_doc_hidden(attribute_item: Node, source: &[u8]) -> bool {
         .any(|tok| tok.kind() == "identifier" && tok.utf8_text(source) == Ok("hidden"))
 }
 
+/// True if `node` is covered by an `#[allow(<scope>::<lint>)]` or
+/// `#[expect(<scope>::<lint>)]` attribute naming `lint`, applied to an enclosing
+/// statement, expression, or item.
+///
+/// Walks up from `node` via `parent()`; at each ancestor it scans the preceding
+/// `attribute_item` siblings (skipping interleaved comment siblings, traversing
+/// past unrelated attributes such as `#[cfg(...)]`) for an `allow`/`expect`
+/// attribute whose argument `token_tree` contains an `identifier` token equal to
+/// `lint`. The walk stops at the enclosing `function_item` / `closure_expression`
+/// / `source_file` boundary so an `#[allow]` on a *sibling* item far above does
+/// not leak in.
+///
+/// Matching on the AST path child (`allow`/`expect`) and the token-tree
+/// `identifier` — not raw text — means a scope prefix like `clippy::` (which
+/// tokenizes as its own `identifier`) is handled, while a lint merely ending in
+/// `lint` or the name appearing inside a comment does not match.
+///
+/// Used by rules that overlap a clippy/rustc lint to defer to an author's
+/// explicit `#[allow]`/`#[expect]` of that exact lint.
+pub fn has_clippy_allow(node: Node, source: &[u8], lint: &str) -> bool {
+    let mut cur = node;
+    loop {
+        if attribute_allows_lint_in_siblings(cur, source, lint) {
+            return true;
+        }
+        if matches!(
+            cur.kind(),
+            "function_item" | "closure_expression" | "source_file"
+        ) {
+            return false;
+        }
+        match cur.parent() {
+            Some(parent) => cur = parent,
+            None => return false,
+        }
+    }
+}
+
+/// Scan `node`'s preceding `attribute_item` siblings for an `allow`/`expect`
+/// attribute naming `lint`, skipping interleaved comments and traversing past
+/// unrelated attributes.
+fn attribute_allows_lint_in_siblings(node: Node, source: &[u8], lint: &str) -> bool {
+    let mut sibling = node.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "line_comment" | "block_comment" => {}
+            "attribute_item" => {
+                if attribute_allows_lint(s, source, lint) {
+                    return true;
+                }
+            }
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+/// True if `attribute_item` is an `allow`/`expect` attribute whose argument list
+/// names `lint`, bare or scoped (`clippy::<lint>`, `rustc::<lint>`).
+///
+/// `attribute_item > attribute` parses as `seq($._path, optional(arguments:
+/// token_tree))`: the path is the attribute's first named child and the lint
+/// names live in the `token_tree` as a flat sequence of `identifier` tokens. We
+/// match on the path child being `allow`/`expect` and on an `identifier` token
+/// equal to `lint`, so an unrelated `#[allow(dead_code)]` does not match and a
+/// scoped `clippy::<lint>` still tokenizes its final segment as `lint`.
+fn attribute_allows_lint(attribute_item: Node, source: &[u8], lint: &str) -> bool {
+    let mut item_cursor = attribute_item.walk();
+    let Some(attribute) = attribute_item
+        .children(&mut item_cursor)
+        .find(|child| child.kind() == "attribute")
+    else {
+        return false;
+    };
+
+    let Some(path) = attribute.named_child(0) else {
+        return false;
+    };
+    let Ok(path_text) = path.utf8_text(source) else {
+        return false;
+    };
+    if path_text != "allow" && path_text != "expect" {
+        return false;
+    }
+
+    let Some(token_tree) = attribute.child_by_field_name("arguments") else {
+        return false;
+    };
+
+    let mut tree_cursor = token_tree.walk();
+    token_tree
+        .children(&mut tree_cursor)
+        .any(|tok| tok.kind() == "identifier" && tok.utf8_text(source) == Ok(lint))
+}
+
 /// Collect the trait names from the top-level `#[derive(...)]` attributes
 /// applied to `item`, an item node (`struct_item` / `enum_item`).
 ///
