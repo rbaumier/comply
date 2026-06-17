@@ -1,5 +1,5 @@
 use crate::diagnostic::Diagnostic;
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, expression_is_or_resolves_to_literal};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BinaryExpression, Expression};
 use std::sync::Arc;
@@ -31,6 +31,16 @@ impl OxcCheck for Check {
             return;
         }
         if is_literal_expr(&bin.left) || is_literal_expr(&bin.right) {
+            return;
+        }
+        // An operand bound to a primitive literal (`const k = "abc"; x === k`) is,
+        // for timing purposes, identical to an inline literal: its bytes are
+        // already present in the source, so a leak reveals nothing (e.g. ethers.js
+        // comparing against a public shared default API key). A binding from a call
+        // or member access is a stored secret and is not exempted here.
+        if expression_is_or_resolves_to_literal(&bin.left, semantic)
+            || expression_is_or_resolves_to_literal(&bin.right, semantic)
+        {
             return;
         }
         // A `Symbol` is compared by reference identity (an O(1) pointer/id
@@ -325,6 +335,44 @@ mod tests {
     fn flags_secret_string_comparison() {
         assert_eq!(
             run_on("const secret = getSecret(); function f(arg) { if (arg === secret) {} }").len(),
+            1
+        );
+    }
+
+    /// ethers.js provider-ankr.ts:136,157 — `defaultApiKey` is a module-level
+    /// const bound to a string literal (a public shared default key whose bytes
+    /// are already in the source). Comparing against it is identical, for timing
+    /// purposes, to comparing against an inline literal, so it must not flag.
+    #[test]
+    fn allows_const_bound_to_string_literal() {
+        assert!(
+            run_on(
+                r#"const defaultApiKey = "9f7d929b018cdffb338517efa06f58359e86ff1ffd350bc889738523659e7972"; function f(apiKey) { return apiKey === defaultApiKey; }"#
+            )
+            .is_empty()
+        );
+    }
+
+    /// A const bound to a numeric literal is likewise a public inline value.
+    #[test]
+    fn allows_const_bound_to_numeric_literal() {
+        assert!(
+            run_on("const apiKey = 12345; function f(token) { if (token === apiKey) {} }")
+                .is_empty()
+        );
+    }
+
+    /// Over-exemption guard: a const bound to a non-literal expression
+    /// (`process.env.KEY`, a `"a" + x` concatenation) is a stored secret, not an
+    /// inline literal, and must still flag.
+    #[test]
+    fn flags_const_bound_to_non_literal() {
+        assert_eq!(
+            run_on("const apiKey = process.env.API_KEY; function f(token) { if (token === apiKey) {} }").len(),
+            1
+        );
+        assert_eq!(
+            run_on(r#"const secret = "a" + getSalt(); function f(token) { if (token === secret) {} }"#).len(),
             1
         );
     }
