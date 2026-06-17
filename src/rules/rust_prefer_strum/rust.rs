@@ -4,12 +4,19 @@
 //! 1. `enum_item` nodes — collect their names.
 //! 2. `impl_item` nodes whose `trait` text matches a `Display` path —
 //!    record the target type name.
-//! 3. `impl_item` nodes whose `trait` text matches a `FromStr` path —
+//! 3. `impl_item` nodes whose `trait` text matches a `FromStr` path AND
+//!    whose `type Err` associated type is the unit type `()` —
 //!    record the target type name.
 //!
 //! Any enum name present in BOTH (2) and (3) is flagged on its
 //! `enum_item` node. The two impls together are the redundancy
 //! `strum::Display` + `strum::EnumString` is designed to remove.
+//!
+//! `strum::EnumString` hardcodes `type Err = strum::ParseError` and can only
+//! report `VariantNotFound`. A `FromStr` whose `Err` is anything other than
+//! `()` carries a richer contract (custom error type and/or messages) that the
+//! derive cannot reproduce, so migrating it would be behavior-destroying — such
+//! impls are not recorded as targets.
 
 use std::collections::HashSet;
 
@@ -47,7 +54,7 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
                 let type_trimmed = type_text.trim().to_string();
                 if is_display_trait(trait_trimmed) {
                     display_targets.insert(type_trimmed);
-                } else if is_from_str_trait(trait_trimmed) {
+                } else if is_from_str_trait(trait_trimmed) && from_str_has_unit_err(child, source) {
                     from_str_targets.insert(type_trimmed);
                 }
             }
@@ -86,6 +93,31 @@ fn is_from_str_trait(text: &str) -> bool {
         text,
         "FromStr" | "str::FromStr" | "std::str::FromStr" | "core::str::FromStr"
     )
+}
+
+/// True when the `FromStr` `impl_item`'s body declares `type Err = ();`.
+///
+/// `()` is the only error type whose replacement by `strum::EnumString`
+/// (which forces `type Err = strum::ParseError`) loses no information. A named
+/// type (`anyhow::Error`, `InvalidChecksum`, …) — or a missing `Err` — means
+/// the migration would change the public `FromStr::Err` and/or drop custom
+/// messages, so the enum must not be flagged.
+fn from_str_has_unit_err(impl_node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(body) = impl_node.child_by_field_name("body") else {
+        return false;
+    };
+    let mut cursor = body.walk();
+    for item in body.named_children(&mut cursor) {
+        if item.kind() == "type_item"
+            && let Some(name) = item.child_by_field_name("name")
+            && name.utf8_text(source) == Ok("Err")
+        {
+            return item
+                .child_by_field_name("type")
+                .is_some_and(|ty| ty.kind() == "unit_type");
+        }
+    }
+    false
 }
 
 
@@ -140,6 +172,68 @@ impl std::str::FromStr for Color {
 }
 "#;
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_enum_with_from_str_custom_err_type() {
+        // `Edition` (rust-lang/cargo): a `type Err = anyhow::Error` carrying
+        // contextual `bail!` messages and a guarded `s if …` arm that
+        // `strum::EnumString` (forced `type Err = strum::ParseError`) cannot
+        // reproduce — migrating is behavior-destroying, so do not flag.
+        let src = r#"
+enum Edition { Edition2015, Edition2018 }
+
+impl std::fmt::Display for Edition {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Edition::Edition2015 => f.write_str("2015"),
+            Edition::Edition2018 => f.write_str("2018"),
+        }
+    }
+}
+
+impl std::str::FromStr for Edition {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "2015" => Ok(Edition::Edition2015),
+            "2018" => Ok(Edition::Edition2018),
+            s => anyhow::bail!("supported edition values are `2015`, `2018`, but `{}` is unknown", s),
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_enum_with_from_str_named_err_type() {
+        // `ChecksumAlgo` (rust-lang/cargo): `type Err = InvalidChecksum` is a
+        // public-API contract `strum::EnumString` cannot preserve.
+        let src = r#"
+enum ChecksumAlgo { Sha256, Blake3 }
+
+impl std::fmt::Display for ChecksumAlgo {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            ChecksumAlgo::Sha256 => f.write_str("sha256"),
+            ChecksumAlgo::Blake3 => f.write_str("blake3"),
+        }
+    }
+}
+
+impl std::str::FromStr for ChecksumAlgo {
+    type Err = InvalidChecksum;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "sha256" => Ok(Self::Sha256),
+            "blake3" => Ok(Self::Blake3),
+            _ => Err(InvalidChecksum::InvalidChecksumAlgo),
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
