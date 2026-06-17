@@ -20,6 +20,12 @@ crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, 
 
     if !has_self_param(node, source) { return; }
 
+    // A method that takes a key/index argument beyond `self` is a keyed lookup
+    // (`HashMap::get(&self, k)`, `slice::get(&self, index)`), not a field
+    // accessor. The C-GETTER convention targets parameterless accessors only;
+    // `get`/`get_` is the idiomatic name for a lookup, so do not flag it.
+    if takes_non_self_param(node) { return; }
+
     let ret = match node.child_by_field_name("return_type") {
         Some(r) => r,
         None => return,
@@ -137,6 +143,21 @@ fn has_self_param(node: tree_sitter::Node, source: &[u8]) -> bool {
             }
     }
     false
+}
+
+/// True when the method declares a parameter other than its receiver. The
+/// `parameters` node's named children are `self_parameter` and `parameter`
+/// (typed params); anonymous tokens like `(`, `)`, `,` are excluded by walking
+/// `named_children`. Any named child that is not the `self_parameter` is a real
+/// argument, marking the method as a keyed lookup rather than a field accessor.
+fn takes_non_self_param(node: tree_sitter::Node) -> bool {
+    let Some(params) = node.child_by_field_name("parameters") else {
+        return false;
+    };
+    let mut cursor = params.walk();
+    params
+        .named_children(&mut cursor)
+        .any(|child| child.kind() != "self_parameter")
 }
 
 
@@ -258,6 +279,25 @@ mod tests {
         // A free function with `&self` (e.g. a closure-like accessor) is not in
         // any impl — still flagged.
         let src = "impl Widget {\n    fn get_id(&self) -> u32 { self.id }\n    fn unrelated(&self) -> u32 { 0 }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_keyed_lookup_with_param_issue_3942() {
+        // `get_version(&self, key)` is a keyed lookup, not a field accessor — it
+        // takes an argument beyond `self`, so `get_`/`get` is the idiomatic name.
+        let src = "impl MarkerEnvironment {\n\
+            pub fn get_version(&self, key: CanonicalMarkerValueVersion) -> &Version { todo!() }\n\
+            pub fn get_string(&self, key: CanonicalMarkerValueString) -> &str { todo!() }\n\
+        }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_parameterless_getter_when_keyed_sibling_exists_issue_3942() {
+        // A parameterless `get_name(&self)` is still a field accessor and must
+        // flag even though the guard exempts keyed lookups.
+        let src = "impl Foo {\n    pub fn get_name(&self) -> &str { &self.name }\n}";
         assert_eq!(run(src).len(), 1);
     }
 }
