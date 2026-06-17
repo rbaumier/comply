@@ -23,7 +23,7 @@ pub const META: RuleMeta = RuleMeta {
     description: "Dismissive filler words in comments hide complexity instead of explaining it.",
     remediation: "Remove the filler word and rewrite the comment to explain the actual \
                   subtlety. If the line needs no explanation, delete the comment instead. \
-                  Banned: obviously, simply, just, basically, clearly, trivially, updated, \
+                  Banned: obviously, simply, just, basically, clearly, trivially, \
                   reloaded, really, literally, genuinely, honestly, truly, fundamentally, \
                   inevitably, interestingly, importantly, crucially.",
     severity: Severity::Error,
@@ -41,7 +41,6 @@ const BANNED: &[&str] = &[
     "basically",
     "clearly",
     "trivially",
-    "updated",
     "reloaded",
     "really",
     "literally",
