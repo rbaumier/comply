@@ -14,6 +14,7 @@ pub struct Check;
 fn has_octal_escape(pattern: &str) -> bool {
     let bytes = pattern.as_bytes();
     let len = bytes.len();
+    let group_count = crate::rules::regex_helpers::count_capturing_groups(bytes);
     let mut i = 0;
     while i < len {
         if bytes[i] == b'\\' {
@@ -31,11 +32,12 @@ fn has_octal_escape(pattern: &str) -> bool {
                     && bytes[after] != b'9'
                 {
                     if bytes[after] == b'0' {
+                        // `\0` is the octal null escape, never a backreference.
                         if after + 1 < len && bytes[after + 1] >= b'0' && bytes[after + 1] <= b'7'
                         {
                             return true;
                         }
-                    } else {
+                    } else if !is_backreference(bytes, after, group_count) {
                         return true;
                     }
                 }
@@ -46,6 +48,20 @@ fn has_octal_escape(pattern: &str) -> bool {
         }
     }
     false
+}
+
+/// Returns true if the digit run starting at `after` (first digit is `1`-`7`)
+/// is a backreference `\N` rather than an octal escape, i.e. a capturing group
+/// numbered `N` exists. In JS, `\N` is an octal escape only when there is NO
+/// capturing group `N`; otherwise it is a valid backreference.
+fn is_backreference(bytes: &[u8], after: usize, group_count: usize) -> bool {
+    let mut n = 0usize;
+    let mut k = after;
+    while k < bytes.len() && bytes[k].is_ascii_digit() {
+        n = n.saturating_mul(10).saturating_add((bytes[k] - b'0') as usize);
+        k += 1;
+    }
+    n >= 1 && n <= group_count
 }
 
 fn extract_pattern(src: &str) -> Option<&str> {
@@ -164,5 +180,49 @@ mod tests {
     fn ignores_scoped_import_path() {
         let src = r#"import X from "@tanstack/react-query";"#;
         assert!(run_on(src).is_empty());
+    }
+
+    // --- backreference vs octal escape (issue #3925) ---
+
+    #[test]
+    fn allows_backreference_with_lookahead_group() {
+        // eslint no-mixed-spaces-and-tabs.js:95 — `\1` -> capture group 1.
+        let src = r#"const re = /^(?=( +|\t+))\1(?:\t| )/u;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_two_backreferences_with_two_groups() {
+        // eslint no-mixed-spaces-and-tabs.js:103 — `\1`/`\2` -> groups 1 and 2.
+        let src = r#"const re = /^(?=(\t*))\1(?=( +))\2\t/u;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_backreference_with_capture_group() {
+        assert!(run_on(r#"const re = /(x)\1/;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_backreference_with_named_group() {
+        assert!(run_on(r#"const re = /(?<y>x)\1/;"#).is_empty());
+    }
+
+    #[test]
+    fn flags_octal_with_no_capture_group() {
+        // 0 capture groups -> `\1` is octal, still flagged.
+        assert_eq!(run_on(r#"const re = /\1/;"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_octal_when_only_non_capturing_group() {
+        // `(?:x)` does not raise the group count, so `\1` is still octal.
+        assert_eq!(run_on(r#"const re = /(?:x)\1/;"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_octal_when_group_number_too_high() {
+        // 1 group but `\2` references a group that does not exist -> octal.
+        assert_eq!(run_on(r#"const re = /(a)\2/;"#).len(), 1);
     }
 }

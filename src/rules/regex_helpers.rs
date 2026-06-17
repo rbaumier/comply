@@ -50,6 +50,51 @@ pub fn is_inside_char_class(bytes: &[u8], target: usize) -> bool {
     inside
 }
 
+/// Counts the CAPTURING groups in a regex pattern.
+///
+/// A capturing group is an unescaped `(` outside a `[...]` character class that
+/// is NOT a non-capturing / assertion form:
+/// - `(?:`, `(?=`, `(?!`, `(?<=`, `(?<!` → NOT a group;
+/// - `(?<name>` (named capture) → IS a group;
+/// - a bare `(` (next char is not `?`) → IS a group.
+///
+/// Used to distinguish a backreference (`\N` with a group `N`) from an octal
+/// escape: `\N` is a backreference iff `1 <= N <= count_capturing_groups`.
+#[must_use]
+pub fn count_capturing_groups(bytes: &[u8]) -> usize {
+    let mut count = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'(' if !is_inside_char_class(bytes, i) => {
+                if is_capturing_open(bytes, i) {
+                    count += 1;
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    count
+}
+
+/// Returns true if the `(` at `open` begins a capturing group (bare `(` or
+/// named `(?<name>`), false for non-capturing/assertion forms.
+fn is_capturing_open(bytes: &[u8], open: usize) -> bool {
+    // Bare `(` not followed by `?` is capturing.
+    if bytes.get(open + 1) != Some(&b'?') {
+        return true;
+    }
+    // `(?<...` is capturing only when it is a named group `(?<name>`, not a
+    // lookbehind `(?<=` / `(?<!`.
+    if bytes.get(open + 2) == Some(&b'<') {
+        return !matches!(bytes.get(open + 3), Some(b'=' | b'!'));
+    }
+    // `(?:`, `(?=`, `(?!` are non-capturing/assertion.
+    false
+}
+
 /// Returns true if a group body can match the empty string (is *nullable*).
 ///
 /// `body` is the bytes between a group's `(` and its matching `)`, including any
@@ -350,5 +395,54 @@ mod tests {
         // is a single mandatory char class, so it is not nullable.
         assert!(!group_is_nullable(b"[a|b]"), "pipe inside class is a literal");
         assert!(!group_is_nullable(b"[a?]"), "question mark inside class is a literal");
+    }
+
+    // --- count_capturing_groups ---
+
+    #[test]
+    fn counts_bare_capture_groups() {
+        assert_eq!(count_capturing_groups(b""), 0, "empty pattern");
+        assert_eq!(count_capturing_groups(b"abc"), 0, "no groups");
+        assert_eq!(count_capturing_groups(b"(a)"), 1, "single bare group");
+        assert_eq!(count_capturing_groups(b"(a)(b)"), 2, "two bare groups");
+        assert_eq!(count_capturing_groups(b"(a(b))"), 2, "nested bare groups");
+    }
+
+    #[test]
+    fn non_capturing_and_assertions_do_not_count() {
+        assert_eq!(count_capturing_groups(b"(?:a)"), 0, "non-capturing");
+        assert_eq!(count_capturing_groups(b"(?=a)"), 0, "lookahead");
+        assert_eq!(count_capturing_groups(b"(?!a)"), 0, "negative lookahead");
+        assert_eq!(count_capturing_groups(b"(?<=a)"), 0, "lookbehind");
+        assert_eq!(count_capturing_groups(b"(?<!a)"), 0, "negative lookbehind");
+    }
+
+    #[test]
+    fn named_group_counts() {
+        assert_eq!(count_capturing_groups(b"(?<name>a)"), 1, "named capture group");
+        assert_eq!(
+            count_capturing_groups(b"(?<a>x)(?<b>y)"),
+            2,
+            "two named groups"
+        );
+    }
+
+    #[test]
+    fn paren_inside_char_class_is_literal() {
+        assert_eq!(count_capturing_groups(b"[()]"), 0, "parens in class are literals");
+        assert_eq!(count_capturing_groups(b"[(]( )"), 1, "literal ( then a real group");
+    }
+
+    #[test]
+    fn escaped_paren_does_not_count() {
+        assert_eq!(count_capturing_groups(br"\(a\)"), 0, "escaped parens");
+        assert_eq!(count_capturing_groups(br"\((a)"), 1, "escaped ( then a real group");
+    }
+
+    #[test]
+    fn mixed_capturing_and_non_capturing() {
+        // `(?=( +|\t+))\1` from eslint: one capturing group inside the lookahead.
+        assert_eq!(count_capturing_groups(br"(?=( +|\t+))"), 1, "group inside lookahead");
+        assert_eq!(count_capturing_groups(br"(?=(\t*))(?=( +))"), 2, "two lookahead groups");
     }
 }
