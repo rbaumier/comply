@@ -15,7 +15,8 @@ const VERBS: &[&str] = &[
     "would", "could", "should", "may", "might", "must", "shall", "can", "need", "check", "verify",
     "ensure", "provide", "specify", "use", "try", "retry", "pass", "set", "add", "remove",
     "update", "create", "delete", "call", "return", "expect", "require", "missing", "failed",
-    "cannot", "unable", "exceeded", "denied", "rejected", "not",
+    "cannot", "unable", "exceeded", "denied", "rejected", "not", "invalid", "unknown", "unexpected",
+    "mismatched", "duplicate", "no", "none", "out", "exceeds", "expected", "wrong",
 ];
 
 fn has_verb(msg: &str) -> bool {
@@ -146,5 +147,46 @@ mod tests {
     }
 }"#;
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_invalid_qualifier() {
+        assert!(run_on(r#"fn f() { bail!("invalid map attribute: {attr:?}"); }"#).is_empty());
+    }
+
+    #[test]
+    fn allows_unknown_qualifier() {
+        assert!(
+            run_on(r#"fn f() { bail!("unknown attribute(s) for message field"); }"#).is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_no_qualifier() {
+        assert!(run_on(r#"fn f() { bail!("no type attribute for oneof field"); }"#).is_empty());
+    }
+
+    #[test]
+    fn allows_unexpected_qualifier() {
+        assert!(run_on(r#"fn f() { bail!("unexpected end of input here"); }"#).is_empty());
+    }
+
+    #[test]
+    fn no_qualifier_is_whole_word_not_substring() {
+        // "note" and "without" contain "no" as a substring; "output" contains
+        // "out". A message whose only candidate token is such a word must still
+        // be flagged — matching is token-based, not substring-based.
+        assert_eq!(
+            run_on(r#"fn f() { bail!("note about wonky thingamajig output"); }"#).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn still_flags_long_vague_no_verb_message() {
+        assert_eq!(
+            run_on(r#"fn f() { bail!("something wonky happened somewhere"); }"#).len(),
+            1
+        );
     }
 }
