@@ -32,14 +32,16 @@ impl OxcCheck for Check {
             return;
         };
 
-        // `x as unknown as T` is the canonical contravariant-boundary escape
-        // hatch (TypeScript itself recommends it for genuine type-erasure
-        // cases). Flagging it produces noise on TanStack Router / library
-        // bridges where the user has no other option.
+        // `x as unknown as T` and `x as never as T` are the canonical
+        // contravariant-boundary escape hatches — `unknown` (top type) and
+        // `never` (bottom type) are the two pivots TypeScript itself requires
+        // when a direct `as T` fails with TS2352. Flagging them produces noise
+        // on TanStack Router / kysely / library bridges where the user has no
+        // other option.
         // Only skip if the inner cast's own expression is NOT itself a
         // TSAsExpression — a triple cast `((x as A) as unknown) as B` still
         // contains a real `as A as unknown` inner pair that should fire.
-        if matches!(inner.type_annotation, TSType::TSUnknownKeyword(_))
+        if matches!(inner.type_annotation, TSType::TSUnknownKeyword(_) | TSType::TSNeverKeyword(_))
             && !matches!(inner.expression, Expression::TSAsExpression(_))
         {
             return;
@@ -96,6 +98,26 @@ mod tests {
         // hatch — required by TanStack Router etc. for generic type bridging.
         let src = "const navigate = routeApi.useNavigate() as unknown as \
                    (options: { search: (p: TSearch) => TSearch }) => void;";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_as_never_as_t() {
+        // `as never as T` is the symmetric bottom-type forced-cast pivot —
+        // TypeScript requires it (or `as unknown as T`) when a direct `as T`
+        // fails with TS2352, so it is a deliberate idiom, not a hidden
+        // misalignment.
+        let src = "const x = value as never as User;";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_as_never_as_t_kysely_shape() {
+        let src = "const [{ cid }] = (await this.executeQuery(\
+                   CompiledQuery.raw(`select connection_id() as cid`))) \
+                   as never as [{ cid: string }];";
         let diags = run_on(src);
         assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
     }
