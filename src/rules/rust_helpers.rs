@@ -385,6 +385,33 @@ pub fn enclosing_fn(node: Node) -> Option<Node> {
     None
 }
 
+/// True if `node` sits inside the body of an enclosing loop — a
+/// `for_expression`, `while_expression`, or `loop_expression` — within the
+/// current function or closure scope.
+///
+/// The walk goes up via `node.parent()` and returns `true` on the first loop
+/// node encountered. It stops (returning `false`) at the first
+/// `function_item`, `closure_expression`, or `async_block` boundary, so a loop
+/// that lives *outside* an intervening closure / spawned future does not count:
+/// only a loop in the same lexical scope as `node` qualifies. A loop nested
+/// *below* `node` is never seen, since the walk only moves upward.
+///
+/// Rules use this to recognize work that repeats per iteration — where a value
+/// (a `JoinHandle`, a lock guard, an allocation) is intentionally created and
+/// discarded each pass rather than retained.
+pub fn is_in_loop_body(node: Node) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        match parent.kind() {
+            "for_expression" | "while_expression" | "loop_expression" => return true,
+            "function_item" | "closure_expression" | "async_block" => return false,
+            _ => {}
+        }
+        cur = parent;
+    }
+    false
+}
+
 /// True if `item` carries the outer attribute named `attr_path` (e.g.
 /// `"track_caller"`) as a preceding `attribute_item` sibling.
 ///
@@ -867,6 +894,56 @@ mod tests {
         let call = first_call_expression(tree.root_node())
             .expect("snippet should contain a call_expression");
         assert!(enclosing_fn(call).is_none());
+    }
+
+    #[test]
+    fn is_in_loop_body_respects_scope_boundaries() {
+        let cases = [
+            // Directly inside each loop form.
+            ("fn f() { loop { g(); } }", true),
+            ("fn f() { while c { g(); } }", true),
+            ("fn f() { for x in xs { g(); } }", true),
+            // Not in any loop.
+            ("fn f() { g(); }", false),
+            // A loop nested BELOW the call (call is above the loop) — not seen.
+            ("fn f() { g(); loop { h(); } }", false),
+            // A closure boundary between the loop and the call: the call lives
+            // in the closure, not in the loop body proper.
+            ("fn f() { for x in xs { register(|| { g(); }); } }", false),
+            // An async-block boundary (spawned future) between loop and call.
+            ("fn f() { for x in xs { spawn(async { g(); }); } }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            // Anchor on the `g()` / `h()` call we care about: the first call
+            // whose callee identifier is `g` or `h`.
+            let mut calls = Vec::new();
+            collect_calls(tree.root_node(), &mut calls);
+            let target = calls
+                .into_iter()
+                .find(|c| {
+                    c.child_by_field_name("function")
+                        .and_then(|f| f.utf8_text(src.as_bytes()).ok())
+                        .is_some_and(|t| t == "g" || t == "h")
+                })
+                .expect("snippet should contain a `g()` or `h()` call");
+            assert_eq!(
+                is_in_loop_body(target),
+                expected,
+                "is_in_loop_body mismatch for `{src}`"
+            );
+        }
+    }
+
+    /// Collect every `call_expression` node in the subtree, pre-order.
+    fn collect_calls<'tree>(node: Node<'tree>, out: &mut Vec<Node<'tree>>) {
+        if node.kind() == "call_expression" {
+            out.push(node);
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            collect_calls(child, out);
+        }
     }
 
     #[test]
