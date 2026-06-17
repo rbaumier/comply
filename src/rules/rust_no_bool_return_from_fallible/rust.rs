@@ -301,6 +301,10 @@ fn has_predicate_doc_comment(func: tree_sitter::Node, source: &[u8]) -> bool {
         "checks whether",
         "returns `false`",
         "returns false",
+        "return `true`",
+        "return true",
+        "return `false`",
+        "return false",
     ];
     let mut sibling = func.prev_named_sibling();
     while let Some(s) = sibling {
@@ -561,6 +565,27 @@ mod tests {
     fn flags_validate_action_without_predicate_doc() {
         let src = "fn validate_config(&self) -> bool { do_thing(); true }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    // --- #3931: imperative-singular predicate doc ("Return `true`") ---
+
+    #[test]
+    fn allows_remove_with_imperative_return_true_doc() {
+        // bevy GraphMap::remove_single_edge — the bool answers "was the
+        // element there?", documented imperatively.
+        let src = "\
+            /// Return `true` if it did exist.\n\
+            fn remove(&mut self, k: K) -> bool { self.inner.remove(&k); true }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_remove_edge_with_imperative_return_false_doc() {
+        // bevy GraphMap::remove_edge — `Return \`false\` if the edge didn't exist.`
+        let src = "\
+            /// Return `false` if the edge didn't exist.\n\
+            pub fn remove_edge(&mut self, a: N, b: N) -> bool { do_thing(); true }";
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
