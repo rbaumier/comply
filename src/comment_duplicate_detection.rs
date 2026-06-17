@@ -79,14 +79,11 @@ fn is_comment_kind(kind: &str) -> bool {
     matches!(kind, "comment" | "line_comment" | "block_comment")
 }
 
-/// License banners and tooling directives are duplicated by design — never a
-/// copy-paste smell — and are matched by content, not file position, so a
-/// banner below `#![attr]` / `'use client'` / a shebang is still caught and a
-/// Rust `//!` module doc is not.
-const EXCLUDE_MARKERS: &[&str] = &[
-    "spdx-license-identifier",
-    "copyright",
-    "licensed under",
+/// Tooling directives that occupy a single `//` line (`// eslint-disable-next-line`,
+/// `// @ts-expect-error`). A directive is a distinct line, so it both excludes its
+/// own group *and* splits a run of `//` lines (see `line_is_marker`) so it never
+/// merges into the prose docblock beneath it.
+const DIRECTIVE_MARKERS: &[&str] = &[
     "eslint-disable",
     "@ts-",
     "biome-ignore",
@@ -96,8 +93,22 @@ const EXCLUDE_MARKERS: &[&str] = &[
     "comply-ignore",
 ];
 
+/// License/copyright banner phrases. These are duplicated by design across files
+/// and can sit on *any* line of a multi-line banner (the Apache header carries
+/// `copyright` on line 4), so they exclude the whole merged block but must never
+/// fragment it — unlike directives, they do not drive the `line_is_marker` split.
+const BANNER_MARKERS: &[&str] = &[
+    "spdx-license-identifier",
+    "copyright",
+    "licensed under",
+    "licensed to the",
+];
+
+/// A merged comment block is excluded when it carries any directive or banner
+/// marker. Matched by content, not file position, so a banner below `#![attr]` /
+/// `'use client'` / a shebang is still caught and a Rust `//!` module doc is not.
 fn is_excluded_comment(lower: &str) -> bool {
-    EXCLUDE_MARKERS.iter().any(|m| lower.contains(m))
+    DIRECTIVE_MARKERS.iter().chain(BANNER_MARKERS).any(|m| lower.contains(m))
 }
 
 /// Source-file extensions that mark a relative path as a citation target.
@@ -222,13 +233,16 @@ fn is_connector(tok: &str) -> bool {
     CITATION_CONNECTORS.contains(&word_core(tok))
 }
 
-/// True when one `//` line is itself a directive/banner. Used to split a run of
+/// True when one `//` line is itself a tooling directive. Used to split a run of
 /// consecutive line comments so a directive (e.g. `// comply-ignore: …`) never
 /// merges into the prose docblock beneath it — otherwise the merged block would
-/// inherit the marker and the real comment would be wrongly excluded.
+/// inherit the marker and the real comment would be wrongly excluded. Banner
+/// phrases are deliberately *not* matched here: a multi-line license header is one
+/// logical block, and a banner word mid-block must keep it whole (then
+/// `is_excluded_comment` excludes the whole block), never carve it into fragments.
 fn line_is_marker(stripped_line: &str) -> bool {
     let lower = stripped_line.to_lowercase();
-    EXCLUDE_MARKERS.iter().any(|m| lower.contains(m))
+    DIRECTIVE_MARKERS.iter().any(|m| lower.contains(m))
 }
 
 /// A comment eligible to be compared against others.
@@ -674,6 +688,58 @@ export const labSection = 2;
         let a = write(&dir, "a.ts", &format!("{banner}export const a = 1;\n"));
         let b = write(&dir, "b.ts", &format!("{banner}export const b = 2;\n"));
         assert!(run(&[&a, &b]).is_empty());
+    }
+
+    /// The standard 16-line Apache 2.0 header. `licensed to the` opens line 1 and
+    /// `copyright` sits on line 4 — mid-block, where it used to fragment the banner.
+    const APACHE_HEADER: &str = "\
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// \"License\"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+";
+
+    #[test]
+    fn ignores_multiline_license_banner() {
+        // Regression (#3907): the Apache header is one `//` run whose banner words
+        // (`licensed to the` on line 1, `copyright` on line 4) used to fragment the
+        // block — each fragment then lost its marker and was flagged. A banner word
+        // on any line must now keep the run whole so the whole block is excluded.
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "a.rs", &format!("{APACHE_HEADER}pub fn f() {{}}\n"));
+        let b = write(&dir, "b.rs", &format!("{APACHE_HEADER}pub fn g() {{}}\n"));
+        assert!(run(&[&a, &b]).is_empty(), "multi-line license banner must be excluded whole");
+    }
+
+    #[test]
+    fn flags_duplicate_multiline_prose_block() {
+        // Over-exclusion guard: a genuine multi-line prose docblock shared verbatim
+        // across files — no banner, no directive — is real duplication and must
+        // still flag, even though it is one merged `//` run like the banner.
+        let dir = tempfile::tempdir().unwrap();
+        let prose = "\
+// The migration runner walks every pending entry in lexical order and applies
+// them inside one transaction so a partial failure rolls back cleanly and the
+// schema never lands in a half-migrated state across any deployment environment.
+pub fn run() {}
+";
+        let a = write(&dir, "a.rs", prose);
+        let b = write(&dir, "b.rs", prose);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "duplicated multi-line prose is still a smell");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
     #[test]
