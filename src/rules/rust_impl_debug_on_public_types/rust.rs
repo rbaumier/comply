@@ -15,8 +15,11 @@
 //! raw-pointer fields.
 //!
 //! We accept manual impls because libraries with closure or PhantomData
-//! fields legitimately can't derive — they hand-roll the impl. The
-//! file-wide check is a heuristic but matches real codebases.
+//! fields legitimately can't derive — they hand-roll the impl. The manual
+//! impl is matched on the AST trait/target of every `impl_item` in the file,
+//! so generic impls (`impl<T: Debug> Debug for Wrapper<'_, T>`) and any
+//! trait-path spelling (`Debug`, `fmt::Debug`, `std::fmt::Debug`,
+//! `core::fmt::Debug`) are recognized.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -38,7 +41,6 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let source_bytes = ctx.source.as_bytes();
-        let source_str = ctx.source;
         let kind = node.kind();
         if !is_pub(node, source_bytes) {
             return;
@@ -79,11 +81,8 @@ impl AstCheck for Check {
         if has_debug_derive(node, source_bytes) {
             return;
         }
-        // Manual `impl Debug for Name` anywhere in the file.
-        if source_str.contains(&format!("impl Debug for {name}"))
-            || source_str.contains(&format!("impl std::fmt::Debug for {name}"))
-            || source_str.contains(&format!("impl fmt::Debug for {name}"))
-        {
+        // A hand-written `Debug` impl for this type anywhere in the file.
+        if has_manual_debug_impl(node, name, source_bytes) {
             return;
         }
         let pos = node.start_position();
@@ -150,6 +149,57 @@ fn has_debug_derive(item: tree_sitter::Node, source: &[u8]) -> bool {
         sibling = s.prev_named_sibling();
     }
     false
+}
+
+/// True when the file contains a hand-written `Debug` impl for `name`.
+///
+/// Walks every `impl_item` in the file from the `source_file` root. An
+/// `impl_item` is a *trait* impl only when it has a `trait` field (inherent
+/// impls have none and are skipped). The trait matches `Debug` when its final
+/// `::` segment is `Debug`, covering `Debug`, `fmt::Debug`, `std::fmt::Debug`,
+/// `core::fmt::Debug`, and any other `*::Debug` path. The target matches when
+/// its base type identifier — stripped of generic arguments, lifetimes, and a
+/// leading path — equals `name` exactly. The `impl<...>` generic-parameter
+/// clause is a separate node that does not affect the `trait`/`type` fields, so
+/// generic impls (`impl<T: Debug> Debug for Wrapper<'_, T>`) match naturally.
+fn has_manual_debug_impl(node: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    let mut root = node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    let mut cursor = root.walk();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "impl_item"
+            && let Some(trait_node) = n.child_by_field_name("trait")
+            && let Ok(trait_text) = trait_node.utf8_text(source)
+            && trait_text.rsplit("::").next() == Some("Debug")
+            && let Some(target_node) = n.child_by_field_name("type")
+            && base_type_name(target_node, source) == Some(name)
+        {
+            return true;
+        }
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
+/// The base type identifier of an `impl` target, ignoring generic arguments,
+/// lifetimes, and a leading module path. `Wrapper<'_, T>` (`generic_type`) →
+/// `Wrapper`; `Closure` (`type_identifier`) → `Closure`; `crate::Span`
+/// (`scoped_type_identifier`) → `Span`. Returns `None` for shapes that have no
+/// single base name (references, tuples, etc.).
+fn base_type_name<'a>(target: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    match target.kind() {
+        // `Wrapper<'_, T>` — the base name lives in the `type` field.
+        "generic_type" => base_type_name(target.child_by_field_name("type")?, source),
+        "type_identifier" => target.utf8_text(source).ok(),
+        // `std::fmt::Foo` — the final `::` segment is the base name.
+        "scoped_type_identifier" => target.utf8_text(source).ok().and_then(|t| t.rsplit("::").next()),
+        _ => None,
+    }
 }
 
 /// True if a preceding `attribute_item` sibling is
@@ -457,6 +507,81 @@ name = "normal_lib"
             1,
             "a normal lib crate's pub type with no Debug must still flag"
         );
+    }
+
+    #[test]
+    fn allows_manual_debug_impl_with_std_path() {
+        let source = "pub struct X { x: u32 }\nimpl std::fmt::Debug for X { fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { Ok(()) } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_manual_debug_impl_with_fmt_path() {
+        let source = "pub struct X { x: u32 }\nimpl fmt::Debug for X { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { Ok(()) } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    /// Closes #3904: `no_std` crates (regex-syntax) spell the manual impl with
+    /// the `core::fmt::Debug` path; a non-generic struct with that impl must not
+    /// be flagged.
+    #[test]
+    fn allows_manual_debug_impl_with_core_path() {
+        let source = "pub struct Span { x: u32 }\nimpl core::fmt::Debug for Span { fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { Ok(()) } }";
+        assert!(
+            run_on(source).is_empty(),
+            "core::fmt::Debug manual impl (no_std) must be recognized"
+        );
+    }
+
+    /// Closes #3738: a generic manual impl (`impl<T: Debug> Debug for
+    /// Wrapper<'_, T>`) must be recognized — the `impl<...>` prefix and the
+    /// generic args on the target previously defeated the literal-string match.
+    #[test]
+    fn allows_generic_manual_debug_impl() {
+        let source = "pub struct Wrapper<T>(T);\nimpl<T: Debug> Debug for Wrapper<T> { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { Ok(()) } }";
+        assert!(
+            run_on(source).is_empty(),
+            "generic manual Debug impl must be recognized"
+        );
+    }
+
+    /// A generic manual impl with lifetimes and a scoped trait path, matching
+    /// the oxc_allocator `impl<T: ?Sized + Debug> fmt::Debug for Box<'_, T>`
+    /// shape from #3738.
+    #[test]
+    fn allows_generic_manual_debug_impl_with_lifetime_and_scoped_trait() {
+        let source = "pub struct Boxed<'a, T>(&'a T);\nimpl<T: ?Sized + Debug> fmt::Debug for Boxed<'_, T> { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { Ok(()) } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    /// A `Debug` impl for a *different* type must not exempt this one — the
+    /// base-type match is exact, not a substring (`SpanOther` ≠ `Span`).
+    #[test]
+    fn still_flags_when_debug_impl_targets_different_type() {
+        let source = "pub struct Span { x: u32 }\nimpl core::fmt::Debug for SpanOther { fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { Ok(()) } }";
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "a Debug impl for SpanOther must not exempt Span"
+        );
+    }
+
+    /// A manual impl of a *different* trait (`Display`) is not a `Debug` impl —
+    /// the type still has no `Debug` and must be flagged.
+    #[test]
+    fn still_flags_when_only_non_debug_trait_impl_exists() {
+        let source = "pub struct Span { x: u32 }\nimpl Display for Span { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { Ok(()) } }";
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "a Display impl does not count as a Debug impl"
+        );
+    }
+
+    /// No derive and no manual impl at all — the type must still be flagged.
+    #[test]
+    fn still_flags_when_no_debug_impl_at_all() {
+        assert_eq!(run_on("pub struct NoDebug { x: u32 }").len(), 1);
     }
 
     #[test]
