@@ -22,20 +22,5 @@ pub fn register_all() -> Vec<RuleDef> {
             "import/no-mutable-exports",
             TS_FAMILY,
         ),
-        oxlint_delegate(
-            RuleMeta {
-                id: "import/exports-last",
-                description: "All exports should appear at the end of the file.",
-                remediation: "Move `export` statements below the non-export code. Grouping exports \
-                      at the bottom makes a module's public surface easy to scan.",
-                severity: Severity::Warning,
-                doc_url: None,
-                categories: &["typescript"],
-                skip_in_test_dir: false,
-                skip_in_relaxed_dir: false,
-            },
-            "import/exports-last",
-            TS_FAMILY,
-        ),
     ]
 }
