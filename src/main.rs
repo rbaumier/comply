@@ -21,7 +21,7 @@ mod changed_lines;
 mod cli;
 mod clippy;
 mod clone_detection;
-mod comment_dup_detection;
+mod comment_duplicate_detection;
 mod config;
 mod diagnostic;
 mod engine;
@@ -104,7 +104,7 @@ mod tests {
         assert!(is_known_rule_id(rules::all_rule_defs()[0].meta.id));
         // In-process cross-file detectors (absent from `all_rule_defs`).
         assert!(is_known_rule_id(clone_detection::RULE_ID));
-        assert!(is_known_rule_id(comment_dup_detection::RULE_ID));
+        assert!(is_known_rule_id(comment_duplicate_detection::RULE_ID));
         // Cargo subprocess detectors (also absent from `all_rule_defs`).
         assert!(is_known_rule_id(cargo_modules::RULE_ID));
         assert!(is_known_rule_id(cargo_shear::RULE_ID));
@@ -120,7 +120,7 @@ mod tests {
         assert!(rule_requires_subprocess(cargo_shear::RULE_ID));
         // In-process cross-file detectors run on the fast path instead.
         assert!(!rule_requires_subprocess(clone_detection::RULE_ID));
-        assert!(!rule_requires_subprocess(comment_dup_detection::RULE_ID));
+        assert!(!rule_requires_subprocess(comment_duplicate_detection::RULE_ID));
     }
 
     #[test]
@@ -139,11 +139,11 @@ mod tests {
              with the database migration layer by hand.\nexport const b = 2;\n",
         );
         let cfg = Config::default();
-        let requested = vec![comment_dup_detection::RULE_ID.to_string()];
+        let requested = vec![comment_duplicate_detection::RULE_ID.to_string()];
 
         let diags = run_cross_file_rules(&requested, &[&a, &b], &cfg);
         assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].rule_id, comment_dup_detection::RULE_ID);
+        assert_eq!(diags[0].rule_id, comment_duplicate_detection::RULE_ID);
 
         // A detector not named in the filter is not dispatched.
         let unrelated = vec!["boolean-naming".to_string()];
@@ -307,7 +307,7 @@ fn print_timings(t: &Timings) {
 /// Cross-file detectors that run in-process outside the rule engine, so they
 /// are absent from `all_rule_defs()`. `comply rules` dispatches these directly
 /// when their ID is requested.
-const CROSS_FILE_RULE_IDS: &[&str] = &[clone_detection::RULE_ID, comment_dup_detection::RULE_ID];
+const CROSS_FILE_RULE_IDS: &[&str] = &[clone_detection::RULE_ID, comment_duplicate_detection::RULE_ID];
 
 /// Cargo-backed subprocess detectors, also absent from `all_rule_defs()`.
 /// Producing them requires shelling out to cargo, so a `comply rules` filter
@@ -369,8 +369,8 @@ fn run_cross_file_rules(
         if wants(clone_detection::RULE_ID) {
             out.extend(clone_detection::lint_files(files));
         }
-        if wants(comment_dup_detection::RULE_ID) {
-            out.extend(comment_dup_detection::lint_files(files, config));
+        if wants(comment_duplicate_detection::RULE_ID) {
+            out.extend(comment_duplicate_detection::lint_files(files, config));
         }
     }
     out
@@ -606,7 +606,7 @@ fn collect_all_diagnostics(
     let clones_enabled =
         discovered.len() >= 2 && !config.is_rule_globally_disabled(clone_detection::RULE_ID);
     let dup_comments_enabled = discovered.len() >= 2
-        && !config.is_rule_globally_disabled(comment_dup_detection::RULE_ID);
+        && !config.is_rule_globally_disabled(comment_duplicate_detection::RULE_ID);
 
     // Clone detection only needs the file list, not the import index, so its
     // `rayon::join` arm runs concurrently with the other arm's full chain:
@@ -678,7 +678,7 @@ fn collect_all_diagnostics(
             return Vec::new();
         }
         let all_refs: Vec<&SourceFile> = discovered.iter().collect();
-        comment_dup_detection::lint_files(&all_refs, config)
+        comment_duplicate_detection::lint_files(&all_refs, config)
     };
 
     let (engine_res, ((clone_diags, clones_elapsed), dup_diags)) =
