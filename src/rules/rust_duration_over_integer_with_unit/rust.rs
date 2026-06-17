@@ -11,6 +11,10 @@
 //! Qualified types (`std::time::Duration`), generic wrappers
 //! (`Option<u64>`), and aliases are deliberately not flagged — the
 //! check is intentionally shallow to keep false positives low.
+//! Names that mark an absolute time *coordinate* (a point on a timeline:
+//! `julian_days`, `unix_seconds`, `created_at_seconds`, `*_timestamp`,
+//! `*_epoch`) are exempted — `Duration` models an elapsed span, not an
+//! absolute timeline point, so the suggestion would be wrong.
 //! Test code is exempted via `is_in_test_context`.
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -35,6 +39,13 @@ const SUFFIXES: &[&str] = &[
     "_us",
     "_microseconds",
 ];
+
+/// Calendar-system / epoch prefixes that mark an absolute time *coordinate*
+/// (a point on a timeline, e.g. a Julian Day Number or a Unix timestamp)
+/// rather than an elapsed span. `Duration` models a non-negative elapsed span
+/// and cannot represent an absolute timeline point, so the suggestion is wrong
+/// for these names even though they carry a unit word.
+const ABSOLUTE_TIME_PREFIXES: &[&str] = &["julian_", "gregorian_", "unix_", "epoch_"];
 
 const NUMERIC_TYPES: &[&str] = &[
     "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128", "usize", "isize", "f32",
@@ -88,7 +99,20 @@ impl AstCheck for Check {
 
 fn has_time_unit_suffix(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    SUFFIXES.iter().any(|s| lower.ends_with(s))
+    SUFFIXES.iter().any(|s| lower.ends_with(s)) && !is_absolute_time_coordinate(&lower)
+}
+
+/// True when a (lowercased) name marks an absolute time *coordinate* — a point
+/// on a timeline (calendar date or timestamp) — rather than an elapsed span.
+/// `Duration` only models the latter, so unit-suffixed names that are really
+/// absolute coordinates must not be flagged.
+fn is_absolute_time_coordinate(lower: &str) -> bool {
+    ABSOLUTE_TIME_PREFIXES.iter().any(|p| lower.starts_with(p))
+        || lower.contains("timestamp")
+        || lower.contains("_since_epoch")
+        || lower.ends_with("_epoch")
+        || lower.contains("_at_")
+        || lower.ends_with("_at")
 }
 
 fn is_numeric_type(text: &str) -> bool {
@@ -176,6 +200,44 @@ mod tests {
     #[test]
     fn allows_time_field_without_suffix_match() {
         assert!(run_on("struct S { deadline: u64 }").is_empty());
+    }
+
+    #[test]
+    fn allows_julian_days_absolute_coordinate() {
+        // Julian Day Number is an absolute astronomical date coordinate, not a
+        // span; `Duration` cannot represent it. Regression for #3915.
+        assert!(run_on("fn f(julian_days: f64) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_gregorian_days_absolute_coordinate() {
+        assert!(run_on("fn f(gregorian_days: u64) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_unix_seconds_absolute_coordinate() {
+        assert!(run_on("struct S { unix_seconds: i64 }").is_empty());
+    }
+
+    #[test]
+    fn allows_created_at_seconds_absolute_coordinate() {
+        assert!(run_on("struct S { created_at_seconds: u64 }").is_empty());
+    }
+
+    #[test]
+    fn allows_request_timestamp_ms_absolute_coordinate() {
+        assert!(run_on("struct S { request_timestamp_ms: u64 }").is_empty());
+    }
+
+    #[test]
+    fn flags_retry_after_ms_span() {
+        // `_at` markers must not match `after`; this is a genuine elapsed span.
+        assert_eq!(run_on("fn f(retry_after_ms: u64) {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_timeout_seconds_span() {
+        assert_eq!(run_on("fn f(timeout_seconds: u64) {}").len(), 1);
     }
 
     #[test]
