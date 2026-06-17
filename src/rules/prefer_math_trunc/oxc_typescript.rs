@@ -18,6 +18,13 @@ fn is_zero_literal(expr: &Expression) -> bool {
     matches!(expr, Expression::NumericLiteral(lit) if lit.value == 0.0)
 }
 
+/// A numeric literal with no fractional part (`1`, `5`, `0b10`). There is
+/// nothing to truncate, so `x | 0` on it is flag composition, not the
+/// `Math.trunc` idiom. A fractional literal (`2.5`) returns false.
+fn is_integer_literal(expr: &Expression) -> bool {
+    matches!(expr, Expression::NumericLiteral(lit) if lit.value.fract() == 0.0)
+}
+
 /// A numeric literal (optionally signed) whose value falls outside the signed
 /// int32 range, so `| 0` (ToInt32) changes it while `Math.trunc` would not.
 fn is_out_of_int32_range_literal(expr: &Expression) -> bool {
@@ -80,6 +87,20 @@ fn is_int32_coercion_left(left: &Expression) -> bool {
     }
 }
 
+/// True when `node` sits inside a `TSEnumMember` initializer, a
+/// constant-expression position where TS forbids function calls (TS2474). The
+/// `Math.trunc(x)` remediation is uncompilable there, so the rule must not
+/// suggest it.
+fn is_in_enum_member_initializer<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    semantic
+        .nodes()
+        .ancestors(node.id())
+        .any(|ancestor| matches!(ancestor.kind(), AstKind::TSEnumMember(_)))
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[
@@ -96,6 +117,13 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Enum member initializers are constant-expression positions where TS
+        // forbids function calls (TS2474), so `Math.trunc(x)` is uncompilable
+        // there — never suggest it for a `BinaryExpression`/`AssignmentExpression`
+        // inside one.
+        if is_in_enum_member_initializer(node, semantic) {
+            return;
+        }
         match node.kind() {
             AstKind::UnaryExpression(unary) => {
                 // ~~x: outer ~ whose argument is also ~expr
@@ -138,6 +166,13 @@ impl OxcCheck for Check {
                     return;
                 }
                 if !is_zero_literal(&bin.right) {
+                    return;
+                }
+                // An integer-literal left operand (`1 << 0`, `5 | 0`) has no
+                // fractional part to truncate, so this is flag composition, not
+                // the `Math.trunc` idiom. A fractional literal (`2.5 | 0`) still
+                // flags.
+                if is_integer_literal(bin.left.get_inner_expression()) {
                     return;
                 }
                 // `| 0` used as a ToInt32 / 32-bit coercion (not fractional
@@ -249,13 +284,26 @@ mod tests {
         assert_eq!(run("const n = ~~value;").len(), 1);
     }
 
+    // False positives: an integer-literal left operand has nothing to truncate,
+    // and `| 0` used as a ToInt32 / 32-bit coercion must be exempt.
+
     #[test]
-    fn flags_int32_max_literal() {
-        // 2147483647 is the largest in-range int32, so `| 0` does not wrap it.
-        assert_eq!(run("const n = 2147483647 | 0;").len(), 1);
+    fn allows_int32_max_literal() {
+        // An integer literal has no fractional part to truncate; `| 0` is a no-op.
+        assert!(run("const n = 2147483647 | 0;").is_empty());
     }
 
-    // False positives: `| 0` used as a ToInt32 / 32-bit coercion must be exempt.
+    #[test]
+    fn allows_integer_literal_or_zero() {
+        // `5 | 0` is flag composition between constants, not float truncation.
+        assert!(run("const n = 5 | 0;").is_empty());
+    }
+
+    #[test]
+    fn allows_power_of_two_flag() {
+        // `1 << 0` is the canonical power-of-two flag idiom, not `x << 0` truncation.
+        assert!(run("const x = 1 << 0;").is_empty());
+    }
 
     #[test]
     fn allows_out_of_range_literal() {
@@ -304,5 +352,41 @@ mod tests {
     #[test]
     fn ignores_string_literal() {
         assert!(run(r#"const s = "value | 0";"#).is_empty());
+    }
+
+    // Enum member initializers are constant-expression positions where TS
+    // forbids `Math.trunc(...)` (TS2474), so the rule must not fire there.
+
+    #[test]
+    fn allows_const_enum_identifier_or_zero() {
+        // babel scopeflags.ts: `KIND_VALUE | 0` is bitflag composition between
+        // constants, used as a column-alignment no-op.
+        assert!(run("const enum E { A = 1, B = 4, C = A | 0 }").is_empty());
+    }
+
+    #[test]
+    fn allows_const_enum_shift_flags() {
+        // babel scope.ts: `1 << 0` power-of-two flag in a const enum.
+        assert!(run("const enum N { Var = 1 << 0, Lexical = 1 << 1 }").is_empty());
+    }
+
+    #[test]
+    fn allows_plain_enum_member_initializer() {
+        // TS2474 forbids function calls in any enum member initializer, const or
+        // not, so a runtime-looking `x | 0` is still uncompilable as Math.trunc.
+        assert!(run("enum E { A = x | 0 }").is_empty());
+    }
+
+    // True positives: genuine fractional-truncation idioms outside enums must
+    // still fire.
+
+    #[test]
+    fn flags_runtime_identifier_outside_enum() {
+        assert_eq!(run("const y = f | 0;").len(), 1);
+    }
+
+    #[test]
+    fn flags_runtime_assignment_outside_enum() {
+        assert_eq!(run("value = value | 0;").len(), 1);
     }
 }
