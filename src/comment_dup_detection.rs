@@ -100,23 +100,22 @@ fn is_excluded_comment(lower: &str) -> bool {
     EXCLUDE_MARKERS.iter().any(|m| lower.contains(m))
 }
 
-/// Phrases that introduce a pointer to a canonical source. A bare source path
-/// (`db/migrate.ts`) only counts as a citation when one of these precedes it —
-/// otherwise a filename mentioned inside a genuinely duplicated rationale would
-/// wrongly silence the duplicate.
-const CITATION_PHRASES: &[&str] = &[
-    "see ",
-    "cf.",
-    "cf ",
-    "rationale in",
-    "convention in",
-    "documented in",
-    "described in",
-    "defined in",
-];
-
 /// Source-file extensions that mark a relative path as a citation target.
 const SOURCE_EXTS: &[&str] = &[".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".rs"];
+
+/// Words that, placed immediately before a doc/file/URL reference (optionally
+/// across one connector like `in`/`at`), mark that reference as a *citation* —
+/// `see X`, `rationale in X`, `documented at X` — as opposed to prose that
+/// merely happens to name a path.
+const CITATION_CUES: &[&str] = &[
+    "see", "cf", "voir", "ref", "reference", "referenced", "rationale", "convention", "documented",
+    "defined", "described", "detailed", "noted", "specified", "explained",
+];
+
+/// Connectors allowed between a cue and its reference (`convention in X`,
+/// `documented at X`, `convention dans X`). Kept tiny on purpose: a wider window
+/// would let a cue verb elsewhere in the sentence latch onto an incidental path.
+const CITATION_CONNECTORS: &[&str] = &["in", "at", "the", "under", "dans", "à"];
 
 /// A "pointer" comment whose job is to cite a single canonical source — a doc,
 /// ADR, URL, or sibling file — rather than restate a rationale. Such comments
@@ -125,37 +124,59 @@ const SOURCE_EXTS: &[&str] = &[".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".r
 /// intentionally near-identical wording is single-source-of-truth done right,
 /// not a copy-paste smell.
 ///
-/// A documentation path (`docs/…`, `*.md`) or URL is a citation on its own;
-/// these tokens do not appear in restated-rationale prose. A generic source
-/// path is a citation only when an explicit pointer phrase introduces it.
+/// Detection is by *adjacency*, matching the "a path introduced by `see` /
+/// `rationale in` / …" framing: a reference is a citation only when a cue word
+/// sits immediately before it (across at most one connector). Requiring the cue
+/// next to the reference — rather than merely present somewhere — keeps a long
+/// duplicated rationale that happens to name a path flagged, and prevents a cue
+/// verb used in ordinary prose (`we see a race in worker/pool.ts`) from
+/// exempting it.
 fn is_citation_comment(lower: &str) -> bool {
-    if lower.contains("http://") || lower.contains("https://") {
-        return true;
-    }
-    let mut has_source_path = false;
-    for tok in path_tokens(lower) {
-        let tok = tok.trim_end_matches('.');
-        if tok.starts_with("docs/")
-            || tok.contains("/docs/")
-            || tok.ends_with(".md")
-            || tok.ends_with(".mdx")
-        {
+    let tokens: Vec<&str> = lower.split_whitespace().collect();
+    for (j, raw) in tokens.iter().enumerate() {
+        if !is_reference_token(raw) {
+            continue;
+        }
+        if j >= 1 && is_cue(tokens[j - 1]) {
             return true;
         }
-        if tok.contains('/') && SOURCE_EXTS.iter().any(|e| tok.ends_with(e)) {
-            has_source_path = true;
+        if j >= 2 && is_connector(tokens[j - 1]) && is_cue(tokens[j - 2]) {
+            return true;
         }
     }
-    has_source_path && CITATION_PHRASES.iter().any(|p| lower.contains(p))
+    false
 }
 
-/// Split on everything that cannot be part of a relative path or URL, so a
-/// citation target survives as one token (`docs/agents/frontend-patterns.md`)
-/// while surrounding prose and `(…)` annotations fall away.
-fn path_tokens(lower: &str) -> impl Iterator<Item = &str> {
-    lower
-        .split(|c: char| !(c.is_alphanumeric() || matches!(c, '/' | '.' | '-' | '_')))
-        .filter(|t| !t.is_empty())
+/// A whitespace token that names a canonical source: a URL, a documentation
+/// path (`docs/…`, `*.md`/`*.mdx`), or a relative source path (`dir/file.ts`).
+fn is_reference_token(raw: &str) -> bool {
+    let core = raw.trim_matches(|c: char| {
+        !c.is_alphanumeric() && !matches!(c, '/' | '.' | '-' | '_' | ':')
+    });
+    if core.starts_with("http://") || core.starts_with("https://") {
+        return true;
+    }
+    let core = core.trim_end_matches('.');
+    if core.starts_with("docs/")
+        || core.contains("/docs/")
+        || core.ends_with(".md")
+        || core.ends_with(".mdx")
+    {
+        return true;
+    }
+    core.contains('/') && SOURCE_EXTS.iter().any(|e| core.ends_with(e))
+}
+
+fn word_core(tok: &str) -> &str {
+    tok.trim_matches(|c: char| !c.is_alphanumeric())
+}
+
+fn is_cue(tok: &str) -> bool {
+    CITATION_CUES.contains(&word_core(tok))
+}
+
+fn is_connector(tok: &str) -> bool {
+    CITATION_CONNECTORS.contains(&word_core(tok))
 }
 
 /// True when one `//` line is itself a directive/banner. Used to split a run of
@@ -688,10 +709,10 @@ export const labSection = 2;
     }
 
     #[test]
-    fn still_flags_duplicate_mentioning_a_path_without_citation_phrase() {
+    fn still_flags_duplicate_naming_a_path_without_an_adjacent_cue() {
         // The guard must stay surgical: a genuinely copy-pasted rationale that
-        // merely names a source file — with no `see` / `rationale in` pointer
-        // phrase — is real duplication and must still be flagged.
+        // merely names a source file — with no `see` / `rationale in` cue next
+        // to the path — is real duplication and must still be flagged.
         let dir = tempfile::tempdir().unwrap();
         let line = "// The migration runner walks db/migrate.ts entries and applies them in lexical order so schema changes stay reproducible across every deployment environment.\nexport const run = 1;\n";
         let a = write(&dir, "a.ts", line);
@@ -699,6 +720,43 @@ export const labSection = 2;
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "duplicate prose naming a path is still a smell");
         assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn still_flags_long_rationale_that_merely_mentions_a_doc() {
+        // Over-exclusion guard: a restated rationale that *names* a `.md` doc
+        // without an adjacent citation cue (`mirrored in rejected.md`, not
+        // `see rejected.md`) is genuine duplication — the doc mention must not
+        // exempt the whole comment.
+        let dir = tempfile::tempdir().unwrap();
+        let line = "// Validate the upload before writing to disk and record the outcome in the audit log; the same failure taxonomy is mirrored in rejected.md so they never disagree.\nexport const v = 1;\n";
+        let a = write(&dir, "a.ts", line);
+        let b = write(&dir, "b.ts", line);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "a doc named without a cue does not exempt a rationale");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn still_flags_long_rationale_containing_a_docs_path_without_cue() {
+        // A `docs/…` path embedded in restated prose (not introduced by a cue)
+        // is still a duplicated rationale.
+        let dir = tempfile::tempdir().unwrap();
+        let line = "// Generated fixtures land under docs/examples during the build and are copied into the bundle so the playground and the published guide always show identical output.\nexport const f = 1;\n";
+        let a = write(&dir, "a.ts", line);
+        let b = write(&dir, "b.ts", line);
+        assert_eq!(run(&[&a, &b]).len(), 1);
+    }
+
+    #[test]
+    fn cue_verb_far_from_path_does_not_exempt() {
+        // `see` used as an ordinary verb, not adjacent to the path, must not
+        // latch onto an incidental source path and silence a real duplicate.
+        let dir = tempfile::tempdir().unwrap();
+        let line = "// Here we see the cache invalidation in lib/cache.ts kick in only after the lease expires, which keeps stale reads from leaking into the response.\nexport const c = 1;\n";
+        let a = write(&dir, "a.ts", line);
+        let b = write(&dir, "b.ts", line);
+        assert_eq!(run(&[&a, &b]).len(), 1, "distant cue verb must not exempt");
     }
 
     #[test]
