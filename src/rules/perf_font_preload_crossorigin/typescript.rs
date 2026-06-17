@@ -105,4 +105,32 @@ mod tests {
     fn ignores_non_font_preload() {
         assert!(run(r#"const x = <link rel="preload" as="script" href="/a.js" />;"#).is_empty());
     }
+
+    // Regression for #3250: font preload matching is a runtime browser concern,
+    // so JSX component output tests that assert on `.toString()` output must
+    // not be flagged — they never reach a browser.
+    #[test]
+    fn skips_test_file() {
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                r#"const x = <link rel="preload" href="/font.woff2" as="font" crossOrigin="" />;"#,
+                "src/jsx/intrinsic-element/components.test.tsx",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_non_test_file() {
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                r#"const x = <link rel="preload" href="/font.woff2" as="font" crossOrigin="" />;"#,
+                "src/jsx/intrinsic-element/components.tsx",
+            )
+            .len(),
+            1
+        );
+    }
 }

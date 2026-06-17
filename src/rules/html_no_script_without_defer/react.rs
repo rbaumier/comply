@@ -106,4 +106,32 @@ mod tests {
     fn ignores_other_tags() {
         assert!(run(r#"function App() { return <link src="/main.js" />; }"#).is_empty());
     }
+
+    // Regression for #3250: parser-blocking scripts are a runtime browser
+    // concern, so JSX component output tests that assert on `.toString()`
+    // output must not be flagged — they never reach an HTML parser.
+    #[test]
+    fn skips_test_file() {
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                r#"const x = <script src="script.js"></script>;"#,
+                "src/jsx/index.test.tsx",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_non_test_file() {
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                r#"const x = <script src="script.js"></script>;"#,
+                "src/jsx/index.tsx",
+            )
+            .len(),
+            1
+        );
+    }
 }
