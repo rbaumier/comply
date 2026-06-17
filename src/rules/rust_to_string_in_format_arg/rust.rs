@@ -35,6 +35,10 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::{
+    is_char_literal, macro_body, skip_char_literal, skip_string_literal, split_top_level_args,
+    string_literal_content,
+};
 
 const KINDS: &[&str] = &["macro_invocation"];
 
@@ -152,81 +156,6 @@ fn count_redundant_to_string(text: &str, bare: &str) -> usize {
     count
 }
 
-/// Returns the text between the macro's outer delimiter pair. `text` is
-/// the whole invocation (`name!( .. )` / `name![ .. ]` / `name!{ .. }`);
-/// we find the first delimiter after `!` and its match.
-fn macro_body(text: &str) -> Option<&str> {
-    let bytes = text.as_bytes();
-    let open = bytes.iter().position(|&b| matches!(b, b'(' | b'[' | b'{'))?;
-    let close = matching_close(bytes, open)?;
-    text.get(open + 1..close)
-}
-
-/// Index of the delimiter closing the one opened at `open`, skipping
-/// nested delimiters and string/char literal contents.
-fn matching_close(bytes: &[u8], open: usize) -> Option<usize> {
-    let mut depth: i32 = 0;
-    let mut i = open;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'"' => {
-                i = skip_string_literal(bytes, i);
-                continue;
-            }
-            b'\'' if is_char_literal(bytes, i) => {
-                i = skip_char_literal(bytes, i);
-                continue;
-            }
-            b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' | b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i);
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    None
-}
-
-/// Splits a macro body into its top-level arguments (separated by commas
-/// at depth 0 of the body), skipping commas inside nested delimiters and
-/// string/char literals. A trailing comma yields no empty final argument.
-fn split_top_level_args(body: &str) -> Vec<&str> {
-    let bytes = body.as_bytes();
-    let mut args = Vec::new();
-    let mut depth: i32 = 0;
-    let mut start = 0usize;
-    let mut i = 0usize;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'"' => {
-                i = skip_string_literal(bytes, i);
-                continue;
-            }
-            b'\'' if is_char_literal(bytes, i) => {
-                i = skip_char_literal(bytes, i);
-                continue;
-            }
-            b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' | b'}' => depth -= 1,
-            b',' if depth == 0 => {
-                args.push(&body[start..i]);
-                start = i + 1;
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    let tail = body[start..].trim();
-    if !tail.is_empty() {
-        args.push(&body[start..]);
-    }
-    args
-}
-
 /// Whether an argument is a named formatting argument: a leading
 /// identifier followed by a single `=` (not `==`). The receiver of a
 /// `.to_string()` and equality operators inside an expression are not
@@ -288,33 +217,6 @@ fn arg_has_terminal_to_string(arg: &str) -> bool {
         i += 1;
     }
     false
-}
-
-/// If `arg` is exactly a plain (`"..."`) or raw (`r"..."` / `r#"..."#`)
-/// string literal, returns its raw inner content (escapes left intact).
-/// Returns `None` when the argument is anything else (a `concat!`, a
-/// constant, an expression, a byte string, …).
-fn string_literal_content(arg: &str) -> Option<String> {
-    let bytes = arg.as_bytes();
-    let open = bytes.iter().position(|&b| b == b'"')?;
-    // Only a raw-string prefix (`r`, `r#`, `r##`, …) or nothing may
-    // precede the opening quote. Anything else means the argument is not
-    // a bare string literal.
-    let prefix = &arg[..open];
-    let is_raw = match prefix {
-        "" => false,
-        _ if prefix.starts_with('r') && prefix[1..].bytes().all(|b| b == b'#') => true,
-        _ => return None,
-    };
-    let end = skip_string_literal(bytes, open);
-    // The literal must span the entire argument.
-    if end != bytes.len() {
-        return None;
-    }
-    let hashes = prefix.bytes().filter(|&b| b == b'#').count();
-    let inner_start = open + 1;
-    let inner_end = end - 1 - if is_raw { hashes } else { 0 };
-    arg.get(inner_start..inner_end).map(str::to_owned)
 }
 
 /// Parses the format string's placeholders left to right and returns, for
@@ -381,68 +283,6 @@ fn is_align(c: char) -> bool {
 /// another method, so it is not consumed directly.
 fn only_whitespace_after(bytes: &[u8], after: usize) -> bool {
     bytes[after..].iter().all(u8::is_ascii_whitespace)
-}
-
-/// Advances past a string literal starting at the opening `"` at `start`.
-/// Detects raw strings (`r"..."` / `r#"..."#`) by walking back over the
-/// `#`s and the `r` prefix: in a raw string backslashes do not escape and
-/// the literal ends at `"` followed by the same number of `#`s. In a
-/// plain string, `\"` is an escaped quote.
-fn skip_string_literal(bytes: &[u8], start: usize) -> usize {
-    let mut hashes = 0;
-    let mut j = start;
-    while j > 0 && bytes[j - 1] == b'#' {
-        j -= 1;
-        hashes += 1;
-    }
-    let is_raw = j > 0 && bytes[j - 1] == b'r';
-    let hashes = if is_raw { hashes } else { 0 };
-    let mut i = start + 1;
-    if is_raw {
-        while i < bytes.len() {
-            if bytes[i] == b'"' && closing_hashes_match(bytes, i + 1, hashes) {
-                return i + 1 + hashes;
-            }
-            i += 1;
-        }
-    } else {
-        while i < bytes.len() {
-            match bytes[i] {
-                b'\\' => i += 2,
-                b'"' => return i + 1,
-                _ => i += 1,
-            }
-        }
-    }
-    i
-}
-
-fn closing_hashes_match(bytes: &[u8], at: usize, hashes: usize) -> bool {
-    (0..hashes).all(|k| bytes.get(at + k) == Some(&b'#'))
-}
-
-/// Distinguishes a char literal `'c'` / `'\n'` / lifetime tick. A char
-/// literal has a closing `'` within a few bytes; a lifetime (`'a`) does
-/// not, so we conservatively require a closing quote.
-fn is_char_literal(bytes: &[u8], start: usize) -> bool {
-    // `'\X'` or `'X'` — closing quote within 4 bytes accounts for escapes.
-    let mut i = start + 1;
-    if bytes.get(i) == Some(&b'\\') {
-        i += 1;
-    }
-    i += 1;
-    bytes.get(i) == Some(&b'\'')
-}
-
-fn skip_char_literal(bytes: &[u8], start: usize) -> usize {
-    let mut i = start + 1;
-    if bytes.get(i) == Some(&b'\\') {
-        i += 2;
-    } else {
-        i += 1;
-    }
-    // Now at the closing quote.
-    i + 1
 }
 
 #[cfg(test)]
