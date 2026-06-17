@@ -11,10 +11,21 @@
 //! `std::cell::OnceCell`, and any other once-cell type are left alone. A
 //! fully-qualified annotation is matched on its path: only `once_cell::...`
 //! is flagged. A bare type with no resolvable `once_cell` import is not flagged.
+//!
+//! ## no_std exemption
+//!
+//! `std::sync::OnceLock` / `LazyLock` live in `std`, so the suggested
+//! replacement does not compile in a `#![no_std]` crate — there `once_cell`
+//! (and `lazy_static!`) are the portable fallbacks. Both arms are silenced
+//! when the file declares `#![no_std]` itself or its crate root does (the
+//! attribute usually lives in `lib.rs`/`main.rs`, not the flagged file).
 
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["macro_invocation", "generic_type"] => |node, source, ctx, diagnostics|
+    if crate::project::source_declares_no_std(ctx.source) || ctx.project.crate_root_is_no_std(ctx.path) {
+        return;
+    }
     let msg = "Use `std::sync::LazyLock` or `OnceLock` (stable since Rust 1.70) instead of `lazy_static!` or `once_cell`.";
 
     if node.kind() == "macro_invocation" {
@@ -168,9 +179,28 @@ impl crate::rules::test_helpers::RunRule for Check {
 mod tests {
     use super::Check;
     use crate::diagnostic::Diagnostic;
+    use std::fs;
+    use tempfile::TempDir;
 
     fn run(s: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, s, "t.rs")
+    }
+
+    /// Build a crate on disk so the `no_std` exemption resolves against real
+    /// files: `Cargo.toml`, a crate root (`src/lib.rs`), and `src/foo.rs`
+    /// holding the source under test. The rule runs on `foo.rs`.
+    fn run_in_crate(crate_root: &str, foo_src: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"c\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/lib.rs"), crate_root).unwrap();
+        let foo_path = dir.path().join("src/foo.rs");
+        fs::write(&foo_path, foo_src).unwrap();
+        crate::rules::test_helpers::run_rule(&Check, foo_src, &foo_path)
     }
 
     #[test]
@@ -270,6 +300,83 @@ mod tests {
     #[test]
     fn still_flags_lazy_static_alongside_tokio_use() {
         let src = "use tokio::sync::OnceCell;\nlazy_static! { static ref FOO: String = String::new(); }";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // ── no_std exemption regression tests (Closes #3989) ────────────────
+
+    /// #3989: in a `#![no_std]` crate, `std::sync::OnceLock`/`LazyLock` are
+    /// unavailable, so `once_cell` is the correct portable replacement. The
+    /// crate root (`lib.rs`) declares `#![no_std]` even though the flagged file
+    /// (`foo.rs`) does not — mirrors the wgpu-core `pool.rs` example.
+    #[test]
+    fn allows_once_cell_when_crate_root_is_no_std() {
+        let src = "use once_cell::sync::OnceCell;\nstatic FOO: OnceCell<u32> = OnceCell::new();";
+        assert!(
+            run_in_crate("#![no_std]\n", src).is_empty(),
+            "must not suggest std OnceLock in a #![no_std] crate"
+        );
+    }
+
+    /// #3989: the conditional `#![cfg_attr(not(feature = "std"), no_std)]` form
+    /// in the crate root — a crate that is structurally no_std-first.
+    #[test]
+    fn allows_once_cell_when_crate_root_is_conditionally_no_std() {
+        let src = "use once_cell::sync::OnceCell;\nstatic FOO: OnceCell<u32> = OnceCell::new();";
+        assert!(
+            run_in_crate("#![cfg_attr(not(feature = \"std\"), no_std)]\n", src).is_empty(),
+            "must not suggest std OnceLock under #![cfg_attr(..., no_std)]"
+        );
+    }
+
+    /// #3989: the flagged file itself declares `#![no_std]`.
+    #[test]
+    fn allows_once_cell_in_no_std_source() {
+        let src = "#![no_std]\nstatic FOO: once_cell::sync::OnceCell<u32> = once_cell::sync::OnceCell::new();";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    /// #3989: `lazy_static!` is also a common no_std fallback — silence it too
+    /// when the crate root is `#![no_std]`.
+    #[test]
+    fn allows_lazy_static_when_crate_root_is_no_std() {
+        let src = "lazy_static! { static ref FOO: String = String::new(); }";
+        assert!(
+            run_in_crate("#![no_std]\n", src).is_empty(),
+            "must not flag lazy_static! in a #![no_std] crate"
+        );
+    }
+
+    /// #3989 negative space: a plain `std` crate root keeps firing — the
+    /// remediation is valid there, so no over-suppression.
+    #[test]
+    fn still_flags_once_cell_when_crate_root_is_std() {
+        let src = "use once_cell::sync::OnceCell;\nstatic FOO: OnceCell<u32> = OnceCell::new();";
+        assert_eq!(
+            run_in_crate("fn main() {}\n", src).len(),
+            1,
+            "must keep flagging once_cell in ordinary std crates"
+        );
+    }
+
+    /// #3989 negative space: `lazy_static!` in a std crate stays flagged.
+    #[test]
+    fn still_flags_lazy_static_when_crate_root_is_std() {
+        let src = "lazy_static! { static ref FOO: String = String::new(); }";
+        assert_eq!(
+            run_in_crate("fn main() {}\n", src).len(),
+            1,
+            "must keep flagging lazy_static! in ordinary std crates"
+        );
+    }
+
+    /// #3989 negative space: the substring `no_std` in a comment/identifier
+    /// must NOT silence the rule — only a real `#![no_std]` inner attribute or a
+    /// no_std crate root exempts it. Guards against the over-suppression of a
+    /// raw substring match (the file declares no `#![...]` attribute here).
+    #[test]
+    fn still_flags_once_cell_when_no_std_only_in_comment() {
+        let src = "// also works in no_std environments\nstatic FOO: once_cell::sync::Lazy<String> = once_cell::sync::Lazy::new(|| compute());";
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
