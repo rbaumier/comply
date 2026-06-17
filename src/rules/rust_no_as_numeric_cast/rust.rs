@@ -28,7 +28,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{cast_operand_is_collection_size, is_in_test_context};
+use crate::rules::rust_helpers::{
+    cast_operand_is_bool, cast_operand_is_collection_size, find_identifier_type, is_in_test_context,
+};
 
 const KINDS: &[&str] = &["type_cast_expression"];
 
@@ -84,6 +86,9 @@ impl AstCheck for Check {
             return;
         }
         if cast_operand_is_collection_size(node, source_bytes) {
+            return;
+        }
+        if cast_operand_is_bool(node, source_bytes) {
             return;
         }
         let source_type = source_numeric_type(node, source_bytes);
@@ -171,59 +176,6 @@ fn source_numeric_type(node: tree_sitter::Node, source: &[u8]) -> Option<Numeric
     let name = value.utf8_text(source).ok()?;
     let type_text = find_identifier_type(node, name, source)?;
     numeric_type(&type_text)
-}
-
-fn find_identifier_type(node: tree_sitter::Node, name: &str, source: &[u8]) -> Option<String> {
-    let mut current = Some(node);
-    while let Some(n) = current {
-        if matches!(
-            n.kind(),
-            "function_item" | "closure_expression" | "block" | "source_file"
-        ) && let Some(found) = find_binding_type_before(n, node.start_byte(), name, source)
-        {
-            return Some(found);
-        }
-        current = n.parent();
-    }
-    None
-}
-
-fn find_binding_type_before(
-    node: tree_sitter::Node,
-    limit: usize,
-    name: &str,
-    source: &[u8],
-) -> Option<String> {
-    if node.start_byte() >= limit {
-        return None;
-    }
-    if matches!(node.kind(), "parameter" | "let_declaration")
-        && let Some(pattern) = node.child_by_field_name("pattern")
-        && pattern_contains_identifier(pattern, name, source)
-        && let Some(type_node) = node.child_by_field_name("type")
-        && let Ok(type_text) = type_node.utf8_text(source)
-    {
-        return Some(type_text.trim().to_string());
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if let Some(found) = find_binding_type_before(child, limit, name, source) {
-            return Some(found);
-        }
-    }
-    None
-}
-
-fn pattern_contains_identifier(pattern: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
-    if pattern.kind() == "identifier" {
-        return pattern.utf8_text(source).is_ok_and(|text| text == name);
-    }
-
-    let mut cursor = pattern.walk();
-    pattern
-        .children(&mut cursor)
-        .any(|child| pattern_contains_identifier(child, name, source))
 }
 
 /// Whether the cast operand's outermost expression is a bitwise operation
@@ -473,5 +425,26 @@ mod tests {
         // `.parse_count()` is not a size accessor — keep flagging it so the
         // exemption does not blanket-allow every method-call operand.
         assert_eq!(run_on("fn f(v: V) -> u8 { v.parse_count() as u8 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_3949_is_some_as_u8_not_flagged() {
+        // `bool as u8` is total and lossless; `is_some()` yields a bool.
+        assert!(run_on("fn f(o: Option<i32>) -> u8 { o.is_some() as u8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_3949_bool_binding_as_u8_not_flagged() {
+        assert!(run_on("fn g(b: bool) -> u8 { b as u8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_3949_comparison_as_u8_not_flagged() {
+        assert!(run_on("fn h() -> u8 { (3 > 2) as u8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_3949_contains_as_u8_not_flagged() {
+        assert!(run_on("fn k(s: &str) -> u8 { s.contains(\"x\") as u8 }").is_empty());
     }
 }
