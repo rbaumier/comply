@@ -68,6 +68,24 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A `throw` on some input path means the function is a validator /
+        // assertion whose control flow is load-bearing — folding it into a
+        // constant would destroy the validation. Suppress (#3938). Attribute the
+        // throw to this function with the same span-containment +
+        // `nearest_function_span` check used for the return statements above.
+        for snode in nodes.iter() {
+            let AstKind::ThrowStatement(throw) = snode.kind() else {
+                continue;
+            };
+            if throw.span.start < func_span.start || throw.span.end > func_span.end {
+                continue;
+            }
+            if nearest_function_span(snode.id(), nodes) != Some(func_span) {
+                continue;
+            }
+            return;
+        }
+
         let first = &literals[0];
         if !literals.iter().all(|l| l == first) {
             return;
@@ -241,5 +259,56 @@ function maybe(x) {
 }
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_validator_that_throws_on_failure() {
+        // #3938: assert-and-return-success validator — `throw` on the failure
+        // path makes control flow load-bearing; the `return true` is a success
+        // sentinel, not dead invariant logic.
+        let src = r#"
+function validateList(value, key) {
+    if (Array.isArray(value) === false || value.length === 0) {
+        throw new InvalidQueryError({ reason: `"${key}" has to be an array of values` });
+    }
+    return true;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_validator_with_two_sentinels_and_a_throw() {
+        // #3938: two `return true` sentinels plus a `throw` on the type-mismatch
+        // path — still a validator, must not flag.
+        let src = r#"
+function validateBoolean(value, key) {
+    if (value === null || value === '') return true;
+    if (typeof value !== 'boolean') {
+        throw new InvalidQueryError({ reason: `"${key}" has to be a boolean` });
+    }
+    return true;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn nested_throw_does_not_exempt_outer_invariant_function() {
+        // The `throw` lives in a nested function; the outer function still has
+        // ≥2 equal invariant returns and no `throw` of its own, so it must flag.
+        // Confirms the `nearest_function_span` attribution of the throw check.
+        let src = r#"
+function outer() {
+    function inner() {
+        throw new Error("boom");
+    }
+    if (cond) {
+        return "X";
+    }
+    return "X";
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
