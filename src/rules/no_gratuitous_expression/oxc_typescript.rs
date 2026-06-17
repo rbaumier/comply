@@ -3,11 +3,46 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BinaryOperator, Expression, LogicalOperator};
+use oxc_ast::ast::{BinaryOperator, Expression, LogicalOperator, UnaryOperator};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
+
+/// Is the result of `node` ultimately consumed as a boolean?
+///
+/// `X || true` short-circuits to `X` when `X` is truthy and only to `true`
+/// otherwise — so the "always true" claim (and the "remove the dead branch"
+/// remediation) is sound *only* when the value is coerced to a boolean. In a
+/// value position (`const x = foo || true`, a JSX prop, a `return`, a ternary
+/// branch) the expression is a deliberate coerce-to-truthy-while-preserving-content
+/// idiom and must not be flagged.
+///
+/// Walks the parent chain: a `ParenthesizedExpression` is transparent; an
+/// operand of an enclosing `LogicalExpression` inherits that logical's context
+/// (recurse on the parent); `!x` is boolean; the `test` of an
+/// `if`/`while`/`do-while`/`for`/ternary is boolean (matched by span, to
+/// distinguish the test from a ternary branch or a loop body). Anything else is
+/// a value position.
+fn is_consumed_as_boolean(node: &oxc_semantic::AstNode, semantic: &oxc_semantic::Semantic) -> bool {
+    let parent = semantic.nodes().parent_node(node.id());
+    // Root node's parent is itself; stop to avoid infinite recursion.
+    if parent.id() == node.id() {
+        return false;
+    }
+    let node_span = node.span();
+    match parent.kind() {
+        AstKind::ParenthesizedExpression(_) => is_consumed_as_boolean(parent, semantic),
+        AstKind::LogicalExpression(_) => is_consumed_as_boolean(parent, semantic),
+        AstKind::UnaryExpression(unary) => unary.operator == UnaryOperator::LogicalNot,
+        AstKind::IfStatement(s) => s.test.span() == node_span,
+        AstKind::WhileStatement(s) => s.test.span() == node_span,
+        AstKind::DoWhileStatement(s) => s.test.span() == node_span,
+        AstKind::ForStatement(s) => s.test.as_ref().is_some_and(|t| t.span() == node_span),
+        AstKind::ConditionalExpression(s) => s.test.span() == node_span,
+        _ => false,
+    }
+}
 
 fn detect_self_comparison(op: BinaryOperator, left: &Expression, right: &Expression, source: &str) -> Option<&'static str> {
     // Both sides must be identifiers (or member expressions) with the same text
@@ -53,7 +88,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         match node.kind() {
@@ -78,7 +113,13 @@ impl OxcCheck for Check {
                 }
             }
             AstKind::LogicalExpression(logical) => {
-                // `&& false` → always false; `|| true` → always true
+                // `&& false` → always false; `|| true` → always true — but only in
+                // a boolean context. In a value position `X || true` is the
+                // coerce-to-truthy-while-preserving-content idiom (yields `X` when
+                // truthy), so the "always true/false" claim is unsound there.
+                if !is_consumed_as_boolean(node, semantic) {
+                    return;
+                }
                 match logical.operator {
                     LogicalOperator::And => {
                         if let Expression::BooleanLiteral(lit) = &logical.right
@@ -180,5 +221,51 @@ mod tests {
     #[test]
     fn flags_loose_equality_self_compare() {
         assert_eq!(run(r#"const b = x == x;"#).len(), 1);
+    }
+
+    // Regression for #3932: `X || true` / `X && false` in a value position is the
+    // coerce-to-truthy-while-preserving-content idiom (yields `X` when truthy),
+    // not a dead branch — must not be flagged.
+    #[test]
+    fn allows_or_true_in_assignment_value_position() {
+        assert!(run(r#"const x = foo || true;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_or_true_in_call_argument() {
+        assert!(run(r#"f(validationError || true);"#).is_empty());
+    }
+
+    #[test]
+    fn allows_or_true_in_ternary_branch() {
+        // The mantine case: `error={valid ? error : validationError || true}` —
+        // the logical sits in the ternary's alternate (a value branch), not the test.
+        assert!(run(r#"const e = valid ? error : validationError || true;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_and_false_in_value_position() {
+        assert!(run(r#"const y = bar && false;"#).is_empty());
+    }
+
+    // True positives: in a boolean context the short-circuit IS gratuitous.
+    #[test]
+    fn flags_or_true_in_if_test() {
+        assert_eq!(run(r#"if (foo || true) {}"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_and_false_in_while_test() {
+        assert_eq!(run(r#"while (bar && false) {}"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_or_true_under_negation() {
+        assert_eq!(run(r#"if (!(foo || true)) {}"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_or_true_as_ternary_test() {
+        assert_eq!(run(r#"const z = (foo || true) ? a : b;"#).len(), 1);
     }
 }
