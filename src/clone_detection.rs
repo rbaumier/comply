@@ -281,7 +281,7 @@ fn merge_and_emit(
     }
 
     // Phase 2 — suppress symmetric sibling pairs.
-    // Three suppression criteria, any one is sufficient:
+    // Five suppression criteria, any one is sufficient:
     //
     // A) Small-gap: the tokens NOT covered by any matching window in the
     //    reporter file are few (> 0, ≤ SYMMETRIC_SIBLING_GAP_THRESHOLD).  A
@@ -305,6 +305,15 @@ fn merge_and_emit(
     //    `cli/template/.../with-auth-db.ts` vs `.../with-better-auth.ts`).
     //    Each variant is copied verbatim into a generated project, so their
     //    overlap is load-bearing, not accidental copy-paste.
+    //
+    // E) Test-spec siblings: both files are executable test specs (`.test.`/
+    //    `.spec.`/… filename convention). Sibling specs intentionally duplicate
+    //    setup scaffolding (test-runner imports, mock factories, fixture/response
+    //    builders, per-route stub shapes) to stay self-contained — extracting a
+    //    shared helper trades test locality and per-case type precision for DRY,
+    //    which is the wrong trade in tests. Scoped to spec files: duplication in
+    //    shared test infrastructure (`test-helpers/`, `fixtures/`, `__mocks__/`)
+    //    is still flagged, because there extraction is the correct fix.
     let mut suppressed = std::collections::HashSet::<usize>::new();
     {
         let mut by_pair: FxHashMap<(usize, usize), Vec<usize>> = FxHashMap::default();
@@ -325,7 +334,14 @@ fn merge_and_emit(
                 are_locale_variant_pair(&files[*rfi].path, &files[*cfi].path);
             let scaffold_variants =
                 are_scaffold_template_pair(&files[*rfi].path, &files[*cfi].path);
-            if small_gap || name_siblings || locale_variants || scaffold_variants {
+            let test_spec_siblings =
+                are_test_spec_siblings(&files[*rfi].path, &files[*cfi].path);
+            if small_gap
+                || name_siblings
+                || locale_variants
+                || scaffold_variants
+                || test_spec_siblings
+            {
                 suppressed.extend(idxs);
             }
         }
@@ -563,6 +579,51 @@ fn are_scaffold_template_pair(a: &std::path::Path, b: &std::path::Path) -> bool 
             .is_some_and(|s| is_feature_variant_stem(&s))
     };
     variant_stem(a) && variant_stem(b)
+}
+
+// --- Test-spec-sibling detection ---
+
+/// Filename infixes that mark a file as an executable test *spec* — a file that
+/// contains the test cases themselves (`describe`/`it`/`test` blocks). Matched
+/// against the file name, not the directory, so shared test *infrastructure*
+/// (`test-helpers/`, `fixtures/`, `__mocks__/`) is deliberately excluded: those
+/// hold reusable utilities where duplication is a genuine smell and extraction
+/// is the right fix.
+const TEST_SPEC_INFIXES: &[&str] = &[
+    ".test.", ".spec.", ".unit.", ".e2e.", ".cy.", "_test.", "_spec.",
+];
+
+/// True when `path` is an executable test spec, by filename convention: a
+/// `.test.`/`.spec.`/… infix, or a file directly inside a `__tests__/` directory.
+/// Spec files hold self-contained test cases; shared test utilities are not specs.
+/// The `__tests__/` check is intentionally non-recursive — a non-spec-named file
+/// nested deeper is more likely a fixture/helper, where duplication stays flagged.
+fn is_test_spec_file(path: &std::path::Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if TEST_SPEC_INFIXES.iter().any(|m| name.contains(m)) {
+        return true;
+    }
+    path.parent().is_some_and(|parent| {
+        parent
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|seg| seg.eq_ignore_ascii_case("__tests__"))
+    })
+}
+
+/// Returns true when both paths are executable test specs. Sibling specs
+/// intentionally duplicate setup scaffolding — test-runner imports, mock
+/// factories, fixture/response builders, per-route stub shapes — to stay
+/// self-contained, so their shared blocks must not be flagged as clones.
+/// Scoped to spec files only: duplication in shared test infrastructure
+/// (`test-helpers/`, `fixtures/`, `__mocks__/`) is still flagged because there
+/// extraction is the correct fix.
+fn are_test_spec_siblings(a: &std::path::Path, b: &std::path::Path) -> bool {
+    is_test_spec_file(a) && is_test_spec_file(b)
 }
 
 // --- Tokenization ---
@@ -1497,6 +1558,131 @@ mod tests {
             1,
             "non-variant-named duplicates under template/ must still be flagged"
         );
+    }
+
+    /// Shared test-spec scaffolding mirroring the saurenya page specs from issue
+    /// #4038: the `vitest` import line, a one-key `MockSearch` object-literal
+    /// line (`sort: "name:asc",`), and the router-mock line
+    /// (`useNavigate: () => navigateSpy,`), padded with mock-factory and helper
+    /// boilerplate so the duplicated run exceeds `MIN_TOKENS`.
+    fn shared_test_scaffolding() -> String {
+        let helpers: String = (1..=20)
+            .map(|i| format!("const fixture_{i} = buildResponse({i}, \"row_{i}\");"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "import {{ describe, expect, it, vi }} from \"vitest\";\n\
+             const mockSearch = {{\n\
+               sort: \"name:asc\",\n\
+             }};\n\
+             vi.mock(\"@tanstack/react-router\", () => ({{\n\
+               getRouteApi: () => ({{\n\
+                 useSearch: () => mockSearch,\n\
+                 useNavigate: () => navigateSpy,\n\
+               }}),\n\
+               useNavigate: () => navigateSpy,\n\
+             }}));\n\
+             {helpers}\n"
+        )
+    }
+
+    #[test]
+    fn no_false_positive_on_test_spec_scaffolding() {
+        // Regression test for issue #4038.
+        // Sibling page specs share a large block of setup scaffolding — the
+        // test-runner import, the per-route `MockSearch` stub, and the router
+        // mock. The duplication is intentional (each spec is self-contained;
+        // extracting a helper loses per-route type precision), so it must not be
+        // flagged as a clone.
+        let dir = tempfile::tempdir().unwrap();
+        let block = shared_test_scaffolding();
+        let pa = dir.path().join("categories-page.test.tsx");
+        let pb = dir.path().join("laboratories-page.test.tsx");
+        std::fs::write(&pa, &block).unwrap();
+        std::fs::write(&pb, &block).unwrap();
+        let fa = SourceFile { path: pa, language: Language::Tsx };
+        let fb = SourceFile { path: pb, language: Language::Tsx };
+        assert!(
+            lint_files(&[&fa, &fb]).is_empty(),
+            "shared test-spec scaffolding across sibling specs must not be flagged as clones"
+        );
+    }
+
+    #[test]
+    fn test_sibling_exemption_requires_both_files_to_be_specs() {
+        // Negative guard: the exemption is scoped to spec ↔ spec pairs. The same
+        // duplicated block across a test spec and a production module is still a
+        // genuine smell (the production copy should reuse, not duplicate), so it
+        // must still be flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let block = shared_test_scaffolding();
+        let pa = dir.path().join("categories-page.test.tsx");
+        let pb = dir.path().join("categories-page.tsx");
+        std::fs::write(&pa, &block).unwrap();
+        std::fs::write(&pb, &block).unwrap();
+        let fa = SourceFile { path: pa, language: Language::Tsx };
+        let fb = SourceFile { path: pb, language: Language::Tsx };
+        assert_eq!(
+            lint_files(&[&fa, &fb]).len(),
+            1,
+            "duplication between a test spec and a production module must still be flagged"
+        );
+    }
+
+    #[test]
+    fn shared_test_infrastructure_still_flagged() {
+        // Negative guard: the exemption is for self-contained *specs*, not shared
+        // test infrastructure. Two near-identical files under `test-helpers/` are
+        // reusable utilities whose duplication is a genuine smell — extracting a
+        // shared module is the right fix — so they must still be flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let block = shared_test_scaffolding();
+        let pa = dir.path().join("test-helpers/categories-fixtures.ts");
+        let pb = dir.path().join("test-helpers/laboratories-fixtures.ts");
+        std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
+        std::fs::write(&pa, &block).unwrap();
+        std::fs::write(&pb, &block).unwrap();
+        let fa = SourceFile { path: pa, language: Language::TypeScript };
+        let fb = SourceFile { path: pb, language: Language::TypeScript };
+        assert_eq!(
+            lint_files(&[&fa, &fb]).len(),
+            1,
+            "duplicated shared test infrastructure (test-helpers/) must still be flagged"
+        );
+    }
+
+    #[test]
+    fn are_test_spec_siblings_recognizes_examples() {
+        use std::path::Path;
+        assert!(are_test_spec_siblings(
+            Path::new("src/app/features/categories/components/categories-page.test.tsx"),
+            Path::new("src/app/features/laboratories/components/laboratories-page.test.tsx"),
+        ));
+        // Files directly inside a `__tests__/` directory are specs.
+        assert!(are_test_spec_siblings(
+            Path::new("src/__tests__/categories.tsx"),
+            Path::new("src/__tests__/laboratories.tsx"),
+        ));
+        // One side is a production module → not a spec-sibling pair.
+        assert!(!are_test_spec_siblings(
+            Path::new("src/app/features/categories/components/categories-page.test.tsx"),
+            Path::new("src/app/features/categories/components/categories-page.tsx"),
+        ));
+        // Shared test infrastructure (test-helpers/, fixtures/) is not a spec —
+        // duplication there is extractable and must stay flagged.
+        assert!(!are_test_spec_siblings(
+            Path::new("src/test-helpers/categories-fixtures.ts"),
+            Path::new("src/test-helpers/laboratories-fixtures.ts"),
+        ));
+        assert!(!are_test_spec_siblings(
+            Path::new("src/fixtures/a.ts"),
+            Path::new("src/fixtures/b.ts"),
+        ));
+        // Neither side is a test → not a spec-sibling pair.
+        assert!(!are_test_spec_siblings(
+            Path::new("src/a.tsx"),
+            Path::new("src/b.tsx"),
+        ));
     }
 
     #[test]
