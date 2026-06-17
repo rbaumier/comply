@@ -90,6 +90,15 @@ fn lock_method_name<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a
     if node.kind() != "call_expression" {
         return None;
     }
+    // Every `std::sync` lock guard (`Mutex::lock`, `RwLock::read`/`write`,
+    // and the `try_*` variants) is nullary. A call carrying arguments —
+    // e.g. `cache.read(id)` — is a same-named lookup, not a lock guard.
+    if node
+        .child_by_field_name("arguments")
+        .is_some_and(|args| args.named_child_count() > 0)
+    {
+        return None;
+    }
     let func = node.child_by_field_name("function")?;
     if func.kind() != "field_expression" {
         return None;
@@ -157,6 +166,26 @@ mod tests {
     #[test]
     fn allows_if_let_unrelated_call() {
         let source = "fn f() { if let Some(x) = compute() { use_(x); } else { default(); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_read_with_argument() {
+        // sled: `self.cache.read(node.object_id)` is a cache lookup, not a
+        // `std::sync` lock — std lock guards are all nullary.
+        let source = "fn f() { if let Some(read_res) = self.cache.read(node.object_id) { use_(read_res); } else { retry(); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_write_with_argument() {
+        let source = "fn f() { if let Some(x) = self.cache.write(id) { use_(x); } else { retry(); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_lock_with_argument() {
+        let source = "fn f() { if let Some(x) = registry.lock(key) { use_(x); } else { retry(); } }";
         assert!(run_on(source).is_empty());
     }
 }
