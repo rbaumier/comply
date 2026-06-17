@@ -21,7 +21,10 @@
 //! - Functions whose body tail expression *computes* the bool from a
 //!   real value — a comparison (parser progress: `pos() != start`) or a
 //!   forwarded call return (`HashSet::insert`'s "was it new?") — rather
-//!   than hardcoding a literal.
+//!   than hardcoding a literal. A `match`/`if` tail counts as computed
+//!   when at least one branch body forwards a computed value (e.g.
+//!   `match { Some(f) => (f)(x), None => true }`); a `match`/`if` whose
+//!   every branch is a bare `true` / `false` is still the smell.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -162,21 +165,105 @@ fn returns_computed_bool(func: tree_sitter::Node) -> bool {
     let Some(body) = func.child_by_field_name("body") else {
         return false;
     };
-    // A block's implicit return is its last named child, provided that
-    // child is an expression: a trailing statement ends in `;` and is
-    // wrapped in `expression_statement`, so it is not a tail value.
-    let mut cursor = body.walk();
-    let Some(tail) = body
-        .named_children(&mut cursor)
-        .filter(|child| child.kind() != "line_comment" && child.kind() != "block_comment")
-        .last()
-    else {
+    let Some(tail) = block_tail_expression(body) else {
         return false;
     };
-    matches!(
-        tail.kind(),
-        "binary_expression" | "call_expression" | "await_expression" | "try_expression"
-    )
+    expression_is_computed(tail)
+}
+
+/// A block's implicit return is its last named child, provided that child
+/// is an expression. A trailing `expr;` statement is wrapped in
+/// `expression_statement`; the `;` is a separate `empty_statement`, so a
+/// genuine tail statement leaves that `empty_statement` last and is not
+/// mistaken for a value. Block-like tail expressions (`match`, `if`) are
+/// themselves wrapped in `expression_statement` even without a `;`, so the
+/// wrapper is unwrapped to expose the inner expression. Comments are
+/// skipped.
+fn block_tail_expression(block: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let mut cursor = block.walk();
+    let tail = block
+        .named_children(&mut cursor)
+        .filter(|child| child.kind() != "line_comment" && child.kind() != "block_comment")
+        .last()?;
+    if tail.kind() == "expression_statement" {
+        return tail.named_child(0);
+    }
+    Some(tail)
+}
+
+/// True if `expr` *computes* its boolean value from a real value rather
+/// than hardcoding `true` / `false`. A comparison (`pos() != start`) or a
+/// forwarded call return (`self.set.insert(x)`, a closure's `(f)(x)`)
+/// carries the operation's actual outcome. A `match`/`if` is computed iff
+/// at least one branch body is itself computed — an all-literal `match`/`if`
+/// (`if ok { true } else { false }`) is the genuine literal-smuggling smell
+/// and is not treated as computed.
+fn expression_is_computed(expr: tree_sitter::Node) -> bool {
+    match expr.kind() {
+        "binary_expression" | "call_expression" | "await_expression" | "try_expression" => true,
+        "match_expression" => match_has_computed_arm(expr),
+        "if_expression" => if_has_computed_branch(expr),
+        _ => false,
+    }
+}
+
+/// True if any `match_arm`'s body expression is computed. The arm body is
+/// the arm's `value` field, which is either a bare expression or a `block`
+/// whose tail is the value.
+fn match_has_computed_arm(match_expr: tree_sitter::Node) -> bool {
+    let Some(body) = match_expr.child_by_field_name("body") else {
+        return false;
+    };
+    let mut cursor = body.walk();
+    body.named_children(&mut cursor)
+        .filter(|child| child.kind() == "match_arm")
+        .filter_map(|arm| arm.child_by_field_name("value"))
+        .any(branch_body_is_computed)
+}
+
+/// True if any branch of an `if`/`else` chain computes its tail value. The
+/// consequent is a `block`; the alternative is an `else_clause` wrapping a
+/// `block` or a chained `else if` (`if_expression`).
+fn if_has_computed_branch(if_expr: tree_sitter::Node) -> bool {
+    if let Some(cons) = if_expr.child_by_field_name("consequence")
+        && branch_body_is_computed(cons)
+    {
+        return true;
+    }
+    let Some(alt) = if_expr.child_by_field_name("alternative") else {
+        return false;
+    };
+    match alt.kind() {
+        // `else if`: the alternative is directly another `if_expression`.
+        "if_expression" => if_has_computed_branch(alt),
+        // `else { .. }`: the `else_clause` wraps a `block` or a chained
+        // `else if` (`if_expression`).
+        "else_clause" => {
+            let mut cursor = alt.walk();
+            alt.named_children(&mut cursor)
+                .any(|child| match child.kind() {
+                    "if_expression" => if_has_computed_branch(child),
+                    "block" => branch_body_is_computed(child),
+                    _ => false,
+                })
+        }
+        _ => false,
+    }
+}
+
+/// True if a branch body computes its value. A `block` is unwrapped to its
+/// tail expression; any other node is the branch value directly (a bare
+/// arm body). Recurses through nested `match`/`if`.
+fn branch_body_is_computed(body: tree_sitter::Node) -> bool {
+    let expr = if body.kind() == "block" {
+        match block_tail_expression(body) {
+            Some(tail) => tail,
+            None => return false,
+        }
+    } else {
+        body
+    };
+    expression_is_computed(expr)
 }
 
 fn looks_like_action(name: &str) -> bool {
@@ -356,6 +443,39 @@ mod tests {
     #[test]
     fn flags_genuine_action_with_literal_branches() {
         let src = "fn save_user(u: &User) -> bool { if ok { true } else { false } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // --- #3965: match/if tail whose arm forwards a computed bool ---
+
+    #[test]
+    fn allows_validate_match_forwarding_closure_bool() {
+        // async-graphql `ScalarType::validate` — the `Some` arm forwards a
+        // user closure's `bool`; `None` legitimately means "valid".
+        let src = "\
+            pub(crate) fn validate(&self, value: &Value) -> bool {\n\
+                match &self.validator {\n\
+                    Some(validator) => (validator)(value),\n\
+                    None => true,\n\
+                }\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_if_tail_forwarding_call_in_one_branch() {
+        let src = "\
+            fn validate_thing(&self, cond: bool) -> bool {\n\
+                if cond { self.compute() } else { true }\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // --- #3965: negative space — all-literal branch bodies still fire ---
+
+    #[test]
+    fn flags_match_with_all_literal_arms() {
+        let src = "fn validate_state(&self, x: State) -> bool { match x { A => true, B => false } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
