@@ -134,6 +134,15 @@ impl AstCheck for Check {
             if arm_body_is_diverging(arm, source_bytes) {
                 continue;
             }
+            // A wildcard arm carrying its own `#[cfg(...)]` / `#[cfg_attr(...)]`
+            // attribute is compiler-mandated and config-conditional: the
+            // variant it covers only exists under that cfg, so it cannot be
+            // listed explicitly (absent as source when the cfg is off) nor
+            // removed (the match stops being exhaustive when the cfg is on).
+            // Such an arm is not a lazy catch-all — skip it.
+            if arm_has_cfg_attribute(arm, source_bytes) {
+                continue;
+            }
             // Variant-accessor idiom (issue #1252): a `_ => None` arm paired
             // with a `Variant(v) => Some(v)` arm is "extract this variant,
             // else nothing". A new variant should still yield `None` here, so
@@ -314,6 +323,32 @@ fn arm_body_is_none(arm: tree_sitter::Node, source: &[u8]) -> bool {
         return false;
     };
     text.rsplit("::").next().unwrap_or(text).trim() == "None"
+}
+
+/// True if the `match_arm` node carries a leading `#[cfg(...)]` /
+/// `#[cfg_attr(...)]` attribute. tree-sitter-rust attaches an arm's outer
+/// attribute as an `attribute_item` *child* of the `match_arm` (verified
+/// against the 0.23 grammar), shaped `attribute_item` → `attribute` whose
+/// first named child `identifier` is the path (`cfg` / `cfg_attr`). The path
+/// is matched exactly — not as a substring — so an unrelated attribute like
+/// `#[allow(my_cfg_thing)]` does not qualify.
+fn arm_has_cfg_attribute(arm: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = arm.walk();
+    arm.children(&mut cursor)
+        .filter(|c| c.kind() == "attribute_item")
+        .any(|attr_item| attribute_item_is_cfg(attr_item, source))
+}
+
+/// True if an `attribute_item`'s inner `attribute` has a leading path
+/// identifier of exactly `cfg` or `cfg_attr`.
+fn attribute_item_is_cfg(attr_item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = attr_item.walk();
+    attr_item
+        .named_children(&mut cursor)
+        .filter(|c| c.kind() == "attribute")
+        .filter_map(|attribute| attribute.named_child(0))
+        .filter(|path| path.kind() == "identifier")
+        .any(|path| matches!(path.utf8_text(source), Ok("cfg") | Ok("cfg_attr")))
 }
 
 #[cfg(test)]
@@ -632,6 +667,50 @@ mod tests {
         // unguarded enum match (variants + `_`) must still flag.
         let src = "fn f(d: Direction) -> i32 { match d { \
                    Direction::North => 1, Direction::South => 2, _ => 0 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_cfg_gated_wildcard_arm_swc_shape() {
+        // Issue #3918: swc's `lit.rs` set_span — all real variants listed
+        // explicitly plus a `_` arm gated by `#[cfg(all(swc_ast_unknown,
+        // feature = "encoding-impl"))]`. The arm is compiler-mandated and
+        // config-conditional, so it must not be flagged.
+        let src = "fn set_span(self, span: Span) { match self { \
+                   Lit::Str(s) => s.span = span, \
+                   Lit::Bool(b) => b.span = span, \
+                   Lit::Num(n) => n.span = span, \
+                   #[cfg(all(swc_ast_unknown, feature = \"encoding-impl\"))] \
+                   _ => swc_common::unknown!(), } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_minimal_cfg_gated_wildcard_arm() {
+        // Issue #3918: the minimal shape — a feature-gated `_` arm.
+        let src = "fn f(x: Foo) -> i32 { match x { \
+                   Foo::A => 1, Foo::B => 2, \
+                   #[cfg(feature = \"x\")] _ => 0, } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_cfg_attr_gated_wildcard_arm() {
+        // Issue #3918: `#[cfg_attr(...)]` on the `_` arm is also exempt.
+        let src = "fn f(x: Foo) -> i32 { match x { \
+                   Foo::A => 1, Foo::B => 2, \
+                   #[cfg_attr(test, allow(unused))] _ => 0, } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_wildcard_arm_with_non_cfg_attribute() {
+        // Issue #3918 negative space: only `cfg`/`cfg_attr` exempts. A
+        // wildcard arm carrying an unrelated attribute (here one whose token
+        // tree even contains the substring `cfg`) is still a lazy catch-all.
+        let src = "fn f(x: Foo) -> i32 { match x { \
+                   Foo::A => 1, Foo::B => 2, \
+                   #[allow(my_cfg_thing)] _ => 0, } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
