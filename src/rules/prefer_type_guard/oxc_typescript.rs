@@ -3,20 +3,22 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::{BinaryOperator, BindingPattern, Expression, UnaryOperator};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
 /// True when some `return` statement inside `[start, end)` returns an
-/// expression that contains `typeof` or `instanceof`.
+/// expression that type-checks `param` itself — `typeof param` or
+/// `param instanceof X`.
 ///
-/// A genuine type-predicate candidate *returns* the type check itself
-/// (`return x instanceof Foo`). When `instanceof`/`typeof` only appears in an
-/// `if` condition used for branching — while the returns are unrelated boolean
-/// expressions — the function discriminates on more than the type and a
-/// `x is T` predicate would be semantically wrong.
+/// A type predicate (`param is T`) narrows exactly one named parameter, so the
+/// `typeof`/`instanceof` operand must be that parameter directly. A member
+/// access (`typeof param.value`), an unrelated local, or a `typeof`/`instanceof`
+/// used only to gate a branch (while the returns are unrelated booleans) cannot
+/// be expressed as `param is T`, so they are not candidates.
 fn returns_a_type_check(
     semantic: &oxc_semantic::Semantic,
-    source: &str,
+    param: &str,
     start: u32,
     end: u32,
 ) -> bool {
@@ -26,10 +28,55 @@ fn returns_a_type_check(
             return false;
         }
         let Some(arg) = &ret.argument else { return false };
-        let span = arg.span();
-        let text = &source[span.start as usize..span.end as usize];
-        text.contains("typeof ") || text.contains("instanceof ")
+        expr_checks_param_type(arg, param)
     })
+}
+
+/// True when `expr` contains a `typeof param` or `param instanceof X` whose
+/// operand is the identifier `param`, recursing through the boolean/grouping
+/// operators a returned predicate is composed of (`&&`, `||`, `!`, parens,
+/// comparisons such as `typeof param === "string"`).
+fn expr_checks_param_type(expr: &Expression, param: &str) -> bool {
+    match expr {
+        Expression::UnaryExpression(unary) => {
+            if unary.operator == UnaryOperator::Typeof
+                && is_param_identifier(&unary.argument, param)
+            {
+                return true;
+            }
+            // e.g. `!(typeof param === ...)`.
+            expr_checks_param_type(&unary.argument, param)
+        }
+        Expression::BinaryExpression(binary) => {
+            if binary.operator == BinaryOperator::Instanceof
+                && is_param_identifier(&binary.left, param)
+            {
+                return true;
+            }
+            // e.g. `typeof param === "string"` (the `typeof` is the left operand).
+            expr_checks_param_type(&binary.left, param)
+                || expr_checks_param_type(&binary.right, param)
+        }
+        Expression::LogicalExpression(logical) => {
+            expr_checks_param_type(&logical.left, param)
+                || expr_checks_param_type(&logical.right, param)
+        }
+        Expression::ParenthesizedExpression(paren) => {
+            expr_checks_param_type(&paren.expression, param)
+        }
+        Expression::ConditionalExpression(cond) => {
+            expr_checks_param_type(&cond.test, param)
+                || expr_checks_param_type(&cond.consequent, param)
+                || expr_checks_param_type(&cond.alternate, param)
+        }
+        _ => false,
+    }
+}
+
+/// True when `expr` is exactly the identifier `param` (not a member access of
+/// it, nor an unrelated name).
+fn is_param_identifier(expr: &Expression, param: &str) -> bool {
+    matches!(expr, Expression::Identifier(id) if id.name.as_str() == param)
 }
 
 pub struct Check;
@@ -61,13 +108,19 @@ impl OxcCheck for Check {
             return;
         }
 
-        // A type predicate (`x is T`) narrows a parameter, so it is impossible
-        // without one. Zero-parameter `isX(): boolean` functions are runtime
+        // A type predicate (`x is T`) narrows exactly one named parameter, so it
+        // requires exactly one simple (non-destructured, non-rest) parameter
+        // bound to an identifier. Zero parameters means runtime
         // environment/feature detection (e.g. `isSafari` guarding `typeof
-        // navigator` for SSR safety), not parameter narrowing — never flag them.
-        if func.params.items.is_empty() && func.params.rest.is_none() {
+        // navigator` for SSR safety); destructured/rest/multiple parameters have
+        // no single name to put after `is`. Bail in all those cases.
+        if func.params.rest.is_some() || func.params.items.len() != 1 {
             return;
         }
+        let BindingPattern::BindingIdentifier(param_id) = &func.params.items[0].pattern else {
+            return;
+        };
+        let param = param_id.name.as_str();
 
         // Return type must be `: boolean` (not a type predicate).
         let Some(ret) = &func.return_type else { return };
@@ -78,9 +131,10 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Only flag when a `return` directly yields a type-check expression.
+        // Only flag when a `return` directly yields a type check whose operand
+        // is the narrowable parameter (`typeof param`, `param instanceof X`).
         let Some(body) = &func.body else { return };
-        if !returns_a_type_check(semantic, ctx.source, body.span.start, body.span.end) {
+        if !returns_a_type_check(semantic, param, body.span.start, body.span.end) {
             return;
         }
 
@@ -183,5 +237,33 @@ mod tests {
             run("function isString(x: unknown): boolean { return typeof x === \"string\"; }").len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_typeof_on_member_access() {
+        // Regression for issue #3954: the `typeof` operand is `node.value`
+        // (a *member* of the param), not `node`. There is no nameable TS type
+        // for "a Literal whose `.value` is a string", so `node is T` is
+        // impossible.
+        let src = "function isStringOrTemplateLiteral(node): boolean {\n\
+                   return node.type === 'Literal' && typeof node.value === 'string';\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_destructured_param() {
+        // A type predicate narrows exactly one *named* parameter; a destructured
+        // `{ a }` param has no single name to put after `is`.
+        let src = "function isInterpolation({ a }): boolean { return typeof a.value === 'string'; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_multi_param_relational_check() {
+        // Two parameters and a relational check between members of each: no
+        // single parameter is narrowed.
+        let src = "function isLengthExpression(a, b): boolean { return typeof a.value === typeof b.value; }";
+        assert!(run(src).is_empty());
     }
 }
