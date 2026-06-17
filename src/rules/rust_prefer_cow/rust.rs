@@ -24,7 +24,7 @@
 //! warrants the warning.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::{is_in_test_context, is_pub};
 
 crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
     if is_in_test_context(node, source) { return; }
@@ -65,19 +65,6 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
             Severity::Warning,
         ));
     }
-}
-
-fn is_pub(item: tree_sitter::Node, source: &[u8]) -> bool {
-    let mut cursor = item.walk();
-    for child in item.children(&mut cursor) {
-        if child.kind() == "visibility_modifier"
-            && let Ok(text) = child.utf8_text(source)
-            && text.starts_with("pub")
-        {
-            return true;
-        }
-    }
-    false
 }
 
 /// Whether `param_name` is moved by value anywhere in `node`'s subtree, either
@@ -188,6 +175,18 @@ mod tests {
     #[test]
     fn allows_private_fn_with_owned_string() {
         assert!(run("fn greet(name: String) -> String { name }").is_empty());
+    }
+
+    #[test]
+    fn allows_pub_crate_fn_with_owned_string() {
+        // `pub(crate)` is crate-internal, not external API — the rule's premise
+        // (external callers forced to allocate) does not apply. Reproduces #3913.
+        assert!(run("pub(crate) fn display(query: String) -> usize { query.len() }").is_empty());
+    }
+
+    #[test]
+    fn allows_pub_super_fn_with_owned_string() {
+        assert!(run("pub(super) fn g(s: String) -> usize { s.len() }").is_empty());
     }
 
     #[test]
