@@ -5,7 +5,11 @@
 //! for T` blocks in the same file. If `PartialEq` is *derived* but
 //! `Eq` is missing, we emit a diagnostic at the type definition.
 //!
-//! Two cases are out of scope because `Eq` is not safely addable:
+//! Types in a test context (`#[cfg(test)]` module, `#[test]` fn) are
+//! skipped: they are throwaway fixtures deriving `PartialEq` only for
+//! `assert_eq!`, so a missing `Eq` is not a defect.
+//!
+//! Two further cases are out of scope because `Eq` is not safely addable:
 //!
 //! * A *manual* `impl PartialEq` is the author's explicit opt-out
 //!   from standard reflexive equality (a hand-written `eq` may be
@@ -24,6 +28,7 @@ use std::collections::HashSet;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::is_in_test_context;
 
 const KINDS: &[&str] = &["struct_item", "enum_item"];
 
@@ -54,6 +59,12 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let source_bytes = ctx.source.as_bytes();
+        // A `#[cfg(test)]`-gated type is a throwaway fixture that derives
+        // `PartialEq` only for `assert_eq!`; it never ships, so its lack of
+        // `Eq` (no `HashSet` / `BTreeSet` use) is not a defect.
+        if is_in_test_context(node, source_bytes) {
+            return;
+        }
         let Some(name_node) = node.child_by_field_name("name") else {
             return;
         };
@@ -372,6 +383,19 @@ mod tests {
     fn flags_struct_with_partial_eq_only() {
         let source = "#[derive(PartialEq)]\nstruct A { x: i32 }";
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_struct_in_cfg_test_module() {
+        // Issue #3839: a `#[cfg(test)]`-gated fixture derives `PartialEq` only
+        // so `assert_eq!` works; it never ships, so demanding `Eq` is ceremony.
+        let source = "\
+#[cfg(test)]
+mod tests {
+    #[derive(PartialEq, Debug)]
+    struct Fixture { x: i32 }
+}";
+        assert!(run_on(source).is_empty());
     }
 
     #[test]
