@@ -8,7 +8,10 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Declaration, ExportNamedDeclaration, TSSignature, TSType, TSTypeName};
+use oxc_ast::ast::{
+    Declaration, ExportDefaultDeclaration, ExportDefaultDeclarationKind, ExportNamedDeclaration,
+    TSSignature, TSType, TSTypeName,
+};
 use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
@@ -71,6 +74,26 @@ fn collect_exported_type_names(export: &ExportNamedDeclaration, out: &mut FxHash
     }
     for spec in &export.specifiers {
         out.insert(spec.local.name().to_string());
+    }
+}
+
+/// Collect the name of a default-exported type — both an inline interface
+/// (`export default interface X {}`) and a bare identifier referencing a
+/// separately-declared type (`export default X;`). `export default` is a
+/// valid public surface for an API DTO, so the referenced name belongs in
+/// the exported set.
+fn collect_default_exported_type_name(
+    export: &ExportDefaultDeclaration,
+    out: &mut FxHashSet<String>,
+) {
+    match &export.declaration {
+        ExportDefaultDeclarationKind::TSInterfaceDeclaration(decl) => {
+            out.insert(decl.id.name.to_string());
+        }
+        ExportDefaultDeclarationKind::Identifier(reference) => {
+            out.insert(reference.name.to_string());
+        }
+        _ => {}
     }
 }
 
@@ -142,6 +165,9 @@ impl OxcCheck for Check {
                 }
                 AstKind::ExportNamedDeclaration(export) => {
                     collect_exported_type_names(export, &mut exported);
+                }
+                AstKind::ExportDefaultDeclaration(export) => {
+                    collect_default_exported_type_name(export, &mut exported);
                 }
                 _ => {}
             }
@@ -286,6 +312,16 @@ mod tests {
              export { User };",
         );
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_default_exported_interface_used_as_both_input_and_output() {
+        let d = run(
+            "export default interface User { id: string; name: string; createdAt: string }\n\
+             function save(u: User): User { return u; }",
+        );
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("User"));
     }
 
     #[test]
