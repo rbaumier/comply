@@ -8,7 +8,9 @@ use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
 const UNSAFE_FNS: &[&str] = &["exec", "execSync", "spawn", "spawnSync"];
-const SAFE_RECEIVERS: &[&str] = &["Regex", "RegExp", "regex", "re", "pattern", "matcher"];
+// Compared against an ASCII-lowercased receiver prefix, so entries must be
+// lowercase. `regexp` covers the common `<name>RegExp` getter/field convention.
+const SAFE_RECEIVERS: &[&str] = &["regexp", "regex", "re", "pattern", "matcher"];
 
 pub struct Check;
 
@@ -93,6 +95,15 @@ impl OxcCheck for Check {
         let last = name.rsplit('.').next().unwrap_or(&name);
         if !UNSAFE_FNS.contains(&last) {
             return;
+        }
+
+        // A `this` first argument is never a shell command: `child_process.exec`
+        // takes a command string, not `this`. A `.exec(this, ...)` call is a
+        // custom dispatch method (e.g. a KeyboardManager), not a subprocess.
+        if let Some(first) = call.arguments.first() {
+            if matches!(first.as_expression(), Some(Expression::ThisExpression(_))) {
+                return;
+            }
         }
 
         // Skip method calls whose receiver is a `RegExp` — `re.exec(str)` is a
@@ -240,5 +251,29 @@ exec(`rm -rf ${userInput}`);"#;
     fn still_flags_spawn_argv_with_shell_true() {
         let src = r#"spawn(binary, [arg], { shell: true });"#;
         assert_eq!(run(src).len(), 1, "got {:?}", run(src));
+    }
+
+    // Regression for #3977 facet A: a static getter named `…RegExp` is a regex,
+    // not a subprocess. The receiver prefix ends with `regexp` (case-insensitive).
+    #[test]
+    fn allows_regexp_static_getter_exec_issue_3977() {
+        let src = "const m = CFFCompiler.EncodeFloatRegExp.exec(value);";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    // Regression for #3977 facet A: a `…RegExp` field/variable receiver is exempt
+    // by name (the case-mismatch bug previously made `RegExp` entries dead).
+    #[test]
+    fn allows_regexp_suffixed_receiver_exec_issue_3977() {
+        let src = "objRegExp.exec(s);";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    // Regression for #3977 facet B: a `.exec(this, …)` call is a custom dispatch
+    // method (e.g. KeyboardManager), never `child_process.exec`.
+    #[test]
+    fn allows_exec_with_this_first_arg_issue_3977() {
+        let src = "_keyboardManager.exec(this, event);";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
     }
 }
