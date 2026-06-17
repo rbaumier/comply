@@ -1,8 +1,10 @@
-//! api-separate-input-output-types — flag type/interface declarations that
-//! mix server-managed fields (`id`, `createdAt`, `updatedAt`) with fields
-//! meant for client input. Such shapes tend to get reused as both request
-//! input and response output, leaking implementation details into the
-//! write path and forcing clients to send fields they shouldn't own.
+//! api-separate-input-output-types — flag *exported* type/interface
+//! declarations that mix server-managed fields (`id`, `createdAt`,
+//! `updatedAt`) with fields meant for client input. Such shapes tend to
+//! get reused as both request input and response output, leaking
+//! implementation details into the write path and forcing clients to send
+//! fields they shouldn't own. Non-exported, file-local helper types never
+//! reach an API boundary, so they are not analyzed.
 
 mod oxc_typescript;
 #[cfg(test)]
