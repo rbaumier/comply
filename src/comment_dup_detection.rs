@@ -100,6 +100,64 @@ fn is_excluded_comment(lower: &str) -> bool {
     EXCLUDE_MARKERS.iter().any(|m| lower.contains(m))
 }
 
+/// Phrases that introduce a pointer to a canonical source. A bare source path
+/// (`db/migrate.ts`) only counts as a citation when one of these precedes it —
+/// otherwise a filename mentioned inside a genuinely duplicated rationale would
+/// wrongly silence the duplicate.
+const CITATION_PHRASES: &[&str] = &[
+    "see ",
+    "cf.",
+    "cf ",
+    "rationale in",
+    "convention in",
+    "documented in",
+    "described in",
+    "defined in",
+];
+
+/// Source-file extensions that mark a relative path as a citation target.
+const SOURCE_EXTS: &[&str] = &[".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".rs"];
+
+/// A "pointer" comment whose job is to cite a single canonical source — a doc,
+/// ADR, URL, or sibling file — rather than restate a rationale. Such comments
+/// are the deduplication remedy this rule recommends (keep one explanation in a
+/// canonical place; let each call site carry a thin pointer to it), so their
+/// intentionally near-identical wording is single-source-of-truth done right,
+/// not a copy-paste smell.
+///
+/// A documentation path (`docs/…`, `*.md`) or URL is a citation on its own;
+/// these tokens do not appear in restated-rationale prose. A generic source
+/// path is a citation only when an explicit pointer phrase introduces it.
+fn is_citation_comment(lower: &str) -> bool {
+    if lower.contains("http://") || lower.contains("https://") {
+        return true;
+    }
+    let mut has_source_path = false;
+    for tok in path_tokens(lower) {
+        let tok = tok.trim_end_matches('.');
+        if tok.starts_with("docs/")
+            || tok.contains("/docs/")
+            || tok.ends_with(".md")
+            || tok.ends_with(".mdx")
+        {
+            return true;
+        }
+        if tok.contains('/') && SOURCE_EXTS.iter().any(|e| tok.ends_with(e)) {
+            has_source_path = true;
+        }
+    }
+    has_source_path && CITATION_PHRASES.iter().any(|p| lower.contains(p))
+}
+
+/// Split on everything that cannot be part of a relative path or URL, so a
+/// citation target survives as one token (`docs/agents/frontend-patterns.md`)
+/// while surrounding prose and `(…)` annotations fall away.
+fn path_tokens(lower: &str) -> impl Iterator<Item = &str> {
+    lower
+        .split(|c: char| !(c.is_alphanumeric() || matches!(c, '/' | '.' | '-' | '_')))
+        .filter(|t| !t.is_empty())
+}
+
 /// True when one `//` line is itself a directive/banner. Used to split a run of
 /// consecutive line comments so a directive (e.g. `// comply-ignore: …`) never
 /// merges into the prose docblock beneath it — otherwise the merged block would
@@ -273,7 +331,8 @@ fn extract_entries(
 
     let mut entries = Vec::new();
     for group in groups {
-        if is_excluded_comment(&group.stripped.to_lowercase()) {
+        let lower = group.stripped.to_lowercase();
+        if is_excluded_comment(&lower) || is_citation_comment(&lower) {
             continue;
         }
         let words = normalize_words(&group.stripped);
@@ -592,6 +651,53 @@ export const labSection = 2;
         );
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "docblock below a directive line is still compared");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn ignores_doc_citation_pointers() {
+        // Regression (#4000): a one-line comment whose body cites a canonical
+        // doc is the dedup remedy this rule recommends, not a copy-paste smell.
+        // Without the citation guard each of these three identical pointers
+        // would flag the others (17 normalized words, distinctive opener).
+        let dir = tempfile::tempdir().unwrap();
+        let line = "// Warm-cache loader, skip on in-page \"stay\" — see docs/agents/frontend-patterns.md (SSR-prefetch, #686).\nexport const loader = 1;\n";
+        let a = write(&dir, "produits.tsx", line);
+        let b = write(&dir, "gammes.tsx", line);
+        let c = write(&dir, "cabinets.tsx", line);
+        assert!(run(&[&a, &b, &c]).is_empty());
+    }
+
+    #[test]
+    fn ignores_rationale_in_sibling_file() {
+        // A `rationale in <relative source path>` pointer is also a citation.
+        let dir = tempfile::tempdir().unwrap();
+        let line = "// Head builder kept in its own file (not the route) for jsdom-safe testing — rationale in laboratories/head.ts.\nexport const head = 1;\n";
+        let a = write(&dir, "a.ts", line);
+        let b = write(&dir, "b.ts", line);
+        assert!(run(&[&a, &b]).is_empty());
+    }
+
+    #[test]
+    fn ignores_url_citation() {
+        let dir = tempfile::tempdir().unwrap();
+        let line = "// Retry budget mirrors the upstream gateway window documented at https://example.com/runbooks/retries so the two never disagree.\nexport const retry = 1;\n";
+        let a = write(&dir, "a.ts", line);
+        let b = write(&dir, "b.ts", line);
+        assert!(run(&[&a, &b]).is_empty());
+    }
+
+    #[test]
+    fn still_flags_duplicate_mentioning_a_path_without_citation_phrase() {
+        // The guard must stay surgical: a genuinely copy-pasted rationale that
+        // merely names a source file — with no `see` / `rationale in` pointer
+        // phrase — is real duplication and must still be flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let line = "// The migration runner walks db/migrate.ts entries and applies them in lexical order so schema changes stay reproducible across every deployment environment.\nexport const run = 1;\n";
+        let a = write(&dir, "a.ts", line);
+        let b = write(&dir, "b.ts", line);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "duplicate prose naming a path is still a smell");
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
