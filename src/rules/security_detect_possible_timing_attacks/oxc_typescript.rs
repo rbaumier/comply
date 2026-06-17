@@ -1,7 +1,9 @@
 //! security-detect-possible-timing-attacks oxc backend.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::{byte_offset_to_line_col, receiver_root_identifier};
+use crate::oxc_helpers::{
+    byte_offset_to_line_col, expression_is_or_resolves_to_literal, receiver_root_identifier,
+};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BinaryOperator, Expression};
 use std::sync::Arc;
@@ -93,7 +95,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::BinaryExpression(bin) = node.kind() else {
@@ -112,6 +114,17 @@ impl OxcCheck for Check {
             return;
         }
         if is_string_literal(&bin.left) || is_string_literal(&bin.right) {
+            return;
+        }
+        // An operand bound to a primitive literal (`const defaultApiKey = "9f7d…";
+        // apiKey === defaultApiKey`) is, for timing purposes, identical to an
+        // inline literal: its bytes are already in the source, so a leak reveals
+        // nothing (e.g. ethers.js comparing against a public shared default API
+        // key). A binding from a call or member access is a stored secret and is
+        // not exempted here.
+        if expression_is_or_resolves_to_literal(&bin.left, semantic)
+            || expression_is_or_resolves_to_literal(&bin.right, semantic)
+        {
             return;
         }
         if both_members_of_same_object(&bin.left, &bin.right) {
@@ -263,5 +276,35 @@ mod tests {
     #[test]
     fn flags_hashed_password_comparison() {
         assert_eq!(run(r#"if (hashedPassword === stored) {}"#).len(), 1);
+    }
+
+    // Regression for #3981: ethers.js compares a secret-looking identifier against
+    // a module-level const bound to a string literal (the public shared default
+    // API key). Its bytes are already in the source — one level of `const`
+    // indirection from an inline literal — so timing leaks nothing.
+    #[test]
+    fn allows_secret_vs_const_bound_to_literal() {
+        let src = r#"const defaultApiKey = "9f7d929b"; function f(apiKey) { return apiKey === defaultApiKey; }"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_member_secret_vs_const_bound_to_literal() {
+        let src = r#"const defaultApiKey = "9f7d929b"; class P { check() { return this.apiKey === defaultApiKey; } }"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Narrowness guard: a const bound to a call or to `process.env` is a stored
+    // secret, not an inline literal, so the comparison stays flagged.
+    #[test]
+    fn flags_secret_vs_const_bound_to_call() {
+        let src = r#"const apiKey = getSecret(); if (apiKey === provided) {}"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_secret_vs_const_bound_to_env() {
+        let src = r#"const secret = process.env.SECRET; if (token === secret) {}"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
