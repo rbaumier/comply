@@ -1,6 +1,8 @@
-//! react-no-state-setter-in-render — calling a `useState` setter directly
-//! in the component body causes an infinite render loop (or, with the
-//! conditional updater pattern, React's "Maximum update depth exceeded").
+//! react-no-state-setter-in-render — calling a `useState` setter
+//! unconditionally in the component body causes an infinite render loop. A
+//! setter guarded by an `if`/ternary whose test references its paired state
+//! variable is exempt: it is the React-sanctioned "adjust state during render"
+//! pattern, which terminates once the state matches.
 
 mod oxc_typescript;
 #[cfg(test)]

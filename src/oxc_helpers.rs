@@ -925,6 +925,10 @@ pub fn is_local_object_builder_binding(
 /// …) resolves to a different declaration shape, or to no local binding at all,
 /// and is rejected.
 ///
+/// Matches on the **setter** slot only: the state slot may be a destructuring
+/// hole (`const [, setValue] = useState(...)`), which still binds a render-
+/// scheduling setter and is therefore recognized.
+///
 /// Resolves the binding via `reference_id` → symbol → declaration node, then
 /// confirms the declaration is a `VariableDeclarator` whose id is an
 /// `ArrayPattern` whose second slot is this identifier and whose initializer
@@ -934,17 +938,58 @@ pub fn is_use_state_setter_binding(
     ident: &oxc_ast::ast::IdentifierReference,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
+    use_state_setter_array_pattern(ident, semantic).is_some()
+}
+
+/// Resolves a `useState`/`useReducer` setter `IdentifierReference` to the name of
+/// the **state variable** it is paired with — the first element of the
+/// destructuring `ArrayPattern` whose second element is this setter
+/// (`const [value, setValue] = useState(...)` → `"value"`). Returns `None` for any
+/// identifier that is not such a setter, or for a destructure whose state slot is
+/// not a plain binding identifier (`const [, setValue] = ...`).
+///
+/// This is the pairing the "adjust state during render" guard needs: a setter call
+/// guarded by `if (cond && state === x)` only terminates when the guard test
+/// references the *paired* state variable, so the exemption must match this exact
+/// state name and no other identifier. Shares the setter-slot locator with
+/// [`is_use_state_setter_binding`] and additionally reads slot 0.
+#[must_use]
+pub fn use_state_setter_state_name(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> Option<String> {
+    use oxc_ast::ast::BindingPattern;
+
+    let arr = use_state_setter_array_pattern(ident, semantic)?;
+    match arr.elements.first() {
+        Some(Some(BindingPattern::BindingIdentifier(state_id))) => {
+            Some(state_id.name.as_str().to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Locate the `useState`/`useReducer` destructuring `ArrayPattern` for which
+/// `ident` is the **setter** (slot 1). Returns the pattern so callers can read
+/// the paired state slot (slot 0) when they need it; the setter match itself
+/// never inspects slot 0, so a state-slot hole (`const [, setValue] = ...`) is
+/// still recognized.
+///
+/// Resolves the binding via `reference_id` → symbol → declaration node, finds the
+/// enclosing `VariableDeclarator`, confirms its initializer calls
+/// `useState`/`useReducer` (bare or member-qualified, e.g. `React.useState`), and
+/// requires slot 1 of the destructure to be a `BindingIdentifier` named like `ident`.
+fn use_state_setter_array_pattern<'a>(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a oxc_ast::ast::ArrayPattern<'a>> {
     use oxc_ast::AstKind;
     use oxc_ast::ast::{BindingPattern, Expression};
     use oxc_span::GetSpan;
 
-    let Some(ref_id) = ident.reference_id.get() else {
-        return false;
-    };
+    let ref_id = ident.reference_id.get()?;
     let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-        return false;
-    };
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
     let decl_node_id = scoping.symbol_declaration(sym_id);
     let nodes = semantic.nodes();
     for kind in
@@ -952,7 +997,7 @@ pub fn is_use_state_setter_binding(
     {
         if let AstKind::VariableDeclarator(decl) = kind {
             let Some(Expression::CallExpression(call)) = &decl.init else {
-                return false;
+                return None;
             };
             let callee_span = call.callee.span();
             let callee_text = semantic.source_text()
@@ -961,19 +1006,97 @@ pub fn is_use_state_setter_binding(
                 .next()
                 .unwrap_or("");
             if callee_text != "useState" && callee_text != "useReducer" {
-                return false;
+                return None;
             }
             let BindingPattern::ArrayPattern(arr) = &decl.id else {
-                return false;
+                return None;
             };
-            return matches!(
+            // Slot 1 must be this setter identifier; slot 0 (the paired state) is
+            // intentionally not inspected, so a state-slot hole still matches.
+            let is_setter = matches!(
                 arr.elements.get(1),
                 Some(Some(BindingPattern::BindingIdentifier(setter_id)))
                     if setter_id.name == ident.name
             );
+            return is_setter.then_some(arr.as_ref());
         }
     }
-    false
+    None
+}
+
+/// True when the setter call at `call_node_id` is nested under an `IfStatement`
+/// (or `ConditionalExpression`) whose **test references one of `state_names`** —
+/// the React-sanctioned "adjust state during render" pattern
+/// (<https://react.dev/reference/react/useState#storing-information-from-previous-renders>).
+///
+/// Such a guard terminates: `if (isOpen && state === 'closed') setState('open')`
+/// re-renders only until `state` matches, then the condition is false and React
+/// bails out — no infinite loop. The pairing must be precise: `state_names` are the
+/// state variables paired with *this* setter, so a guard on an unrelated flag
+/// (`if (someProp) setState(x)`) is NOT exempted and stays flagged.
+///
+/// Walks up the `parent_id` chain from `call_node_id`, stopping at `boundary_id`
+/// (the render-function node, exclusive). Any enclosing `IfStatement` /
+/// `ConditionalExpression` counts — the call need not be in the consequent/alternate
+/// specifically (a setter in the test itself is degenerate and out of scope). The
+/// match is by identifier *name*, not resolved symbol: a guard test mentioning a
+/// shadowing local of the same name would also match, which only ever *widens* the
+/// exemption (never a new false positive).
+#[must_use]
+pub fn is_guarded_derive_during_render(
+    call_node_id: oxc_semantic::NodeId,
+    state_names: &std::collections::HashSet<String>,
+    boundary_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+
+    if state_names.is_empty() {
+        return false;
+    }
+    let nodes = semantic.nodes();
+    let mut cur = call_node_id;
+    loop {
+        let parent_id = nodes.parent_id(cur);
+        if parent_id == cur || parent_id == boundary_id {
+            return false;
+        }
+        let test_span = match nodes.kind(parent_id) {
+            AstKind::IfStatement(stmt) => stmt.test.span(),
+            AstKind::ConditionalExpression(cond) => cond.test.span(),
+            _ => {
+                cur = parent_id;
+                continue;
+            }
+        };
+        if test_references_state(test_span, state_names, semantic) {
+            return true;
+        }
+        cur = parent_id;
+    }
+}
+
+/// True when any `IdentifierReference` inside `test_span` names one of
+/// `state_names`. Scans semantic nodes by span containment within the guard test.
+fn test_references_state(
+    test_span: oxc_span::Span,
+    state_names: &std::collections::HashSet<String>,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+
+    semantic.nodes().iter().any(|node| {
+        if let AstKind::IdentifierReference(id) = node.kind() {
+            let span = id.span();
+            test_span.start <= span.start
+                && span.end <= test_span.end
+                && state_names.contains(id.name.as_str())
+        } else {
+            false
+        }
+    })
 }
 
 /// True when `ident` resolves to the **accumulator** parameter of an

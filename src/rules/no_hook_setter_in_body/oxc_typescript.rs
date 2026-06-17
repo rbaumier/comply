@@ -52,6 +52,7 @@ impl OxcCheck for Check {
         let mut in_safe_scope = false;
         let mut in_component = false;
         let mut depth = 0u32;
+        let mut component_node_id: Option<oxc_semantic::NodeId> = None;
 
         for ancestor in semantic.nodes().ancestors(node.id()) {
             match ancestor.kind() {
@@ -89,8 +90,9 @@ impl OxcCheck for Check {
                 }
                 AstKind::Function(func) => {
                     depth += 1;
-                    if depth == 1
-                        && let Some(ref id) = func.id {
+                    if depth == 1 {
+                        component_node_id = Some(ancestor.id());
+                        if let Some(ref id) = func.id {
                             let fn_name = id.name.as_str();
                             if fn_name
                                 .starts_with(|c: char| c.is_ascii_uppercase())
@@ -98,9 +100,13 @@ impl OxcCheck for Check {
                                 in_component = true;
                             }
                         }
+                    }
                 }
                 AstKind::ArrowFunctionExpression(_) => {
                     depth += 1;
+                    if depth == 1 {
+                        component_node_id = Some(ancestor.id());
+                    }
                 }
                 _ => {}
             }
@@ -112,6 +118,27 @@ impl OxcCheck for Check {
 
         if depth != 1 {
             return;
+        }
+
+        // React-sanctioned "adjust state during render": a `set*()` guarded by an
+        // `if`/ternary whose test references the state variable paired with this
+        // setter terminates (once state matches, the guard is false and React bails
+        // out — no infinite loop). Exempt it. The pairing is precise: an unrelated
+        // guard (`if (someProp) setX(v)`) does not reference the paired state and
+        // stays flagged.
+        if let Some(component_id) = component_node_id
+            && let Some(state) = crate::oxc_helpers::use_state_setter_state_name(id, semantic)
+        {
+            let mut state_names = std::collections::HashSet::new();
+            state_names.insert(state);
+            if crate::oxc_helpers::is_guarded_derive_during_render(
+                node.id(),
+                &state_names,
+                component_id,
+                semantic,
+            ) {
+                return;
+            }
         }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
@@ -231,5 +258,99 @@ function App() {
 }
 "#;
         assert_eq!(run_on_path(src, "app.ts").len(), 1);
+    }
+
+    // --- #3984: React-sanctioned "adjust state during render" is exempt ---
+
+    #[test]
+    fn allows_guarded_setter_color_handle() {
+        let src = r#"
+function ColorHandle({isOpen}) {
+  let [state, setState] = useState(isOpen ? 'open' : 'closed');
+  if (isOpen && state === 'closed') {
+    setState('open');
+  }
+  if (!isOpen && state === 'open') {
+    setState('exiting');
+  }
+  return null;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_guarded_setter_dialog_container() {
+        let src = r#"
+function DialogContainer({child}) {
+  let [lastChild, setLastChild] = useState(null);
+  if (child && child !== lastChild) {
+    setLastChild(child);
+  }
+  return null;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_guarded_setter_action_bar() {
+        let src = r#"
+function ActionBar({selectedItemCount}) {
+  let [lastCount, setLastCount] = useState(selectedItemCount);
+  if ((selectedItemCount === 'all' || selectedItemCount > 0) && selectedItemCount !== lastCount) {
+    setLastCount(selectedItemCount);
+  }
+  return null;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // --- false-negative guards: the exemption must stay narrow ---
+
+    #[test]
+    fn flags_setter_guarded_by_unrelated_condition() {
+        let src = r#"
+function Comp({someProp}) {
+  let [state, setState] = useState('closed');
+  if (someProp) {
+    setState('open');
+  }
+  return null;
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_setter_guarded_by_other_states_state() {
+        let src = r#"
+function Comp({prop}) {
+  let [state, setState] = useState('closed');
+  let [other, setOther] = useState(0);
+  if (other > 0) {
+    setState('open');
+  }
+  return null;
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_guarded_setter_with_no_state_slot() {
+        // The destructure omits the state slot (`const [, setX]`), so there is no
+        // paired state variable to compare against — stays flagged.
+        let src = r#"
+function Comp({flag}) {
+  let [, setState] = useState('closed');
+  if (flag) {
+    setState('open');
+  }
+  return null;
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
