@@ -9,6 +9,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::collect_top_level_derives;
 
 const KINDS: &[&str] = &["struct_item", "enum_item"];
 
@@ -34,7 +35,7 @@ impl AstCheck for Check {
         let Ok(type_name) = name_node.utf8_text(source_bytes) else {
             return;
         };
-        let derives = collect_derives(node, source_bytes);
+        let derives = collect_top_level_derives(node, source_bytes);
         let (manual_hash, manual_eq) = manual_impls(node, source_bytes, type_name);
         let derived_hash = derives.iter().any(|d| d == "Hash");
         let derived_eq = derives.iter().any(|d| d == "PartialEq");
@@ -60,36 +61,6 @@ impl AstCheck for Check {
             ));
         }
     }
-}
-
-fn collect_derives(node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
-    let mut out = Vec::new();
-    let Some(parent) = node.parent() else {
-        return out;
-    };
-    let mut cursor = parent.walk();
-    let children: Vec<_> = parent.children(&mut cursor).collect();
-    let Some(idx) = children.iter().position(|c| c.id() == node.id()) else {
-        return out;
-    };
-    for i in (0..idx).rev() {
-        let c = children[i];
-        if c.kind() != "attribute_item" {
-            break;
-        }
-        let Ok(text) = c.utf8_text(source) else {
-            continue;
-        };
-        if let Some(start) = text.find("derive(") {
-            let after = &text[start + "derive(".len()..];
-            if let Some(end) = after.find(')') {
-                for item in after[..end].split(',') {
-                    out.push(item.trim().to_string());
-                }
-            }
-        }
-    }
-    out
 }
 
 /// Returns `(has_manual_hash, has_manual_partial_eq)` for `type_name`
@@ -181,6 +152,23 @@ mod tests {
     #[test]
     fn allows_only_one() {
         let source = "#[derive(PartialEq)]\nstruct A;";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_derive_nested_in_cfg_attr_rkyv() {
+        // `rkyv(derive(...))` generates impls on the archived companion type,
+        // not on `Version`; `Version` itself implements Hash/PartialEq/Eq
+        // manually and consistently. The nested `derive(` must not be read as a
+        // derive on the host. Reproduces astral-sh/uv version.rs:277 (#3944).
+        let source = "#[derive(Clone)]\n\
+                      #[cfg_attr(feature = \"rkyv\", rkyv(derive(Debug, Eq, PartialEq, PartialOrd, Ord)))]\n\
+                      pub struct Version { inner: u32 }\n\
+                      impl PartialEq for Version { fn eq(&self, _o: &Self) -> bool { true } }\n\
+                      impl Eq for Version {}\n\
+                      impl std::hash::Hash for Version { fn hash<H: std::hash::Hasher>(&self, _s: &mut H) {} }\n\
+                      impl PartialOrd for Version { fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(o)) } }\n\
+                      impl Ord for Version { fn cmp(&self, _o: &Self) -> std::cmp::Ordering { std::cmp::Ordering::Equal } }";
         assert!(run_on(source).is_empty());
     }
 }

@@ -7,6 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::collect_top_level_derives;
 
 const KINDS: &[&str] = &["struct_item", "enum_item"];
 
@@ -32,7 +33,7 @@ impl AstCheck for Check {
         let Ok(type_name) = name_node.utf8_text(source_bytes) else {
             return;
         };
-        let derives = collect_derives(node, source_bytes);
+        let derives = collect_top_level_derives(node, source_bytes);
         let (manual_ord, manual_partial_ord) = manual_impls(node, source_bytes, type_name);
         let derived_ord = derives.iter().any(|d| d == "Ord");
         let derived_partial_ord = derives.iter().any(|d| d == "PartialOrd");
@@ -58,36 +59,6 @@ impl AstCheck for Check {
             ));
         }
     }
-}
-
-fn collect_derives(node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
-    let mut out = Vec::new();
-    let Some(parent) = node.parent() else {
-        return out;
-    };
-    let mut cursor = parent.walk();
-    let children: Vec<_> = parent.children(&mut cursor).collect();
-    let Some(idx) = children.iter().position(|c| c.id() == node.id()) else {
-        return out;
-    };
-    for i in (0..idx).rev() {
-        let c = children[i];
-        if c.kind() != "attribute_item" {
-            break;
-        }
-        let Ok(text) = c.utf8_text(source) else {
-            continue;
-        };
-        if let Some(start) = text.find("derive(") {
-            let after = &text[start + "derive(".len()..];
-            if let Some(end) = after.find(')') {
-                for item in after[..end].split(',') {
-                    out.push(item.trim().to_string());
-                }
-            }
-        }
-    }
-    out
 }
 
 fn manual_impls(node: tree_sitter::Node, source: &[u8], type_name: &str) -> (bool, bool) {
@@ -179,6 +150,23 @@ mod tests {
     #[test]
     fn allows_only_partial_ord() {
         let source = "#[derive(PartialOrd, PartialEq)]\nstruct A { x: f64 }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_derive_nested_in_cfg_attr_rkyv() {
+        // `rkyv(derive(...))` generates impls on the archived companion type,
+        // not on `Version`; `Version` itself implements Ord/PartialOrd manually
+        // and consistently. The nested `derive(` must not be read as a derive
+        // on the host. Reproduces astral-sh/uv version.rs:277 (issue #3944).
+        let source = "#[derive(Clone)]\n\
+                      #[cfg_attr(feature = \"rkyv\", rkyv(derive(Debug, Eq, PartialEq, PartialOrd, Ord)))]\n\
+                      pub struct Version { inner: u32 }\n\
+                      impl PartialEq for Version { fn eq(&self, _o: &Self) -> bool { true } }\n\
+                      impl Eq for Version {}\n\
+                      impl std::hash::Hash for Version { fn hash<H: std::hash::Hasher>(&self, _s: &mut H) {} }\n\
+                      impl PartialOrd for Version { fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(o)) } }\n\
+                      impl Ord for Version { fn cmp(&self, _o: &Self) -> std::cmp::Ordering { std::cmp::Ordering::Equal } }";
         assert!(run_on(source).is_empty());
     }
 }
