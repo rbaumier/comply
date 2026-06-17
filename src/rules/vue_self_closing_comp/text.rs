@@ -68,8 +68,25 @@ impl TextCheck for Check {
 }
 
 #[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        self.check(&CheckCtx::for_test_full(path, src, project, file))
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::test_helpers::run_rule_gated;
     use std::path::Path;
 
     fn run(source: &str) -> Vec<Diagnostic> {
@@ -93,33 +110,20 @@ mod tests {
         // Issue #852: a `.vue` syntax-highlighting fixture (e.g. bat's
         // `tests/syntax-tests/`) is not a real component. The engine's
         // `skip_in_test_dir` gate suppresses the rule on test-dir paths.
-        use crate::files::Language;
-        let path =
-            std::path::Path::new("tests/syntax-tests/highlighted/Vue/example.vue");
-        let file = crate::rules::file_ctx::FileCtx::build(
-            path,
-            "<template>\n  <AppHeader></AppHeader>\n</template>",
-            Language::Vue,
-            crate::project::default_static_project_ctx(),
+        let source = "<template>\n  <AppHeader></AppHeader>\n</template>";
+        assert!(
+            run_rule_gated(&Check, source, "tests/syntax-tests/highlighted/Vue/example.vue")
+                .is_empty()
         );
-        assert!(file.path_segments.in_test_dir);
-        assert!(!crate::rules::vue_self_closing_comp::META.applies_to_file(&file));
     }
 
     #[test]
     fn still_flags_real_component() {
-        // Control: an empty element in a real component path is still flagged.
-        use crate::files::Language;
-        let path = std::path::Path::new("src/components/AppHeader.vue");
+        // Control: an empty element in a real component path survives the gate.
         let source = "<template>\n  <AppHeader></AppHeader>\n</template>";
-        let file = crate::rules::file_ctx::FileCtx::build(
-            path,
-            source,
-            Language::Vue,
-            crate::project::default_static_project_ctx(),
+        assert_eq!(
+            run_rule_gated(&Check, source, "src/components/AppHeader.vue").len(),
+            1
         );
-        assert!(!file.path_segments.in_test_dir);
-        assert!(crate::rules::vue_self_closing_comp::META.applies_to_file(&file));
-        assert_eq!(Check.check(&CheckCtx::for_test(path, source)).len(), 1);
     }
 }
