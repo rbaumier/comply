@@ -1,4 +1,11 @@
 //! prefer-dom-node-remove
+//!
+//! Flags `parentNode.removeChild(childNode)` and suggests the DOM-only
+//! `childNode.remove()`. Because `.remove()` exists solely on the DOM
+//! `ChildNode` interface, the rule stays silent across the whole project when
+//! any file declares a class method named `removeChild` — that marks a
+//! project-owned tree type (HTML/XML AST, vdom, scene graph, …) whose nodes
+//! have no `.remove()`, where the suggestion would throw at runtime.
 
 mod oxc_typescript;
 #[cfg(test)]
