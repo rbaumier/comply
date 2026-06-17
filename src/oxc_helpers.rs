@@ -917,6 +917,64 @@ pub fn is_local_object_builder_binding(
     false
 }
 
+/// True when `expr` is a primitive literal — `string`, `number`, or `boolean` —
+/// or an identifier whose binding's initializer is directly such a literal
+/// (`const k = "abc"; … x === k`). A binding initialized from a call
+/// (`getSecret()`), a member access (`process.env.KEY`), or a compound
+/// expression (`"a" + x`) is **not** a literal and returns `false`, so a stored
+/// secret stays distinguishable from an inline constant.
+///
+/// For timing-attack rules, comparing against a literal whose bytes are present
+/// in the source — inline or behind one level of `const` indirection — leaks
+/// nothing an attacker cannot already read.
+///
+/// Resolves the binding via `reference_id` → symbol → declaration node, then
+/// inspects the enclosing `VariableDeclarator`'s `init`. Only a *direct* literal
+/// initializer matches; a literal nested inside a larger expression does not.
+#[must_use]
+pub fn expression_is_or_resolves_to_literal(
+    expr: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+
+    if is_primitive_literal(expr) {
+        return true;
+    }
+    let Expression::Identifier(ident) = expr else {
+        return false;
+    };
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            return decl.init.as_ref().is_some_and(is_primitive_literal);
+        }
+    }
+    false
+}
+
+/// True when `expr` is directly a `string`, `number`, or `boolean` literal.
+fn is_primitive_literal(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+    matches!(
+        expr,
+        Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_)
+    )
+}
+
 /// True when `ident` resolves to the setter slot of a React state hook — the
 /// second element of an array-destructuring binding whose initializer is a
 /// `useState` or `useReducer` call (`const [value, setValue] = useState(...)`).
@@ -2187,9 +2245,9 @@ mod oxc_helpers_tests {
     }
 
     use super::{
-        ClassShape, file_imports_db_library, has_ts_expect_error_above, is_as_unknown_double_cast,
-        is_outer_as_unknown_double_cast, peel_parens, type_annotation_is_type_predicate,
-        with_semantic,
+        ClassShape, expression_is_or_resolves_to_literal, file_imports_db_library,
+        has_ts_expect_error_above, is_as_unknown_double_cast, is_outer_as_unknown_double_cast,
+        peel_parens, type_annotation_is_type_predicate, with_semantic,
     };
     use oxc_ast::AstKind;
     use oxc_span::SourceType;
@@ -2333,6 +2391,68 @@ mod oxc_helpers_tests {
                 assert!(type_annotation_is_type_predicate(f.return_type.as_deref()));
             },
         );
+    }
+
+    /// Right operand of the first `BinaryExpression` in the program.
+    fn binary_right<'a>(
+        sem: &'a oxc_semantic::Semantic<'a>,
+    ) -> &'a oxc_ast::ast::Expression<'a> {
+        sem.nodes()
+            .iter()
+            .find_map(|n| match n.kind() {
+                AstKind::BinaryExpression(b) => Some(&b.right),
+                _ => None,
+            })
+            .expect("a binary expression")
+    }
+
+    #[test]
+    fn expression_is_or_resolves_to_literal_inline_and_const_bound() {
+        // Inline primitive literals.
+        with_semantic("x === \"abc\";", SourceType::ts(), |sem| {
+            assert!(expression_is_or_resolves_to_literal(binary_right(sem), sem));
+        });
+        with_semantic("x === 42;", SourceType::ts(), |sem| {
+            assert!(expression_is_or_resolves_to_literal(binary_right(sem), sem));
+        });
+        // Const bound to a string literal (the ethers.js shape).
+        with_semantic(
+            "const k = \"9f7d\"; function f(a) { return a === k; }",
+            SourceType::ts(),
+            |sem| assert!(expression_is_or_resolves_to_literal(binary_right(sem), sem)),
+        );
+        // Const bound to a numeric literal.
+        with_semantic(
+            "const k = 12345; function f(a) { if (a === k) {} }",
+            SourceType::ts(),
+            |sem| assert!(expression_is_or_resolves_to_literal(binary_right(sem), sem)),
+        );
+    }
+
+    #[test]
+    fn expression_is_or_resolves_to_literal_rejects_non_literals() {
+        // Bound to a call → not a literal.
+        with_semantic(
+            "const k = getSecret(); function f(a) { if (a === k) {} }",
+            SourceType::ts(),
+            |sem| assert!(!expression_is_or_resolves_to_literal(binary_right(sem), sem)),
+        );
+        // Bound to a member access → not a literal.
+        with_semantic(
+            "const k = process.env.KEY; function f(a) { if (a === k) {} }",
+            SourceType::ts(),
+            |sem| assert!(!expression_is_or_resolves_to_literal(binary_right(sem), sem)),
+        );
+        // A literal nested inside a larger expression → not a direct literal.
+        with_semantic(
+            "const k = \"a\" + salt; function f(a) { if (a === k) {} }",
+            SourceType::ts(),
+            |sem| assert!(!expression_is_or_resolves_to_literal(binary_right(sem), sem)),
+        );
+        // An unresolved free identifier → not a literal.
+        with_semantic("x === secret;", SourceType::ts(), |sem| {
+            assert!(!expression_is_or_resolves_to_literal(binary_right(sem), sem));
+        });
     }
 
     /// First `Class` node in the program.
