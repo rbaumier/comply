@@ -1,8 +1,10 @@
 //! ESLint core rules delegated to oxlint.
 
 use crate::diagnostic::Severity;
+use crate::rules::backend::{Backend, PostFilter};
 use crate::rules::meta::RuleMeta;
 use crate::rules::{RuleDef, TS_FAMILY, oxlint_and_clippy, oxlint_delegate};
+use std::sync::Arc;
 
 // comply-ignore: max-function-lines — this is a flat data table, not logic; splitting it would scatter related rule entries across files for no readability gain.
 pub fn register_all() -> Vec<RuleDef> {
@@ -211,7 +213,7 @@ pub fn register_all() -> Vec<RuleDef> {
             "Split `a = b = c` into separate statements. Chained assignment \
              obscures which variables are declared and which are mutated.",
         ),
-        entry(
+        entry_with_filter(
             "no-console",
             "no-console",
             Severity::Error,
@@ -219,6 +221,7 @@ pub fn register_all() -> Vec<RuleDef> {
             "Remove the `console.*` call or route it through a real logger. \
              Stray console output clutters production logs and can leak \
              data.",
+            Some(Arc::new(NoConsoleFilter)),
         ),
         entry(
             "no-fallthrough",
@@ -516,4 +519,241 @@ fn entry_with_clippy(
         oxlint_key,
         clippy_lint,
     )
+}
+
+/// Same shape as `entry()` but attaches a `PostFilter` to the oxlint backend.
+fn entry_with_filter(
+    id: &'static str,
+    oxlint_key: &'static str,
+    severity: Severity,
+    description: &'static str,
+    remediation: &'static str,
+    post_filter: Option<Arc<dyn PostFilter>>,
+) -> RuleDef {
+    RuleDef {
+        meta: RuleMeta {
+            id,
+            description,
+            remediation,
+            severity,
+            doc_url: None,
+            categories: &["typescript"],
+            skip_in_test_dir: false,
+            skip_in_relaxed_dir: false,
+        },
+        backends: TS_FAMILY
+            .iter()
+            .map(|&lang| {
+                (lang, Backend::Oxlint { rule: oxlint_key, post_filter: post_filter.as_ref().map(Arc::clone) })
+            })
+            .collect(),
+    }
+}
+
+// ── no-console post-filter ─────────────────────────────────────────────────
+//
+// `console` is the wrong tool on the server (a structured logger should be
+// used) but the correct, standard logging primitive in the browser, where no
+// server logger exists. This filter drops the diagnostic when the file is
+// browser-targeted and keeps it everywhere else.
+//
+// A file is treated as browser-targeted when any of these hold:
+// 1. Its extension is `tsx`/`jsx` (JSX renders into the DOM).
+// 2. It carries a `"use client"` / `'use client'` directive.
+// 3. It imports a browser-only frontend package (see `BROWSER_PACKAGES`).
+//    `react-dom/server` is server-side rendering and is not a browser signal.
+
+struct NoConsoleFilter;
+
+impl PostFilter for NoConsoleFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        !is_browser_targeted(&diag.path, source)
+    }
+}
+
+/// Browser-only frontend packages: importing one means the file runs in a
+/// browser, where `console` is the standard logging primitive.
+const BROWSER_PACKAGES: &[&str] = &[
+    "react",
+    "react-dom",
+    "preact",
+    "solid-js",
+    "vue",
+    "svelte",
+    "@sentry/react",
+    "@sentry/browser",
+    "@sentry/vue",
+    "@sentry/svelte",
+    "@angular/core",
+    "@tanstack/react-router",
+];
+
+fn is_browser_targeted(path: &std::path::Path, source: Option<&str>) -> bool {
+    if matches!(path.extension().and_then(|e| e.to_str()), Some("tsx") | Some("jsx")) {
+        return true;
+    }
+    let Some(src) = source else {
+        return false;
+    };
+    if src.contains("\"use client\"") || src.contains("'use client'") {
+        return true;
+    }
+    import_specifiers(src).any(is_browser_package)
+}
+
+fn is_browser_package(spec: &str) -> bool {
+    if spec.starts_with("react-dom/server") {
+        return false;
+    }
+    BROWSER_PACKAGES
+        .iter()
+        .any(|&pkg| spec == pkg || spec.starts_with(&format!("{pkg}/")))
+}
+
+/// Yields each module specifier referenced by `from "..."`, bare
+/// `import "..."`, `require("...")`, and dynamic `import("...")`.
+///
+/// Only lines that look like a module-loading statement are scanned, so a
+/// `from "vue"` that merely appears inside a string or template literal is not
+/// mistaken for an import.
+fn import_specifiers(src: &str) -> impl Iterator<Item = &str> {
+    src.lines().filter_map(line_specifier)
+}
+
+/// Extracts the module specifier from a single import-like line, if any.
+fn line_specifier(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    let looks_like_import =
+        trimmed.starts_with("import") || line.contains("import(") || line.contains("require(");
+    if !looks_like_import {
+        return None;
+    }
+    const MARKERS: &[&str] = &["from ", "import ", "import(", "require("];
+    let mut rest = line;
+    loop {
+        let (marker_pos, marker) = MARKERS
+            .iter()
+            .filter_map(|&m| rest.find(m).map(|p| (p, m)))
+            .min_by_key(|&(p, _)| p)?;
+        let after_marker = &rest[marker_pos + marker.len()..];
+        let candidate = after_marker.trim_start_matches(['(', ' ']);
+        rest = after_marker;
+        if let Some(spec) = quoted_specifier(candidate) {
+            return Some(spec);
+        }
+    }
+}
+
+/// Extracts the contents of a leading `"..."` / `'...'` string literal.
+fn quoted_specifier(s: &str) -> Option<&str> {
+    let bytes = s.as_bytes();
+    let quote = *bytes.first()?;
+    if quote != b'"' && quote != b'\'' {
+        return None;
+    }
+    let end = s[1..].find(quote as char)?;
+    Some(&s[1..1 + end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostic::{Diagnostic, Severity};
+    use std::borrow::Cow;
+    use std::path::Path;
+
+    fn diag(path: &str) -> Diagnostic {
+        Diagnostic {
+            path: Arc::from(Path::new(path)),
+            line: 1,
+            column: 1,
+            rule_id: Cow::Borrowed("no-console"),
+            message: "Unexpected console statement.".into(),
+            severity: Severity::Error,
+            span: None,
+        }
+    }
+
+    const FILTER: NoConsoleFilter = NoConsoleFilter;
+
+    // ── frontend (dropped) — exact findings from issue #4040 ─────────────────
+
+    #[test]
+    fn drops_tsx_component_importing_react() {
+        let src = "import { useState } from \"react\";\nconsole.error(\"Async filter search failed\", searchError);\n";
+        let d = diag("src/app/components/data-table/async-multi-select.tsx");
+        assert!(!FILTER.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn drops_tsx_component_by_extension() {
+        // `.tsx` alone is a browser signal even without a known import.
+        let src = "export const Grouped = () => null;\nconsole.error(\"failed\");\n";
+        let d = diag("src/app/components/data-table/async-multi-select-grouped.tsx");
+        assert!(!FILTER.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn drops_ts_file_importing_sentry_react() {
+        let src = "import type { Breadcrumb } from \"@sentry/react\";\nconsole.debug(\"Sentry replay integration failed to load\", error);\n";
+        let d = diag("src/app/lib/sentry.ts");
+        assert!(!FILTER.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn drops_tsx_route_importing_tanstack_router() {
+        let src = "import { createRootRoute } from \"@tanstack/react-router\";\nconsole.warn(\"Failed to load toast chunk, notifications disabled\", error);\n";
+        let d = diag("src/app/routes/__root.tsx");
+        assert!(!FILTER.keep(&d, Some(src)));
+    }
+
+    // ── server (kept) — exact finding from issue #4040 ───────────────────────
+
+    #[test]
+    fn keeps_ts_server_file_without_browser_signal() {
+        let src = "import process from \"node:process\";\nimport * as Sentry from \"@sentry/bun\";\nimport { z } from \"zod\";\nconsole.warn(\"[ErrorReporter] No Sentry DSN configured\");\n";
+        let d = diag("src/api/sentry.ts");
+        assert!(FILTER.keep(&d, Some(src)));
+    }
+
+    // ── focused unit tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn drops_ts_file_with_use_client_directive() {
+        let src = "\"use client\";\nconsole.log(\"hi\");\n";
+        let d = diag("src/app/widget.ts");
+        assert!(!FILTER.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn keeps_ts_file_importing_react_dom_server() {
+        // SSR entry — server-side, not a browser signal.
+        let src = "import { renderToString } from \"react-dom/server\";\nconsole.log(\"render\");\n";
+        let d = diag("src/server/render.ts");
+        assert!(FILTER.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn keeps_ts_file_importing_react_redux() {
+        // `react-redux` must not match the `react` prefix.
+        let src = "import { useSelector } from \"react-redux\";\nconsole.log(\"state\");\n";
+        let d = diag("src/store/hooks.ts");
+        assert!(FILTER.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn extracts_require_and_dynamic_import_specifiers() {
+        let src = "const v = require('vue');\nconst lazy = () => import(\"solid-js\");\n";
+        assert!(import_specifiers(src).any(|s| s == "vue"));
+        assert!(import_specifiers(src).any(|s| s == "solid-js"));
+    }
+
+    #[test]
+    fn keeps_server_file_mentioning_package_in_string_literal() {
+        // `from "vue"` inside a string is not an import — must not flip the file
+        // to browser-targeted.
+        let src = "const msg = `migrated from \"vue\" to bun`;\nconsole.log(msg);\n";
+        let d = diag("src/api/migrate.ts");
+        assert!(FILTER.keep(&d, Some(src)));
+    }
 }
