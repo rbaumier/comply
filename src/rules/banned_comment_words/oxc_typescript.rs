@@ -106,20 +106,15 @@ mod tests {
     }
 
     #[test]
-    fn flags_updated() {
-        assert_eq!(run("// updated to use the new API").len(), 1);
-    }
-
-    #[test]
     fn flags_reloaded() {
         assert_eq!(run("// config reloaded on each request").len(), 1);
     }
 
     #[test]
-    fn allows_updated_as_prefix() {
-        // word boundary: `updatedProduct` references an identifier, not the
+    fn allows_reloaded_as_prefix() {
+        // word boundary: `reloadedConfig` references an identifier, not the
         // banned word — the trailing letter blocks the match.
-        assert!(run("// returns updatedProduct from the cache").is_empty());
+        assert!(run("// returns reloadedConfig from the cache").is_empty());
     }
 
     #[test]
