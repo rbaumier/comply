@@ -6,8 +6,9 @@
 //! - `if let Err(_) = r {}` — empty if-let block over an `Err(_)` pattern.
 //!
 //! A body is considered "empty" when it is a `block` with zero named
-//! children AND contains no comment. Comments act as an explicit
-//! justification for swallowing the error.
+//! children AND contains no comment. A comment acts as an explicit
+//! justification for swallowing the error, whether placed inside the `{}`
+//! block or as a leading comment on its own line directly above the arm.
 //!
 //! An empty `Err(CONST_PATH) => {}` arm is exempt: a payload that is a
 //! const/path binding nothing (`Err(Self::REGISTERED)`, `Err(MAX_RETRIES)`)
@@ -42,6 +43,12 @@ match node.kind() {
             // result must be this exact error — the empty arm is the
             // success case, not silent error-swallowing.
             if has_diverging_sibling_arm(&node, source) {
+                return;
+            }
+            // An explicit justification placed as a leading comment directly
+            // above the arm (`// why\nErr(_) => {}`, the idiomatic Rust
+            // placement) is the same escape hatch as an in-brace comment.
+            if arm_has_leading_comment(&node) {
                 return;
             }
             push_diag(node, ctx, diagnostics);
@@ -106,6 +113,35 @@ fn has_diverging_sibling_arm(arm: &tree_sitter::Node, source: &[u8]) -> bool {
         }
     }
     false
+}
+
+/// True if a `line_comment`/`block_comment` is the arm's immediate preceding
+/// named sibling in the `match_block` AND sits on its own line above the arm —
+/// the idiomatic Rust placement of a justification comment for an empty arm.
+///
+/// A comment is a named sibling of the `match_block` (same level as the arms),
+/// not a child of the arm's `{}` body, so the in-brace `is_empty_block` check
+/// never sees it; this mirrors that escape hatch for the leading placement.
+///
+/// Trailing-comment edge: a comment trailing the *previous* arm
+/// (`Ok(v) => go(v), // ...\nErr(_) => {}`) is also the arm's preceding named
+/// sibling. We attribute the comment to the arm it directly precedes by
+/// requiring it to start on a row strictly below the node before it, so a
+/// trailing comment of the previous arm does NOT justify this empty arm.
+fn arm_has_leading_comment(arm: &tree_sitter::Node) -> bool {
+    let Some(prev) = arm.prev_named_sibling() else {
+        return false;
+    };
+    if prev.kind() != "line_comment" && prev.kind() != "block_comment" {
+        return false;
+    }
+    // Reject a comment that trails the previous arm rather than leading this one.
+    if let Some(before) = prev.prev_named_sibling()
+        && prev.start_position().row <= before.end_position().row
+    {
+        return false;
+    }
+    true
 }
 
 fn is_empty_block(node: &tree_sitter::Node, _source: &[u8]) -> bool {
@@ -309,6 +345,41 @@ mod tests {
         let src = "fn f(r: Result<u8, E>) { match r { \
                    Ok(v) => go(v), \
                    Err(_state) => {} \
+                   } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_err_arm_with_leading_comment_issue_3988() {
+        // Issue #3988: the justification is placed as a leading comment on its
+        // own line directly above the empty `Err(_) => {}` arm — the idiomatic
+        // Rust placement, not between the braces.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Ok(v) => go(v),\n\
+                   // documented: safe to ignore here\n\
+                   Err(_) => {} \
+                   } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_err_arm_with_leading_block_comment_issue_3988() {
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Ok(v) => go(v),\n\
+                   /* documented: safe to ignore here */\n\
+                   Err(_) => {} \
+                   } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_err_arm_with_trailing_comment_on_previous_arm_issue_3988() {
+        // Narrowness guard: a comment trailing the PREVIOUS arm is not a
+        // leading justification for the empty `Err(_) => {}` arm, which still
+        // silently swallows and must fire.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Ok(v) => go(v), // trailing comment on the Ok arm\n\
+                   Err(_) => {} \
                    } }";
         assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
