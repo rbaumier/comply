@@ -55,24 +55,49 @@ fn tokenize(pattern: &str) -> Vec<&str> {
     tokens
 }
 
+/// A single literal character token (letter, digit, `-`, `/`, `_`, …) — i.e. NOT
+/// a metacharacter (`(` `)` `|` `^` `$` `.` `?` `+` `*`), an escape (`\d`), a
+/// char class `[...]`, or a `{m,n}` quantifier. Used to detect when a repeated
+/// run is embedded inside a longer literal word.
+fn is_literal_char_token(tok: &str) -> bool {
+    tok.chars().count() == 1
+        && !matches!(tok, "(" | ")" | "|" | "^" | "$" | "." | "?" | "+" | "*")
+        && !tok.starts_with('\\')
+        && !tok.starts_with('[')
+        && !tok.starts_with('{')
+}
+
+/// True when the pattern contains a STANDALONE run of 3+ identical repeatable
+/// tokens. A run is suppressed when it is a literal-word fragment — a repeated
+/// literal char glued to a literal char on BOTH sides (e.g. `www` in
+/// `x-www-form-urlencoded`), where a quantifier rewrite would be unreadable.
 fn has_repeated_tokens(pattern: &str) -> bool {
     let tokens = tokenize(pattern);
-    let mut run = 1;
-    for i in 1..tokens.len() {
-        let prev = tokens[i - 1];
-        let cur = tokens[i];
-        if cur == prev
-            && !matches!(cur, "(" | ")" | "|" | "?" | "+" | "*" | "^" | "$" | ".")
-            && !cur.starts_with('{')
-            && !cur.starts_with('[')
-        {
-            run += 1;
-            if run >= 3 {
+    let len = tokens.len();
+    let mut start = 0;
+    while start < len {
+        let tok = tokens[start];
+        let repeatable = !matches!(tok, "(" | ")" | "|" | "?" | "+" | "*" | "^" | "$" | ".")
+            && !tok.starts_with('{')
+            && !tok.starts_with('[');
+
+        let mut end = start;
+        while end + 1 < len && tokens[end + 1] == tok {
+            end += 1;
+        }
+
+        if repeatable && end - start + 1 >= 3 {
+            let embedded = is_literal_char_token(tok)
+                && start > 0
+                && is_literal_char_token(tokens[start - 1])
+                && end + 1 < len
+                && is_literal_char_token(tokens[end + 1]);
+            if !embedded {
                 return true;
             }
-        } else {
-            run = 1;
         }
+
+        start = end + 1;
     }
     false
 }
@@ -143,6 +168,34 @@ mod tests {
     #[test]
     fn flags_repeated_escape() {
         assert_eq!(run_on(r#"const re = /\d\d\d\d/;"#).len(), 1);
+    }
+
+    #[test]
+    fn allows_www_in_mime_literal() {
+        assert!(run_on(r#"const ct = /^application\/x-www-form-urlencoded$/;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_www_in_content_type_union() {
+        assert!(run_on(
+            r#"const re = /^\b(application\/x-www-form-urlencoded|multipart\/form-data|text\/plain)\b/i;"#
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn allows_bare_embedded_www() {
+        assert!(run_on(r#"const re = /x-www-form/;"#).is_empty());
+    }
+
+    #[test]
+    fn flags_run_touching_left_edge() {
+        assert_eq!(run_on("const re = /aaab/;").len(), 1);
+    }
+
+    #[test]
+    fn flags_run_touching_right_edge() {
+        assert_eq!(run_on("const re = /xaaa/;").len(), 1);
     }
 
     #[test]
