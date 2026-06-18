@@ -115,6 +115,38 @@ pub fn is_in_enum_discriminant(node: Node) -> bool {
     false
 }
 
+/// True if `node` is in the initializer (the `value` field) of a `const` or
+/// `static` item — the expression after `=` in `const NAME: T = <expr>;`.
+///
+/// A const/static item initializer is const-evaluated at compile time: a
+/// `None`/`Err` there is a compile-time error, not a runtime panic. None of the
+/// usual fallibility remediations apply — `?` does not compile (a const item is
+/// not a function body), `unwrap_or_else` closures are not const-callable, and a
+/// const item cannot evaluate to a `Result`. `unwrap`/`expect` are the only
+/// const-stable, safe way to extract the value, so the panic-family lints have
+/// nothing valid to offer there.
+///
+/// Walks up parents and, at the first enclosing `const_item` / `static_item`,
+/// returns true only when the subtree it ascended through is that item's `value`
+/// field (so the type annotation isn't exempted). The walk stops at a
+/// `function_item` / `closure_expression` boundary, so a call inside a `const fn`
+/// body — which is a runtime body that can return `Result` and use `?` — keeps
+/// being flagged.
+pub fn is_in_const_initializer(node: Node) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        match parent.kind() {
+            "const_item" | "static_item" => {
+                return parent.child_by_field_name("value") == Some(cur);
+            }
+            "function_item" | "closure_expression" => return false,
+            _ => {}
+        }
+        cur = parent;
+    }
+    false
+}
+
 /// True if `node` is inside a closure that is passed directly as an argument
 /// to a thread-spawning function (`thread::spawn`, `spawn_blocking`, etc.).
 /// Those closures execute on a separate OS thread, not on the async runtime
@@ -1333,6 +1365,50 @@ mod tests {
             let cast = first_type_cast_expression(tree.root_node())
                 .expect("source should contain a cast");
             assert_eq!(is_in_enum_discriminant(cast), expected, "src: {src}");
+        }
+    }
+
+    /// Find the `.unwrap()` / `.expect(...)` `call_expression` (the innermost
+    /// such call) anywhere in the tree.
+    fn first_unwrap_call<'a>(node: Node<'a>, source: &[u8]) -> Option<Node<'a>> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(found) = first_unwrap_call(child, source) {
+                return Some(found);
+            }
+        }
+        if node.kind() == "call_expression"
+            && let Some(function) = node.child_by_field_name("function")
+            && function.kind() == "field_expression"
+            && let Some(field) = function.child_by_field_name("field")
+            && let Ok(text) = field.utf8_text(source)
+            && (text == "unwrap" || text == "expect")
+        {
+            return Some(node);
+        }
+        None
+    }
+
+    #[test]
+    fn is_in_const_initializer_distinguishes_initializer_from_const_fn_body() {
+        let cases = [
+            // Const item initializer — the canonical `NonZeroU32::new(_).unwrap()`.
+            (
+                "impl W { pub const ONE: W = W(NonZeroU32::new(1).unwrap()); }",
+                true,
+            ),
+            // Static item initializer.
+            ("static S: u32 = foo().unwrap();", true),
+            // A `const fn` body is a runtime body that can return `Result`.
+            ("const fn f(x: Option<u32>) -> u32 { x.unwrap() }", false),
+            // A plain function-body unwrap is never a const initializer.
+            ("fn f(x: Option<u32>) -> u32 { x.unwrap() }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let call = first_unwrap_call(tree.root_node(), src.as_bytes())
+                .expect("source should contain an unwrap/expect call");
+            assert_eq!(is_in_const_initializer(call), expected, "src: {src}");
         }
     }
 
