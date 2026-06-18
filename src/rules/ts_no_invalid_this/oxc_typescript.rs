@@ -320,6 +320,69 @@ fn is_chai_registration_callback(
     is_chai_assertion_receiver(&member.object)
 }
 
+/// Node EventEmitter listener-registration methods. Each invokes its callback
+/// with `this` bound to the emitter, so a non-arrow `function` callback's `this`
+/// is the emitter instance at call time.
+const EVENT_EMITTER_LISTENER_METHODS: &[&str] = &[
+    "on", "once", "addListener", "prependListener", "prependOnceListener",
+];
+
+/// True when `expr` is a member-expression callee registering a listener — its
+/// property is one of the EventEmitter listener methods (`recv.on`, `recv.once`,
+/// …). This is the direct `body.on('data', function () {...})` form.
+fn is_listener_method_callee(expr: &Expression) -> bool {
+    let Expression::StaticMemberExpression(member) = expr else {
+        return false;
+    };
+    EVENT_EMITTER_LISTENER_METHODS.contains(&member.property.name.as_str())
+}
+
+/// True when `func_id` is a `function` expression passed as an argument to an
+/// EventEmitter listener registration. Node binds `this` to the emitter inside
+/// such callbacks, so `this` in the body is the emitter instance.
+///
+/// Two callee shapes register a listener. The direct member call
+/// (`body.on('data', function () {...})`) has a callee `<recv>.<method>` whose
+/// `<method>` is a listener method. The `Function.prototype` reflection form
+/// (`EE.prototype.on.call(body, 'end', function () {...})` / `.apply(...)`) has a
+/// callee `<member>.call` / `<member>.apply` whose `<member>` is itself a
+/// listener-method member access.
+///
+/// The `function` must be an argument of the call (not its callee), so a bare
+/// `function () { this.x }` outside such a call still flags.
+fn is_event_emitter_listener_callback(
+    func_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let parent_id = nodes.parent_id(func_id);
+    let call = match nodes.kind(parent_id) {
+        AstKind::CallExpression(call) => call,
+        _ => {
+            let gp_id = nodes.parent_id(parent_id);
+            let AstKind::CallExpression(call) = nodes.kind(gp_id) else {
+                return false;
+            };
+            call
+        }
+    };
+    let func_span = nodes.kind(func_id).span();
+    if !call.arguments.iter().any(|arg| arg.span() == func_span) {
+        return false;
+    }
+    if is_listener_method_callee(&call.callee) {
+        return true;
+    }
+    // `<member>.call(receiver, …)` / `<member>.apply(...)` reflection form.
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    if !matches!(member.property.name.as_str(), "call" | "apply") {
+        return false;
+    }
+    is_listener_method_callee(&member.object)
+}
+
 /// True when `name` follows the constructor-function convention: after any
 /// leading underscores, the first character is an uppercase ASCII letter (e.g.
 /// `Suspense`, `Component`, or the module-private `_Reply`). Such functions are
@@ -440,6 +503,14 @@ fn is_valid_this_context(
                 // Assertion instance — the documented plugin API — so `this`
                 // is valid.
                 if is_chai_registration_callback(ancestor.id(), semantic) {
+                    return true;
+                }
+                // EventEmitter listener callback: a `function` passed to a
+                // listener-registration call (`emitter.on('e', function () {…})`,
+                // `.once`/`.addListener`/`.prependListener`/`.prependOnceListener`,
+                // and the `EE.prototype.on.call(emitter, …)` form) is invoked by
+                // Node with `this` bound to the emitter, so `this` is valid.
+                if is_event_emitter_listener_callback(ancestor.id(), semantic) {
                     return true;
                 }
                 // Constructor function: a PascalCase `function`, or one
@@ -845,6 +916,62 @@ mod tests {
         // Negative: a `function` callback passed to a plain Promise `.then()`
         // (no `cy` chain root) gets no bound `this` — must still fire.
         let diags = run_on("fetch('/x').then(function () {\n  return this.value;\n});");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_event_emitter_on_callback() {
+        // Regression for #3884: Node binds `this` to the emitter inside a
+        // non-arrow `function` listener callback (`body.on('data', function () {
+        // this.used })`). undici registers listeners this way throughout `lib`.
+        let src = "body.on('data', function () {\n  this.used = true;\n});";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_event_emitter_prototype_call_callback() {
+        // Regression for #3884: the `EE.prototype.on.call(body, …)` reflection
+        // form registers the listener on `body`, so Node still binds `this` to
+        // the emitter inside the callback (`lib/core/util.js`).
+        let src = "EventEmitter.prototype.on.call(body, 'end', function () {\n  this.done = true;\n});";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_event_emitter_listener_method_variants() {
+        // Regression for #3884: every EventEmitter listener-registration method
+        // (`once`/`addListener`/`prependListener`/`prependOnceListener`) binds
+        // `this` to the emitter the same way `on` does.
+        for method in ["once", "addListener", "prependListener", "prependOnceListener"] {
+            let src = format!("emitter.{method}('e', function () {{\n  this.x = 1;\n}});");
+            assert!(run_on(&src).is_empty(), "method `{method}` should be exempt");
+        }
+    }
+
+    #[test]
+    fn allows_this_in_private_field_emitter_on_callback() {
+        // Regression for #3884: the receiver can be any expression, including a
+        // private-field member (`this.#writeStream.on('close', function () {…})`
+        // from `lib/handler/cache-handler.js`).
+        let src = "class H {\n  #s;\n  m() {\n    this.#s.on('close', function () {\n      this.closed = true;\n    });\n  }\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_function_as_first_arg_of_on_call() {
+        // Negative-space guard for #3884: the exemption applies only to the
+        // callback *argument*. A `function` in the callee position of an `on`
+        // call (e.g. an IIFE) is not a listener callback — `this` stays unbound.
+        let diags = run_on("(function () {\n  return this.x;\n})();");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_this_in_non_listener_method_callback() {
+        // Negative-space guard for #3884: a method name outside the listener set
+        // (`addEventListener` is DOM, not EventEmitter; `subscribe` is unrelated)
+        // does not bind `this` to a receiver — must still fire.
+        let diags = run_on("source.subscribe(function () {\n  return this.x;\n});");
         assert_eq!(diags.len(), 1);
     }
 
