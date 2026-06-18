@@ -800,6 +800,30 @@ pub fn is_pub(item: Node, source: &[u8]) -> bool {
     false
 }
 
+/// True if `node` is nested inside a module that is not publicly visible — an
+/// enclosing `mod_item` declared `pub(crate)`, `pub(super)`, `pub(in path)`, or
+/// with no visibility modifier at all.
+///
+/// Effective visibility is the product of an item's own modifier and every
+/// enclosing module's modifier: a bare-`pub` item inside a `pub(crate) mod`
+/// cannot escape the crate. The walk returns true at the first ancestor
+/// `mod_item` that is not bare-`pub` (reusing [`is_pub`], which treats every
+/// restricted form as non-public), and false once the ancestor chain reaches
+/// the file root with only bare-`pub` modules in between.
+///
+/// Rules whose rationale is "this reaches the crate's public API" call this to
+/// skip items confined to a non-public module.
+pub fn is_inside_non_public_module(node: Node, source: &[u8]) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "mod_item" && !is_pub(parent, source) {
+            return true;
+        }
+        cur = parent;
+    }
+    false
+}
+
 /// True if the `match_arm`'s body is a single diverging or error
 /// expression — a `unreachable!`/`panic!`/`unimplemented!`/`todo!`/`bail!`
 /// macro invocation, or a `return Err(...)`. Such an arm is an explicit
@@ -1468,6 +1492,36 @@ mod tests {
                 is_pub(func, src.as_bytes()),
                 expected,
                 "is_pub mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_inside_non_public_module_walks_enclosing_modules() {
+        let cases = [
+            // A non-public enclosing module confines the inner item.
+            ("pub(crate) mod m { pub use foo::*; }", true),
+            ("pub(super) mod m { pub use foo::*; }", true),
+            ("pub(in crate::a) mod m { pub use foo::*; }", true),
+            ("mod m { pub use foo::*; }", true),
+            // A bare-`pub` enclosing module leaves visibility public.
+            ("pub mod m { pub use foo::*; }", false),
+            // Nested: a private module anywhere in the chain confines it,
+            // even when the innermost module is bare-`pub`.
+            ("pub(crate) mod outer { pub mod inner { pub use foo::*; } }", true),
+            // All-public chain: nothing confines the item.
+            ("pub mod outer { pub mod inner { pub use foo::*; } }", false),
+            // File scope: no enclosing module at all.
+            ("pub use foo::*;", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let use_decl = first_of_kind(tree.root_node(), "use_declaration")
+                .expect("snippet should contain a use_declaration");
+            assert_eq!(
+                is_inside_non_public_module(use_decl, src.as_bytes()),
+                expected,
+                "is_inside_non_public_module mismatch for `{src}`"
             );
         }
     }
