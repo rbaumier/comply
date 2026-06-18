@@ -6,17 +6,21 @@
 //! alone — three is the threshold where named fields start paying
 //! for themselves.
 //!
-//! Two exemptions suppress an otherwise-flagged function:
+//! Three exemptions suppress an otherwise-flagged function:
 //! - Trait-impl methods: the tuple return type is fixed by the trait
 //!   contract, so the implementor cannot swap it for a named struct.
 //! - Private positional returns: a non-`pub` function whose tuple
 //!   elements are all textually identical, or all name the function's
 //!   own generic type parameters — named fields add no information
 //!   there. Tuples mixing distinct concrete types still flag.
+//! - An enclosing `#[allow(clippy::type_complexity)]` /
+//!   `#[expect(clippy::type_complexity)]`: this rule overlaps that
+//!   canonical clippy lint, so an author who has silenced it has
+//!   already made the call.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{is_in_trait_impl, is_pub};
+use crate::rules::rust_helpers::{has_clippy_allow, is_in_trait_impl, is_pub};
 
 #[derive(Debug)]
 pub struct Check;
@@ -52,6 +56,9 @@ impl AstCheck for Check {
             return;
         }
         if !is_pub(node, source_bytes) && tuple_is_positional(ret_type, node, source_bytes) {
+            return;
+        }
+        if has_clippy_allow(node, source_bytes, "type_complexity") {
             return;
         }
         let name = node
@@ -204,5 +211,44 @@ mod tests {
     #[test]
     fn flags_public_same_type_tuple_return() {
         assert_eq!(run_on("pub fn f() -> (i64, i64, i64) { todo!() }").len(), 1);
+    }
+
+    #[test]
+    fn allows_clippy_type_complexity_allow() {
+        assert!(run_on(
+            "#[allow(clippy::type_complexity)] \
+             pub fn f() -> (String, i32, bool) { todo!() }"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn allows_clippy_type_complexity_expect() {
+        assert!(run_on(
+            "#[expect(clippy::type_complexity)] \
+             pub fn f() -> (String, i32, bool) { todo!() }"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn allows_clippy_type_complexity_grouped_allow() {
+        assert!(run_on(
+            "#[allow(clippy::type_complexity, dead_code)] \
+             pub fn f() -> (String, i32, bool) { todo!() }"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn flags_unrelated_allow() {
+        assert_eq!(
+            run_on(
+                "#[allow(dead_code)] \
+                 pub fn f() -> (String, i32, bool) { todo!() }"
+            )
+            .len(),
+            1
+        );
     }
 }
