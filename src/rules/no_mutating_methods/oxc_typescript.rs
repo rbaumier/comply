@@ -61,6 +61,20 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Mutation of a fresh array produced by a chained array-returning call
+        // is not externally observable: `children.slice(0, n).reverse()`,
+        // `items.filter(...).sort(...)`, `xs.map(...).reverse()` mutate the
+        // just-allocated array that the preceding call returned — nothing else
+        // holds a reference to it. This is the canonical "reverse/sort a copy"
+        // idiom. A receiver whose method is not a fresh-array producer
+        // (`obj.getList().reverse()`) may return a shared array, so it stays
+        // flagged.
+        if matches!(&member.object, Expression::CallExpression(_))
+            && is_array_evident_initializer(&member.object)
+        {
+            return;
+        }
+
         // Bounded local accumulator inside a `for` / `for-of` / `for-in`
         // loop: `const items = []; for (...) items.push(yield* fn());`.
         // The non-mutating spread alternative is O(n²) and the
@@ -697,6 +711,59 @@ mod tests {
             const registry: number[] = [];
             export function register(x: number) {
                 registry.push(x);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_reverse_on_chained_slice_call() {
+        // Regression for rbaumier/comply#3831 — `children.slice(0, n).reverse()`
+        // (mui AvatarGroup) mutates the fresh array returned by `.slice()`, which
+        // nothing else references. The "reverse a copy" idiom is not observable.
+        let src = r#"
+            function reversedHead(children, maxAvatars) {
+                return children
+                    .slice(0, maxAvatars)
+                    .reverse()
+                    .map((child) => child);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_sort_on_chained_filter_call() {
+        // Regression for rbaumier/comply#3831 — `items.filter(...).sort(...)`
+        // sorts the fresh array returned by `.filter()`.
+        let src = r#"
+            function topThree(items) {
+                return items.filter((x) => x > 0).sort((a, b) => a - b);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_reverse_on_plain_array_identifier() {
+        // Negative space for #3831 — `arr.reverse()` on a plain array identifier
+        // (not a fresh-array call) mutates a possibly-shared array, so it fires.
+        let src = r#"
+            function flip(arr) {
+                arr.reverse();
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_reverse_on_non_fresh_array_call() {
+        // Negative space for #3831 — `obj.getList().reverse()`: the receiver is a
+        // call whose method is not a fresh-array producer, so `getList()` may
+        // return a shared array and the mutation stays observable.
+        let src = r#"
+            function flip(obj) {
+                obj.getList().reverse();
             }
         "#;
         assert_eq!(run(src).len(), 1);
