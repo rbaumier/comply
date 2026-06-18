@@ -1,7 +1,7 @@
 //! prefer-native-coercion-functions OXC backend.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, type_annotation_is_type_predicate};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
@@ -70,6 +70,14 @@ impl OxcCheck for Check {
             return;
         };
 
+        // A `x is T` / `this is T` return type narrows per call site. Replacing the
+        // arrow with a bare coercion (`Boolean`/`String`/…) erases that narrowing —
+        // e.g. `.filter((o): o is Opt => Boolean(o))` keeps `(Opt | undefined)[]`
+        // under `.filter(Boolean)`. The predicate is the reason the arrow exists.
+        if type_annotation_is_type_predicate(arrow.return_type.as_deref()) {
+            return;
+        }
+
         // Check body: either expression body or block body with single return
         let func_name = if arrow.expression {
             // Expression body: `x => Number(x)`
@@ -112,5 +120,73 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    // Regression for #3744: a `x is T` type predicate narrows per call site, which
+    // a bare `Boolean` cannot reproduce — `.filter(Boolean)` keeps the element type.
+    #[test]
+    fn allows_type_predicate_expression_body() {
+        let src = "const r = arr.filter((option): option is SyncOption => Boolean(option));";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_type_predicate_block_body() {
+        let src = "const r = arr.filter((x): x is Foo => { return Boolean(x); });";
+        assert!(run_on(src).is_empty());
+    }
+
+    // The predicate also guards String/Number, not just Boolean.
+    #[test]
+    fn allows_type_predicate_string() {
+        assert!(run_on("const f = (x): x is string => String(x);").is_empty());
+    }
+
+    // A plain `boolean` return type is type-preserving once rewritten to `Boolean`,
+    // so this genuine redundant wrapper must still be flagged.
+    #[test]
+    fn flags_plain_boolean_return_type() {
+        let d = run_on("const f = (x): boolean => Boolean(x);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Boolean"));
+    }
+
+    #[test]
+    fn flags_unannotated_boolean_wrapper() {
+        let d = run_on("const f = (x) => Boolean(x);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Boolean"));
+    }
+
+    #[test]
+    fn flags_unannotated_number_wrapper() {
+        let d = run_on("const f = (x) => Number(x);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Number"));
     }
 }
