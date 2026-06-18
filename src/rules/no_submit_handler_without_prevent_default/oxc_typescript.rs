@@ -49,7 +49,7 @@ impl OxcCheck for Check {
             return;
         };
         // Only inspect inline handlers (arrow / function expression).
-        let (param_name, body_source, expr_start, body_is_single_call) =
+        let (param_name, body_source, expr_start, body_delegates) =
             match &container.expression {
                 JSXExpression::ArrowFunctionExpression(arrow) => {
                     let pname = first_param_name(&arrow.params);
@@ -58,8 +58,8 @@ impl OxcCheck for Check {
                         None => return,
                     };
                     let body_src = &ctx.source[arrow.body.span.start as usize..arrow.body.span.end as usize];
-                    let single_call = arrow_body_is_single_call(arrow);
-                    (pname, body_src, arrow.span.start, single_call)
+                    let delegates = arrow_body_delegates(arrow, &pname);
+                    (pname, body_src, arrow.span.start, delegates)
                 }
                 JSXExpression::FunctionExpression(func) => {
                     let pname = first_param_name(&func.params);
@@ -71,8 +71,8 @@ impl OxcCheck for Check {
                         return;
                     };
                     let body_src = &ctx.source[body.span.start as usize..body.span.end as usize];
-                    let single_call = function_body_is_single_call(body);
-                    (pname, body_src, func.span.start, single_call)
+                    let delegates = function_body_delegates(body, &pname);
+                    (pname, body_src, func.span.start, delegates)
                 }
                 _ => return,
             };
@@ -83,13 +83,15 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Delegation: body is a single call expression (e.g.
+        // Delegation: body forwards the event to another handler (e.g.
         // `(e) => form.handleSubmit(onSubmit)(e)` /
-        // `(e) => void flow.onSubmit(e)`). The author has explicitly
-        // forwarded the event to another handler — RHF's
-        // \`form.handleSubmit\` and similar wrappers call preventDefault
-        // internally, and a forwarding handler is the documented shape.
-        if body_is_single_call {
+        // `(e) => void flow.onSubmit(e)`). RHF's `form.handleSubmit` and
+        // similar wrappers call preventDefault internally, and a
+        // forwarding handler is the documented shape. Leading event-identity
+        // bubble guards (`if (e.target !== e.currentTarget) return;`) are
+        // allowed before the delegation — they only bail on submit events
+        // that bubbled up from a nested, portaled child form.
+        if body_delegates {
             return;
         }
 
@@ -179,8 +181,10 @@ fn callee_is_handle_submit(expr: &Expression) -> bool {
     }
 }
 
-fn arrow_body_is_single_call(arrow: &ArrowFunctionExpression) -> bool {
+fn arrow_body_delegates(arrow: &ArrowFunctionExpression, param: &str) -> bool {
     if arrow.expression {
+        // A concise-body arrow is a single expression — no room for a
+        // leading guard, so just check the delegation shape directly.
         return arrow
             .body
             .statements
@@ -191,14 +195,20 @@ fn arrow_body_is_single_call(arrow: &ArrowFunctionExpression) -> bool {
             })
             .is_some_and(is_delegation_shape);
     }
-    function_body_is_single_call(&arrow.body)
+    function_body_delegates(&arrow.body, param)
 }
 
-fn function_body_is_single_call(body: &FunctionBody) -> bool {
-    if body.statements.len() != 1 {
+/// True when the body is zero or more leading event-identity bubble guards
+/// followed by a final delegation statement. With no leading statements this
+/// reduces to "the single statement is a delegation".
+fn function_body_delegates(body: &FunctionBody, param: &str) -> bool {
+    let Some((last, leading)) = body.statements.split_last() else {
+        return false;
+    };
+    if !leading.iter().all(|stmt| is_event_bubble_guard(stmt, param)) {
         return false;
     }
-    match &body.statements[0] {
+    match last {
         Statement::ExpressionStatement(es) => is_delegation_shape(&es.expression),
         Statement::ReturnStatement(ret) => ret
             .argument
@@ -206,6 +216,64 @@ fn function_body_is_single_call(body: &FunctionBody) -> bool {
             .is_some_and(is_delegation_shape),
         _ => false,
     }
+}
+
+/// True when `stmt` is `if (<param>.target !== <param>.currentTarget) return;`
+/// (operands in either order, with or without a block around the `return`).
+/// Such a guard only bails on submit events that bubbled up from a nested,
+/// portaled child form — it never leaves this form's default unprevented. A
+/// generic validation guard (e.g. `if (isInvalid) return;`) is NOT matched.
+fn is_event_bubble_guard(stmt: &Statement, param: &str) -> bool {
+    let Statement::IfStatement(if_stmt) = stmt else {
+        return false;
+    };
+    if if_stmt.alternate.is_some() {
+        return false;
+    }
+    if !consequent_is_bare_return(&if_stmt.consequent) {
+        return false;
+    }
+    let Expression::BinaryExpression(bin) = &if_stmt.test else {
+        return false;
+    };
+    if bin.operator != BinaryOperator::StrictInequality {
+        return false;
+    }
+    let (Some(left), Some(right)) = (
+        event_member_property(&bin.left, param),
+        event_member_property(&bin.right, param),
+    ) else {
+        return false;
+    };
+    (left == "target" && right == "currentTarget")
+        || (left == "currentTarget" && right == "target")
+}
+
+/// True when `stmt` is a bare `return;` — directly, or as the sole statement
+/// of a block.
+fn consequent_is_bare_return(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::ReturnStatement(_) => true,
+        Statement::BlockStatement(block) => {
+            matches!(block.body.as_slice(), [Statement::ReturnStatement(_)])
+        }
+        _ => false,
+    }
+}
+
+/// For `<param>.target` / `<param>.currentTarget`, returns the property name.
+/// Returns `None` for any other expression.
+fn event_member_property<'a>(expr: &'a Expression, param: &str) -> Option<&'a str> {
+    let Expression::StaticMemberExpression(member) = expr else {
+        return None;
+    };
+    let Expression::Identifier(obj) = &member.object else {
+        return None;
+    };
+    if obj.name.as_str() != param {
+        return None;
+    }
+    Some(member.property.name.as_str())
 }
 
 #[cfg(test)]
@@ -255,6 +323,102 @@ mod tests {
         let src = r#"const f = <form onSubmit={form.handleSubmit(onSubmit)} />;"#;
         // This goes through the non-arrow path which already passes.
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bubble_guard_then_delegation() {
+        // Regression for rbaumier/comply#4200 — a leading event-identity
+        // bubble guard before delegating to RHF's wrapper.
+        let src = r#"const f = (
+          <form
+            onSubmit={(event) => {
+              if (event.target !== event.currentTarget) {
+                return;
+              }
+              void onSubmit(event);
+            }}
+          />
+        );"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bubble_guard_symmetric_operands() {
+        let src = r#"const f = (
+          <form
+            onSubmit={(event) => {
+              if (event.currentTarget !== event.target) {
+                return;
+              }
+              void onSubmit(event);
+            }}
+          />
+        );"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bubble_guard_bare_return() {
+        let src = r#"const f = (
+          <form
+            onSubmit={(event) => {
+              if (event.target !== event.currentTarget) return;
+              void onSubmit(event);
+            }}
+          />
+        );"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_two_bubble_guards_then_delegation() {
+        // The exemption accepts zero-or-more leading bubble guards.
+        let src = r#"const f = (
+          <form
+            onSubmit={(event) => {
+              if (event.target !== event.currentTarget) {
+                return;
+              }
+              if (event.currentTarget !== event.target) return;
+              void onSubmit(event);
+            }}
+          />
+        );"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_validation_guard_then_delegation() {
+        // A non-identity guard returns early on a real submit, leaving the
+        // default unprevented — must still flag.
+        let src = r#"const f = (
+          <form
+            onSubmit={(event) => {
+              if (isInvalid) {
+                return;
+              }
+              void onSubmit(event);
+            }}
+          />
+        );"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_bubble_guard_then_non_delegation() {
+        // The final statement is not a delegation, so nothing calls
+        // preventDefault — must still flag.
+        let src = r#"const f = (
+          <form
+            onSubmit={(event) => {
+              if (event.target !== event.currentTarget) {
+                return;
+              }
+              doStuff(event);
+            }}
+          />
+        );"#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
