@@ -134,21 +134,86 @@ fn char_fits(target: NumericType) -> bool {
     target.kind != NumericKind::Float && target.bits >= 21
 }
 
-/// True when the cast operand is a `char`: a `char_literal` (`'A' as i32`) or
-/// an identifier whose local binding is annotated `char` (`c as i32`).
+/// True when the cast operand is a `char`: a `char_literal` (`'A' as i32`), an
+/// identifier whose local binding is annotated `char` (`c as i32`), or an
+/// identifier bound by a `chars()`/`char_indices()` for-loop (`for c in
+/// s.chars()`).
 fn source_is_char(node: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(value) = node.child_by_field_name("value") else {
         return false;
     };
     match value.kind() {
         "char_literal" => true,
-        "identifier" => value
-            .utf8_text(source)
-            .ok()
-            .and_then(|name| find_identifier_type(node, name, source))
-            .is_some_and(|type_text| type_text == "char"),
+        "identifier" => value.utf8_text(source).ok().is_some_and(|name| {
+            find_identifier_type(node, name, source)
+                .is_some_and(|type_text| type_text == "char")
+                || binding_is_chars_iter(node, name, source)
+        }),
         _ => false,
     }
+}
+
+/// True when `name` is the `char` binding of an enclosing `for <pat> in
+/// <expr>.chars()` or `for (<idx>, <name>) in <expr>.char_indices()` loop.
+///
+/// `<str>.chars()` yields `char`, and `<str>.char_indices()` yields `(usize,
+/// char)` — so the plain loop binding (or the tuple's second element) is a
+/// `char`. The match is on the iterator's method name, not the receiver, since
+/// any `&str`/`String` chain ending in those inherent methods yields a `char`.
+fn binding_is_chars_iter(node: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    let mut current = node.parent();
+    while let Some(n) = current {
+        if n.kind() == "for_expression"
+            && let Some(pattern) = n.child_by_field_name("pattern")
+            && for_pattern_binds_char(pattern, name, source)
+            && let Some(value) = n.child_by_field_name("value")
+            && let Some(method) = chars_iter_method(value, source)
+        {
+            return (method == "chars" && pattern.kind() == "identifier")
+                || (method == "char_indices" && pattern.kind() == "tuple_pattern");
+        }
+        current = n.parent();
+    }
+    false
+}
+
+/// True when `pattern` is the for-loop binding site for the `char` value of a
+/// `chars()`/`char_indices()` iterator: either the plain identifier `name`
+/// (`for name in ...chars()`), or the second element of a two-element tuple
+/// pattern (`for (_, name) in ...char_indices()`).
+fn for_pattern_binds_char(pattern: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    match pattern.kind() {
+        "identifier" => pattern.utf8_text(source).is_ok_and(|text| text == name),
+        "tuple_pattern" => {
+            pattern.named_child_count() == 2
+                && pattern.named_child(1).is_some_and(|second| {
+                    second.kind() == "identifier"
+                        && second.utf8_text(source).is_ok_and(|text| text == name)
+                })
+        }
+        _ => false,
+    }
+}
+
+/// The method name of a no-argument `<expr>.<method>()` call, or `None` if the
+/// node is not such a method call.
+fn chars_iter_method<'a>(value: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    if value.kind() != "call_expression" {
+        return None;
+    }
+    if value
+        .child_by_field_name("arguments")
+        .is_some_and(|args| args.named_child_count() > 0)
+    {
+        return None;
+    }
+    let function = value.child_by_field_name("function")?;
+    if function.kind() != "field_expression" {
+        return None;
+    }
+    function
+        .child_by_field_name("field")
+        .and_then(|field| field.utf8_text(source).ok())
 }
 
 fn source_numeric_type(node: tree_sitter::Node, source: &[u8]) -> Option<NumericType> {
@@ -317,5 +382,47 @@ mod tests {
     fn repro_3949_bitwise_not_int_narrowing_still_flagged() {
         // `!x` on a u32 is bitwise NOT (stays u32); narrowing to u8 is lossy.
         assert_eq!(run_on("fn f(x: u32) -> u8 { !x as u8 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_3847_for_chars_binding_as_u32_not_flagged() {
+        // `for c in s.chars()` binds `c: char`; `char as u32` is total.
+        assert!(run_on("fn f(s: &str) { for c in s.chars() { let _ = c as u32; } }").is_empty());
+    }
+
+    #[test]
+    fn repro_3847_for_chars_binding_as_u8_still_flagged() {
+        // The binding is `char`, but `char as u8` narrows below 21 bits (lossy).
+        assert_eq!(
+            run_on("fn f(s: &str) { for c in s.chars() { let _ = c as u8; } }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn repro_3847_for_char_indices_binding_as_u32_not_flagged() {
+        // `for (i, c) in s.char_indices()` binds `c: char` (the tuple's 2nd elem).
+        assert!(
+            run_on("fn f(s: &str) { for (i, c) in s.char_indices() { let _ = c as u32; } }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn repro_3847_for_non_chars_iter_binding_still_flagged() {
+        // The iterator is not `.chars()`/`.char_indices()`, so the binding type
+        // is unknown and a narrowing cast must stay flagged.
+        assert_eq!(
+            run_on("fn f(v: V) { for x in v.bytes() { let _ = x as u8; } }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn repro_3847_inner_loop_shadows_chars_binding_still_flagged() {
+        // The innermost `for c` rebinds `c` to a non-char; the nearest binding
+        // wins, so `c as u32` must not borrow the outer `chars()` exemption.
+        let src = "fn f(s: &str, v: V) { for c in s.chars() { for c in v.iter() { let _ = c as u32; } } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
