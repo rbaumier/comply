@@ -26,14 +26,15 @@ fn is_jsx(expr: &Expression) -> bool {
     )
 }
 
-/// True if the expression is a boolean coercion (`!!x`).
-fn is_double_bang(expr: &Expression) -> bool {
-    if let Expression::UnaryExpression(outer) = expr
-        && outer.operator == oxc_ast::ast::UnaryOperator::LogicalNot
-            && let Expression::UnaryExpression(inner) = &outer.argument {
-                return inner.operator == oxc_ast::ast::UnaryOperator::LogicalNot;
-            }
-    false
+/// True when `expr` is a logical-NOT (`!x`, `!!x`, …). A `!` unary always
+/// evaluates to a primitive `boolean`, so `{!x && <JSX/>}` renders `false`
+/// (nothing) and can never leak a falsy `0`/`""` into the DOM.
+fn is_logical_not(expr: &Expression) -> bool {
+    matches!(
+        expr,
+        Expression::UnaryExpression(u)
+            if u.operator == oxc_ast::ast::UnaryOperator::LogicalNot
+    )
 }
 
 /// True if the expression is a comparison that produces a boolean.
@@ -87,8 +88,8 @@ impl OxcCheck for Check {
             return;
         }
         let left = &logical.left;
-        // Skip `!!x`.
-        if is_double_bang(left) {
+        // Skip a logical-NOT guard (`!x`, `!!x`) — it always yields a boolean.
+        if is_logical_not(left) {
             return;
         }
         // Skip comparisons.
@@ -151,8 +152,20 @@ mod tests {
     }
 
     #[test]
+    fn allows_single_bang() {
+        let src = "const a = <div>{!isCloud && <SecurityTip />}</div>;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_single_bang_on_optional_length() {
+        let src = "const b = <div>{!activeSurveys?.length && <p>-</p>}</div>;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
     fn allows_double_bang() {
-        let src = "const x = <div>{!!count && <Component />}</div>;";
+        let src = "const c = <div>{!!count && <X />}</div>;";
         assert!(run_on(src).is_empty());
     }
 
