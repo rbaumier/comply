@@ -11,6 +11,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::sql_helpers::is_sql_string;
 
+use super::position::placeholder_is_identifier_position;
+
 const FORMAT_MACROS: &[&str] = &[
     "format",
     "format_args",
@@ -114,6 +116,10 @@ fn first_string_literal_in_macro<'src>(
 ///   SCREAMING_SNAKE_CASE identifier, which denotes an inline
 ///   compile-time const (`{COLUMN_KIND}`), not user input. A positional
 ///   `{}` / `{0}` is filled by a macro argument expression and is risky.
+/// - A placeholder in a SQL identifier position (`FROM {t}`, `UPDATE {t}`,
+///   `alias.{col}`, …) names a relation/column. Identifiers cannot be bind
+///   parameters (`SELECT * FROM $1` is a parse error), so interpolating one
+///   is the only possible form and is not risky.
 fn has_risky_placeholder(format_string: &str) -> bool {
     let bytes = format_string.as_bytes();
     let mut i = 0;
@@ -127,7 +133,7 @@ fn has_risky_placeholder(format_string: &str) -> bool {
                 };
                 let inner = &format_string[i + 1..i + 1 + end];
                 let name = inner.split(':').next().unwrap_or("");
-                if !is_const_name(name) {
+                if !is_const_name(name) && !placeholder_is_identifier_position(format_string, i) {
                     return true;
                 }
                 i += 1 + end + 1;
@@ -258,6 +264,55 @@ mod tests {
     #[test]
     fn flags_inline_lowercase_runtime_var() {
         let src = r#"fn f() { let q = format!("SELECT * FROM t WHERE name = '{user_name}'"); }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Issue #3878 — a placeholder in an identifier position names a relation or
+    // column. Identifiers cannot be bind parameters, so interpolating one is the
+    // only possible form, not an injection. The sqlx repro already parameterizes
+    // the value (`$1` + `.bind`) and only interpolates the table identifier.
+    #[test]
+    fn does_not_flag_table_name_after_delete_from() {
+        let src = r##"fn f(table_name: &str) { let q = format!(r#"DELETE FROM {table_name} WHERE version = $1"#); }"##;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_table_name_after_select_from() {
+        let src = r#"fn f(t: &str) { let q = format!("SELECT * FROM {t}"); }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_table_name_after_update() {
+        let src = r#"fn f(t: &str) { let q = format!("UPDATE {t} SET x = $1"); }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_table_name_after_insert_into() {
+        let src = r#"fn f(t: &str) { let q = format!("INSERT INTO {t} (a) VALUES ($1)"); }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_table_name_after_join() {
+        let src = r#"fn f(t: &str) { let q = format!("SELECT * FROM a JOIN {t} ON a.id = b.id"); }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_dot_qualified_column() {
+        let src = r#"fn f(pid_type: &str) { let q = format!("SELECT pg_stat_activity.{pid_type} FROM pg_stat_activity"); }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // #3878 guard — a value-position placeholder is still a real injection and
+    // must keep firing even though the same string also interpolates a table
+    // identifier (the value, not the identifier, is the risk).
+    #[test]
+    fn flags_value_placeholder_alongside_identifier_placeholder() {
+        let src = r#"fn f(t: &str, user_id: i32) { let q = format!("SELECT * FROM {t} WHERE id = {user_id}"); }"#;
         assert_eq!(run_on(src).len(), 1);
     }
 }

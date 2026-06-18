@@ -11,6 +11,8 @@ use crate::rules::sql_helpers::is_sql_string;
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
+use super::position::all_substitutions_in_identifier_position;
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -40,16 +42,19 @@ impl OxcCheck for Check {
                 if matches!(parent.kind(), AstKind::TaggedTemplateExpression(_)) {
                     return;
                 }
-                let static_text: String = tpl
-                    .quasis
-                    .iter()
-                    .map(|q| q.value.raw.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" ");
+                let fragments: Vec<&str> =
+                    tpl.quasis.iter().map(|q| q.value.raw.as_str()).collect();
+                let static_text = fragments.join(" ");
                 if !is_sql_string(&static_text) {
                     return;
                 }
                 if static_text.contains("$1") || static_text.contains("$2") {
+                    return;
+                }
+                // Every interpolation sits in an identifier position (a relation
+                // or column name): those cannot be bind parameters, so this is
+                // the only possible form, not an injection.
+                if all_substitutions_in_identifier_position(&fragments) {
                     return;
                 }
                 let (line, column) =
@@ -85,6 +90,16 @@ impl OxcCheck for Check {
                 if !other_side_dynamic {
                     return;
                 }
+                // When the SQL string is the left operand, the dynamic right
+                // operand is appended at its end. If that end is an identifier
+                // position (`"... FROM " + table`), the value names a relation
+                // and cannot be a bind parameter, so it is not an injection.
+                if left_sql
+                    && let Some(prefix) = string_expr_value(&bin.left)
+                    && all_substitutions_in_identifier_position(&[&prefix, ""])
+                {
+                    return;
+                }
                 // Skip parameterised queries.
                 let start = bin.span.start as usize;
                 let end = bin.span.end as usize;
@@ -114,6 +129,23 @@ impl OxcCheck for Check {
             }
             _ => {}
         }
+    }
+}
+
+/// The static text of a string-literal or interpolation-free template-literal
+/// expression, for inspecting what precedes an appended concat operand. Returns
+/// `None` for a template literal that itself interpolates (its trailing text is
+/// not a single static string the position check can key off).
+fn string_expr_value(expr: &Expression) -> Option<String> {
+    match expr.without_parentheses() {
+        Expression::StringLiteral(lit) => Some(lit.value.to_string()),
+        Expression::TemplateLiteral(tpl) if tpl.expressions.is_empty() => Some(
+            tpl.quasis
+                .iter()
+                .map(|q| q.value.raw.as_str())
+                .collect::<String>(),
+        ),
+        _ => None,
     }
 }
 
@@ -448,6 +480,34 @@ mod tests {
     #[test]
     fn still_flags_query_concat_assigned_to_variable() {
         let src = r#"const q = "SELECT * FROM t WHERE x = " + v;"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Issue #3878 — a table name interpolated into an identifier position
+    // cannot be a bind parameter, so it is the only possible form.
+    #[test]
+    fn does_not_flag_table_identifier_in_template_literal() {
+        let src = r#"const q = `SELECT * FROM ${tableName}`;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_table_identifier_in_binary_concat() {
+        let src = r#"const q = "SELECT * FROM " + tableName;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_dot_qualified_column_in_template_literal() {
+        let src = r#"const q = `SELECT a.${col} FROM a`;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // #3878 guard — a value-position interpolation alongside an identifier one
+    // is still an injection and must fire.
+    #[test]
+    fn flags_value_interpolation_even_with_identifier_interpolation_template() {
+        let src = r#"const q = `SELECT * FROM ${t} WHERE id = ${userId}`;"#;
         assert_eq!(run_on(src).len(), 1);
     }
 }

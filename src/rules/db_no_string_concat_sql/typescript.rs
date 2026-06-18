@@ -22,6 +22,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::sql_helpers::is_sql_string;
 
+use super::position::all_substitutions_in_identifier_position;
+
 #[derive(Debug)]
 pub struct Check;
 
@@ -69,6 +71,14 @@ impl AstCheck for Check {
                 if static_text.contains("$1") || static_text.contains("$2") {
                     return;
                 }
+                // Every interpolation sits in an identifier position (a relation
+                // or column name), which cannot be a bind parameter.
+                let fragments = template_fragments(node, source_bytes);
+                let fragment_refs: Vec<&str> =
+                    fragments.iter().map(String::as_str).collect();
+                if all_substitutions_in_identifier_position(&fragment_refs) {
+                    return;
+                }
                 let pos = node.start_position();
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
@@ -114,6 +124,16 @@ impl AstCheck for Check {
                     !is_string_node(left)
                 };
                 if !other_side_dynamic {
+                    return;
+                }
+                // When the SQL string is the left operand, the dynamic right
+                // operand is appended at its end. If that end is an identifier
+                // position (`"... FROM " + table`), the value names a relation
+                // and cannot be a bind parameter.
+                if left_sql
+                    && let Some(prefix) = string_node_text(left, source_bytes)
+                    && all_substitutions_in_identifier_position(&[&prefix, ""])
+                {
                     return;
                 }
                 // Skip if the SQL string already uses placeholders ($1, $2,
@@ -185,6 +205,45 @@ fn template_static_text(node: tree_sitter::Node, source: &[u8]) -> String {
         }
     }
     out
+}
+
+/// The static text pieces around each interpolation in a `template_string`, in
+/// source order: `n + 1` fragments for `n` `template_substitution` children.
+/// Each `template_substitution` closes the current fragment and opens the next,
+/// so consecutive substitutions yield an empty fragment between them.
+fn template_fragments(node: tree_sitter::Node, source: &[u8]) -> Vec<String> {
+    let mut cursor = node.walk();
+    let mut fragments = vec![String::new()];
+    for child in node.named_children(&mut cursor) {
+        match child.kind() {
+            "string_fragment" => {
+                if let Ok(t) = child.utf8_text(source) {
+                    fragments
+                        .last_mut()
+                        .expect("fragments is seeded with one element")
+                        .push_str(t);
+                }
+            }
+            "template_substitution" => fragments.push(String::new()),
+            _ => {}
+        }
+    }
+    fragments
+}
+
+/// The content of a `string` node with its surrounding quote characters
+/// stripped, for inspecting what precedes an appended concat operand. Returns
+/// `None` for a non-string node or a `template_string` (handled separately).
+fn string_node_text(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    if node.kind() != "string" {
+        return None;
+    }
+    let text = node.utf8_text(source).ok()?;
+    let trimmed = text
+        .strip_prefix(['\'', '"'])
+        .and_then(|t| t.strip_suffix(['\'', '"']))
+        .unwrap_or(text);
+    Some(trimmed.to_string())
 }
 
 #[cfg(test)]
@@ -301,6 +360,34 @@ mod tests {
     #[test]
     fn still_flags_untagged_template_literal_with_interpolated_sql() {
         let src = r#"const q = `SELECT * FROM users WHERE id = ${userId}`;"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Issue #3878 — a table name interpolated into an identifier position
+    // cannot be a bind parameter, so it is the only possible form.
+    #[test]
+    fn does_not_flag_table_identifier_in_template_literal() {
+        let src = r#"const q = `SELECT * FROM ${tableName}`;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_table_identifier_in_binary_concat() {
+        let src = r#"const q = "SELECT * FROM " + tableName;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_dot_qualified_column_in_template_literal() {
+        let src = r#"const q = `SELECT a.${col} FROM a`;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // #3878 guard — a value-position interpolation alongside an identifier one
+    // is still an injection and must fire.
+    #[test]
+    fn flags_value_interpolation_even_with_identifier_interpolation_template() {
+        let src = r#"const q = `SELECT * FROM ${t} WHERE id = ${userId}`;"#;
         assert_eq!(run_on(src).len(), 1);
     }
 }

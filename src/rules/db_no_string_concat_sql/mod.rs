@@ -38,6 +38,7 @@
 //! substring false positives.
 
 mod oxc_typescript;
+mod position;
 mod rust;
 #[cfg(test)]
 mod typescript;
