@@ -66,8 +66,6 @@ fn enclosing_for_body_span(
     for kind in nodes.ancestor_kinds(decl_id) {
         match kind {
             AstKind::ForStatement(stmt) => return Some(stmt.body.span()),
-            AstKind::ForOfStatement(stmt) => return Some(stmt.body.span()),
-            AstKind::ForInStatement(stmt) => return Some(stmt.body.span()),
             AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
                 return None;
             }
