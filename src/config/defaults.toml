@@ -43,6 +43,12 @@ min_line_length = 80
 [rules.prefer-switch-over-chained-if]
 min_arms = 4
 
+[rules.prefer-early-return]
+# Minimum statements in the wrapped `if` before suggesting a guard clause: a
+# short positive `if` reads as the function's intent, so inverting it into a
+# negated early return only pays off once the wrapped body is substantial.
+min_statements = 3
+
 # ---------------------------------------------------------------
 # Rust-specific thresholds.
 # ---------------------------------------------------------------
