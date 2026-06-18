@@ -2,6 +2,8 @@
 //! `void`-returning call (e.g. `console.log`, `arr.forEach`) just stores
 //! `undefined`. Almost always a typo or a misunderstood API.
 
+mod oxc_typescript;
+#[cfg(test)]
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -29,13 +31,13 @@ pub fn register() -> RuleDef {
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::Text(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::JavaScript,
-                Backend::Text(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
-            (Language::Tsx, Backend::Text(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
         ],
     }
 }
