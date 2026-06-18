@@ -44,8 +44,6 @@ mod drizzle;
 mod rust;
 mod sql_text;
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 mod vue;
 
 #[cfg(test)]

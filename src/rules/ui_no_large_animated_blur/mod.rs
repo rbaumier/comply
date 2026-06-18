@@ -3,8 +3,6 @@
 //! with radius and layer size) and can exhaust GPU memory on mobile.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

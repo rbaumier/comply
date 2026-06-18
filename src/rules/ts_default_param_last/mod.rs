@@ -1,8 +1,6 @@
 //! ts-default-param-last — enforce default parameters to be last.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

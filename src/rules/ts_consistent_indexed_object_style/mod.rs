@@ -1,8 +1,6 @@
 //! ts-consistent-indexed-object-style — prefer `Record<K, V>` over index signatures.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

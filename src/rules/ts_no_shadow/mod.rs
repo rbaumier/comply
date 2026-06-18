@@ -1,8 +1,6 @@
 //! ts-no-shadow — disallow variable declarations from shadowing outer scope variables.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

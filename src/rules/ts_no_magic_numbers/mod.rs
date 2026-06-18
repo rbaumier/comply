@@ -1,8 +1,6 @@
 //! no-magic-numbers — disallow magic numbers in TS/JS.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

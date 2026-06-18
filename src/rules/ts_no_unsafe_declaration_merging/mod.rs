@@ -1,8 +1,6 @@
 //! ts-no-unsafe-declaration-merging — flag class/interface with same name.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

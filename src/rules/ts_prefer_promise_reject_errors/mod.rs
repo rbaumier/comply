@@ -1,8 +1,6 @@
 //! ts-prefer-promise-reject-errors — require `Promise.reject()` to be called with an `Error`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

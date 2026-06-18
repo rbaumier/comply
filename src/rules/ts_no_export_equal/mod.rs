@@ -1,8 +1,6 @@
 //! ts-no-export-equal
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

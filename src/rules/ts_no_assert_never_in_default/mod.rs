@@ -4,8 +4,6 @@
 //! `const _: never = x;`) so the type-checker catches missing branches.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

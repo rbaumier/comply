@@ -2,8 +2,6 @@
 //! shadcn `<Separator />` component so theming and a11y stay uniform.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

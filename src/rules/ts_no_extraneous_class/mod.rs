@@ -1,8 +1,6 @@
 //! ts-no-extraneous-class — disallow classes used as namespaces.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

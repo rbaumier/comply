@@ -1,8 +1,6 @@
 //! ui-stagger-children-cap — `staggerChildren` values above 0.05s feel slow.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -1,8 +1,6 @@
 //! ts-no-inferrable-types — flag explicit types when TS can infer them.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

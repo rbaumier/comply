@@ -1,8 +1,6 @@
 //! testing-no-real-external-service — flag `fetch`/`axios` calls to real external URLs in tests.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

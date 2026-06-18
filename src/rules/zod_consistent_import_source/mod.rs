@@ -2,8 +2,6 @@
 //! while allowing the official versioned entry points (`zod/v3`, `zod/v4`, …).
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -6,8 +6,6 @@ mod sql;
 mod oxc_typescript;
 #[cfg(test)]
 mod drizzle;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

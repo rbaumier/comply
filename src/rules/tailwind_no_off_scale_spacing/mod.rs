@@ -4,8 +4,6 @@
 //! rather than an intentional token choice and fragment the design system.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

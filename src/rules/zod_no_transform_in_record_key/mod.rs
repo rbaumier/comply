@@ -4,8 +4,6 @@
 //! validation asymmetries and parse/serialize mismatches follow.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

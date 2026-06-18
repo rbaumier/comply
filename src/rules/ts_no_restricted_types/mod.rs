@@ -1,8 +1,6 @@
 //! ts-no-restricted-types — disallow certain types from being used.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

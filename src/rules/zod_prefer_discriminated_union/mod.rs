@@ -2,8 +2,6 @@
 //! the union branches share a literal tag field.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

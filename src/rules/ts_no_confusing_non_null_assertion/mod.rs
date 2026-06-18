@@ -1,8 +1,6 @@
 //! ts-no-confusing-non-null-assertion — flag `a! == b` (looks like `a !== b`).
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

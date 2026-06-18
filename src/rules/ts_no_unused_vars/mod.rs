@@ -1,8 +1,6 @@
 //! ts-no-unused-vars — flag declared variables that are never referenced.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

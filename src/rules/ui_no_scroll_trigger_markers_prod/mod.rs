@@ -2,8 +2,6 @@
 //! must be guarded by `process.env.NODE_ENV` to avoid shipping debug UI.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

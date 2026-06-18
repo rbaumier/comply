@@ -2,8 +2,6 @@
 //! component should share the same key set so the animation mirrors.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

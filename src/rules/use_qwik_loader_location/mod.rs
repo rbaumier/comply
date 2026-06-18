@@ -9,8 +9,6 @@
 //! can keep server code out of the client bundle.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

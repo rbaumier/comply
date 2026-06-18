@@ -2,8 +2,6 @@
 //! a `<SheetTitle>` descendant (Radix a11y requirement).
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

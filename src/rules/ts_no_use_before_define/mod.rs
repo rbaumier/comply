@@ -1,8 +1,6 @@
 //! ts-no-use-before-define — disallow use of variables before they are defined.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

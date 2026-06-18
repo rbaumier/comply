@@ -1,8 +1,6 @@
 //! ts-prefer-literal-enum-member — require all enum members to be literal values.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

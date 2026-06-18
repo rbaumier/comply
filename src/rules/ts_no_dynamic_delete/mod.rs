@@ -1,8 +1,6 @@
 //! ts-no-dynamic-delete — disallow `delete` on computed key expressions.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

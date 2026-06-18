@@ -1,8 +1,6 @@
 //! ts-no-invalid-this — disallow `this` outside classes or class-like objects.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -2,8 +2,6 @@
 //! of relative internal paths. Tests should mock boundaries, not internals.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

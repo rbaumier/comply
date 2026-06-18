@@ -1,8 +1,6 @@
 //! zod-no-optional-nullable-chain — collapse `.optional().nullable()` to `.nullish()`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

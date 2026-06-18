@@ -1,8 +1,6 @@
 //! zod-prefer-loose-object — prefer `z.looseObject({...})` over `z.object({...}).passthrough()`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

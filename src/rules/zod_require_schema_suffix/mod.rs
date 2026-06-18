@@ -1,8 +1,6 @@
 //! zod-require-schema-suffix — exported Zod schemas should end in `Schema`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

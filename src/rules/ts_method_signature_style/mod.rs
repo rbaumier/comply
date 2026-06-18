@@ -1,8 +1,6 @@
 //! ts-method-signature-style — enforce property signature for methods in interfaces.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
