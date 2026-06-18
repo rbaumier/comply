@@ -1,8 +1,6 @@
 //! nestjs-no-global-module-abuse — `@Global()` modules should be rare.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -1,8 +1,6 @@
 //! no-wait-for-timeout — reject `waitForTimeout` in Playwright tests.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::rules::backend::Backend;

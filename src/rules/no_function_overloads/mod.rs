@@ -1,8 +1,6 @@
 //! no-function-overloads — use unions or generics instead of overloads.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::rules::backend::Backend;

@@ -1,8 +1,6 @@
 //! no-mock-fetch-directly — use MSW instead of mocking HTTP clients.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -1,8 +1,6 @@
 //! nestjs-pipe-must-implement-transform — pipes must implement `transform()`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

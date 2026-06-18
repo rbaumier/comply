@@ -1,8 +1,6 @@
 //! no-accessor-recursion — flag getters/setters that access their own property on `this`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

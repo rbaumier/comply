@@ -1,8 +1,6 @@
 //! next-dynamic-no-ssr-false-with-suspense
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

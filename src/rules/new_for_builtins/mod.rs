@@ -1,8 +1,6 @@
 //! new-for-builtins — enforce `new` for builtins that need it, disallow for Symbol/BigInt.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -35,8 +35,6 @@
 //! distinct from the body. Same call as entries #17 and #25.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

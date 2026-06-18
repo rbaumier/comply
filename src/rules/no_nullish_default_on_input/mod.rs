@@ -8,8 +8,6 @@
 //! and function expressions, supplied by the runtime) are not flagged.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::rules::backend::Backend;

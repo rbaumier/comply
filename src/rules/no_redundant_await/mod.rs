@@ -1,8 +1,6 @@
 //! no-redundant-await — flag `return await x` outside of try blocks.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

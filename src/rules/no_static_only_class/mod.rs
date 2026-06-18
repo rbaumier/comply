@@ -1,8 +1,6 @@
 //! no-static-only-class — flag classes that contain only static members.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

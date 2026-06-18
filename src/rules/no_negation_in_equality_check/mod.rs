@@ -1,8 +1,6 @@
 //! no-negation-in-equality-check — flag `!x === y` (precedence bug).
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

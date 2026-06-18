@@ -5,8 +5,6 @@
 //! without widening, or refactor to use proper type guards.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

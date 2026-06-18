@@ -1,8 +1,6 @@
 //! no-test-logic — reject control-flow logic inside test bodies.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::rules::backend::Backend;

@@ -1,8 +1,6 @@
 //! no-json-parse-cast — validate JSON.parse output, don't cast.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::rules::backend::Backend;

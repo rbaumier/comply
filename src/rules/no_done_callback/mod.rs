@@ -2,8 +2,6 @@
 //! parameter (legacy async style). Prefer async/await.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

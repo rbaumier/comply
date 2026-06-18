@@ -1,7 +1,4 @@
-//! Cross-backend scenarios for `nested-control-flow`.
-//!
-//! Each scenario is expressed both in Rust and in TS/JS and must produce
-//! the same verdict (diagnostic count) on both backends.
+//! Nesting-depth scenarios for the `nested-control-flow` Rust backend.
 
 #![cfg(test)]
 
@@ -9,10 +6,6 @@ use crate::diagnostic::Diagnostic;
 
 fn run_rs(src: &str) -> Vec<Diagnostic> {
     crate::rules::test_helpers::run_rule(&super::rust::Check, src, "t.rs")
-}
-
-fn run_ts(src: &str) -> Vec<Diagnostic> {
-    crate::rules::test_helpers::run_rule(&super::typescript::Check, src, "t.ts")
 }
 
 #[test]
@@ -27,18 +20,7 @@ fn f(x: i32) -> i32 {
     else { -1 }
 }
 "#;
-    let ts = r#"
-function f(x) {
-    if (x === 0) return 0;
-    else if (x === 1) return 1;
-    else if (x === 2) return 2;
-    else if (x === 3) return 3;
-    else if (x === 4) return 4;
-    else return -1;
-}
-"#;
     assert!(run_rs(rs).is_empty(), "Rust: else-if cascade flagged");
-    assert!(run_ts(ts).is_empty(), "TS: else-if cascade flagged");
 }
 
 #[test]
@@ -54,19 +36,7 @@ fn f() {
     }
 }
 "#;
-    let ts = r#"
-function f() {
-    if (a()) {
-        if (b()) {
-            if (c()) {
-                d();
-            }
-        }
-    }
-}
-"#;
     assert!(run_rs(rs).is_empty());
-    assert!(run_ts(ts).is_empty());
 }
 
 #[test]
@@ -84,21 +54,7 @@ fn f() {
     }
 }
 "#;
-    let ts = r#"
-function f() {
-    if (a()) {
-        if (b()) {
-            if (c()) {
-                if (d()) {
-                    e();
-                }
-            }
-        }
-    }
-}
-"#;
     assert_eq!(run_rs(rs).len(), 1, "Rust: expected 1 diag");
-    assert_eq!(run_ts(ts).len(), 1, "TS: expected 1 diag");
 }
 
 #[test]
@@ -125,31 +81,10 @@ fn outer() {
     }
 }
 "#;
-    let ts = r#"
-function outer() {
-    for (const _ of a) {
-        for (const _ of b) {
-            for (const _ of c) {
-                const cb = (x) => {
-                    if (x > 0) {
-                        if (x > 1) {
-                            if (x > 2) {
-                                go();
-                            }
-                        }
-                    }
-                };
-                cb(0);
-            }
-        }
-    }
-}
-"#;
     assert!(
         run_rs(rs).is_empty(),
         "Rust: callable boundary not resetting"
     );
-    assert!(run_ts(ts).is_empty(), "TS: callable boundary not resetting");
 }
 
 #[test]
@@ -165,17 +100,5 @@ fn f(items: &[i32]) {
     }
 }
 "#;
-    let ts = r#"
-function f(items) {
-    for (const x of items) {
-        if (x === 0) a();
-        else if (x === 1) b();
-        else if (x === 2) c();
-        else if (x === 3) d();
-        else e();
-    }
-}
-"#;
     assert!(run_rs(rs).is_empty());
-    assert!(run_ts(ts).is_empty());
 }

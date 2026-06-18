@@ -1,8 +1,6 @@
 //! nestjs-dto-needs-validation — `*Dto` classes should use class-validator.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
