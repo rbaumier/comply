@@ -271,9 +271,22 @@ fn looks_like_action(name: &str) -> bool {
     ACTION_PREFIXES.iter().any(|p| lower.starts_with(p))
 }
 
+/// True if `name` reads as a predicate. An exempt token (`is_`, `has_`,
+/// `needs_`, …) counts whether it leads the name or appears as an internal
+/// snake_case segment (`update_needs_…`, `…_is_missing`) — the segment is
+/// matched via a leading `_`, so `_is_` does not match `_island`. A name
+/// ending in a predicate suffix (`_is_missing`, `_is_present`, `_exists`) is
+/// likewise a predicate.
 fn looks_like_predicate(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    EXEMPT_PREFIXES.iter().any(|p| lower.starts_with(p))
+    if EXEMPT_PREFIXES
+        .iter()
+        .any(|p| lower.starts_with(p) || lower.contains(&format!("_{p}")))
+    {
+        return true;
+    }
+    const PREDICATE_SUFFIXES: &[&str] = &["_is_missing", "_is_present", "_exists"];
+    PREDICATE_SUFFIXES.iter().any(|s| lower.ends_with(s))
 }
 
 /// True if `name` is an atomic fetch/bitwise op whose `bool` return is the
@@ -291,20 +304,34 @@ fn is_atomic_fetch_op(name: &str) -> bool {
 ///
 /// In tree-sitter-rust, doc comments (`///`, `/** */`) are `line_comment`
 /// / `block_comment` siblings preceding the item, possibly interleaved
-/// with `attribute_item`s. The match is on the leading phrase only, so an
-/// action that merely mentions "validate" in prose still fires.
+/// with `attribute_item`s. Each doc line is normalized (markers and
+/// backticks stripped, lowercased) and matched two ways: a `starts_with`
+/// against question/answer lead-ins ("returns true", "figure out if", …) so
+/// an action that merely mentions "validate" mid-prose still fires, and a
+/// `contains` against "return(s) true/false if/when" phrases so a predicate
+/// answer phrased mid-sentence ("…and return true if one was loaded") counts.
 fn has_predicate_doc_comment(func: tree_sitter::Node, source: &[u8]) -> bool {
     const PREDICATE_DOC_LEADS: &[&str] = &[
-        "returns `true`",
         "returns true",
         "returns whether",
         "checks whether",
-        "returns `false`",
         "returns false",
-        "return `true`",
         "return true",
-        "return `false`",
         "return false",
+        "figure out if",
+        "figure out whether",
+        "determine if",
+        "determine whether",
+    ];
+    const PREDICATE_DOC_PHRASES: &[&str] = &[
+        "return true if",
+        "returns true if",
+        "return true when",
+        "returns true when",
+        "return false if",
+        "returns false if",
+        "return false when",
+        "returns false when",
     ];
     let mut sibling = func.prev_named_sibling();
     while let Some(s) = sibling {
@@ -315,10 +342,14 @@ fn has_predicate_doc_comment(func: tree_sitter::Node, source: &[u8]) -> bool {
                     let normalized = text
                         .trim_start_matches(['/', '*', '!'])
                         .trim()
+                        .replace('`', "")
                         .to_ascii_lowercase();
                     if PREDICATE_DOC_LEADS
                         .iter()
                         .any(|lead| normalized.starts_with(lead))
+                        || PREDICATE_DOC_PHRASES
+                            .iter()
+                            .any(|phrase| normalized.contains(phrase))
                     {
                         return true;
                     }
@@ -593,6 +624,63 @@ mod tests {
         let src = "\
             /// Validates the config and persists the result.\n\
             fn validate_config(&self) -> bool { do_thing(); true }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // --- #3716: predicate signal in an internal name segment / suffix ---
+
+    #[test]
+    fn allows_action_prefix_with_internal_predicate_segment() {
+        // Name leads with `update_` but carries `_needs_` and ends `_is_missing`.
+        let src = "\
+            fn update_needs_adjustment_as_edits_symbolic_target_is_missing(x: u8) -> bool {\n\
+                let a = q(x);\n\
+                if a { return false; }\n\
+                !w()\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // --- #3716: broadened doc lead-ins and mid-doc predicate phrasing ---
+
+    #[test]
+    fn allows_figure_out_if_doc_lead() {
+        let src = "\
+            /// Figure out if x. If so, return true.\n\
+            fn process_thing() -> bool { check() }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mid_doc_return_true_if_phrase() {
+        let src = "\
+            /// load a new index, and return true if one was indeed loaded\n\
+            fn load_next_index() -> bool { do_load() }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_determine_whether_doc_lead() {
+        let src = "\
+            /// Determine whether the cache is warm.\n\
+            fn refresh_cache_state() -> bool { warm() }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // --- #3716: negative space — genuine actions still flagged ---
+
+    #[test]
+    fn flags_genuine_action_no_predicate_name_or_doc() {
+        let src = "fn save_file(p: &str) -> bool { write(p); true }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn island_segment_not_mistaken_for_is_segment() {
+        // `_island` must not match the `_is_` internal-segment check.
+        assert!(!looks_like_predicate("parse_island_data"));
+        // An action prefix + `island` still flags (it is not a predicate).
+        let src = "fn create_island_index() -> bool { do_thing(); true }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
