@@ -117,6 +117,16 @@ fn is_skipped_context(nodes: &oxc_semantic::AstNodes, node_id: NodeId) -> bool {
         // structure that consumes it, which hurts readability more
         // than a missing closure-capture indicator helps.
         AstKind::JSXExpressionContainer(_) => true,
+        // A function that is *returned* is the value its parent produces — a
+        // useEffect cleanup (`return () => …`), a factory's closure, etc.
+        // Hoisting it to module scope separates the produced value from its
+        // producer, so it stays nested even when it captures nothing.
+        AstKind::ReturnStatement(ret) => {
+            let node_span = nodes.kind(node_id).span();
+            ret.argument
+                .as_ref()
+                .is_some_and(|arg| arg.span() == node_span)
+        }
         AstKind::CallExpression(call) => {
             let node_span = nodes.kind(node_id).span();
             if call.callee.span() == node_span {
@@ -135,7 +145,9 @@ fn is_skipped_context(nodes: &oxc_semantic::AstNodes, node_id: NodeId) -> bool {
             }
             matches!(
                 nodes.kind(grandparent_id),
-                AstKind::CallExpression(_) | AstKind::NewExpression(_)
+                AstKind::CallExpression(_)
+                    | AstKind::NewExpression(_)
+                    | AstKind::ReturnStatement(_)
             )
         }
         _ => false,
@@ -272,6 +284,21 @@ mod tests {
         let src = r#"
             function Btn() {
                 return <button onClick={() => alert("hi")}>x</button>;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_returned_cleanup_function() {
+        // Regression: a useEffect cleanup `return () => …` is the value the
+        // effect produces, not a hoistable helper, even with no capture.
+        let src = r#"
+            function useThing() {
+                useEffect(() => {
+                    subscribe();
+                    return () => unsubscribe();
+                }, []);
             }
         "#;
         assert!(run(src).is_empty());
