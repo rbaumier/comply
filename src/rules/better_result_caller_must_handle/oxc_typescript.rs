@@ -55,6 +55,14 @@ impl OxcCheck for Check {
             return;
         }
 
+        // The concise body of an arrow (`(tx) => Result.gen(...)`) is the arrow's
+        // return value, which oxc models as a synthetic ExpressionStatement. A
+        // returned Result is handled by the arrow's caller, exactly as a block-body
+        // `return Result.gen(...)` is — so this is not an ignored result.
+        if is_concise_arrow_body(parent.id(), semantic.nodes()) {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -68,6 +76,24 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// `true` when `expr_stmt_id` is the synthetic `ExpressionStatement` oxc emits
+/// for the concise body of an arrow function (`(x) => expr`): that statement's
+/// parent is a `FunctionBody` whose parent is an `ArrowFunctionExpression` with
+/// `expression == true`.
+fn is_concise_arrow_body(
+    expr_stmt_id: oxc_semantic::NodeId,
+    nodes: &oxc_semantic::AstNodes,
+) -> bool {
+    let body = nodes.parent_node(expr_stmt_id);
+    if !matches!(body.kind(), AstKind::FunctionBody(_)) {
+        return false;
+    }
+    matches!(
+        nodes.parent_node(body.id()).kind(),
+        AstKind::ArrowFunctionExpression(arrow) if arrow.expression
+    )
 }
 
 /// Returns the immediately-enclosing call expression, transparent to parens, await, and TS type wrappers. None if no enclosing call exists.
@@ -153,5 +179,39 @@ mod tests {
             unwrapOrThrow(Result.gen(function* () { return Result.ok(1); }));
         "#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression for #4071 — a `Result.gen(...)` that is the concise body of an
+    // arrow callback is the arrow's return value (consumed by the higher-order
+    // caller and awaited), not an ignored result.
+    #[test]
+    fn accepts_result_gen_returned_from_concise_arrow_callback() {
+        let src = r#"
+            import { Result } from 'better-result';
+
+            const deactivated = yield* Result.await(
+                transactionalQuery(database, (tx) =>
+                    Result.gen(async function* () {
+                        const n = yield* Result.await(tryDatabaseQuery(() => tx.$count(team, where)));
+                        if (n > 0) return Result.err(new ConflictError({}));
+                        return Result.ok(row);
+                    }),
+                ),
+            );
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Discriminator — a block-body arrow that drops the Result in statement
+    // position still flags; the exemption covers concise bodies (returns) only.
+    #[test]
+    fn flags_result_gen_dropped_in_block_body_arrow() {
+        let src = r#"
+            import { Result } from 'better-result';
+            transactionalQuery(database, (tx) => {
+                Result.gen(function* () { return Result.ok(1); });
+            });
+        "#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
