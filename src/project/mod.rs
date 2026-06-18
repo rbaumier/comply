@@ -1969,6 +1969,12 @@ pub struct ProjectCtx {
     // JSX-dense tree pays the full walk once per file.
     react_compiler_dir_cache: Mutex<FxHashMap<PathBuf, bool>>,
 
+    // "Is this a React/Next project?" keyed by the *directory* of the file
+    // asking. The answer depends only on the nearest `package.json` from that
+    // directory up to the root (a `react` or `next` dependency), not file
+    // content, so a deep tree pays the manifest walk once per directory.
+    react_project_dir_cache: Mutex<FxHashMap<PathBuf, bool>>,
+
     // "Does this project use a bundler?" keyed by the *directory* of the file
     // asking. Like `react_compiler_dir_cache`, the answer depends only on the
     // directory chain (nearest package.json + bundler config files up to the
@@ -3139,6 +3145,24 @@ impl ProjectCtx {
             .lock()
             .unwrap()
             .insert(key, v);
+        v
+    }
+
+    /// True when the nearest `package.json` for `path` declares a `react` or
+    /// `next` dependency — the two ecosystems whose Server Actions (`"use
+    /// server"`) must be `async`. Other frameworks (SolidStart, Astro, …) reuse
+    /// the `"use server"` directive without that async requirement, so rules
+    /// encoding a React constraint gate on this predicate. Memoized by
+    /// directory: the answer is identical for every file in the same directory.
+    pub fn is_react_project(&self, path: &Path) -> bool {
+        let key = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        if let Some(&v) = self.react_project_dir_cache.lock().unwrap().get(&key) {
+            return v;
+        }
+        let v = self
+            .nearest_package_json(path)
+            .is_some_and(|pkg| pkg.has_dep_or_engine("react") || pkg.has_dep_or_engine("next"));
+        self.react_project_dir_cache.lock().unwrap().insert(key, v);
         v
     }
 
@@ -5646,6 +5670,42 @@ mod tests {
         )
         .unwrap();
         assert!(!load_ctx_in(&dir).uses_tailwind());
+    }
+
+    #[test]
+    fn is_react_project_true_with_react_dependency() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"x","dependencies":{"react":"^18"}}"#,
+        )
+        .unwrap();
+        let ctx = load_ctx_in(&dir);
+        assert!(ctx.is_react_project(&dir.path().join("app.tsx")));
+    }
+
+    #[test]
+    fn is_react_project_true_with_next_dependency() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"x","dependencies":{"next":"^14"}}"#,
+        )
+        .unwrap();
+        let ctx = load_ctx_in(&dir);
+        assert!(ctx.is_react_project(&dir.path().join("app.tsx")));
+    }
+
+    #[test]
+    fn is_react_project_false_for_solidstart() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"x","dependencies":{"solid-js":"^1.8","@solidjs/start":"^1"}}"#,
+        )
+        .unwrap();
+        let ctx = load_ctx_in(&dir);
+        assert!(!ctx.is_react_project(&dir.path().join("app.tsx")));
     }
 
     #[test]

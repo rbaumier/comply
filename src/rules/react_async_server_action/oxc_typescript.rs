@@ -20,6 +20,14 @@ impl OxcCheck for Check {
     ) -> Vec<Diagnostic> {
         use oxc_ast::AstKind;
         let mut diagnostics = Vec::new();
+
+        // The async-server-action constraint is React/Next-specific. Other
+        // frameworks (SolidStart, Astro, …) reuse the `"use server"` directive
+        // but allow synchronous server functions, so skip non-React projects.
+        if !ctx.project.is_react_project(ctx.path) {
+            return diagnostics;
+        }
+
         let Some(prog) = semantic.nodes().iter().find_map(|n| {
             if let AstKind::Program(p) = n.kind() { Some(p) } else { None }
         }) else {
@@ -106,5 +114,81 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser as OxcParser;
+    use oxc_semantic::SemanticBuilder;
+    use oxc_span::SourceType;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Build a temp project with `pkg` at the root and `source` at `rel_path`,
+    /// then run the rule against a real `ProjectCtx`. Lets the `is_react_project`
+    /// gate read the staged `package.json` exactly as it does in production.
+    fn run_pkg(pkg: &str, source: &str, rel_path: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), pkg).unwrap();
+
+        let full = dir.path().join(rel_path);
+        fs::create_dir_all(full.parent().unwrap()).unwrap();
+        fs::write(&full, source).unwrap();
+        let full = fs::canonicalize(&full).unwrap();
+
+        let lang = Language::from_path(&full).unwrap_or(Language::TypeScript);
+        let sf = SourceFile {
+            path: full.clone(),
+            language: lang,
+        };
+        let refs: Vec<&SourceFile> = vec![&sf];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        let source_type = match lang {
+            Language::Tsx => SourceType::tsx(),
+            _ => SourceType::ts(),
+        };
+        let allocator = Allocator::default();
+        let parse_ret = OxcParser::new(&allocator, source, source_type).parse();
+        let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+        let ctx = CheckCtx::for_test_with_project(&full, source, &project);
+        Check.run_on_semantic(&semantic, &ctx)
+    }
+
+    const SYNC_USE_SERVER: &str = "\"use server\";\nexport function f() { return 1; }\n";
+
+    // Regression for rbaumier/comply#3206 — SolidStart server functions marked
+    // with file-level `"use server"` are allowed to be synchronous, so a project
+    // depending on `@solidjs/start` (no `react`/`next`) must not be flagged.
+    #[test]
+    fn skips_solidstart_synchronous_use_server() {
+        let pkg = r#"{"name":"t","version":"0.0.0","dependencies":{"solid-js":"^1.8.0","@solidjs/start":"^1.0.0"}}"#;
+        let d = run_pkg(pkg, SYNC_USE_SERVER, "src/functions/server.ts");
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    // The async-server-action constraint is genuine in React: a synchronous
+    // file-level `"use server"` export must still flag when `react` is a dep.
+    #[test]
+    fn flags_synchronous_use_server_in_react_project() {
+        let pkg = r#"{"name":"t","version":"0.0.0","dependencies":{"react":"^18.0.0"}}"#;
+        let d = run_pkg(pkg, SYNC_USE_SERVER, "src/actions.ts");
+        assert_eq!(d.len(), 1, "{d:?}");
+    }
+
+    // Next.js is a React framework that requires async server actions — it must
+    // stay in scope even though it doesn't depend on `react` by that name here.
+    #[test]
+    fn flags_synchronous_use_server_in_next_project() {
+        let pkg = r#"{"name":"t","version":"0.0.0","dependencies":{"next":"^14.0.0"}}"#;
+        let d = run_pkg(pkg, SYNC_USE_SERVER, "app/actions.ts");
+        assert_eq!(d.len(), 1, "{d:?}");
     }
 }
