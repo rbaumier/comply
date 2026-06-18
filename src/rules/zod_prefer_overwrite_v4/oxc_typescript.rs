@@ -205,9 +205,6 @@ fn is_same_shape_expr(expr_text: &str, param: &str) -> bool {
                 }
             }
         }
-        if rest.trim_start().starts_with("??") {
-            return true;
-        }
     }
     false
 }
@@ -258,6 +255,16 @@ mod tests {
     #[test]
     fn ignores_to_fixed_transform() {
         let src = "const s = z.number().transform(n => n.toFixed(2));";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_nullish_default_substitution_issue_4201() {
+        // Nullish coalescing removes null from a nullable schema → shape-changing → not an
+        // `.overwrite()` candidate; the `param ?? X` shape is ambiguous w.r.t. upstream
+        // nullability so it is not flagged.
+        let src =
+            "const s = z.string().nullable().default(null).transform((v) => v ?? fallback);";
         assert!(run(src).is_empty());
     }
 }

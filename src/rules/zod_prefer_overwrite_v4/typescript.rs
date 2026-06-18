@@ -83,10 +83,6 @@ fn is_same_shape_expr(expr_text: &str, param: &str) -> bool {
                 }
             }
         }
-        // Nullish coalescing: `param ?? defaultValue`.
-        if rest.trim_start().starts_with("??") {
-            return true;
-        }
     }
     false
 }
@@ -208,10 +204,9 @@ mod tests {
     }
 
     #[test]
-    fn flags_nullish_coalesce_transform() {
-        assert_eq!(
-            run("const S = z.string().transform(s => s ?? '');").len(),
-            1
-        );
+    fn ignores_nullish_coalesce_transform() {
+        // `?? X` is ambiguous: shape-changing on a nullable schema (removes null), so it is
+        // no longer treated as same-shape.
+        assert!(run("const S = z.string().transform(s => s ?? '');").is_empty());
     }
 }
