@@ -1,9 +1,15 @@
 //! rust-mod-tests-without-cfg-test backend.
 //!
-//! Walks `mod_item` nodes whose name is `tests` (or `test`) and checks the
-//! preceding `attribute_item` siblings for an attribute that activates the
-//! `test` cfg — `#[cfg(test)]`, compound forms like `#[cfg(all(test, …))]`
-//! and `#[cfg(any(test, …))]`, and `#[cfg_attr(test, …)]`. Flag if absent.
+//! Walks inline `mod_item` nodes whose name is `tests` (or `test`) — those
+//! with a `declaration_list` body — and checks the preceding `attribute_item`
+//! siblings for an attribute that activates the `test` cfg — `#[cfg(test)]`,
+//! compound forms like `#[cfg(all(test, …))]` and `#[cfg(any(test, …))]`, and
+//! `#[cfg_attr(test, …)]`. Flag if absent.
+//!
+//! Only inline `mod tests { … }` blocks are checked. An external declaration
+//! `mod tests;` is gated by an inner `#![cfg(test)]` in the referenced file
+//! (`tests.rs` / `tests/mod.rs`), which a single-file check cannot see, so it
+//! is skipped.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -31,6 +37,13 @@ impl AstCheck for Check {
             return;
         };
         if name != "tests" && name != "test" {
+            return;
+        }
+        // External declaration `mod tests;` has no `declaration_list` body; its
+        // gating `#![cfg(test)]` lives in the referenced file, which this
+        // single-file check cannot see. Only inline `mod tests { … }` blocks
+        // can carry the outer `#[cfg(test)]` this rule looks for.
+        if node.child_by_field_name("body").is_none() {
             return;
         }
         if crate::rules::rust_helpers::has_test_attribute(node, source_bytes) {
@@ -79,6 +92,19 @@ mod tests {
     #[test]
     fn flags_mod_tests_without_cfg() {
         assert_eq!(run_on("mod tests { #[test] fn t() {} }").len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_external_mod_tests_declaration() {
+        // `mod tests;` references a file gated by an inner `#![cfg(test)]`,
+        // not visible here, so the external declaration must not be flagged
+        // (issue #3787).
+        assert!(run_on("mod tests;").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_external_mod_test_declaration() {
+        assert!(run_on("mod test;").is_empty());
     }
 
     #[test]
