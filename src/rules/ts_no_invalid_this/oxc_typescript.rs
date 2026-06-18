@@ -93,12 +93,36 @@ fn is_prototype_initializer(expr: &Expression) -> bool {
     ) || is_object_create_call(expr)
 }
 
+/// True when `expr` is a `module.exports` / `exports` assignment (directly or
+/// through a chain like `exports = module.exports = {}`). A binding initialized
+/// from such a chain is the CommonJS namespace object; a function assigned to one
+/// of its members is invoked as `obj.method()`, so `this` is the namespace object.
+fn is_module_exports_initializer(expr: &Expression) -> bool {
+    let Expression::AssignmentExpression(assign) = expr else {
+        return false;
+    };
+    // LHS is `exports` (identifier) or `module.exports` (member).
+    let lhs_is_exports = match &assign.left {
+        AssignmentTarget::AssignmentTargetIdentifier(id) => id.name == "exports",
+        AssignmentTarget::StaticMemberExpression(member) => {
+            member.property.name == "exports"
+                && matches!(&member.object, Expression::Identifier(o) if o.name == "module")
+        }
+        _ => false,
+    };
+    // ... OR a deeper link in the chain is (recurse on the RHS).
+    lhs_is_exports || is_module_exports_initializer(&assign.right)
+}
+
 /// True when `expr` is a `*.prototype` member access (e.g. `Foo.prototype`), or
-/// an identifier bound to a prototype-object initializer — a `*.prototype`
-/// access (`var proto = Foo.prototype`) or an `Object.create(...)` call
-/// (`var res = Object.create(http.ServerResponse.prototype)`). These are the
-/// receivers of the prototype-patching idiom, where a function assigned to one
-/// of their members gains the instance as `this` at call time.
+/// an identifier bound to a method receiver — either a prototype-object
+/// initializer (a `*.prototype` access `var proto = Foo.prototype` or an
+/// `Object.create(...)` call `var res = Object.create(http.ServerResponse.prototype)`)
+/// or a CommonJS namespace object built from a `module.exports` / `exports`
+/// assignment chain (`var app = exports = module.exports = {}`). These are the
+/// receivers of the prototype-patching / namespace-augmentation idioms, where a
+/// function assigned to one of their members gains the receiver as `this` at call
+/// time.
 fn is_prototype_object(
     expr: &Expression,
     semantic: &oxc_semantic::Semantic,
@@ -119,19 +143,21 @@ fn is_prototype_object(
             else {
                 return false;
             };
-            declarator
-                .init
-                .as_ref()
-                .is_some_and(is_prototype_initializer)
+            declarator.init.as_ref().is_some_and(|init| {
+                is_prototype_initializer(init) || is_module_exports_initializer(init)
+            })
         }
         _ => false,
     }
 }
 
-/// True when `func_id` is a function expression assigned to a member of a
-/// prototype object (`proto[m] = function() {}` / `Foo.prototype.m = function() {}`).
-/// In that idiom `this` is bound to the instance at call time, so `this` inside
-/// the function body is valid.
+/// True when `func_id` is a function expression assigned to a member of a method
+/// receiver — a prototype object (`proto[m] = function() {}` /
+/// `Foo.prototype.m = function() {}`) or a CommonJS namespace object bound from a
+/// `module.exports` / `exports` chain (`app.init = function () {}` where
+/// `var app = exports = module.exports = {}`). In those idioms `this` is bound to
+/// the receiver at call time (`obj.method()`), so `this` inside the function body
+/// is valid.
 fn is_prototype_method_assignment(
     func_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
@@ -775,6 +801,41 @@ mod tests {
         // Negative-space guard for #3386: a free-floating `function` not assigned
         // as any object's method has an unbound `this` and must still fire.
         let diags = run_on("function foo() { this.x = 1; }");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_module_exports_namespace_method() {
+        // Regression for #3643: express's `lib/application.js` exposes its public
+        // object via `var app = exports = module.exports = {}` then augments it
+        // (`app.init = function () { this.cache = ... }`). `app.init()` binds
+        // `this` to the namespace object, so `this` is valid.
+        let src = "var app = exports = module.exports = {};\napp.init = function init() {\n  this.cache = Object.create(null);\n  this.defaultConfiguration();\n};";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_direct_module_exports_namespace_method() {
+        // Regression for #3643: the shorter `var app = module.exports = {}` chain
+        // is recognized the same way.
+        let src = "var app = module.exports = {};\napp.foo = function () { return this.x; };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_bare_exports_namespace_method() {
+        // Regression for #3643: a bare `exports` chain (`var app = exports = {}`)
+        // also yields the CommonJS namespace object.
+        let src = "var app = exports = {};\napp.bar = function () { return this.y; };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_plain_object_member_method() {
+        // Negative-space guard for #3643: a function assigned to a member of a
+        // plain `var obj = {}` (no `module.exports`/`exports` chain) is still a
+        // standalone function — `this` is unbound and must fire.
+        let diags = run_on("var obj = {};\nobj.m = function () { return this.x; };");
         assert_eq!(diags.len(), 1);
     }
 
