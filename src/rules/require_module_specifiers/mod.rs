@@ -1,4 +1,4 @@
-//! require-module-specifiers — flag import/export with empty specifiers.
+//! require-module-specifiers — flag `export {} from 'x'` re-exports with empty specifiers.
 
 mod oxc_typescript;
 
@@ -10,9 +10,9 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "require-module-specifiers",
-    description: "Import/export statements with empty specifier lists are not allowed.",
-    remediation: "Add specifiers to the import/export, convert to a side-effect \
-                  import, or remove the statement entirely.",
+    description: "Re-export statements with empty specifier lists (`export {} from 'x'`) \
+                  are not allowed.",
+    remediation: "Add specifiers to the re-export, or remove the statement entirely.",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["unicorn"],
