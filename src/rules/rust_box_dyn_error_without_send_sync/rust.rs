@@ -3,7 +3,10 @@
 //! Walks `generic_type` nodes whose constructor is `Box` and whose
 //! sole type argument is a `dyn`-typed trait object referencing the
 //! `Error` trait. We then check whether the trait object's bounds
-//! include both `Send` and `Sync`. If either is missing, we flag it.
+//! include both `Send` and `Sync`. If either is missing, we flag it —
+//! unless the bounds carry an explicit non-`'static` lifetime (e.g.
+//! `Box<dyn Error + 'a>`), which marks a borrow-scoped error for which
+//! the `+ 'static` remediation is inapplicable.
 //!
 //! The check is text-based on the trait-object substring because
 //! tree-sitter-rust models `dyn Trait + Send + Sync` as a single
@@ -56,6 +59,12 @@ impl AstCheck for Check {
         if has_send && has_sync {
             return;
         }
+        // A non-`'static` lifetime bound (`Box<dyn Error + 'a>`) marks a
+        // borrow-scoped error: it borrows from an input, so it cannot be
+        // `'static`. The `+ 'static` remediation is impossible here.
+        if has_non_static_lifetime(args_text) {
+            return;
+        }
         if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
             return;
         }
@@ -103,6 +112,31 @@ fn is_ident_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
+/// Returns true if `args_text` (a type-position substring) carries a
+/// lifetime bound whose name is not `static`. A `'` in a type is always a
+/// lifetime (type position has no char literals), so we scan for a `'`
+/// followed by an identifier and compare the name against `static`.
+fn has_non_static_lifetime(args_text: &str) -> bool {
+    let bytes = args_text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\'' {
+            let name_start = i + 1;
+            let mut name_end = name_start;
+            while name_end < bytes.len() && is_ident_char(bytes[name_end]) {
+                name_end += 1;
+            }
+            if name_end > name_start && &bytes[name_start..name_end] != b"static" {
+                return true;
+            }
+            i = name_end;
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
     fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
@@ -142,6 +176,24 @@ mod tests {
     fn allows_box_dyn_error_send_sync() {
         let source = "fn f() -> Result<(), Box<dyn std::error::Error + Send + Sync>> { Ok(()) }";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_box_dyn_error_with_non_static_lifetime() {
+        // `Box<dyn Error + 'a>` is a borrow-scoped error: it borrows from the
+        // `&'a str` input, so it is intentionally not `'static`. The `+ 'static`
+        // remediation is impossible here. (helix command_line.rs:805)
+        let source =
+            "fn parse(line: &'a str) -> Result<Self, Box<dyn Error + 'a>> { todo!() }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_box_dyn_error_static_only() {
+        // Only `'static` (no Send + Sync) is still a true positive: the error
+        // can be made thread-safe, so the remediation applies.
+        let source = "fn f() -> Result<(), Box<dyn std::error::Error + 'static>> { Ok(()) }";
+        assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
