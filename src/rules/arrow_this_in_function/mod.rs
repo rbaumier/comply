@@ -7,8 +7,6 @@
 //! (strict) or the global object — almost always a bug.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

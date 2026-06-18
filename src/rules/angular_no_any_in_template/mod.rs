@@ -1,8 +1,6 @@
 //! angular-no-any-in-template — `$any()` defeats template type checking.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

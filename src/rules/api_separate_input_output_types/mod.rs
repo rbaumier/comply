@@ -7,8 +7,6 @@
 //! reach an API boundary, so they are not analyzed.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
