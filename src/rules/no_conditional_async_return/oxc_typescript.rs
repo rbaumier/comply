@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, Statement, TSType, TSTypeAnnotation, TSTypeName};
+use oxc_ast::ast::{Expression, LogicalOperator, Statement, TSType, TSTypeAnnotation, TSTypeName};
 use std::sync::Arc;
 
 pub struct Check;
@@ -35,7 +35,7 @@ impl OxcCheck for Check {
                     let Some(body) = &func.body else {
                         continue;
                     };
-                    if is_mixed_promise_union(func.return_type.as_deref()) {
+                    if annotation_permits_promise_branches(func.return_type.as_deref()) {
                         continue;
                     }
                     let kinds = collect_return_kinds(&body.statements, ctx.source);
@@ -60,7 +60,7 @@ impl OxcCheck for Check {
                     if arrow.expression {
                         continue;
                     }
-                    if is_mixed_promise_union(arrow.return_type.as_deref()) {
+                    if annotation_permits_promise_branches(arrow.return_type.as_deref()) {
                         continue;
                     }
                     let kinds = collect_return_kinds(&arrow.body.statements, ctx.source);
@@ -96,15 +96,20 @@ fn is_promise_type(ty: &TSType) -> bool {
     false
 }
 
-/// Does the explicit return-type annotation deliberately union a `Promise<T>`
-/// member with at least one non-promise member (e.g. `void | Promise<void>`,
-/// `T | Promise<T>`)? Such a signature documents the mixed-return contract, so
-/// the conditional async return is intentional, not a mistake.
-fn is_mixed_promise_union(return_type: Option<&TSTypeAnnotation>) -> bool {
+/// Does the explicit return-type annotation document an all-promise or
+/// mixed-promise contract? A plain `Promise<T>` guarantees every branch is a
+/// Promise (TypeScript enforces assignability), and a `Promise<T>`-bearing
+/// union (e.g. `void | Promise<void>`, `T | Promise<T>`) deliberately documents
+/// the mixed-return contract. In both cases the conditional return is
+/// intentional, so trust the annotation rather than the syntactic classifier.
+fn annotation_permits_promise_branches(return_type: Option<&TSTypeAnnotation>) -> bool {
     let Some(rt) = return_type else { return false };
     let mut ty = &rt.type_annotation;
     while let TSType::TSParenthesizedType(paren) = ty {
         ty = &paren.type_annotation;
+    }
+    if is_promise_type(ty) {
+        return true;
     }
     let TSType::TSUnionType(union) = ty else {
         return false;
@@ -113,7 +118,17 @@ fn is_mixed_promise_union(return_type: Option<&TSTypeAnnotation>) -> bool {
 }
 
 /// Classify a return-value expression as promise-returning or sync.
-fn classify_value(expr: &Expression, _source: &str) -> ReturnKind {
+fn classify_value(expr: &Expression, source: &str) -> ReturnKind {
+    // `a ?? Promise.resolve()` / `a || Promise.resolve()`: a single
+    // Promise-typed operand makes the whole expression resolve to a Promise.
+    if let Expression::LogicalExpression(logical) = expr
+        && matches!(logical.operator, LogicalOperator::Coalesce | LogicalOperator::Or)
+        && (classify_value(&logical.left, source) == ReturnKind::Promise
+            || classify_value(&logical.right, source) == ReturnKind::Promise)
+    {
+        return ReturnKind::Promise;
+    }
+
     let Expression::CallExpression(call) = expr else {
         return ReturnKind::Sync;
     };
@@ -287,5 +302,43 @@ mod tests {
         // mixed-return contract, so the inconsistency still fires.
         let src = "function f(x: boolean): number { if (x) return 1; return Promise.resolve(2); }";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_plain_promise_annotation_with_coalesce_branch() {
+        // Regression for #3858: TanStack/query `runNext` is annotated
+        // `Promise<unknown>`, so every branch is contractually a Promise even
+        // though `foundMutation?.continue() ?? Promise.resolve()` is not
+        // syntactically recognized as one.
+        let src = "function runNext(s: string): Promise<unknown> {
+            if (typeof s === 'string') {
+                return foundMutation?.continue() ?? Promise.resolve();
+            } else {
+                return Promise.resolve();
+            }
+        }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_plain_promise_annotation_with_method_call_branch() {
+        // Regression for #3858: `ensureQueryData` returns a method call
+        // (`this.fetchQuery(options)`) in one branch and `Promise.resolve` in
+        // another, both contractually `Promise<TData>`.
+        let src = "function ensureQueryData(options: any): Promise<TData> {
+            if (cachedData === undefined) {
+                return this.fetchQuery(options);
+            }
+            return Promise.resolve(cachedData);
+        }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_unannotated_arrow_with_coalesce_promise_branch() {
+        // Regression for #3858 (part 2): an un-annotated arrow whose branches
+        // are `x ?? Promise.resolve()` and `Promise.resolve()` is all-Promise.
+        let src = "const f = (x: boolean) => { if (x) { return foo() ?? Promise.resolve(); } return Promise.resolve(); };";
+        assert!(run(src).is_empty());
     }
 }
