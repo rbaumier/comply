@@ -4,6 +4,12 @@
 //! `#[serde(untagged)]`. If found, walk each variant: for any field whose
 //! type is `Option<T>`, ensure the field has its own `#[serde(default)]`
 //! attribute. Flag the field otherwise.
+//!
+//! A variant that has a required field (one that is neither `Option<T>` nor
+//! carries `#[serde(default)]`) is exempt: empty input can never deserialize
+//! into it, so it cannot fall through on missing data and its `Option` fields
+//! are harmless. Only variants where every field is optional/defaultable can
+//! match empty input and shadow later variants.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -68,6 +74,9 @@ fn check_field_decls(
     ctx: &CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    if field_decls_has_required(list, source) {
+        return;
+    }
     let mut cursor = list.walk();
     for field in list.named_children(&mut cursor) {
         if field.kind() != "field_declaration" {
@@ -101,6 +110,9 @@ fn check_ordered_fields(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     // Tuple variants: `Variant(Option<T>)`. Each named child is a type.
+    if ordered_has_required(list, source) {
+        return;
+    }
     let mut cursor = list.walk();
     for ty in list.named_children(&mut cursor) {
         if !is_option_type(ty, source) {
@@ -116,6 +128,39 @@ fn check_ordered_fields(
             Severity::Warning,
         ));
     }
+}
+
+/// A struct variant can only match empty input when every field is optional —
+/// an `Option<T>` or one carrying `#[serde(default)]`. A single required field
+/// (non-`Option`, no `default`) means the variant cannot fall through on empty
+/// input, so its `Option` fields are harmless.
+fn field_decls_has_required(list: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = list.walk();
+    for field in list.named_children(&mut cursor) {
+        if field.kind() != "field_declaration" {
+            continue;
+        }
+        let Some(ty) = field.child_by_field_name("type") else {
+            continue;
+        };
+        if is_option_type(ty, source) {
+            continue; // Option → not required
+        }
+        if has_serde_default(field, source) {
+            continue; // has default → not required
+        }
+        return true; // required field found
+    }
+    false
+}
+
+/// A tuple variant can only match empty input when every element is an
+/// `Option<T>` (tuple positions cannot carry per-field `#[serde(default)]`).
+/// A single non-`Option` element makes the variant required.
+fn ordered_has_required(list: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = list.walk();
+    list.named_children(&mut cursor)
+        .any(|ty| !is_option_type(ty, source))
 }
 
 fn is_option_type(node: tree_sitter::Node, source: &[u8]) -> bool {
@@ -236,6 +281,67 @@ enum E {
 #[serde(untagged)]
 enum E {
     A(Option<u32>),
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_option_in_variant_with_required_sibling() {
+        // Repro from #3791: `Deprecated` has a required `name: String`, so the
+        // `Option` field can never make the variant match empty input.
+        let src = r#"
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum E {
+    Active(String),
+    Deprecated {
+        name: String,
+        deprecated_in_version: Option<String>,
+    },
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_option_in_struct_variant_with_required_field() {
+        let src = r#"
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum E {
+    V { id: u32, note: Option<String> },
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_option_in_tuple_variant_with_required_element() {
+        let src = r#"
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum E {
+    V(String, Option<u32>),
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_option_when_sibling_has_default_but_no_required_field() {
+        // Both fields are optional (one `Option` with `#[serde(default)]`, one
+        // bare `Option`), so the variant can still match empty input. Only the
+        // bare `Option` (`y`) is flagged.
+        let src = r#"
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum E {
+    A {
+        #[serde(default)]
+        x: Option<u32>,
+        y: Option<u32>,
+    },
 }
 "#;
         assert_eq!(run_on(src).len(), 1);
