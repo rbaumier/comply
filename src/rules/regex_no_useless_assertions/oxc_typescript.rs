@@ -24,15 +24,24 @@ fn has_useless_dollar(pattern: &str) -> bool {
     false
 }
 
+/// A `^` at index `i` (`i > 0`) begins an alternative — a valid anchor — when it
+/// follows a group-open `(`, an alternation `|`, a char-class `[`, an escape `\`,
+/// or a group prefix `(?:` / `(?=` / `(?!` / `(?<=` / `(?<!`.
+fn caret_begins_alternative(bytes: &[u8], i: usize) -> bool {
+    if matches!(bytes[i - 1], b'(' | b'|' | b'[' | b'\\') {
+        return true;
+    }
+    const GROUP_PREFIXES: &[&[u8]] = &[b"(?:", b"(?=", b"(?!", b"(?<=", b"(?<!"];
+    GROUP_PREFIXES.iter().any(|p| bytes[..i].ends_with(p))
+}
+
 fn has_useless_caret(pattern: &str) -> bool {
     let bytes = pattern.as_bytes();
     for (i, &b) in bytes.iter().enumerate() {
-        if b == b'^' && i > 0 {
-            let prev = bytes[i - 1];
-            if prev != b'(' && prev != b'|' && prev != b'[' && prev != b'\\'
-                && !is_inside_char_class(bytes, i) {
-                return true;
-            }
+        if b == b'^' && i > 0
+            && !caret_begins_alternative(bytes, i)
+            && !is_inside_char_class(bytes, i) {
+            return true;
         }
     }
     false
@@ -112,6 +121,41 @@ mod tests {
         // Issue #385: [^\w] inside lookahead/lookbehind must not be flagged.
         let src = r#"const pattern = /(?<=[^\w]|^)keyword(?=[^\w]|$)/;"#;
         assert!(run_on(src).is_empty(), "[^\\w] inside lookahead is a char class, not a useless assertion");
+    }
+
+    #[test]
+    fn allows_caret_as_first_alternative_of_group() {
+        // Issue #3774: `(?:^|,)` means start-of-string OR comma; the `^` is a
+        // real anchor. The trailing `(?:,|$)` exercises the `$` valid set too.
+        let src = r#"const re = /(?:^|,)\s*?no-transform\s*?(?:,|$)/i;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_caret_after_noncapturing_group_prefix() {
+        // Issue #3774 second repro.
+        assert!(run_on(r#"const re = /(?:^|\.)__proto__\./;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_caret_in_lookahead() {
+        assert!(run_on(r#"const re = /(?=^foo)/;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_caret_in_lookbehind() {
+        assert!(run_on(r#"const re = /(?<=^)x/;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_caret_in_negative_lookahead() {
+        assert!(run_on(r#"const re = /(?!^)bar/;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_caret_and_dollar_anchors_in_groups_with_char_classes() {
+        // filepath.ts shape: both `^` and `$` begin/end group alternatives.
+        assert!(run_on(r#"const re = /(?:^|[\/\\])\.\.(?:$|[\/\\])/;"#).is_empty());
     }
 }
 
