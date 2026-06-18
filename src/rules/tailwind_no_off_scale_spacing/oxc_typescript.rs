@@ -5,7 +5,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::JSXAttributeItem;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 const SPACING_PREFIXES: &[&str] = &[
     "p-", "px-", "py-", "pt-", "pb-", "pl-", "pr-", "ps-", "pe-", "m-", "mx-", "my-", "mt-",
@@ -17,8 +17,16 @@ const ON_SCALE: &[&str] = &[
     "20", "24", "28", "32", "36", "40", "44", "48", "52", "56", "60", "64", "72", "80", "96",
 ];
 
+/// Prefixes ordered longest-first so the most specific match wins: `gap-x-8`
+/// must strip `gap-x-` (leaving `8`), not the shorter `gap-` (leaving `x-8`).
+static PREFIXES_BY_LEN_DESC: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
+    let mut prefixes = SPACING_PREFIXES.to_vec();
+    prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
+    prefixes
+});
+
 fn is_off_scale(base: &str) -> bool {
-    for prefix in SPACING_PREFIXES {
+    for prefix in PREFIXES_BY_LEN_DESC.iter() {
         let Some(rest) = base.strip_prefix(prefix) else {
             continue;
         };
@@ -80,5 +88,59 @@ impl OxcCheck for Check {
                 span: None,
             });
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
+    }
+
+    #[test]
+    fn allows_on_scale_axis_gaps() {
+        // Regression for rbaumier/comply#4194 — `gap-x-8`/`gap-y-4` must strip
+        // the `gap-x-`/`gap-y-` prefix (leaving `8`/`4`), not the shorter
+        // `gap-` (leaving `x-8`/`y-4`), which would falsely read as off-scale.
+        let diags = run(
+            r#"const x = <dl className="grid grid-cols-2 gap-x-8 gap-y-4 px-6 pb-6 sm:grid-cols-3 lg:grid-cols-4" />;"#,
+        );
+        assert!(diags.is_empty(), "on-scale axis gaps must not flag: {diags:?}");
+    }
+
+    #[test]
+    fn allows_on_scale_space_axis() {
+        let diags = run(r#"const x = <div className="space-x-4 space-y-2" />;"#);
+        assert!(diags.is_empty(), "on-scale space utilities must not flag: {diags:?}");
+    }
+
+    #[test]
+    fn flags_off_scale_axis_gaps() {
+        assert_eq!(run(r#"const x = <div className="gap-x-5" />;"#).len(), 1);
+        assert_eq!(run(r#"const x = <div className="gap-y-5" />;"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_off_scale_shorthand() {
+        assert_eq!(run(r#"const x = <div className="p-5" />;"#).len(), 1);
+        assert_eq!(run(r#"const x = <div className="mb-7" />;"#).len(), 1);
     }
 }

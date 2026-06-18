@@ -1,10 +1,19 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::jsx::{jsx_attribute_name, jsx_attribute_string_value};
+use std::sync::LazyLock;
 
 const SPACING_PREFIXES: &[&str] = &[
     "p-", "px-", "py-", "pt-", "pb-", "pl-", "pr-", "ps-", "pe-", "m-", "mx-", "my-", "mt-", "mb-",
     "ml-", "mr-", "ms-", "me-", "gap-", "gap-x-", "gap-y-", "space-x-", "space-y-",
 ];
+
+/// Prefixes ordered longest-first so the most specific match wins: `gap-x-8`
+/// must strip `gap-x-` (leaving `8`), not the shorter `gap-` (leaving `x-8`).
+static PREFIXES_BY_LEN_DESC: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
+    let mut prefixes = SPACING_PREFIXES.to_vec();
+    prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
+    prefixes
+});
 
 /// On-scale values. 0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 6, 8, 10, 12, 14, 16,
 /// 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 72, 80, 96 are the
@@ -17,7 +26,7 @@ const ON_SCALE: &[&str] = &[
 ];
 
 fn is_off_scale(base: &str) -> bool {
-    for prefix in SPACING_PREFIXES {
+    for prefix in PREFIXES_BY_LEN_DESC.iter() {
         let Some(rest) = base.strip_prefix(prefix) else {
             continue;
         };
@@ -107,5 +116,25 @@ mod tests {
     #[test]
     fn allows_half_step() {
         assert!(run(r#"export const A = () => <div className="p-2.5" />;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_on_scale_axis_gaps() {
+        // Regression for rbaumier/comply#4194 — `gap-x-8`/`gap-y-4` must strip
+        // the longest matching prefix (`gap-x-`/`gap-y-`), not the shorter
+        // `gap-`, which would read the axis letter as part of an off-scale value.
+        assert!(
+            run(
+                r#"export const A = () => <dl className="grid grid-cols-2 gap-x-8 gap-y-4 px-6 pb-6 sm:grid-cols-3 lg:grid-cols-4" />;"#
+            )
+            .is_empty()
+        );
+        assert!(run(r#"export const A = () => <div className="space-x-4 space-y-2" />;"#).is_empty());
+    }
+
+    #[test]
+    fn flags_off_scale_axis_gaps() {
+        assert_eq!(run(r#"export const A = () => <div className="gap-x-5" />;"#).len(), 1);
+        assert_eq!(run(r#"export const A = () => <div className="gap-y-5" />;"#).len(), 1);
     }
 }
