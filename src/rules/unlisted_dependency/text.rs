@@ -33,7 +33,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::no_implicit_deps::{is_virtual_module, types_package_name};
+use crate::rules::no_implicit_deps::{is_virtual_module, matches_alias, types_package_name};
 use crate::rules::path_utils::is_scaffold_template_path;
 
 const RULE_ID: &str = "unlisted-dependency";
@@ -59,19 +59,32 @@ impl TextCheck for Check {
             return Vec::new();
         }
 
-        let alias_prefixes = ctx
-            .project
-            .tsconfig
-            .as_ref()
-            .map(|t| t.alias_prefixes())
-            .unwrap_or_default();
-
         let workspace_names: rustc_hash::FxHashSet<String> =
             ctx.project.workspace_package_names().iter().cloned().collect();
 
+        // Alias prefixes are resolved per importer from its NEAREST ancestor
+        // tsconfig (mirroring `no-implicit-deps`), not from the project-root
+        // tsconfig alone. A `paths` alias declared in a sub-directory tsconfig
+        // (e.g. `website/tsconfig.json`) governs imports in that sub-tree, so a
+        // root-only lookup would miss it and flag the alias as an npm package.
+        // Cached per importer directory so each tsconfig is loaded once.
+        let mut alias_cache: rustc_hash::FxHashMap<std::path::PathBuf, Vec<String>> =
+            rustc_hash::FxHashMap::default();
+        let mut spec_matches_importer_alias = |spec: &str, importers: &[std::path::PathBuf]| {
+            importers.iter().any(|imp| {
+                let prefixes = alias_cache.entry(imp.clone()).or_insert_with(|| {
+                    ctx.project
+                        .nearest_tsconfig(imp)
+                        .map(|t| t.alias_prefixes())
+                        .unwrap_or_default()
+                });
+                matches_alias(spec, prefixes)
+            })
+        };
+
         let mut diagnostics = Vec::new();
         for (spec, info) in index.bare_specifiers() {
-            if matches_alias(spec, &alias_prefixes) {
+            if spec_matches_importer_alias(spec, &info.importers) {
                 continue;
             }
             // Virtual modules: Vite's `virtual:` convention and custom
@@ -186,22 +199,6 @@ impl TextCheck for Check {
 /// files, never to an npm package (`@site` is not a publishable name).
 fn is_docusaurus_site_alias(spec: &str) -> bool {
     spec == "@site" || spec.starts_with("@site/")
-}
-
-/// True if `spec` matches any tsconfig alias prefix (exact or `prefix/...`).
-fn matches_alias(spec: &str, alias_prefixes: &[String]) -> bool {
-    alias_prefixes.iter().any(|p| {
-        if p.is_empty() {
-            return false;
-        }
-        if spec == p.as_str() {
-            return true;
-        }
-        if let Some(rest) = spec.strip_prefix(p.as_str()) {
-            return rest.starts_with('/');
-        }
-        false
-    })
 }
 
 #[cfg(test)]
@@ -698,6 +695,101 @@ mod tests {
             diags.is_empty(),
             "tsconfig alias `@/*` should suppress the diagnostic: {diags:?}"
         );
+    }
+
+    /// Build the valtio nested layout: a root `tsconfig.json` WITHOUT a `~`
+    /// alias, a `website/tsconfig.json` declaring `paths: { "~/*": ["./*"] }`,
+    /// and an importer at `website/pages/_app.tsx`. Runs the check on the
+    /// anchor path and returns the diagnostics. `import_spec` is the bare
+    /// specifier the importer pulls in.
+    fn run_nested_tsconfig_alias(import_spec: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "name": "valtio", "dependencies": {} }"#,
+        )
+        .unwrap();
+        // Root tsconfig: no `~` alias.
+        fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{ "compilerOptions": { "paths": { "valtio": ["./src/index.ts"] } } }"#,
+        )
+        .unwrap();
+        let website = dir.path().join("website");
+        fs::create_dir_all(website.join("pages")).unwrap();
+        // Sub-directory tsconfig: the `~` alias is declared HERE only.
+        fs::write(
+            website.join("tsconfig.json"),
+            r#"{ "compilerOptions": { "baseUrl": ".", "paths": { "~/*": ["./*"] } } }"#,
+        )
+        .unwrap();
+        let importer = website.join("pages").join("_app.tsx");
+        fs::write(&importer, format!("import '{import_spec}';")).unwrap();
+        let root_file = dir.path().join("a.ts");
+        fs::write(&root_file, "export const x = 1;").unwrap();
+
+        let source_files = [
+            SourceFile {
+                path: importer,
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: root_file,
+                language: Language::TypeScript,
+            },
+        ];
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        let target_path: PathBuf = project
+            .import_index()
+            .indexed_paths()
+            .min()
+            .expect("at least one indexed file")
+            .to_path_buf();
+        let source = fs::read_to_string(&target_path).unwrap();
+        let file_ctx = FileCtx::build(&target_path, &source, Language::TypeScript, &project);
+        let ctx = CheckCtx {
+            path: &target_path,
+            path_arc: std::sync::Arc::from(target_path.as_path()),
+            source: &source,
+            config: &config,
+            project: &project,
+            file: &file_ctx,
+            lang: crate::files::Language::TypeScript,
+        };
+        Check.check(&ctx)
+    }
+
+    #[test]
+    fn allows_path_alias_from_sub_directory_tsconfig() {
+        // Regression for #2099 — valtio: the `~` alias is declared in
+        // `website/tsconfig.json`, not the project-root tsconfig. The importer
+        // `website/pages/_app.tsx` does `import '~/styles/tailwind.css'`, which
+        // resolves locally via the sub-dir tsconfig. The rule reads alias
+        // prefixes from the NEAREST tsconfig per importer, so the `~` import
+        // must not be flagged as an unlisted npm package.
+        let diags = run_nested_tsconfig_alias("~/styles/tailwind.css");
+        assert!(
+            diags.is_empty(),
+            "`~/styles/tailwind.css` resolves via the sub-dir tsconfig alias: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_unlisted_package_in_sub_directory_with_alias_tsconfig() {
+        // Negative space for #2099 — the sub-dir alias resolution must not
+        // suppress a genuinely unlisted npm package imported from the same
+        // sub-tree. `some-unlisted-pkg` matches no alias prefix and is declared
+        // nowhere, so it must still fire.
+        let diags = run_nested_tsconfig_alias("some-unlisted-pkg");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a real unlisted package in the sub-tree must still fire: {diags:?}"
+        );
+        assert!(diags[0].message.contains("some-unlisted-pkg"));
     }
 
     #[test]

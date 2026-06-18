@@ -245,7 +245,7 @@ pub(crate) fn types_package_name(spec: &str) -> String {
 }
 
 /// True if `spec` matches any alias prefix (exact or `prefix/...`).
-pub(super) fn matches_alias(spec: &str, alias_prefixes: &[String]) -> bool {
+pub(crate) fn matches_alias(spec: &str, alias_prefixes: &[String]) -> bool {
     alias_prefixes.iter().any(|p| {
         if p.is_empty() {
             return false;
