@@ -510,6 +510,41 @@ fn attr_names_path(attr_text: &str, attr_path: &str) -> bool {
         || attr_text.contains(&format!("::{attr_path}]"))
 }
 
+/// True if `node` is preceded by a `// SAFETY:` / `// Safety:` comment on the
+/// lines directly above it. Scans upward from the node's start row, skipping
+/// blank lines and other comment lines, and stops at the first line of real
+/// code. tree-sitter doesn't attach comments to the items they document, so the
+/// scan is by source text rather than by AST sibling.
+///
+/// A documented `unsafe` assertion is the convention `rust-undocumented-unsafe`
+/// and `rust-unsafe-impl-without-comment` enforce; rules that flag a *kind* of
+/// `unsafe` impl call this to defer to an author who has already spelled out the
+/// upheld invariant.
+pub fn has_adjacent_safety_comment(node: Node, source: &str) -> bool {
+    let start_row = node.start_position().row;
+    if start_row == 0 {
+        return false;
+    }
+    let lines: Vec<&str> = source.lines().collect();
+    let mut row = start_row;
+    while row > 0 {
+        row -= 1;
+        let Some(line) = lines.get(row) else { break };
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("//") || trimmed.starts_with("/*") {
+            if trimmed.contains("SAFETY:") || trimmed.contains("Safety:") {
+                return true;
+            }
+            continue;
+        }
+        break;
+    }
+    false
+}
+
 /// True if `item` carries a `#[doc(hidden)]` outer attribute as a preceding
 /// `attribute_item` sibling. `#[doc(hidden)]` is the universal author signal
 /// that an item is excluded from the documented public API.

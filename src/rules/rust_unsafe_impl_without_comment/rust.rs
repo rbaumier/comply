@@ -8,6 +8,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::has_adjacent_safety_comment;
 
 const KINDS: &[&str] = &["impl_item"];
 
@@ -36,7 +37,7 @@ impl AstCheck for Check {
         if !text.trim_start().starts_with("unsafe impl") {
             return;
         }
-        if has_safety_comment_above(node, ctx.source) {
+        if has_adjacent_safety_comment(node, ctx.source) {
             return;
         }
         let pos = node.start_position();
@@ -54,31 +55,6 @@ impl AstCheck for Check {
             span: None,
         });
     }
-}
-
-fn has_safety_comment_above(node: tree_sitter::Node, source: &str) -> bool {
-    let start_row = node.start_position().row;
-    if start_row == 0 {
-        return false;
-    }
-    let lines: Vec<&str> = source.lines().collect();
-    let mut row = start_row;
-    while row > 0 {
-        row -= 1;
-        let Some(line) = lines.get(row) else { break };
-        let trimmed = line.trim_start();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if trimmed.starts_with("//") || trimmed.starts_with("/*") {
-            if trimmed.contains("SAFETY:") || trimmed.contains("Safety:") {
-                return true;
-            }
-            continue;
-        }
-        break;
-    }
-    false
 }
 
 #[cfg(test)]
