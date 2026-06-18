@@ -2,14 +2,16 @@
 //!
 //! Walks struct fields, function parameters, and let bindings.
 //! Flags any binding whose name matches an unambiguously monetary
-//! word (`price`, `cost`, `balance`, `fee`, `total`, `subtotal`,
+//! word (`price`, `balance`, `fee`, `total`, `subtotal`,
 //! `tax`, `discount`, `revenue`, `salary`, `wage`, `fare`, `charge`)
 //! AND whose declared type is `f32` or `f64`.
 //!
-//! The name list excludes polysemous words like `amount`, which in
-//! non-monetary domains (color-channel/lightness adjustments, animation
-//! seek offsets, GUI pixel measurements, physics) is correctly an
-//! `f32`/`f64` and carries no AST signal distinguishing it from money.
+//! The name list excludes polysemous words like `amount` and `cost`.
+//! `amount`, in non-monetary domains (color-channel/lightness adjustments,
+//! animation seek offsets, GUI pixel measurements, physics), is correctly
+//! an `f32`/`f64`. `cost`, in algorithmic domains (query planners,
+//! pathfinding/A*, optimization, ML loss), is a heuristic weight rather
+//! than currency. Both carry no AST signal distinguishing them from money.
 //!
 //! False positives are possible (`average_score`, `tax_rate`) but
 //! the failure mode of using a float for money is bad enough that
@@ -21,8 +23,8 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 const KINDS: &[&str] = &["field_declaration", "parameter"];
 
 const MONEY_NAMES: &[&str] = &[
-    "price", "cost", "balance", "fee", "total", "subtotal", "tax", "discount", "revenue", "salary",
-    "wage", "fare", "charge",
+    "price", "balance", "fee", "total", "subtotal", "tax", "discount", "revenue", "salary", "wage",
+    "fare", "charge",
 ];
 
 #[derive(Debug)]
@@ -144,8 +146,37 @@ mod tests {
     }
 
     #[test]
-    fn flags_cost_param() {
-        assert_eq!(run_on("fn bill(total_cost: f64) {}").len(), 1);
+    fn does_not_flag_estimated_cost_field() {
+        // query-planner cost estimate, unitless heuristic weight. #3776.
+        assert!(run_on("struct S { estimated_cost: f64 }").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_cpu_cost_per_row_field() {
+        // #3776
+        assert!(run_on("struct S { cpu_cost_per_row: f64 }").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_hash_lookup_cost_field() {
+        // #3776
+        assert!(run_on("struct S { hash_lookup_cost: f64 }").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_bare_cost_field() {
+        // #3776
+        assert!(run_on("struct S { cost: f64 }").is_empty());
+    }
+
+    #[test]
+    fn flags_balance_field() {
+        assert_eq!(run_on("struct S { balance: f64 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_fee_param() {
+        assert_eq!(run_on("fn pay(fee: f64) {}").len(), 1);
     }
 
     #[test]
