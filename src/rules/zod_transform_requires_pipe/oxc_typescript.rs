@@ -3,7 +3,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Argument, Expression, Statement};
+use oxc_ast::ast::{
+    Argument, ArrowFunctionExpression, BindingPattern, Expression, LogicalOperator, Statement,
+};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -70,7 +72,41 @@ fn body_returns_typed_value(arrow_arg: &Argument) -> bool {
         }
         returns[0]
     };
-    expression_yields_typed_value(expr)
+    expression_yields_typed_value(expr) || is_default_substitution(expr, arrow)
+}
+
+/// The simple identifier name of the arrow's first parameter, if any
+/// (`v` in `v => ...`). Destructured or absent params yield `None`.
+fn arrow_first_param_name<'a>(arrow: &'a ArrowFunctionExpression<'a>) -> Option<&'a str> {
+    match &arrow.params.items.first()?.pattern {
+        BindingPattern::BindingIdentifier(id) => Some(id.name.as_str()),
+        _ => None,
+    }
+}
+
+/// True for the `param ?? <default>` idiom that substitutes a default for the
+/// `null` case of a `nullable().default(null)` schema. The non-null branch is
+/// the already-validated input value itself (`param`), so `.pipe(z.*)` would
+/// re-validate a value the schema already constrained. The fallback must be a
+/// constructively-typed value or a named/route-level default constant.
+fn is_default_substitution(expr: &Expression, arrow: &ArrowFunctionExpression) -> bool {
+    let Expression::LogicalExpression(logical) = expr else {
+        return false;
+    };
+    if logical.operator != LogicalOperator::Coalesce {
+        return false;
+    }
+    let Expression::Identifier(left) = &logical.left else {
+        return false;
+    };
+    if Some(left.name.as_str()) != arrow_first_param_name(arrow) {
+        return false;
+    }
+    expression_yields_typed_value(&logical.right)
+        || matches!(
+            logical.right,
+            Expression::Identifier(_) | Expression::StaticMemberExpression(_)
+        )
 }
 
 fn expression_yields_typed_value(expr: &Expression) -> bool {
@@ -219,5 +255,41 @@ mod tests {
     fn ignores_transform_returning_json_stringify() {
         let src = "const s = z.unknown().transform(o => JSON.stringify(o));";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_transform_nullish_default_named_const() {
+        // Regression for rbaumier/comply#4199: `nullable().default(null)` with
+        // a transform that substitutes the null case for a route-level default.
+        let src = "const s = sortLiteral.nullable().default(null).transform(v => v ?? defaultSort);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_transform_nullish_default_member() {
+        let src = "const s = sortLiteral.nullable().default(null).transform(v => v ?? defaults.sort);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_transform_nullish_default_literal() {
+        let src = "const s = sortLiteral.nullable().default(null).transform(v => v ?? \"asc\");";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_transform_nullish_left_not_param() {
+        // The left operand is an arbitrary call, not the validated input value,
+        // so the output is not guaranteed and must still be flagged.
+        let src = "const s = z.string().transform(v => parseRich(v) ?? fallback);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_transform_nullish_left_other_identifier() {
+        // The left operand is an outer binding, not the validated param, so the
+        // output is not guaranteed and must still be flagged.
+        let src = "const s = z.string().transform(v => outer ?? fallback);";
+        assert_eq!(run(src).len(), 1);
     }
 }
