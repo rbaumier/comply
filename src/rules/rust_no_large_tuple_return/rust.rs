@@ -6,7 +6,7 @@
 //! alone — three is the threshold where named fields start paying
 //! for themselves.
 //!
-//! Three exemptions suppress an otherwise-flagged function:
+//! Four exemptions suppress an otherwise-flagged function:
 //! - Trait-impl methods: the tuple return type is fixed by the trait
 //!   contract, so the implementor cannot swap it for a named struct.
 //! - Private positional returns: a non-`pub` function whose tuple
@@ -17,10 +17,14 @@
 //!   `#[expect(clippy::type_complexity)]`: this rule overlaps that
 //!   canonical clippy lint, so an author who has silenced it has
 //!   already made the call.
+//! - Test-context functions (`#[test]` / `#[cfg(test)]` mods or
+//!   `#![cfg(test)]` files): returning an RAII guard plus the
+//!   endpoints under test as a tuple is the textbook fixture shape
+//!   for code that never ships, so a named struct is pure ceremony.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{has_clippy_allow, is_in_trait_impl, is_pub};
+use crate::rules::rust_helpers::{has_clippy_allow, is_in_test_context, is_in_trait_impl, is_pub};
 
 #[derive(Debug)]
 pub struct Check;
@@ -59,6 +63,9 @@ impl AstCheck for Check {
             return;
         }
         if has_clippy_allow(node, source_bytes, "type_complexity") {
+            return;
+        }
+        if is_in_test_context(node, source_bytes) {
             return;
         }
         let name = node
@@ -250,5 +257,23 @@ mod tests {
             .len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_tuple_return_in_cfg_test_mod() {
+        assert!(run_on(
+            "#[cfg(test)]\nmod tests {\n    \
+             fn make_ring() -> (AlignedRegion, DsmMpscReceiver, DsmMpscSender) { todo!() }\n}"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn allows_tuple_return_under_test_fn() {
+        assert!(run_on(
+            "#[test]\nfn t() {\n    \
+             fn make_ring() -> (A, B, C) { todo!() }\n}"
+        )
+        .is_empty());
     }
 }
