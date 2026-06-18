@@ -3,6 +3,12 @@
 //! `X` contains raw pointers, `Cell`, or `RefCell` fields the promise is
 //! almost always wrong — those types are explicitly `!Send` / `!Sync` for
 //! sound reasons.
+//!
+//! Two shapes are not flagged: a documented unsafe impl carrying a
+//! `// SAFETY:` comment that states the upheld invariant, and a conditional
+//! auto-trait forwarding impl whose generic bounds already require the trait
+//! (`unsafe impl<T: Send> Send for W<T>`) — the sound hand-rolled lock /
+//! cell-wrapper signature.
 
 mod rust;
 

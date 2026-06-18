@@ -10,6 +10,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::has_adjacent_safety_comment;
 
 const KINDS: &[&str] = &["impl_item"];
 
@@ -47,6 +48,19 @@ impl AstCheck for Check {
         if last_segment != "Send" && last_segment != "Sync" {
             return;
         }
+        // A documented unsafe impl spells out the externally-upheld invariant
+        // (the `// SAFETY:` convention `rust-undocumented-unsafe` enforces);
+        // defer to the author's justification.
+        if has_adjacent_safety_comment(node, ctx.source) {
+            return;
+        }
+        // A conditional auto-trait forwarding impl — `unsafe impl<T: ?Sized +
+        // Send> Send for W<T>` — only asserts the trait when the generic param
+        // already carries it; that is the sound hand-rolled lock / cell-wrapper
+        // signature, not a hand-waved promise.
+        if forwards_auto_trait_conditionally(node, last_segment, source) {
+            return;
+        }
         let Some(type_node) = node.child_by_field_name("type") else {
             return;
         };
@@ -81,6 +95,32 @@ impl AstCheck for Check {
             Severity::Error,
         ));
     }
+}
+
+/// True if the impl forwards the auto-trait `trait_name` (`Send` / `Sync`)
+/// conditionally on a generic parameter — i.e. the impl's generic bounds
+/// already require `trait_name`, as in `unsafe impl<T: ?Sized + Send> Send for
+/// W<T>`. The `type_parameters` field (`<…>`) holds the generics and their
+/// bounds; we check whether its text mentions `trait_name`.
+///
+/// Requiring the trait name inside the bounds is what makes this safe: a sound
+/// forwarding impl (`<T: Send>`) is skipped, but an unconditional generic impl
+/// (`unsafe impl<T> Send for W<T>`, whose `type_parameters` text is just `<T>`)
+/// keeps being flagged — it asserts `Send` for every `T`, including non-`Send`
+/// ones, which is unsound.
+fn forwards_auto_trait_conditionally(
+    node: tree_sitter::Node,
+    trait_name: &str,
+    source: &[u8],
+) -> bool {
+    let Some(type_params) = node.child_by_field_name("type_parameters") else {
+        return false;
+    };
+    let Ok(text) = type_params.utf8_text(source) else {
+        return false;
+    };
+    text.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .any(|word| word == trait_name)
 }
 
 fn find_struct<'a>(
@@ -227,5 +267,43 @@ mod tests {
     fn does_not_flag_safe_impl() {
         let src = "struct S { p: *mut u8 }\nimpl Default for S { fn default() -> Self { S { p: std::ptr::null_mut() } } }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_documented_unsafe_impl_with_safety_comment() {
+        let src = "struct Page { inner: UnsafeCell<u32> }\n\
+                   // SAFETY: atomic page flags serialize concurrent modifications.\n\
+                   unsafe impl Send for Page {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_conditional_send_forwarding() {
+        let src = "struct SpinLock<T> { value: UnsafeCell<T> }\n\
+                   unsafe impl<T: ?Sized + Send> Send for SpinLock<T> {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_conditional_sync_forwarding() {
+        let src = "struct SpinLock<T> { value: UnsafeCell<T> }\n\
+                   unsafe impl<T: ?Sized + Sync> Sync for SpinLock<T> {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_unconditional_generic_impl() {
+        // `<T>` has no `Send` bound, so the impl asserts `Send` for every `T`
+        // including non-`Send` ones — unsound, must stay flagged.
+        let src = "struct W<T> { c: UnsafeCell<T> }\nunsafe impl<T> Send for W<T> {}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn non_safety_comment_does_not_exempt() {
+        let src = "struct S { c: Cell<u32> }\n\
+                   // just a normal comment\n\
+                   unsafe impl Sync for S {}";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
