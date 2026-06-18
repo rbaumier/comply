@@ -3,6 +3,7 @@
 //! Counts ancestors of each control-flow node up to the nearest function
 //! boundary, collapses `else if` cascades, and flags depth > MAX_DEPTH.
 
+use rustc_hash::FxHashSet;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 
@@ -50,7 +51,7 @@ impl AstCheck for Check {
     }
 
     fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
-        Some(Box::new(std::collections::HashSet::<usize>::new()))
+        Some(Box::new(FxHashSet::<usize>::default()))
     }
 
     fn visit_node(
@@ -63,7 +64,7 @@ impl AstCheck for Check {
         let max_depth = ctx.config.threshold("nested-control-flow", "max", ctx.lang);
         let flagged_lines = state
             .unwrap()
-            .downcast_mut::<std::collections::HashSet<usize>>()
+            .downcast_mut::<FxHashSet<usize>>()
             .unwrap();
 
         // Skip the inner `if_expression` of an `else if` cascade — it is

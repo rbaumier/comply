@@ -2,7 +2,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 pub struct Check;
@@ -66,7 +66,7 @@ impl OxcCheck for Check {
         };
 
         // Phase 1: collect private member declarations.
-        let mut private_members: HashMap<String, u32> = HashMap::new();
+        let mut private_members: FxHashMap<String, u32> = FxHashMap::default();
 
         for element in &class.body.body {
             match element {

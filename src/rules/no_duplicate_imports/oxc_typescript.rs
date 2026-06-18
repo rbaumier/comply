@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 pub struct Check;
@@ -23,7 +23,7 @@ impl OxcCheck for Check {
         // offset of the most recent same-module import). The byte offset lets
         // us inspect the text gap between consecutive same-module imports to
         // honor doc-tooling region markers (see `gap_has_docregion_marker`).
-        let mut seen: HashMap<(&str, bool), (usize, usize)> = HashMap::new();
+        let mut seen: FxHashMap<(&str, bool), (usize, usize)> = FxHashMap::default();
 
         for node in semantic.nodes().iter() {
             let AstKind::ImportDeclaration(import) = node.kind() else {

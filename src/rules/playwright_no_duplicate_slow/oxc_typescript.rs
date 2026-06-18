@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -23,7 +23,7 @@ impl OxcCheck for Check {
         }
 
         // scope_node_id -> list of test.slow() span starts
-        let mut by_scope = HashMap::<u32, Vec<u32>>::new();
+        let mut by_scope = FxHashMap::<u32, Vec<u32>>::default();
 
         for node in semantic.nodes().iter() {
             let AstKind::CallExpression(call) = node.kind() else {

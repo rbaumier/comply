@@ -8,7 +8,7 @@
 //! struct's field names but cannot be merged with it.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     if ctx.file.path_segments.in_test_dir {
@@ -19,14 +19,14 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     collect_structs(node, source, &mut struct_fields);
 
     // For each 3-field subset, count how many structs contain it.
-    let mut subset_occurrences: HashMap<Vec<String>, Vec<usize>> = HashMap::new();
+    let mut subset_occurrences: FxHashMap<Vec<String>, Vec<usize>> = FxHashMap::default();
     for (line, fields) in &struct_fields {
         for combo in combinations(fields, 3) {
             subset_occurrences.entry(combo).or_default().push(*line);
         }
     }
 
-    let mut flagged_lines: HashSet<usize> = HashSet::new();
+    let mut flagged_lines: FxHashSet<usize> = FxHashSet::default();
     let mut results: Vec<(usize, String)> = Vec::new();
 
     for (subset, lines) in &subset_occurrences {

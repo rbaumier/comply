@@ -16,7 +16,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::import_index::{ExportKind, ImportKind};
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -39,7 +39,7 @@ impl OxcCheck for Check {
         }
 
         let canon = index.canonical(ctx.path);
-        let mut exports_cache: HashMap<PathBuf, Option<HashSet<String>>> = HashMap::new();
+        let mut exports_cache: FxHashMap<PathBuf, Option<FxHashSet<String>>> = FxHashMap::default();
 
         // Names of every local workspace member (pnpm/yarn/npm monorepo). A
         // cross-package import addresses a sibling by its scoped package name
@@ -47,7 +47,7 @@ impl OxcCheck for Check {
         // crosses the package boundary (build artifacts, `exports`/conditions,
         // re-export indirection) and is not reliably indexed. Absence of a
         // resolvable export set is not absence of the export — skip these.
-        let workspace_names: HashSet<&str> = ctx
+        let workspace_names: FxHashSet<&str> = ctx
             .project
             .workspace_package_names()
             .iter()
@@ -96,7 +96,7 @@ impl OxcCheck for Check {
                 {
                     return None;
                 }
-                let mut names: HashSet<String> =
+                let mut names: FxHashSet<String> =
                     exports.iter().map(|e| e.name.clone()).collect();
                 // A package's type-only named exports (`export type Foo`) live in
                 // a companion `.d.ts` declaration, not the runtime JS the
@@ -184,7 +184,7 @@ enum CompanionExports {
     /// verification to avoid false positives.
     Unenumerable,
     /// The companion's named exports.
-    Names(HashSet<String>),
+    Names(FxHashSet<String>),
 }
 
 /// Names exported by the declaration file(s) accompanying a runtime source file.
@@ -196,7 +196,7 @@ enum CompanionExports {
 /// - the declaration pointed to by the package's `"types"`/`"typings"` field,
 ///   covering bare imports of an npm package whose types live in a `.d.ts`.
 fn companion_declaration_exports(src: &std::path::Path) -> CompanionExports {
-    let mut names: HashSet<String> = HashSet::new();
+    let mut names: FxHashSet<String> = FxHashSet::default();
     let mut found = false;
 
     for decl in companion_declaration_paths(src) {

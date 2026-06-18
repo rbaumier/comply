@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 #[derive(Debug)]
 pub struct Check;
@@ -10,8 +10,8 @@ pub struct Check;
 /// Collect identifiers bound to a `ref(...)` / `shallowRef(...)` /
 /// `computed(...)` call in the source. Heuristic: look for
 /// `const X = ref(...)` patterns.
-fn collect_ref_bindings(source: &str) -> HashSet<String> {
-    let mut bindings = HashSet::new();
+fn collect_ref_bindings(source: &str) -> FxHashSet<String> {
+    let mut bindings = FxHashSet::default();
     for line in source.lines() {
         let trimmed = line.trim_start();
         let after_kw = trimmed
@@ -41,7 +41,7 @@ fn collect_ref_bindings(source: &str) -> HashSet<String> {
 /// and the bare parameter names that shadow any outer binding inside it.
 struct ShadowScope {
     body: std::ops::Range<usize>,
-    params: HashSet<String>,
+    params: FxHashSet<String>,
 }
 
 /// Whether `byte` is part of a JS/TS identifier (so we can require word
@@ -79,8 +79,8 @@ fn match_delimiter(bytes: &[u8], open: usize) -> Option<usize> {
 /// the parens). Splits on depth-0 commas, takes each param's leading
 /// identifier, and skips destructuring (`{…}` / `[…]`) params, which never
 /// bind a bare outer-ref name.
-fn parse_param_names(param_list: &str) -> HashSet<String> {
-    let mut names = HashSet::new();
+fn parse_param_names(param_list: &str) -> FxHashSet<String> {
+    let mut names = FxHashSet::default();
     let mut depth = 0i32;
     let mut start = 0usize;
     let bytes = param_list.as_bytes();

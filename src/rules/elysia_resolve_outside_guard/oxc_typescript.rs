@@ -18,7 +18,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -52,8 +52,8 @@ fn is_promise_receiver(expr: &Expression) -> bool {
 /// Matches `const/let/var x = Promise.withResolvers()` (with or without type
 /// arguments). Their `.resolve` property is the deferred-promise resolver, not
 /// an Elysia chain method.
-fn collect_with_resolvers_var_names(semantic: &oxc_semantic::Semantic<'_>) -> HashSet<String> {
-    let mut names = HashSet::new();
+fn collect_with_resolvers_var_names(semantic: &oxc_semantic::Semantic<'_>) -> FxHashSet<String> {
+    let mut names = FxHashSet::default();
     for node in semantic.nodes().iter() {
         let oxc_ast::AstKind::VariableDeclarator(decl) = node.kind() else {
             continue;

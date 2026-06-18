@@ -1,6 +1,7 @@
 //! no-async-without-await OXC backend — flag `async` functions that contain
 //! no `await` or `for await` in their own body.
 
+use rustc_hash::FxHashSet;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{ClassShape, byte_offset_to_line_col, enclosing_class};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
@@ -194,8 +195,8 @@ impl OxcCheck for Check {
         }
 
         // Collect node IDs of functions/arrows that contain an await or for-await.
-        let mut has_await: std::collections::HashSet<oxc_semantic::NodeId> =
-            std::collections::HashSet::new();
+        let mut has_await: FxHashSet<oxc_semantic::NodeId> =
+            FxHashSet::default();
 
         for node in semantic.nodes().iter() {
             match node.kind() {

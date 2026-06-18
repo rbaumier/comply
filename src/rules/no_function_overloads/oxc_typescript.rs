@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::{byte_offset_to_line_col, type_annotation_is_type_predicate};
@@ -95,7 +95,7 @@ impl OxcCheck for Check {
         let mut diagnostics = Vec::new();
         for node in semantic.nodes().iter() {
             if let AstKind::Program(program) = node.kind() {
-                let mut groups: HashMap<String, Vec<OverloadSig>> = HashMap::new();
+                let mut groups: FxHashMap<String, Vec<OverloadSig>> = FxHashMap::default();
                 for stmt in &program.body {
                     if let Some(sig) = extract_overload_sig(ctx.source, stmt) {
                         groups.entry(sig.name.clone()).or_default().push(sig);

@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use serde_json::Value;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::path::Path;
 
 #[derive(Debug)]
@@ -30,7 +30,7 @@ fn is_locale_filename(path: &Path) -> bool {
     false
 }
 
-fn extract_string_values(value: &Value, prefix: &str, result: &mut HashMap<String, String>) {
+fn extract_string_values(value: &Value, prefix: &str, result: &mut FxHashMap<String, String>) {
     match value {
         Value::Object(map) => {
             for (key, val) in map {
@@ -49,7 +49,7 @@ fn extract_string_values(value: &Value, prefix: &str, result: &mut HashMap<Strin
     }
 }
 
-fn find_base_locale_values(dir: &Path) -> Option<(String, HashMap<String, String>)> {
+fn find_base_locale_values(dir: &Path) -> Option<(String, FxHashMap<String, String>)> {
     let entries = std::fs::read_dir(dir).ok()?;
 
     let mut locales: Vec<String> = entries
@@ -76,7 +76,7 @@ fn find_base_locale_values(dir: &Path) -> Option<(String, HashMap<String, String
     let content = std::fs::read_to_string(&base_path).ok()?;
     let json: Value = serde_json::from_str(&content).ok()?;
 
-    let mut values = HashMap::new();
+    let mut values = FxHashMap::default();
     extract_string_values(&json, "", &mut values);
 
     Some((base_name, values))
@@ -151,7 +151,7 @@ impl TextCheck for Check {
             return vec![];
         };
 
-        let mut current_values = HashMap::new();
+        let mut current_values = FxHashMap::default();
         extract_string_values(&json, "", &mut current_values);
 
         let mut untranslated = Vec::new();

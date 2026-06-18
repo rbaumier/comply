@@ -6,7 +6,7 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     BindingPattern, Expression, ImportDeclarationSpecifier, JSXAttributeName,
 };
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 const CLIENT_GLOBALS: &[&str] = &[
@@ -115,7 +115,7 @@ impl OxcCheck for Check {
         // `use*` shape is invisible on the local name. Also treat a direct
         // `export { useX as y } from '...'` as client usage when the *source*
         // name is a hook.
-        let mut aliased_hook_locals: HashSet<&str> = HashSet::new();
+        let mut aliased_hook_locals: FxHashSet<&str> = FxHashSet::default();
         for node in semantic.nodes().iter() {
             match node.kind() {
                 AstKind::ImportDeclaration(decl) => {

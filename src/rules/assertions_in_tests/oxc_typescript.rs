@@ -1,6 +1,7 @@
 //! assertions-in-tests OXC backend — test functions must contain at
 //! least one assertion.
 
+use rustc_hash::FxHashSet;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
@@ -118,8 +119,8 @@ impl OxcCheck for Check {
         }
 
         // Pass 1: collect node IDs of functions/arrows that contain assertions.
-        let mut has_assertion: std::collections::HashSet<oxc_semantic::NodeId> =
-            std::collections::HashSet::new();
+        let mut has_assertion: FxHashSet<oxc_semantic::NodeId> =
+            FxHashSet::default();
 
         for node in semantic.nodes().iter() {
             let is_assert = match node.kind() {

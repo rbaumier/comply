@@ -11,7 +11,7 @@ use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     BindingPattern, Expression, TSType, TSTypeName, VariableDeclarator,
 };
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -63,8 +63,8 @@ fn binding_name<'a>(decl: &'a VariableDeclarator<'a>) -> Option<&'a str> {
 /// the program (top-level + inside functions).
 fn collect_empty_bindings<'a>(
     semantic: &'a oxc_semantic::Semantic<'a>,
-) -> HashSet<String> {
-    let mut names = HashSet::new();
+) -> FxHashSet<String> {
+    let mut names = FxHashSet::default();
     for node in semantic.nodes().iter() {
         if let AstKind::VariableDeclarator(decl) = node.kind()
             && is_empty_forever(decl)

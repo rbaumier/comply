@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::vue_template_helpers::{collect_attr_names, extract_elements, is_vue_file};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 #[derive(Debug)]
 pub struct Check;
@@ -16,7 +16,7 @@ impl TextCheck for Check {
         let mut diagnostics = Vec::new();
         for elem in extract_elements(ctx.source) {
             let names = collect_attr_names(elem.attrs);
-            let mut seen = HashSet::new();
+            let mut seen = FxHashSet::default();
             for name in &names {
                 if !seen.insert(*name) {
                     diagnostics.push(Diagnostic {

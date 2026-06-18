@@ -5,7 +5,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BindingPattern, Expression};
 use oxc_span::GetSpan;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
 fn starts_with_uppercase(name: &str) -> bool {
@@ -87,8 +87,8 @@ fn collect_setters_oxc(
     func_node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
     ctx: &CheckCtx,
-) -> HashMap<String, Option<String>> {
-    let mut setters = HashMap::new();
+) -> FxHashMap<String, Option<String>> {
+    let mut setters = FxHashMap::default();
     let nodes = semantic.nodes();
 
     for node in nodes.iter() {
@@ -132,7 +132,7 @@ fn find_setter_calls_oxc(
     func_node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
     ctx: &CheckCtx,
-    setters: &HashMap<String, Option<String>>,
+    setters: &FxHashMap<String, Option<String>>,
     _func_name: &str,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -163,7 +163,7 @@ fn find_setter_calls_oxc(
         // `if`/ternary whose test references the *paired* state variable terminates
         // (once state matches, the guard is false and React bails out). Exempt it.
         if let Some(state) = paired_state {
-            let mut state_names = HashSet::new();
+            let mut state_names = FxHashSet::default();
             state_names.insert(state.clone());
             if crate::oxc_helpers::is_guarded_derive_during_render(
                 node.id(),

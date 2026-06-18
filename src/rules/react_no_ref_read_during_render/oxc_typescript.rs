@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_span::GetSpan;
-use std::collections::HashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
 pub struct Check;
@@ -24,8 +24,8 @@ fn collect_ref_bindings<'a>(
     body_span: oxc_span::Span,
     semantic: &'a oxc_semantic::Semantic<'a>,
     source: &str,
-) -> HashSet<String> {
-    let mut refs = HashSet::new();
+) -> FxHashSet<String> {
+    let mut refs = FxHashSet::default();
     for node in semantic.nodes().iter() {
         let AstKind::VariableDeclarator(decl) = node.kind() else {
             continue;
@@ -75,8 +75,8 @@ fn collect_safe_default_refs<'a>(
     body_span: oxc_span::Span,
     semantic: &'a oxc_semantic::Semantic<'a>,
     source: &str,
-) -> HashSet<String> {
-    let mut refs = HashSet::new();
+) -> FxHashSet<String> {
+    let mut refs = FxHashSet::default();
     for node in semantic.nodes().iter() {
         let AstKind::VariableDeclarator(decl) = node.kind() else {
             continue;
@@ -117,11 +117,11 @@ fn collect_safe_default_refs<'a>(
 /// well-defined before the effect runs.
 fn collect_post_mount_effect_only_refs<'a>(
     body_span: oxc_span::Span,
-    refs: &HashSet<String>,
-    safe_default_refs: &HashSet<String>,
+    refs: &FxHashSet<String>,
+    safe_default_refs: &FxHashSet<String>,
     semantic: &'a oxc_semantic::Semantic<'a>,
     source: &str,
-) -> HashSet<String> {
+) -> FxHashSet<String> {
     // Spans of post-mount-effect callbacks (`useLayoutEffect`/`useEffect`
     // called with an empty-array 2nd arg) inside this component body.
     let mut effect_callback_spans: Vec<oxc_span::Span> = Vec::new();
@@ -171,8 +171,8 @@ fn collect_post_mount_effect_only_refs<'a>(
 
     // Classify every `ref.current` write target (assignment LHS or update arg):
     // written in render (disqualifies) vs written in a post-mount effect.
-    let mut written_in_render: HashSet<String> = HashSet::new();
-    let mut written_in_effect: HashSet<String> = HashSet::new();
+    let mut written_in_render: FxHashSet<String> = FxHashSet::default();
+    let mut written_in_effect: FxHashSet<String> = FxHashSet::default();
 
     for node in semantic.nodes().iter() {
         let write = match node.kind() {
@@ -311,7 +311,7 @@ fn is_nullish_guard_on_ref(expr: &oxc_ast::ast::Expression, ref_name: &str) -> b
 /// the write and tearing the read, so it does not qualify.
 fn is_change_detector_on_some_ref(
     expr: &oxc_ast::ast::Expression,
-    refs: &HashSet<String>,
+    refs: &FxHashSet<String>,
 ) -> bool {
     use oxc_ast::ast::{BinaryOperator, Expression, LogicalOperator};
     match expr {
@@ -340,7 +340,7 @@ fn is_change_detector_on_some_ref(
 }
 
 /// True if `expr` is `<name>.current` where `name` is one of `refs`.
-fn ref_current_object_name(expr: &oxc_ast::ast::Expression, refs: &HashSet<String>) -> bool {
+fn ref_current_object_name(expr: &oxc_ast::ast::Expression, refs: &FxHashSet<String>) -> bool {
     let oxc_ast::ast::Expression::StaticMemberExpression(member) = expr else {
         return false;
     };
@@ -366,7 +366,7 @@ fn ref_current_object_name(expr: &oxc_ast::ast::Expression, refs: &HashSet<Strin
 /// are stable within a render — no tearing. A disjunct that is neither (a bare
 /// `cond`, a call, an equality) can run the write every render and defeats the
 /// gate, so the whole `if` is rejected.
-fn is_controlled_reinit_guard(test: &oxc_ast::ast::Expression, refs: &HashSet<String>) -> bool {
+fn is_controlled_reinit_guard(test: &oxc_ast::ast::Expression, refs: &FxHashSet<String>) -> bool {
     use oxc_ast::ast::{Expression, LogicalOperator};
     let Expression::LogicalExpression(logical) = test else {
         return false;
@@ -428,9 +428,9 @@ fn collect_or_disjuncts<'a>(
 /// flags, guarding against the tearing false-negative.
 fn collect_lazy_init_refs<'a>(
     body_span: oxc_span::Span,
-    refs: &HashSet<String>,
+    refs: &FxHashSet<String>,
     semantic: &'a oxc_semantic::Semantic<'a>,
-) -> HashSet<String> {
+) -> FxHashSet<String> {
     // Consequent spans of `if`-statements whose test nullish-guards a given ref,
     // keyed by the guarded ref name.
     let mut guarded_consequents: Vec<(String, oxc_span::Span)> = Vec::new();
@@ -455,8 +455,8 @@ fn collect_lazy_init_refs<'a>(
 
     // Classify each write to `ref.current`: is it inside the consequent of an
     // `if` that nullish-guards THAT SAME ref?
-    let mut has_any_write: HashSet<String> = HashSet::new();
-    let mut has_unguarded_write: HashSet<String> = HashSet::new();
+    let mut has_any_write: FxHashSet<String> = FxHashSet::default();
+    let mut has_unguarded_write: FxHashSet<String> = FxHashSet::default();
 
     for node in semantic.nodes().iter() {
         let member = match node.kind() {
@@ -536,10 +536,10 @@ struct ReinitGate {
 /// tearing within the render — so it is not exempted here and still flags.
 fn collect_controlled_reinit_refs<'a>(
     body_span: oxc_span::Span,
-    refs: &HashSet<String>,
+    refs: &FxHashSet<String>,
     semantic: &'a oxc_semantic::Semantic<'a>,
-) -> std::collections::HashMap<String, Vec<ReinitGate>> {
-    use std::collections::HashMap;
+) -> FxHashMap<String, Vec<ReinitGate>> {
+    use rustc_hash::FxHashMap;
 
     // `if`-statements in render scope whose test is a controlled re-init guard,
     // paired with their consequent span.
@@ -565,7 +565,7 @@ fn collect_controlled_reinit_refs<'a>(
         }
     }
     if gated.is_empty() {
-        return HashMap::new();
+        return FxHashMap::default();
     }
 
     // Classify each render-scope write to `ref.current`, recording for each ref
@@ -573,8 +573,8 @@ fn collect_controlled_reinit_refs<'a>(
     // outside every gated consequent is mutated unconditionally and is not
     // exempt; each exempt ref is keyed ONLY to the gates that actually re-init
     // it, so a read of one ref is never exempted by an unrelated ref's gate.
-    let mut writes_into_gates: HashMap<String, HashSet<usize>> = HashMap::new();
-    let mut has_unguarded_write: HashSet<String> = HashSet::new();
+    let mut writes_into_gates: FxHashMap<String, FxHashSet<usize>> = FxHashMap::default();
+    let mut has_unguarded_write: FxHashSet<String> = FxHashSet::default();
     for node in semantic.nodes().iter() {
         let member = match node.kind() {
             AstKind::AssignmentExpression(assign) => {
@@ -623,7 +623,7 @@ fn collect_controlled_reinit_refs<'a>(
         }
     }
 
-    let mut out: HashMap<String, Vec<ReinitGate>> = HashMap::new();
+    let mut out: FxHashMap<String, Vec<ReinitGate>> = FxHashMap::default();
     for (name, gate_indices) in writes_into_gates {
         if has_unguarded_write.contains(&name) {
             continue;

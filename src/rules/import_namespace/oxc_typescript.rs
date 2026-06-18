@@ -1,6 +1,6 @@
 //! OXC backend for import-namespace.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -57,7 +57,7 @@ impl OxcCheck for Check {
         let canon = index.canonical(ctx.path);
 
         // 1. Collect namespace imports: local_name -> resolved source path.
-        let mut ns_map: HashMap<String, PathBuf> = HashMap::new();
+        let mut ns_map: FxHashMap<String, PathBuf> = FxHashMap::default();
         for imp in index.get_imports(&canon) {
             if imp.kind == ImportKind::Namespace
                 && let Some(src) = &imp.source_path {
@@ -70,7 +70,7 @@ impl OxcCheck for Check {
         }
 
         // 2. For each source module, collect exported names.
-        let mut exports_by_source: HashMap<PathBuf, HashSet<String>> = HashMap::new();
+        let mut exports_by_source: FxHashMap<PathBuf, FxHashSet<String>> = FxHashMap::default();
         for src in ns_map.values() {
             if exports_by_source.contains_key(src) {
                 continue;
@@ -80,7 +80,7 @@ impl OxcCheck for Check {
             if has_star {
                 continue;
             }
-            let names: HashSet<String> = exports.iter().map(|e| e.name.clone()).collect();
+            let names: FxHashSet<String> = exports.iter().map(|e| e.name.clone()).collect();
             exports_by_source.insert(src.clone(), names);
         }
 

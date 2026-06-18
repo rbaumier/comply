@@ -7,7 +7,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::icu::extract_placeholders;
 use crate::rules::backend::{CheckCtx, TextCheck};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::Path;
 
 #[derive(Debug)]
@@ -37,7 +37,7 @@ fn is_locale_filename(path: &Path) -> bool {
 fn extract_key_placeholders(
     value: &Value,
     prefix: &str,
-    result: &mut HashMap<String, Vec<String>>,
+    result: &mut FxHashMap<String, Vec<String>>,
 ) {
     match value {
         Value::Object(map) => {
@@ -59,7 +59,7 @@ fn extract_key_placeholders(
     }
 }
 
-fn find_base_locale(dir: &Path) -> Option<(String, HashMap<String, Vec<String>>)> {
+fn find_base_locale(dir: &Path) -> Option<(String, FxHashMap<String, Vec<String>>)> {
     let entries = std::fs::read_dir(dir).ok()?;
 
     let mut locales: Vec<String> = entries
@@ -87,7 +87,7 @@ fn find_base_locale(dir: &Path) -> Option<(String, HashMap<String, Vec<String>>)
     let content = std::fs::read_to_string(&base_path).ok()?;
     let json: Value = serde_json::from_str(&content).ok()?;
 
-    let mut placeholders = HashMap::new();
+    let mut placeholders = FxHashMap::default();
     extract_key_placeholders(&json, "", &mut placeholders);
 
     Some((base_name, placeholders))
@@ -101,8 +101,8 @@ struct PlaceholderMismatch {
 }
 
 fn find_mismatches(
-    current_placeholders: &HashMap<String, Vec<String>>,
-    base_placeholders: &HashMap<String, Vec<String>>,
+    current_placeholders: &FxHashMap<String, Vec<String>>,
+    base_placeholders: &FxHashMap<String, Vec<String>>,
     source: &str,
 ) -> Vec<PlaceholderMismatch> {
     let mut mismatches = Vec::new();
@@ -112,8 +112,8 @@ fn find_mismatches(
             continue; // Key doesn't exist in base, handled by identical-keys rule
         };
 
-        let current_set: HashSet<&String> = current.iter().collect();
-        let base_set: HashSet<&String> = base.iter().collect();
+        let current_set: FxHashSet<&String> = current.iter().collect();
+        let base_set: FxHashSet<&String> = base.iter().collect();
 
         let missing: Vec<String> = base_set
             .difference(&current_set)
@@ -178,7 +178,7 @@ impl TextCheck for Check {
             return vec![];
         };
 
-        let mut current_placeholders = HashMap::new();
+        let mut current_placeholders = FxHashMap::default();
         extract_key_placeholders(&json, "", &mut current_placeholders);
 
         let mismatches = find_mismatches(&current_placeholders, &base_placeholders, ctx.source);

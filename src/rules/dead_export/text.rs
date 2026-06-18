@@ -142,7 +142,7 @@ use crate::rules::path_utils::{
     is_sample_dir_path,
 };
 use crate::rules::walker::walk_tree;
-use std::collections::HashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::Path;
 
 const RULE_ID: &str = "dead-export";
@@ -423,7 +423,7 @@ const CO_OCCURRENCE_EXEMPTIONS: &[CoOccurrenceExemption] = &[
 /// gate is satisfied by the module's `export_names`. A convention contributes
 /// its `exempt` names only when BOTH of its gate names co-occur, preserving the
 /// per-convention co-occurrence requirement.
-fn is_co_occurrence_exempt(export_name: &str, export_names: &HashSet<&str>) -> bool {
+fn is_co_occurrence_exempt(export_name: &str, export_names: &FxHashSet<&str>) -> bool {
     CO_OCCURRENCE_EXEMPTIONS.iter().any(|conv| {
         conv.gate.iter().all(|g| export_names.contains(g)) && conv.exempt.contains(&export_name)
     })
@@ -483,8 +483,8 @@ fn collect_ng_package_reexported_names(
     index: &crate::project::import_index::ImportIndex,
     project: &crate::project::ProjectCtx,
     exporting_file: &Path,
-) -> HashSet<String> {
-    let mut out = HashSet::new();
+) -> FxHashSet<String> {
+    let mut out = FxHashSet::default();
     for barrel in index.indexed_paths() {
         if !project.is_ng_package_entry_file(barrel) {
             continue;
@@ -656,7 +656,7 @@ impl TextCheck for Check {
         // filename convention at runtime, never through a static import. Each
         // convention fires only when its two gate names co-occur in this set, so
         // a module merely exporting one signature name is not blanket-exempted.
-        let export_names: HashSet<&str> = exports.iter().map(|e| e.name.as_str()).collect();
+        let export_names: FxHashSet<&str> = exports.iter().map(|e| e.name.as_str()).collect();
 
         // Serverless function handler: a `handler` export in a file under a
         // `functions/` directory is invoked by the cloud runtime through the
@@ -690,15 +690,15 @@ impl TextCheck for Check {
         // (`BaseSchema.extend(...)`, `z.infer<typeof BaseSchema>`), object
         // composition, and any other intra-file re-use that doesn't go through
         // the import index.
-        let mut structurally_consumed: Option<HashSet<String>> = None;
-        let mut in_file_referenced: Option<HashSet<String>> = None;
+        let mut structurally_consumed: Option<FxHashSet<String>> = None;
+        let mut in_file_referenced: Option<FxHashSet<String>> = None;
 
         // Classes decorated with a custom-element-registering decorator
         // (`@customElement('tag')`). They are registered in the browser's
         // custom-element registry as a side effect and reached through their HTML
         // tag name, never a static import — so their export is live despite
         // having no importer. Computed lazily, like the scans above.
-        let mut custom_element_classes: Option<HashSet<String>> = None;
+        let mut custom_element_classes: Option<FxHashSet<String>> = None;
 
         // Docusaurus `@site/` alias importers. The alias maps to the site root
         // via webpack and never resolves in the import index, so a component
@@ -713,7 +713,7 @@ impl TextCheck for Check {
         // externally — the entry barrel re-exports it but no source file
         // imports it. Computed lazily: only an export that survived every cheap
         // check pays for the per-barrel scan.
-        let mut ng_reexported: Option<HashSet<String>> = None;
+        let mut ng_reexported: Option<FxHashSet<String>> = None;
 
         // Whether this module is a Cloudflare Worker module-format entry point —
         // an `export default` object carrying a `fetch`/`scheduled`/… lifecycle
@@ -757,7 +757,7 @@ impl TextCheck for Check {
         // through a static import, so they are live despite having no importer.
         // Computed lazily: only a surviving export pays for the parse, and the set
         // is scoped to the wrapper-call exports so a plain export stays flagged.
-        let mut convex_magic_exports: Option<HashSet<String>> = None;
+        let mut convex_magic_exports: Option<FxHashSet<String>> = None;
 
         // Names of this module's Node.js ESM loader-hook exports — the
         // `resolve`/`load`/`globalPreload` hooks declared with the canonical
@@ -768,7 +768,7 @@ impl TextCheck for Check {
         // only when the file already matched the ESM hooks convention, so a
         // non-`.mjs`/`.mts` module pays nothing and the set is scoped to the
         // shape-valid hook names so a plain `export const resolve` stays flagged.
-        let mut node_loader_hook_exports: Option<HashSet<String>> = None;
+        let mut node_loader_hook_exports: Option<FxHashSet<String>> = None;
 
         let mut diagnostics = Vec::new();
         for export in exports {
@@ -931,8 +931,8 @@ impl TextCheck for Check {
 /// that appear inside another exported `type_alias_declaration` or
 /// `interface_declaration` are deliberately ignored — chaining one
 /// "potentially dead" type through another doesn't make either of them live.
-fn collect_structurally_consumed_types(source: &str, lang: crate::files::Language) -> HashSet<String> {
-    let mut out = HashSet::new();
+fn collect_structurally_consumed_types(source: &str, lang: crate::files::Language) -> FxHashSet<String> {
+    let mut out = FxHashSet::default();
     let Some(grammar) = ts_language_for(lang) else {
         return out;
     };
@@ -975,17 +975,17 @@ fn collect_structurally_consumed_types(source: &str, lang: crate::files::Languag
 /// sharing a name with an export at top level would silence the diagnostic —
 /// a false negative we accept in exchange for never re-flagging an export
 /// that's genuinely re-used in the same file.
-fn collect_in_file_referenced_names(source: &str, lang: crate::files::Language) -> HashSet<String> {
-    let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+fn collect_in_file_referenced_names(source: &str, lang: crate::files::Language) -> FxHashSet<String> {
+    let mut counts: FxHashMap<String, u32> = FxHashMap::default();
     let Some(grammar) = ts_language_for(lang) else {
-        return HashSet::new();
+        return FxHashSet::default();
     };
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&grammar).is_err() {
-        return HashSet::new();
+        return FxHashSet::default();
     }
     let Some(tree) = parser.parse(source, None) else {
-        return HashSet::new();
+        return FxHashSet::default();
     };
     let bytes = source.as_bytes();
     let root = tree.root_node();
@@ -1026,7 +1026,7 @@ fn collect_in_file_referenced_names(source: &str, lang: crate::files::Language) 
 /// `statement_block` so that type casts or local variable annotations inside
 /// the function body do not silence dead-export for types that appear nowhere
 /// in the public signature.
-fn collect_type_identifiers(node: tree_sitter::Node, source: &[u8], out: &mut HashSet<String>) {
+fn collect_type_identifiers(node: tree_sitter::Node, source: &[u8], out: &mut FxHashSet<String>) {
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
         if n.kind() == "type_identifier" {
@@ -1055,8 +1055,8 @@ fn collect_type_identifiers(node: tree_sitter::Node, source: &[u8], out: &mut Ha
 /// `class_declaration` itself; both placements are inspected. The decorator's
 /// callee identifier is matched via the shared `is_custom_element_decorator_name`
 /// predicate, so the registered tag string is irrelevant.
-fn collect_custom_element_class_names(source: &str, lang: crate::files::Language) -> HashSet<String> {
-    let mut out = HashSet::new();
+fn collect_custom_element_class_names(source: &str, lang: crate::files::Language) -> FxHashSet<String> {
+    let mut out = FxHashSet::default();
     let Some(grammar) = ts_language_for(lang) else {
         return out;
     };

@@ -5,7 +5,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Expression, PropertyKey};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -27,7 +27,7 @@ impl OxcCheck for Check {
         }
 
         // Collect imported identifiers ending in Schema/Model from relative paths.
-        let mut schema_names: HashSet<&str> = HashSet::new();
+        let mut schema_names: FxHashSet<&str> = FxHashSet::default();
         for snode in semantic.nodes().iter() {
             let AstKind::ImportDeclaration(import) = snode.kind() else {
                 continue;

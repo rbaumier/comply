@@ -275,7 +275,7 @@ use oxc_ast::ast::{
     Argument, AssignmentTarget, BindingPattern, Declaration, ExportDefaultDeclarationKind,
     Expression, ImportDeclarationSpecifier, Program, Statement,
 };
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -409,7 +409,7 @@ fn hook_callee_root<'a>(call: &'a oxc_ast::ast::CallExpression) -> Option<&'a st
 /// modules that shadow a hook name flagged.
 fn is_test_runner_hook_call(
     call: &oxc_ast::ast::CallExpression,
-    locals: &HashSet<String>,
+    locals: &FxHashSet<String>,
 ) -> bool {
     let Some(root) = hook_callee_root(call) else {
         return false;
@@ -426,8 +426,8 @@ fn is_test_runner_hook_call(
 /// excluded — a hook imported from a runner package (`import { beforeAll } from
 /// "vitest"`) is the runner's binding, not a user definition, so it must not
 /// disqualify the setup-file shape.
-fn module_top_level_value_bindings(program: &Program) -> HashSet<String> {
-    let mut out = HashSet::new();
+fn module_top_level_value_bindings(program: &Program) -> FxHashSet<String> {
+    let mut out = FxHashSet::default();
     for stmt in &program.body {
         match stmt {
             Statement::FunctionDeclaration(func) => {
@@ -1047,8 +1047,8 @@ const STORYBOOK_REGISTRATION_IDENTS: &[&str] = &["register", "add", "setConfig"]
 /// `import { addons as a } from "@storybook/manager-api"`,
 /// `import addons from "@storybook/addons"`, and
 /// `import * as addons from "@storybook/manager-api"`.
-fn storybook_addons_bindings(program: &Program) -> HashSet<String> {
-    let mut out = HashSet::new();
+fn storybook_addons_bindings(program: &Program) -> FxHashSet<String> {
+    let mut out = FxHashSet::default();
     for stmt in &program.body {
         let Statement::ImportDeclaration(import) = stmt else { continue };
         if !STORYBOOK_MANAGER_SPECIFIERS.contains(&import.source.value.as_str()) {
@@ -1080,7 +1080,7 @@ fn storybook_addons_bindings(program: &Program) -> HashSet<String> {
 /// `addons` is the binding imported from a Storybook manager package.
 fn is_storybook_registration_call(
     call: &oxc_ast::ast::CallExpression,
-    bindings: &HashSet<String>,
+    bindings: &FxHashSet<String>,
 ) -> bool {
     let Expression::StaticMemberExpression(m) = &call.callee else {
         return false;
@@ -1218,8 +1218,8 @@ fn is_data_generation_script(program: &Program) -> bool {
 /// Collect local identifier names that are bound to `startTransition`
 /// imported from `"react"`. Handles `import { startTransition } from "react"`
 /// and `import { startTransition as ST } from "react"`.
-fn react_start_transition_bindings(program: &Program) -> HashSet<String> {
-    let mut out = HashSet::new();
+fn react_start_transition_bindings(program: &Program) -> FxHashSet<String> {
+    let mut out = FxHashSet::default();
     for stmt in &program.body {
         let Statement::ImportDeclaration(import) = stmt else { continue };
         if import.source.value.as_str() != "react" {
@@ -1240,7 +1240,7 @@ fn react_start_transition_bindings(program: &Program) -> HashSet<String> {
 
 fn is_start_transition_call(
     call: &oxc_ast::ast::CallExpression,
-    bindings: &HashSet<String>,
+    bindings: &FxHashSet<String>,
 ) -> bool {
     let Expression::Identifier(id) = &call.callee else { return false };
     bindings.contains(id.name.as_str())
@@ -1273,8 +1273,8 @@ fn is_vue_ecosystem_specifier(src: &str) -> bool {
 /// `import { watchEffect as track } from "@vue/runtime-core"`. The import source
 /// gate keeps a same-named local `watch()` (or one imported from `node:fs`) out
 /// of the set, so only the genuine Vue idiom is exempted.
-fn vue_reactivity_bindings(program: &Program) -> HashSet<String> {
-    let mut out = HashSet::new();
+fn vue_reactivity_bindings(program: &Program) -> FxHashSet<String> {
+    let mut out = FxHashSet::default();
     for stmt in &program.body {
         let Statement::ImportDeclaration(import) = stmt else { continue };
         if !is_vue_ecosystem_specifier(import.source.value.as_str()) {
@@ -1299,7 +1299,7 @@ fn vue_reactivity_bindings(program: &Program) -> HashSet<String> {
 /// [`vue_reactivity_bindings`]).
 fn is_vue_reactivity_setup_call(
     call: &oxc_ast::ast::CallExpression,
-    bindings: &HashSet<String>,
+    bindings: &FxHashSet<String>,
 ) -> bool {
     let Expression::Identifier(id) = &call.callee else { return false };
     bindings.contains(id.name.as_str())
@@ -1423,8 +1423,8 @@ fn is_tanstack_start_entry(path: &std::path::Path, project: &crate::project::Pro
 /// Collect the names of identifiers bound by top-level `const` declarations
 /// with a simple binding (`const lookup = …`). Destructuring patterns are
 /// skipped — the data-init exemption only reasons about plain named bindings.
-fn module_const_bindings(program: &Program) -> HashSet<String> {
-    let mut out = HashSet::new();
+fn module_const_bindings(program: &Program) -> FxHashSet<String> {
+    let mut out = FxHashSet::default();
     for stmt in &program.body {
         let decl = match stmt {
             Statement::VariableDeclaration(decl) => decl,
@@ -1446,8 +1446,8 @@ fn module_const_bindings(program: &Program) -> HashSet<String> {
 /// `const <name> = new ...()` declarations. These are freshly-constructed
 /// objects local to the module; configuring them in place is the builder/fluent
 /// pattern, not an external side effect.
-fn module_const_new_bindings(program: &Program) -> HashSet<String> {
-    let mut out = HashSet::new();
+fn module_const_new_bindings(program: &Program) -> FxHashSet<String> {
+    let mut out = FxHashSet::default();
     for stmt in &program.body {
         let Statement::VariableDeclaration(decl) = stmt else { continue };
         if decl.kind != oxc_ast::ast::VariableDeclarationKind::Const {
@@ -1475,7 +1475,7 @@ fn module_const_new_bindings(program: &Program) -> HashSet<String> {
 /// whose init is a plain call is still flagged.
 fn is_local_const_config_call(
     call: &oxc_ast::ast::CallExpression,
-    new_locals: &HashSet<String>,
+    new_locals: &FxHashSet<String>,
 ) -> bool {
     let Expression::StaticMemberExpression(m) = &call.callee else {
         return false;
@@ -1491,8 +1491,8 @@ fn is_local_const_config_call(
 /// (`export { styled }` → `styled`, `export { foo as bar }` → `foo`). These are
 /// the bindings whose object is the module's own public contract, so augmenting
 /// one before consumers observe it is module initialization, not external state.
-fn module_exported_local_bindings(program: &Program) -> HashSet<String> {
-    let mut out = HashSet::new();
+fn module_exported_local_bindings(program: &Program) -> FxHashSet<String> {
+    let mut out = FxHashSet::default();
     for stmt in &program.body {
         match stmt {
             Statement::ExportDefaultDeclaration(export) => {
@@ -1522,7 +1522,7 @@ fn module_exported_local_bindings(program: &Program) -> HashSet<String> {
 /// binding is not matched and stays flagged.
 fn is_export_object_assign(
     call: &oxc_ast::ast::CallExpression,
-    exported: &HashSet<String>,
+    exported: &FxHashSet<String>,
 ) -> bool {
     let Expression::StaticMemberExpression(m) = &call.callee else {
         return false;
@@ -1572,8 +1572,8 @@ fn identifier_through_casts<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
 /// initialization observed by consumers only after assembly — not external
 /// state. Distinct from `module_exported_local_bindings`, which intentionally
 /// covers only re-exported bindings for the `Object.assign` exemption.
-fn module_exported_bindings(program: &Program) -> HashSet<String> {
-    let mut out = HashSet::new();
+fn module_exported_bindings(program: &Program) -> FxHashSet<String> {
+    let mut out = FxHashSet::default();
     for stmt in &program.body {
         match stmt {
             Statement::ExportDefaultDeclaration(export) => {
@@ -1648,7 +1648,7 @@ fn module_exported_bindings(program: &Program) -> HashSet<String> {
 /// exported binding is still flagged.
 fn is_exported_builder_call(
     call: &oxc_ast::ast::CallExpression,
-    exported: &HashSet<String>,
+    exported: &FxHashSet<String>,
 ) -> bool {
     if !matches!(call.callee, Expression::Identifier(_)) {
         return false;
@@ -1699,8 +1699,8 @@ fn patched_export_root<'a>(stmt: &'a Statement<'a>) -> Option<&'a str> {
 /// flagged.
 fn is_export_patching_foreach(
     call: &oxc_ast::ast::CallExpression,
-    locals: &HashSet<String>,
-    exported: &HashSet<String>,
+    locals: &FxHashSet<String>,
+    exported: &FxHashSet<String>,
 ) -> bool {
     let Expression::StaticMemberExpression(m) = &call.callee else {
         return false;
@@ -1835,7 +1835,7 @@ fn is_pure_argument(arg: &Argument) -> bool {
 ///   `const` (a `Map`/`Set` populated in place), with pure arguments; or
 /// - `obj[k] = v` / `obj.k = v` where the assignment target roots at a
 ///   module-scoped `const`, with a pure right-hand side.
-fn is_local_mutation_stmt(stmt: &Statement, locals: &HashSet<String>) -> bool {
+fn is_local_mutation_stmt(stmt: &Statement, locals: &FxHashSet<String>) -> bool {
     let Statement::ExpressionStatement(es) = stmt else {
         return false;
     };
@@ -1872,7 +1872,7 @@ fn is_local_mutation_stmt(stmt: &Statement, locals: &HashSet<String>) -> bool {
 /// `throw`, or a non-local receiver keeps the rule firing.
 fn is_data_init_foreach(
     call: &oxc_ast::ast::CallExpression,
-    locals: &HashSet<String>,
+    locals: &FxHashSet<String>,
 ) -> bool {
     let Expression::StaticMemberExpression(m) = &call.callee else {
         return false;

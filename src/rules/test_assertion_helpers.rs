@@ -4,7 +4,7 @@ use crate::rules::backend::AstKind;
 use oxc_ast::ast::{BindingPattern, CallExpression, Expression};
 use oxc_semantic::NodeId;
 use oxc_span::{GetSpan, Span};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 /// How many call-graph edges into same-file helpers the assertion search
 /// follows. The test body is depth 0; a helper it calls is depth 1; a helper
@@ -133,7 +133,7 @@ pub(crate) fn delegates_to_outer_param(
 
     // Functions enclosing the it() call — i.e. wrappers OUTSIDE the test
     // callback (the callback is a child of the call, never an ancestor).
-    let outer_fns: HashSet<NodeId> = nodes
+    let outer_fns: FxHashSet<NodeId> = nodes
         .ancestors(it_call.id())
         .filter(|a| {
             matches!(
@@ -415,7 +415,7 @@ pub(crate) fn body_calls_asserting_local_helper(
     body_span: Span,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
-    let mut visited = HashSet::new();
+    let mut visited = FxHashSet::default();
     span_reaches_asserting_helper(body_span, semantic, &mut visited, 0)
 }
 
@@ -446,7 +446,7 @@ pub(crate) fn body_contains_assertion_prefixed_call(
 fn span_reaches_asserting_helper(
     span: Span,
     semantic: &oxc_semantic::Semantic,
-    visited: &mut HashSet<NodeId>,
+    visited: &mut FxHashSet<NodeId>,
     depth: u32,
 ) -> bool {
     if depth >= MAX_HELPER_DEPTH {
@@ -559,7 +559,7 @@ fn call_is_assertion(call: &CallExpression) -> bool {
 /// True when `decl` is a formal-parameter binding of one of `outer_fns`.
 fn binding_is_outer_param(
     decl: NodeId,
-    outer_fns: &HashSet<NodeId>,
+    outer_fns: &FxHashSet<NodeId>,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
     let nodes = semantic.nodes();

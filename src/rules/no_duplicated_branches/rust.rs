@@ -19,6 +19,7 @@
 //!
 //! A single duplicate line is reported at most once per chain.
 
+use rustc_hash::FxHashSet;
 use crate::diagnostic::{Diagnostic, Severity};
 
 struct Branch {
@@ -67,7 +68,7 @@ fn check_if_branches(
     // arm; merging them would require reordering the chain, which changes
     // top-to-bottom evaluation when conditions overlap. Compare each arm
     // against its immediate predecessor only.
-    let mut reported: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut reported: FxHashSet<usize> = FxHashSet::default();
     for j in 1..branches.len() {
         if branches[j].body.is_empty() || branches[j - 1].body.is_empty() {
             continue;

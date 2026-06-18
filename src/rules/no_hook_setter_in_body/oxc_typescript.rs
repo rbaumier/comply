@@ -1,6 +1,7 @@
 //! OxcCheck backend for no-hook-setter-in-body — flag `useState` setter
 //! called directly in a React component body (causes infinite re-renders).
 
+use rustc_hash::FxHashSet;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::Language;
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -129,7 +130,7 @@ impl OxcCheck for Check {
         if let Some(component_id) = component_node_id
             && let Some(state) = crate::oxc_helpers::use_state_setter_state_name(id, semantic)
         {
-            let mut state_names = std::collections::HashSet::new();
+            let mut state_names = FxHashSet::default();
             state_names.insert(state);
             if crate::oxc_helpers::is_guarded_derive_during_render(
                 node.id(),

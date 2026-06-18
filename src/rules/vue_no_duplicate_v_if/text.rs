@@ -11,7 +11,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 #[derive(Debug)]
 pub struct Check;
@@ -20,7 +20,7 @@ impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         // Collect all v-if conditions with their line numbers.
-        let mut conditions: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut conditions: FxHashMap<String, Vec<usize>> = FxHashMap::default();
         for (idx, line) in ctx.source.lines().enumerate() {
             let trimmed = line.trim();
             if let Some(cond) = extract_v_if_condition(trimmed) {

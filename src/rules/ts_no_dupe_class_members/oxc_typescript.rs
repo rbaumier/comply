@@ -2,7 +2,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{ClassElement, MethodDefinitionKind, PropertyKey};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 /// What a bodied class member is, for duplicate detection.
@@ -37,7 +37,7 @@ impl OxcCheck for Check {
         // `static foo` never collides with an instance `foo`. Key duplicate
         // groups on `(name, is_static)`; only bodied members participate
         // (overload signatures have no body).
-        let mut seen: HashMap<(&str, bool), Vec<(u32, MemberKind)>> = HashMap::new();
+        let mut seen: FxHashMap<(&str, bool), Vec<(u32, MemberKind)>> = FxHashMap::default();
 
         for element in &class.body.body {
             let (name, is_static, span_start, kind) = match element {

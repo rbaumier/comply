@@ -3,6 +3,7 @@
 //! Runs once per project (anchored on the lexicographically smallest indexed
 //! path). Emits one diagnostic per unreachable file in a single pass.
 
+use rustc_hash::FxHashSet;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::Language;
 use crate::project::{ImportIndex, ProjectCtx};
@@ -50,7 +51,7 @@ impl TextCheck for Check {
         // A `HashSet` so the workspace-root membership test in `is_entry_point`
         // is O(1) instead of a linear scan per indexed path — a monorepo can
         // declare hundreds of workspace roots, making that scan O(files × roots).
-        let canon_workspace_roots: std::collections::HashSet<std::path::PathBuf> = ctx
+        let canon_workspace_roots: FxHashSet<std::path::PathBuf> = ctx
             .project
             .workspace_roots
             .iter()
@@ -103,7 +104,7 @@ fn detect_entry_points<'a>(
     index: &'a ImportIndex,
     project: &ProjectCtx,
     canon_root: Option<&Path>,
-    canon_workspace_roots: &std::collections::HashSet<std::path::PathBuf>,
+    canon_workspace_roots: &FxHashSet<std::path::PathBuf>,
 ) -> Vec<&'a Path> {
     let gecko_loaded_module_names = gecko_dynamic_loaded_module_names(index);
     index
@@ -140,8 +141,8 @@ fn detect_entry_points<'a>(
 /// `.sys.mjs` name alone never grants a free pass.
 fn gecko_dynamic_loaded_module_names(
     index: &ImportIndex,
-) -> std::collections::HashSet<String> {
-    let mut names = std::collections::HashSet::new();
+) -> FxHashSet<String> {
+    let mut names = FxHashSet::default();
     for path in index.indexed_paths() {
         if !matches!(
             Language::from_path(path),
@@ -168,7 +169,7 @@ fn gecko_dynamic_loaded_module_names(
 /// `Services.scriptloader.loadSubScript`). A filename is taken only when it has a
 /// JS/TS-module extension (`.js`/`.mjs`/`.jsm`/`.sys.mjs`/`.ts`/…), keeping
 /// unrelated URL strings out of the set.
-fn collect_gecko_loaded_module_names(source: &str, names: &mut std::collections::HashSet<String>) {
+fn collect_gecko_loaded_module_names(source: &str, names: &mut FxHashSet<String>) {
     const LOADERS: [&str; 3] = [
         "ChromeUtils.importESModule",
         "ChromeUtils.import",
@@ -221,7 +222,7 @@ fn is_module_filename(name: &str) -> bool {
 /// project that does not use Gecko loaders is unaffected.
 fn is_gecko_dynamic_loaded_file(
     path: &Path,
-    loaded_module_names: &std::collections::HashSet<String>,
+    loaded_module_names: &FxHashSet<String>,
 ) -> bool {
     if loaded_module_names.is_empty() {
         return false;
@@ -303,7 +304,7 @@ fn is_entry_point(
     path: &Path,
     project: &ProjectCtx,
     canon_root: Option<&Path>,
-    canon_workspace_roots: &std::collections::HashSet<std::path::PathBuf>,
+    canon_workspace_roots: &FxHashSet<std::path::PathBuf>,
 ) -> bool {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
 

@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::{JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXElementName};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 const EXEMPT_INPUT_TYPES: &[&str] = &["hidden", "submit", "button", "reset", "image"];
@@ -61,7 +61,7 @@ impl OxcCheck for Check {
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
-        let mut label_fors: HashSet<String> = HashSet::new();
+        let mut label_fors: FxHashSet<String> = FxHashSet::default();
 
         struct InputInfo {
             name: String,

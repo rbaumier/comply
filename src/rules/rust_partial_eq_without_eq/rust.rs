@@ -37,7 +37,7 @@
 //! and generic types (`Source<'a, T>`) that the current-file-only
 //! resolution can never see.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -49,7 +49,7 @@ const KINDS: &[&str] = &["struct_item", "enum_item"];
 /// implement `Eq` — either because a field is (transitively)
 /// float-bearing, or because the type is itself `PartialEq` without
 /// `Eq`. Computed once on the first visit.
-type EqIncapableTypeNames = Option<HashSet<String>>;
+type EqIncapableTypeNames = Option<FxHashSet<String>>;
 
 #[derive(Debug)]
 pub struct Check;
@@ -135,7 +135,7 @@ fn all_fields_provably_eq(
             type_def_all_fields_provably_eq(node, source, names)
         }
         // No state available (defensive): no local Eq-incapable names known.
-        None => type_def_all_fields_provably_eq(node, source, &HashSet::new()),
+        None => type_def_all_fields_provably_eq(node, source, &FxHashSet::default()),
     }
 }
 
@@ -146,7 +146,7 @@ fn all_fields_provably_eq(
 fn type_def_all_fields_provably_eq(
     node: tree_sitter::Node,
     source: &[u8],
-    eq_incapable_names: &HashSet<String>,
+    eq_incapable_names: &FxHashSet<String>,
 ) -> bool {
     field_type_nodes(node)
         .iter()
@@ -174,7 +174,7 @@ const EQ_STDLIB_CONTAINERS: &[&str] = &[
 fn field_type_is_provably_eq(
     ty: tree_sitter::Node,
     source: &[u8],
-    eq_incapable_names: &HashSet<String>,
+    eq_incapable_names: &FxHashSet<String>,
 ) -> bool {
     match ty.kind() {
         // A non-float primitive is `Eq`; `f32` / `f64` never are.
@@ -237,7 +237,7 @@ fn named_type_children(node: tree_sitter::Node) -> impl Iterator<Item = tree_sit
 fn generic_container_is_provably_eq(
     ty: tree_sitter::Node,
     source: &[u8],
-    eq_incapable_names: &HashSet<String>,
+    eq_incapable_names: &FxHashSet<String>,
 ) -> bool {
     if ty.kind() == "scoped_type_identifier" {
         // Path-qualified bare type, e.g. `std::path::Path`. Only a known
@@ -306,7 +306,7 @@ fn is_local_type_name(node: tree_sitter::Node, source: &[u8], name: &str) -> boo
 fn type_def_has_eq_incapable_field(
     node: tree_sitter::Node,
     source: &[u8],
-    eq_incapable_names: &HashSet<String>,
+    eq_incapable_names: &FxHashSet<String>,
 ) -> bool {
     field_type_nodes(node)
         .iter()
@@ -360,7 +360,7 @@ fn field_type_nodes(node: tree_sitter::Node) -> Vec<tree_sitter::Node> {
 fn type_node_forces_partial_eq(
     ty: tree_sitter::Node,
     source: &[u8],
-    eq_incapable_names: &HashSet<String>,
+    eq_incapable_names: &FxHashSet<String>,
 ) -> bool {
     let mut stack = vec![ty];
     while let Some(n) = stack.pop() {
@@ -395,7 +395,7 @@ fn type_node_forces_partial_eq(
 /// itself `PartialEq` without `Eq` (a manual `impl PartialEq`, or a
 /// derived `PartialEq` with no `Eq`), or when any field is a direct
 /// `f32` / `f64` or names another type already known to be Eq-incapable.
-fn collect_eq_incapable_type_names(node: tree_sitter::Node, source: &[u8]) -> HashSet<String> {
+fn collect_eq_incapable_type_names(node: tree_sitter::Node, source: &[u8]) -> FxHashSet<String> {
     let mut root = node;
     while let Some(p) = root.parent() {
         root = p;
@@ -417,7 +417,7 @@ fn collect_eq_incapable_type_names(node: tree_sitter::Node, source: &[u8]) -> Ha
         }
     }
 
-    let mut eq_incapable_names = HashSet::new();
+    let mut eq_incapable_names = FxHashSet::default();
     // Seed: any local type that is `PartialEq` without `Eq` cannot gain
     // `Eq`, so it taints any type that holds it as a field.
     for (name, def) in &defs {

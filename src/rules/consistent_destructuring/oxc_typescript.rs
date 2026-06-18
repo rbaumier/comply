@@ -12,7 +12,7 @@ use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
 use oxc_semantic::SymbolId;
 use oxc_span::GetSpan;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -53,7 +53,7 @@ impl OxcCheck for Check {
         // a different object never exempts a read on the destructured one —
         // even when neither base resolves to a binding (unresolved globals
         // both carry a `None` symbol and are disambiguated by text).
-        let mut mutated_props: HashSet<(Option<SymbolId>, String, String)> = HashSet::new();
+        let mut mutated_props: FxHashSet<(Option<SymbolId>, String, String)> = FxHashSet::default();
 
         for node in nodes.iter() {
             match node.kind() {

@@ -3,7 +3,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use crate::rules::path_utils;
 use oxc_span::GetSpan;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -43,7 +43,7 @@ impl OxcCheck for Check {
         }
         let nodes = semantic.nodes();
         let max_depth = ctx.config.threshold("nested-control-flow", "max", ctx.lang);
-        let mut flagged_lines = HashSet::new();
+        let mut flagged_lines = FxHashSet::default();
 
         for node in nodes.iter() {
             let kind = node.kind();

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 use oxc_ast::AstKind;
@@ -21,7 +21,7 @@ impl OxcCheck for Check {
         let scoping = semantic.scoping();
         let nodes = semantic.nodes();
         let mut diagnostics = Vec::new();
-        let mut seen: HashSet<NodeId> = HashSet::new();
+        let mut seen: FxHashSet<NodeId> = FxHashSet::default();
 
         for symbol_id in scoping.symbol_ids() {
             let decl_id = scoping.symbol_declaration(symbol_id);

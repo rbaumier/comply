@@ -1,6 +1,7 @@
 //! no-duplicated-branches OxcCheck backend — flag if/else branches with
 //! identical bodies.
 
+use rustc_hash::FxHashSet;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
@@ -54,7 +55,7 @@ impl OxcCheck for Check {
         // distinct arm; merging them would require reordering the chain,
         // which changes top-to-bottom evaluation when conditions overlap.
         // Compare each arm against its immediate predecessor only.
-        let mut reported = std::collections::HashSet::new();
+        let mut reported = FxHashSet::default();
         for j in 1..bodies.len() {
             if bodies[j].1.is_empty() || bodies[j - 1].1.is_empty() {
                 continue;

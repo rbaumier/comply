@@ -6,7 +6,7 @@
 //! This recognises the `useSyncExternalStore` / observer idiom where
 //! module-level mutable state is the explicit architectural contract.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
@@ -38,7 +38,7 @@ impl OxcCheck for Check {
         }
 
         let mut diagnostics = Vec::new();
-        let mut flagged: HashSet<NodeId> = HashSet::new();
+        let mut flagged: FxHashSet<NodeId> = FxHashSet::default();
 
         for symbol_id in scoping.symbol_ids() {
             if scoping.symbol_scope_id(symbol_id) != root_scope {
