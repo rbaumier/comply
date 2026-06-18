@@ -19,6 +19,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
     cast_operand_is_bool, cast_operand_is_collection_size, find_identifier_type,
+    is_in_enum_discriminant,
 };
 
 const KINDS: &[&str] = &["type_cast_expression"];
@@ -79,6 +80,9 @@ impl AstCheck for Check {
         if let Some(source_type) = source_numeric_type(node, source_bytes)
             && !is_dangerous_cast(source_type, target_type)
         {
+            return;
+        }
+        if is_in_enum_discriminant(node) {
             return;
         }
         let pos = node.start_position();
@@ -423,6 +427,27 @@ mod tests {
         // The innermost `for c` rebinds `c` to a non-char; the nearest binding
         // wins, so `c as u32` must not borrow the outer `chars()` exemption.
         let src = "fn f(s: &str, v: V) { for c in s.chars() { for c in v.iter() { let _ = c as u32; } } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_3859_enum_discriminant_cast_not_flagged() {
+        // A discriminant must be a const expression; `as` is the only
+        // conversion that compiles there (`From`/`TryFrom` are unavailable).
+        assert!(run_on("#[repr(i8)] enum E { Str = b's' as i8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_3859_full_conversion_flag_shape_not_flagged() {
+        let src = "#[repr(i8)] enum ConversionFlag { None = -1, Str = b's' as i8, Ascii = b'a' as i8, Repr = b'r' as i8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_3859_cast_in_impl_method_still_flagged() {
+        // A cast inside an `impl Enum` method is a runtime body, not a
+        // discriminant — it must keep flagging.
+        let src = "enum E { A } impl E { fn f(&self, x: u32) -> i8 { x as i8 } }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
