@@ -7,7 +7,7 @@
 //! False positives (e.g. `*const u8 as usize` pointer casts) are
 //! accepted — suppress with `// comply-ignore` on the offending line.
 
-mod rust;
+pub(crate) mod rust;
 
 use crate::diagnostic::Severity;
 use crate::rules::RuleDef;

@@ -14,6 +14,10 @@
 //! type alias), the cast is flagged conservatively.  Use
 //! `// comply-ignore: rust-no-lossy-as-cast — <justification>` to
 //! suppress known-safe casts in that situation.
+//!
+//! Casts that `rust-no-as-numeric-cast` already flags are suppressed here so
+//! the pair emits one diagnostic per span; this rule keeps firing only where
+//! that one does not — notably int `as f32` (no `f32::From` for those sources).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -21,6 +25,7 @@ use crate::rules::rust_helpers::{
     cast_operand_is_bool, cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
     find_identifier_type, is_in_enum_discriminant,
 };
+use crate::rules::rust_no_as_numeric_cast::rust::fires_on_cast;
 
 const KINDS: &[&str] = &["type_cast_expression"];
 
@@ -86,6 +91,12 @@ impl AstCheck for Check {
             return;
         }
         if is_in_enum_discriminant(node) {
+            return;
+        }
+        // De-duplicate: when `rust-no-as-numeric-cast` owns this cast, let it
+        // be the single diagnostic for the span. This rule keeps firing only
+        // where that one does not (e.g. int/float `as f32`).
+        if fires_on_cast(node, source_bytes) {
             return;
         }
         let pos = node.start_position();
@@ -257,13 +268,14 @@ mod tests {
     }
 
     #[test]
-    fn flags_u32_to_u8() {
-        assert_eq!(run_on("fn f(x: u32) -> u8 { x as u8 }").len(), 1);
+    fn u32_to_u8_owned_by_numeric_cast() {
+        // Narrowing `u32 as u8` — `rust-no-as-numeric-cast` owns the span.
+        assert!(run_on("fn f(x: u32) -> u8 { x as u8 }").is_empty());
     }
 
     #[test]
-    fn flags_f64_to_u32() {
-        assert_eq!(run_on("fn f(x: f64) -> u32 { x as u32 }").len(), 1);
+    fn f64_to_u32_owned_by_numeric_cast() {
+        assert!(run_on("fn f(x: f64) -> u32 { x as u32 }").is_empty());
     }
 
     #[test]
@@ -297,8 +309,9 @@ mod tests {
     }
 
     #[test]
-    fn flags_unknown_source_type_conservatively() {
-        assert_eq!(run_on("fn f(x: MyInt) -> u32 { x as u32 }").len(), 1);
+    fn unknown_source_type_owned_by_numeric_cast() {
+        // Unresolved source narrowing to u32 — `rust-no-as-numeric-cast` owns it.
+        assert!(run_on("fn f(x: MyInt) -> u32 { x as u32 }").is_empty());
     }
 
     #[test]
@@ -318,19 +331,19 @@ mod tests {
     }
 
     #[test]
-    fn flags_char_to_u8() {
-        // `char as u8` truncates (only the low byte survives).
-        assert_eq!(run_on("fn f(c: char) -> u8 { c as u8 }").len(), 1);
+    fn char_to_u8_owned_by_numeric_cast() {
+        // `char as u8` truncates — `rust-no-as-numeric-cast` owns the span.
+        assert!(run_on("fn f(c: char) -> u8 { c as u8 }").is_empty());
     }
 
     #[test]
-    fn flags_char_to_u16() {
-        assert_eq!(run_on("fn f(c: char) -> u16 { c as u16 }").len(), 1);
+    fn char_to_u16_owned_by_numeric_cast() {
+        assert!(run_on("fn f(c: char) -> u16 { c as u16 }").is_empty());
     }
 
     #[test]
-    fn flags_char_literal_to_i8() {
-        assert_eq!(run_on("fn f() -> i8 { 'A' as i8 }").len(), 1);
+    fn char_literal_to_i8_owned_by_numeric_cast() {
+        assert!(run_on("fn f() -> i8 { 'A' as i8 }").is_empty());
     }
 
     #[test]
@@ -358,10 +371,10 @@ mod tests {
     }
 
     #[test]
-    fn repro_1309_unbounded_method_call_still_flagged() {
-        // `.parse_count()` is not a collection-size method — keep flagging:
-        // the exemption must not blanket-allow every method-call operand.
-        assert_eq!(run_on("fn f(v: V) -> u8 { v.parse_count() as u8 }").len(), 1);
+    fn repro_1309_unbounded_method_call_owned_by_numeric_cast() {
+        // `.parse_count()` is not a collection-size method, so this narrowing
+        // is a real finding — but `rust-no-as-numeric-cast` owns the span.
+        assert!(run_on("fn f(v: V) -> u8 { v.parse_count() as u8 }").is_empty());
     }
 
     #[test]
@@ -398,11 +411,11 @@ mod tests {
     }
 
     #[test]
-    fn repro_3847_for_chars_binding_as_u8_still_flagged() {
-        // The binding is `char`, but `char as u8` narrows below 21 bits (lossy).
-        assert_eq!(
-            run_on("fn f(s: &str) { for c in s.chars() { let _ = c as u8; } }").len(),
-            1
+    fn repro_3847_for_chars_binding_as_u8_owned_by_numeric_cast() {
+        // The binding is `char`, `char as u8` narrows below 21 bits (lossy) —
+        // but `rust-no-as-numeric-cast` owns the span.
+        assert!(
+            run_on("fn f(s: &str) { for c in s.chars() { let _ = c as u8; } }").is_empty()
         );
     }
 
@@ -416,21 +429,21 @@ mod tests {
     }
 
     #[test]
-    fn repro_3847_for_non_chars_iter_binding_still_flagged() {
+    fn repro_3847_for_non_chars_iter_binding_owned_by_numeric_cast() {
         // The iterator is not `.chars()`/`.char_indices()`, so the binding type
-        // is unknown and a narrowing cast must stay flagged.
-        assert_eq!(
-            run_on("fn f(v: V) { for x in v.bytes() { let _ = x as u8; } }").len(),
-            1
+        // is unknown — a real narrowing, but `rust-no-as-numeric-cast` owns it.
+        assert!(
+            run_on("fn f(v: V) { for x in v.bytes() { let _ = x as u8; } }").is_empty()
         );
     }
 
     #[test]
-    fn repro_3847_inner_loop_shadows_chars_binding_still_flagged() {
+    fn repro_3847_inner_loop_shadows_chars_binding_owned_by_numeric_cast() {
         // The innermost `for c` rebinds `c` to a non-char; the nearest binding
-        // wins, so `c as u32` must not borrow the outer `chars()` exemption.
+        // wins, so `c as u32` is a real narrowing — `rust-no-as-numeric-cast`
+        // owns the span.
         let src = "fn f(s: &str, v: V) { for c in s.chars() { for c in v.iter() { let _ = c as u32; } } }";
-        assert_eq!(run_on(src).len(), 1);
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
@@ -447,11 +460,12 @@ mod tests {
     }
 
     #[test]
-    fn repro_3859_cast_in_impl_method_still_flagged() {
+    fn repro_3859_cast_in_impl_method_owned_by_numeric_cast() {
         // A cast inside an `impl Enum` method is a runtime body, not a
-        // discriminant — it must keep flagging.
+        // discriminant — a real narrowing, but `rust-no-as-numeric-cast`
+        // owns the span.
         let src = "enum E { A } impl E { fn f(&self, x: u32) -> i8 { x as i8 } }";
-        assert_eq!(run_on(src).len(), 1);
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
@@ -470,10 +484,33 @@ mod tests {
     }
 
     #[test]
-    fn repro_3832_self_as_u8_in_impl_data_enum_still_flagged() {
+    fn repro_3832_self_as_u8_in_impl_data_enum_owned_by_numeric_cast() {
         // A data-carrying enum has no discriminant `as`-cast semantics, so the
-        // exemption must not apply.
+        // exemption does not apply — a real narrowing, but
+        // `rust-no-as-numeric-cast` owns the span.
         let src = "enum E { A(u32), B } impl E { fn bit(self) -> u8 { self as u8 } }";
-        assert_eq!(run_on(src).len(), 1);
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_1254_method_call_as_u8_suppressed_numeric_cast_owns_it() {
+        // A method-call narrowing both rules used to flag (`.value()` is not a
+        // size accessor, so the collection-size exemption does not apply) —
+        // `rust-no-as-numeric-cast` owns it, so this rule suppresses.
+        assert!(run_on("fn f(m: M) -> u8 { let n = m.value() as u8; n }").is_empty());
+    }
+
+    #[test]
+    fn repro_1254_axum_index_as_u32_suppressed() {
+        // axum `syn::Index { index: index as u32 }` where `index: usize`:
+        // `rust-no-as-numeric-cast` fires (unsigned narrowing), so suppress here.
+        assert!(run_on("fn f(index: usize) -> u32 { index as u32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_1254_int_as_f32_still_flagged_numeric_cast_skips_it() {
+        // `y as f32` where `y: u32`: `rust-no-as-numeric-cast` skips int->f32
+        // (no `f32::From<u32>` to suggest), so this rule still owns it.
+        assert_eq!(run_on("fn f(y: u32) -> f32 { let x = y as f32; x }").len(), 1);
     }
 }
