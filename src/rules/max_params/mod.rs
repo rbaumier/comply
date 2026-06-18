@@ -15,8 +15,8 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "max-params",
-    description: "Functions should take at most 3 positional arguments.",
-    remediation: "If you need more than 3 parameters, pack them into an \
+    description: "Functions should take at most 4 positional arguments.",
+    remediation: "If you need more than 4 parameters, pack them into an \
                   options object — named fields carry intent where \
                   positional arguments don't.",
     severity: Severity::Error,
