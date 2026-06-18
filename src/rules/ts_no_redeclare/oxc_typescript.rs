@@ -6,10 +6,12 @@
 //! declaration of a symbol is a `Function` AST node.
 //!
 //! Branded type pattern: TypeScript allows a symbol to occupy both the
-//! value namespace (`const`/function/import binding) and the type namespace
-//! (`type`/`interface`) simultaneously — skipped when declarations are a mix
-//! of value and type-only nodes (e.g. `import Database from 'better-sqlite3'`
-//! + `export interface Database`). A type-only import specifier
+//! value namespace (`const`/function/`class`/import binding) and the type
+//! namespace (`type`/`interface`) simultaneously — skipped when declarations
+//! are a mix of value and type-only nodes (e.g. `import Database from
+//! 'better-sqlite3'` + `export interface Database`, or `interface Column` +
+//! `class Column` where the interface augments the class instance type). A
+//! type-only import specifier
 //! (`import type { X }` or `import { type X }`) binds `X` in the type
 //! namespace only, so it counts as a type declaration for this merge (a
 //! function `X` coexisting with `import type { X }` is the standard
@@ -100,13 +102,16 @@ impl OxcCheck for Check {
             };
 
             // Branded type pattern: `export const Foo = ...; export type Foo = ...;`
-            // TypeScript merges value-namespace (const/function/import binding)
-            // and type-namespace (type alias/interface) declarations — exempt only
-            // when both sides present and every decl is one or the other
-            // (const only, not let/var).
+            // TypeScript merges value-namespace (const/function/class/import
+            // binding) and type-namespace (type alias/interface) declarations —
+            // exempt only when both sides present and every decl is one or the
+            // other (const only, not let/var). A class binds in the value
+            // namespace only here, so `class X` + `interface X` is exempt while
+            // `class X` + `class X` (no type decl) still flags.
             let is_value_decl = |id| -> bool {
                 match nodes.kind(id) {
                     AstKind::Function(_)
+                    | AstKind::Class(_)
                     | AstKind::ImportDefaultSpecifier(_)
                     | AstKind::ImportNamespaceSpecifier(_) => true,
                     AstKind::ImportSpecifier(_) => !is_type_only_import(id),
@@ -491,6 +496,51 @@ function SortFilterItem({ item }: { item: SortFilterItem }) {
         let src = "/*\n * PARTIAL FILE: switch_without_default.js\n */\nimport { Component } from '@angular/core';\nexport class MyApp {}\n/*\n * PARTIAL FILE: switch_with_default.js\n */\nimport { Component } from '@angular/core';\nexport class MyApp {}";
         let d = crate::rules::test_helpers::run_rule(&Check, src, "GOLDEN_PARTIAL.js");
         assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_interface_plus_class_merging() {
+        // Regression for #3852: `interface X` + `class X` is canonical legal
+        // declaration merging (drizzle's `interface Column` + `abstract class
+        // Column`) — the interface augments the class instance type while the
+        // class supplies the value binding.
+        let d = run("export interface Column {}\nexport abstract class Column {}");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_class_plus_interface_merging() {
+        // Regression for #3852: the merge is order-independent.
+        let d = run("class Foo {}\ninterface Foo {}");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_class_plus_namespace_merging() {
+        // Regression for #3852: `class X` + `namespace X` is intentional
+        // declaration merging (static-side augmentation), covered by the
+        // namespace guard once a class counts as a value declaration.
+        let d = run("class Foo {}\nnamespace Foo {\n  export const x = 1;\n}");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn flags_duplicate_class() {
+        // Two class declarations = real redeclaration. A class is only a value
+        // declaration (never a type declaration), so two classes do not satisfy
+        // the branded-type merge guard (no type decl present) and still fire.
+        let d = run("class Foo {}\nclass Foo {}");
+        assert_eq!(d.len(), 1, "expected 1 diagnostic, got: {d:?}");
+        assert!(d[0].message.contains("`Foo`"));
+    }
+
+    #[test]
+    fn flags_const_plus_class() {
+        // const + class are both value-namespace declarations — a genuine
+        // value collision, still flagged.
+        let d = run("const Foo = 1;\nclass Foo {}");
+        assert_eq!(d.len(), 1, "expected 1 diagnostic, got: {d:?}");
+        assert!(d[0].message.contains("`Foo`"));
     }
 
     #[test]
