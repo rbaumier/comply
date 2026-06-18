@@ -10,10 +10,13 @@ use tree_sitter::Node;
 /// Combinators whose closure argument runs blocking code off the async
 /// worker, so a `block_on` lexically inside it does not start a runtime
 /// within the running runtime: `task::block_in_place` runs on the current
-/// thread but tells tokio to move other tasks off it, and `thread::spawn`
+/// thread but tells tokio to move other tasks off it, `thread::spawn`
 /// (and `Builder::spawn`) runs on a separate OS thread with no runtime
-/// context. Matched against the call's final path segment only.
-const BLOCKING_OFFLOAD_COMBINATORS: &[&str] = &["block_in_place", "spawn"];
+/// context, and `task::spawn_blocking` runs the closure on tokio's
+/// dedicated blocking-thread pool where `Handle::current().block_on(..)`
+/// is the documented bridge. Matched against the call's final path segment
+/// only.
+const BLOCKING_OFFLOAD_COMBINATORS: &[&str] = &["block_in_place", "spawn", "spawn_blocking"];
 
 /// True if `node` is lexically inside a synchronous closure that is an
 /// argument to one of the `BLOCKING_OFFLOAD_COMBINATORS`. Walks the
@@ -144,6 +147,14 @@ mod tests {
     #[test]
     fn allows_block_on_inside_thread_spawn_closure() {
         let source = "async fn f() { std::thread::spawn(move || { handle.block_on(fut) }); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_block_on_inside_spawn_blocking_closure() {
+        let source = "async fn new_vendor() -> u32 { let v = tokio::task::spawn_blocking(move || { \
+                      let rt = tokio::runtime::Handle::current(); rt.block_on(async { 42 }) }).await\
+                      .unwrap(); v }";
         assert!(run_on(source).is_empty());
     }
 
