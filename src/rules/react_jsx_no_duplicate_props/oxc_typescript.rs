@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{JSXAttributeItem, JSXAttributeName};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -24,7 +24,7 @@ impl OxcCheck for Check {
         let AstKind::JSXOpeningElement(opening) = node.kind() else {
             return;
         };
-        let mut seen = HashSet::new();
+        let mut seen = FxHashSet::default();
         for attr in &opening.attributes {
             let JSXAttributeItem::Attribute(a) = attr else {
                 continue;

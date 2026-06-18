@@ -1,6 +1,6 @@
 //! tailwind-no-duplicate-classes oxc backend for TS / JS / TSX.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -39,7 +39,7 @@ impl OxcCheck for Check {
             return;
         };
         let class_str = lit.value.as_str();
-        let mut seen: HashSet<&str> = HashSet::new();
+        let mut seen: FxHashSet<&str> = FxHashSet::default();
         let (line, column) = byte_offset_to_line_col(ctx.source, attr.span.start as usize);
         for class in class_str.split_whitespace() {
             if !seen.insert(class) {

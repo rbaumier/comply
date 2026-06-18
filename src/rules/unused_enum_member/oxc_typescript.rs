@@ -6,7 +6,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BinaryOperator, Expression};
 use oxc_span::GetSpan;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
 pub struct Check;
@@ -23,11 +23,11 @@ impl OxcCheck for Check {
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         // Map enum_name -> Vec<(member_name, line)>
-        let mut enums: HashMap<String, Vec<(String, u32)>> = HashMap::new();
+        let mut enums: FxHashMap<String, Vec<(String, u32)>> = FxHashMap::default();
         // Set of (enum_name, member_name) that are referenced.
-        let mut used: HashSet<(String, String)> = HashSet::new();
+        let mut used: FxHashSet<(String, String)> = FxHashSet::default();
         // Track enum node IDs to skip their subtrees in usage collection.
-        let mut enum_node_ids: HashSet<oxc_semantic::NodeId> = HashSet::new();
+        let mut enum_node_ids: FxHashSet<oxc_semantic::NodeId> = FxHashSet::default();
 
         // Pass 1: collect enum declarations (non-exported only).
         for node in semantic.nodes().iter() {

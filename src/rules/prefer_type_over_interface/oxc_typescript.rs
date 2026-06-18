@@ -1,7 +1,7 @@
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -43,7 +43,7 @@ impl OxcCheck for Check {
         // class implements or any sibling interface extends must stay an
         // `interface`: it serves as an extension base and supports declaration
         // merging, neither of which a `type` alias provides.
-        let mut referenced_as_base = HashSet::new();
+        let mut referenced_as_base = FxHashSet::default();
         for node in semantic.nodes().iter() {
             match node.kind() {
                 AstKind::TSClassImplements(impl_clause) => {

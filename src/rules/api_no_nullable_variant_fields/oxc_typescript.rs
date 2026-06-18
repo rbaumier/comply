@@ -1,7 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 pub struct Check;
@@ -136,8 +136,8 @@ fn is_in_shorthand_axis_family(name: &str, names: &[&str]) -> bool {
 
 fn collect_optional_prefixes<'b>(
     members: &'b oxc_allocator::Vec<'_, oxc_ast::ast::TSSignature<'_>>,
-) -> HashMap<String, Vec<&'b str>> {
-    let mut buckets: HashMap<String, Vec<&'b str>> = HashMap::new();
+) -> FxHashMap<String, Vec<&'b str>> {
+    let mut buckets: FxHashMap<String, Vec<&'b str>> = FxHashMap::default();
     for member in members.iter() {
         let oxc_ast::ast::TSSignature::TSPropertySignature(prop) = member else {
             continue;
@@ -170,7 +170,7 @@ fn collect_optional_prefixes<'b>(
 }
 
 fn check_optional_clusters(
-    buckets: HashMap<String, Vec<&str>>,
+    buckets: FxHashMap<String, Vec<&str>>,
     type_name: &str,
     span_start: u32,
     ctx: &CheckCtx,

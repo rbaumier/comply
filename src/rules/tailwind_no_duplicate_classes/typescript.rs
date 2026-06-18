@@ -6,7 +6,7 @@
 //! the value on whitespace and reports any token that appears more than
 //! once.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -51,7 +51,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     let class_str = jsx_class_value(node, source)
         .or_else(|| vue_class_value(node, source));
     let Some(class_str) = class_str else { return; };
-    let mut seen: HashSet<&str> = HashSet::new();
+    let mut seen: FxHashSet<&str> = FxHashSet::default();
     for class in class_str.split_whitespace() {
         if !seen.insert(class) {
             diagnostics.push(Diagnostic::at_node(

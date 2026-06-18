@@ -81,7 +81,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::project::ProjectCtx;
 use crate::project::import_index::ExportKind;
 use crate::rules::backend::{CheckCtx, TextCheck};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 
 const RULE_ID: &str = "duplicate-export";
@@ -89,7 +89,7 @@ const RULE_ID: &str = "duplicate-export";
 /// Per-package re-export occurrences keyed by `(package dir, symbol name)`,
 /// each holding the barrel file, line, and module specifier the name is
 /// re-exported `from` (the specifier discriminates interchangeable adapters).
-type ReExportMap = HashMap<(Option<PathBuf>, String), Vec<(PathBuf, usize, Option<String>)>>;
+type ReExportMap = FxHashMap<(Option<PathBuf>, String), Vec<(PathBuf, usize, Option<String>)>>;
 
 #[derive(Debug)]
 pub struct Check;
@@ -110,12 +110,12 @@ impl TextCheck for Check {
         // re-exported. Keying on the nearest `package.json` directory keeps
         // independent packages from being compared against each other; barrels
         // outside any package share a `None` key and compare among themselves.
-        let mut reexports: ReExportMap = HashMap::new();
+        let mut reexports: ReExportMap = FxHashMap::default();
         // `(barrel, name)` pairs whose re-export pulls the name out of a compiled
         // `dist/`/`build/` artifact. These barrels re-export build output to
         // simulate a consumer (the bundle-size measurement shape), so they add no
         // ambiguous source-import path and are dropped before counting.
-        let mut build_output_reexports: HashSet<(PathBuf, String)> = HashSet::new();
+        let mut build_output_reexports: FxHashSet<(PathBuf, String)> = FxHashSet::default();
         for (path, exports) in index.iter_exports() {
             for export in exports {
                 if !matches!(export.kind, ExportKind::ReExport) {
@@ -143,7 +143,7 @@ impl TextCheck for Check {
         // their names qualified under the `X.` namespace, never flat — so a short
         // name shared by two such barrels is `X.Bar` vs `Y.Bar`, not an ambiguous
         // flat path. Collect them once so the count below can drop them.
-        let indexed: HashSet<&Path> = index.indexed_paths().collect();
+        let indexed: FxHashSet<&Path> = index.indexed_paths().collect();
         let namespace_wrapped = collect_namespace_wrapped_barrels(&indexed);
 
         // `(barrel, name)` pairs whose re-export is type-only — either the
@@ -184,7 +184,7 @@ impl TextCheck for Check {
             // not add an independent import path — only barrels whose origin
             // lies outside the group do. Flag only when two or more such
             // independent barrels remain.
-            let group: std::collections::HashSet<&Path> = barrels.iter().copied().collect();
+            let group: FxHashSet<&Path> = barrels.iter().copied().collect();
             let independent: Vec<&Path> = barrels
                 .iter()
                 .copied()
@@ -323,7 +323,7 @@ fn is_interchangeable_adapter_group(
     barrels: &[&Path],
     occurrences: &[(PathBuf, usize, Option<String>)],
 ) -> bool {
-    let mut sources: HashSet<&str> = HashSet::new();
+    let mut sources: FxHashSet<&str> = FxHashSet::default();
     for &barrel in barrels {
         let Some(source) = occurrences
             .iter()
@@ -371,8 +371,8 @@ fn display_path(path: &Path, root: Option<&Path>) -> String {
 /// each barrel's source. Only re-export statements (`export … from '…'`) are
 /// considered — local `export type { X }` without a `from` clause is a binding,
 /// not a barrel re-export.
-fn collect_type_only_reexports(indexed: &HashSet<&Path>) -> HashSet<(PathBuf, String)> {
-    let mut out = HashSet::new();
+fn collect_type_only_reexports(indexed: &FxHashSet<&Path>) -> FxHashSet<(PathBuf, String)> {
+    let mut out = FxHashSet::default();
     for &file in indexed {
         let Ok(source) = std::fs::read_to_string(file) else {
             continue;
@@ -447,8 +447,8 @@ fn type_only_reexport_names(source: &str) -> Vec<String> {
 /// set. The index drops the `export * as X` form entirely (it binds a namespace,
 /// not a flat name), so the wrapper is recovered by scanning each indexed file's
 /// source for the statement and resolving its specifier against `indexed`.
-fn collect_namespace_wrapped_barrels(indexed: &HashSet<&Path>) -> HashSet<PathBuf> {
-    let mut wrapped = HashSet::new();
+fn collect_namespace_wrapped_barrels(indexed: &FxHashSet<&Path>) -> FxHashSet<PathBuf> {
+    let mut wrapped = FxHashSet::default();
     for &file in indexed {
         let Ok(source) = std::fs::read_to_string(file) else {
             continue;
@@ -513,7 +513,7 @@ fn specifier_after_from(tail: &str) -> Option<String> {
 fn resolve_relative_specifier(
     importer: &Path,
     specifier: &str,
-    indexed: &HashSet<&Path>,
+    indexed: &FxHashSet<&Path>,
 ) -> Option<PathBuf> {
     if !specifier.starts_with('.') {
         return None;
@@ -600,11 +600,11 @@ fn is_gatsby_lifecycle_entry(barrel: &Path, project: &ProjectCtx) -> bool {
 fn collapse_devprod_type_variants<'a>(
     barrels: Vec<&'a Path>,
     name: &str,
-    type_only_reexports: &HashSet<(PathBuf, String)>,
+    type_only_reexports: &FxHashSet<(PathBuf, String)>,
 ) -> Vec<&'a Path> {
     // Group candidate barrels by (parent dir, base name) — variants of one
     // module live side by side and differ only in their dev/prod marker.
-    let mut groups: HashMap<(PathBuf, String), Vec<&'a Path>> = HashMap::new();
+    let mut groups: FxHashMap<(PathBuf, String), Vec<&'a Path>> = FxHashMap::default();
     let mut passthrough: Vec<&'a Path> = Vec::new();
     for barrel in barrels {
         let is_type_only =

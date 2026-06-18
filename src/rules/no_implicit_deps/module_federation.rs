@@ -6,7 +6,7 @@
 //! packages and must not appear in `package.json`, so `no-implicit-deps` reads
 //! the nearest bundler config to learn which root names are federated remotes.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::path::Path;
 
 /// Bundler config files that may host a Module Federation `remotes` map.
@@ -35,8 +35,8 @@ const CONFIG_FILES: &[&str] = &[
 /// Collect Module Federation remote names declared in any bundler config
 /// between `importer`'s directory and `stop_at` (inclusive). Walks no further
 /// than `stop_at` so the scan never escapes the project root.
-pub(super) fn remote_names(importer: &Path, stop_at: Option<&Path>) -> HashSet<String> {
-    let mut names = HashSet::new();
+pub(super) fn remote_names(importer: &Path, stop_at: Option<&Path>) -> FxHashSet<String> {
+    let mut names = FxHashSet::default();
     let mut dir = importer.parent();
     while let Some(d) = dir {
         for file in CONFIG_FILES {
@@ -57,7 +57,7 @@ pub(super) fn remote_names(importer: &Path, stop_at: Option<&Path>) -> HashSet<S
 /// Keys are either bare JS identifiers (`remote:`) or quoted strings
 /// (`"remote-app":`). Nested braces inside values are skipped so the scan
 /// stops at the matching close brace of the `remotes` object.
-fn collect_remote_names(source: &str, out: &mut HashSet<String>) {
+fn collect_remote_names(source: &str, out: &mut FxHashSet<String>) {
     let bytes = source.as_bytes();
     let mut search_from = 0;
     while let Some(rel) = source[search_from..].find("remotes") {
@@ -95,7 +95,7 @@ fn collect_remote_names(source: &str, out: &mut HashSet<String>) {
 /// Walk the object literal whose `{` is at `open`, recording each top-level
 /// key. Tracks brace depth so keys of nested objects (remote option blocks)
 /// are not mistaken for remote names; ignores `:` / `{` inside strings.
-fn collect_object_keys(source: &str, open: usize, out: &mut HashSet<String>) {
+fn collect_object_keys(source: &str, open: usize, out: &mut FxHashSet<String>) {
     let bytes = source.as_bytes();
     let mut i = open + 1;
     let mut depth = 1usize;
@@ -189,8 +189,8 @@ fn is_ident_char(c: u8) -> bool {
 mod tests {
     use super::*;
 
-    fn names(source: &str) -> HashSet<String> {
-        let mut out = HashSet::new();
+    fn names(source: &str) -> FxHashSet<String> {
+        let mut out = FxHashSet::default();
         collect_remote_names(source, &mut out);
         out
     }

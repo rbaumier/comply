@@ -7,7 +7,7 @@ use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
 use oxc_ast::ast::{Expression, FunctionType, TSTypeName};
 use oxc_semantic::SymbolId;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -230,8 +230,8 @@ fn is_custom_element_class(
 /// `<>` to a `Fragment` call, so the named binding is consumed by the JSX
 /// transform without ever appearing as an explicit source reference. Both the
 /// block (`/** @jsx X */`) and line (`// @jsx X`) comment forms are honored.
-fn jsx_pragma_factories(semantic: &oxc_semantic::Semantic, source: &str) -> HashSet<String> {
-    let mut factories = HashSet::new();
+fn jsx_pragma_factories(semantic: &oxc_semantic::Semantic, source: &str) -> FxHashSet<String> {
+    let mut factories = FxHashSet::default();
     for comment in semantic.comments() {
         let Some(text) = source.get(comment.span.start as usize..comment.span.end as usize) else {
             continue;
@@ -296,10 +296,10 @@ fn file_contains_jsx(semantic: &oxc_semantic::Semantic) -> bool {
 /// same file does not exempt the enum's `Header`.
 fn collect_type_position_enum_member_uses(
     semantic: &oxc_semantic::Semantic,
-) -> HashSet<(SymbolId, String)> {
+) -> FxHashSet<(SymbolId, String)> {
     let scoping = semantic.scoping();
     let nodes = semantic.nodes();
-    let mut uses = HashSet::new();
+    let mut uses = FxHashSet::default();
 
     for node in nodes.iter() {
         let AstKind::TSQualifiedName(qualified) = node.kind() else {
@@ -334,7 +334,7 @@ fn collect_type_position_enum_member_uses(
 fn is_enum_member_used_in_type_position(
     decl_node: oxc_semantic::NodeId,
     member_name: &str,
-    type_position_uses: &HashSet<(SymbolId, String)>,
+    type_position_uses: &FxHashSet<(SymbolId, String)>,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
     let nodes = semantic.nodes();
@@ -422,11 +422,11 @@ impl OxcCheck for Check {
         // Memoized on the first import binding that looks unused; scanning the
         // comments for `@jsx`/`@jsxFrag` pragmas is only paid for when a file
         // declares an import that would otherwise be flagged.
-        let mut jsx_factories: Option<HashSet<String>> = None;
+        let mut jsx_factories: Option<FxHashSet<String>> = None;
         // Memoized on the first unreferenced enum member; building the
         // type-position use set scans every node, so it is only paid for in
         // files that actually declare an enum member that looks unused.
-        let mut enum_member_type_uses: Option<HashSet<(SymbolId, String)>> = None;
+        let mut enum_member_type_uses: Option<FxHashSet<(SymbolId, String)>> = None;
 
         for symbol_id in scoping.symbol_ids() {
             let name = scoping.symbol_name(symbol_id);

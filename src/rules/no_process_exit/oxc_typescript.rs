@@ -2,7 +2,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Argument, Expression};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -49,7 +49,7 @@ impl OxcCheck for Check {
         // Phase 1a: find process.on('SIGTERM'/'SIGINT', callback) calls.
         // Collect spans of inline function callbacks and names of referenced functions.
         let mut signal_callback_spans: Vec<(u32, u32)> = Vec::new();
-        let mut signal_callee_names: HashSet<&'a str> = HashSet::new();
+        let mut signal_callee_names: FxHashSet<&'a str> = FxHashSet::default();
 
         for node in nodes.iter() {
             let AstKind::CallExpression(call) = node.kind() else {
@@ -173,7 +173,7 @@ fn is_in_signal_handler<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
     signal_callback_spans: &[(u32, u32)],
-    signal_callee_names: &HashSet<&'a str>,
+    signal_callee_names: &FxHashSet<&'a str>,
 ) -> bool {
     let nodes = semantic.nodes();
     for ancestor in nodes.ancestors(node.id()) {

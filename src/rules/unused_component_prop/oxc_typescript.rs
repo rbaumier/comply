@@ -3,7 +3,7 @@
 //! Uses `run_on_semantic` to detect React component props that are declared
 //! in the Props type but never read in the component body.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
 use oxc_ast::AstKind;
@@ -46,7 +46,7 @@ impl OxcCheck for Check {
         // keyed by the declaration's own `NodeId`. Keying by node (not by type
         // name) keeps two same-named declarations in different scopes distinct,
         // so a component is matched against the specific `Props` it references.
-        let mut prop_types: HashMap<oxc_semantic::NodeId, Vec<PropInfo>> = HashMap::new();
+        let mut prop_types: FxHashMap<oxc_semantic::NodeId, Vec<PropInfo>> = FxHashMap::default();
         for node in nodes.iter() {
             match node.kind() {
                 AstKind::TSInterfaceDeclaration(decl) => {
@@ -91,7 +91,7 @@ impl OxcCheck for Check {
                 None => continue,
             };
 
-            let used_props: HashSet<String> = match &param.pattern {
+            let used_props: FxHashSet<String> = match &param.pattern {
                 BindingPattern::ObjectPattern(obj) => {
                     if obj.rest.is_some() {
                         continue;
@@ -259,7 +259,7 @@ fn collect_ts_signature_props(sigs: &[TSSignature]) -> Vec<PropInfo> {
 fn resolve_props<'a>(
     param: &oxc_ast::ast::FormalParameter<'a>,
     scoping: &oxc_semantic::Scoping,
-    prop_types: &HashMap<oxc_semantic::NodeId, Vec<PropInfo>>,
+    prop_types: &FxHashMap<oxc_semantic::NodeId, Vec<PropInfo>>,
 ) -> Option<Vec<PropInfo>> {
     let ta = param.type_annotation.as_ref()?;
     match &ta.type_annotation {
@@ -284,8 +284,8 @@ fn collect_accessed_props(
     scoping: &oxc_semantic::Scoping,
     nodes: &oxc_semantic::AstNodes,
     sym: oxc_semantic::SymbolId,
-) -> Option<HashSet<String>> {
-    let mut used = HashSet::new();
+) -> Option<FxHashSet<String>> {
+    let mut used = FxHashSet::default();
     for reference in scoping.get_resolved_references(sym) {
         let ref_id = reference.node_id();
         let parent_id = nodes.parent_id(ref_id);

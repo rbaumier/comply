@@ -6,7 +6,7 @@
 //! (`p-`, `px-`, `bg-`, …) or by membership in the `display` group; if a
 //! group has 2+ entries, it reports the conflict.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -251,7 +251,7 @@ crate::ast_check! { |node, source, ctx, diagnostics|
         .or_else(|| vue_class_value(node, source));
     let Some(class_str) = class_str else { return; };
     let classes: Vec<&str> = class_str.split_whitespace().collect();
-    let mut groups: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut groups: FxHashMap<&str, Vec<&str>> = FxHashMap::default();
     for class in &classes {
         if let Some(key) = conflict_key(class) {
             groups.entry(key).or_default().push(class);

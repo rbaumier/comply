@@ -4,7 +4,7 @@ use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
 use oxc_ast::ast::*;
 use oxc_semantic::SymbolId;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 pub struct Check;
@@ -26,7 +26,7 @@ impl OxcCheck for Check {
 
         // Phase 1: collect named imports as
         // `local_name -> (module_specifier, symbol_id, is_type_only)`.
-        let mut imports: HashMap<&str, (&str, Option<SymbolId>, bool)> = HashMap::new();
+        let mut imports: FxHashMap<&str, (&str, Option<SymbolId>, bool)> = FxHashMap::default();
         for stmt in &program.body {
             let Statement::ImportDeclaration(import) = stmt else {
                 continue;

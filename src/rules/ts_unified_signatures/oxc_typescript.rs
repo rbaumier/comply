@@ -7,7 +7,7 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{PropertyKey, TSCallSignatureDeclaration, TSLiteral, TSSignature, TSType};
 use oxc_span::GetSpan;
 use rustc_hash::FxHashSet;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 pub struct Check;
@@ -128,7 +128,7 @@ fn collect_signatures<'a>(
     ctx: &CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut seen: HashMap<String, Vec<u32>> = HashMap::new();
+    let mut seen: FxHashMap<String, Vec<u32>> = FxHashMap::default();
     let mut call_sigs: Vec<&TSCallSignatureDeclaration<'a>> = Vec::new();
 
     for sig in members {

@@ -8,7 +8,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BinaryExpression, BinaryOperator, Expression, LogicalOperator, UnaryOperator};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
 /// `typeof` operands that are environment/feature detection, not shape
@@ -77,8 +77,8 @@ impl OxcCheck for Check {
         collect_leaves(&logical.left, &mut leaves);
         collect_leaves(&logical.right, &mut leaves);
 
-        let mut object_gates: HashSet<&str> = HashSet::new();
-        let mut prop_counts: HashMap<&str, usize> = HashMap::new();
+        let mut object_gates: FxHashSet<&str> = FxHashSet::default();
+        let mut prop_counts: FxHashMap<&str, usize> = FxHashMap::default();
         for leaf in &leaves {
             let Expression::BinaryExpression(bin) = leaf else { continue };
             match classify(bin) {

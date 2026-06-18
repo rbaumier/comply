@@ -11,6 +11,7 @@
 //! Self-closing tags (`<div />`) are also ignored — the author has
 //! explicitly indicated no close is needed.
 
+use rustc_hash::FxHashMap;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::vue_template_helpers::{extract_elements, extract_template, is_vue_file};
@@ -50,8 +51,8 @@ impl TextCheck for Check {
 
         // Bucket openings by tag name (in source order).
         let mut diagnostics = Vec::new();
-        let mut seen_per_tag: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
+        let mut seen_per_tag: FxHashMap<String, usize> =
+            FxHashMap::default();
         for (tag, line) in &openings {
             let n = seen_per_tag.entry(tag.clone()).or_insert(0);
             *n += 1;
@@ -73,8 +74,8 @@ impl TextCheck for Check {
 }
 
 /// Count `</tagname>` occurrences per tag name (lowercased) in `template`.
-fn count_closing_tags(template: &str) -> std::collections::HashMap<String, usize> {
-    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+fn count_closing_tags(template: &str) -> FxHashMap<String, usize> {
+    let mut counts: FxHashMap<String, usize> = FxHashMap::default();
     let bytes = template.as_bytes();
     let len = bytes.len();
     let mut i = 0;

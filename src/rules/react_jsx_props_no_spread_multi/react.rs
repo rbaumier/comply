@@ -4,10 +4,10 @@
 //! on a single JSX element.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |node, source, ctx, diagnostics|
-    let mut seen_spreads = HashSet::new();
+    let mut seen_spreads = FxHashSet::default();
     let mut cursor = node.walk();
 
     for child in node.children(&mut cursor) {

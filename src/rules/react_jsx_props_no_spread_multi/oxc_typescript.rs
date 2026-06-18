@@ -5,7 +5,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::JSXAttributeItem;
 use oxc_span::GetSpan;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
@@ -26,7 +26,7 @@ impl OxcCheck for Check {
             return;
         };
 
-        let mut seen_spreads = HashSet::new();
+        let mut seen_spreads = FxHashSet::default();
 
         for attr_item in &opening.attributes {
             let JSXAttributeItem::SpreadAttribute(spread) = attr_item else {

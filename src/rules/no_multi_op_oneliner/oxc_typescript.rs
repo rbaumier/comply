@@ -1,5 +1,6 @@
 //! no-multi-op-oneliner oxc backend.
 
+use rustc_hash::FxHashSet;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
@@ -41,7 +42,7 @@ impl OxcCheck for Check {
             }
         }
 
-        let mut reported_lines = std::collections::HashSet::new();
+        let mut reported_lines = FxHashSet::default();
         let mut diagnostics = Vec::new();
 
         for node in semantic.nodes() {

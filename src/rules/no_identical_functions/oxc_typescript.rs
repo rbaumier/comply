@@ -6,7 +6,7 @@
 //! the `pub(super)` visibility — the module is only `#[cfg(test)]` for the
 //! AstCheck impl, but the helper functions are always compiled).
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::hash::{Hash, Hasher};
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -136,7 +136,7 @@ fn in_distinct_test_scopes(a: &CollectedFunction, b: &CollectedFunction) -> bool
 /// as `IdentifierReference`, lowercase host tags as `Identifier`; both carry a
 /// `name`. Namespaced (`<a:b/>`) and member (`<a.b/>`) tags are irrelevant to
 /// the component-identity signal and are skipped.
-fn collect_jsx_element_names(semantic: &oxc_semantic::Semantic) -> HashSet<String> {
+fn collect_jsx_element_names(semantic: &oxc_semantic::Semantic) -> FxHashSet<String> {
     semantic
         .nodes()
         .iter()
@@ -162,7 +162,7 @@ fn is_distinct_jsx_component_pair(
     a: &CollectedFunction,
     b: &CollectedFunction,
     in_test_file: bool,
-    jsx_names: &HashSet<String>,
+    jsx_names: &FxHashSet<String>,
 ) -> bool {
     in_test_file
         && a.name != b.name
@@ -336,7 +336,7 @@ impl OxcCheck for Check {
         // since we can't reuse the TS backend's cache across cfg boundaries,
         // we build a lightweight per-file hash lookup here.
         if !_import_index.is_empty() {
-            let mut local_hashes: HashSet<(u64, usize)> = HashSet::new();
+            let mut local_hashes: FxHashSet<(u64, usize)> = FxHashSet::default();
             for func in &local_functions {
                 let h = hash_str(&func.normalized);
                 if local_hashes.insert((h, func.line)) {

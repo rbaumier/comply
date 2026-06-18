@@ -1,5 +1,6 @@
 //! react-refresh-only-export-components oxc backend for TSX.
 
+use rustc_hash::FxHashSet;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::project::Framework;
@@ -136,9 +137,9 @@ fn is_react_router_route_file(ctx: &CheckCtx) -> bool {
 /// magic-export registry (`magic_exports_for_path`), which only resolves them
 /// when the file's package actually depends on the framework, so a coincidental
 /// non-router export named `dynamic` elsewhere is still flagged.
-fn next_router_magic_exports<'a>(ctx: &CheckCtx<'a>) -> std::collections::HashSet<&'a str> {
+fn next_router_magic_exports<'a>(ctx: &CheckCtx<'a>) -> FxHashSet<&'a str> {
     if !(ctx.file.path_segments.in_app_router || ctx.file.path_segments.in_pages_router) {
-        return std::collections::HashSet::new();
+        return FxHashSet::default();
     }
     ctx.project.magic_exports_for_path(ctx.path)
 }

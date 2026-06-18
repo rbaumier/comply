@@ -13,7 +13,7 @@
 //! different rates and no single iterator combinator expresses the traversal.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 crate::ast_check! { on ["while_expression"] => |node, source, ctx, diagnostics|
     let Some(condition) = node.child_by_field_name("condition") else { return };
@@ -102,7 +102,7 @@ fn index_variable<'a>(condition: tree_sitter::Node, source: &'a [u8]) -> Option<
 /// `v[i] = …`) are not bare identifiers and do not count, so a single-index
 /// loop accumulating into `*sum` still reports one mutated index.
 fn count_mutated_index_variables(body: tree_sitter::Node, source: &[u8]) -> usize {
-    let mut vars: HashSet<&str> = HashSet::new();
+    let mut vars: FxHashSet<&str> = FxHashSet::default();
     let mut stack = vec![body];
     while let Some(cur) = stack.pop() {
         if matches!(cur.kind(), "compound_assignment_expr" | "assignment_expression")

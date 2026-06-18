@@ -3,7 +3,7 @@
 //! For each container, collects env entry names and flags subsequent
 //! occurrences of the same name.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::yaml_k8s_helpers as y;
@@ -16,7 +16,7 @@ crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostic
     let Some(pod_spec) = y::pod_spec_mapping(node, source, &kind) else { return; };
     for container in y::containers_of_pod_spec(pod_spec, source, true) {
         let Some(env) = y::descend_sequence(container, source, &["env"]) else { continue; };
-        let mut seen: HashSet<String> = HashSet::new();
+        let mut seen: FxHashSet<String> = FxHashSet::default();
         for entry in y::sequence_item_mappings(env) {
             let Some(name_pair) = y::find_pair(entry, source, "name") else { continue; };
             let Some(name) = y::pair_scalar_value(name_pair, source) else { continue; };

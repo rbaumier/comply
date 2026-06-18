@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Argument, Expression, Statement};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 pub struct Check;
@@ -46,7 +46,7 @@ fn extract_test_title<'a>(
 /// into nested describes).
 fn collect_titles<'a>(
     stmts: &'a [Statement<'a>],
-    out: &mut HashMap<String, Vec<u32>>,
+    out: &mut FxHashMap<String, Vec<u32>>,
 ) {
     for stmt in stmts.iter() {
         let Statement::ExpressionStatement(es) = stmt else { continue };
@@ -97,7 +97,7 @@ impl OxcCheck for Check {
             }
             _ => return,
         };
-        let mut titles: HashMap<String, Vec<u32>> = HashMap::new();
+        let mut titles: FxHashMap<String, Vec<u32>> = FxHashMap::default();
         collect_titles(stmts, &mut titles);
         for (title, positions) in titles.iter() {
             if positions.len() < 2 {

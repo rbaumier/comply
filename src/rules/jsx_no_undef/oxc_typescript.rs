@@ -1,7 +1,7 @@
 //! jsx-no-undef OXC backend — walk every `JSXOpeningElement` and flag
 //! PascalCase tag identifiers that don't resolve to any symbol in the file.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -26,7 +26,7 @@ impl OxcCheck for Check {
         }
 
         let scoping = semantic.scoping();
-        let defined: HashSet<String> = scoping.symbol_names().map(|s| s.to_string()).collect();
+        let defined: FxHashSet<String> = scoping.symbol_names().map(|s| s.to_string()).collect();
 
         let mut diagnostics = Vec::new();
         for node in semantic.nodes().iter() {

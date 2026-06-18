@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, OxcCheck};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -32,7 +32,7 @@ impl OxcCheck for Check {
         }
 
         let canon = index.canonical(ctx.path);
-        let mut seen: HashSet<(String, usize)> = HashSet::new();
+        let mut seen: FxHashSet<(String, usize)> = FxHashSet::default();
         let mut diagnostics = Vec::new();
 
         for imp in index.get_imports(&canon) {

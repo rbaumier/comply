@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::project::import_index::{ExportKind, ImportKind};
 use crate::rules::backend::{CheckCtx, OxcCheck};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -13,10 +13,10 @@ pub struct Check;
 /// Enumerated export surface of one source module, cached per import target.
 struct SourceExports {
     /// Non-default export names (`export const foo`, `export { foo }`, …).
-    named: HashSet<String>,
+    named: FxHashSet<String>,
     /// Named bindings that are also the default export via
     /// `export { X as default }` — `import X from '…'` is valid for these.
-    default_aliases: HashSet<String>,
+    default_aliases: FxHashSet<String>,
 }
 
 impl OxcCheck for Check {
@@ -42,7 +42,7 @@ impl OxcCheck for Check {
         // named bindings that are *also* the module's default export via
         // `export { X as default }`. `None` means "skip this source" (it has
         // `export * from '…'`, so its export surface can't be enumerated).
-        let mut exports_by_source: HashMap<PathBuf, Option<SourceExports>> = HashMap::new();
+        let mut exports_by_source: FxHashMap<PathBuf, Option<SourceExports>> = FxHashMap::default();
 
         for imp in index.get_imports(&canon) {
             if imp.kind != ImportKind::Default {

@@ -233,7 +233,7 @@ mod tests {
         let mut deduped = ids.clone();
         deduped.dedup();
         if deduped.len() != ids.len() {
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = rustc_hash::FxHashSet::default();
             let dups: Vec<_> = ids.iter().filter(|id| !seen.insert(*id)).collect();
             panic!("duplicate rule IDs detected: {:?}", dups);
         }

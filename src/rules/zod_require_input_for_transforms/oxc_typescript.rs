@@ -1,6 +1,7 @@
 //! zod-require-input-for-transforms OXC backend — flag `z.infer<typeof X>`
 //! where `X` uses `.transform()`.
 
+use rustc_hash::FxHashSet;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
@@ -20,8 +21,8 @@ impl OxcCheck for Check {
         }
 
         // Collect variable declarators whose init contains `.transform(`.
-        let mut transform_schemas: std::collections::HashSet<&str> =
-            std::collections::HashSet::new();
+        let mut transform_schemas: FxHashSet<&str> =
+            FxHashSet::default();
         for snode in semantic.nodes().iter() {
             let AstKind::VariableDeclaration(decl) = snode.kind() else {
                 continue;

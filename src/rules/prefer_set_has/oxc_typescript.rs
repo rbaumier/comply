@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::ast::{Expression, VariableDeclarationKind};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 pub struct Check;
@@ -28,7 +28,7 @@ impl OxcCheck for Check {
 
         // Phase 1: collect `const NAME = [...]` declarations with their element
         // count — the count gates emission in phase 2.
-        let mut array_lens: HashMap<&str, usize> = HashMap::new();
+        let mut array_lens: FxHashMap<&str, usize> = FxHashMap::default();
         for node in semantic.nodes().iter() {
             if let AstKind::VariableDeclaration(decl) = node.kind() {
                 if decl.kind != VariableDeclarationKind::Const {

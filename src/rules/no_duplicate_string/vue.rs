@@ -5,7 +5,7 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::sql_helpers::TS_STRING_KINDS;
 use crate::rules::vue_sfc::{self, ScriptBlock};
 use crate::rules::walker::collect_nodes_of_kinds;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 #[derive(Debug)]
 pub struct Check;
@@ -23,8 +23,8 @@ impl AstCheck for Check {
         // Count occurrences across ALL <script> blocks of this SFC so
         // a string used in both the regular `<script>` and in
         // `<script setup>` counts as two.
-        let mut occurrences: HashMap<String, Vec<(ScriptBlock<'_>, tree_sitter::Point)>> =
-            HashMap::new();
+        let mut occurrences: FxHashMap<String, Vec<(ScriptBlock<'_>, tree_sitter::Point)>> =
+            FxHashMap::default();
         let mut inner_trees: Vec<(ScriptBlock<'_>, tree_sitter::Tree)> = Vec::new();
         for block in blocks {
             let mut parser = tree_sitter::Parser::new();
