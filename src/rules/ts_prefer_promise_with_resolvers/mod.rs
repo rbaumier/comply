@@ -1,7 +1,10 @@
-//! ts-prefer-promise-with-resolvers — flag the `new Promise(...)` constructor
-//! and steer users toward the modern `Promise.withResolvers()` API which
-//! avoids the executor-callback closure pattern.
+//! ts-prefer-promise-with-resolvers — steer users toward `Promise.withResolvers()`
+//! when a `new Promise(executor)` leaks its `resolve`/`reject` handle out of the
+//! executor's scope (assigns it to an outer binding, stores it on an object, or
+//! returns it). Self-contained executors are left alone.
 
+mod oxc_typescript;
+#[cfg(test)]
 mod typescript;
 
 use crate::diagnostic::Severity;
@@ -12,7 +15,7 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "ts-prefer-promise-with-resolvers",
-    description: "`new Promise(...)` is verbose — prefer `Promise.withResolvers()` to obtain `{ promise, resolve, reject }` without an executor closure.",
+    description: "An executor that leaks `resolve`/`reject` out of its scope is better written with `Promise.withResolvers()`, which returns `{ promise, resolve, reject }` directly.",
     remediation: "Replace `new Promise((resolve, reject) => { ... })` with \
                   `const { promise, resolve, reject } = Promise.withResolvers();` \
                   and call `resolve`/`reject` from wherever you previously did.",
@@ -32,13 +35,13 @@ pub fn register() -> RuleDef {
         backends: vec![
             (
                 Language::TypeScript,
-                Backend::Text(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
             (
                 Language::JavaScript,
-                Backend::Text(Box::new(typescript::Check)),
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
-            (Language::Tsx, Backend::Text(Box::new(typescript::Check))),
+            (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
         ],
     }
 }
