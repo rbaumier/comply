@@ -255,14 +255,39 @@ fn is_method_call_on_text(stmt: &str, var_name: &str, methods: &[&str]) -> bool 
 }
 
 /// Check if text looks like `varName.prop = ...` or `varName[...] = ...`.
+///
+/// A real property/element assignment has its `=` at bracket depth 0: the member
+/// access `.foo` / `[i]` closes back to depth 0 before the `=`. An `=` nested
+/// inside `(...)` belongs to a callback (`arr.forEach((x) => {...})` or
+/// `arr.forEach((x) => { m[x] = y })`), not an assignment to the receiver, so it
+/// is ignored. The arrow `=>` and the comparison operators `==`/`!=`/`<=`/`>=`
+/// are excluded as well.
 fn is_property_assignment_text(stmt: &str, var_name: &str) -> bool {
     if !stmt.starts_with(var_name) {
         return false;
     }
     let rest = &stmt[var_name.len()..];
-    if rest.starts_with('.') || rest.starts_with('[') {
-        // Must have an assignment somewhere
-        return rest.contains('=') && !rest.starts_with("==");
+    if !(rest.starts_with('.') || rest.starts_with('[')) {
+        return false;
+    }
+    let bytes = rest.as_bytes();
+    let mut depth: i32 = 0;
+    for i in 0..bytes.len() {
+        match bytes[i] {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b'=' if depth == 0 => {
+                let next = bytes.get(i + 1).copied();
+                let prev = if i > 0 { Some(bytes[i - 1]) } else { None };
+                if next != Some(b'>')
+                    && next != Some(b'=')
+                    && !matches!(prev, Some(b'!') | Some(b'<') | Some(b'>') | Some(b'='))
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
     }
     false
 }
@@ -330,6 +355,45 @@ mod tests {
     #[test]
     fn flags_map_set() {
         assert_eq!(run_on("const m = new Map();\nm.set('a', 1);").len(), 1);
+    }
+
+    // A property assignment whose VALUE is an arrow still flags: the assignment
+    // `=` is at bracket depth 0, found before the `(a) => a`.
+    #[test]
+    fn flags_property_assignment_with_arrow_value() {
+        assert_eq!(run_on("const obj = {};\nobj.fn = (a) => a;").len(), 1);
+    }
+
+    // --- Regressions for #3795: a callback arrow `=>` is not a property
+    // assignment. The `=` lives inside the callback's parens (depth > 0). ---
+
+    // The repro: a multi-line `.forEach` whose callback contains an arrow.
+    #[test]
+    fn allows_foreach_callback_arrow() {
+        let src = "const neutralKeys = [\"white\", \"100\"];\nneutralKeys.forEach((key) => {\n  doSomething(key);\n});";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // Single-line `.forEach` with a body assignment: the `=` nests inside the
+    // callback's parens (depth > 0), so it is not the receiver's assignment.
+    #[test]
+    fn allows_foreach_callback_body_assignment() {
+        let src = "const arr = [1, 2];\narr.forEach((x) => { map[x] = x; });";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // `.map` callback with an arrow.
+    #[test]
+    fn allows_map_callback_arrow() {
+        let src = "const arr = [1];\narr.map((x) => x + 1);";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // `.filter` with an arrow that is not a mutator.
+    #[test]
+    fn allows_filter_callback_arrow() {
+        let src = "const arr = [1];\narr.filter((x) => x > 0);";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
     }
 
     // --- Regressions for #3801: mutators that don't return the receiver can't be
