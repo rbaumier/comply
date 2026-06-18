@@ -7,9 +7,10 @@
 //! (`Arc`, `Rc`, `LazyLock`, `OnceLock`, `Lazy`, `OnceCell`).
 //!
 //! Non-usage positions are exempt: a type alias definition
-//! (`type Lists<T> = Mutex<…>;`) and the subject of an `impl` head
-//! (`impl<T> RwLock<T>`, `unsafe impl<T> Send for RwLock<T>`) name the lock
-//! type rather than use it, so neither can be `Arc`-wrapped at that site.
+//! (`type Lists<T> = Mutex<…>;`), the subject of an `impl` head
+//! (`impl<T> RwLock<T>`, `unsafe impl<T> Send for RwLock<T>`), and a function
+//! return type (`fn new() -> RwLock<T>`, `fn get(&self) -> &Mutex<T>`) name the
+//! lock type rather than use it, so none can be `Arc`-wrapped at that site.
 //!
 //! Test code is exempted — tests commonly use bare `Mutex` for simple
 //! state without thread sharing, and rewriting them to `RefCell`
@@ -56,6 +57,17 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
             // looking at a genuine usage, so only exempt the head.
             "impl_item" => {
                 if ancestor.child_by_field_name("body") != Some(child) {
+                    return;
+                }
+            }
+            // A function return type (`fn new() -> RwLock<T>`,
+            // `fn get(&self) -> &Mutex<T>`) names the lock the caller receives;
+            // the caller, not the callee, decides whether to share it in `Arc`,
+            // so the return position can't be wrapped here. A `Mutex<T>` in the
+            // function body (e.g. a `let` annotation) is reached through `body`,
+            // not `return_type`, and stays flagged.
+            "function_item" | "function_signature_item" => {
+                if ancestor.child_by_field_name("return_type") == Some(child) {
                     return;
                 }
             }
@@ -253,5 +265,21 @@ fn f() {
     fn flags_bare_mutex_used_inside_impl_body() {
         let src = "impl S { fn f(&self) { let m: Mutex<u32> = Mutex::new(0); } }";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_rwlock_in_function_return_type() {
+        assert!(run("pub fn new(value: T) -> RwLock<T> { todo!() }").is_empty());
+    }
+
+    #[test]
+    fn allows_mutex_ref_in_function_return_type() {
+        let src = "fn get_uring(&self) -> &Mutex<UringContext> { todo!() }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_rwlock_in_trait_method_signature_return_type() {
+        assert!(run("trait T { fn lock(&self) -> RwLock<u32>; }").is_empty());
     }
 }
