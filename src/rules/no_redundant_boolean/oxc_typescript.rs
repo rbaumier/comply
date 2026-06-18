@@ -88,6 +88,27 @@ fn returns_bool(stmt: &Statement) -> Option<bool> {
     }
 }
 
+/// Returns `true` when `stmt` is an early-return guard: a bare `return ...;`
+/// (any value), or an `if (cond) return ...;` with no `else` whose consequent
+/// early-returns. Any return — `return;`, `return foo();`, `return false;` —
+/// counts: it breaks the pattern-3b equivalence the same way a boolean return
+/// does. The consequent is peeled through a single-statement block.
+fn is_early_return_guard(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::ReturnStatement(_) => true,
+        Statement::IfStatement(if_stmt) if if_stmt.alternate.is_none() => {
+            let mut consequent = &if_stmt.consequent;
+            if let Statement::BlockStatement(block) = consequent
+                && block.body.len() == 1
+            {
+                consequent = &block.body[0];
+            }
+            matches!(consequent, Statement::ReturnStatement(_))
+        }
+        _ => false,
+    }
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[
@@ -169,6 +190,11 @@ impl OxcCheck for Check {
                 }
 
                 // 3b. No else — look at the next sibling statement.
+                // Only flag when this `if` is the first return-affecting
+                // statement in its block: `if (X) return A; return B;`
+                // collapses to `return X;` only when no preceding sibling is
+                // an early-return guard. In a guard chain, applying the
+                // suggestion would silently drop the earlier guards.
                 // Walk the parent to find the sibling after this if.
                 let nodes = semantic.nodes();
                 let parent_id = nodes.parent_id(node.id());
@@ -183,9 +209,11 @@ impl OxcCheck for Check {
                 };
                 if let Some(stmts) = stmts {
                     let mut found_self = false;
+                    let mut prior_guard = false;
                     for stmt in stmts.iter() {
                         if found_self {
-                            if let Some(next_bool) = returns_bool(stmt)
+                            if !prior_guard
+                                && let Some(next_bool) = returns_bool(stmt)
                                 && cons_bool != next_bool {
                                     push_diag(
                                         diagnostics,
@@ -199,6 +227,8 @@ impl OxcCheck for Check {
                         if let Statement::IfStatement(s) = stmt
                             && s.span == if_stmt.span {
                                 found_self = true;
+                            } else if is_early_return_guard(stmt) {
+                                prior_guard = true;
                             }
                     }
                 }
@@ -262,5 +292,37 @@ mod tests {
         // No annotation — cannot determine type without TS checker; do not flag.
         let src = "function f(x) { return x === true; }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_guard_chain_pattern_3b() {
+        // Regression for #3719 — neither guard flags: the first is followed by
+        // an `if`, not a return; the second has a preceding early-return guard.
+        let src = "function f(x: { op: string; value: unknown }): boolean { if (x.op === \"isString\" && typeof x.value !== \"string\") { return false; } if (x.op === \"isBetween\" && !Array.isArray(x.value)) { return false; } return true; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_early_return_then_flagged_shape() {
+        // Regression for #3719 — preceding `if (...) return true;` guard
+        // suppresses the flag on the second `if`.
+        let src = "function f(field: any): boolean { if (field.required) { return true; } if (field.optional && field.required) { return true; } return false; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_non_bool_preceding_guard() {
+        // Regression for #3719 — a non-boolean early-return guard still
+        // suppresses the flag (any return breaks the 3b equivalence).
+        let src = "function f(x: any): boolean { if (x == null) { return null as any; } if (x.ok) { return true; } return false; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_lone_pattern_3b() {
+        // True positive preserved — the genuinely-redundant lone 3b shape with
+        // no preceding guard.
+        let src = "function f(cond: boolean): boolean { if (cond) { return true; } return false; }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
