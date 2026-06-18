@@ -16,6 +16,15 @@ crate::ast_check! { on ["variable_declarator", "assignment_expression"] prefilte
         return;
     }
 
+    // Re-assigning a plain local variable to `undefined` is the only way to reset
+    // it: `let x;` is for the declaration and `delete obj.prop` is for properties,
+    // so neither remediation applies to a plain-identifier re-assignment target.
+    if node.kind() == "assignment_expression"
+        && node.child_by_field_name("left").map(|left| left.kind()) == Some("identifier")
+    {
+        return;
+    }
+
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -56,9 +65,9 @@ mod tests {
     }
 
     #[test]
-    fn flags_reassignment_undefined() {
+    fn allows_plain_identifier_reassignment() {
         let d = crate::rules::test_helpers::run_rule(&Check, "x = undefined;", "t.ts");
-        assert_eq!(d.len(), 1);
+        assert!(d.is_empty());
     }
 
     #[test]
