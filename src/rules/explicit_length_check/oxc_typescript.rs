@@ -75,6 +75,10 @@ fn is_inside_expect_argument(trimmed: &str, prop_pos: usize) -> bool {
 ///   * a ternary branch — `cond ? arr.length : 0` / `cond ? 0 : arr.length`
 ///     (the base is preceded by `?` or `:`), or an object-property value
 ///     (`{ k: arr.length }`); both are value positions, never boolean coercion.
+///   * the right operand of a binary arithmetic expression — `30 + name.length`,
+///     `total / sizes.length`, `(i + 1) % options.length` (the base is preceded
+///     by `+`/`-`/`*`/`/`/`%`); arithmetic produces a number, so `.length` is a
+///     numeric operand, never a boolean coercion.
 /// A plain `=` assignment RHS (`x = arr.length`) is also a value position.
 fn length_is_numeric_operand(trimmed: &str, prop_pos: usize) -> bool {
     let bytes = trimmed.as_bytes();
@@ -113,10 +117,11 @@ fn length_is_numeric_operand(trimmed: &str, prop_pos: usize) -> bool {
         return false;
     }
     // Comparison RHS (`===`, `!==`, `==`, `<`, `>`, `<=`, `>=`) or `=` assignment
-    // RHS, a non-leading argument separated by `,`, or a ternary branch /
-    // object-property value preceded by `?`/`:`.
+    // RHS, a non-leading argument separated by `,`, a ternary branch /
+    // object-property value preceded by `?`/`:`, or the right operand of a
+    // binary arithmetic operator (`+`, `-`, `*`, `/`, `%`).
     match bytes[j - 1] {
-        b'=' | b'<' | b'>' | b',' | b':' => true,
+        b'=' | b'<' | b'>' | b',' | b':' | b'+' | b'-' | b'*' | b'/' | b'%' => true,
         // `?` is a ternary delimiter only when not part of optional chaining:
         // `obj?.length` puts a `?` immediately left of the base chain too, but
         // there it is followed by `.` (`?.`) and the access stays a boolean
@@ -512,5 +517,37 @@ mod tests {
     #[test]
     fn still_flags_length_as_ternary_condition_in_interpolation_issue_3785() {
         assert_eq!(run_on("`${arr.length ? 'a' : 'b'}`").len(), 1);
+    }
+
+    // Regression #3788 — `.length`/`.size` as the right operand of a binary
+    // arithmetic expression is a numeric operand, not a boolean coercion.
+    #[test]
+    fn allows_length_after_addition_issue_3788() {
+        assert!(run_on("const buf = Buffer.allocUnsafe(30 + nameBytes.length);").is_empty());
+    }
+
+    #[test]
+    fn allows_length_after_modulo_issue_3788() {
+        assert!(run_on("next = (next + 1) % options.length;").is_empty());
+    }
+
+    #[test]
+    fn allows_length_after_division_issue_3788() {
+        assert!(run_on("const avg = total / sizes.length;").is_empty());
+    }
+
+    #[test]
+    fn allows_length_after_multiplication_issue_3788() {
+        assert!(run_on("const x = a * arr.length;").is_empty());
+    }
+
+    #[test]
+    fn allows_length_after_subtraction_issue_3788() {
+        assert!(run_on("const y = a - arr.length;").is_empty());
+    }
+
+    #[test]
+    fn allows_size_after_addition_issue_3788() {
+        assert!(run_on("const z = 5 + mySet.size;").is_empty());
     }
 }
