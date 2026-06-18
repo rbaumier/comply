@@ -23,7 +23,7 @@
 //!   need to test "does any workload's labels match all keys/values in
 //!   this selector?" call `has_pods_matching`.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use rayon::prelude::*;
 use tree_sitter::{Node, Parser, Tree};
@@ -40,14 +40,14 @@ const DEFAULT_NAMESPACE: &str = "default";
 pub struct K8sIndex {
     /// `(kind, namespace) → set of resource names`. Used by
     /// `has_resource` to answer "does this Service exist?".
-    resources: HashMap<(String, String), HashSet<String>>,
+    resources: FxHashMap<(String, String), FxHashSet<String>>,
     /// `(namespace, workload_name) → labels` extracted from
     /// `spec.template.metadata.labels` of Deployments/StatefulSets/
     /// DaemonSets/ReplicaSets/Jobs.
-    pod_labels: HashMap<(String, String), HashMap<String, String>>,
+    pod_labels: FxHashMap<(String, String), FxHashMap<String, String>>,
     /// `(namespace, service_name) → selector labels` from
     /// `spec.selector` of Service manifests.
-    service_selectors: HashMap<(String, String), HashMap<String, String>>,
+    service_selectors: FxHashMap<(String, String), FxHashMap<String, String>>,
 }
 
 impl K8sIndex {
@@ -101,7 +101,7 @@ impl K8sIndex {
         &self,
         namespace: &str,
         workload_name: &str,
-    ) -> Option<&HashMap<String, String>> {
+    ) -> Option<&FxHashMap<String, String>> {
         self.pod_labels
             .get(&(namespace.to_string(), workload_name.to_string()))
     }
@@ -114,7 +114,7 @@ impl K8sIndex {
     /// server, but most of our rules want to call out missing selectors
     /// before they reach this index).
     #[must_use]
-    pub fn has_pods_matching(&self, namespace: &str, selector: &HashMap<String, String>) -> bool {
+    pub fn has_pods_matching(&self, namespace: &str, selector: &FxHashMap<String, String>) -> bool {
         if selector.is_empty() {
             // Conservatively match: an empty selector can't be proved
             // dangling by this index. Callers that want to flag empty
@@ -134,7 +134,7 @@ impl K8sIndex {
         &self,
         namespace: &str,
         name: &str,
-    ) -> Option<&HashMap<String, String>> {
+    ) -> Option<&FxHashMap<String, String>> {
         self.service_selectors
             .get(&(namespace.to_string(), name.to_string()))
     }
@@ -161,8 +161,8 @@ struct ResourceEntry {
     kind: String,
     namespace: String,
     name: String,
-    pod_template_labels: Option<HashMap<String, String>>,
-    service_selector: Option<HashMap<String, String>>,
+    pod_template_labels: Option<FxHashMap<String, String>>,
+    service_selector: Option<FxHashMap<String, String>>,
 }
 
 #[derive(Debug, Default)]
@@ -247,8 +247,8 @@ fn extract_resource(mapping: Node, source: &[u8]) -> Option<ResourceEntry> {
 /// a plain string map. Pairs whose value isn't a scalar (nested
 /// mapping, sequence) are skipped — they aren't valid k8s label
 /// values anyway.
-fn extract_string_map(mapping: Node, source: &[u8]) -> HashMap<String, String> {
-    let mut out = HashMap::new();
+fn extract_string_map(mapping: Node, source: &[u8]) -> FxHashMap<String, String> {
+    let mut out = FxHashMap::default();
     let mut cursor = mapping.walk();
     for child in mapping.named_children(&mut cursor) {
         if child.kind() != "block_mapping_pair" {
@@ -331,7 +331,7 @@ mod tests {
              metadata:\n  name: web\n\
              spec:\n  template:\n    metadata:\n      labels:\n        app: web\n        tier: frontend\n    spec:\n      containers:\n      - name: c\n        image: nginx\n",
         )]);
-        let mut sel = HashMap::new();
+        let mut sel = FxHashMap::default();
         sel.insert("app".to_string(), "web".to_string());
         assert!(index.has_pods_matching("default", &sel));
 
@@ -351,7 +351,7 @@ mod tests {
              metadata:\n  name: web\n  namespace: prod\n\
              spec:\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n      - name: c\n        image: nginx\n",
         )]);
-        let mut sel = HashMap::new();
+        let mut sel = FxHashMap::default();
         sel.insert("app".to_string(), "web".to_string());
         assert!(index.has_pods_matching("prod", &sel));
         assert!(!index.has_pods_matching("default", &sel));

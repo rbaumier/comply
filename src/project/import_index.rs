@@ -47,7 +47,7 @@
 //! - Rust `mod foo { … }` inline modules are not tracked; only file-backed
 //!   modules (`mod foo;`) participate in the module graph.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 
 use oxc_resolver::{
@@ -211,30 +211,30 @@ pub struct BareSpecifierInfo {
 /// set. Frozen after `build` — all fields are read-only for rule consumers.
 #[derive(Debug, Default)]
 pub struct ImportIndex {
-    exports: HashMap<PathBuf, Vec<ExportedSymbol>>,
-    imports: HashMap<PathBuf, Vec<ImportedSymbol>>,
+    exports: FxHashMap<PathBuf, Vec<ExportedSymbol>>,
+    imports: FxHashMap<PathBuf, Vec<ImportedSymbol>>,
     /// `(exporting_file, exported_name)` → every importer that pulls it in.
     /// Populated after re-export propagation so barrel usages flow through.
-    symbol_usages: HashMap<(PathBuf, String), Vec<Usage>>,
+    symbol_usages: FxHashMap<(PathBuf, String), Vec<Usage>>,
     /// `(exporting_file, exported_name)` → every cross-file call/new site that
     /// references it. Populated only for named + default imports that resolve
     /// to a known exporting file. Namespace imports (`import * as ns`) and
     /// member-access calls (`ns.Foo()`) are not tracked.
-    call_sites: HashMap<(PathBuf, String), Vec<CallSite>>,
+    call_sites: FxHashMap<(PathBuf, String), Vec<CallSite>>,
     /// Bare specifiers (npm package names) seen across all files, mapped to
     /// whether ALL imports from that package are type-only.
-    bare_specifiers: HashMap<String, BareSpecifierInfo>,
+    bare_specifiers: FxHashMap<String, BareSpecifierInfo>,
     /// Strongly connected components with >1 member (import cycles).
     cycles: Vec<Vec<PathBuf>>,
     /// Raw discovered path → canonical absolute path. Built from the
     /// canonicalization already performed during extraction, so cross-file
     /// rules look up `ctx.path`'s canonical form with an O(1) map hit instead
     /// of a per-file `std::fs::canonicalize` syscall.
-    canonical: HashMap<PathBuf, PathBuf>,
+    canonical: FxHashMap<PathBuf, PathBuf>,
     /// Distinct importing files per exporting (canonical) path. Precomputed
     /// reverse edge of `imports` so `get_importers` / `importer_count` are
     /// O(1) lookups rather than a full scan of every file's imports.
-    importers: HashMap<PathBuf, Vec<PathBuf>>,
+    importers: FxHashMap<PathBuf, Vec<PathBuf>>,
     /// Lexicographically smallest indexed (canonical) path, or `None` when no
     /// file was indexed. Once-per-project rules anchor on this; precomputing it
     /// avoids an O(N) `indexed_paths().min()` scan on every file.
@@ -243,18 +243,18 @@ pub struct ImportIndex {
     /// (`import * as ns from './m'`). `dead-export` treats every export of such
     /// a module as live; precomputing the set avoids an O(N) `get_imports_to`
     /// scan per file.
-    namespace_imported: std::collections::HashSet<PathBuf>,
+    namespace_imported: FxHashSet<PathBuf>,
     /// `(re-exporting file, exported name)` → resolved origin file of a
     /// `export { name } from './m'`. Only relative specifiers that resolve to an
     /// indexed file are recorded. Lets rules tell a re-export *chain* (one
     /// barrel re-exporting through another) from independent barrels that both
     /// re-export the same name.
-    reexport_targets: HashMap<(PathBuf, String), PathBuf>,
+    reexport_targets: FxHashMap<(PathBuf, String), PathBuf>,
     /// Re-exporting file → resolved source files of its `export … from './m'`
     /// declarations (both `export { x } from` and `export * from`). A barrel
     /// reached through the import graph keeps the files it re-exports reachable,
     /// so reachability traversal follows these edges as well as import edges.
-    reexport_edges: HashMap<PathBuf, Vec<PathBuf>>,
+    reexport_edges: FxHashMap<PathBuf, Vec<PathBuf>>,
     /// Canonical directories referenced by a template-literal dynamic import
     /// (`import(\`./locales/${lang}\`)`). The runtime path is computed, so any
     /// file under such a directory is reachable and its exports are live —
@@ -264,7 +264,7 @@ pub struct ImportIndex {
     /// Reachability traverses these so a crate root reaches every `mod.rs` and
     /// submodule file in its module tree, which `mod foo;` (unlike a `use`
     /// import) does not record as an import edge.
-    mod_edges: HashMap<PathBuf, Vec<PathBuf>>,
+    mod_edges: FxHashMap<PathBuf, Vec<PathBuf>>,
     /// `true` when any indexed TS/JS/TSX file declares a class method named
     /// `removeChild`. Signals the project owns a tree type whose nodes are
     /// detached via `parent.removeChild(child)` rather than the DOM `Node` API,
@@ -293,8 +293,8 @@ impl ImportIndex {
 
         // Raw → canonical map, reusing the canonicalization extract_for already
         // did. Lets cross-file rules canonicalize `ctx.path` with a map hit.
-        let mut canonical: HashMap<PathBuf, PathBuf> =
-            HashMap::with_capacity(per_file_raw.len());
+        let mut canonical: FxHashMap<PathBuf, PathBuf> =
+            FxHashMap::with_capacity_and_hasher(per_file_raw.len(), Default::default());
         let per_file: Vec<(PathBuf, FileExtract)> = per_file_raw
             .into_iter()
             .map(|(raw, canon, extract)| {
@@ -303,10 +303,10 @@ impl ImportIndex {
             })
             .collect();
 
-        let mut exports: HashMap<PathBuf, Vec<ExportedSymbol>> = HashMap::new();
-        let mut imports: HashMap<PathBuf, Vec<ImportedSymbol>> = HashMap::new();
-        let mut file_calls: HashMap<PathBuf, Vec<LocalCall>> = HashMap::new();
-        let known_paths: std::collections::HashSet<PathBuf> =
+        let mut exports: FxHashMap<PathBuf, Vec<ExportedSymbol>> = FxHashMap::default();
+        let mut imports: FxHashMap<PathBuf, Vec<ImportedSymbol>> = FxHashMap::default();
+        let mut file_calls: FxHashMap<PathBuf, Vec<LocalCall>> = FxHashMap::default();
+        let known_paths: FxHashSet<PathBuf> =
             per_file.iter().map(|(p, _)| p.clone()).collect();
 
         // Rust resolution is more involved than TS: specifiers are not file
@@ -369,7 +369,7 @@ impl ImportIndex {
         // Second pass: link imports → exports via symbol_usages. Only named
         // and default imports link cleanly; namespace imports touch every
         // export and are left to callers (we'd otherwise balloon the map).
-        let mut symbol_usages: HashMap<(PathBuf, String), Vec<Usage>> = HashMap::new();
+        let mut symbol_usages: FxHashMap<(PathBuf, String), Vec<Usage>> = FxHashMap::default();
         for (importer, imps) in &imports {
             for imp in imps {
                 let Some(src) = &imp.source_path else {
@@ -395,12 +395,12 @@ impl ImportIndex {
         // importer, build a map (local_name → (exporting_file, exported_name))
         // from its named/default imports, then translate each collected
         // `new Foo(...)` / `Foo(...)` whose callee matches a local binding.
-        let mut call_sites: HashMap<(PathBuf, String), Vec<CallSite>> = HashMap::new();
+        let mut call_sites: FxHashMap<(PathBuf, String), Vec<CallSite>> = FxHashMap::default();
         for (importer, imps) in &imports {
             let Some(calls) = file_calls.get(importer) else {
                 continue;
             };
-            let mut local_to_source: HashMap<String, (PathBuf, String)> = HashMap::new();
+            let mut local_to_source: FxHashMap<String, (PathBuf, String)> = FxHashMap::default();
             for imp in imps {
                 let Some(src) = &imp.source_path else {
                     continue;
@@ -441,9 +441,9 @@ impl ImportIndex {
         // subset so re-export propagation can flow barrel usages into the
         // wildcard-re-exported origins (named edges are matched separately by
         // `propagate_reexports`).
-        let mut reexport_targets: HashMap<(PathBuf, String), PathBuf> = HashMap::new();
-        let mut reexport_edges: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
-        let mut star_edges: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+        let mut reexport_targets: FxHashMap<(PathBuf, String), PathBuf> = FxHashMap::default();
+        let mut reexport_edges: FxHashMap<PathBuf, Vec<PathBuf>> = FxHashMap::default();
+        let mut star_edges: FxHashMap<PathBuf, Vec<PathBuf>> = FxHashMap::default();
         for (path, exps) in &exports {
             for exp in exps {
                 if !matches!(exp.kind, ExportKind::ReExport | ExportKind::StarReExport) {
@@ -486,11 +486,11 @@ impl ImportIndex {
         // per (source, importer) pair — multiple imports of the same source
         // from one file collapse to a single importer (matching the old
         // `get_importers` scan semantics).
-        let mut importers: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
-        let mut namespace_imported: std::collections::HashSet<PathBuf> =
-            std::collections::HashSet::new();
+        let mut importers: FxHashMap<PathBuf, Vec<PathBuf>> = FxHashMap::default();
+        let mut namespace_imported: FxHashSet<PathBuf> =
+            FxHashSet::default();
         for (importer, imps) in &imports {
-            let mut seen: std::collections::HashSet<&Path> = std::collections::HashSet::new();
+            let mut seen: FxHashSet<&Path> = FxHashSet::default();
             for imp in imps {
                 if let Some(src) = &imp.source_path {
                     if seen.insert(src.as_path()) {
@@ -670,7 +670,7 @@ impl ImportIndex {
 
     /// Bare specifiers (npm package names) collected from all imports.
     #[must_use]
-    pub fn bare_specifiers(&self) -> &HashMap<String, BareSpecifierInfo> {
+    pub fn bare_specifiers(&self) -> &FxHashMap<String, BareSpecifierInfo> {
         &self.bare_specifiers
     }
 
@@ -687,8 +687,8 @@ impl ImportIndex {
     /// Files reachable from `roots` via import edges (BFS). Unreachable files
     /// in the indexed set are candidates for the `unused-file` rule.
     #[must_use]
-    pub fn reachable_from(&self, roots: &[&Path]) -> std::collections::HashSet<PathBuf> {
-        let mut visited = std::collections::HashSet::new();
+    pub fn reachable_from(&self, roots: &[&Path]) -> FxHashSet<PathBuf> {
+        let mut visited = FxHashSet::default();
         let mut queue: std::collections::VecDeque<PathBuf> =
             roots.iter().map(|p| p.to_path_buf()).collect();
         // Any file under a template-literal dynamic-import directory is reachable
@@ -781,10 +781,10 @@ impl ImportIndex {
 /// when impl exports `X`, since the wildcard re-export is the only thing that
 /// makes `import { X } from './barrel'` resolve.
 fn propagate_reexports(
-    exports: &HashMap<PathBuf, Vec<ExportedSymbol>>,
-    reexport_targets: &HashMap<(PathBuf, String), PathBuf>,
-    star_edges: &HashMap<PathBuf, Vec<PathBuf>>,
-    symbol_usages: &mut HashMap<(PathBuf, String), Vec<Usage>>,
+    exports: &FxHashMap<PathBuf, Vec<ExportedSymbol>>,
+    reexport_targets: &FxHashMap<(PathBuf, String), PathBuf>,
+    star_edges: &FxHashMap<PathBuf, Vec<PathBuf>>,
+    symbol_usages: &mut FxHashMap<(PathBuf, String), Vec<Usage>>,
 ) {
     // Build re-export edges from the `export { X } from './m'` records directly:
     // link (barrel, exported_name) → (origin, origin_name). The origin file is
@@ -871,11 +871,11 @@ fn propagate_reexports(
 /// runtime symbol for `dead-export` to reason about.
 fn star_reexported_names(
     barrel: &Path,
-    star_edges: &HashMap<PathBuf, Vec<PathBuf>>,
-    exports: &HashMap<PathBuf, Vec<ExportedSymbol>>,
+    star_edges: &FxHashMap<PathBuf, Vec<PathBuf>>,
+    exports: &FxHashMap<PathBuf, Vec<ExportedSymbol>>,
 ) -> Vec<(String, PathBuf)> {
-    let mut resolved: HashMap<String, PathBuf> = HashMap::new();
-    let mut visited: HashSet<PathBuf> = HashSet::new();
+    let mut resolved: FxHashMap<String, PathBuf> = FxHashMap::default();
+    let mut visited: FxHashSet<PathBuf> = FxHashSet::default();
     let mut queue: std::collections::VecDeque<PathBuf> = star_edges
         .get(barrel)
         .into_iter()
@@ -906,14 +906,14 @@ fn star_reexported_names(
 /// Extract bare specifier → package name mapping from all imports.
 /// `@scope/pkg/path` → `@scope/pkg`, `lodash/fp` → `lodash`.
 fn collect_bare_specifiers(
-    imports: &HashMap<PathBuf, Vec<ImportedSymbol>>,
-) -> HashMap<String, BareSpecifierInfo> {
-    let mut result: HashMap<String, BareSpecifierInfo> = HashMap::new();
+    imports: &FxHashMap<PathBuf, Vec<ImportedSymbol>>,
+) -> FxHashMap<String, BareSpecifierInfo> {
+    let mut result: FxHashMap<String, BareSpecifierInfo> = FxHashMap::default();
     // Per-package importer dedup. The previous `entry.importers.contains(file)`
     // scan was O(importers²) per package — quadratic for a dependency imported
     // by thousands of files. A `HashSet` makes the membership test O(1) while
     // preserving the first-seen insertion order into the `Vec`.
-    let mut seen: HashMap<String, std::collections::HashSet<PathBuf>> = HashMap::new();
+    let mut seen: FxHashMap<String, FxHashSet<PathBuf>> = FxHashMap::default();
     for (file, imps) in imports {
         // Rust external crates that weren't resolved by RustModuleGraph are
         // not npm packages — skip them to avoid "unlisted-dependency" FPs.
@@ -1041,12 +1041,12 @@ fn is_indexable(lang: Language) -> bool {
 /// otherwise. A detected cycle is reported only if at least one edge among its
 /// members is a runtime-value edge; a cycle whose every edge is deferred-only
 /// carries no module-evaluation hazard and is suppressed.
-fn compute_cycles(imports: &HashMap<PathBuf, Vec<ImportedSymbol>>) -> Vec<Vec<PathBuf>> {
-    let mut adj: HashMap<&Path, Vec<&Path>> = HashMap::new();
-    let mut all_nodes: HashSet<&Path> = HashSet::new();
+fn compute_cycles(imports: &FxHashMap<PathBuf, Vec<ImportedSymbol>>) -> Vec<Vec<PathBuf>> {
+    let mut adj: FxHashMap<&Path, Vec<&Path>> = FxHashMap::default();
+    let mut all_nodes: FxHashSet<&Path> = FxHashSet::default();
     // Edges (importer → source) that read a value at module-evaluation time. A
     // cycle survives suppression only if it contains one of these.
-    let mut runtime_edges: HashSet<(&Path, &Path)> = HashSet::new();
+    let mut runtime_edges: FxHashSet<(&Path, &Path)> = FxHashSet::default();
     for (file, imps) in imports {
         all_nodes.insert(file.as_path());
         for imp in imps {
@@ -1064,9 +1064,9 @@ fn compute_cycles(imports: &HashMap<PathBuf, Vec<ImportedSymbol>>) -> Vec<Vec<Pa
     }
 
     let mut index_counter: u32 = 0;
-    let mut indices: HashMap<&Path, u32> = HashMap::new();
-    let mut lowlinks: HashMap<&Path, u32> = HashMap::new();
-    let mut on_stack: HashSet<&Path> = HashSet::new();
+    let mut indices: FxHashMap<&Path, u32> = FxHashMap::default();
+    let mut lowlinks: FxHashMap<&Path, u32> = FxHashMap::default();
+    let mut on_stack: FxHashSet<&Path> = FxHashSet::default();
     let mut stack: Vec<&Path> = Vec::new();
     let mut result: Vec<Vec<PathBuf>> = Vec::new();
 
@@ -1133,10 +1133,10 @@ fn compute_cycles(imports: &HashMap<PathBuf, Vec<ImportedSymbol>>) -> Vec<Vec<Pa
 /// deferred-only / type-position imports and carries no initialization hazard.
 fn scc_has_runtime_edge(
     scc: &[PathBuf],
-    adj: &HashMap<&Path, Vec<&Path>>,
-    runtime_edges: &HashSet<(&Path, &Path)>,
+    adj: &FxHashMap<&Path, Vec<&Path>>,
+    runtime_edges: &FxHashSet<(&Path, &Path)>,
 ) -> bool {
-    let members: HashSet<&Path> = scc.iter().map(PathBuf::as_path).collect();
+    let members: FxHashSet<&Path> = scc.iter().map(PathBuf::as_path).collect();
     for &from in &members {
         let Some(neighbors) = adj.get(from) else {
             continue;
@@ -2274,7 +2274,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
 /// re-export (which pulls in names this single-file parse cannot see). A `None`
 /// result means "cannot prove the name is absent", so callers must not flag.
 #[must_use]
-pub fn declaration_file_exports(path: &Path) -> Option<HashSet<String>> {
+pub fn declaration_file_exports(path: &Path) -> Option<FxHashSet<String>> {
     let source = std::fs::read_to_string(path).ok()?;
     let extract = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         extract_ts_oxc(&source, path)
@@ -2970,7 +2970,7 @@ fn oxc_extract_import_equals(
 fn resolve_relative(
     importer: &Path,
     specifier: &str,
-    known: &std::collections::HashSet<PathBuf>,
+    known: &FxHashSet<PathBuf>,
 ) -> Option<PathBuf> {
     if !specifier.starts_with('.') {
         return None;
@@ -3077,7 +3077,7 @@ fn subpath_import_target_path(dir: &Path, target: &str) -> PathBuf {
     dir.join(rel)
 }
 
-fn probe_path(raw: &Path, known: &std::collections::HashSet<PathBuf>) -> Option<PathBuf> {
+fn probe_path(raw: &Path, known: &FxHashSet<PathBuf>) -> Option<PathBuf> {
     const EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mts", "mjs", "cts", "cjs", "vue"];
     // Declaration-only directory entries. TypeScript resolves `import './dir'`
     // to `./dir/index.d.ts` when the directory holds only a declaration file.
@@ -3233,7 +3233,7 @@ fn probe_decl_sibling(raw: &Path) -> Option<PathBuf> {
 fn resolve_specifier(
     importer: &Path,
     specifier: &str,
-    known: &std::collections::HashSet<PathBuf>,
+    known: &FxHashSet<PathBuf>,
     resolver: &OxcPathResolver,
 ) -> Option<PathBuf> {
     if specifier.starts_with('.') {
@@ -3269,25 +3269,25 @@ struct TsconfigResolver {
 }
 
 impl OxcPathResolver {
-    fn discover(known_paths: &std::collections::HashSet<PathBuf>) -> Self {
-        let mut seen_dirs: HashSet<PathBuf> = HashSet::new();
-        let mut tsconfig_dirs: HashMap<PathBuf, PathBuf> = HashMap::new();
+    fn discover(known_paths: &FxHashSet<PathBuf>) -> Self {
+        let mut seen_dirs: FxHashSet<PathBuf> = FxHashSet::default();
+        let mut tsconfig_dirs: FxHashMap<PathBuf, PathBuf> = FxHashMap::default();
         // Directories that are the root of a SvelteKit project. Their `$lib`
         // alias is synthesized below, independent of whether the dir has a
         // checked-in `tsconfig.json`.
-        let mut sveltekit_dirs: HashSet<PathBuf> = HashSet::new();
+        let mut sveltekit_dirs: FxHashSet<PathBuf> = FxHashSet::default();
         // Directories that are the root of a Cypress project. Their `cypress/*`
         // alias is synthesized below, independent of a checked-in `tsconfig.json`.
-        let mut cypress_dirs: HashSet<PathBuf> = HashSet::new();
+        let mut cypress_dirs: FxHashSet<PathBuf> = FxHashSet::default();
         // Workspace member name → its manifest directory. Built from every
         // named `package.json` reachable above an indexed file.
-        let mut workspace_packages: HashMap<String, PathBuf> = HashMap::new();
+        let mut workspace_packages: FxHashMap<String, PathBuf> = FxHashMap::default();
         // Directory of a `package.json` declaring a non-empty `imports` field →
         // its `(key, manifest-relative target)` pairs. The `#`-prefixed subpath
         // aliases are synthesized below from these, so they resolve even when the
         // dir's `tsconfig.json` `extends` an absent package and oxc resolution
         // (which would otherwise handle `imports`) fails for the whole scope.
-        let mut subpath_import_dirs: HashMap<PathBuf, Vec<(String, String)>> = HashMap::new();
+        let mut subpath_import_dirs: FxHashMap<PathBuf, Vec<(String, String)>> = FxHashMap::default();
 
         for path in known_paths {
             let Some(mut dir) = path.parent() else {
@@ -3350,7 +3350,7 @@ impl OxcPathResolver {
         // `package.json`. A Cypress base dir, in particular, typically ships only
         // `cypress.config.*` and no `tsconfig.json`, and a `package.json` with an
         // `imports` field need not have a sibling `tsconfig.json` at all.
-        let synthetic_dirs: HashSet<&PathBuf> = sveltekit_dirs
+        let synthetic_dirs: FxHashSet<&PathBuf> = sveltekit_dirs
             .iter()
             .chain(cypress_dirs.iter())
             .chain(subpath_import_dirs.keys())
@@ -3403,9 +3403,9 @@ impl OxcPathResolver {
     fn aliases_for_dir(
         dir: &Path,
         tsconfig_path: Option<&Path>,
-        sveltekit_dirs: &HashSet<PathBuf>,
-        cypress_dirs: &HashSet<PathBuf>,
-        subpath_import_dirs: &HashMap<PathBuf, Vec<(String, String)>>,
+        sveltekit_dirs: &FxHashSet<PathBuf>,
+        cypress_dirs: &FxHashSet<PathBuf>,
+        subpath_import_dirs: &FxHashMap<PathBuf, Vec<(String, String)>>,
     ) -> Vec<(String, Vec<PathBuf>)> {
         let mut aliases = tsconfig_path
             .map(|p| Self::read_path_aliases(dir, p))
@@ -3489,7 +3489,7 @@ impl OxcPathResolver {
         &self,
         importer: &Path,
         specifier: &str,
-        known: &std::collections::HashSet<PathBuf>,
+        known: &FxHashSet<PathBuf>,
     ) -> Option<PathBuf> {
         let entry = self.resolvers.iter().find(|e| importer.starts_with(&e.dir));
 
@@ -3523,7 +3523,7 @@ impl OxcPathResolver {
     fn resolve_workspace_package(
         &self,
         specifier: &str,
-        known: &std::collections::HashSet<PathBuf>,
+        known: &FxHashSet<PathBuf>,
     ) -> Option<PathBuf> {
         for (name, dir) in &self.workspace_packages {
             let subpath = if specifier == name {
@@ -3556,7 +3556,7 @@ impl OxcPathResolver {
     fn resolve_alias(
         specifier: &str,
         aliases: &[(String, Vec<PathBuf>)],
-        known: &std::collections::HashSet<PathBuf>,
+        known: &FxHashSet<PathBuf>,
     ) -> Option<PathBuf> {
         for (pattern, targets) in aliases {
             let matched_suffix = if let Some(prefix) = pattern.strip_suffix('*') {
@@ -3869,16 +3869,16 @@ fn rust_scoped_segments_into(node: Node, source: &[u8], out: &mut Vec<String>) {
 struct RustModuleGraph {
     /// For each indexed `.rs` file, the crate root it belongs to (the nearest
     /// `lib.rs` / `main.rs` ancestor).
-    crate_root: HashMap<PathBuf, PathBuf>,
+    crate_root: FxHashMap<PathBuf, PathBuf>,
     /// `(file, child_mod_name)` → resolved child file. Built from `pub mod foo;`
     /// declarations found during extraction.
-    children: HashMap<(PathBuf, String), PathBuf>,
+    children: FxHashMap<(PathBuf, String), PathBuf>,
 }
 
 impl RustModuleGraph {
     fn build(
         per_file: &[(PathBuf, FileExtract)],
-        known_paths: &std::collections::HashSet<PathBuf>,
+        known_paths: &FxHashSet<PathBuf>,
     ) -> Self {
         let rust_files: Vec<&PathBuf> = per_file
             .iter()
@@ -3891,7 +3891,7 @@ impl RustModuleGraph {
         // private ones matter for reachability (a private `mod foo;` still pulls
         // `foo.rs` into the crate) and let `use crate::foo::…` resolve through
         // crate-internal modules regardless of their visibility.
-        let mut declared_mods: HashMap<PathBuf, Vec<String>> = HashMap::new();
+        let mut declared_mods: FxHashMap<PathBuf, Vec<String>> = FxHashMap::default();
         for (path, extract) in per_file {
             if !matches!(path.extension().and_then(|e| e.to_str()), Some("rs")) {
                 continue;
@@ -3915,7 +3915,7 @@ impl RustModuleGraph {
 
         // For each rust file, find its owning crate root: the deepest crate
         // root whose directory is an ancestor of the file.
-        let mut crate_root = HashMap::new();
+        let mut crate_root = FxHashMap::default();
         for f in &rust_files {
             let mut best: Option<&PathBuf> = None;
             for root in &crate_roots {
@@ -3937,7 +3937,7 @@ impl RustModuleGraph {
 
         // Build children: for each file declaring `mod foo;`, probe
         // `foo.rs` / `foo/mod.rs` in its child search directory.
-        let mut children = HashMap::new();
+        let mut children = FxHashMap::default();
         for (parent_file, mods) in &declared_mods {
             for dir in rust_child_search_dirs(parent_file) {
                 for m in mods {
@@ -3969,8 +3969,8 @@ impl RustModuleGraph {
     /// `mod.rs` / submodule file in its module tree, even when no `use` ever
     /// references them (the `mod foo;` declaration alone makes `foo` part of the
     /// crate's compilation).
-    fn mod_edges(&self) -> HashMap<PathBuf, Vec<PathBuf>> {
-        let mut edges: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+    fn mod_edges(&self) -> FxHashMap<PathBuf, Vec<PathBuf>> {
+        let mut edges: FxHashMap<PathBuf, Vec<PathBuf>> = FxHashMap::default();
         for ((parent, _name), child) in &self.children {
             let bucket = edges.entry(parent.clone()).or_default();
             if !bucket.contains(child) {

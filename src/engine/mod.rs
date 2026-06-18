@@ -976,13 +976,13 @@ export function Carte({ titré }: { titré: string }): JSX.Element {
 "#;
         const RUST: &str = r#"
 //! Module résumé — 日本語 💡 العربية.
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Doc é à ü — convertit héllo.
 pub fn slugï(input: &str) -> Result<String, String> {
     // commentaire é 💡 — TODO: rien à faire
     let re = "[à-ÿ]+— 日本語";
-    let map: HashMap<&str, i32> = HashMap::new();
+    let map: FxHashMap<&str, i32> = FxHashMap::default();
     let s = format!("héllo {} 日本語 {} {}", input, re, map.len());
     let parts: Vec<&str> = s.split('—').collect();
     for (i, part) in parts.iter().enumerate() {

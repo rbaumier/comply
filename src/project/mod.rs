@@ -20,7 +20,8 @@
 //! - Lazy fields use `OnceLock<Option<T>>`; parse failures cache as `None`
 //!   (no retry within the run) and emit one stderr warning per field.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -1183,8 +1184,8 @@ const CONVEX_DEFINE_SCHEMA: &str = "defineSchema";
 pub fn convex_magic_exports_for_source(
     source: &str,
     lang: crate::files::Language,
-) -> HashSet<String> {
-    let mut names = HashSet::new();
+) -> FxHashSet<String> {
+    let mut names = FxHashSet::default();
     let Some(grammar) = crate::parsing::ts_language_for(lang) else {
         return names;
     };
@@ -1209,7 +1210,7 @@ pub fn convex_magic_exports_for_source(
     if imports_convex_server {
         names
     } else {
-        HashSet::new()
+        FxHashSet::default()
     }
 }
 
@@ -1231,7 +1232,7 @@ fn imports_from_convex_server(node: tree_sitter::Node, source: &[u8]) -> bool {
 fn collect_convex_wrapper_exports(
     node: tree_sitter::Node,
     source: &[u8],
-    out: &mut HashSet<String>,
+    out: &mut FxHashSet<String>,
 ) {
     let is_default = node.children(&mut node.walk()).any(|c| c.kind() == "default");
     if is_default {
@@ -1318,8 +1319,8 @@ const NODE_LOAD_NEXT_PARAM: &str = "nextLoad";
 pub fn node_loader_hook_exports_for_source(
     source: &str,
     lang: crate::files::Language,
-) -> HashSet<String> {
-    let mut names = HashSet::new();
+) -> FxHashSet<String> {
+    let mut names = FxHashSet::default();
     let Some(grammar) = crate::parsing::ts_language_for(lang) else {
         return names;
     };
@@ -1900,22 +1901,22 @@ pub struct ProjectCtx {
     // manifest. Mutex over HashMap is sufficient: contention is low (same
     // manifest reused across sibling files hits the cache, so after the
     // first insert all readers take the lock briefly just to clone an Arc).
-    package_json_cache: Mutex<HashMap<PathBuf, Arc<PackageJson>>>,
-    tsconfig_cache: Mutex<HashMap<PathBuf, Arc<Tsconfig>>>,
-    cargo_manifest_cache: Mutex<HashMap<PathBuf, Arc<CargoManifest>>>,
+    package_json_cache: Mutex<FxHashMap<PathBuf, Arc<PackageJson>>>,
+    tsconfig_cache: Mutex<FxHashMap<PathBuf, Arc<Tsconfig>>>,
+    cargo_manifest_cache: Mutex<FxHashMap<PathBuf, Arc<CargoManifest>>>,
 
     // "Does this crate's root declare `#![no_std]`?", keyed by crate (manifest)
     // directory. The crate root (`src/lib.rs` / `src/main.rs`) is read once per
     // crate rather than once per file, since every file in the crate shares the
     // same answer.
-    crate_no_std_cache: Mutex<HashMap<PathBuf, bool>>,
+    crate_no_std_cache: Mutex<FxHashMap<PathBuf, bool>>,
 
     // Memoizes the upward `walk_up_finding` stat-walk that locates a marker
     // file (`package.json`, `tsconfig.json`). The resolved manifest directory
     // is identical for every file in the same directory, so the walk runs once
     // per (start dir, marker) instead of once per file. Nested by marker so
     // hits avoid allocating a composite key.
-    manifest_dir_cache: Mutex<HashMap<&'static str, HashMap<PathBuf, Option<PathBuf>>>>,
+    manifest_dir_cache: Mutex<FxHashMap<&'static str, FxHashMap<PathBuf, Option<PathBuf>>>>,
 
     // Lazy project-wide fields. `OnceLock<Option<T>>` keeps the "init once,
     // cache None on failure, never retry" contract in a single primitive.
@@ -1966,14 +1967,14 @@ pub struct ProjectCtx {
     // bundler/babel configs from that dir up to the root), not file content,
     // and the underlying probe stat-walks config files — so without this memo a
     // JSX-dense tree pays the full walk once per file.
-    react_compiler_dir_cache: Mutex<HashMap<PathBuf, bool>>,
+    react_compiler_dir_cache: Mutex<FxHashMap<PathBuf, bool>>,
 
     // "Does this project use a bundler?" keyed by the *directory* of the file
     // asking. Like `react_compiler_dir_cache`, the answer depends only on the
     // directory chain (nearest package.json + bundler config files up to the
     // root), not file content, and the probe stat-walks config files — so
     // without this memo a deep monorepo pays the full walk once per file.
-    bundler_dir_cache: Mutex<HashMap<PathBuf, bool>>,
+    bundler_dir_cache: Mutex<FxHashMap<PathBuf, bool>>,
 
     // Workspace member package names, read+parsed from each workspace root's
     // package.json. Project-wide and constant, but queried once per import by
@@ -1987,7 +1988,7 @@ pub struct ProjectCtx {
     // workspace walk never runs) still hoist sibling packages' deps at runtime;
     // this lets `no-implicit-deps` recognize a dep declared in any sibling
     // manifest. Built lazily on first miss and reused for the rest of the run.
-    tree_dep_names_cache: Mutex<HashMap<PathBuf, Arc<HashSet<String>>>>,
+    tree_dep_names_cache: Mutex<FxHashMap<PathBuf, Arc<FxHashSet<String>>>>,
 
     // Union of every dependency name declared across all member packages of an
     // npm-workspaces root, keyed by that root's directory. npm hoists every
@@ -1996,7 +1997,7 @@ pub struct ProjectCtx {
     // recognize such an import. Resolved from the `workspaces` globs (not a full
     // tree walk), so it covers the workspaces root even when `project_root` is
     // scoped to one member. Built lazily on first miss and reused for the run.
-    workspace_sibling_deps_cache: Mutex<HashMap<PathBuf, Arc<HashSet<String>>>>,
+    workspace_sibling_deps_cache: Mutex<FxHashMap<PathBuf, Arc<FxHashSet<String>>>>,
 
     // Files the engine read and found to contain no `comply-ignore` substring.
     // The post-filter (`ignore_comments::apply_to_all`) otherwise re-reads every
@@ -2004,13 +2005,13 @@ pub struct ProjectCtx {
     // recorded here it can skip the read entirely (a known-clean file can carry
     // neither a suppression nor a malformed marker). Keyed by the discovery path
     // (same value `apply_to_all` iterates), so no canonicalization is needed.
-    clean_files: Mutex<HashSet<PathBuf>>,
+    clean_files: Mutex<FxHashSet<PathBuf>>,
 
     // Prisma model names (lowercase) that have a `deletedAt` field in the
     // project's schema.prisma. `None` when no schema.prisma is found (rules
     // fall back to the old "fire on all" behaviour). Populated lazily on
     // first access, cached for the lifetime of the run.
-    prisma_soft_delete_models: OnceLock<Option<HashSet<String>>>,
+    prisma_soft_delete_models: OnceLock<Option<FxHashSet<String>>>,
 
     // Frameworks detected from the *nearest* package.json to a file, keyed by
     // that manifest's directory. Root-level `detected_frameworks` misses an app
@@ -2018,7 +2019,7 @@ pub struct ProjectCtx {
     // any monorepo package) because detection only reads the root manifest; this
     // resolves the framework owning each file. Memoized per manifest dir — the
     // answer is identical for every file under the same package.json.
-    path_frameworks_cache: Mutex<HashMap<PathBuf, Vec<&'static FrameworkDef>>>,
+    path_frameworks_cache: Mutex<FxHashMap<PathBuf, Vec<&'static FrameworkDef>>>,
 
     // `lib.entryFile` declared in each `ng-package.json`, keyed by that file's
     // directory. ng-packagr Angular libraries declare their public-API entry
@@ -2026,7 +2027,7 @@ pub struct ProjectCtx {
     // build output). Parsed lazily on first miss and memoized — the answer is
     // identical for every file under the same `ng-package.json`. `None` caches a
     // missing/malformed file or an absent `lib.entryFile` so it is not re-read.
-    ng_package_entry_cache: Mutex<HashMap<PathBuf, Option<String>>>,
+    ng_package_entry_cache: Mutex<FxHashMap<PathBuf, Option<String>>>,
 
     // "Does this package directory declare a Bazel `ng_package` target?", keyed
     // by the manifest directory. Angular's source packages carry a placeholder
@@ -2036,7 +2037,7 @@ pub struct ProjectCtx {
     // declaring `ng_package(...)` is the source-tree library marker. Read lazily
     // on first miss and memoized — the answer is identical for every file under
     // the same package directory.
-    bazel_ng_package_cache: Mutex<HashMap<PathBuf, bool>>,
+    bazel_ng_package_cache: Mutex<FxHashMap<PathBuf, bool>>,
 
     // Absolute directories declared as a Prisma `generator { output = … }` in
     // each `schema.prisma`, keyed by that schema's directory. The generated
@@ -2046,7 +2047,7 @@ pub struct ProjectCtx {
     // by schema dir — every importer under the same schema shares the answer. An
     // empty `Vec` caches a missing schema or one with no `output` (default
     // `node_modules/.prisma/client`, already covered by the build-output match).
-    prisma_output_dirs_cache: Mutex<HashMap<PathBuf, Arc<Vec<PathBuf>>>>,
+    prisma_output_dirs_cache: Mutex<FxHashMap<PathBuf, Arc<Vec<PathBuf>>>>,
 
     // Distribution root of a shadcn-style component registry — the common
     // ancestor directory of every file a `registry.json` manifest declares,
@@ -2056,7 +2057,7 @@ pub struct ProjectCtx {
     // in-repo importer. Resolved lazily on first miss and memoized — `None`
     // caches a directory with no enclosing shadcn registry so the disk walk and
     // manifest parse run at most once per directory.
-    registry_root_cache: Mutex<HashMap<PathBuf, Option<PathBuf>>>,
+    registry_root_cache: Mutex<FxHashMap<PathBuf, Option<PathBuf>>>,
 }
 
 impl ProjectCtx {
@@ -2087,7 +2088,7 @@ impl ProjectCtx {
     /// Snapshot of the known-clean file set, taken once after the engine
     /// completes so the post-filter can do lock-free membership checks.
     #[must_use]
-    pub fn clean_files_snapshot(&self) -> HashSet<PathBuf> {
+    pub fn clean_files_snapshot(&self) -> FxHashSet<PathBuf> {
         self.clean_files.lock().unwrap().clone()
     }
 
@@ -2378,8 +2379,8 @@ impl ProjectCtx {
     /// router by convention, never through a static import. Walking the nearest
     /// manifest lets these be recognized for an app nested in a sub-package whose
     /// framework dependency is invisible to root-anchored detection.
-    pub fn magic_exports_for_path(&self, path: &Path) -> HashSet<&str> {
-        let mut names: HashSet<&str> = self.framework_magic_exports().collect();
+    pub fn magic_exports_for_path(&self, path: &Path) -> FxHashSet<&str> {
+        let mut names: FxHashSet<&str> = self.framework_magic_exports().collect();
         for fw in self.frameworks_for_path(path) {
             names.extend(fw.magic_exports.names.iter().map(String::as_str));
         }
@@ -2428,7 +2429,7 @@ impl ProjectCtx {
     /// Each framework's `route_files` apply only when `path` matches that
     /// framework's own route-file convention, keeping a same-named export in an
     /// ordinary module flaggable.
-    fn extend_route_magic_exports<'a>(&'a self, path: &Path, names: &mut HashSet<&'a str>) {
+    fn extend_route_magic_exports<'a>(&'a self, path: &Path, names: &mut FxHashSet<&'a str>) {
         let basename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let is_sveltekit_route = crate::rules::path_utils::is_sveltekit_route_file(basename);
         let is_param_matcher = crate::rules::path_utils::is_param_dir_file(path);
@@ -3507,7 +3508,7 @@ impl ProjectCtx {
     /// monorepo, deep under a `packages/*/prisma/` package), so this scans the
     /// project tree downward rather than walking up from the root — an upward
     /// walk never descends into the subdirectory holding the schema.
-    pub fn prisma_soft_delete_models(&self) -> Option<&HashSet<String>> {
+    pub fn prisma_soft_delete_models(&self) -> Option<&FxHashSet<String>> {
         self.prisma_soft_delete_models
             .get_or_init(|| {
                 // Anchored on the detected project root only — never the process
@@ -3523,7 +3524,7 @@ impl ProjectCtx {
     #[must_use]
     pub fn for_test_with_prisma_models(models: &[&str]) -> Self {
         let ctx = ProjectCtx::default();
-        let set: HashSet<String> = models.iter().map(|s| s.to_lowercase()).collect();
+        let set: FxHashSet<String> = models.iter().map(|s| s.to_lowercase()).collect();
         let _ = ctx.prisma_soft_delete_models.set(Some(set));
         ctx
     }
@@ -3583,9 +3584,9 @@ impl ProjectCtx {
 /// schema was found, so models absent from `set` provably have no soft-delete
 /// column and must not be flagged. Bounded by a depth limit so a pathologically
 /// deep tree can't blow the stack or stall.
-fn collect_prisma_soft_delete_models(root: &Path) -> Option<HashSet<String>> {
+fn collect_prisma_soft_delete_models(root: &Path) -> Option<FxHashSet<String>> {
     const MAX_DEPTH: u32 = 8;
-    let mut models = HashSet::new();
+    let mut models = FxHashSet::default();
     let mut found_schema = false;
     let mut stack: Vec<(PathBuf, u32)> = vec![(root.to_path_buf(), 0)];
 
@@ -3622,8 +3623,8 @@ fn collect_prisma_soft_delete_models(root: &Path) -> Option<HashSet<String>> {
 /// Parse a `schema.prisma` text and return the lowercase names of models that
 /// declare a `deletedAt` field. Uses a simple line-based scan — no full Prisma
 /// parser needed.
-fn parse_prisma_soft_delete_models(schema: &str) -> HashSet<String> {
-    let mut result = HashSet::new();
+fn parse_prisma_soft_delete_models(schema: &str) -> FxHashSet<String> {
+    let mut result = FxHashSet::default();
     let mut current_model: Option<String> = None;
     let mut block_has_deleted_at = false;
     let mut depth: i32 = 0;
@@ -3824,8 +3825,8 @@ fn expand_workspace_glob(root: &Path, pattern: &str) -> Vec<PathBuf> {
 /// member directories, and each member's declared deps (plus `engines` keys) are
 /// unioned. Only the members listed under `workspaces` are read — no full tree
 /// walk — so the cost is bounded by the number of workspace packages.
-fn collect_workspace_member_deps(root: &Path) -> HashSet<String> {
-    let mut names = HashSet::new();
+fn collect_workspace_member_deps(root: &Path) -> FxHashSet<String> {
+    let mut names = FxHashSet::default();
     let Some(pkg) = std::fs::read_to_string(root.join("package.json"))
         .ok()
         .and_then(|raw| PackageJson::parse(&raw))
@@ -3846,9 +3847,9 @@ fn collect_workspace_member_deps(root: &Path) -> HashSet<String> {
 /// Collect the union of every dependency name declared in every `package.json`
 /// under `root` (excluding `node_modules` and dot-directories), bounded by a
 /// depth limit so a pathologically deep tree can't blow the stack or stall.
-fn collect_tree_dep_names(root: &Path) -> HashSet<String> {
+fn collect_tree_dep_names(root: &Path) -> FxHashSet<String> {
     const MAX_DEPTH: u32 = 8;
-    let mut names = HashSet::new();
+    let mut names = FxHashSet::default();
     let mut stack: Vec<(PathBuf, u32)> = vec![(root.to_path_buf(), 0)];
 
     while let Some((dir, depth)) = stack.pop() {
@@ -3887,7 +3888,7 @@ fn collect_tree_dep_names(root: &Path) -> HashSet<String> {
 /// at the manifest directory. The directory is assumed already resolved (no
 /// upward walk), so callers that have stat-walked themselves do not redo it.
 fn nearest_parsed_at<T>(
-    cache: &Mutex<HashMap<PathBuf, Arc<T>>>,
+    cache: &Mutex<FxHashMap<PathBuf, Arc<T>>>,
     manifest_dir: &Path,
     filename: &str,
     parse: impl Fn(&str) -> Option<T>,
@@ -3975,7 +3976,7 @@ pub(crate) fn walk_up_finding(start: &Path, target: &str) -> Option<PathBuf> {
 /// while collapsing thousands of duplicate stat-walks (one per file sharing a
 /// directory) down to one per (directory, marker).
 fn walk_up_finding_cached(
-    cache: &Mutex<HashMap<&'static str, HashMap<PathBuf, Option<PathBuf>>>>,
+    cache: &Mutex<FxHashMap<&'static str, FxHashMap<PathBuf, Option<PathBuf>>>>,
     start: &Path,
     target: &'static str,
 ) -> Option<PathBuf> {
