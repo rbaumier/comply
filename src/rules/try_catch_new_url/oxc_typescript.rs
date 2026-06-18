@@ -73,7 +73,8 @@ impl OxcCheck for Check {
 /// True when the `new URL(arg)` argument is author-controlled and not raw
 /// untrusted input: a string literal, a template literal whose every
 /// interpolation roots in an env-validated config object (`config.…` / `env.…`),
-/// or a direct member access rooted in `config` / `env`.
+/// a direct member access rooted in `config` / `env`, a WHATWG `Request.url`
+/// getter, or the `Location.href` getter for the current page URL.
 /// Those cannot fail at runtime in a way the author hasn't already controlled.
 fn arg_is_trusted(new_expr: &oxc_ast::ast::NewExpression) -> bool {
     use oxc_ast::ast::Expression;
@@ -88,7 +89,16 @@ fn arg_is_trusted(new_expr: &oxc_ast::ast::NewExpression) -> bool {
         // A WHATWG `Request`'s `.url` getter always returns a well-formed
         // absolute URL, so `new URL(request.url)` cannot throw. Covers
         // `request.url`, `req.url`, and `event.request.url`.
-        Expression::StaticMemberExpression(m) if is_request_url_access(m) => true,
+        //
+        // `Location.href` is the live getter for the current page URL; the
+        // browser only ever assigns it a well-formed absolute URL, so
+        // `new URL(location.href)` cannot throw either. Covers `location.href`
+        // and `<window|globalThis|document|self>.location.href`.
+        Expression::StaticMemberExpression(m)
+            if is_request_url_access(m) || is_location_href_access(m) =>
+        {
+            true
+        }
         Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_) => {
             expr_roots_in_trusted_config(arg)
         }
@@ -143,6 +153,29 @@ fn is_request_url_access(member: &oxc_ast::ast::StaticMemberExpression) -> bool 
         Expression::Identifier(id) => matches!(id.name.as_str(), "request" | "req"),
         Expression::StaticMemberExpression(m) => {
             matches!(m.property.name.as_str(), "request" | "req")
+        }
+        _ => false,
+    }
+}
+
+/// True for a `Location.href` read — `location.href`, or a `.location.href`
+/// rooted at a standard host object (`window`/`globalThis`/`document`/`self`).
+/// The browser only ever assigns `Location.href` a well-formed absolute URL, so
+/// `new URL(location.href)` cannot throw. An arbitrary `foo.href` still flags.
+fn is_location_href_access(member: &oxc_ast::ast::StaticMemberExpression) -> bool {
+    use oxc_ast::ast::Expression;
+    if member.property.name != "href" {
+        return false;
+    }
+    match &member.object {
+        // `location.href`
+        Expression::Identifier(id) => id.name == "location",
+        // `window.location.href` / `globalThis.location.href`
+        // / `document.location.href` / `self.location.href`
+        Expression::StaticMemberExpression(inner) => {
+            inner.property.name == "location"
+                && matches!(&inner.object, Expression::Identifier(host)
+                    if matches!(host.name.as_str(), "window" | "globalThis" | "document" | "self"))
         }
         _ => false,
     }
@@ -407,6 +440,31 @@ mod tests {
     #[test]
     fn still_flags_arbitrary_member_url() {
         assert_eq!(run_on("const u = new URL(config2.url);").len(), 1);
+    }
+
+    // Regression for #3714: `Location.href` is the live getter for the current
+    // page URL — the browser only ever assigns it a well-formed absolute URL, so
+    // the constructor cannot throw.
+    #[test]
+    fn allows_location_href() {
+        assert!(run_on("const url = new URL(window.location.href);").is_empty());
+        assert!(run_on("const url = new URL(globalThis.location.href);").is_empty());
+        assert!(run_on("const url = new URL(location.href);").is_empty());
+        assert!(run_on("const url = new URL(document.location.href);").is_empty());
+        assert!(run_on("const url = new URL(self.location.href);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_arbitrary_href() {
+        // An arbitrary `.href` is not the `Location.href` getter.
+        assert_eq!(run_on("const url = new URL(anchor.href);").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_location_href_on_non_host_object() {
+        // `state` is not a standard `location` host object
+        // (window/globalThis/document/self).
+        assert_eq!(run_on("const url = new URL(state.location.href);").len(), 1);
     }
 
     // Regression for #1828: Playwright's `res.request().url()` returns the same
