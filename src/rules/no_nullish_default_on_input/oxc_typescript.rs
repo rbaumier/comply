@@ -1,10 +1,7 @@
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{
-    BindingPattern, Expression, FormalParameter, LogicalExpression, LogicalOperator,
-};
-use std::collections::HashSet;
+use oxc_ast::ast::{Expression, FunctionType, LogicalExpression, LogicalOperator};
 use std::sync::Arc;
 
 pub struct Check;
@@ -19,42 +16,81 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        // Collect all parameter names in the file.
-        let mut params = HashSet::new();
-        for node in semantic.nodes().iter() {
-            if let AstKind::FormalParameter(param) = node.kind() {
-                collect_param_name(param, &mut params);
-            }
-        }
-        if params.is_empty() {
-            return Vec::new();
-        }
-
         let mut diagnostics = Vec::new();
         for node in semantic.nodes().iter() {
             if let AstKind::LogicalExpression(expr) = node.kind() {
-                check_logical(expr, &params, ctx, &mut diagnostics);
+                check_logical(expr, semantic, ctx, &mut diagnostics);
             }
         }
         diagnostics
     }
 }
 
-fn collect_param_name(param: &FormalParameter, params: &mut HashSet<String>) {
-    // An optional parameter (`param?: T`) explicitly admits `undefined` as valid
-    // input, so defaulting it (`param ?? x`) is idiomatic rather than a smell.
-    // Only non-optional parameters whose nullability is domain-driven are tracked.
-    if param.optional {
-        return;
+/// True when `id` resolves to a non-optional formal parameter of a named
+/// function declaration or a class method — a real input boundary.
+///
+/// Resolution is per-binding (via the reference's symbol declaration), so a
+/// same-named parameter in another scope cannot poison the verdict. Two gates
+/// must hold on the resolved binding:
+///   1. The declaration is a non-optional `FormalParameter`. An optional
+///      parameter (`param?: T`) admits `undefined` as valid input, so defaulting
+///      it is idiomatic.
+///   2. The enclosing function is a `FunctionDeclaration` or a class method —
+///      not an inline arrow/function-expression callback (`map`/`watch`/event
+///      handlers), whose parameters are supplied by the runtime, not the caller.
+///
+/// When the identifier does not resolve to a binding, returns `false`
+/// (conservative; an exported arrow public API is likewise not flagged).
+fn is_boundary_param(
+    id: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let scoping = semantic.scoping();
+    let Some(sym_id) = id
+        .reference_id
+        .get()
+        .and_then(|ref_id| scoping.get_reference(ref_id).symbol_id())
+    else {
+        return false;
+    };
+
+    let nodes = semantic.nodes();
+    let decl_id = scoping.symbol_declaration(sym_id);
+
+    // Walk the declaration node and its ancestors once. The binding must be a
+    // non-optional `FormalParameter`, and the first enclosing function must be a
+    // real input boundary: a `FunctionDeclaration`, or a `Function` whose parent
+    // is a `MethodDefinition` (a class method). An arrow or function-expression
+    // callback (`map`/`watch`/event handlers) is excluded.
+    let mut seen_param = false;
+    for node in
+        std::iter::once(nodes.get_node(decl_id)).chain(nodes.ancestors(decl_id))
+    {
+        match node.kind() {
+            AstKind::FormalParameter(param) => {
+                if param.optional {
+                    return false;
+                }
+                seen_param = true;
+            }
+            AstKind::Function(func) => {
+                return seen_param
+                    && (func.r#type == FunctionType::FunctionDeclaration
+                        || matches!(
+                            nodes.parent_kind(node.id()),
+                            AstKind::MethodDefinition(_)
+                        ));
+            }
+            AstKind::ArrowFunctionExpression(_) => return false,
+            _ => {}
+        }
     }
-    if let BindingPattern::BindingIdentifier(id) = &param.pattern {
-        params.insert(id.name.to_string());
-    }
+    false
 }
 
 fn check_logical(
     expr: &LogicalExpression,
-    params: &HashSet<String>,
+    semantic: &oxc_semantic::Semantic<'_>,
     ctx: &CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -66,7 +102,7 @@ fn check_logical(
         return;
     };
     let name = id.name.as_str();
-    if !params.contains(name) {
+    if !is_boundary_param(id, semantic) {
         return;
     }
     // A typed identifier fallback (e.g. `param ?? otherParam`) is intentional
@@ -255,5 +291,52 @@ mod tests {
             run_on("function f(items: number[]) { const v = items || []; return v; }").len(),
             1
         );
+    }
+
+    #[test]
+    fn flags_nullish_coalesce_on_method_param() {
+        // A class method is a real input boundary: a non-optional parameter
+        // defaulted with `??` is still flagged.
+        assert_eq!(
+            run_on("class C { m(x: number) { return x ?? 0; } }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_cross_scope_optional_param() {
+        // Issue #3712 case 1: two non-optional `value` params in sibling functions
+        // must not poison an optional `value?` in a third. Per-binding resolution
+        // means the optional binding is exempt; `a`/`b` don't default anything.
+        assert!(run_on(
+            "function a(value: string) { return value; }\nfunction b(value: number) { return value; }\nasync function copy(value?: string) { const r = value ?? \"x\"; return r; }"
+        ).is_empty());
+    }
+
+    #[test]
+    fn allows_flatmap_callback_param() {
+        // Issue #3712 case 2: `i` is a `flatMap` callback parameter supplied by the
+        // runtime, not a function-declaration/method input boundary.
+        assert!(run_on(
+            "function useX() { return modes.flatMap(i => (i || \"\").split(\"/\")); }"
+        ).is_empty());
+    }
+
+    #[test]
+    fn allows_event_handler_arrow_param() {
+        // Issue #3712 case 2: `event` is an arrow parameter (const-assigned event
+        // handler), not a boundary function — not flagged.
+        assert!(run_on(
+            "const handler = (event) => { event = event || globalThis.event; return event; };"
+        ).is_empty());
+    }
+
+    #[test]
+    fn allows_watch_callback_param() {
+        // Issue #3712 case 2: `newValue` is a `watch` callback parameter supplied
+        // by the reactivity runtime, not a boundary function input.
+        assert!(run_on(
+            "function useTitle() { watch(title, (newValue) => { document.title = newValue ?? \"\"; }); }"
+        ).is_empty());
     }
 }

@@ -1,4 +1,11 @@
 //! no-nullish-default-on-input — don't silently default function inputs.
+//!
+//! Flags `||`/`??` defaulting of a non-optional parameter of a named function
+//! declaration or class method. The left identifier is resolved per-binding, so
+//! only its own declaration is inspected — a same-named parameter elsewhere does
+//! not poison the verdict. Optional parameters (which admit `undefined` by
+//! contract) and inline callback parameters (`map`/`watch`/event-handler arrows
+//! and function expressions, supplied by the runtime) are not flagged.
 
 mod oxc_typescript;
 #[cfg(test)]
