@@ -6,12 +6,18 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Argument, CallExpression, Expression, NewExpression, Statement, UnaryOperator};
 use oxc_semantic::ReferenceFlags;
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
 
 const LOOKUP_METHODS: &[&str] = &["find", "findIndex", "filter", "includes", "indexOf"];
-const ITERATOR_METHODS: &[&str] = &["forEach", "map", "flatMap", "reduce", "some", "every"];
+/// Methods whose callback is invoked once per element of the receiver — a
+/// per-iteration context. Covers the iterator methods (`forEach`/`map`/…) plus
+/// the predicate-taking lookups (`filter`/`find`/`findIndex`): a lookup nested in
+/// such a callback runs per element.
+const CALLBACK_ITERATING_METHODS: &[&str] =
+    &["forEach", "map", "flatMap", "reduce", "some", "every", "filter", "find", "findIndex"];
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
@@ -148,13 +154,14 @@ fn is_set_or_map_constructor(new_expr: &NewExpression<'_>) -> bool {
     )
 }
 
-/// True when `call` is an iterator-method call (`.forEach`/`.map`/…) whose
-/// callback the rule treats as a loop body.
-fn call_is_iterator_method(call: &CallExpression<'_>) -> bool {
+/// True when `call`'s callback is invoked once per element of the receiver
+/// (`.forEach`/`.map`/`.filter`/`.find`/…), so the rule treats that callback as
+/// a loop body.
+fn call_iterates_via_callback(call: &CallExpression<'_>) -> bool {
     matches!(
         &call.callee,
         Expression::StaticMemberExpression(member)
-            if ITERATOR_METHODS.contains(&member.property.name.as_str())
+            if CALLBACK_ITERATING_METHODS.contains(&member.property.name.as_str())
     )
 }
 
@@ -163,6 +170,10 @@ fn is_inside_loop<'a>(
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
     let nodes = semantic.nodes();
+    // `child` is the node we ascended from on each step — the subtree of the
+    // current ancestor that contains `node`. It distinguishes an iterator
+    // method's per-iteration callback subtree from its receiver subtree.
+    let mut child = nodes.get_node(node.id());
     for ancestor in nodes.ancestors(node.id()) {
         match ancestor.kind() {
             AstKind::ForStatement(_)
@@ -178,27 +189,35 @@ fn is_inside_loop<'a>(
 
             // Arrow / anonymous-function boundaries stop the walk: a callback
             // passed to an ordinary call (`bench(...)`/`group(...)`) does not run
-            // per enclosing-loop iteration. The exception is an iterator-method
-            // callback (`.forEach`/`.map`/…), which IS a loop body — leave the
-            // walk to the `CallExpression` arm below, which returns `true`.
+            // per enclosing-loop iteration. The exception is a callback that
+            // iterates (`.forEach`/`.map`/`.filter`/…), which IS a loop body —
+            // leave the walk to the `CallExpression` arm below.
             AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
                 if let AstKind::CallExpression(call) = nodes.parent_node(ancestor.id()).kind()
-                    && call_is_iterator_method(call)
+                    && call_iterates_via_callback(call)
                 {
+                    child = ancestor;
                     continue;
                 }
                 return false;
             }
 
-            // .forEach() / .map() etc. count as loops.
+            // A callback-iterating method (`.forEach`/`.map`/`.filter`/…) is a
+            // loop body only for its callback. When we arrived through the callee
+            // (`X.map` member-expression receiver chain), `node` is a downstream
+            // stage of a sequential pipeline (`a.filter(…).map(…)`) that runs
+            // once, not per iteration — keep walking up.
             AstKind::CallExpression(call) => {
-                if call_is_iterator_method(call) {
+                if call_iterates_via_callback(call)
+                    && !call.callee.span().contains_inclusive(child.kind().span())
+                {
                     return true;
                 }
             }
 
             _ => {}
         }
+        child = ancestor;
     }
     false
 }
@@ -424,12 +443,13 @@ const unknownGtins = parsedRows
 
     #[test]
     fn still_flags_has_on_unknown_receiver() {
-        // `updatedGtins` is not provably a Set/Map — keep flagging.
+        // `updatedGtins` is not provably a Set/Map — keep flagging the `.find`
+        // that runs per loop iteration.
         let diags = run(r#"
 const updatedGtins = getGtins();
-const unknownGtins = parsedRows
-  .filter((r) => !updatedGtins.has(r.gtin))
-  .map((r) => r.gtin);
+for (const row of rows) {
+    const known = candidates.find((c) => updatedGtins.has(c.id));
+}
 "#);
         assert_eq!(diags.len(), 1);
     }
@@ -438,11 +458,11 @@ const unknownGtins = parsedRows
     fn still_flags_has_on_reassigned_receiver() {
         // The binding is reassigned after the Set declaration — no guarantee left.
         let diags = run(r#"
-let updatedGtins = new Set(updatedRows.map((r) => r.gtin));
+let updatedGtins = new Set(getGtins());
 updatedGtins = getGtins();
-const unknownGtins = parsedRows
-  .filter((r) => !updatedGtins.has(r.gtin))
-  .map((r) => r.gtin);
+for (const row of rows) {
+    const known = candidates.find((c) => updatedGtins.has(c.id));
+}
 "#);
         assert_eq!(diags.len(), 1);
     }
@@ -464,6 +484,47 @@ for (const item of items) {
 items.map(item => {
     return getCategories().find(c => c.id === item.categoryId);
 });
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_filter_as_map_receiver() {
+        // Regression for #3784: `.filter()` is the receiver of `.map()`, a
+        // sequential pipeline stage that runs once — not a per-iteration body.
+        assert!(
+            run(r#"
+const out = files.filter((f) => f.isDirectory()).map((f) => f.name);
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_longer_pipeline_chain() {
+        assert!(
+            run(r#"
+const r = files.filter((a) => a.ok).map((b) => b.id).filter((c) => !c.hidden);
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_filter_then_foreach() {
+        assert!(
+            run(r#"
+arr.filter((x) => x.ok).forEach((y) => use(y));
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_filter_in_map_callback() {
+        // The inner `.filter` is nested in the `.map` callback — per-iteration.
+        let diags = run(r#"
+const r = items.map((i) => others.filter((o) => o.id === i.id));
 "#);
         assert_eq!(diags.len(), 1);
     }
