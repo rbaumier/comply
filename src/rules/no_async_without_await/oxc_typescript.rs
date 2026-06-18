@@ -311,17 +311,22 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            // Block body that is exactly `return <call>();` — the function
-            // forwards another call's `Promise`; `async` is the type-level way to
-            // declare that `Promise` return (per `promise-function-async`), so the
-            // absent `await` is not a smell. Block-body analog of the concise
-            // arrow exemption above.
+            // Block body that is either empty (`async () => {}`) or exactly
+            // `return <call>();`. An empty body is a `Promise<void>` no-op whose
+            // `async` is its only source of the return type — dropping it yields
+            // `() => void` and breaks a contextual `(params) => Promise<void>`. A
+            // single-return-call forwards another call's `Promise`. In both cases
+            // `async` is load-bearing for the type contract (per
+            // `promise-function-async`), so the absent `await` is not a smell.
+            // These are the block-body analogs of the concise arrow exemption.
             let block_body = match node.kind() {
                 AstKind::Function(f) => f.body.as_deref(),
                 AstKind::ArrowFunctionExpression(f) if !f.expression => Some(&*f.body),
                 _ => None,
             };
-            if block_body.is_some_and(body_is_single_return_call) {
+            if block_body.is_some_and(|body| {
+                body.statements.is_empty() || body_is_single_return_call(body)
+            }) {
                 continue;
             }
 
@@ -611,6 +616,22 @@ mod tests {
         // it is not a framework callback and stays flagged.
         let src = "(async () => { return 42; })();";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_empty_block_body_async_arrow() {
+        // Regression for rbaumier/comply#3850 — drizzle's `invalidate: async
+        // (_params) => {}`. An empty-block-body async is a `Promise<void>` no-op
+        // whose `async` is its only source of the return type; dropping it would
+        // make it `() => void` and break a contextual `(params) => Promise<void>`.
+        // Block-body analog of the concise-constant arrow and the annotated stub.
+        assert!(run_on("const f = async (_params) => {};").is_empty());
+    }
+
+    #[test]
+    fn allows_empty_block_body_async_function() {
+        // Same shape as a standalone async function declaration with an empty body.
+        assert!(run_on("async function noop() {}").is_empty());
     }
 
     #[test]
