@@ -16,8 +16,15 @@ pub struct Check;
 /// method would match. A `set*()` call is only a React `useState` setter when
 /// the file is actually React: a `.tsx`/`.jsx` file (JSX implies React) or a
 /// `.ts`/`.js` module that imports React. Plain TypeScript is out of scope.
+///
+/// SolidJS files are excluded even when the `.tsx` extension or a stray React
+/// import would otherwise match: Solid's fine-grained reactivity has no
+/// component re-render cycle (the body runs once), so a `createSignal` setter in
+/// the body sets the initial value and never loops — the React hazard this rule
+/// flags cannot occur.
 fn in_react_context(ctx: &CheckCtx) -> bool {
-    matches!(ctx.lang, Language::Tsx) || crate::oxc_helpers::imports_react(ctx.source)
+    (matches!(ctx.lang, Language::Tsx) || crate::oxc_helpers::imports_react(ctx.source))
+        && !crate::oxc_helpers::imports_solid(ctx.source)
 }
 
 impl OxcCheck for Check {
@@ -350,6 +357,55 @@ function Comp({flag}) {
     setState('open');
   }
   return null;
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // --- #3207: SolidJS files are excluded ---
+
+    #[test]
+    fn allows_solid_signal_setter_in_body() {
+        // SolidJS components run once; a `createSignal` setter in the body sets
+        // the initial value and never re-renders. The `.tsx` extension must not
+        // make this read as React. (Removing the `!imports_solid` exclusion in
+        // `in_react_context` makes this flag — that is the regression guard.)
+        let src = r#"
+import { createSignal } from "solid-js";
+import { isServer } from "solid-js/web";
+
+export default function ClientOnlyComponent() {
+  const [output, setOutput] = createSignal({});
+  setOutput(prev => ({ ...prev, clientWithIsServer: isServer }));
+  return <main>{JSON.stringify(output())}</main>;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_solid_signal_setter_in_plain_ts() {
+        let src = r#"
+import { createSignal } from "solid-js";
+function makeCounter() {
+  const [count, setCount] = createSignal(0);
+  setCount(1);
+  return count;
+}
+"#;
+        assert!(run_on_path(src, "counter.ts").is_empty());
+    }
+
+    #[test]
+    fn flags_modern_react_tsx_without_react_import() {
+        // The new JSX transform means modern React `.tsx` files do NOT
+        // `import React`. The `.tsx` default must keep flagging the setter; if it
+        // didn't, a real React infinite-render bug would slip through.
+        let src = r#"
+function App() {
+  const [count, setCount] = useState(0);
+  setCount(1);
+  return <div />;
 }
 "#;
         assert_eq!(run_on(src).len(), 1);
