@@ -61,6 +61,13 @@ impl OxcCheck for Check {
                 return;
             }
 
+        // `!a === !b` compares the truthiness of both operands — intentional,
+        // no precedence surprise. Skip symmetric negation.
+        if let Expression::UnaryExpression(right_unary) = &bin.right
+            && right_unary.operator == UnaryOperator::LogicalNot {
+                return;
+            }
+
         let op = op_str(bin.operator);
         let neg_op = negate_op(bin.operator);
         let (line, column) = byte_offset_to_line_col(ctx.source, unary.span.start as usize);
@@ -137,5 +144,20 @@ mod tests {
     #[test]
     fn allows_negation_on_right() {
         assert!(run_on("if (x === !y) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_symmetric_negation_strict_equals() {
+        assert!(run_on("const eq = (a, b) => !a === !b;").is_empty());
+    }
+
+    #[test]
+    fn allows_symmetric_negation_strict_not_equals() {
+        assert!(run_on("const eq = (a, b) => !a !== !b;").is_empty());
+    }
+
+    #[test]
+    fn flags_single_left_negation_with_plain_right() {
+        assert_eq!(run_on("const eq = (a, b) => !a === b;").len(), 1);
     }
 }
