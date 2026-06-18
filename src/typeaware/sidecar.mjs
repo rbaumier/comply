@@ -101,6 +101,103 @@ function nullishMembership(type) {
   };
 }
 
+// ── Shared helpers for the `in` / `typeof` boundary rules ─────────────────────
+
+/** Source text of a node. */
+function nodeText(text, sourceFile, node) {
+  return text.slice(getTokenPosOfNode(node, sourceFile), node.end);
+}
+
+/** Peel parentheses, `as`/`satisfies`/`!` and property accesses down to the
+ *  base identifier node (`(err as any).cause` → the `err` identifier). */
+function baseIdentifierNode(node) {
+  for (;;) {
+    if (!node) return null;
+    switch (node.kind) {
+      case SyntaxKind.ParenthesizedExpression:
+      case SyntaxKind.AsExpression:
+      case SyntaxKind.SatisfiesExpression:
+      case SyntaxKind.NonNullExpression:
+      case SyntaxKind.PropertyAccessExpression:
+        node = node.expression;
+        continue;
+      case SyntaxKind.Identifier:
+        return node;
+      default:
+        return null;
+    }
+  }
+}
+
+/** Whether `operand` refers to the value bound by an enclosing `catch` — an
+ *  `unknown`-by-nature value that `in`/`typeof` may legitimately inspect.
+ *  Matched by symbol identity, not by name, so an inner binding that shadows
+ *  the catch variable (`catch (e) { (e: T) => typeof e }`) is not mistaken for
+ *  the caught value. A destructured binding (`catch ({ cause })`) has no single
+ *  identifier symbol and is treated as not-a-caught-error. */
+function operandIsCaughtError(checker, operand) {
+  let clause = null;
+  for (let p = operand.parent; p; p = p.parent) {
+    if (p.kind === SyntaxKind.CatchClause) {
+      clause = p;
+      break;
+    }
+  }
+  const binding = clause?.variableDeclaration?.name;
+  if (!binding || binding.kind !== SyntaxKind.Identifier) return false;
+  const id = baseIdentifierNode(operand);
+  if (!id) return false;
+  const catchSym = checker.getSymbolAtLocation(binding);
+  return !!catchSym && catchSym === checker.getSymbolAtLocation(id);
+}
+
+/** Live runtime/DOM objects whose shape carries no methods yet must not be
+ *  reconstructed from validated data (e.g. an element's `dataset`). */
+const RUNTIME_OBJECT_TYPE_NAMES = new Set([
+  "DOMStringMap",
+  "DOMTokenList",
+  "CSSStyleDeclaration",
+  "NamedNodeMap",
+]);
+
+/** Whether a type owns a method (a property whose type is a function).
+ *  The typescript-go API does not expose call-signature queries
+ *  (`getCallSignatures` returns nothing on a constituent), so a function-typed
+ *  property is detected from its rendered type containing `=>`. */
+function typeHasMethod(checker, type) {
+  const props = checker.getPropertiesOfType(type) || [];
+  return props.some((p) => {
+    const pt = checker.getTypeOfSymbol(p);
+    return pt && /=>/.test(checker.typeToString(pt));
+  });
+}
+
+/** Whether a value of this type cannot be reconstructed from validated data —
+ *  it is a function, a JSX/runtime object, or a class instance with methods
+ *  (Playwright `Page`/`Locator`, DOM nodes, …). For a union, true when any
+ *  constituent is non-serializable (the `function`-variant discriminant case).
+ *
+ *  Method presence is the only available proxy for "live runtime object": the
+ *  API exposes neither call signatures nor a symbol's declaration file, so a
+ *  class instance from `node_modules` cannot be told apart from an owned object
+ *  that happens to carry a method. The `in` rule therefore deliberately does
+ *  NOT flag `key in ownedObjectWithAMethod` — favouring no false positive on
+ *  the runtime objects this exemption exists for (DOM, Playwright). */
+function isNonSerializable(checker, type) {
+  return constituents(type).some((c) => {
+    const s = checker.typeToString(c);
+    const base = s.replace(/<.*$/s, "").trim();
+    if (RUNTIME_OBJECT_TYPE_NAMES.has(base)) return true;
+    if (/=>/.test(s)) return true;
+    return typeHasMethod(checker, c);
+  });
+}
+
+function pushDiag(sourceFile, lineStarts, file, node, rule, message) {
+  const { line, column } = lineColAt(lineStarts, getTokenPosOfNode(node, sourceFile));
+  diagnostics.push({ file, line, column, rule, message });
+}
+
 // ── Rule: no-redundant-nullish-coalescing-null ───────────────────────────────
 // `x ?? null` is a no-op when x's type already includes `null` and not
 // `undefined` (the coalesce can never change the value or the type). Symmetric
@@ -206,6 +303,114 @@ function emitDuplicateTypeDiagnostics(candidates) {
   }
 }
 
+// ── Rule: ts-no-in-operator ──────────────────────────────────────────────────
+// `"key" in obj` probes an object's shape by hand. External input must be parsed
+// with a schema (Zod) and an owned union must be discriminated by a tag; the
+// only legitimate `in` guards are on a caught error or a non-serializable
+// runtime object (DOM dataset, Playwright Page vs Locator). `for ... in` is a
+// ForInStatement (never a binary expression); `#field in obj` is the class-brand
+// idiom and is skipped.
+function ruleNoInOperator(sourceFile, checker, text, lineStarts, file) {
+  walk(sourceFile, (node) => {
+    if (node.kind !== SyntaxKind.BinaryExpression) return;
+    if (node.operatorToken?.kind !== SyntaxKind.InKeyword) return;
+    if (node.left?.kind === SyntaxKind.PrivateIdentifier) return;
+
+    const rhs = node.right;
+    if (operandIsCaughtError(checker, rhs)) return;
+    const type = checker.getTypeAtLocation(rhs);
+    if (type && isNonSerializable(checker, type)) return;
+
+    pushDiag(
+      sourceFile,
+      lineStarts,
+      file,
+      node,
+      "ts-no-in-operator",
+      "Avoid `in` to probe shape: parse external input with a schema (e.g. Zod), or discriminate an owned union with a tag + exhaustive switch.",
+    );
+  });
+}
+
+// ── Rule: ts-no-typeof-operator ──────────────────────────────────────────────
+// `typeof x` stands in for validating a boundary value or discriminating an
+// owned union. It is allowed only as an environment guard (`typeof window`), on
+// a caught error, inside a `z.preprocess` normaliser, or to discriminate a union
+// whose variant is non-serializable (function/JSX, e.g. SetStateAction).
+const ENV_GLOBALS = new Set([
+  "window",
+  "document",
+  "globalThis",
+  "self",
+  "navigator",
+  "process",
+  "location",
+  "localStorage",
+  "sessionStorage",
+  "WorkerGlobalScope",
+  "Deno",
+  "Bun",
+  "require",
+  "importScripts",
+  "__DEV__",
+]);
+
+/** Whether `node` sits inside the callback argument of a `*.preprocess(...)`
+ *  call (Zod's `z.preprocess(fn, schema)` normaliser). Scoped to the callback:
+ *  a `typeof` in the schema argument, or merely anywhere under an unrelated
+ *  `.preprocess(...)`, is not exempted. */
+function inPreprocessCallback(text, sourceFile, node) {
+  let fn = null;
+  for (let p = node.parent; p; p = p.parent) {
+    if (
+      p.kind === SyntaxKind.ArrowFunction ||
+      p.kind === SyntaxKind.FunctionExpression
+    ) {
+      fn = p;
+      break;
+    }
+    if (
+      p.kind === SyntaxKind.FunctionDeclaration ||
+      p.kind === SyntaxKind.MethodDeclaration
+    ) {
+      return false;
+    }
+  }
+  const call = fn?.parent;
+  if (!call || call.kind !== SyntaxKind.CallExpression) return false;
+  if (!(call.arguments || []).includes(fn)) return false;
+  const callee = call.expression ? nodeText(text, sourceFile, call.expression).trim() : "";
+  return /(^|\.)preprocess$/.test(callee);
+}
+
+function ruleNoTypeofOperator(sourceFile, checker, text, lineStarts, file) {
+  walk(sourceFile, (node) => {
+    if (node.kind !== SyntaxKind.TypeOfExpression) return;
+    const operand = node.expression;
+
+    if (
+      operand.kind === SyntaxKind.Identifier &&
+      ENV_GLOBALS.has(nodeText(text, sourceFile, operand))
+    ) {
+      return;
+    }
+    if (operandIsCaughtError(checker, operand)) return;
+    if (inPreprocessCallback(text, sourceFile, node)) return;
+
+    const type = checker.getTypeAtLocation(operand);
+    if (type && type.flags & TypeFlags.Union && isNonSerializable(checker, type)) return;
+
+    pushDiag(
+      sourceFile,
+      lineStarts,
+      file,
+      node,
+      "ts-no-typeof-operator",
+      "Avoid `typeof` here: parse external `unknown` with a schema (e.g. Zod), or discriminate an owned union with a tag + exhaustive switch.",
+    );
+  });
+}
+
 const duplicateCandidates = [];
 
 for (const file of files) {
@@ -227,6 +432,12 @@ for (const file of files) {
   }
   if (enabled.has("no-duplicate-type-definition")) {
     collectDuplicateTypeCandidates(sourceFile, checker, text, lineStarts, file, duplicateCandidates);
+  }
+  if (enabled.has("ts-no-in-operator")) {
+    ruleNoInOperator(sourceFile, checker, text, lineStarts, file);
+  }
+  if (enabled.has("ts-no-typeof-operator")) {
+    ruleNoTypeofOperator(sourceFile, checker, text, lineStarts, file);
   }
 }
 

@@ -336,7 +336,12 @@ mod tests {
     #[test]
     fn custom_type_aware_rules_are_registered() {
         let metas = crate::rules::collect_type_aware_bindings();
-        for id in [REDUNDANT_NULLISH, "no-duplicate-type-definition"] {
+        for id in [
+            REDUNDANT_NULLISH,
+            "no-duplicate-type-definition",
+            "ts-no-in-operator",
+            "ts-no-typeof-operator",
+        ] {
             assert!(
                 metas.iter().any(|m| m.id == id),
                 "expected {id} among type-aware bindings"
