@@ -28,6 +28,38 @@ fn guarded_before(line: &str, abs: usize) -> bool {
         .any(|guard_at| guard_at < abs)
 }
 
+/// Per-byte mask of `line` where `true` marks a byte inside a string literal
+/// (`'…'`, `"…"`, or `` `…` ``), respecting backslash escapes. Quote delimiters
+/// themselves are marked too, so a global word matched anywhere in the span is
+/// treated as string content (prose), not a code-context global access.
+fn string_literal_mask(line: &str) -> Vec<bool> {
+    let bytes = line.as_bytes();
+    let mut mask = vec![false; bytes.len()];
+    let mut quote: Option<u8> = None;
+    let mut escaped = false;
+    for (i, &b) in bytes.iter().enumerate() {
+        match quote {
+            Some(q) => {
+                mask[i] = true;
+                if escaped {
+                    escaped = false;
+                } else if b == b'\\' {
+                    escaped = true;
+                } else if b == q {
+                    quote = None;
+                }
+            }
+            None => {
+                if b == b'\'' || b == b'"' || b == b'`' {
+                    quote = Some(b);
+                    mask[i] = true;
+                }
+            }
+        }
+    }
+    mask
+}
+
 fn script_setup_range(source: &str) -> Option<(usize, usize)> {
     for (i, _) in source.match_indices("<script") {
         let close = source[i..].find('>')?;
@@ -55,6 +87,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
             continue;
         }
         if depth == 0 {
+            let in_string = string_literal_mask(line);
             for g in SSR_GLOBALS {
                 let mut pos = 0;
                 while let Some(p) = line[pos..].find(g) {
@@ -63,7 +96,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
                     let after = line.as_bytes().get(abs + g.len()).map(|b| *b as char).unwrap_or(' ');
                     let is_word = before.is_alphanumeric() || before == '_' || before == '.';
                     let is_word_after = after.is_alphanumeric() || after == '_';
-                    if !is_word && !is_word_after && !guarded_before(line, abs) {
+                    if !is_word && !is_word_after && !in_string[abs] && !guarded_before(line, abs) {
                         diagnostics.push(Diagnostic {
                             path: std::sync::Arc::clone(&ctx.path_arc),
                             line: base_line + idx + 1,
@@ -164,5 +197,36 @@ mod tests {
         // protected by it.
         let sfc = "<script setup>\nconst w = window.innerWidth // import.meta.client\n</script>";
         assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn ignores_global_word_in_single_quoted_string() {
+        // Issue #3888: prose inside a string literal is not a global access.
+        let sfc = "<script setup>\nconst s = 'click outside of the document'\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn ignores_global_word_in_double_quoted_string() {
+        let sfc = "<script setup>\nconst t = \"window resize handler\"\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn ignores_global_word_in_backtick_string() {
+        let sfc = "<script setup>\nconst u = `navigator info`\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn flags_only_real_access_when_line_mixes_string_and_code() {
+        // The string mention of `document` is prose; only the real `window`
+        // access (in code context) is flagged, at its column.
+        let sfc = "<script setup>\nconst x = 'document'; const w = window.innerWidth\n</script>";
+        let diags = run(sfc);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`window`"));
+        // `window` starts at byte offset 32 on the line (column 33, 1-based).
+        assert_eq!(diags[0].column, 33);
     }
 }
