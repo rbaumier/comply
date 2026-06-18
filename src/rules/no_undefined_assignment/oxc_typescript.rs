@@ -51,12 +51,14 @@ impl OxcCheck for Check {
                 );
                 // Re-assigning a plain local variable to `undefined` is the only way
                 // to reset it: `let x;` applies to the declaration (already emitted)
-                // and `delete obj.prop` applies to properties, not locals. The
+                // and `delete obj.prop` applies to properties, not locals. Private
+                // fields are exempt because `delete this.#x` is a SyntaxError. The
                 // `ref.current` member idiom is exempt for the same reason. Member
-                // assignments other than `ref.current` keep flagging (`delete obj.prop`).
+                // assignments other than these keep flagging (`delete obj.prop`).
                 let target_has_no_remediation = matches!(
                     &assign.left,
                     AssignmentTarget::AssignmentTargetIdentifier(_)
+                        | AssignmentTarget::PrivateFieldExpression(_)
                 ) || is_ref_current_target(&assign.left);
                 if assign.operator == AssignmentOperator::Assign && target_has_no_remediation {
                     return;
@@ -135,5 +137,14 @@ mod tests {
     #[test]
     fn flags_member_property_not_current() {
         assert_eq!(run_on("obj.value = undefined;").len(), 1);
+    }
+
+    #[test]
+    fn allows_private_field_assignment() {
+        // `delete this.#field` is a SyntaxError, so no remediation applies.
+        assert!(
+            run_on("class C { #handle: number | undefined; clear() { this.#handle = undefined; } }")
+                .is_empty()
+        );
     }
 }
