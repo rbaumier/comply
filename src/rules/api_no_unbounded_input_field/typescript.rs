@@ -2,20 +2,86 @@
 //!
 //! For each `call_expression` whose callee text is `z.string` / `z.number`
 //! / `z.array`, walk the surrounding member-call chain to see if it ends in
-//! `.max(...)`. If not, and the file lives in a route/api path and is not a
-//! test file and the enclosing top-level declaration is not a non-input
+//! `.max(...)`. If not, and the file is a server request-input boundary and is
+//! not a test file and the enclosing top-level declaration is not a non-input
 //! schema (response/output shapes like `*Response*Schema` / `*Select*Schema`,
 //! or config/env shapes like `*Config*Schema` / `*Env*Schema` parsed from
 //! `process.env`), and the field is not under a known output-contract key
 //! (`response:`, `output:`, `returns:`, `result:`), emit a diagnostic.
+//!
+//! "Server request-input boundary" is gated by [`looks_like_api_path`], which
+//! matches exact path components (`api`, `routes`, `controllers`, …) or
+//! endpoint-handler filename stems (`route.ts`, `users.controller.ts`) — not a
+//! mere `api`/`route` substring, so a feature folder like `apis/` or a file
+//! like `delete-api.tsx` is not treated as an endpoint. Two file shapes are
+//! skipped because their Zod schemas validate something other than a server
+//! request body: a `"use client"` React component (in-browser form validation,
+//! see [`is_client_component`]) and a TanStack Router page-route file using
+//! `createFileRoute(...)` (parses the URL query, not a request body).
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const ROUTE_HINTS: &[&str] = &["route", "api", "handler", "controller", "endpoint"];
+/// Exact path-component names (directories, case-insensitive) that mark a
+/// server endpoint location: Next.js `app/api/`, an Express/`src/routes/` tree,
+/// NestJS `controllers/`, etc. Matched as whole path segments so `apis/` and a
+/// feature folder merely containing `api` as a substring do not qualify.
+const ENDPOINT_DIR_SEGMENTS: &[&str] = &[
+    "api",
+    "routes",
+    "route",
+    "handlers",
+    "handler",
+    "controllers",
+    "controller",
+    "endpoints",
+    "endpoint",
+];
 
+/// Exact filename stems that mark a file as an endpoint handler: Next.js App
+/// Router `route.ts`, and the bare `handler`/`controller`/`endpoint` stems.
+const ENDPOINT_STEMS: &[&str] = &["route", "handler", "controller", "endpoint"];
+
+/// Trailing stem segments that mark an endpoint handler file: NestJS
+/// `users.controller.ts`, `auth.handler.ts`, `health.endpoint.ts`.
+const ENDPOINT_STEM_SUFFIXES: &[&str] = &[".controller", ".handler", ".endpoint"];
+
+/// True when `path` is a server HTTP request-input boundary: it has an exact
+/// path component naming an endpoint directory ([`ENDPOINT_DIR_SEGMENTS`]), or
+/// its filename stem marks an endpoint handler file (an exact endpoint stem, or
+/// one ending in `.controller`/`.handler`/`.endpoint`). Segment/stem matching
+/// (not substring) keeps `apis/`, `delete-api.tsx`, and feature folders that
+/// merely contain `api`/`route` as a substring out of scope.
 fn looks_like_api_path(path: &std::path::Path) -> bool {
-    let s = path.to_string_lossy().to_ascii_lowercase();
-    ROUTE_HINTS.iter().any(|h| s.contains(h))
+    let has_endpoint_segment = path.components().any(|c| {
+        c.as_os_str()
+            .to_str()
+            .is_some_and(|seg| ENDPOINT_DIR_SEGMENTS.iter().any(|d| seg.eq_ignore_ascii_case(d)))
+    });
+    if has_endpoint_segment {
+        return true;
+    }
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    let stem = stem.to_ascii_lowercase();
+    ENDPOINT_STEMS.iter().any(|s| stem == *s)
+        || ENDPOINT_STEM_SUFFIXES.iter().any(|s| stem.ends_with(s))
+}
+
+/// True when `source` opens with a `"use client"` / `'use client'` directive
+/// (with or without a trailing `;`) as one of its first non-empty lines. Such a
+/// file is a client React component; its Zod schemas are in-browser form
+/// validation, not a server request-input boundary.
+fn is_client_component(source: &str) -> bool {
+    source
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(3)
+        .any(|line| {
+            let line = line.strip_suffix(';').unwrap_or(line).trim_end();
+            line == "\"use client\"" || line == "'use client'"
+        })
 }
 
 const TEST_MARKERS: &[&str] = &[
@@ -160,6 +226,14 @@ crate::ast_check! { on ["call_expression"] prefilter = ["z.string", "z.number", 
         return;
     }
     if is_test_file(ctx.path) {
+        return;
+    }
+    // A `"use client"` file validates a browser form, not a server request body.
+    if is_client_component(ctx.source) {
+        return;
+    }
+    // A TanStack Router page route parses the URL query, not a request body.
+    if ctx.source.contains("createFileRoute") {
         return;
     }
 
@@ -372,5 +446,54 @@ mod tests {
         let src = "app.post('/create', handler, {\n  body: z.object({ result: z.string() }),\n  response: z.string(),\n});";
         let diags = run_at(src, "src/api/features/create.ts");
         assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_tanstack_page_route() {
+        // Regression for #3709 — a TanStack Router page route's `validateSearch`
+        // schema parses the URL query, not a request body. The `routes/` segment
+        // still gates the path, so `createFileRoute` is the distinguishing signal.
+        let src = "import { createFileRoute } from \"@tanstack/react-router\";\nconst searchSchema = z.object({ session: z.string().optional() });\nexport const Route = createFileRoute(\"/\")({ validateSearch: searchSchema });";
+        assert!(run_at(src, "apps/portal/src/routes/index.tsx").is_empty());
+    }
+
+    #[test]
+    fn ignores_use_client_in_apis_path() {
+        // Regression for #3709 — a `"use client"` form schema under an `apis/`
+        // feature folder is in-browser validation. Both the use-client directive
+        // and the (now exact-segment) path gate keep it out of scope.
+        let src = "\"use client\";\nconst formSchema = z.object({ name: z.string() });";
+        assert!(
+            run_at(
+                src,
+                "apps/dashboard/app/(app)/[workspaceSlug]/apis/[apiId]/settings/components/delete-api.tsx"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn ignores_apis_resource_dir_without_use_client() {
+        // Regression for #3709 — path tightening alone: an `apis/` resource dir is
+        // not an exact `api` segment and the stem `x` is not an endpoint handler,
+        // so a plain schema there is not a server input boundary.
+        let src = "const formSchema = z.object({ name: z.string() });";
+        assert!(run_at(src, "apps/dashboard/src/apis/x.tsx").is_empty());
+    }
+
+    #[test]
+    fn ignores_use_client_in_api_path() {
+        // Regression for #3709 — a `"use client"` file inside a genuine `api/`
+        // segment is still a client component, so its schemas are skipped.
+        let src = "\"use client\";\nconst s = z.object({ x: z.string() });";
+        assert!(run_at(src, "src/api/foo.tsx").is_empty());
+    }
+
+    #[test]
+    fn flags_nextjs_route_handler() {
+        // The Next.js App Router `route.ts` stem plus the `api` segment marks a
+        // real server endpoint; an unbounded request-body field is still flagged.
+        let src = "const Body = z.object({ name: z.string() });";
+        assert_eq!(run_at(src, "app/api/users/route.ts").len(), 1);
     }
 }
