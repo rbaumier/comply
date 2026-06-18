@@ -14,9 +14,48 @@ const NUMERIC_HINTS: &[&str] = &[
     "offset", "width", "height", "price", "cost",
 ];
 
+/// Split an identifier into lowercased word segments across camelCase,
+/// snake_case / kebab boundaries and digit runs (`pageIndex` -> `["page",
+/// "index"]`, `item_count2` -> `["item", "count", "2"]`).
+fn segments(name: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut prev_lower = false;
+    let mut prev_digit = false;
+    for ch in name.chars() {
+        if ch == '_' || ch == '-' || ch == '$' || ch == '.' {
+            if !current.is_empty() {
+                segments.push(std::mem::take(&mut current));
+            }
+            prev_lower = false;
+            prev_digit = false;
+            continue;
+        }
+        let starts_word = (ch.is_ascii_uppercase() && prev_lower)
+            || (ch.is_ascii_digit() != prev_digit && !current.is_empty());
+        if starts_word && !current.is_empty() {
+            segments.push(std::mem::take(&mut current));
+        }
+        current.push(ch.to_ascii_lowercase());
+        prev_lower = ch.is_ascii_lowercase();
+        prev_digit = ch.is_ascii_digit();
+    }
+    if !current.is_empty() {
+        segments.push(current);
+    }
+    segments
+}
+
+/// Whether some whole word segment of `name` equals a numeric hint (or its
+/// trailing-`s` plural). Matching on segments, not arbitrary substrings, keeps
+/// `message`/`package`/`storage` (where "age" is a mere substring) un-flagged
+/// while still flagging `itemCount`, `pageIndex`, `bufferOffset`.
 fn looks_numeric(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    NUMERIC_HINTS.iter().any(|h| lower.contains(h))
+    segments(name).iter().any(|seg| {
+        NUMERIC_HINTS
+            .iter()
+            .any(|h| seg == h || seg.strip_suffix('s').is_some_and(|stem| stem == *h))
+    })
 }
 
 fn final_ident_name<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
@@ -159,5 +198,27 @@ mod tests {
     #[test]
     fn flags_number_plus_label_with_space() {
         assert_eq!(run_on(r#"const msg = itemCount + " items found";"#).len(), 1);
+    }
+
+    // A numeric hint that is only a substring of a non-numeric word ("age" in
+    // "message", "port" in "report", "num" in "enum", "sum" in "consumer") must
+    // not flag — the hint has to match a whole identifier segment. See #3809.
+    #[test]
+    fn allows_substring_only_hint_matches() {
+        assert!(run_on(r#"throw new Error("Invalid svg format\n" + e.message);"#).is_empty());
+        assert!(run_on(r#"const s = "Got: " + e.package;"#).is_empty());
+        assert!(run_on(r#"const s = "Got: " + e.storage;"#).is_empty());
+        assert!(run_on(r#"const s = "Got: " + e.usage;"#).is_empty());
+        assert!(run_on(r#"const s = "Got: " + report;"#).is_empty());
+        assert!(run_on(r#"const s = "Got: " + enumValue;"#).is_empty());
+        assert!(run_on(r#"const s = "Got: " + consumer;"#).is_empty());
+    }
+
+    // True positives where a hint is a whole segment stay flagged. See #3809.
+    #[test]
+    fn flags_whole_segment_hint() {
+        assert_eq!(run_on(r#"const s = "Got: " + pageIndex;"#).len(), 1);
+        assert_eq!(run_on(r#"const s = "Got: " + bufferOffset;"#).len(), 1);
+        assert_eq!(run_on(r#"const s = "Got: " + item_count;"#).len(), 1);
     }
 }
