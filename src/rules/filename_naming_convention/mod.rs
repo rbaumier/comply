@@ -4,6 +4,8 @@ mod rust;
 mod text;
 mod vue;
 
+pub(crate) use text::{FilenameConvention, classify_ts_js_stem};
+
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use crate::rules::RuleDef;

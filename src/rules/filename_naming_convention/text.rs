@@ -7,7 +7,24 @@ pub struct Check;
 /// Returns `true` when `stem` matches kebab-case: a lowercase ASCII letter
 /// followed by lowercase alphanumerics optionally separated by single dashes.
 /// Equivalent to the pattern `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`.
-pub(super) fn is_kebab_case(stem: &str) -> bool {
+pub(crate) fn is_kebab_case(stem: &str) -> bool {
+    is_lower_separated(stem, b'-')
+}
+
+/// Returns `true` when `stem` matches snake_case: a lowercase ASCII letter
+/// followed by lowercase alphanumerics optionally separated by single
+/// underscores. Equivalent to the pattern `^[a-z][a-z0-9]*(_[a-z0-9]+)*$`.
+/// The mirror of [`is_kebab_case`] with `_` as the separator — Angular/Google
+/// mandate this casing for all TypeScript source.
+pub(crate) fn is_snake_case(stem: &str) -> bool {
+    is_lower_separated(stem, b'_')
+}
+
+/// Shared classifier for the single-separator lowercase conventions: a
+/// lowercase ASCII letter, then lowercase alphanumerics with `sep` allowed only
+/// as a single interior separator (never leading, trailing, or doubled).
+/// `sep = b'-'` yields kebab-case, `sep = b'_'` yields snake_case.
+fn is_lower_separated(stem: &str, sep: u8) -> bool {
     if stem.is_empty() {
         return false;
     }
@@ -15,15 +32,15 @@ pub(super) fn is_kebab_case(stem: &str) -> bool {
     if !bytes[0].is_ascii_lowercase() {
         return false;
     }
-    let mut prev_dash = false;
+    let mut prev_sep = false;
     for (i, &b) in bytes.iter().enumerate() {
-        if b == b'-' {
-            if prev_dash || i == 0 || i == bytes.len() - 1 {
+        if b == sep {
+            if prev_sep || i == 0 || i == bytes.len() - 1 {
                 return false;
             }
-            prev_dash = true;
+            prev_sep = true;
         } else if b.is_ascii_lowercase() || b.is_ascii_digit() {
-            prev_dash = false;
+            prev_sep = false;
         } else {
             return false;
         }
@@ -57,7 +74,7 @@ fn is_locale_tag(stem: &str) -> bool {
     is_iso_segment(language, false) && is_iso_segment(country, true)
 }
 
-fn is_pascal_case(stem: &str) -> bool {
+pub(crate) fn is_pascal_case(stem: &str) -> bool {
     if stem.is_empty() {
         return false;
     }
@@ -68,7 +85,7 @@ fn is_pascal_case(stem: &str) -> bool {
     bytes.iter().all(|&b| b.is_ascii_alphanumeric())
 }
 
-fn is_camel_case(stem: &str) -> bool {
+pub(crate) fn is_camel_case(stem: &str) -> bool {
     if stem.is_empty() {
         return false;
     }
@@ -77,6 +94,37 @@ fn is_camel_case(stem: &str) -> bool {
         return false;
     }
     bytes.iter().all(|&b| b.is_ascii_alphanumeric())
+}
+
+/// A TS/JS filename-casing convention a project's source can settle on. Used by
+/// [`crate::project::ProjectCtx::dominant_ts_js_filename_convention`] to detect
+/// the project's established convention; the rule then accepts a snake_case file
+/// when the project is snake_case-dominant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum FilenameConvention {
+    Kebab,
+    Snake,
+    Camel,
+    Pascal,
+}
+
+/// Classifies a TS/JS file `stem` into its casing convention, or `None` when it
+/// matches none (single-word `index`, locale tags, mixed-case oddities) — those
+/// carry no signal about the project's dominant convention. `kebab`/`camel`
+/// overlap on single lowercase words (`index`); kebab wins since it is the
+/// JS/TS baseline, keeping single-word files from inflating the camel tally.
+pub(crate) fn classify_ts_js_stem(stem: &str) -> Option<FilenameConvention> {
+    if is_kebab_case(stem) {
+        Some(FilenameConvention::Kebab)
+    } else if is_snake_case(stem) {
+        Some(FilenameConvention::Snake)
+    } else if is_camel_case(stem) {
+        Some(FilenameConvention::Camel)
+    } else if is_pascal_case(stem) {
+        Some(FilenameConvention::Pascal)
+    } else {
+        None
+    }
 }
 
 /// Strips a leading run of convention-prefix sigils (`_` and `$`) from `stem`,
@@ -170,6 +218,23 @@ fn is_ts_or_jsx_file(path: &std::path::Path) -> bool {
         || s.ends_with(".cjs")
 }
 
+impl Check {
+    /// Returns `true` when snake_case is the project's established dominant TS/JS
+    /// filename convention: its share of classifiable TS/JS stems meets the
+    /// `min_dominant_share` threshold. The project-wide convention tally is
+    /// computed once per run and memoized on `ProjectCtx`; the threshold lives in
+    /// `src/config/defaults.toml`.
+    fn snake_is_project_dominant(&self, ctx: &CheckCtx) -> bool {
+        let Some((convention, share)) = ctx.project.dominant_ts_js_filename_convention() else {
+            return false;
+        };
+        let min_share = ctx
+            .config
+            .float("filename-naming-convention", "min_dominant_share", ctx.lang);
+        convention == FilenameConvention::Snake && share >= min_share
+    }
+}
+
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let Some(file_name) = ctx.path.file_name().and_then(|s| s.to_str()) else {
@@ -223,6 +288,13 @@ impl TextCheck for Check {
         {
             return Vec::new();
         }
+        // Angular / Google mandate snake_case for all TS/JS source. Accept a
+        // snake_case file only when snake_case is the project's *established*
+        // dominant convention — a kebab-dominant project with a stray
+        // snake_case file must still be flagged.
+        if is_snake_case(convention_stem) && self.snake_is_project_dominant(ctx) {
+            return Vec::new();
+        }
         if is_test_context_path(ctx.path) && is_regression_test_name(convention_stem) {
             return Vec::new();
         }
@@ -241,10 +313,33 @@ impl TextCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
     use std::path::Path;
 
     fn run(path: &str) -> Vec<Diagnostic> {
         Check.check(&CheckCtx::for_test(Path::new(path), ""))
+    }
+
+    /// Build a `ProjectCtx` whose TS/JS file set is `stems` (each `<stem>.ts`
+    /// written under a tempdir), then run the rule against `target` (a path
+    /// string, not necessarily on disk). Lets the dominance-detection tests
+    /// establish a project convention from many files and assert how a single
+    /// target file is judged against it.
+    fn run_in_project(stems: &[&str], target: &str) -> Vec<Diagnostic> {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut source_files = Vec::new();
+        for stem in stems {
+            let path = dir.path().join(format!("{stem}.ts"));
+            std::fs::write(&path, "export const x = 1;\n").unwrap();
+            source_files.push(SourceFile {
+                path,
+                language: Language::TypeScript,
+            });
+        }
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let project = ProjectCtx::for_test_with_files(&refs);
+        Check.check(&CheckCtx::for_test_with_project(Path::new(target), "", &project))
     }
 
     #[test]
@@ -802,5 +897,57 @@ mod tests {
     #[test]
     fn flags_bracket_stem_under_bare_api_dir_issue_3280() {
         assert_eq!(run("src/api/[id].ts").len(), 1);
+    }
+
+    // Regression for #2298: Angular/Google mandate snake_case for all TS source.
+    // When snake_case is the project's established dominant convention, a
+    // snake_case file is accepted.
+    #[test]
+    fn allows_snake_case_in_snake_dominant_project_issue_2298() {
+        let dominant = [
+            "abstract_control",
+            "activate_routes",
+            "animation_ast_builder",
+            "change_detection",
+            "component_factory",
+            "directive_resolver",
+            "element_ref",
+            "view_container_ref",
+        ];
+        assert!(
+            run_in_project(&dominant, "packages/core/src/ng_class.ts").is_empty(),
+            "snake_case file must be accepted in a snake_case-dominant project"
+        );
+    }
+
+    // Load-bearing guard for #2298: a kebab-dominant project with a single stray
+    // snake_case file must STILL flag that file — snake_case is accepted only via
+    // project dominance, never as a blanket allowance. This fails if dominance
+    // detection is removed (snake_case would then be accepted everywhere).
+    #[test]
+    fn flags_stray_snake_case_in_kebab_dominant_project_issue_2298() {
+        let dominant = [
+            "user-profile",
+            "data-store",
+            "auth-guard",
+            "http-client",
+            "router-outlet",
+            "form-control",
+            "event-bus",
+            "bad_name",
+        ];
+        assert_eq!(
+            run_in_project(&dominant, "src/bad_name.ts").len(),
+            1,
+            "a stray snake_case file in a kebab-dominant project must still be flagged"
+        );
+    }
+
+    // Guard for #2298: an empty project (no indexed TS/JS files, so no dominant
+    // convention) must not accept snake_case — the rule falls back to flagging,
+    // exactly as the single-file `flags_snake_case` test asserts.
+    #[test]
+    fn flags_snake_case_without_dominant_convention_issue_2298() {
+        assert_eq!(run_in_project(&[], "src/user_profile.ts").len(), 1);
     }
 }
