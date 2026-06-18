@@ -4,15 +4,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::TSType;
+use oxc_span::GetSpan;
 use std::sync::Arc;
-
-fn source_line_at(source: &str, byte_offset: usize) -> &str {
-    let start = source[..byte_offset].rfind('\n').map_or(0, |i| i + 1);
-    let end = source[byte_offset..]
-        .find('\n')
-        .map_or(source.len(), |i| byte_offset + i);
-    &source[start..end]
-}
 
 /// True when the empty `{}` is a deliberate type-system idiom rather than a
 /// value-level annotation, based on the AST parent of the `TSTypeLiteral`:
@@ -64,11 +57,21 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Skip `{}` when used as a type argument to TaggedError (better-result convention).
+        // Skip `{}` used as the type argument to a `TaggedError(...)` call
+        // (better-result convention for a zero-prop error class). Resolve through
+        // the type-argument list to the enclosing call and inspect the callee's
+        // full span, so a multi-line `TaggedError(...)` call doesn't defeat it.
         if matches!(parent.kind(), AstKind::TSTypeParameterInstantiation(_)) {
-            let line_src = source_line_at(ctx.source, lit.span.start as usize);
-            if line_src.contains("TaggedError") {
-                return;
+            let callee_span = match semantic.nodes().parent_node(parent.id()).kind() {
+                AstKind::CallExpression(call) => Some(call.callee.span()),
+                AstKind::NewExpression(new) => Some(new.callee.span()),
+                _ => None,
+            };
+            if let Some(span) = callee_span {
+                let callee_src = &ctx.source[span.start as usize..span.end as usize];
+                if callee_src.contains("TaggedError") {
+                    return;
+                }
             }
         }
 
@@ -119,6 +122,21 @@ mod tests {
     #[test]
     fn allows_tagged_error_empty_type_param() {
         assert!(run_on(r#"export class FooError extends TaggedError("foo")<{}>() {}"#).is_empty());
+    }
+
+    /// The `TaggedError(...)` call is often formatted across multiple lines, so
+    /// the `{}` type argument lands on a line that has no "TaggedError" text.
+    /// Resolving through the call's callee span keeps the exemption working.
+    #[test]
+    fn allows_tagged_error_empty_type_param_multiline() {
+        let src = r#"
+            export class OrganizationHasAttachedTeamsError extends TaggedError(
+              "organizationHasAttachedTeams",
+            )<{}>() {
+              override readonly message = "Organization has attached teams";
+            }
+        "#;
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
