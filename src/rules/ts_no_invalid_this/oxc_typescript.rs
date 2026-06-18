@@ -383,6 +383,45 @@ fn is_event_emitter_listener_callback(
     is_listener_method_callee(&member.object)
 }
 
+/// True when `func_id` is a non-arrow `function` passed as a callback argument
+/// to a `CallExpression` that also passes a trailing `this` argument
+/// (`arr.map(function () {…}, this)`). `Array.prototype.{map,forEach,filter,…}`
+/// and util libraries following the `(collection, callback, context)` convention
+/// (zrender `map`/`each`, lodash) invoke the callback with the trailing argument
+/// bound as `this`, so `this` in the callback body is the bound context.
+///
+/// The `this` argument must come *after* the callback in the argument list — a
+/// `this` passed before the callback (`foo(this, function () {…})`) is data, not
+/// the `thisArg`, so it does not bind the callback's `this`.
+fn is_callback_with_trailing_this_arg(
+    func_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let parent_id = nodes.parent_id(func_id);
+    let call = match nodes.kind(parent_id) {
+        AstKind::CallExpression(call) => call,
+        _ => {
+            let gp_id = nodes.parent_id(parent_id);
+            let AstKind::CallExpression(call) = nodes.kind(gp_id) else {
+                return false;
+            };
+            call
+        }
+    };
+    let func_span = nodes.kind(func_id).span();
+    let Some(callback_index) = call
+        .arguments
+        .iter()
+        .position(|arg| arg.span() == func_span)
+    else {
+        return false;
+    };
+    call.arguments[callback_index + 1..]
+        .iter()
+        .any(|arg| matches!(arg, oxc_ast::ast::Argument::ThisExpression(_)))
+}
+
 /// True when `name` follows the constructor-function convention: after any
 /// leading underscores, the first character is an uppercase ASCII letter (e.g.
 /// `Suspense`, `Component`, or the module-private `_Reply`). Such functions are
@@ -511,6 +550,14 @@ fn is_valid_this_context(
                 // and the `EE.prototype.on.call(emitter, …)` form) is invoked by
                 // Node with `this` bound to the emitter, so `this` is valid.
                 if is_event_emitter_listener_callback(ancestor.id(), semantic) {
+                    return true;
+                }
+                // Trailing-thisArg callback: a `function` passed to a call that
+                // also passes a later `this` argument (`arr.map(function () {…},
+                // this)`) is invoked with that `this` bound — the ECMAScript
+                // `thisArg` convention shared by `Array.prototype.{map,forEach,…}`
+                // and `(collection, callback, context)` util libraries.
+                if is_callback_with_trailing_this_arg(ancestor.id(), semantic) {
                     return true;
                 }
                 // Constructor function: a PascalCase `function`, or one
@@ -1026,6 +1073,44 @@ mod tests {
         // no type annotation has no callable contract — `this` is unbound and
         // must fire.
         let diags = run_on("const f = function () {\n  return this.v;\n};");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_array_map_callback_with_trailing_this_arg() {
+        // Regression for #3812: `Array.prototype.map(callbackFn, thisArg)` binds
+        // `this` inside the non-arrow callback to the trailing `thisArg`, so
+        // `this` in the callback body is the bound context, not unbound.
+        let src = "class Foo {\n  vals = [];\n  run() {\n    return [1, 2, 3].map(function (x) {\n      return x + this.vals.length;\n    }, this);\n  }\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_util_callback_with_trailing_this_arg() {
+        // Regression for #3812: the `(collection, callback, context)` util-library
+        // convention (zrender `map`/`each`, lodash) passes the `thisArg` after the
+        // callback — `this` in the callback is the bound context. The trailing
+        // `this` argument sits in a class method so it is itself a valid context.
+        let src = "class Foo {\n  run() {\n    return map(arr, function () {\n      return this.x;\n    }, this);\n  }\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_map_callback_without_trailing_this_arg() {
+        // Negative-space guard for #3812: a callback with no trailing `thisArg`
+        // gets no bound `this` — must still fire.
+        let diags = run_on("[1, 2, 3].map(function () {\n  return this.x;\n});");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_this_in_callback_with_this_arg_before_it() {
+        // Negative-space guard for #3812: a `this` passed *before* the callback is
+        // data, not the `thisArg` (which the spec places after the callback) —
+        // `this` in the callback stays unbound and must fire. The leading `this`
+        // argument sits in a class method so only the callback's `this` is flagged.
+        let src = "class Foo {\n  run() {\n    return foo(this, function () {\n      return this.x;\n    });\n  }\n}";
+        let diags = run_on(src);
         assert_eq!(diags.len(), 1);
     }
 
