@@ -31,7 +31,11 @@
 //! sound syntactic proxy for "the scrutinee is a stdlib type". The
 //! wildcard is idiomatic on Result/Option (stable, closed, two
 //! variants) and compiler-mandated on `#[non_exhaustive]` enums like
-//! `ErrorKind`. Project-defined enums still require explicit arms.
+//! `ErrorKind`. A glob or brace import (`use std::io::ErrorKind::*;`,
+//! `use std::io::ErrorKind::{NotFound, ..};`) strips the qualifier; bare
+//! variant heads are then recognized as ErrorKind when the file carries such
+//! an import and the head names a known ErrorKind variant. Project-defined
+//! enums still require explicit arms.
 //!
 //! Variant-accessor exemption: a `_ => None` arm paired with at least one
 //! `Variant(v) => Some(v)` arm is the idiomatic "extract this variant, else
