@@ -8,7 +8,10 @@
 //! the iterable's length, making `Vec::with_capacity(n)` the right call —
 //! it avoids the log2(n) reallocation chain from doubling. A conditional
 //! push or a `continue` makes the final length unknowable up front, so
-//! `with_capacity` would mis-size.
+//! `with_capacity` would mis-size. Likewise a body that reassigns the
+//! accumulator (`X = ...`) resets it each iteration, so its final length is
+//! one segment's size rather than the iteration count, and the rule stays
+//! silent.
 //!
 //! The iterable itself must be length-bearing — a bare binding or field of a
 //! collection type (`v`, `self.items`), optionally behind one reference
@@ -54,6 +57,7 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
             && body_directly_pushes(body, var_name, source)
             && !body_has_continue(body)
             && !body_extends_or_appends(body, var_name, source)
+            && !body_reassigns(body, var_name, source)
         {
             has_for_with_push = true;
             break;
@@ -186,6 +190,21 @@ fn body_extends_or_appends(node: tree_sitter::Node, var: &str, source: &[u8]) ->
         .any(|child| body_extends_or_appends(child, var, source))
 }
 
+/// Whether the loop body reassigns the accumulator (`<var> = ...`) anywhere —
+/// including inside an `if`. A reassignment resets the Vec, so its final length
+/// no longer equals the iteration count and `with_capacity(n)` would mis-size.
+fn body_reassigns(node: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
+    if node.kind() == "assignment_expression"
+        && let Some(left) = node.child_by_field_name("left")
+        && left.utf8_text(source).map(|t| t == var).unwrap_or(false)
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| body_reassigns(child, var, source))
+}
+
 
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
@@ -303,6 +322,24 @@ mod tests {
     #[test]
     fn flags_extend_on_different_var_issue_3947() {
         let src = "fn f(xs: Vec<i32>, z: Vec<i32>) {\n    let mut v = Vec::new();\n    let mut other = Vec::new();\n    for x in xs {\n        v.push(x);\n        other.extend(z.clone());\n    }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_group_by_comma_reassigned_accumulator_issue_3792() {
+        let src = "fn f<T>(items: Vec<T>, is_comma: impl Fn(&T) -> bool) -> Vec<Vec<T>> {\n    let mut groups: Vec<Vec<T>> = Vec::new();\n    let mut current_group: Vec<T> = Vec::new();\n    for element in items {\n        let comma = is_comma(&element);\n        current_group.push(element);\n        if comma {\n            groups.push(current_group);\n            current_group = Vec::new();\n        }\n    }\n    groups\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_minimal_reassigned_accumulator_issue_3792() {
+        let src = "fn f(items: Vec<i32>) {\n    let mut v = Vec::new();\n    for x in items {\n        v.push(x);\n        v = Vec::new();\n    }\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_assignment_to_different_var_issue_3792() {
+        let src = "fn f(items: Vec<i32>) {\n    let mut v = Vec::new();\n    let mut n = 0;\n    for x in items {\n        v.push(x);\n        n = n + 1;\n    }\n}";
         assert_eq!(run(src).len(), 1);
     }
 }
