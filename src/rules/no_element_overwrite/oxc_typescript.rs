@@ -7,6 +7,16 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// True when `text` contains a sub-expression whose evaluation can change the
+/// resolved element/key between two statements: an update operator (`++`/`--`)
+/// or a call (`(`). Two textually-equal targets containing such an expression do
+/// not denote the same element (`bytes[byteIndex++]` writes a new slot each
+/// statement; `f(x)` may be impure), so the overwrite heuristic must not compare
+/// them.
+fn key_is_impure(text: &str) -> bool {
+    text.contains("++") || text.contains("--") || text.contains('(')
+}
+
 /// Extract the assignment target from bracket-notation: `arr[0] = ...` -> `arr[0]`
 fn bracket_target(text: &str) -> Option<String> {
     let trimmed = text.trim();
@@ -14,7 +24,11 @@ fn bracket_target(text: &str) -> Option<String> {
     let _bracket_start = trimmed[..bracket_end].find('[')?;
     let after = trimmed[bracket_end + 1..].trim_start();
     if after.starts_with('=') && !after.starts_with("==") {
-        Some(trimmed[..bracket_end + 1].to_string())
+        let target = trimmed[..bracket_end + 1].to_string();
+        if key_is_impure(&target) {
+            return None;
+        }
+        Some(target)
     } else {
         None
     }
@@ -47,6 +61,9 @@ fn map_set_target(stmt: &Statement, source: &str) -> Option<String> {
     let receiver_span = member.object.span();
     let receiver = &source[receiver_span.start as usize..receiver_span.end as usize];
     let key = &source[key_span.start as usize..key_span.end as usize];
+    if key_is_impure(key) {
+        return None;
+    }
     Some(format!("{}.set({})", receiver, key))
 }
 
@@ -193,8 +210,50 @@ mod tests {
     }
 
     #[test]
-    fn flags_key_with_nested_comma_when_equal() {
+    fn allows_call_key_set_even_when_textually_equal() {
+        // A call key (`f(a, b)`) may be impure — two calls can return different
+        // values or have side effects — so the overwrite is not provable (#3753).
         let src = "map.set(f(a, b), 1);\nmap.set(f(a, b), 2);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_post_increment_bracket_writes() {
+        // `byteIndex++` is a post-increment: each statement writes a different
+        // slot, so the textually-equal target is not a dead write (#3753).
+        let src = "bytes[byteIndex++] = (bitmap >> 16) & 255;\nbytes[byteIndex++] = (bitmap >> 8) & 255;\nbytes[byteIndex++] = bitmap & 255;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_pre_increment_bracket_writes() {
+        let src = "arr[++i] = 1;\narr[++i] = 2;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_post_decrement_bracket_writes() {
+        let src = "arr[i--] = 1;\narr[i--] = 2;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_call_in_receiver_bracket_writes() {
+        let src = "getArr()[0] = 1;\ngetArr()[0] = 2;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_call_valued_map_key() {
+        let src = "map.set(next(), 1);\nmap.set(next(), 2);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_plain_variable_index() {
+        // A plain variable index with no mutation is a genuine dead write: both
+        // statements write the same slot `arr[i]` (#3753).
+        let src = "arr[i] = 1;\narr[i] = 2;";
         assert_eq!(run_on(src).len(), 1);
     }
 }
