@@ -58,6 +58,15 @@ impl AstCheck for Check {
         if operand_is_float_zero(left, source) || operand_is_float_zero(right, source) {
             return;
         }
+        // Same exact-representability family: `int as f64 == value` is the
+        // lossless integer round-trip idiom ("did casting to an int and back
+        // lose anything?"). Exact equality is the only correct tool — an
+        // epsilon would let a near-integer wrongly pass.
+        if operand_is_int_to_float_cast(left, source)
+            || operand_is_int_to_float_cast(right, source)
+        {
+            return;
+        }
         diagnostics.push(Diagnostic::at_node(
             ctx.path,
             &node,
@@ -95,6 +104,82 @@ fn operand_is_float(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
+/// Is `node` a cast of an integer expression to `f32`/`f64`, e.g.
+/// `(value as u32) as f64` or `i as f64` where `i` is an integer local?
+/// Such a comparison is a lossless integer round-trip / exact-representability
+/// check, not a fuzzy numerical comparison.
+fn operand_is_int_to_float_cast(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() != "type_cast_expression" {
+        return false;
+    }
+    let Some(ty) = node.child_by_field_name("type") else {
+        return false;
+    };
+    let Ok(ty_text) = ty.utf8_text(source) else {
+        return false;
+    };
+    if ty_text != "f32" && ty_text != "f64" {
+        return false;
+    }
+    let Some(inner) = node.child_by_field_name("value") else {
+        return false;
+    };
+    operand_is_integer(inner, source)
+}
+
+/// Is `node` an integer expression: a cast to an integer type
+/// (`x as i64`), or an identifier bound to an integer-typed local in this file?
+fn operand_is_integer(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let node = unwrap_parens(node);
+    // `<expr> as <int type>`.
+    if node.kind() == "type_cast_expression"
+        && let Some(ty) = node.child_by_field_name("type")
+        && let Ok(text) = ty.utf8_text(source)
+        && is_integer_type(text)
+    {
+        return true;
+    }
+    // identifier bound to an integer-typed local visible in this file, via
+    // either a type annotation (`let i: u32 = …`) or an integer-cast
+    // initializer (`let i = value as u32;`).
+    if node.kind() == "identifier"
+        && let Ok(name) = node.utf8_text(source)
+        && lookup_let_int_binding(node, name, source)
+    {
+        return true;
+    }
+    false
+}
+
+/// Peel `parenthesized_expression` wrappers, e.g. `(n as i64)` -> `n as i64`.
+fn unwrap_parens(mut node: tree_sitter::Node) -> tree_sitter::Node {
+    while node.kind() == "parenthesized_expression" {
+        match node.named_child(0) {
+            Some(inner) => node = inner,
+            None => break,
+        }
+    }
+    node
+}
+
+/// The set of Rust integer primitive type names.
+fn is_integer_type(name: &str) -> bool {
+    matches!(
+        name,
+        "i8" | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+    )
+}
+
 /// Is `node` a float-zero literal? Covers `0.0`, `0.0f64`, `0f64`, `0.`,
 /// and a leading-minus `-0.0`. A negative zero appears as a `unary_expression`
 /// (`-` applied to the literal) in the tree-sitter grammar, so unwrap it first.
@@ -124,24 +209,62 @@ fn operand_is_float_zero(node: tree_sitter::Node, source: &[u8]) -> bool {
         .is_ok_and(|value| value == 0.0)
 }
 
-/// Walk upward from `node` looking for a `let_declaration` whose pattern
-/// names `ident`. If found, return its type annotation text.
-fn lookup_let_type(node: tree_sitter::Node, ident: &str, source: &[u8]) -> Option<String> {
+/// Walk upward from `node`, scanning preceding siblings at each level for a
+/// `let_declaration`, and return the first `extract(decl)` that is `Some`.
+fn find_let_decl<T>(
+    node: tree_sitter::Node,
+    extract: impl Fn(tree_sitter::Node) -> Option<T>,
+) -> Option<T> {
     let mut cur = node;
     while let Some(parent) = cur.parent() {
-        // Visit preceding siblings of `cur` for prior `let` bindings.
         let mut sibling = cur.prev_named_sibling();
         while let Some(s) = sibling {
             if s.kind() == "let_declaration"
-                && let Some(ty) = let_decl_type_for(s, ident, source)
+                && let Some(found) = extract(s)
             {
-                return Some(ty);
+                return Some(found);
             }
             sibling = s.prev_named_sibling();
         }
         cur = parent;
     }
     None
+}
+
+/// Walk upward from `node` looking for a `let_declaration` whose pattern
+/// names `ident`. If found, return its type annotation text.
+fn lookup_let_type(node: tree_sitter::Node, ident: &str, source: &[u8]) -> Option<String> {
+    find_let_decl(node, |decl| let_decl_type_for(decl, ident, source))
+}
+
+/// Is `ident` bound to an integer-typed local visible above `node`? Recognises
+/// both a type annotation (`let i: u32 = …`) and an integer-cast initializer
+/// (`let i = value as u32;`).
+fn lookup_let_int_binding(node: tree_sitter::Node, ident: &str, source: &[u8]) -> bool {
+    find_let_decl(node, |decl| {
+        let pat = decl.child_by_field_name("pattern")?;
+        if pat.utf8_text(source).ok()? != ident {
+            return None;
+        }
+        let is_int = decl
+            .child_by_field_name("type")
+            .and_then(|ty| ty.utf8_text(source).ok())
+            .is_some_and(is_integer_type)
+            || decl
+                .child_by_field_name("value")
+                .is_some_and(|init| init_is_int_cast(init, source));
+        is_int.then_some(())
+    })
+    .is_some()
+}
+
+/// Is the initializer expression an integer cast (`value as u32`)?
+fn init_is_int_cast(init: tree_sitter::Node, source: &[u8]) -> bool {
+    init.kind() == "type_cast_expression"
+        && init
+            .child_by_field_name("type")
+            .and_then(|ty| ty.utf8_text(source).ok())
+            .is_some_and(is_integer_type)
 }
 
 fn let_decl_type_for(decl: tree_sitter::Node, ident: &str, source: &[u8]) -> Option<String> {
@@ -247,6 +370,27 @@ mod tests {
         ] {
             assert!(run_on(src).is_empty(), "should not flag: {src}");
         }
+    }
+
+    #[test]
+    fn allows_int_roundtrip_cast_initializer() {
+        // oxc constant_evaluation/call_expr.rs: `let i = value as u32; i as f64
+        // != value` — the lossless integer round-trip idiom (no annotation).
+        let src = "fn f(value: f64) -> Option<u32> { \
+                   let i = value as u32; if i as f64 != value { return None; } Some(i) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_inline_nested_int_cast() {
+        let src = "fn f(n: i32, value: f64) -> bool { (n as i64) as f64 == value }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_annotated_int_local_roundtrip() {
+        let src = "fn f(value: f64) -> bool { let i: u32 = something(); i as f64 != value }";
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
