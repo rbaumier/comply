@@ -1,6 +1,11 @@
-//! require-hook oxc backend — in test files, flag top-level statements
-//! that have side effects (function calls, assignments) which belong
-//! inside a `beforeEach` / `beforeAll` hook so tests can control them.
+//! require-hook oxc backend — in test files, flag top-level setup that
+//! belongs inside a `beforeEach` / `beforeAll` hook so tests can control it.
+//!
+//! Aligned with canonical ESLint `jest/require-hook`: a `const` declaration is
+//! never flagged (an immutable binding tests cannot reassign), a `let`/`var`
+//! with an initializer is flagged (mutable module-scope setup), and a bare
+//! side-effecting call statement is flagged — except the test-API/suite calls,
+//! hoisted mock APIs, and imports/`require` that must stay at module scope.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -248,284 +253,18 @@ fn is_hoisted_test_api(expr: &Expression) -> bool {
     HOISTED_TEST_API_METHODS.contains(&(obj_name, prop_name))
 }
 
-fn is_commonjs_import(expr: &Expression) -> bool {
-    let Expression::CallExpression(call) = expr else {
-        return false;
-    };
-    let Expression::Identifier(callee) = &call.callee else {
-        return false;
-    };
-    if callee.name.as_str() != "require" {
-        return false;
-    }
-    if call.arguments.len() != 1 {
-        return false;
-    }
-    matches!(&call.arguments[0], Argument::StringLiteral(_))
-}
-
-/// A `path.join(...)` / `path.resolve(...)` call whose every argument is a pure
-/// initializer. These resolve module-relative paths with no side effects.
-fn is_pure_path_call(call: &CallExpression) -> bool {
-    let Expression::StaticMemberExpression(mem) = &call.callee else {
-        return false;
-    };
-    let Expression::Identifier(obj) = &mem.object else {
-        return false;
-    };
-    if obj.name.as_str() != "path" {
-        return false;
-    }
-    if !matches!(mem.property.name.as_str(), "join" | "resolve") {
-        return false;
-    }
-    call.arguments.iter().all(|arg| match arg.as_expression() {
-        Some(inner) => is_pure_initializer(inner),
-        None => false,
-    })
-}
-
-/// A `vi.fn(...)` / `vi.spyOn(...)` / `jest.fn(...)` / `jest.spyOn(...)` mock-factory
-/// call. These construct an isolated mock function (or spy) as a value — declaring one
-/// at module scope is the idiomatic vitest/jest pattern for a shared mock that is reset
-/// in `beforeEach(() => mockFn.mockReset())`. It has no cross-test ordering side effect,
-/// so it belongs at module scope and must not be required to move into a hook.
-fn is_mock_factory_call(call: &CallExpression) -> bool {
-    let Expression::StaticMemberExpression(mem) = &call.callee else {
-        return false;
-    };
-    let Expression::Identifier(obj) = &mem.object else {
-        return false;
-    };
-    matches!(
-        (obj.name.as_str(), mem.property.name.as_str()),
-        ("vi", "fn") | ("vi", "spyOn") | ("jest", "fn") | ("jest", "spyOn")
-    )
-}
-
-/// Is `name` a side-effect-free `String.prototype` / `Array.prototype` predicate or
-/// accessor — one that reads its receiver and returns a value without mutating it or
-/// touching anything outside? Used to clear version-gate reads such as
-/// `React.version.startsWith('18.')` at module scope.
-fn is_pure_builtin_method(name: &str) -> bool {
-    matches!(
-        name,
-        "startsWith"
-            | "endsWith"
-            | "includes"
-            | "indexOf"
-            | "lastIndexOf"
-            | "slice"
-            | "substring"
-            | "substr"
-            | "charAt"
-            | "charCodeAt"
-            | "codePointAt"
-            | "toLowerCase"
-            | "toUpperCase"
-            | "trim"
-            | "trimStart"
-            | "trimEnd"
-            | "padStart"
-            | "padEnd"
-            | "repeat"
-            | "concat"
-            | "at"
-    )
-}
-
-/// A call to a known-pure built-in prototype method
-/// (`React.version.startsWith('18.')`, `name.toLowerCase()`): the method must be a
-/// side-effect-free `String`/`Array` predicate, the receiver chain a pure read, and
-/// every argument a pure initializer. An impure receiver (`fetch().includes(...)`) or
-/// an unknown method (`obj.save()`) still fires.
-fn is_pure_method_call(call: &CallExpression) -> bool {
-    let Expression::StaticMemberExpression(mem) = &call.callee else {
-        return false;
-    };
-    if !is_pure_builtin_method(mem.property.name.as_str()) {
-        return false;
-    }
-    if !is_pure_initializer(&mem.object) {
-        return false;
-    }
-    call.arguments.iter().all(|arg| match arg.as_expression() {
-        Some(inner) => is_pure_initializer(inner),
-        None => false,
-    })
-}
-
-/// Is `expr` the `import.meta.url` member read?
-fn is_import_meta_url(expr: &Expression) -> bool {
-    let Expression::StaticMemberExpression(mem) = expr else {
-        return false;
-    };
-    mem.property.name.as_str() == "url" && matches!(&mem.object, Expression::MetaProperty(_))
-}
-
-/// A `new URL(stringLiteral, import.meta.url)` call: the standard ESM idiom for
-/// resolving a module-relative path. Both arguments are constants — a pure string
-/// initializer and the module's own immutable URL — so it computes the same value
-/// every load with no observable side effect.
-fn is_url_resolution(expr: &Expression) -> bool {
-    let Expression::NewExpression(new_expr) = expr else {
-        return false;
-    };
-    let Expression::Identifier(callee) = &new_expr.callee else {
-        return false;
-    };
-    if callee.name.as_str() != "URL" {
-        return false;
-    }
-    if new_expr.arguments.len() != 2 {
-        return false;
-    }
-    let Some(first) = new_expr.arguments[0].as_expression() else {
-        return false;
-    };
-    let Some(second) = new_expr.arguments[1].as_expression() else {
-        return false;
-    };
-    is_pure_initializer(first) && is_import_meta_url(second)
-}
-
-/// A `new Set(...)` / `new Map(...)` whose every argument is itself a pure
-/// initializer — e.g. `new Set(['a', 'b'])` or `new Map([['a', 1]])`. These
-/// build a deterministic, side-effect-free data structure from constant values,
-/// semantically equivalent to the array/object literals already allowed. An
-/// impure argument (a call, like `new Set([doSomething()])`) is rejected by the
-/// recursion, and any other constructor (`new WeakSet()`, `new SomeClass()`)
-/// fails the callee-name gate.
-fn is_pure_collection_construction(expr: &Expression) -> bool {
-    let Expression::NewExpression(new_expr) = expr else {
-        return false;
-    };
-    let Expression::Identifier(callee) = &new_expr.callee else {
-        return false;
-    };
-    if !matches!(callee.name.as_str(), "Set" | "Map") {
-        return false;
-    }
-    new_expr
-        .arguments
-        .iter()
-        .all(|arg| arg.as_expression().is_some_and(is_pure_initializer))
-}
-
-/// Is this initializer pure enough to allow at module scope?
-fn is_pure_initializer(expr: &Expression) -> bool {
-    if is_hoisted_test_api(expr) {
-        return true;
-    }
-    if is_commonjs_import(expr) {
-        return true;
-    }
-    if is_url_resolution(expr) {
-        return true;
-    }
-    if is_pure_collection_construction(expr) {
-        return true;
-    }
-    match expr {
-        Expression::StringLiteral(_)
-        | Expression::NumericLiteral(_)
-        | Expression::BooleanLiteral(_)
-        | Expression::NullLiteral(_)
-        | Expression::RegExpLiteral(_)
-        | Expression::Identifier(_)
-        | Expression::ArrowFunctionExpression(_)
-        | Expression::FunctionExpression(_)
-        | Expression::ClassExpression(_) => true,
-        // `import.meta` is an immutable, side-effect-free read; this makes
-        // `import.meta.dirname` / `import.meta.url` pure via the member arm below.
-        Expression::MetaProperty(_) => true,
-        // `path.join(...)` / `path.resolve(...)` over pure arguments is a
-        // deterministic, side-effect-free module-relative path computation; a
-        // call to a known-pure built-in prototype method over a pure receiver
-        // (`React.version.startsWith('18.')`) is a side-effect-free read; and a
-        // `vi.fn()` / `vi.spyOn()` / `jest.fn()` / `jest.spyOn()` mock-factory call
-        // constructs an isolated mock value with no cross-test side effect.
-        Expression::CallExpression(call) => {
-            is_pure_path_call(call) || is_pure_method_call(call) || is_mock_factory_call(call)
-        }
-        // A ternary is a pure read when its condition and both branches are pure —
-        // e.g. `isReact18 ? test : test.skip` just selects between two existing
-        // function references. An impure branch (a call) still fires.
-        Expression::ConditionalExpression(c) => {
-            is_pure_initializer(&c.test)
-                && is_pure_initializer(&c.consequent)
-                && is_pure_initializer(&c.alternate)
-        }
-        // A template literal is a pure read when every interpolation is a plain
-        // identifier reference to an already-bound value (e.g.
-        // `http://localhost:${PORT}/`). Calls or member access can throw or have
-        // side effects, so those still fire. `all` on no interpolations is true.
-        Expression::TemplateLiteral(t) => t
-            .expressions
-            .iter()
-            .all(|e| matches!(e, Expression::Identifier(_))),
-        Expression::ArrayExpression(arr) => arr.elements.iter().all(|el| match el {
-            ArrayExpressionElement::SpreadElement(_) => false,
-            ArrayExpressionElement::Elision(_) => true,
-            _ => {
-                if let Some(inner) = el.as_expression() {
-                    is_pure_initializer(inner)
-                } else {
-                    false
-                }
-            }
-        }),
-        Expression::ObjectExpression(obj) => obj.properties.iter().all(|prop| match prop {
-            ObjectPropertyKind::ObjectProperty(p) => is_pure_initializer(&p.value),
-            ObjectPropertyKind::SpreadProperty(s) => is_pure_initializer(&s.argument),
-        }),
-        Expression::UnaryExpression(u) => is_pure_initializer(&u.argument),
-        // A binary expression (comparison, `in`, `instanceof`, arithmetic) is a
-        // pure read when both operands are pure — e.g. `process.platform === 'win32'`
-        // or `'rolldownVersion' in vite`. An impure operand (a call) still fires.
-        Expression::BinaryExpression(b) => {
-            is_pure_initializer(&b.left) && is_pure_initializer(&b.right)
-        }
-        // Property access (`process.platform`) is a pure read when its object is pure.
-        Expression::StaticMemberExpression(m) => is_pure_initializer(&m.object),
-        Expression::ParenthesizedExpression(p) => is_pure_initializer(&p.expression),
-        Expression::TSAsExpression(e) => is_pure_initializer(&e.expression),
-        Expression::TSTypeAssertion(e) => is_pure_initializer(&e.expression),
-        Expression::TSSatisfiesExpression(e) => is_pure_initializer(&e.expression),
-        Expression::TSNonNullExpression(e) => is_pure_initializer(&e.expression),
-        _ => false,
-    }
-}
-
-/// Initializer that builds a shared, read-only test fixture by calling a
-/// domain function (`buildSchema(...)`, `getTracingChannel(...)`) or a
-/// constructor (`new TypeInfo(...)`). Unwraps the same value-preserving
-/// wrappers as `is_pure_initializer` so `buildSchema(...) as Schema` counts.
-fn is_fixture_builder(expr: &Expression) -> bool {
-    match expr {
-        Expression::CallExpression(_) | Expression::NewExpression(_) => true,
-        Expression::ParenthesizedExpression(p) => is_fixture_builder(&p.expression),
-        Expression::TSAsExpression(e) => is_fixture_builder(&e.expression),
-        Expression::TSTypeAssertion(e) => is_fixture_builder(&e.expression),
-        Expression::TSSatisfiesExpression(e) => is_fixture_builder(&e.expression),
-        Expression::TSNonNullExpression(e) => is_fixture_builder(&e.expression),
-        _ => false,
-    }
-}
-
-/// Every declarator in a declaration must have a pure initializer (or none).
+/// Is this top-level variable declaration allowed?
 ///
-/// In `node:test` files a module-scope `const` may also be initialized by a
-/// fixture-builder call. `node:test` has no `beforeAll` equivalent at module
-/// scope, so building a shared read-only fixture (a parsed schema, a tracing
-/// channel) once at import time is the idiomatic pattern there.
-fn declaration_is_pure(decl: &VariableDeclaration, node_test_mode: bool) -> bool {
-    let allow_fixture_builder = node_test_mode && decl.kind == VariableDeclarationKind::Const;
-    decl.declarations.iter().all(|d| {
-        d.init.as_ref().is_none_or(|init| {
-            is_pure_initializer(init) || (allow_fixture_builder && is_fixture_builder(init))
-        })
-    })
+/// A `const` is always allowed — like canonical `jest/require-hook`, a `const`
+/// binding is treated as immutable setup that tests cannot reassign, so it does
+/// not need to live in a hook. A `let`/`var` is allowed only when it has no
+/// initializer (`let x;`): a mutable binding with module-scope initialization is
+/// the setup that belongs in a `beforeEach`/`beforeAll`.
+fn declaration_is_allowed(decl: &VariableDeclaration) -> bool {
+    if decl.kind == VariableDeclarationKind::Const {
+        return true;
+    }
+    decl.declarations.iter().all(|d| d.init.is_none())
 }
 
 /// Is `init` a `require('node:test')` call expression — the CommonJS form of
@@ -639,7 +378,7 @@ fn top_level_is_allowed(
         | Statement::TSGlobalDeclaration(_)
         | Statement::EmptyStatement(_) => true,
 
-        Statement::VariableDeclaration(decl) => declaration_is_pure(decl, node_test_mode),
+        Statement::VariableDeclaration(decl) => declaration_is_allowed(decl),
 
         Statement::ExpressionStatement(expr_stmt) => {
             let expr = &expr_stmt.expression;
@@ -768,23 +507,6 @@ describe("diagnostics", () => {
     }
 
     #[test]
-    fn flags_const_fixture_builder_call_without_node_test_import() {
-        let src = r#"
-import { buildSchema } from "../buildASTSchema";
-
-const schema = buildSchema(`type Query { field: String }`);
-
-describe("x", () => { it("works", () => {}); });
-"#;
-        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
-        assert_eq!(
-            d.len(),
-            1,
-            "const call initializer outside node:test mode must still be flagged (jest/vitest have beforeAll): {d:?}"
-        );
-    }
-
-    #[test]
     fn flags_let_fixture_builder_call_in_node_test_mode() {
         let src = r#"
 import { describe, it } from "node:test";
@@ -856,6 +578,53 @@ test('hooks', async t => {})
     }
 
     #[test]
+    fn allows_const_arktype_builder_chain() {
+        let src = r#"
+import { type } from 'arktype'
+
+const intSchema = type.keywords.number.integer.atLeast(0).atMost(100);
+const textSchema = type.string.atMostLength(50);
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "schema.test.ts");
+        assert!(
+            d.is_empty(),
+            "module-scope const built by a pure builder chain (arktype) must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_let_call_initializer_at_top_level() {
+        let src = r#"
+let server = setupThing();
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a top-level `let` with a call initializer is mutable setup and must be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_bare_setup_call_statement_at_top_level() {
+        let src = r#"
+doSetup();
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a bare side-effecting call statement must be flagged: {d:?}"
+        );
+    }
+
+    #[test]
     fn allows_const_comparison_initializer() {
         let src = r#"
 const isWindows = process.platform === 'win32'
@@ -865,7 +634,7 @@ describe("x", () => { it("works", () => {}); });
         let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
         assert!(
             d.is_empty(),
-            "module-scope const with a pure comparison initializer must be allowed: {d:?}"
+            "module-scope const with a comparison initializer must be allowed: {d:?}"
         );
     }
 
@@ -880,21 +649,6 @@ describe("x", () => { it("works", () => {}); });
         assert!(
             d.is_empty(),
             "module-scope const with a pure `in` initializer must be allowed: {d:?}"
-        );
-    }
-
-    #[test]
-    fn flags_const_binary_with_call_operand() {
-        let src = r#"
-const x = sideEffect() === 1
-
-describe("x", () => { it("works", () => {}); });
-"#;
-        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
-        assert_eq!(
-            d.len(),
-            1,
-            "a binary expression with a call operand must still be flagged: {d:?}"
         );
     }
 
@@ -995,38 +749,6 @@ describe("x", () => { it("works", () => {}); });
     }
 
     #[test]
-    fn flags_const_arbitrary_method_call_at_top_level() {
-        let src = r#"
-import { test, vi } from 'vitest'
-
-const data = service.fetchSync()
-
-test('x', () => {});
-"#;
-        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
-        assert_eq!(
-            d.len(),
-            1,
-            "a non-hoisted member-call initializer must still be flagged: {d:?}"
-        );
-    }
-
-    #[test]
-    fn flags_const_object_spread_of_call() {
-        let src = r#"
-const x = { ...sideEffect() };
-
-describe("x", () => { it("works", () => {}); });
-"#;
-        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
-        assert_eq!(
-            d.len(),
-            1,
-            "an object spread of a call expression must still be flagged: {d:?}"
-        );
-    }
-
-    #[test]
     fn allows_const_template_literal_with_identifier_interpolation() {
         let src = r#"
 import { REGISTRY_MOCK_PORT } from '@pnpm/testing.registry-mock'
@@ -1053,36 +775,6 @@ describe("x", () => { it("works", () => {}); });
         assert!(
             d.is_empty(),
             "a template literal interpolating only identifiers must be allowed: {d:?}"
-        );
-    }
-
-    #[test]
-    fn flags_const_template_literal_with_call_interpolation() {
-        let src = r#"
-const url = `http://localhost:${getPort()}/`
-
-describe("x", () => { it("works", () => {}); });
-"#;
-        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
-        assert_eq!(
-            d.len(),
-            1,
-            "a template literal interpolating a call expression must still be flagged: {d:?}"
-        );
-    }
-
-    #[test]
-    fn flags_const_template_literal_with_member_interpolation() {
-        let src = r#"
-const url = `http://localhost:${obj.port}/`
-
-describe("x", () => { it("works", () => {}); });
-"#;
-        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
-        assert_eq!(
-            d.len(),
-            1,
-            "a template literal interpolating a member access must still be flagged: {d:?}"
         );
     }
 
@@ -1136,40 +828,6 @@ describe("x", () => { it("works", () => {}); });
     }
 
     #[test]
-    fn flags_const_arbitrary_call_initializer() {
-        let src = r#"
-import { readFileSync } from 'node:fs'
-
-const data = readFileSync('p')
-
-describe("x", () => { it("works", () => {}); });
-"#;
-        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
-        assert_eq!(
-            d.len(),
-            1,
-            "an arbitrary call initializer must still be flagged: {d:?}"
-        );
-    }
-
-    #[test]
-    fn flags_const_path_join_with_impure_arg() {
-        let src = r#"
-import path from 'node:path'
-
-const fixture = path.join(compute(), 'x')
-
-describe("x", () => { it("works", () => {}); });
-"#;
-        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
-        assert_eq!(
-            d.len(),
-            1,
-            "path.join with an impure (call) argument must still be flagged: {d:?}"
-        );
-    }
-
-    #[test]
     fn allows_const_new_url_import_meta_url() {
         let src = r#"
 import { test, expect } from '../../playwright.extend'
@@ -1205,21 +863,6 @@ describe("x", () => { it("works", () => {}); });
     }
 
     #[test]
-    fn flags_const_new_url_with_dynamic_base() {
-        let src = r#"
-const target = new URL('./file.ts', getBase())
-
-describe("x", () => { it("works", () => {}); });
-"#;
-        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
-        assert_eq!(
-            d.len(),
-            1,
-            "new URL with a non-import.meta.url base must still be flagged: {d:?}"
-        );
-    }
-
-    #[test]
     fn allows_const_new_set_of_literals() {
         let src = r#"
 const classes = new Set([
@@ -1251,51 +894,6 @@ describe("x", () => { it("works", () => { lookup.get('a') }); });
         assert!(
             d.is_empty(),
             "module-scope const built by new Map([[lit, lit], ...]) must be allowed: {d:?}"
-        );
-    }
-
-    #[test]
-    fn flags_const_new_set_with_impure_arg() {
-        let src = r#"
-const x = new Set([doSomething()])
-
-describe("x", () => { it("works", () => {}); });
-"#;
-        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
-        assert_eq!(
-            d.len(),
-            1,
-            "new Set with a call inside its argument must still be flagged: {d:?}"
-        );
-    }
-
-    #[test]
-    fn flags_const_new_weakset() {
-        let src = r#"
-const y = new WeakSet()
-
-describe("x", () => { it("works", () => {}); });
-"#;
-        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
-        assert_eq!(
-            d.len(),
-            1,
-            "a non-Set/Map constructor (new WeakSet) must still be flagged: {d:?}"
-        );
-    }
-
-    #[test]
-    fn flags_const_new_some_class() {
-        let src = r#"
-const z = new SomeClass()
-
-describe("x", () => { it("works", () => {}); });
-"#;
-        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
-        assert_eq!(
-            d.len(),
-            1,
-            "an arbitrary constructor (new SomeClass) must still be flagged: {d:?}"
         );
     }
 
@@ -1512,21 +1110,6 @@ it('temporarily overrides console.error', () => {})
     }
 
     #[test]
-    fn flags_const_computed_member_access_initializer() {
-        let src = r#"
-const x = obj[key]
-
-describe("x", () => { it("works", () => {}); });
-"#;
-        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
-        assert_eq!(
-            d.len(),
-            1,
-            "computed member access (obj[key]) must still be flagged: {d:?}"
-        );
-    }
-
-    #[test]
     fn flags_non_tester_package_call_at_top_level() {
         let src = r#"
 import setup from 'some-pkg'
@@ -1565,21 +1148,6 @@ describe("x", () => { it("works", () => {}); });
     }
 
     #[test]
-    fn flags_const_impure_method_call_initializer() {
-        let src = r#"
-const data = client.fetchSync('users')
-
-describe("x", () => { it("works", () => {}); });
-"#;
-        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
-        assert_eq!(
-            d.len(),
-            1,
-            "a member-call to an unknown (non-pure-builtin) method must still be flagged: {d:?}"
-        );
-    }
-
-    #[test]
     fn flags_top_level_setup_server_call() {
         let src = r#"
 import { setupServer } from 'msw/node'
@@ -1593,36 +1161,6 @@ describe("x", () => { it("works", () => {}); });
             d.len(),
             1,
             "a genuine side-effecting top-level setup call must still be flagged: {d:?}"
-        );
-    }
-
-    #[test]
-    fn flags_const_pure_method_call_on_impure_receiver() {
-        let src = r#"
-const ok = fetchVersion().startsWith('18.')
-
-describe("x", () => { it("works", () => {}); });
-"#;
-        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
-        assert_eq!(
-            d.len(),
-            1,
-            "a pure-builtin method on an impure (call) receiver must still be flagged: {d:?}"
-        );
-    }
-
-    #[test]
-    fn flags_const_ternary_with_call_branch() {
-        let src = r#"
-const value = cond ? makeThing() : fallback
-
-describe("x", () => { it("works", () => {}); });
-"#;
-        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
-        assert_eq!(
-            d.len(),
-            1,
-            "a ternary with a call in one branch must still be flagged: {d:?}"
         );
     }
 
@@ -1845,7 +1383,7 @@ await orm.schema.create();
         let src = r#"
 import { describe, it, beforeAll } from 'vitest';
 
-const orm = await MikroORM.init({ driver: MongoDriver });
+await orm.schema.create();
 
 describe('orm', () => {
   it('works', () => {});
@@ -1855,7 +1393,7 @@ describe('orm', () => {
         assert_eq!(
             d.len(),
             1,
-            "top-level setup in a file that DOES use a test framework (describe/it) must still be flagged: {d:?}"
+            "a bare side-effecting top-level statement in a file that DOES use a test framework (describe/it) must still be flagged: {d:?}"
         );
     }
 
