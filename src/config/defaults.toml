@@ -107,9 +107,6 @@ max = 20
 [rules.max-call-chain-depth]
 max = 4
 
-[rules.max-union-size]
-max = 5
-
 [rules.intermediate-variables]
 min_ops = 2
 
