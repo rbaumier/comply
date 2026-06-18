@@ -49,9 +49,16 @@ impl OxcCheck for Check {
                     &assign.right,
                     Expression::Identifier(id) if id.name.as_str() == "undefined"
                 );
-                if assign.operator == AssignmentOperator::Assign
-                    && is_ref_current_target(&assign.left)
-                {
+                // Re-assigning a plain local variable to `undefined` is the only way
+                // to reset it: `let x;` applies to the declaration (already emitted)
+                // and `delete obj.prop` applies to properties, not locals. The
+                // `ref.current` member idiom is exempt for the same reason. Member
+                // assignments other than `ref.current` keep flagging (`delete obj.prop`).
+                let target_has_no_remediation = matches!(
+                    &assign.left,
+                    AssignmentTarget::AssignmentTargetIdentifier(_)
+                ) || is_ref_current_target(&assign.left);
+                if assign.operator == AssignmentOperator::Assign && target_has_no_remediation {
                     return;
                 }
                 (is_undef, assign.span.start)
@@ -113,8 +120,16 @@ mod tests {
     }
 
     #[test]
-    fn flags_plain_identifier_reassignment() {
-        assert_eq!(run_on("instance = undefined;").len(), 1);
+    fn allows_plain_identifier_reassignment() {
+        assert!(run_on("instance = undefined;").is_empty());
+    }
+
+    #[test]
+    fn allows_reset_let_to_undefined() {
+        // hono's `lastError = undefined` — resetting a declared `let` to "no value".
+        // `let x;` is for the declaration and `delete obj.prop` is for properties;
+        // neither remediation applies to a plain-identifier re-assignment.
+        assert!(run_on("lastError = undefined;").is_empty());
     }
 
     #[test]
