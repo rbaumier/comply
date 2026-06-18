@@ -2,13 +2,18 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["new_expression"] prefilter = ["JSON.stringify"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["new_expression"] prefilter = ["@tanstack/start", "@tanstack/react-start"] => |node, source, ctx, diagnostics|
     let Some(ctor) = node.child_by_field_name("constructor") else { return; };
     let Ok(ctor_name) = ctor.utf8_text(source) else { return; };
     if ctor_name != "Response" { return; }
 
     let Some(args) = node.child_by_field_name("arguments") else { return; };
     if !first_arg_is_json_stringify(args, source) { return; }
+
+    // File must use TanStack Start, where `json()` is importable.
+    if !ctx.source_contains("@tanstack/start") && !ctx.source_contains("@tanstack/react-start") {
+        return;
+    }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -61,27 +66,37 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, s, "t.ts")
     }
 
+    const TANSTACK_IMPORT: &str = "import { json } from '@tanstack/react-start';\n";
+
     #[test]
     fn flags_new_response_json_stringify() {
-        assert_eq!(
-            run("return new Response(JSON.stringify({ ok: true }));").len(),
-            1
-        );
+        let src = format!("{TANSTACK_IMPORT}return new Response(JSON.stringify({{ ok: true }}));");
+        assert_eq!(run(&src).len(), 1);
     }
 
     #[test]
     fn flags_with_headers_opts() {
-        let src = "return new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json' } });";
-        assert_eq!(run(src).len(), 1);
+        let src = format!(
+            "{TANSTACK_IMPORT}return new Response(JSON.stringify(data), {{ headers: {{ 'content-type': 'application/json' }} }});"
+        );
+        assert_eq!(run(&src).len(), 1);
     }
 
     #[test]
     fn allows_json_helper() {
-        assert!(run("return json({ ok: true });").is_empty());
+        let src = format!("{TANSTACK_IMPORT}return json({{ ok: true }});");
+        assert!(run(&src).is_empty());
     }
 
     #[test]
     fn allows_new_response_text() {
-        assert!(run("return new Response('hello');").is_empty());
+        let src = format!("{TANSTACK_IMPORT}return new Response('hello');");
+        assert!(run(&src).is_empty());
+    }
+
+    #[test]
+    fn ignores_when_no_tanstack_start_import() {
+        let src = "const mockResponse = new Response(JSON.stringify(body), { status: 400, headers: { 'Content-Type': 'application/problem+json' } });";
+        assert!(run(src).is_empty());
     }
 }
