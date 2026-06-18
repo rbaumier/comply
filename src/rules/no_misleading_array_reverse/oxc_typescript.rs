@@ -15,7 +15,7 @@ const MUTATING_METHODS: &[&str] = &["reverse", "sort", "fill", "splice"];
 /// mutating method onto one of these is safe — the caller holds the only
 /// reference to the new array, so nothing shared is silently mutated.
 const FRESH_ARRAY_METHODS: &[&str] =
-    &["filter", "map", "slice", "concat", "flat", "flatMap"];
+    &["filter", "map", "slice", "concat", "flat", "flatMap", "split"];
 
 /// Whether the receiver is a freshly-constructed array with no prior alias, so
 /// mutating it in place is not observable through any other reference.
@@ -261,5 +261,12 @@ mod oxc_tests {
         // GUARD: a member-access-chain receiver (`obj.items`) is not an
         // Identifier, so the uppercase guard does not apply — still flags.
         assert_eq!(run("function f() { return obj.items.sort(); }").len(), 1);
+    }
+
+    // === issue #3826: String#split() returns a freshly-allocated array ===
+
+    #[test]
+    fn allows_split_then_sort() {
+        assert!(run("function f(text) { return text.split('\\n').sort(); }").is_empty());
     }
 }
