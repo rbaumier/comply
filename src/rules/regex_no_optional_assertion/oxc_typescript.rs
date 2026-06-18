@@ -3,11 +3,16 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::regex_helpers::is_inside_char_class;
 use std::sync::Arc;
 
 /// Scans a regex pattern for assertions (`^`, `$`, `(?=...)`, `(?!...)`,
 /// `(?<=...)`, `(?<!...)`) inside a group whose quantifier is `?` or `*`
 /// (i.e. the group may match zero times, making the assertion a no-op).
+///
+/// `^` / `$` inside a `[...]` character class are literal members (or the
+/// negation marker for a leading `^`), never positional assertions, so they
+/// are not counted.
 fn has_optional_assertion(pattern: &str) -> bool {
     let bytes = pattern.as_bytes();
     let len = bytes.len();
@@ -29,7 +34,7 @@ fn has_optional_assertion(pattern: &str) -> bool {
                         }
                     }
                     b'^' | b'$' => {
-                        if depth == 1 {
+                        if depth == 1 && !is_inside_char_class(bytes, j) {
                             has_assertion = true;
                         }
                     }
@@ -73,6 +78,22 @@ fn has_optional_assertion(pattern: &str) -> bool {
 
 pub struct Check;
 
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::RegExpLiteral]
@@ -102,5 +123,67 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn flags_assertion_in_optional_group() {
+        assert_eq!(run_on(r#"const re = /(?:^foo)?bar/;"#).len(), 1);
+    }
+
+    #[test]
+    fn allows_assertion_in_required_group() {
+        assert!(run_on(r#"const re = /(?:^foo)bar/;"#).is_empty());
+    }
+
+    #[test]
+    fn flags_assertion_in_star_group() {
+        assert_eq!(run_on(r#"const re = /(?:^foo)*bar/;"#).len(), 1);
+    }
+
+    // --- Char-class `^` / `$` regression tests (issue #3887). ---
+
+    #[test]
+    fn allows_negated_char_class_caret_in_star_group() {
+        // The `^` in `[^"\\]` is the negation marker, not a start anchor.
+        assert!(run_on(r#"const r1 = /(?:\\.[^"\\]*)*/g;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_negated_char_class_caret_in_alternation() {
+        // The `^` in `[^']` is the negation marker, not a start anchor.
+        assert!(run_on(r#"const r2 = /(?:''|[^'])*/;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_typeorm_postgres_hstore_pattern() {
+        let src = r#"const re = /"([^"\\]*(?:\\.[^"\\]*)*)"=>(?:(NULL)|"([^"\\]*(?:\\.[^"\\]*)*)")(?:,|$)/g;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_typeorm_sqlite_json_pattern() {
+        let src = r#"const re = /^(jsonb|json)\s*\(\s*'((?:''|[^'])*)'\s*\)\s*$/i;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_real_start_anchor_in_star_group() {
+        // `^` outside any char class, inside a `*`-quantified group: a real no-op.
+        assert_eq!(run_on(r#"const r3 = /(?:^abc)*/;"#).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_real_end_anchor_in_optional_group() {
+        // `$` outside any char class, inside a `?`-quantified group: a real no-op.
+        assert_eq!(run_on(r#"const re = /(?:abc$)?/;"#).len(), 1);
     }
 }
