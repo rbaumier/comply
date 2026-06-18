@@ -1,8 +1,6 @@
 //! angular-no-lifecycle-in-service — services don't have component lifecycle hooks.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -7,10 +7,6 @@
 
 use crate::diagnostic::Diagnostic;
 
-fn run_ts(src: &str) -> Vec<Diagnostic> {
-    crate::rules::test_helpers::run_rule(&super::typescript::Check, src, "t.ts")
-}
-
 fn run_vue(body: &str) -> Vec<Diagnostic> {
     let mut parser = tree_sitter::Parser::new();
     parser
@@ -31,7 +27,6 @@ fn run_oxc(src: &str) -> Vec<Diagnostic> {
 #[test]
 fn flags_catch_e_cross_backend() {
     let body = "try { f(); } catch (e) {}";
-    assert_eq!(run_ts(body).len(), 1);
     assert_eq!(run_vue(body).len(), 1);
     assert_eq!(run_oxc(body).len(), 1);
 }
@@ -39,7 +34,6 @@ fn flags_catch_e_cross_backend() {
 #[test]
 fn flags_catch_err_cross_backend() {
     let body = "try { f(); } catch (err) {}";
-    assert_eq!(run_ts(body).len(), 1);
     assert_eq!(run_vue(body).len(), 1);
     assert_eq!(run_oxc(body).len(), 1);
 }
@@ -47,7 +41,6 @@ fn flags_catch_err_cross_backend() {
 #[test]
 fn allows_catch_error_cross_backend() {
     let body = "try { f(); } catch (error) {}";
-    assert!(run_ts(body).is_empty());
     assert!(run_vue(body).is_empty());
     assert!(run_oxc(body).is_empty());
 }
@@ -55,7 +48,6 @@ fn allows_catch_error_cross_backend() {
 #[test]
 fn allows_suffixed_error_cross_backend() {
     let body = "try { f(); } catch (parseError) {}";
-    assert!(run_ts(body).is_empty());
     assert!(run_vue(body).is_empty());
     assert!(run_oxc(body).is_empty());
 }
@@ -63,7 +55,6 @@ fn allows_suffixed_error_cross_backend() {
 #[test]
 fn allows_bare_catch_cross_backend() {
     let body = "try { f(); } catch {}";
-    assert!(run_ts(body).is_empty());
     assert!(run_vue(body).is_empty());
     assert!(run_oxc(body).is_empty());
 }

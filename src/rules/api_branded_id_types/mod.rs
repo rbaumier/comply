@@ -4,8 +4,6 @@
 //! class of bugs, which raw string/number parameters cannot catch.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
