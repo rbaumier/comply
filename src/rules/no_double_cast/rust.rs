@@ -1,45 +1,14 @@
 //! no-double-cast Rust backend — flag `x as u32 as u64` chained casts.
+//!
+//! A double cast whose inner cast target is a raw pointer type
+//! (`<expr> as *raw as <ptr|usize|...>`) is exempt: it is a pointer
+//! reinterpretation / address extraction (repr(transparent) reinterpret,
+//! byte-pointer, fn-pointer-to-address, FFI `c_void` erasure), not a numeric
+//! "misaligned type" double cast. Rust forbids the single-step form in those
+//! cases, so the two-step chain is mandatory and has no `From`/`Into`
+//! alternative.
 
 use crate::diagnostic::{Diagnostic, Severity};
-
-/// A raw pointer to a `dyn Trait`, i.e. a `*const dyn Trait` / `*mut dyn Trait`
-/// fat pointer (data pointer + vtable).
-fn raw_ptr_to_dyn(ty: tree_sitter::Node) -> bool {
-    ty.kind() == "pointer_type"
-        && ty
-            .child_by_field_name("type")
-            .is_some_and(|inner| inner.kind() == "dynamic_type")
-}
-
-/// A raw pointer to a non-`dyn` type, i.e. a thin pointer `*const T` / `*mut T`.
-fn raw_ptr_to_thin(ty: tree_sitter::Node) -> bool {
-    ty.kind() == "pointer_type"
-        && ty
-            .child_by_field_name("type")
-            .is_some_and(|inner| inner.kind() != "dynamic_type")
-}
-
-/// A raw pointer to `c_void`, i.e. `*mut c_void` / `*const c_void`. Matches the
-/// final type segment so path-qualified forms (`core::ffi::c_void`,
-/// `std::os::raw::c_void`, `libc::c_void`) are recognized too.
-fn raw_ptr_to_c_void(ty: tree_sitter::Node, source: &[u8]) -> bool {
-    if ty.kind() != "pointer_type" {
-        return false;
-    }
-    let Some(inner) = ty.child_by_field_name("type") else {
-        return false;
-    };
-    let leaf = match inner.kind() {
-        "type_identifier" => inner,
-        // `core::ffi::c_void` etc.: the trailing `type_identifier` is the name.
-        "scoped_type_identifier" => match inner.child_by_field_name("name") {
-            Some(name) => name,
-            None => return false,
-        },
-        _ => return false,
-    };
-    leaf.utf8_text(source).is_ok_and(|name| name == "c_void")
-}
 
 /// Bit width of a primitive integer type by its `primitive_type` node text.
 /// `isize`/`usize` map to 64: pointer width is target-dependent, but 64-bit is
@@ -77,57 +46,27 @@ fn int_truncate_then_widen(inner_ty: tree_sitter::Node, outer_ty: tree_sitter::N
     inner_w < outer_w
 }
 
-/// The alignment-preserving FFI erasure chain `&x as *mut _ as *mut c_void`:
-/// a reference coerced to a typed raw pointer, then type-erased to a void
-/// pointer. Rust forbids casting `&T`/`&mut T` straight to `*mut c_void`, so the
-/// intermediate typed raw pointer is mandatory, not a hidden misalignment.
-fn ref_to_void_ptr_chain(
-    inner: tree_sitter::Node,
-    outer_ty: tree_sitter::Node,
-    source: &[u8],
-) -> bool {
-    raw_ptr_to_c_void(outer_ty, source)
-        && inner
-            .child_by_field_name("type")
-            .is_some_and(raw_ptr_to_thin)
-        && inner
-            .child_by_field_name("value")
-            .is_some_and(|base| base.kind() == "reference_expression")
-}
-
 crate::ast_check! { on ["type_cast_expression"] => |node, source, ctx, diagnostics|
     // The inner expression (left side of `as`) is the first named child.
     let Some(inner) = node.child_by_field_name("value") else { return };
     if inner.kind() != "type_cast_expression" {
         return;
     }
+    let Some(inner_ty) = inner.child_by_field_name("type") else { return };
 
-    // Exempt the fat-pointer-to-thin-pointer downcast `x as *const dyn Trait
-    // as *const Concrete`. Rust cannot convert a fat `*const dyn Trait` (which
-    // carries a vtable) to a thin `*const Concrete` in a single `as`, so the
-    // intermediate cast is required, not redundant.
-    if let (Some(inner_ty), Some(outer_ty)) =
-        (inner.child_by_field_name("type"), node.child_by_field_name("type"))
-        && raw_ptr_to_dyn(inner_ty)
-        && raw_ptr_to_thin(outer_ty)
-    {
-        return;
-    }
-
-    // Exempt the FFI erasure chain `&x as *mut _ as *mut c_void`. Rust forbids
-    // casting a reference straight to `*mut c_void`, so the intermediate typed
-    // raw pointer is mandatory; both casts preserve alignment.
-    if let Some(outer_ty) = node.child_by_field_name("type")
-        && ref_to_void_ptr_chain(inner, outer_ty, source)
-    {
+    // A cast chained off a raw pointer (`<expr> as *raw as <ptr|usize|...>`) is a
+    // pointer reinterpretation / address extraction (repr(transparent) reinterpret,
+    // byte-pointer, fn-pointer-to-address, FFI `c_void` erasure), not a numeric
+    // "misaligned type" double cast. Rust forbids the single-step form, so the
+    // two-step chain is mandatory and has no `From`/`Into` alternative. Exempt it.
+    if inner_ty.kind() == "pointer_type" {
         return;
     }
 
     // Exempt the integer truncate-then-widen chain `x as u16 as u32`: the inner
     // cast to a strictly narrower type is a deliberate, lossy truncation, so the
     // chain is not collapsible to a single `as`.
-    if let (Some(inner_ty), Some(outer_ty)) =
-        (inner.child_by_field_name("type"), node.child_by_field_name("type"))
+    if let Some(outer_ty) = node.child_by_field_name("type")
         && int_truncate_then_widen(inner_ty, outer_ty, source)
     {
         return;
@@ -253,9 +192,40 @@ mod tests {
 
     #[test]
     fn flags_numeric_intermediate_to_c_void() {
-        // Negative-space guard: the inner cast is to a numeric type, not a raw
-        // pointer, and the base is not a reference — still a suspicious double cast.
+        // Negative-space guard: the inner cast target is `usize` (numeric), not a
+        // raw pointer, so the pointer-chain exemption does not apply — still a
+        // suspicious double cast.
         assert_eq!(run_on("fn f(x: usize) { let _ = x as usize as *mut c_void; }").len(), 1);
+    }
+
+    #[test]
+    fn allows_repr_transparent_reinterpret_chain() {
+        // repr(transparent) raw-pointer reinterpret: inner cast target is a raw
+        // pointer, so the chain is a pointer reinterpretation, not numeric.
+        let src = "unsafe fn f(t: *const u8) { let _ = t as *const u8 as *const u32; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_ref_to_typed_ptr_to_byte_ptr_chain() {
+        // `&mut view as *mut _ as *mut u8`: reference -> typed raw ptr -> byte ptr.
+        let src = "unsafe fn f() { let p = &mut view as *mut _ as *mut u8; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_fn_pointer_to_address_chain() {
+        // `signal_handler as *const () as usize`: function pointer -> address.
+        let src = "fn f() { let addr = signal_handler as *const () as usize; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_field_base_typed_ptr_to_c_void_chain() {
+        // diesel pg/connection/raw.rs: `self.value as *mut pgNotify as *mut c_void`,
+        // base is a reference-typed `field_expression`, not a syntactic `&x`.
+        let src = "unsafe fn f(g: G) { let p = g.value as *mut pgNotify as *mut core::ffi::c_void; }";
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
