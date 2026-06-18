@@ -1135,7 +1135,7 @@ fn use_state_setter_array_pattern<'a>(
 #[must_use]
 pub fn is_guarded_derive_during_render(
     call_node_id: oxc_semantic::NodeId,
-    state_names: &std::collections::HashSet<String>,
+    state_names: &FxHashSet<String>,
     boundary_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
@@ -1171,7 +1171,7 @@ pub fn is_guarded_derive_during_render(
 /// `state_names`. Scans semantic nodes by span containment within the guard test.
 fn test_references_state(
     test_span: oxc_span::Span,
-    state_names: &std::collections::HashSet<String>,
+    state_names: &FxHashSet<String>,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
     use oxc_ast::AstKind;

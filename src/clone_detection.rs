@@ -4,7 +4,7 @@
 //! - Hash sliding windows of MIN_TOKENS tokens
 //! - Cross-file collisions with token-by-token verification = clones
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use rayon::prelude::*;
 use tree_sitter::Parser;
@@ -203,12 +203,11 @@ fn verify_tokens(a: &FileTokens, a_start: usize, b: &FileTokens, b_start: usize)
 /// The clone is rejected when the merged span has fewer than
 /// `MIN_DISTINCT_TRIGRAMS` distinct trigrams.
 fn has_enough_distinct_texts(ft: &FileTokens, first_tok: usize, last_window_tok: usize) -> bool {
-    use std::collections::HashSet;
     let last_tok = (last_window_tok + MIN_TOKENS - 1).min(ft.tokens.len() - 1);
     if last_tok < first_tok + 2 {
         return false;
     }
-    let mut seen: HashSet<(&[u8], &[u8], &[u8])> = HashSet::new();
+    let mut seen: FxHashSet<(&[u8], &[u8], &[u8])> = FxHashSet::default();
     for i in first_tok..=last_tok - 2 {
         let a = &ft.tokens[i];
         let b = &ft.tokens[i + 1];
@@ -314,7 +313,7 @@ fn merge_and_emit(
     //    which is the wrong trade in tests. Scoped to spec files: duplication in
     //    shared test infrastructure (`test-helpers/`, `fixtures/`, `__mocks__/`)
     //    is still flagged, because there extraction is the correct fix.
-    let mut suppressed = std::collections::HashSet::<usize>::new();
+    let mut suppressed = FxHashSet::<usize>::default();
     {
         let mut by_pair: FxHashMap<(usize, usize), Vec<usize>> = FxHashMap::default();
         for (idx, s) in spans.iter().enumerate() {

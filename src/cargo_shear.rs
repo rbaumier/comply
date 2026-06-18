@@ -22,6 +22,7 @@
 //! Workspaces are de-duplicated so we don't shell out twice for the same
 //! manifest when many `.rs` files share a parent crate.
 
+use rustc_hash::FxHashSet;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::fs;
@@ -52,7 +53,7 @@ pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
         return Ok(vec![]);
     }
     let mut diagnostics = Vec::new();
-    let mut roots = std::collections::HashSet::new();
+    let mut roots = FxHashSet::default();
     for f in files {
         if let Some(root) = runner_helpers::find_cargo_workspace_root(&f.path) {
             roots.insert(root);

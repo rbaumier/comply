@@ -27,7 +27,7 @@
 //! warning, same as the regular clippy runner.
 
 use anyhow::{Context, Result};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -125,7 +125,7 @@ fn run_clippy_fix(files: &[&SourceFile], config: &Config) -> Result<usize> {
     for (workspace, files_in_ws) in workspaces {
         match workspace {
             Some(root) => {
-                let touched: HashSet<&Path> =
+                let touched: FxHashSet<&Path> =
                     files_in_ws.iter().map(|f| f.path.as_path()).collect();
                 if let Err(e) = invoke_clippy_fix(&root, &touched, config) {
                     eprintln!("comply: clippy --fix failed for {}: {e:#}", root.display());
@@ -190,7 +190,7 @@ fn find_workspace_root(file: &Path) -> Option<PathBuf> {
 /// crate, not on a per-file basis, so we can't restrict it to the
 /// files comply was asked about. We accept the broader edit scope
 /// because the alternative (no auto-fix at all on Rust) is worse.
-fn invoke_clippy_fix(workspace: &Path, _touched: &HashSet<&Path>, config: &Config) -> Result<()> {
+fn invoke_clippy_fix(workspace: &Path, _touched: &FxHashSet<&Path>, config: &Config) -> Result<()> {
     let manifest = workspace.join("Cargo.toml");
     let mut cmd = Command::new("cargo");
     cmd.args([
