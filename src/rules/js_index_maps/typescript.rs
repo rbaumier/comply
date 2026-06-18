@@ -14,6 +14,10 @@ const ITERATOR_METHODS: &[&str] = &["forEach", "map", "flatMap", "reduce", "some
 const LOOKUP_METHODS: &[&str] = &["find", "findIndex", "filter", "includes", "indexOf"];
 
 fn is_inside_loop(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // `child` is the node we ascended from — the subtree of the current
+    // ancestor that contains `node`. It distinguishes an iterator method's
+    // per-iteration callback subtree from its receiver subtree.
+    let mut child = node;
     let mut ancestor = node.parent();
     while let Some(a) = ancestor {
         if LOOP_KINDS.contains(&a.kind()) {
@@ -27,13 +31,19 @@ fn is_inside_loop(node: tree_sitter::Node, source: &[u8]) -> bool {
         ) {
             return false;
         }
-        // .forEach() / .map() etc. count as loops.
+        // An iterator method (`.forEach`/`.map`/…) is a loop body only for its
+        // callback. When we arrived through the callee (the `X.map`
+        // member-expression receiver chain), `node` is a downstream stage of a
+        // sequential pipeline (`a.filter(…).map(…)`) that runs once, not per
+        // iteration — keep walking up.
         if a.kind() == "call_expression" {
             if let Some(callee) = a.child_by_field_name("function") {
                 if callee.kind() == "member_expression" {
                     if let Some(prop) = callee.child_by_field_name("property") {
                         if let Ok(method) = prop.utf8_text(source) {
-                            if ITERATOR_METHODS.contains(&method) {
+                            if ITERATOR_METHODS.contains(&method)
+                                && a.child_by_field_name("function") != Some(child)
+                            {
                                 return true;
                             }
                         }
@@ -44,6 +54,7 @@ fn is_inside_loop(node: tree_sitter::Node, source: &[u8]) -> bool {
         if a.kind() == "program" {
             break;
         }
+        child = a;
         ancestor = a.parent();
     }
     false
@@ -197,5 +208,46 @@ items.forEach(item => {
 "#)
             .is_empty()
         );
+    }
+
+    #[test]
+    fn no_fp_on_filter_as_map_receiver() {
+        // Regression for #3784: `.filter()` is the receiver of `.map()`, a
+        // sequential pipeline stage that runs once — not a per-iteration body.
+        assert!(
+            run(r#"
+const out = files.filter((f) => f.isDirectory()).map((f) => f.name);
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_longer_pipeline_chain() {
+        assert!(
+            run(r#"
+const r = files.filter((a) => a.ok).map((b) => b.id).filter((c) => !c.hidden);
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_filter_then_foreach() {
+        assert!(
+            run(r#"
+arr.filter((x) => x.ok).forEach((y) => use(y));
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_filter_in_map_callback() {
+        // The inner `.filter` is nested in the `.map` callback — per-iteration.
+        let diags = run(r#"
+const r = items.map((i) => others.filter((o) => o.id === i.id));
+"#);
+        assert_eq!(diags.len(), 1);
     }
 }
