@@ -297,6 +297,120 @@ fn is_nullish_guard_on_ref(expr: &oxc_ast::ast::Expression, ref_name: &str) -> b
     }
 }
 
+/// True if `expr` is a "change detector" on some ref's `.current`: a `!==`/`!=`
+/// inequality where one side is `<anyRef>.current` (e.g.
+/// `prevProp.current !== props.value`), optionally `&&`-guarded by other
+/// expressions (`props.value && prevProp.current !== props.value`).
+///
+/// A change detector is self-limiting: it fires only when the compared value
+/// differs from the value recorded in the ref on a prior render, and the gated
+/// consequent records the new value — so on a re-render with the same input it
+/// is false and the write does not re-run. That makes the post-write reads
+/// stable within a render. An arbitrary disjunct (a bare identifier, a call, an
+/// equality test) is NOT self-limiting: it can be true every render, re-running
+/// the write and tearing the read, so it does not qualify.
+fn is_change_detector_on_some_ref(
+    expr: &oxc_ast::ast::Expression,
+    refs: &HashSet<String>,
+) -> bool {
+    use oxc_ast::ast::{BinaryOperator, Expression, LogicalOperator};
+    match expr {
+        Expression::ParenthesizedExpression(paren) => {
+            is_change_detector_on_some_ref(&paren.expression, refs)
+        }
+        // `guard && <detector>` (or `<detector> && guard`): the inequality must
+        // still be present on one side.
+        Expression::LogicalExpression(logical) if logical.operator == LogicalOperator::And => {
+            is_change_detector_on_some_ref(&logical.left, refs)
+                || is_change_detector_on_some_ref(&logical.right, refs)
+        }
+        Expression::BinaryExpression(bin) => {
+            let is_neq = matches!(
+                bin.operator,
+                BinaryOperator::Inequality | BinaryOperator::StrictInequality
+            );
+            if !is_neq {
+                return false;
+            }
+            ref_current_object_name(&bin.left, refs)
+                || ref_current_object_name(&bin.right, refs)
+        }
+        _ => false,
+    }
+}
+
+/// True if `expr` is `<name>.current` where `name` is one of `refs`.
+fn ref_current_object_name(expr: &oxc_ast::ast::Expression, refs: &HashSet<String>) -> bool {
+    let oxc_ast::ast::Expression::StaticMemberExpression(member) = expr else {
+        return false;
+    };
+    if member.property.name.as_str() != "current" {
+        return false;
+    }
+    let oxc_ast::ast::Expression::Identifier(obj) = &member.object else {
+        return false;
+    };
+    refs.contains(obj.name.as_str())
+}
+
+/// True if `test` is a controlled-re-init guard: a `||` disjunction where, for
+/// SOME ref R, one disjunct nullish-self-guards R (`!R.current`, `=== null`, …)
+/// and EVERY OTHER disjunct is either another nullish self-guard on R or a
+/// change detector on some ref's `.current` (see `is_change_detector_on_some_ref`).
+///
+/// This is the react-hook-form `useForm` shape:
+/// `!_formControl.current || (props.formControl && _formControlProp.current !== props.formControl)`.
+/// The nullish self-guard makes the first render run the init; every other
+/// disjunct is a change detector that re-fires only on a genuine input change,
+/// so the gated writes are one-time-per-distinct-input and the post-write reads
+/// are stable within a render — no tearing. A disjunct that is neither (a bare
+/// `cond`, a call, an equality) can run the write every render and defeats the
+/// gate, so the whole `if` is rejected.
+fn is_controlled_reinit_guard(test: &oxc_ast::ast::Expression, refs: &HashSet<String>) -> bool {
+    use oxc_ast::ast::{Expression, LogicalOperator};
+    let Expression::LogicalExpression(logical) = test else {
+        return false;
+    };
+    if logical.operator != LogicalOperator::Or {
+        return false;
+    }
+    let mut disjuncts: Vec<&Expression> = Vec::new();
+    collect_or_disjuncts(test, &mut disjuncts);
+
+    // Find the ref nullish-self-guarded by some disjunct, then require every
+    // remaining disjunct to be a nullish guard on that same ref or a change
+    // detector. Try each ref so the nullish-guard and the detectors need not
+    // name the same ref (RHF guards `_formControl` but detects on
+    // `_formControlProp`).
+    refs.iter().any(|guarded| {
+        let mut has_nullish_self_guard = false;
+        for disjunct in &disjuncts {
+            if is_nullish_guard_on_ref(disjunct, guarded) {
+                has_nullish_self_guard = true;
+            } else if !is_change_detector_on_some_ref(disjunct, refs) {
+                return false;
+            }
+        }
+        has_nullish_self_guard
+    })
+}
+
+/// Flatten a left-associative `||` chain into its leaf disjuncts.
+fn collect_or_disjuncts<'a>(
+    expr: &'a oxc_ast::ast::Expression<'a>,
+    out: &mut Vec<&'a oxc_ast::ast::Expression<'a>>,
+) {
+    use oxc_ast::ast::{Expression, LogicalOperator};
+    match expr {
+        Expression::LogicalExpression(logical) if logical.operator == LogicalOperator::Or => {
+            collect_or_disjuncts(&logical.left, out);
+            collect_or_disjuncts(&logical.right, out);
+        }
+        Expression::ParenthesizedExpression(paren) => collect_or_disjuncts(&paren.expression, out),
+        _ => out.push(expr),
+    }
+}
+
 /// Collect the names of refs that follow React's sanctioned lazy-init pattern:
 /// every render-time write to `ref.current` sits inside the consequent of an
 /// `if` whose test nullish-guards THAT SAME ref (`if (!ref.current) { ref.current = make(); }`).
@@ -394,6 +508,130 @@ fn collect_lazy_init_refs<'a>(
         .into_iter()
         .filter(|name| !has_unguarded_write.contains(name))
         .collect()
+}
+
+/// A gating `if` for a controlled-re-init ref: the full statement span (reads
+/// after `stmt.end` are stable) and the test span (the change-detector read of
+/// the ref inside the guard is also stable — it reads the value recorded on a
+/// prior render before deciding whether to re-init).
+#[derive(Clone, Copy)]
+struct ReinitGate {
+    stmt: oxc_span::Span,
+    test: oxc_span::Span,
+}
+
+/// Collect refs that follow the controlled prop-change re-init pattern, keyed by
+/// ref name → the gating `if` blocks. A ref qualifies when it has at least one
+/// render-scope write to `ref.current` and EVERY such write sits inside the
+/// consequent of an `if` whose test is a controlled re-init guard
+/// (`is_controlled_reinit_guard`). All refs written solely inside the gated
+/// consequents qualify — both the nullish-guarded ref (`_formControl`) and any
+/// sibling tracker ref written alongside it (`_formControlProp`), which the
+/// change detector reads.
+///
+/// The returned gates let the caller exempt only reads that are provably stable:
+/// a read inside the gate's test (the change-detector read) or strictly after
+/// the gate's `if` block. A read positioned BEFORE the gate could observe the
+/// pre-re-init value while a later read observes the post-re-init value —
+/// tearing within the render — so it is not exempted here and still flags.
+fn collect_controlled_reinit_refs<'a>(
+    body_span: oxc_span::Span,
+    refs: &HashSet<String>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> std::collections::HashMap<String, Vec<ReinitGate>> {
+    use std::collections::HashMap;
+
+    // `if`-statements in render scope whose test is a controlled re-init guard,
+    // paired with their consequent span.
+    let mut gated: Vec<(ReinitGate, oxc_span::Span)> = Vec::new();
+    for node in semantic.nodes().iter() {
+        let AstKind::IfStatement(if_stmt) = node.kind() else {
+            continue;
+        };
+        if if_stmt.span.start < body_span.start || if_stmt.span.end > body_span.end {
+            continue;
+        }
+        if is_inside_nested_function(node.id(), body_span, semantic) {
+            continue;
+        }
+        if is_controlled_reinit_guard(&if_stmt.test, refs) {
+            gated.push((
+                ReinitGate {
+                    stmt: if_stmt.span,
+                    test: if_stmt.test.span(),
+                },
+                if_stmt.consequent.span(),
+            ));
+        }
+    }
+    if gated.is_empty() {
+        return HashMap::new();
+    }
+
+    // Classify each render-scope write to `ref.current`, recording for each ref
+    // the gate(s) whose consequent contains that write. A ref with any write
+    // outside every gated consequent is mutated unconditionally and is not
+    // exempt; each exempt ref is keyed ONLY to the gates that actually re-init
+    // it, so a read of one ref is never exempted by an unrelated ref's gate.
+    let mut writes_into_gates: HashMap<String, HashSet<usize>> = HashMap::new();
+    let mut has_unguarded_write: HashSet<String> = HashSet::new();
+    for node in semantic.nodes().iter() {
+        let member = match node.kind() {
+            AstKind::AssignmentExpression(assign) => {
+                let oxc_ast::ast::AssignmentTarget::StaticMemberExpression(member) = &assign.left
+                else {
+                    continue;
+                };
+                member.as_ref()
+            }
+            AstKind::UpdateExpression(update) => {
+                let oxc_ast::ast::SimpleAssignmentTarget::StaticMemberExpression(member) =
+                    &update.argument
+                else {
+                    continue;
+                };
+                member.as_ref()
+            }
+            _ => continue,
+        };
+        if member.property.name.as_str() != "current" {
+            continue;
+        }
+        if member.span.start < body_span.start || member.span.end > body_span.end {
+            continue;
+        }
+        let oxc_ast::ast::Expression::Identifier(obj) = &member.object else {
+            continue;
+        };
+        let name = obj.name.as_str();
+        if !refs.contains(name) {
+            continue;
+        }
+        if is_inside_nested_function(node.id(), body_span, semantic) {
+            continue;
+        }
+        let containing_gate = gated.iter().position(|(_, consequent)| {
+            member.span.start >= consequent.start && member.span.end <= consequent.end
+        });
+        match containing_gate {
+            Some(idx) => {
+                writes_into_gates.entry(name.to_string()).or_default().insert(idx);
+            }
+            None => {
+                has_unguarded_write.insert(name.to_string());
+            }
+        }
+    }
+
+    let mut out: HashMap<String, Vec<ReinitGate>> = HashMap::new();
+    for (name, gate_indices) in writes_into_gates {
+        if has_unguarded_write.contains(&name) {
+            continue;
+        }
+        let gates = gate_indices.iter().map(|&idx| gated[idx].0).collect();
+        out.insert(name, gates);
+    }
+    out
 }
 
 /// Check if a `ref.current` member expression is the LHS of an
@@ -540,6 +778,31 @@ impl OxcCheck for Check {
             // runs once and subsequent render reads are stable — no tearing.
             let lazy_init_refs = collect_lazy_init_refs(body_span, &refs, semantic);
 
+            // Refs following the controlled prop-change re-init pattern: every
+            // render-time write is gated by an `if` whose `||` test combines a
+            // nullish self-guard with change detectors on a ref's `.current`
+            // (the react-hook-form `useForm` shape). Reads are exempt only when
+            // provably stable — inside the gate test or strictly after the gate
+            // block — so a read before the gate still flags.
+            let reinit_gates = collect_controlled_reinit_refs(body_span, &refs, semantic);
+            // A read is stable iff it is a guard read inside SOME own-gate test
+            // (the change detector / nullish guard, which reads the prior stable
+            // value to decide the re-init and never feeds render output), OR it
+            // is strictly after EVERY own-gate block (all re-inits have run). A
+            // read sitting before any own-gate — even after an earlier one — can
+            // still observe a value a later gate then re-inits, so it tears and
+            // stays flagged.
+            let is_stable_reinit_read = |name: &str, read_span: oxc_span::Span| {
+                reinit_gates.get(name).is_some_and(|gates| {
+                    let inside_some_test = gates.iter().any(|gate| {
+                        read_span.start >= gate.test.start && read_span.end <= gate.test.end
+                    });
+                    let after_every_gate =
+                        gates.iter().all(|gate| read_span.start >= gate.stmt.end);
+                    inside_some_test || after_every_gate
+                })
+            };
+
             // Walk semantic nodes for `.current` member accesses inside this body
             for inner_node in semantic.nodes().iter() {
                 let AstKind::StaticMemberExpression(member) = inner_node.kind() else {
@@ -568,6 +831,11 @@ impl OxcCheck for Check {
                 // render-time write is gated by a nullish guard on the ref, so
                 // the read is stable after the one-time init.
                 if lazy_init_refs.contains(obj.name.as_str()) {
+                    continue;
+                }
+                // Skip reads of a controlled-re-init ref that are provably
+                // stable (inside the gate test or after the gate block).
+                if is_stable_reinit_read(obj.name.as_str(), member.span) {
                     continue;
                 }
                 // Must NOT be inside a nested function
@@ -1009,18 +1277,15 @@ mod tests {
         assert_eq!(run(src).len(), 2);
     }
 
-    // Regression for issue #3990 — the react-hook-form `useForm` repro. The
-    // `||`-combined guard `if (!_formControl.current || (props.formControl &&
-    // _formControlProp.current !== props.formControl))` has a non-nullish
-    // second operand (a prop-change detector), so it is NOT a valid one-time
-    // gate on `_formControl`: the write can re-run when the prop changes, so a
-    // render read can tear. The safe AST rule cannot distinguish RHF's
-    // controlled re-init from the tearing counterexample, so both refs flag:
-    // `_formControl`'s four render reads and `_formControlProp`'s one read.
-    // (Clearing this controlled-re-init variant would reopen the tearing FN;
-    // it is tracked as a separate follow-up.)
+    // Regression for issue #4023 — the react-hook-form `useForm` controlled
+    // prop-change re-init shape. The guard `if (!_formControl.current ||
+    // (props.formControl && _formControlProp.current !== props.formControl))`
+    // combines a nullish self-guard with a change detector on a ref's
+    // `.current`: the gated writes run on first render or on a genuine prop
+    // change, and every read sits inside the guard test or strictly after the
+    // block, so the reads are stable within a render. No tearing — zero flags.
     #[test]
-    fn rhf_useform_flags_prop_change_reinit_refs() {
+    fn rhf_useform_controlled_reinit_is_exempt() {
         let src = "function useForm(props) { \
                    const _formControl = React.useRef(undefined); \
                    const _formControlProp = React.useRef(props.formControl); \
@@ -1032,22 +1297,118 @@ mod tests {
                    _formControl.current.formState = React.useMemo(() => x, []); \
                    return _formControl.current; \
                    }";
-        let diags = run(src);
-        assert_eq!(diags.len(), 5);
-        assert_eq!(
-            diags
-                .iter()
-                .filter(|d| d.message.contains("`_formControl.current`"))
-                .count(),
-            4
-        );
-        assert_eq!(
-            diags
-                .iter()
-                .filter(|d| d.message.contains("`_formControlProp.current`"))
-                .count(),
-            1
-        );
+        assert!(run(src).is_empty());
+    }
+
+    // FALSE-NEGATIVE GUARD for #4023 — the widening must NOT exempt an arbitrary
+    // non-nullish disjunct. `if (cond || !ref.current)` re-runs the write every
+    // render when `cond` is true, so a render read tears. `cond` is a bare
+    // identifier, not a change detector on a ref's `.current`, so the `if` is
+    // not a controlled re-init guard: the ref stays flagged (the `!ref.current`
+    // guard read plus the render read).
+    #[test]
+    fn still_flags_or_guard_with_arbitrary_disjunct() {
+        let src = "function C({ cond }) { \
+                   const ref = useRef(null); \
+                   if (cond || !ref.current) { ref.current = compute(); } \
+                   return <div>{ref.current}</div>; \
+                   }";
+        assert_eq!(run(src).len(), 2);
+    }
+
+    // FALSE-NEGATIVE GUARD for #4023 — an equality (`===`) disjunct is not a
+    // change detector (inequality `!==`/`!=` only). `ref.current === x` is not
+    // self-limiting, so the `if` is not a controlled re-init guard. Both the
+    // guard reads (`!ref.current`, `ref.current === x`) and the render read
+    // flag.
+    #[test]
+    fn still_flags_or_guard_with_equality_disjunct() {
+        let src = "function C({ x }) { \
+                   const ref = useRef(null); \
+                   if (!ref.current || ref.current === x) { ref.current = compute(); } \
+                   return <div>{ref.current}</div>; \
+                   }";
+        assert_eq!(run(src).len(), 3);
+    }
+
+    // FALSE-NEGATIVE GUARD for #4023 — a non-nullish disjunct that is a `!==`
+    // comparison but does NOT involve a ref's `.current` (`a !== b` on plain
+    // values) is not a change detector, so the `if` is not a controlled re-init
+    // guard and the ref stays flagged.
+    #[test]
+    fn still_flags_or_guard_with_non_ref_inequality() {
+        let src = "function C({ a, b }) { \
+                   const ref = useRef(null); \
+                   if (!ref.current || a !== b) { ref.current = compute(); } \
+                   return <div>{ref.current}</div>; \
+                   }";
+        assert_eq!(run(src).len(), 2);
+    }
+
+    // FALSE-NEGATIVE GUARD for #4023 — a controlled re-init guard exempts reads
+    // only when they are stable. A read positioned BEFORE the gating `if` block
+    // can observe the pre-re-init value while a later read observes the
+    // post-re-init value — tearing within the render — so the pre-gate read
+    // still flags.
+    #[test]
+    fn still_flags_read_before_controlled_reinit_gate() {
+        let src = "function useForm(props) { \
+                   const _formControl = React.useRef(undefined); \
+                   const _formControlProp = React.useRef(props.formControl); \
+                   const early = _formControl.current; \
+                   if (!_formControl.current || (props.formControl && _formControlProp.current !== props.formControl)) { \
+                     _formControlProp.current = props.formControl; \
+                     _formControl.current = { ...rest, formState }; \
+                   } \
+                   return _formControl.current; \
+                   }";
+        // The pre-gate `const early = _formControl.current` read flags; the
+        // `return` read (after the block) is exempt.
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // FALSE-NEGATIVE GUARD for #4023 — each exempt ref is keyed ONLY to the
+    // gate(s) that re-init it. A read of ref `b` positioned before `b`'s own
+    // gate but after an UNRELATED earlier gate for ref `a` must still flag:
+    // it observes `b`'s pre-re-init value while the later `return` read
+    // observes the post-re-init value — tearing within the render.
+    #[test]
+    fn still_flags_read_before_own_gate_after_unrelated_gate() {
+        let src = "function useForm(props) { \
+                   const a = React.useRef(undefined); \
+                   const b = React.useRef(undefined); \
+                   const aProp = React.useRef(props.x); \
+                   const bProp = React.useRef(props.y); \
+                   if (!a.current || (props.x && aProp.current !== props.x)) { aProp.current = props.x; a.current = makeA(); } \
+                   const tearing = b.current; \
+                   if (!b.current || (props.y && bProp.current !== props.y)) { bProp.current = props.y; b.current = makeB(); } \
+                   return null; \
+                   }";
+        // `const tearing = b.current` sits after `a`'s gate but before `b`'s
+        // gate → not exempted by `b`'s own gate → flags. Exactly one diagnostic.
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // FALSE-NEGATIVE GUARD for #4023 — a ref re-initialized by TWO gates is
+    // stable only after EVERY gate. A read sandwiched between the ref's two
+    // gates observes the pre-re-init value of the second gate while a later
+    // read observes the post-re-init value — tearing within the render — so the
+    // sandwiched read still flags.
+    #[test]
+    fn still_flags_read_between_two_gates_for_same_ref() {
+        let src = "function useForm(props) { \
+                   const b = React.useRef(undefined); \
+                   const bProp1 = React.useRef(props.x); \
+                   const bProp2 = React.useRef(props.y); \
+                   if (!b.current || (props.x && bProp1.current !== props.x)) { bProp1.current = props.x; b.current = makeB1(); } \
+                   const tearing = b.current; \
+                   if (!b.current || (props.y && bProp2.current !== props.y)) { bProp2.current = props.y; b.current = makeB2(); } \
+                   return b.current; \
+                   }";
+        // `const tearing = b.current` sits after the first gate but before the
+        // second gate (which can still re-init `b`) → flags. The `return` read
+        // (after both gates) is exempt. Exactly one diagnostic.
+        assert_eq!(run(src).len(), 1);
     }
 
     // Negative-space guard for #3990 — a ref written BOTH unconditionally and
