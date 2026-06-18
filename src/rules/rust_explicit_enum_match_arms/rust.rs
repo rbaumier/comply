@@ -49,7 +49,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{arm_body_is_diverging, is_in_test_context};
+use crate::rules::rust_helpers::{
+    arm_body_is_diverging, enum_has_cfg_gated_variant, is_in_test_context,
+};
 
 #[derive(Debug)]
 pub struct Check;
@@ -124,6 +126,18 @@ impl AstCheck for Check {
             .iter()
             .all(|p| references_stdlib_closed_enum(*p, source_bytes))
         {
+            return;
+        }
+        // If the scrutinee enum is defined in *this* file and has a
+        // `#[cfg(...)]`-gated variant, its variant set is target-dependent:
+        // listing every variant explicitly fails to compile on the excluded
+        // target (the gated variant is absent there), so a wildcard `_` is the
+        // portable, compiler-required way to match it. Resolution is same-file
+        // only — the enum name is read from the qualified arm patterns
+        // (`Addr::SocketAddr` → `Addr`) and matched against this file's
+        // `enum_item` definitions. Skip the whole match, like the other
+        // whole-match exemptions.
+        if match_covers_same_file_cfg_gated_enum(node, &enum_like_arms, source_bytes) {
             return;
         }
         // Emit on each wildcard arm found (usually just one). A wildcard
@@ -376,6 +390,90 @@ fn attribute_item_is_cfg(attr_item: tree_sitter::Node, source: &[u8]) -> bool {
         .filter_map(|attribute| attribute.named_child(0))
         .filter(|path| path.kind() == "identifier")
         .any(|path| matches!(path.utf8_text(source), Ok("cfg") | Ok("cfg_attr")))
+}
+
+/// True if the match's scrutinee is an enum defined in the same file that has a
+/// `#[cfg(...)]`-gated variant.
+///
+/// Reads the enum names from the qualified `enum_like_arms` patterns
+/// (`Addr::SocketAddr(addr)` → `Addr`), then walks up to the enclosing
+/// `source_file` and checks every `enum_item` whose name is one of those: if any
+/// has a cfg-gated variant, the wildcard arm is portability-mandated. Bare
+/// unqualified variants (no `::`) carry no enum name to resolve and are ignored
+/// here — the match then falls through to normal flagging.
+fn match_covers_same_file_cfg_gated_enum(
+    match_node: tree_sitter::Node,
+    enum_like_arms: &[tree_sitter::Node],
+    source: &[u8],
+) -> bool {
+    let names: Vec<&str> = enum_like_arms
+        .iter()
+        .filter_map(|p| qualified_enum_name(*p, source))
+        .collect();
+    if names.is_empty() {
+        return false;
+    }
+    let mut current = match_node.parent();
+    while let Some(node) = current {
+        if node.kind() == "source_file" {
+            return source_file_has_cfg_gated_enum(node, &names, source);
+        }
+        current = node.parent();
+    }
+    false
+}
+
+/// Extract the enum type name from a qualified variant pattern: the path
+/// segment immediately before the final `::variant` (`Addr::SocketAddr` →
+/// `Addr`, `crate::net::Addr::Unix` → `Addr`). Returns `None` for unqualified
+/// patterns (no `::`) and literal/range patterns, which carry no enum name.
+fn qualified_enum_name<'a>(pattern: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    // Unwrap the `match_pattern` wrapper, mirroring `pattern_is_enum_like`.
+    if pattern.kind() == "match_pattern" {
+        let mut cursor = pattern.walk();
+        let inner = pattern.named_children(&mut cursor).next()?;
+        return qualified_enum_name(inner, source);
+    }
+    let text = pattern.utf8_text(source).ok()?.trim();
+    // Strip tuple-struct / struct fields: `Addr::Unix(_)` → `Addr::Unix`,
+    // `Foo::Bar { .. }` → `Foo::Bar`.
+    let head = text.split(['(', '{', ' ']).next().unwrap_or(text).trim();
+    let mut segments = head.rsplit("::");
+    // Discard the variant segment; the one before it is the enum name.
+    segments.next()?;
+    let enum_name = segments.next()?.trim();
+    if enum_name.is_empty() {
+        None
+    } else {
+        Some(enum_name)
+    }
+}
+
+/// True if any `enum_item` anywhere in `source_file` whose name is in `names`
+/// has a `#[cfg(...)]`-gated variant. Descends the whole subtree so an enum
+/// nested in a `mod` is found, not only top-level definitions.
+fn source_file_has_cfg_gated_enum(
+    source_file: tree_sitter::Node,
+    names: &[&str],
+    source: &[u8],
+) -> bool {
+    let mut cursor = source_file.walk();
+    let mut stack = vec![source_file];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "enum_item"
+            && node
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok())
+                .is_some_and(|name| names.contains(&name))
+            && enum_has_cfg_gated_variant(node, source)
+        {
+            return true;
+        }
+        for child in node.named_children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -759,6 +857,37 @@ mod tests {
         // `use Direction::*`) still need explicit arms.
         let src = "use Direction::*; \
                    fn f(x: Direction) -> i32 { match x { North => 1, South => 2, _ => 0 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_wildcard_on_same_file_cfg_gated_enum() {
+        // Issue #3873: the poem `Addr` shape, collapsed into one file. The
+        // enum has a `#[cfg(unix)] Unix(..)` variant, so listing every variant
+        // explicitly fails to compile on non-unix targets — the `_` arm is the
+        // portable, compiler-required way to match it.
+        let src = "pub enum Addr { \
+                   SocketAddr(S), \
+                   #[cfg(unix)] Unix(U), \
+                   Custom(C), \
+                   } \
+                   fn real_ip(a: Addr) -> i32 { match a { \
+                   Addr::SocketAddr(addr) => 1, _ => 0 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_wildcard_on_same_file_enum_without_cfg_gated_variant() {
+        // Issue #3873 negative space: an enum defined in the same file with NO
+        // cfg-gated variant has a target-stable variant set, so the wildcard
+        // is a real catch-all and must still flag.
+        let src = "pub enum Addr { \
+                   SocketAddr(S), \
+                   Unix(U), \
+                   Custom(C), \
+                   } \
+                   fn real_ip(a: Addr) -> i32 { match a { \
+                   Addr::SocketAddr(addr) => 1, _ => 0 } }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
