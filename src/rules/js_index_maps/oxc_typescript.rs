@@ -148,11 +148,22 @@ fn is_set_or_map_constructor(new_expr: &NewExpression<'_>) -> bool {
     )
 }
 
+/// True when `call` is an iterator-method call (`.forEach`/`.map`/…) whose
+/// callback the rule treats as a loop body.
+fn call_is_iterator_method(call: &CallExpression<'_>) -> bool {
+    matches!(
+        &call.callee,
+        Expression::StaticMemberExpression(member)
+            if ITERATOR_METHODS.contains(&member.property.name.as_str())
+    )
+}
+
 fn is_inside_loop<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
-    for ancestor in semantic.nodes().ancestors(node.id()) {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
         match ancestor.kind() {
             AstKind::ForStatement(_)
             | AstKind::ForInStatement(_)
@@ -165,12 +176,25 @@ fn is_inside_loop<'a>(
             AstKind::Function(f) if f.id.is_some() => return false,
             AstKind::Class(_) => return false,
 
+            // Arrow / anonymous-function boundaries stop the walk: a callback
+            // passed to an ordinary call (`bench(...)`/`group(...)`) does not run
+            // per enclosing-loop iteration. The exception is an iterator-method
+            // callback (`.forEach`/`.map`/…), which IS a loop body — leave the
+            // walk to the `CallExpression` arm below, which returns `true`.
+            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
+                if let AstKind::CallExpression(call) = nodes.parent_node(ancestor.id()).kind()
+                    && call_is_iterator_method(call)
+                {
+                    continue;
+                }
+                return false;
+            }
+
             // .forEach() / .map() etc. count as loops.
             AstKind::CallExpression(call) => {
-                if let Expression::StaticMemberExpression(member) = &call.callee
-                    && ITERATOR_METHODS.contains(&member.property.name.as_str()) {
-                        return true;
-                    }
+                if call_is_iterator_method(call) {
+                    return true;
+                }
             }
 
             _ => {}
@@ -280,6 +304,27 @@ const names = items.map(i => i.name);
 function process() {
     const item = arr.find(x => x.id === id);
     return item;
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_find_in_anon_callback_to_ordinary_call_inside_loop() {
+        // Regression for #3844: `bench(...)`/`group(...)` are ordinary calls, not
+        // iterator methods — their callbacks are not run per loop iteration, and
+        // `router.find()` here is a MedleyRouter method, not Array.prototype.find.
+        assert!(
+            run(r#"
+for (const benchRoute of benchRoutes) {
+    group(`${benchRoute.method} ${benchRoute.path}`, () => {
+        bench('MedleyRouter', () => {
+            const router = new MedleyRouter();
+            const match = router.find(benchRoute.path);
+            match.store[benchRoute.method];
+        });
+    });
 }
 "#)
             .is_empty()
