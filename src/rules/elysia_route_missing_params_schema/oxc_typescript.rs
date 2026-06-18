@@ -11,30 +11,6 @@ pub struct Check;
 
 const ROUTE_METHODS: &[&str] = &["get", "post", "put", "patch", "delete", "head", "options"];
 
-/// Returns true if the identifier resolves to a binding imported from `"msw"` or `"msw/*"`.
-fn ident_is_from_msw<'a>(
-    ident: &oxc_ast::ast::IdentifierReference<'a>,
-    semantic: &'a oxc_semantic::Semantic<'a>,
-) -> bool {
-    let Some(ref_id) = ident.reference_id.get() else {
-        return false;
-    };
-    let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-        return false;
-    };
-    let decl_node_id = scoping.symbol_declaration(sym_id);
-    let nodes = semantic.nodes();
-    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
-    {
-        if let AstKind::ImportDeclaration(import) = kind {
-            let src = import.source.value.as_str();
-            return src == "msw" || src.starts_with("msw/");
-        }
-    }
-    false
-}
-
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -64,9 +40,7 @@ impl OxcCheck for Check {
         }
 
         // Skip http.<method>(...) when the receiver binding is imported from msw.
-        if let Expression::Identifier(obj) = &member.object
-            && ident_is_from_msw(obj, semantic)
-        {
+        if crate::rules::elysia_helpers::member_receiver_is_from_msw(member, semantic) {
             return;
         }
 
