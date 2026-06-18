@@ -1,8 +1,6 @@
 //! zod-no-coerce-on-financial — forbid `z.coerce.*` on money/price/amount/currency fields.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

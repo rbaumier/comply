@@ -3,8 +3,6 @@
 //! animation and removed after; leaving it permanently wastes GPU memory.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -1,8 +1,6 @@
 //! template-indent — flag template literals with inherited indentation.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::rules::backend::Backend;

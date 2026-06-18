@@ -1,8 +1,6 @@
 //! ts-branded-type-no-direct-cast — forbid `as BrandedType` outside validators.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

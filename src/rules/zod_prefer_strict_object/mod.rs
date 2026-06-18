@@ -1,8 +1,6 @@
 //! zod-prefer-strict-object — prefer `z.strictObject({...})` over `z.object({...}).strict()`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

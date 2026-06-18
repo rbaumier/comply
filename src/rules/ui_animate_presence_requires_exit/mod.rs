@@ -2,8 +2,6 @@
 //! `<AnimatePresence>` must declare an `exit` prop or it will snap out.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -1,8 +1,6 @@
 //! throw-new-error — require `new` when creating an error.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

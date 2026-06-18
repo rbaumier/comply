@@ -2,8 +2,6 @@
 //! reference an env var or be a literal at least 32 characters long.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

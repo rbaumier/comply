@@ -1,8 +1,6 @@
 //! ts-class-literal-property-style — enforce consistent literal property style on classes.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

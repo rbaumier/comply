@@ -1,8 +1,6 @@
 //! vitest-no-disabled-tests — flag `xtest` / `xit` / `xdescribe` and `test.skip` variants.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

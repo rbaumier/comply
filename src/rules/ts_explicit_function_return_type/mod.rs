@@ -1,8 +1,6 @@
 //! ts-explicit-function-return-type — require explicit return types on functions.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

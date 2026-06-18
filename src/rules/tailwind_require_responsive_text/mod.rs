@@ -3,8 +3,6 @@
 //! `sm:text-*` / `md:text-*` / `lg:text-*` when the base size is big.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

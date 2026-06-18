@@ -1,8 +1,6 @@
 //! testing-no-undefined-mock-var — flag `jest.fn()` / `vi.fn()` mocks that are never configured.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

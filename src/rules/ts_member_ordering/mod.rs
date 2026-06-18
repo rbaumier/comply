@@ -1,8 +1,6 @@
 //! ts-member-ordering — require a consistent order for class/interface members.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

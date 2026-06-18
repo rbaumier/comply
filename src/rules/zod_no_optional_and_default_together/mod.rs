@@ -2,8 +2,6 @@
 //! `.default()` (or vice versa) is redundant and hides intent.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

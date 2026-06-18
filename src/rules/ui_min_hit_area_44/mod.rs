@@ -1,8 +1,6 @@
 //! ui-min-hit-area-44 — interactive elements should be ≥ 44×44 CSS px.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

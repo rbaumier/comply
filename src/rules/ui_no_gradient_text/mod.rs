@@ -2,8 +2,6 @@
 //! creates gradient text that is often inaccessible and hard to read.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

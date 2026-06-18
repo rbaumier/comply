@@ -4,8 +4,6 @@
 //! is what reads as the active-tab indicator.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -4,8 +4,6 @@
 //! class (e.g. `bg-background` instead of `bg-white dark:bg-zinc-900`).
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

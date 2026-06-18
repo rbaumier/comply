@@ -1,8 +1,6 @@
 //! tanstack-start-session-cookie-secure — `useSession({ cookie })` must set `secure`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

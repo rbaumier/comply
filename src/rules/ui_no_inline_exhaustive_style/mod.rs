@@ -2,8 +2,6 @@
 //! properties should be extracted to a CSS class or styled component.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

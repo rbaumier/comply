@@ -1,8 +1,6 @@
 //! ts-triple-slash-reference — disallow `/// <reference ... />` directives.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

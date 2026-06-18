@@ -1,8 +1,6 @@
 //! testing-prefer-msw — flag direct HTTP-client mocking in tests.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

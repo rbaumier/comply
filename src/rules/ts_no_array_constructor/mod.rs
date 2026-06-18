@@ -1,8 +1,6 @@
 //! ts-no-array-constructor — disallow generic `Array` constructors (TS extension).
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

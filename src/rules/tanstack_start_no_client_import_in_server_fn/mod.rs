@@ -1,8 +1,6 @@
 //! tanstack-start-no-client-import-in-server-fn
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

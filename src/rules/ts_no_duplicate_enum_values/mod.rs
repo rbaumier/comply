@@ -1,8 +1,6 @@
 //! ts-no-duplicate-enum-values — flag duplicate values in enum declarations.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

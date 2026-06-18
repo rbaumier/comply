@@ -2,8 +2,6 @@
 //! from a schema that applies `.transform()`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

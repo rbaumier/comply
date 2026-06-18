@@ -1,8 +1,6 @@
 //! valid-describe-callback — require describe callbacks to be sync, parameter-less, and not return a value.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

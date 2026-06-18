@@ -1,8 +1,6 @@
 //! ts-prefer-for-of — prefer `for-of` over index-only `for` loops.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -1,8 +1,6 @@
 //! zod-trim-before-min — `.min(1)` without `.trim()` accepts whitespace-only strings.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

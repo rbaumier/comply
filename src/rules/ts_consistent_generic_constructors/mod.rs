@@ -1,8 +1,6 @@
 //! ts-consistent-generic-constructors — enforce generic type arguments on constructor call site.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

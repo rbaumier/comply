@@ -2,8 +2,6 @@
 //! `const foo = () => {}` at module top-level.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

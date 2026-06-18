@@ -1,8 +1,6 @@
 //! zod-record-two-args — require `z.record(keySchema, valueSchema)` (Zod v4).
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

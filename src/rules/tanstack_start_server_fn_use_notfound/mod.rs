@@ -2,8 +2,6 @@
 //! `throw new Error('not found')` in server functions.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

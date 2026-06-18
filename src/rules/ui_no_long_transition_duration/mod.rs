@@ -2,8 +2,6 @@
 //! above 1s feel sluggish and block user interaction.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
