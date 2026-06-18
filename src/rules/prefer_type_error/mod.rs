@@ -1,8 +1,6 @@
 //! prefer-type-error — enforce throwing TypeError in type-checking conditions.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

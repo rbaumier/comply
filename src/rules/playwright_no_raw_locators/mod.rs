@@ -1,8 +1,6 @@
 //! playwright-no-raw-locators — flag `page.locator()` with CSS selectors.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -1,8 +1,6 @@
 //! playwright-expect-expect — enforce assertions in test bodies.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

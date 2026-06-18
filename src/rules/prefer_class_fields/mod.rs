@@ -1,8 +1,6 @@
 //! prefer-class-fields — flag `this.x = <literal>` in constructors.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

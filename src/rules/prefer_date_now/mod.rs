@@ -1,8 +1,6 @@
 //! prefer-date-now — prefer `Date.now()` over `new Date().getTime()` and similar patterns.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

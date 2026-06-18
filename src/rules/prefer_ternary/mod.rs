@@ -1,8 +1,6 @@
 //! prefer-ternary — flag `if (c) { x = a; } else { x = b; }` -> ternary.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

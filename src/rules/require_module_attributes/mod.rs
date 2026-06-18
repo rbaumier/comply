@@ -1,8 +1,6 @@
 //! require-module-attributes — flag imports/exports with empty `with {}`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

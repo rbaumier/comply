@@ -8,8 +8,6 @@
 //! have no `.remove()`, where the suggestion would throw at runtime.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

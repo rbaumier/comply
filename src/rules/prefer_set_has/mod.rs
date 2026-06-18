@@ -1,8 +1,6 @@
 //! prefer-set-has — flag array `.includes()` inside loops -> use `Set#has()`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

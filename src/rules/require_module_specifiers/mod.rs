@@ -1,8 +1,6 @@
 //! require-module-specifiers — flag import/export with empty specifiers.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

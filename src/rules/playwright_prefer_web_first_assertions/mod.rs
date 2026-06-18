@@ -1,8 +1,6 @@
 //! playwright-prefer-web-first-assertions — flag manual boolean assertions on locator methods.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

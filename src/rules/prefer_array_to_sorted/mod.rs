@@ -1,8 +1,6 @@
 //! Prefer `toSorted()` over `[...arr].sort()` (ES2023).
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

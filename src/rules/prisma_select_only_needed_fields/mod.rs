@@ -1,8 +1,6 @@
 //! prisma-select-only-needed-fields — `findMany` without `select`/`include`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

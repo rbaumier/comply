@@ -3,8 +3,6 @@
 //! so the router only ships the bundle the user actually navigates to.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

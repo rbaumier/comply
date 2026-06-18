@@ -7,8 +7,6 @@
 
 mod oxc_typescript;
 mod rust;
-#[cfg(test)]
-mod typescript;
 
 #[cfg(test)]
 mod shared_tests;

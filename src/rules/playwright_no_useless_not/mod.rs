@@ -1,8 +1,6 @@
 //! playwright-no-useless-not — disallow `not` when a direct matcher exists.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

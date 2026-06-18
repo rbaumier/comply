@@ -1,8 +1,6 @@
 //! prefer-export-from — use `export { x } from` for re-exports.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
