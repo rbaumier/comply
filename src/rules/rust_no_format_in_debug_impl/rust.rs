@@ -5,7 +5,7 @@
 //! body for `format!` macro invocations. Each one is a wasted
 //! allocation that should be a `write!`.
 //!
-//! Two `format!` shapes are allowed:
+//! Three `format!` shapes are allowed:
 //!
 //! - One that supplies the *name* argument of a `debug_struct(...)` /
 //!   `debug_tuple(...)` call — those methods require a runtime `&str`
@@ -16,6 +16,11 @@
 //!   (`v[0]`). Those mark an intentionally summarized rendering of large
 //!   data (embedding vectors, result sets) where printing the full
 //!   structure would dump unbounded output.
+//! - One that produces an owned `String` *value* rather than a write sink:
+//!   the initializer of a `let` binding (`let s = format!(...)`) or the
+//!   return value of a closure (`unwrap_or_else(|e| format!(...))`,
+//!   `.map(|i| { ...; format!(...) })`). There is no formatter in scope to
+//!   `write!` to — the closure or binding must yield an owned `String`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -210,6 +215,74 @@ fn is_dot(node: Option<&tree_sitter::Node>, source: &[u8]) -> bool {
     node.is_some_and(|n| n.utf8_text(source) == Ok("."))
 }
 
+/// True when the `format!` produces an owned `String` *value* — bound to a
+/// `let` or returned from a closure — rather than streamed into a formatter.
+/// In those positions there is no `f` to `write!` to: a closure returning
+/// `String` (`unwrap_or_else(|e| format!(...))`, `.map(|i| { ...; format!(...) })`)
+/// and a `let s = format!(...)` binding must yield an owned `String`, so the
+/// `format!` cannot be rewritten as `write!`.
+///
+/// The macro may reach its value slot directly, behind a `&` reference, or via
+/// a `format!(...).as_str()`-style adapter, mirroring the climb in
+/// [`is_debug_builder_name_arg`].
+fn format_is_owned_string_value(format_node: tree_sitter::Node) -> bool {
+    let value = climb_value_wrappers(format_node);
+    let Some(parent) = value.parent() else {
+        return false;
+    };
+    // `let s = format!(...);` — the macro is the initializer of a binding.
+    if parent.kind() == "let_declaration"
+        && parent.child_by_field_name("value") == Some(value)
+    {
+        return true;
+    }
+    // `|e| format!(...)` — expression-body closure returning the value.
+    if parent.kind() == "closure_expression"
+        && parent.child_by_field_name("body") == Some(value)
+    {
+        return true;
+    }
+    // `|i| { ...; format!(...) }` — the value is the tail expression of a block
+    // (last named child, no trailing `;`) whose parent is a closure.
+    if parent.kind() == "block"
+        && is_block_tail_expression(parent, value)
+        && parent
+            .parent()
+            .is_some_and(|grand| grand.kind() == "closure_expression")
+    {
+        return true;
+    }
+    false
+}
+
+/// Walks up from `node` through value-flow wrappers — a `&` reference and
+/// `.as_str()`-style adapter chains — returning the outermost node that still
+/// denotes the same string value. Mirrors the wrapper climb in
+/// [`is_debug_builder_name_arg`].
+fn climb_value_wrappers(node: tree_sitter::Node<'_>) -> tree_sitter::Node<'_> {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        match parent.kind() {
+            "reference_expression" => current = parent,
+            "field_expression" if parent.child_by_field_name("value") == Some(current) => {
+                current = parent;
+            }
+            "call_expression" if parent.child_by_field_name("function") == Some(current) => {
+                current = parent;
+            }
+            _ => break,
+        }
+    }
+    current
+}
+
+/// `child` is the tail expression of `block` — its last named child, with no
+/// trailing `;` (a trailing-semicolon statement would not be the block's value).
+fn is_block_tail_expression(block: tree_sitter::Node, child: tree_sitter::Node) -> bool {
+    let count = block.named_child_count();
+    count > 0 && block.named_child(count - 1) == Some(child)
+}
+
 fn collect_format_macros_in(
     body: tree_sitter::Node,
     source: &[u8],
@@ -224,6 +297,7 @@ fn collect_format_macros_in(
             && name == "format"
             && !is_debug_builder_name_arg(node, source)
             && !format_args_contain_truncation_signal(node, source)
+            && !format_is_owned_string_value(node)
         {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
@@ -401,6 +475,64 @@ mod tests {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 debug.field("name", &format!("{}", self.raw));
                 debug.finish()
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_format_as_unwrap_or_else_closure_return() {
+        // databend: the `format!` is the fallback value of a fallible
+        // conversion. The closure must return an owned `String`; there is no
+        // formatter in scope to `write!` to. See #3798.
+        let source = r#"impl Debug for Foo {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                let geom = conv(self.s).unwrap_or_else(|e| format!("err: {:?}", e));
+                write!(f, "{geom:?}")
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_format_as_map_closure_block_tail() {
+        // databend: the `format!` is the tail expression of a `.map(|i| {...})`
+        // closure yielding `String` items to `debug_list().entries(...)`. See
+        // #3798.
+        let source = r#"impl Debug for Foo {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.debug_list().entries((0..self.n).map(|i| {
+                    let s = self.get(i);
+                    format!("0x{}", s)
+                })).finish()
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_format_as_let_initializer() {
+        // An owned `String` bound for later use is not a write sink. See #3798.
+        let source = r#"impl Debug for Foo {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                let s = format!("{:?}", self.x);
+                write!(f, "{s}")
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_format_statement_in_closure_block_not_tail() {
+        // A `format!(...);` statement (trailing `;`, not the block tail) inside
+        // a closure is a discarded throwaway allocation — the owned-value
+        // exemption must not reach it.
+        let source = r#"impl Debug for Foo {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.debug_list().entries((0..self.n).map(|i| {
+                    format!("discarded {}", i);
+                    self.get(i)
+                })).finish()
             }
         }"#;
         assert_eq!(run_on(source).len(), 1);
