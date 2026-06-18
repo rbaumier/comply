@@ -1100,6 +1100,109 @@ fn call_method_returns_bool(call: Node, source: &[u8]) -> bool {
         })
 }
 
+/// True if `cast` (a `type_cast_expression`) reads the discriminant of a
+/// fieldless (C-like) enum — `<enum value> as <integer>`. For such an enum the
+/// `as`-cast is the language-blessed way to obtain the discriminant: no
+/// `From<Enum> for {integer}` / `TryFrom<Enum> for {integer}` impl exists, so
+/// the rules' usual `from`/`try_from` remediations would not compile.
+///
+/// The operand (the `value` field of the cast) qualifies when it is provably a
+/// fieldless-enum value, recognized from the AST without type inference:
+///
+/// - `self` inside an `impl <Enum>` block whose target `<Enum>` is a fieldless
+///   `enum_item` defined in the same file. `self as <integer>` only type-checks
+///   when `Self` is a fieldless enum (or a primitive), so the shape is
+///   unambiguous; or
+/// - a `scoped_identifier` `EnumName::Variant` where `EnumName` is a fieldless
+///   `enum_item` in the file.
+///
+/// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`, which both
+/// otherwise flag the cast because a fieldless-enum operand resolves to no
+/// numeric type and falls through to their conservative "unknown source" branch.
+pub fn cast_operand_is_enum_discriminant(cast: Node, source: &[u8]) -> bool {
+    let Some(value) = cast.child_by_field_name("value") else {
+        return false;
+    };
+    match value.kind() {
+        "self" => self_enum_is_fieldless(cast, source),
+        "scoped_identifier" => value
+            .child_by_field_name("path")
+            .and_then(|path| path.utf8_text(source).ok())
+            .is_some_and(|enum_name| {
+                find_enum_item(cast, enum_name, source).is_some_and(enum_is_fieldless)
+            }),
+        _ => false,
+    }
+}
+
+/// True if `node`'s nearest enclosing `impl_item` targets a fieldless
+/// `enum_item` (by `type_identifier` name) defined in the same file.
+fn self_enum_is_fieldless(node: Node, source: &[u8]) -> bool {
+    let mut current = node.parent();
+    while let Some(ancestor) = current {
+        if ancestor.kind() == "impl_item" {
+            return ancestor
+                .child_by_field_name("type")
+                .filter(|target| target.kind() == "type_identifier")
+                .and_then(|target| target.utf8_text(source).ok())
+                .and_then(|enum_name| find_enum_item(node, enum_name, source))
+                .is_some_and(enum_is_fieldless);
+        }
+        current = ancestor.parent();
+    }
+    false
+}
+
+/// The first `enum_item` named `name` in the file containing `node`, or `None`.
+fn find_enum_item<'a>(node: Node<'a>, name: &str, source: &[u8]) -> Option<Node<'a>> {
+    let mut root = node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    let mut cursor = root.walk();
+    let mut stack = vec![root];
+    while let Some(current) = stack.pop() {
+        if current.kind() == "enum_item"
+            && current
+                .child_by_field_name("name")
+                .and_then(|name_node| name_node.utf8_text(source).ok())
+                == Some(name)
+        {
+            return Some(current);
+        }
+        for child in current.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    None
+}
+
+/// True if `enum_item` is fieldless — no variant carries a payload. A payload is
+/// a `field_declaration_list` (struct variant) or `ordered_field_declaration_list`
+/// (tuple variant) child of an `enum_variant`. A discriminant-only variant
+/// (`Variant = 1`) carries no such child and stays fieldless.
+fn enum_is_fieldless(enum_item: Node) -> bool {
+    let Some(body) = enum_item.child_by_field_name("body") else {
+        return false;
+    };
+    let mut variant_cursor = body.walk();
+    for variant in body.named_children(&mut variant_cursor) {
+        if variant.kind() != "enum_variant" {
+            continue;
+        }
+        let mut field_cursor = variant.walk();
+        if variant.named_children(&mut field_cursor).any(|child| {
+            matches!(
+                child.kind(),
+                "field_declaration_list" | "ordered_field_declaration_list"
+            )
+        }) {
+            return false;
+        }
+    }
+    true
+}
+
 /// True if `node` is a const-or-path pattern that binds nothing — it pins a
 /// match arm to one specific known value rather than capturing it.
 ///
@@ -1464,6 +1567,50 @@ mod tests {
             let cast = first_type_cast_expression(tree.root_node())
                 .expect("source should contain a cast");
             assert_eq!(is_in_enum_discriminant(cast), expected, "src: {src}");
+        }
+    }
+
+    #[test]
+    fn cast_operand_is_enum_discriminant_distinguishes_fieldless_enum_reads() {
+        let cases = [
+            // `self as u8` in an `impl` of a fieldless enum reads the discriminant.
+            (
+                "enum E { A, B } impl E { fn bit(self) -> u32 { 1 << (self as u8) } }",
+                true,
+            ),
+            // `EnumName::Variant as u8` of a fieldless enum.
+            ("enum E { A, B, C } fn f() -> u8 { E::A as u8 }", true),
+            // Discriminant-only variants are still fieldless.
+            (
+                "enum E { A = 1, B = 2 } impl E { fn bit(self) -> u8 { self as u8 } }",
+                true,
+            ),
+            // A data-carrying enum: the `as`-cast is not a discriminant read.
+            (
+                "enum E { A(u32), B } impl E { fn bit(self) -> u8 { self as u8 } }",
+                false,
+            ),
+            // `self` in an `impl` of a struct, not an enum.
+            (
+                "struct S; impl S { fn bit(self) -> u8 { self as u8 } }",
+                false,
+            ),
+            // A plain numeric operand is never an enum discriminant.
+            ("fn f(x: u32) -> u8 { x as u8 }", false),
+            // `EnumName::Variant` of a data-carrying enum.
+            ("enum E { A(u32), B } fn f() -> u8 { E::B as u8 }", false),
+            // A scoped path whose root is not an enum in this file.
+            ("fn f() -> u8 { Foo::Bar as u8 }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_type_cast_expression(tree.root_node())
+                .expect("source should contain a cast");
+            assert_eq!(
+                cast_operand_is_enum_discriminant(cast, src.as_bytes()),
+                expected,
+                "src: {src}"
+            );
         }
     }
 

@@ -29,8 +29,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cast_operand_is_bool, cast_operand_is_collection_size, find_identifier_type,
-    is_in_enum_discriminant, is_in_test_context,
+    cast_operand_is_bool, cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
+    find_identifier_type, is_in_enum_discriminant, is_in_test_context,
 };
 
 const KINDS: &[&str] = &["type_cast_expression"];
@@ -93,6 +93,9 @@ impl AstCheck for Check {
             return;
         }
         if cast_operand_is_bool(node, source_bytes) {
+            return;
+        }
+        if cast_operand_is_enum_discriminant(node, source_bytes) {
             return;
         }
         let source_type = source_numeric_type(node, source_bytes);
@@ -470,6 +473,29 @@ mod tests {
         // A cast inside an `impl Enum` method is a runtime body, not a
         // discriminant — it must keep flagging.
         let src = "enum E { A } impl E { fn f(&self, x: u32) -> i8 { x as i8 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_3832_self_as_u8_in_impl_fieldless_enum_not_flagged() {
+        // `self as u8` reads a fieldless enum's discriminant; `as` is the only
+        // conversion that compiles (no `From`/`TryFrom<ArgSettings> for u8`).
+        let src = "enum ArgSettings { Required, Multiple, Hidden } \
+                   impl ArgSettings { fn bit(self) -> u32 { 1 << (self as u8) } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_3832_scoped_variant_of_fieldless_enum_not_flagged() {
+        let src = "enum E { A, B, C } fn f() -> u8 { E::A as u8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_3832_self_as_u8_in_impl_data_enum_still_flagged() {
+        // A data-carrying enum has no discriminant `as`-cast semantics, so the
+        // exemption must not apply.
+        let src = "enum E { A(u32), B } impl E { fn bit(self) -> u8 { self as u8 } }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
