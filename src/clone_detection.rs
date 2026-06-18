@@ -735,7 +735,8 @@ fn grammar_family(lang: Language) -> Option<u8> {
         | Language::Sql
         | Language::GraphQl
         | Language::Svelte
-        | Language::Markdown => None,
+        | Language::Markdown
+        | Language::Astro => None,
     }
 }
 

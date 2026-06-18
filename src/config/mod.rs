@@ -331,7 +331,7 @@ impl Config {
     }
 }
 
-const ALL_LANGUAGES: [Language; 14] = [
+const ALL_LANGUAGES: [Language; 15] = [
     Language::TypeScript,
     Language::Tsx,
     Language::JavaScript,
@@ -346,6 +346,7 @@ const ALL_LANGUAGES: [Language; 14] = [
     Language::Sql,
     Language::GraphQl,
     Language::Markdown,
+    Language::Astro,
 ];
 
 /// Extract language-qualified rule keys (e.g. `"id-length.ts"`,
