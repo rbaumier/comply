@@ -24,7 +24,12 @@
 //! Matches whose enum-like arms all reference a known stdlib closed or
 //! non_exhaustive enum — `Result` (`Ok`/`Err`), `Option` (`Some`/`None`),
 //! or `std::io::ErrorKind` — are exempt: the wildcard there is idiomatic
-//! or compiler-mandated, and all arms of a `match` share one type.
+//! or compiler-mandated, and all arms of a `match` share one type. A glob
+//! or brace import (`use std::io::ErrorKind::*;`,
+//! `use std::io::ErrorKind::{NotFound, ..};`) strips the qualifier, leaving
+//! bare variant heads (`Unsupported`, `WriteZero`); these are recognized as
+//! ErrorKind when the file carries such an import and the head names a known
+//! ErrorKind variant.
 //!
 //! Matches whose enum-like arms are all externally rooted — every arm path
 //! leads with a lowercase crate-name segment (`multer::Error::FieldSizeExceeded`,
@@ -126,6 +131,13 @@ impl AstCheck for Check {
         if enum_like_arms.is_empty() {
             return;
         }
+        // A glob (`use std::io::ErrorKind::*;`) or brace-list
+        // (`use std::io::ErrorKind::{NotFound, ..};`) import strips the
+        // `ErrorKind::` qualifier from arm heads, leaving bare variant names
+        // (`Unsupported`, `WriteZero`). Detecting the import lets the stdlib
+        // exemption below still recognize those bare heads as ErrorKind.
+        let error_kind_unqualified =
+            ctx.source.contains("ErrorKind::*") || ctx.source.contains("ErrorKind::{");
         // All arms of a `match` necessarily cover the same type, so when
         // every enum-like arm references a known stdlib closed or
         // non_exhaustive enum, the scrutinee is that stdlib type and the
@@ -133,7 +145,7 @@ impl AstCheck for Check {
         // (ErrorKind) — never a silent catch-all for a project enum.
         if enum_like_arms
             .iter()
-            .all(|p| references_stdlib_closed_enum(*p, source_bytes))
+            .all(|p| references_stdlib_closed_enum(*p, source_bytes, error_kind_unqualified))
         {
             return;
         }
@@ -318,17 +330,55 @@ fn is_screaming_snake_const(segment: &str) -> bool {
         && !segment.chars().any(|c| c.is_ascii_lowercase())
 }
 
+/// Stable `std::io::ErrorKind` variant names. Used only to recognize a bare
+/// (unqualified) arm head as an ErrorKind variant when the file imports the
+/// enum unqualified (`use std::io::ErrorKind::*;` or a brace list).
+const ERROR_KIND_VARIANTS: &[&str] = &[
+    "NotFound",
+    "PermissionDenied",
+    "ConnectionRefused",
+    "ConnectionReset",
+    "ConnectionAborted",
+    "NotConnected",
+    "AddrInUse",
+    "AddrNotAvailable",
+    "BrokenPipe",
+    "AlreadyExists",
+    "WouldBlock",
+    "InvalidInput",
+    "InvalidData",
+    "TimedOut",
+    "WriteZero",
+    "Interrupted",
+    "Unsupported",
+    "UnexpectedEof",
+    "OutOfMemory",
+    "Other",
+];
+
 /// True if `pattern` references a variant of a known stdlib closed or
 /// non_exhaustive enum: `Result` (`Ok`/`Err`), `Option` (`Some`/`None`),
 /// or `std::io::ErrorKind`. Matching is purely syntactic: the final path
 /// segment of the variant head must be exactly one of the Result/Option
 /// constructors, or the head must contain `ErrorKind::`.
-fn references_stdlib_closed_enum(pattern: tree_sitter::Node, source: &[u8]) -> bool {
+///
+/// When `error_kind_unqualified` is true (the file glob- or brace-imports
+/// `std::io::ErrorKind`, stripping the `ErrorKind::` qualifier), a bare head
+/// that names a known `ErrorKind` variant (`Unsupported`, `WriteZero`) also
+/// qualifies — the scrutinee is the `#[non_exhaustive]` `ErrorKind`, so the
+/// `_` arm is compiler-mandated. The exemption keys on both the import and a
+/// known variant name, so a local enum whose variants are not ErrorKind names
+/// is unaffected.
+fn references_stdlib_closed_enum(
+    pattern: tree_sitter::Node,
+    source: &[u8],
+    error_kind_unqualified: bool,
+) -> bool {
     // Unwrap the `match_pattern` wrapper, mirroring `pattern_is_enum_like`.
     if pattern.kind() == "match_pattern" {
         let mut cursor = pattern.walk();
         if let Some(inner) = pattern.named_children(&mut cursor).next() {
-            return references_stdlib_closed_enum(inner, source);
+            return references_stdlib_closed_enum(inner, source, error_kind_unqualified);
         }
         return false;
     }
@@ -337,7 +387,7 @@ fn references_stdlib_closed_enum(pattern: tree_sitter::Node, source: &[u8]) -> b
         let mut cursor = pattern.walk();
         return pattern
             .named_children(&mut cursor)
-            .all(|child| references_stdlib_closed_enum(child, source));
+            .all(|child| references_stdlib_closed_enum(child, source, error_kind_unqualified));
     }
 
     let Ok(text) = pattern.utf8_text(source) else {
@@ -352,7 +402,12 @@ fn references_stdlib_closed_enum(pattern: tree_sitter::Node, source: &[u8]) -> b
         return true;
     }
     // `std::io::ErrorKind` is #[non_exhaustive]: a `_` arm is mandatory.
-    head.contains("ErrorKind::")
+    if head.contains("ErrorKind::") {
+        return true;
+    }
+    // Unqualified import (`use std::io::ErrorKind::*;` / brace list): a bare
+    // head naming a known ErrorKind variant is the same #[non_exhaustive] enum.
+    error_kind_unqualified && ERROR_KIND_VARIANTS.contains(&last_seg)
 }
 
 /// True if `pattern`'s head path is rooted at a foreign-crate segment: its
@@ -986,6 +1041,51 @@ mod tests {
                    } \
                    fn real_ip(a: Addr) -> i32 { match a { \
                    Addr::SocketAddr(addr) => 1, _ => 0 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_glob_imported_error_kind_variants() {
+        // Issue #3717: `use std::io::ErrorKind::*;` strips the qualifier, so
+        // arm heads are bare `Unsupported`/`WriteZero`/etc. `ErrorKind` is
+        // #[non_exhaustive], so the `_` arm is compiler-mandated.
+        let src = "impl T for E { fn f(&self) -> bool {\n  \
+                   use std::io::ErrorKind::*;\n  \
+                   match self.kind() {\n    \
+                   Unsupported | WriteZero | InvalidInput => false,\n    \
+                   Interrupted | UnexpectedEof | ConnectionRefused => true,\n    \
+                   _ => false,\n  }\n} }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_brace_imported_error_kind_variants() {
+        // Issue #3717: a brace-list import (`use std::io::ErrorKind::{..};`)
+        // likewise strips the qualifier, leaving bare ErrorKind heads.
+        let src = "fn f(k: K) -> bool { use std::io::ErrorKind::{NotFound, PermissionDenied}; \
+                   match k { NotFound => true, PermissionDenied => false, _ => false } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_local_enum_without_error_kind_import() {
+        // Issue #3717 negative space: a local enum with a `_` arm and NO
+        // ErrorKind import still flags — bare `North`/`South` are not
+        // ErrorKind variant names, so the exemption does not apply.
+        let src = "enum Dir { North, South, East, West }\n\
+                   fn f(d: Dir) -> u8 { match d { North => 0, South => 1, _ => 2 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_unrelated_enum_despite_error_kind_glob_import() {
+        // Issue #3717 negative space: even with a `use std::io::ErrorKind::*;`
+        // glob in the file, a different enum whose bare variants are not
+        // ErrorKind names (`Red`/`Green`) still flags — the exemption keys on
+        // BOTH the import and a known ErrorKind variant name.
+        let src = "use std::io::ErrorKind::*;\n\
+                   enum Color { Red, Green, Blue }\n\
+                   fn f(c: Color) -> u8 { match c { Red => 0, Green => 1, _ => 2 } }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
