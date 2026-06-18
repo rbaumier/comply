@@ -6,7 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
 use std::path::{Path, PathBuf};
 
 const KINDS: &[&str] = &["enum_item"];
@@ -43,7 +43,9 @@ impl AstCheck for Check {
         }
         // Test-helper enum: `#[non_exhaustive]` would force wildcard match
         // arms in tests, defeating exhaustiveness checking. Not an external API.
-        if is_in_test_context(node, source_bytes) {
+        // A `pub enum` under a `tests/` directory (integration tests, fixtures)
+        // is likewise never a SemVer-bound published surface.
+        if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
             return;
         }
         // Binary-only crate (no `[lib]` target): no external consumers, so
@@ -416,6 +418,48 @@ mod tests {
         // checking in tests.
         let source = "#[cfg(test)]\nmod tests {\n    pub enum FixtureProvider { Git, Hg }\n}";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_pub_enum_under_tests_dir() {
+        // #3846: a `pub enum` in a file under a `tests/` directory (integration
+        // test, fixture) is not part of any crate's published API surface, so
+        // `#[non_exhaustive]` is meaningless there. Exempt via the shared
+        // `is_under_tests_dir` predicate, generalizing the inline `#[cfg(test)]`
+        // exemption to the `tests/` directory.
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"mylib\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+        let fixture_path = dir.path().join("tests/syntax-tests/source/Rust/output.rs");
+        let source = "pub enum OutputType { Pager, Stdout }";
+
+        assert!(crate::rules::test_helpers::run_rule(&Check, source, &fixture_path).is_empty());
+    }
+
+    #[test]
+    fn flags_pub_enum_in_published_lib_src() {
+        // #3846: the same published crate still flags a bare `pub enum` in its
+        // `src/` API surface — the `tests/` exemption must not leak to source.
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"mylib\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let src_path = dir.path().join("src/lib.rs");
+        let source = "pub enum OutputType { Pager, Stdout }";
+        fs::write(&src_path, source).unwrap();
+
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, source, &src_path).len(),
+            1
+        );
     }
 
     #[test]
