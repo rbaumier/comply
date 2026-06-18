@@ -11,9 +11,11 @@
 //! (`impl<T> RwLock<T>`, `unsafe impl<T> Send for RwLock<T>`), a function
 //! return type (`fn new() -> RwLock<T>`, `fn get(&self) -> &Mutex<T>`), a
 //! function parameter (`fn f(m: &Mutex<T>)` borrows a lock the caller owns),
-//! and a struct field — named (`struct S { m: Mutex<T> }`) or tuple
-//! (`struct S(Mutex<T>)`). None can be `Arc`-wrapped at that site: the lock is
-//! owned or wrapped elsewhere.
+//! a struct field — named (`struct S { m: Mutex<T> }`) or tuple
+//! (`struct S(Mutex<T>)`) — and a turbofish type argument in expression
+//! position (`v.downcast_ref::<Mutex<T>>()`, `size_of::<Mutex<T>>()`), which
+//! only names the type a generic fn operates on. None can be `Arc`-wrapped at
+//! that site: the lock is owned or wrapped elsewhere.
 //!
 //! Test code is exempted — tests commonly use bare `Mutex` for simple
 //! state without thread sharing, and rewriting them to `RefCell`
@@ -57,6 +59,17 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
             // `Mutex<T>` in the function body is reached through `body`, not
             // `parameter`, and stays flagged.
             "parameter" => return,
+            // A turbofish / generic argument in EXPRESSION position
+            // (`downcast_ref::<Mutex<T>>()`, `size_of::<Mutex<T>>()`) only NAMES
+            // the type — it is not an owning binding and cannot be `Arc`-wrapped
+            // here. A type argument nested inside another TYPE (`Vec<Mutex<T>>`,
+            // `Arc<Mutex<T>>`) IS a real usage, so keep walking (the
+            // `generic_type` arm handles the `Arc`-wrapper exemption).
+            "type_arguments" => {
+                if ancestor.parent().map(|p| p.kind()) != Some("generic_type") {
+                    return;
+                }
+            }
             // A type alias definition (`type Lists<T> = Mutex<…>;`) is not a
             // usage: callers wrap the alias in `Arc` at the use site, which the
             // alias body can't observe.
@@ -313,5 +326,29 @@ fn f() {
     #[test]
     fn allows_std_mutex_in_tuple_struct_field() {
         assert!(run("struct S(std::sync::Mutex<u32>);").is_empty());
+    }
+
+    #[test]
+    fn allows_mutex_in_downcast_turbofish() {
+        let src = "fn get<T: Clone + 'static>(v: &dyn std::any::Any) -> T { let m = v.downcast_ref::<Mutex<T>>().expect(\"d\"); m.lock().unwrap().clone() }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mutex_in_size_of_turbofish() {
+        assert!(run("fn f() -> usize { std::mem::size_of::<Mutex<u32>>() }").is_empty());
+    }
+
+    #[test]
+    fn allows_rwlock_in_downcast_turbofish() {
+        assert!(run("fn g(v: &dyn std::any::Any) { v.downcast_ref::<RwLock<u32>>(); }").is_empty());
+    }
+
+    #[test]
+    fn flags_mutex_nested_in_vec_local() {
+        assert_eq!(
+            run("fn f() { let v: Vec<Mutex<u32>> = Vec::new(); let _ = &v; }").len(),
+            1
+        );
     }
 }
