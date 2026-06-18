@@ -9,13 +9,13 @@
 use tree_sitter::Node;
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::is_pub;
+use crate::rules::rust_helpers::is_effectively_pub;
 
 crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
     let Some(body) = node.child_by_field_name("body") else { return; };
     let Ok(body_text) = body.utf8_text(source) else { return; };
     if !body_uses_fs(body_text) { return; }
-    if !is_pub(node, source) { return; }
+    if !is_effectively_pub(node, source) { return; }
 
     let Some(params) = node.child_by_field_name("parameters") else { return; };
     let mut cursor = params.walk();
@@ -154,5 +154,23 @@ mod tests {
     fn allows_pub_crate_fs_function_with_ref_path() {
         let src = "pub(crate) fn load(p: &Path) -> String { fs::read_to_string(p).unwrap() }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_pub_fs_function_inside_private_module() {
+        // `pub fn` confined to a private `mod` is unreachable from outside the
+        // crate, so loosening its signature to `impl AsRef<Path>` buys nothing.
+        let src = "mod imp { \
+                   pub fn copy_metadata(from: &Path, to: &Path) -> std::io::Result<()> { \
+                   let _ = std::fs::metadata(from)?; Ok(()) } }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_pub_fs_function_inside_pub_module() {
+        // `pub fn` inside a bare-`pub mod` is effectively public, so it stays flagged.
+        let src = "pub mod foo { \
+                   pub fn find(p: &Path) -> String { fs::read_to_string(p).unwrap() } }";
+        assert_eq!(run(src).len(), 1);
     }
 }
