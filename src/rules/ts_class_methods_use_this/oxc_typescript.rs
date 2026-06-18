@@ -76,9 +76,19 @@ impl OxcCheck for Check {
             // the method may be required by the base-class or interface
             // contract (e.g. NestJS DI factories, overrides), so making it
             // `static` or extracting it would break polymorphism.
+            //
+            // Also skip methods that reference the enclosing class's own type
+            // parameters in any type position (return type, parameter types, or
+            // body type-argument lists). A `static` method cannot reference
+            // class type parameters (TS2302), so a generic fluent-builder method
+            // like `context<T>() { return new Builder<T, TMeta>(); }` legitimately
+            // omits `this` yet cannot be made `static`.
             if let Some(class) = enclosing_class(node.id(), nodes) {
                 let shape = ClassShape::of(class);
                 if shape.is_decorated || shape.has_super_class || shape.has_implements {
+                    continue;
+                }
+                if method_references_class_type_param(method_def.span, class, nodes) {
                     continue;
                 }
             }
@@ -132,6 +142,48 @@ fn is_symbol_member_key(key: &oxc_ast::ast::PropertyKey) -> bool {
         return false;
     };
     matches!(&member.object, oxc_ast::ast::Expression::Identifier(id) if id.name == "Symbol")
+}
+
+/// Whether the method references any of the enclosing class's type parameters
+/// in a type position. A `static` method cannot reference class type parameters
+/// (TS2302), so such a method cannot be made `static` even when its body omits
+/// `this`.
+///
+/// Class type parameters are matched by name against every `TSTypeReference`
+/// whose span falls inside the method — this covers return types, parameter type
+/// annotations, and body type-argument lists (`new Builder<T, TMeta>()`)
+/// uniformly. Returns `false` when the class has no type parameters.
+fn method_references_class_type_param(
+    method_span: oxc_span::Span,
+    class: &oxc_ast::ast::Class,
+    nodes: &oxc_semantic::AstNodes,
+) -> bool {
+    let Some(type_params) = &class.type_parameters else {
+        return false;
+    };
+    if type_params.params.is_empty() {
+        return false;
+    }
+
+    for node in nodes.iter() {
+        let AstKind::TSTypeReference(type_ref) = node.kind() else {
+            continue;
+        };
+        if type_ref.span.start < method_span.start || type_ref.span.end > method_span.end {
+            continue;
+        }
+        let oxc_ast::ast::TSTypeName::IdentifierReference(ident) = &type_ref.type_name else {
+            continue;
+        };
+        if type_params
+            .params
+            .iter()
+            .any(|param| param.name.name == ident.name)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Check if any descendant of the method body references `this`, stopping at
@@ -341,5 +393,43 @@ mod tests {
         let diags = run_on("class Foo { compute(): number { return 1 + 2; } }");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("compute"));
+    }
+
+    #[test]
+    fn allows_fluent_builder_referencing_class_type_params() {
+        // Issue #3856: a generic fluent builder threads the class's own type
+        // parameters (`TMeta`, `TContext`) through `new Builder<…>()` in the body.
+        // A `static` method cannot reference class type parameters (TS2302), so
+        // neither method can be made static even though neither uses `this`.
+        let src = "class Builder<TContext, TMeta> {\n\
+                   context<TNewContext>() { return new Builder<TNewContext, TMeta>(); }\n\
+                   meta<TNewMeta>() { return new Builder<TContext, TNewMeta>(); }\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_method_with_class_type_param_in_parameter_type() {
+        // Issue #3856: a class type parameter referenced in a parameter type
+        // annotation also blocks `static`.
+        let src = "class C<T> { foo(x: T) { return 1; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_method_with_class_type_param_in_return_type() {
+        // Issue #3856: a class type parameter referenced in the return type also
+        // blocks `static`.
+        let src = "class C<T> { foo(): T | undefined { return undefined; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_generic_class_method_not_referencing_class_type_param() {
+        // True positive: a method in a generic class that references NO class
+        // type parameter and omits `this` can still be made static.
+        let diags = run_on("class C<T> { foo() { return 42; } }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("foo"));
     }
 }
