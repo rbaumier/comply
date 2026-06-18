@@ -29,13 +29,21 @@ impl crate::rules::backend::AstCheck for Check {
 
             for symbol_id in scoping.symbol_ids() {
                 let decl_id = scoping.symbol_declaration(symbol_id);
-                let Some(body_span) = enclosing_for_body_span(nodes, decl_id) else {
+                let Some(ForLoopSpans { body, update }) = enclosing_for_spans(nodes, decl_id)
+                else {
                     continue;
                 };
                 // Only treat the symbol as a loop counter when its
                 // declaration sits in the for-header (not in the body).
                 let decl_span = nodes.kind(decl_id).span();
-                if span_contains(body_span, decl_span) {
+                if span_contains(body, decl_span) {
+                    continue;
+                }
+                // The counter is the variable the loop advances in its
+                // update clause. A for-init binding the update clause does
+                // not reference is an accumulator, and recomputing it in
+                // the body is intended — skip it.
+                if !is_referenced_in_update(scoping, symbol_id, update, nodes) {
                     continue;
                 }
 
@@ -45,7 +53,7 @@ impl crate::rules::backend::AstCheck for Check {
                         continue;
                     }
                     let ref_span = nodes.kind(reference.node_id()).span();
-                    if !span_contains(body_span, ref_span) {
+                    if !span_contains(body, ref_span) {
                         continue;
                     }
                     let (line, column) =
@@ -69,17 +77,29 @@ impl crate::rules::backend::AstCheck for Check {
     }
 }
 
-/// Find the body span of the nearest enclosing C-style `for` statement
-/// whose init declares the symbol at `decl_id`. Stops at the first
-/// function / arrow / program ancestor. `for-of` / `for-in` are not
-/// counted loops, so their head bindings never match.
-fn enclosing_for_body_span(
+/// The body and update-clause spans of a C-style `for` statement. The
+/// update span is `None` when the loop has an empty update clause.
+struct ForLoopSpans {
+    body: Span,
+    update: Option<Span>,
+}
+
+/// Find the spans of the nearest enclosing C-style `for` statement whose
+/// init declares the symbol at `decl_id`. Stops at the first function /
+/// arrow / program ancestor. `for-of` / `for-in` are not counted loops,
+/// so their head bindings never match.
+fn enclosing_for_spans(
     nodes: &oxc_semantic::AstNodes,
     decl_id: oxc_semantic::NodeId,
-) -> Option<Span> {
+) -> Option<ForLoopSpans> {
     for kind in nodes.ancestor_kinds(decl_id) {
         match kind {
-            AstKind::ForStatement(stmt) => return Some(stmt.body.span()),
+            AstKind::ForStatement(stmt) => {
+                return Some(ForLoopSpans {
+                    body: stmt.body.span(),
+                    update: stmt.update.as_ref().map(GetSpan::span),
+                });
+            }
             AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
                 return None;
             }
@@ -87,6 +107,24 @@ fn enclosing_for_body_span(
         }
     }
     None
+}
+
+/// A for-init binding is the loop counter only when the update clause
+/// references it (e.g. `i` in `i++`). Returns `false` for an empty update
+/// clause, since then nothing advances and the body reassignment is the
+/// progression itself.
+fn is_referenced_in_update(
+    scoping: &oxc_semantic::Scoping,
+    symbol_id: oxc_semantic::SymbolId,
+    update: Option<Span>,
+    nodes: &oxc_semantic::AstNodes,
+) -> bool {
+    let Some(update) = update else {
+        return false;
+    };
+    scoping
+        .get_resolved_references(symbol_id)
+        .any(|reference| span_contains(update, nodes.kind(reference.node_id()).span()))
 }
 
 fn span_contains(outer: Span, inner: Span) -> bool {
@@ -209,5 +247,32 @@ mod tests {
         let src =
             "for (let i = 0; i < n; i++) {\n  for (const x of items) {\n    x = f(x);\n  }\n}";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_init_accumulator_not_in_update() {
+        // `tick` is declared in the for-init but the update clause only
+        // advances `idx`, so `tick` is a loop-scoped accumulator the body
+        // is supposed to recompute. Mirrors echarts `Interval.ts`.
+        let src = "function f(start, interval, count) {\n  const out = [];\n  for (let tick = start, idx = 0; ; idx++) {\n    if (idx > count) break;\n    out.push(tick);\n    tick = tick + interval;\n  }\n  return out;\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_init_var_when_update_clause_empty() {
+        // An empty update clause advances nothing, so the body
+        // reassignment is the sole progression mechanism. Mirrors mantine
+        // `TreeNode.tsx` `for (let cur = node; cur; ) { cur = cur.parentElement; }`.
+        let src = "for (let cur = node; cur; ) {\n  cur = cur.parentElement;\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_counter_with_second_init_var() {
+        // The counter `i` IS referenced in the `i++` update, so a body
+        // reassignment of `i` is still a genuine off-by-one risk and must
+        // flag, even when a sibling accumulator shares the init clause.
+        let src = "for (let i = 0, acc = 0; i < n; i++) {\n  acc = acc + i;\n  i = i + 2;\n}";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
