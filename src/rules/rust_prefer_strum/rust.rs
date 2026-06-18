@@ -10,9 +10,20 @@
 //!    whose `type Err` associated type is the unit type `()` —
 //!    record the target type name.
 //!
-//! Any enum name present in BOTH (2) and (3) is flagged on its
-//! `enum_item` node. The two impls together are the redundancy
-//! `strum::Display` + `strum::EnumString` is designed to remove.
+//! An enum name present in BOTH (2) and (3) is flagged on its `enum_item` node
+//! only when its `FromStr` impl is a clean 1:1 round-trip with the variants:
+//! the `from_str` `match` has exactly one value arm (a single string-literal
+//! pattern mapping to `Ok(<Variant>)`) per enum variant, no two value arms
+//! target the same variant, and every other arm is a single catch-all error
+//! arm (`_ => Err(..)` / `v => Err(..)`). Any or-pattern, guarded arm, or value
+//! arm whose body is not `Ok(<single path>)` makes the pair non-1:1 and is not
+//! flagged. Only a clean round-trip is reproducible by `#[derive(strum::Display,
+//! strum::EnumString)]`; aliasing (two strings → one variant), dropped variants
+//! (a variant with no `FromStr` arm), or asymmetric mappings would be silently
+//! broken by the derive.
+//!
+//! The two clean impls together are the redundancy `strum::Display` +
+//! `strum::EnumString` is designed to remove.
 //!
 //! `strum::EnumString` hardcodes `type Err = strum::ParseError` and can only
 //! report `VariantNotFound`. A `FromStr` whose `Err` is anything other than
@@ -20,14 +31,14 @@
 //! derive cannot reproduce, so migrating it would be behavior-destroying — such
 //! impls are not recorded as targets.
 
-use std::collections::HashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     let mut enums: Vec<(tree_sitter::Node, String)> = Vec::new();
-    let mut display_targets: HashSet<String> = HashSet::new();
-    let mut from_str_targets: HashSet<String> = HashSet::new();
+    let mut display_targets: FxHashSet<String> = FxHashSet::default();
+    let mut from_str_impls: FxHashMap<String, tree_sitter::Node> = FxHashMap::default();
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
@@ -58,7 +69,7 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
                 if is_display_trait(trait_trimmed) {
                     display_targets.insert(type_trimmed);
                 } else if is_from_str_trait(trait_trimmed) && from_str_has_unit_err(child, source) {
-                    from_str_targets.insert(type_trimmed);
+                    from_str_impls.insert(type_trimmed, child);
                 }
             }
             _ => {}
@@ -66,7 +77,12 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     }
 
     for (enum_node, name) in enums {
-        if display_targets.contains(&name) && from_str_targets.contains(&name) {
+        let Some(&from_str_impl) = from_str_impls.get(&name) else {
+            continue;
+        };
+        if display_targets.contains(&name)
+            && from_str_is_clean_round_trip(from_str_impl, enum_node, source)
+        {
             diagnostics.push(Diagnostic::at_node(
                 ctx.path,
                 &enum_node,
@@ -151,6 +167,204 @@ fn from_str_has_unit_err(impl_node: tree_sitter::Node, source: &[u8]) -> bool {
         }
     }
     false
+}
+
+/// True when `impl_node`'s `from_str` is a clean 1:1 round-trip with the
+/// enum's variants: exactly one value arm (a single string-literal pattern
+/// mapping to `Ok(<Variant>)`) per variant, no two value arms targeting the
+/// same variant, and every other arm a single catch-all error arm
+/// (`_ => Err(..)` / `v => Err(..)`).
+///
+/// Any irregular arm — an or-pattern (`"a" | "b" =>`), a guarded arm
+/// (`s if .. =>`), a value arm whose body is not `Ok(<single path>)`, or a
+/// binding arm whose body is not `Err(..)` — means the pair is not a
+/// strum-expressible round-trip, so the function returns `false`. It also
+/// returns `false` for any node shape it cannot confidently classify:
+/// under-flagging is the safe direction for a false-positive fix.
+fn from_str_is_clean_round_trip(
+    impl_node: tree_sitter::Node,
+    enum_node: tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    let Some(variant_count) = enum_variant_count(enum_node) else {
+        return false;
+    };
+    let Some(match_block) = from_str_match_block(impl_node) else {
+        return false;
+    };
+
+    let mut value_targets: FxHashSet<String> = FxHashSet::default();
+    let mut value_arm_count = 0usize;
+    let mut cursor = match_block.walk();
+    for arm in match_block.named_children(&mut cursor) {
+        if arm.kind() != "match_arm" {
+            continue;
+        }
+        match classify_arm(arm, source) {
+            ArmKind::Value(variant) => {
+                value_arm_count += 1;
+                value_targets.insert(variant);
+            }
+            ArmKind::Error => {}
+            ArmKind::Irregular => return false,
+        }
+    }
+
+    value_arm_count == variant_count && value_targets.len() == value_arm_count
+}
+
+enum ArmKind {
+    /// A clean value arm: a single string-literal pattern → `Ok(<Variant>)`.
+    /// Carries the target variant's identifier.
+    Value(String),
+    /// A single catch-all error arm: `_ => Err(..)` / `v => Err(..)`.
+    Error,
+    /// Anything else (or-pattern, guard, non-`Ok`/`Err` body, multiple
+    /// literals): not a clean round-trip.
+    Irregular,
+}
+
+/// Number of `enum_variant` children in `enum_node`'s body, or `None` when the
+/// body is absent.
+fn enum_variant_count(enum_node: tree_sitter::Node) -> Option<usize> {
+    let body = enum_node.child_by_field_name("body")?;
+    let mut cursor = body.walk();
+    let count = body
+        .named_children(&mut cursor)
+        .filter(|v| v.kind() == "enum_variant")
+        .count();
+    Some(count)
+}
+
+/// The `match_block` of the FIRST `match_expression` inside the impl's
+/// `from_str` function body.
+fn from_str_match_block(impl_node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let body = impl_node.child_by_field_name("body")?;
+    let mut cursor = body.walk();
+    let from_str_fn = body
+        .named_children(&mut cursor)
+        .find(|item| item.kind() == "function_item")?;
+    let fn_body = from_str_fn.child_by_field_name("body")?;
+    let match_expr = first_descendant(fn_body, "match_expression")?;
+    match_expr.child_by_field_name("body")
+}
+
+/// First descendant of `node` (pre-order) whose kind matches `kind`.
+fn first_descendant<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == kind {
+            return Some(child);
+        }
+        if let Some(found) = first_descendant(child, kind) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Classify one `match_arm` as a clean value arm, a catch-all error arm, or
+/// irregular. Defaults to `Irregular` for any shape not confidently a clean
+/// value or error arm.
+fn classify_arm(arm: tree_sitter::Node, source: &[u8]) -> ArmKind {
+    let Some(pattern) = arm.child_by_field_name("pattern") else {
+        return ArmKind::Irregular;
+    };
+    let Some(value) = arm.child_by_field_name("value") else {
+        return ArmKind::Irregular;
+    };
+    // A guard (`s if ..`) adds a `condition` field to the `match_pattern`.
+    if pattern.child_by_field_name("condition").is_some() {
+        return ArmKind::Irregular;
+    }
+
+    let mut cursor = pattern.walk();
+    let core: Vec<tree_sitter::Node> = pattern.named_children(&mut cursor).collect();
+
+    match core.as_slice() {
+        // `"literal" => ...`: candidate value arm.
+        [single] if single.kind() == "string_literal" => {
+            match ok_call_target(value, source) {
+                Some(variant) => ArmKind::Value(variant),
+                None => ArmKind::Irregular,
+            }
+        }
+        // `v => Err(..)`: a bare binding catch-all error arm.
+        [single] if single.kind() == "identifier" => {
+            if is_err_call(value, source) {
+                ArmKind::Error
+            } else {
+                ArmKind::Irregular
+            }
+        }
+        // `_ => Err(..)`: a wildcard catch-all error arm (no named children).
+        [] if is_wildcard(pattern) => {
+            if is_err_call(value, source) {
+                ArmKind::Error
+            } else {
+                ArmKind::Irregular
+            }
+        }
+        // or-pattern, multiple literals, ranges, etc.
+        _ => ArmKind::Irregular,
+    }
+}
+
+/// True when `match_pattern` is a bare wildcard `_` (its only child is the
+/// unnamed `_` token).
+fn is_wildcard(pattern: tree_sitter::Node) -> bool {
+    let mut cursor = pattern.walk();
+    pattern.children(&mut cursor).any(|c| c.kind() == "_")
+}
+
+/// When `value` is `Ok(<single path>)`, return the LAST path-segment identifier
+/// (the target variant). Otherwise `None`.
+fn ok_call_target(value: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let arg = single_call_arg(value, "Ok", source)?;
+    last_path_segment(arg, source)
+}
+
+/// True when `value` is `Err(..)` with a single argument.
+fn is_err_call(value: tree_sitter::Node, source: &[u8]) -> bool {
+    single_call_arg(value, "Err", source).is_some()
+}
+
+/// When `value` is a `call_expression` whose function text equals `func` and
+/// whose `arguments` hold exactly one argument node, return that argument.
+fn single_call_arg<'a>(
+    value: tree_sitter::Node<'a>,
+    func: &str,
+    source: &[u8],
+) -> Option<tree_sitter::Node<'a>> {
+    if value.kind() != "call_expression" {
+        return None;
+    }
+    let function = value.child_by_field_name("function")?;
+    if function.utf8_text(source).ok()?.trim() != func {
+        return None;
+    }
+    let arguments = value.child_by_field_name("arguments")?;
+    let mut cursor = arguments.walk();
+    let args: Vec<tree_sitter::Node> = arguments.named_children(&mut cursor).collect();
+    match args.as_slice() {
+        [single] => Some(*single),
+        _ => None,
+    }
+}
+
+/// The last path-segment identifier of a variant path. Accepts
+/// `identifier` (`Variant`), `scoped_identifier` (`Enum::Variant`,
+/// `crate::Enum::Variant`), returning the final segment. `None` for any other
+/// node shape.
+fn last_path_segment(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "identifier" => node.utf8_text(source).ok().map(str::to_string),
+        "scoped_identifier" => {
+            let name = node.child_by_field_name("name")?;
+            name.utf8_text(source).ok().map(str::to_string)
+        }
+        _ => None,
+    }
 }
 
 
@@ -420,6 +634,135 @@ impl std::str::FromStr for Color {
     type Err = ();
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         s.parse::<u32>().map(Color).map_err(|_| ())
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_enum_with_aliasing_named_err_type() {
+        // `Severity` (biomejs/biome): `type Err = String` is already exempt via
+        // the named-error gate. This guards that the biome repro — which is also
+        // a non-round-trip (aliasing `"hint"`/`"info"` -> Information, no `Fatal`
+        // parse arm) — stays empty even though Display + FromStr both exist.
+        let src = r#"
+enum Severity { Hint, Information, Warning, Error, Fatal }
+
+impl std::fmt::Display for Severity {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Severity::Hint => write!(f, "hint"),
+            Severity::Information => write!(f, "info"),
+            Severity::Warning => write!(f, "warn"),
+            Severity::Error => write!(f, "error"),
+            Severity::Fatal => write!(f, "fatal"),
+        }
+    }
+}
+
+impl std::str::FromStr for Severity {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "hint" => Ok(Self::Information),
+            "info" => Ok(Self::Information),
+            "warn" => Ok(Self::Warning),
+            "error" => Ok(Self::Error),
+            v => Err(format!("unexpected value ({v})")),
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_unit_err_aliasing_two_strings_one_variant() {
+        // Two value arms target the same variant `A` (aliasing). strum's
+        // `EnumString` maps each serialize string to its own variant and cannot
+        // fold two inputs into one, so the round-trip is not strum-expressible.
+        let src = r#"
+enum E { A, B }
+
+impl std::fmt::Display for E {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            E::A => f.write_str("a"),
+            E::B => f.write_str("b"),
+        }
+    }
+}
+
+impl std::str::FromStr for E {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "a" => Ok(E::A),
+            "x" => Ok(E::A),
+            _ => Err(()),
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_unit_err_dropped_variant() {
+        // `C` has no `FromStr` arm: 2 value arms != 3 variants. strum's
+        // `EnumString` would generate a parse arm for `C`, changing behavior.
+        let src = r#"
+enum E { A, B, C }
+
+impl std::fmt::Display for E {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            E::A => f.write_str("a"),
+            E::B => f.write_str("b"),
+            E::C => f.write_str("c"),
+        }
+    }
+}
+
+impl std::str::FromStr for E {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "a" => Ok(E::A),
+            "b" => Ok(E::B),
+            _ => Err(()),
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_unit_err_or_pattern_alias() {
+        // An or-pattern (`"a" | "alpha"`) maps two strings to one variant; it is
+        // not a clean 1:1 round-trip strum can express.
+        let src = r#"
+enum E { A, B }
+
+impl std::fmt::Display for E {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            E::A => f.write_str("a"),
+            E::B => f.write_str("b"),
+        }
+    }
+}
+
+impl std::str::FromStr for E {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "a" | "alpha" => Ok(E::A),
+            "b" => Ok(E::B),
+            _ => Err(()),
+        }
     }
 }
 "#;
