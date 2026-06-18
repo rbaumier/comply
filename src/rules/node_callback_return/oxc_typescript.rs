@@ -88,8 +88,16 @@ impl OxcCheck for Check {
             }
             AstKind::ExpressionStatement(expr_stmt) => {
                 let grandparent = semantic.nodes().parent_node(parent.id());
-                if let AstKind::FunctionBody(block) = grandparent.kind() {
-                    let stmts = &block.statements;
+                // The trailing-return exemption applies to a statement list at
+                // any nesting: a `FunctionBody` directly, or a `BlockStatement`
+                // nested in `if`/`for`/`try`/etc. (`oxc` names the slice
+                // `statements` on the former and `body` on the latter).
+                let stmts = match grandparent.kind() {
+                    AstKind::FunctionBody(block) => Some(&block.statements),
+                    AstKind::BlockStatement(block) => Some(&block.body),
+                    _ => None,
+                };
+                if let Some(stmts) = stmts {
                     // Find our position in the block.
                     let our_span = expr_stmt.span;
                     let mut found_idx = None;
@@ -466,6 +474,24 @@ mod tests {
             };
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_trailing_return_in_nested_if_block() {
+        // Issue #3872 (fastify lib/hooks.js): the canonical error-first escape
+        // `if (err) { cb(err); return }` carries a trailing `return`, so the
+        // nested `cb(err)` is not a missing-return. The exemption must apply at
+        // any block nesting, not only directly in the function body.
+        let src = "function handle(err, cb) { if (err) { cb(err); return; } cb(); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_callback_in_nested_block_without_trailing_return() {
+        // Negative space for #3872: a nested `cb(err)` with no trailing return in
+        // the `if` block is still a genuine missing-return and stays flagged.
+        let src = "function handle(err, cb) { if (err) { cb(err); } cb(); }";
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
