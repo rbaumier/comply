@@ -1312,6 +1312,66 @@ pub(crate) fn skip_char_literal(bytes: &[u8], start: usize) -> usize {
     i + 1
 }
 
+/// True if `enum_item` has at least one variant gated behind a `#[cfg(...)]`
+/// (or `#[cfg_attr(...)]`) attribute, making the enum's variant set
+/// target-dependent.
+///
+/// Walks the enum's `enum_variant_list` body; for each `enum_variant`, scans the
+/// preceding `attribute_item` siblings (skipping interleaved comments) for an
+/// `attribute` whose path child is `cfg` or `cfg_attr`. A variant so gated does
+/// not exist on the excluded target, so listing every variant explicitly fails
+/// to compile there — a wildcard `_` arm is then the portable, compiler-required
+/// way to match such an enum.
+///
+/// Matching on the `attribute` path child (not raw text) means an unrelated
+/// attribute whose name merely ends in `cfg`, or `cfg` appearing in a comment,
+/// does not count.
+pub fn enum_has_cfg_gated_variant(enum_item: Node, source: &[u8]) -> bool {
+    let Some(body) = enum_item.child_by_field_name("body") else {
+        return false;
+    };
+    let mut cursor = body.walk();
+    body.named_children(&mut cursor)
+        .filter(|child| child.kind() == "enum_variant")
+        .any(|variant| variant_is_cfg_gated(variant, source))
+}
+
+/// True if `enum_variant` carries a preceding `#[cfg(...)]` / `#[cfg_attr(...)]`
+/// attribute. Skips interleaved comment siblings and stops at the first
+/// non-attribute, non-comment sibling.
+fn variant_is_cfg_gated(variant: Node, source: &[u8]) -> bool {
+    let mut sibling = variant.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "line_comment" | "block_comment" => {}
+            "attribute_item" => {
+                if attribute_is_cfg(s, source) {
+                    return true;
+                }
+            }
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+/// True if `attribute_item`'s `attribute` path child is exactly `cfg` or
+/// `cfg_attr`.
+fn attribute_is_cfg(attribute_item: Node, source: &[u8]) -> bool {
+    let mut item_cursor = attribute_item.walk();
+    let Some(attribute) = attribute_item
+        .children(&mut item_cursor)
+        .find(|child| child.kind() == "attribute")
+    else {
+        return false;
+    };
+    let Some(path) = attribute.named_child(0) else {
+        return false;
+    };
+    matches!(path.utf8_text(source), Ok("cfg") | Ok("cfg_attr"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1959,6 +2019,54 @@ mod tests {
                 subtree_string_literal_contains(tree.root_node(), src.as_bytes(), needle),
                 expected,
                 "subtree_string_literal_contains mismatch for `{src}` / `{needle}`"
+            );
+        }
+    }
+
+    /// Find the first `enum_item` node anywhere in the tree.
+    fn first_enum_item(node: Node) -> Option<Node> {
+        if node.kind() == "enum_item" {
+            return Some(node);
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(found) = first_enum_item(child) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn enum_has_cfg_gated_variant_detects_gated_and_plain_enums() {
+        let cases = [
+            // The poem `Addr` repro: a `#[cfg(unix)]`-gated variant.
+            (
+                "enum Addr { SocketAddr(S), #[cfg(unix)] Unix(U), Custom(C) }",
+                true,
+            ),
+            // `#[cfg_attr(...)]` gating also makes the variant set
+            // target-dependent.
+            (
+                "enum E { A, #[cfg_attr(feature = \"x\", cfg(unix))] B }",
+                true,
+            ),
+            // Comment between the attribute and the variant must not defeat it.
+            ("enum E { A, #[cfg(unix)]\n// note\nB }", true),
+            // No cfg attribute anywhere — exhaustive listing is portable.
+            ("enum E { A, B, C }", false),
+            // A non-cfg attribute (`#[serde(rename)]`) must not count.
+            ("enum E { A, #[serde(rename = \"b\")] B }", false),
+            // An identifier merely ending in `cfg` is not `cfg`.
+            ("enum E { A, #[mycfg(unix)] B }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let enum_item = first_enum_item(tree.root_node()).expect("enum present");
+            assert_eq!(
+                enum_has_cfg_gated_variant(enum_item, src.as_bytes()),
+                expected,
+                "enum_has_cfg_gated_variant mismatch for `{src}`"
             );
         }
     }

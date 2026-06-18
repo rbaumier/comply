@@ -38,6 +38,16 @@
 //! nothing" accessor. A new variant should still return `None` here, so
 //! exhaustive listing adds noise without safety — the wildcard is not flagged.
 //!
+//! cfg-gated-enum exemption: when the scrutinee enum is defined in the same
+//! file and has a `#[cfg(...)]`-gated variant, its variant set is
+//! target-dependent. Listing every variant explicitly fails to compile on the
+//! target that excludes the gated variant, so the wildcard `_` is the portable,
+//! compiler-required way to match it. The enum name is read from the qualified
+//! arm patterns (`Addr::SocketAddr` → `Addr`) and matched against this file's
+//! `enum_item` definitions (cross-file enums are not resolved). A wildcard arm
+//! carrying its own `#[cfg(...)]` / `#[cfg_attr(...)]` attribute is exempt for
+//! the same reason.
+//!
 //! Test contexts are exempted for consistency with `rust-no-unwrap`:
 //! test code routinely writes compact wildcard matches for setup
 //! without losing much safety if a variant is later added.
