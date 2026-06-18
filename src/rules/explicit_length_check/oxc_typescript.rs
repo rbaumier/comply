@@ -126,6 +126,48 @@ fn length_is_numeric_operand(trimmed: &str, prop_pos: usize) -> bool {
     }
 }
 
+/// True when the `.length`/`.size` whose `.` is at `prop_pos` is the value of a
+/// template-literal interpolation `${ <base>.length }` — a numeric value being
+/// string-formatted, not a boolean coercion. Walks left over the base expression
+/// (balancing `]`/`)`), skips whitespace, and checks the base is immediately
+/// preceded by `${`.
+fn is_template_interpolation_value(trimmed: &str, prop_pos: usize) -> bool {
+    let bytes = trimmed.as_bytes();
+    // Walk left over the base expression (identifier/member/bracket/call chain),
+    // balancing brackets — mirror the loop in `length_is_numeric_operand`.
+    let mut i = prop_pos;
+    let mut depth: i32 = 0;
+    while i > 0 {
+        let c = bytes[i - 1];
+        if depth > 0 {
+            match c {
+                b')' | b']' => depth += 1,
+                b'(' | b'[' => depth -= 1,
+                _ => {}
+            }
+            i -= 1;
+            continue;
+        }
+        match c {
+            b')' | b']' => {
+                depth += 1;
+                i -= 1;
+            }
+            _ if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c == b'.' => {
+                i -= 1;
+            }
+            _ => break,
+        }
+    }
+    // Skip whitespace to the left of the base.
+    let mut j = i;
+    while j > 0 && bytes[j - 1] == b' ' {
+        j -= 1;
+    }
+    // The base must be immediately preceded by `${`.
+    j >= 2 && bytes[j - 1] == b'{' && bytes[j - 2] == b'$'
+}
+
 /// Check if a line has a bare `.length`/`.size` in a boolean context
 /// (no explicit comparison like `> 0`, `=== 0`, `!== 0`, etc.).
 fn has_implicit_length_check(line: &str) -> bool {
@@ -226,6 +268,16 @@ fn has_implicit_length_check(line: &str) -> bool {
                     && !before.ends_with(">=")
                     && !before.ends_with("<=")
                 {
+                    search_from = after_prop;
+                    continue;
+                }
+
+                // `${ base.length }` — the `.length` is the entire interpolated
+                // value (closed by `}`), a numeric value being string-formatted,
+                // not a boolean coercion. A ternary condition inside an
+                // interpolation (`${arr.length ? a : b}`) is followed by `?`, not
+                // `}`, so it stays a genuine coercion and still flags.
+                if rest.starts_with('}') && is_template_interpolation_value(trimmed, abs_pos) {
                     search_from = after_prop;
                     continue;
                 }
@@ -430,5 +482,35 @@ mod tests {
     #[test]
     fn still_flags_optional_chain_length_as_call_arg_issue_3914() {
         assert_eq!(run_on("notExpect(a?.b.length);").len(), 1);
+    }
+
+    // Regression #3785 — `.length`/`.size` as the value of a template-literal
+    // interpolation `${...}` is a numeric value being string-formatted, not a
+    // boolean coercion.
+    #[test]
+    fn allows_length_as_template_interpolation_value_issue_3785() {
+        assert!(run_on("console.log(`count: ${items.length}`);").is_empty());
+    }
+
+    #[test]
+    fn allows_length_as_template_interpolation_value_with_whitespace_issue_3785() {
+        assert!(run_on("`${ items.length }`").is_empty());
+    }
+
+    #[test]
+    fn allows_size_as_template_interpolation_value_issue_3785() {
+        assert!(run_on("`set: ${mySet.size}`").is_empty());
+    }
+
+    #[test]
+    fn allows_member_base_length_as_template_interpolation_value_issue_3785() {
+        assert!(run_on("`${obj.items.length}`").is_empty());
+    }
+
+    // A ternary condition inside an interpolation IS a genuine boolean coercion
+    // (`.length` is followed by `?`, not `}`) and must still flag.
+    #[test]
+    fn still_flags_length_as_ternary_condition_in_interpolation_issue_3785() {
+        assert_eq!(run_on("`${arr.length ? 'a' : 'b'}`").len(), 1);
     }
 }
