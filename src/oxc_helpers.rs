@@ -391,6 +391,26 @@ pub fn imports_react(source: &str) -> bool {
         || source_contains(source, "require('react-dom")
 }
 
+/// True if the file imports anything from SolidJS: `solid-js`, a `solid-js/*`
+/// subpath (`solid-js/web`, `solid-js/store`), or the `@solidjs/*` scope
+/// (`@solidjs/router`, `@solidjs/start`) — ESM `import ... from` or CommonJS
+/// `require(...)`. React-specific rules use this to exclude SolidJS files, whose
+/// fine-grained reactivity has no component re-render cycle (the body runs once),
+/// so React-render concerns do not apply. Memoized per file via [`source_contains`].
+#[must_use]
+pub fn imports_solid(source: &str) -> bool {
+    source_contains(source, "from \"solid-js\"")
+        || source_contains(source, "from 'solid-js'")
+        || source_contains(source, "from \"solid-js/")
+        || source_contains(source, "from 'solid-js/")
+        || source_contains(source, "from \"@solidjs/")
+        || source_contains(source, "from '@solidjs/")
+        || source_contains(source, "require(\"solid-js")
+        || source_contains(source, "require('solid-js")
+        || source_contains(source, "require(\"@solidjs/")
+        || source_contains(source, "require('@solidjs/")
+}
+
 /// True when `path`'s nearest `package.json` declares a non-React JSX framework
 /// (`vue` or `solid-js`) and does **not** declare `react`. React-only render-churn
 /// rules (`react-jsx-no-bind`, `jsx-no-new-function-as-prop`) use this to skip
