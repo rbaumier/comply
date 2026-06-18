@@ -1,5 +1,5 @@
 //! prefer-early-return oxc backend — flag functions whose body is a single
-//! `if` without `else`, with 2+ statements inside.
+//! `if` without `else`, wrapping at least `min_statements` statements.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -24,7 +24,10 @@ fn check_body(body: &FunctionBody, ctx: &CheckCtx, diagnostics: &mut Vec<Diagnos
     let Statement::BlockStatement(block) = &if_stmt.consequent else {
         return;
     };
-    if block.body.len() < 2 {
+    let min_statements = ctx
+        .config
+        .threshold("prefer-early-return", "min_statements", ctx.lang);
+    if block.body.len() < min_statements {
         return;
     }
 

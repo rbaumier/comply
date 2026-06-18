@@ -8,8 +8,8 @@
 //! Triggers when:
 //!   - A function's `statement_block` body contains exactly one named
 //!     child which is an `if_statement` without `alternative`.
-//!   - The `if` body is a `statement_block` with 2+ statements (inverting
-//!     a single-statement body is noise, not improvement).
+//!   - The `if` body is a `statement_block` with at least `min_statements`
+//!     statements (inverting a small body is noise, not improvement).
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -51,11 +51,14 @@ crate::ast_check! { |node, source, ctx, diagnostics|
     if cons.kind() != "statement_block" {
         return;
     }
-    // Require at least 2 statements inside the if — inverting a
-    // one-liner is churn, not improvement.
+    // Require at least `min_statements` inside the if — inverting a small
+    // positive `if` is churn, not improvement (see #4067).
     let mut cc = cons.walk();
     let inner: Vec<_> = cons.named_children(&mut cc).collect();
-    if inner.len() < 2 {
+    let min_statements = ctx
+        .config
+        .threshold("prefer-early-return", "min_statements", ctx.lang);
+    if inner.len() < min_statements {
         return;
     }
 
@@ -113,6 +116,7 @@ mod tests {
     if (x > 0) {
         doA();
         doB();
+        doC();
     }
 };"#;
         assert_eq!(run_on(src).len(), 1);
@@ -125,6 +129,7 @@ mod tests {
         if (x > 0) {
             doA();
             doB();
+            doC();
         }
     }
 }"#;
@@ -149,6 +154,20 @@ mod tests {
         let src = r#"function f(x: number) {
     if (x > 0) {
         doA();
+    }
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_two_statement_body() {
+        // Regression for #4067: a function whose entire body is a single `if`
+        // wrapping only two statements reads fine as a positive condition;
+        // inverting it into `if (!cond) return;` is not a readability win.
+        let src = r#"function reportIfServerError(args: Args): void {
+    if (args.status >= 500) {
+        const reportable = pick(args);
+        args.reporter.captureException(reportable);
     }
 }"#;
         assert!(run_on(src).is_empty());
