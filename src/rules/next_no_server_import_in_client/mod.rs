@@ -1,8 +1,6 @@
 //! next-no-server-import-in-client
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

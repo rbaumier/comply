@@ -1,8 +1,6 @@
 //! Bans while/do-while loops — prefer recursion or higher-order functions.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

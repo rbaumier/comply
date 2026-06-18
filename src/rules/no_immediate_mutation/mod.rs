@@ -1,8 +1,6 @@
 //! no-immediate-mutation — flag mutation on a variable immediately after its declaration.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

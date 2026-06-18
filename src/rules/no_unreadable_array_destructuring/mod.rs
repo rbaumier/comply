@@ -1,8 +1,6 @@
 //! no-unreadable-array-destructuring — flag destructuring with consecutive holes.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -32,8 +32,6 @@ mod oxc_typescript;
 mod rust;
 #[cfg(test)]
 mod shared_tests;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::rules::backend::Backend;

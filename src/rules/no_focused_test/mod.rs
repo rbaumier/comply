@@ -1,8 +1,6 @@
 //! no-focused-test — reject `.only` committed to tests.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::rules::backend::Backend;

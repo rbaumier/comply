@@ -1,8 +1,6 @@
 //! no-inline-param-type — extract object-shaped parameter types to named types.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::rules::backend::Backend;

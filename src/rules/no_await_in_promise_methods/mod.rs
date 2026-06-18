@@ -1,8 +1,6 @@
 //! no-await-in-promise-methods — flag `await` inside `Promise.all/race/any/allSettled` arrays.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

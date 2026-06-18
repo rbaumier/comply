@@ -1,8 +1,6 @@
 //! no-catch-log-rethrow — flag `catch { log(e); throw e; }` patterns.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -1,8 +1,6 @@
 //! no-object-as-default-parameter — flag object literals as default parameter values.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

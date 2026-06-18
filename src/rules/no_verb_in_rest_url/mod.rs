@@ -2,8 +2,6 @@
 
 mod oxc_typescript;
 mod rust;
-#[cfg(test)]
-mod typescript;
 mod verb_url_match;
 
 use crate::diagnostic::Severity;

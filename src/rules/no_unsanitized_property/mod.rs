@@ -6,8 +6,6 @@
 //! SSR/hydration setup assigning `innerHTML` to simulate server-rendered HTML).
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

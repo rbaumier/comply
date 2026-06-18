@@ -1,8 +1,6 @@
 //! no-thenable — flag objects/classes that define a `.then()` method.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

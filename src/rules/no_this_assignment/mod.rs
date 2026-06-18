@@ -1,8 +1,6 @@
 //! no-this-assignment — flag `const self = this` patterns.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

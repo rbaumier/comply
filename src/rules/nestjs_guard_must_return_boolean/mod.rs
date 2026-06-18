@@ -1,8 +1,6 @@
 //! nestjs-guard-must-return-boolean — guards must return boolean / Observable<boolean>.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -1,8 +1,6 @@
 //! nestjs-no-sync-controller-method — controller methods should be async.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

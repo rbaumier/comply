@@ -1,8 +1,6 @@
 //! no-boolean-flag-param — split boolean-flagged functions into two.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

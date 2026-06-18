@@ -3,8 +3,6 @@
 //! no-constructor-side-effects
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
