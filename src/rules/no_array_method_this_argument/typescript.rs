@@ -8,6 +8,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 /// Array methods that accept a `thisArg` as their second parameter.
 /// (`.reduce()` / `.reduceRight()` take initial-value as 2nd arg, not thisArg.)
+/// `forEach` is excluded: `Set`/`Map`/`NodeList` share it with a standard
+/// `thisArg` and the receiver type isn't provable syntactically.
 const METHODS_WITH_THIS_ARG: &[&str] = &[
     "every",
     "filter",
@@ -16,7 +18,6 @@ const METHODS_WITH_THIS_ARG: &[&str] = &[
     "findIndex",
     "findLastIndex",
     "flatMap",
-    "forEach",
     "map",
     "some",
 ];

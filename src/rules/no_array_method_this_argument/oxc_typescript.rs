@@ -1,5 +1,11 @@
 //! OXC backend for no-array-method-this-argument — flag the `thisArg`
 //! parameter in array methods like `.filter(fn, context)`.
+//!
+//! `forEach` is intentionally excluded: `Set`, `Map`, and `NodeList` expose
+//! it with the same `(callback, thisArg)` signature, where `thisArg` is a
+//! standard, non-discouraged API. The receiver type cannot be proven
+//! syntactically for a bare-identifier receiver, so `forEach` is left
+//! unchecked. The remaining methods are Array-exclusive.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -15,7 +21,6 @@ const METHODS_WITH_THIS_ARG: &[&str] = &[
     "findIndex",
     "findLastIndex",
     "flatMap",
-    "forEach",
     "map",
     "some",
 ];
@@ -174,5 +179,22 @@ mod oxc_tests {
         // An object literal thisArg is a real `Array#map(callback, thisArg)`
         // binding and must still flag.
         assert_eq!(run("arr.map((x) => x, { ctx: 1 });").len(), 1);
+    }
+
+    #[test]
+    fn allows_set_foreach_with_this_arg() {
+        // Set#forEach(callback, thisArg) forwards thisArg per spec — not the
+        // discouraged Array#forEach shape. The receiver type can't be proven
+        // syntactically, so forEach is left unchecked entirely.
+        assert!(
+            run("set.forEach(function (this: object, value) {}, thisArg);").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_new_set_foreach_with_this_arg() {
+        // Callback-shaped arg0 so only the forEach exclusion keeps this
+        // unflagged (a bare-identifier arg0 would be filtered anyway).
+        assert!(run("new Set(['v']).forEach((value) => {}, thisArg);").is_empty());
     }
 }
