@@ -39,6 +39,17 @@ impl OxcCheck for Check {
             return;
         }
 
+        // An empty object literal can never satisfy a type with required
+        // members, so `{} satisfies T` fails to compile (TS1360). `{} as T`
+        // is the canonical deliberate-coercion idiom (default/fallback props,
+        // empty option bags) — skip it. An empty *array* is exempt from this:
+        // `[] satisfies T[]` compiles, so it still flags below.
+        if let Expression::ObjectExpression(obj) = &as_expr.expression
+            && obj.properties.is_empty()
+        {
+            return;
+        }
+
         // Filter out `as const`.
         let type_text = &ctx.source[as_expr.type_annotation.span().start as usize..as_expr.type_annotation.span().end as usize];
         if type_text.trim() == "const" {
@@ -122,6 +133,34 @@ mod tests {
     #[test]
     fn flags_array_literal_cast() {
         assert_eq!(crate::rules::test_helpers::run_rule(&Check, "const y = [1, 2] as Tuple;", "t.ts").len(), 1);
+    }
+
+    // Regression test for #3881: an empty object literal cast cannot use
+    // `satisfies` (`{} satisfies T` is TS1360 when T has required members),
+    // so `{} as T` must not be flagged.
+    #[test]
+    fn allows_empty_object_literal_cast() {
+        assert!(crate::rules::test_helpers::run_rule(&Check, "const x = {} as T;", "t.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_empty_object_fallback_cast() {
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, "const o = pOptions || ({} as ResourceOptions<T, S>);", "t.ts")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_non_empty_object_literal_cast() {
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "const x = { a: 1 } as T;", "t.ts").len(), 1);
+    }
+
+    // An empty array still flags: `[] satisfies T[]` compiles fine, so the
+    // empty-object exemption must not extend to arrays.
+    #[test]
+    fn still_flags_empty_array_literal_cast() {
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, "const a = [] as T[];", "t.ts").len(), 1);
     }
 
     #[test]
