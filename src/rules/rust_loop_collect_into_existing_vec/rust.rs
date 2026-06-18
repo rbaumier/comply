@@ -100,7 +100,7 @@ impl AstCheck for Check {
         let Ok(var) = receiver.utf8_text(source) else {
             return;
         };
-        if !receiver_is_local_vec(node, var, source) {
+        if !crate::rules::rust_helpers::local_let_binds_vec(node, var, source) {
             return;
         }
         diagnostics.push(Diagnostic::at_node(
@@ -124,65 +124,6 @@ fn arg_contains_try(node: tree_sitter::Node) -> bool {
     }
     let mut cursor = node.walk();
     node.children(&mut cursor).any(arg_contains_try)
-}
-
-/// Walk up the enclosing scopes from `for_node` looking for a `let`
-/// declaration that binds `var` to a confirmable `Vec`. Only declarations
-/// that lexically precede the loop in their block are considered.
-fn receiver_is_local_vec(for_node: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
-    let mut child = for_node;
-    while let Some(parent) = child.parent() {
-        let mut cursor = parent.walk();
-        for sib in parent.children(&mut cursor) {
-            if sib.id() == child.id() {
-                break;
-            }
-            if sib.kind() == "let_declaration" && let_binds_vec(sib, var, source) {
-                return true;
-            }
-        }
-        child = parent;
-    }
-    false
-}
-
-/// Whether `let_node` declares `var` with a `Vec`-shaped initializer or an
-/// explicit `Vec<...>` type annotation.
-fn let_binds_vec(let_node: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
-    let Some(pattern) = let_node.child_by_field_name("pattern") else {
-        return false;
-    };
-    if !pattern_binds(pattern, var, source) {
-        return false;
-    }
-    if let Some(ty) = let_node.child_by_field_name("type")
-        && ty.utf8_text(source).unwrap_or("").trim_start().starts_with("Vec<")
-    {
-        return true;
-    }
-    if let Some(value) = let_node.child_by_field_name("value") {
-        let text = value.utf8_text(source).unwrap_or("");
-        if text.starts_with("Vec::") || text.starts_with("vec!") {
-            return true;
-        }
-    }
-    false
-}
-
-/// Whether a `let` pattern (`x` or `mut x`) binds the name `var`.
-fn pattern_binds(pattern: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
-    let name = match pattern.kind() {
-        "identifier" => pattern.utf8_text(source).ok(),
-        "mut_pattern" => {
-            let mut cursor = pattern.walk();
-            pattern
-                .children(&mut cursor)
-                .find(|c| c.kind() == "identifier")
-                .and_then(|c| c.utf8_text(source).ok())
-        }
-        _ => None,
-    };
-    name == Some(var)
 }
 
 #[cfg(test)]
