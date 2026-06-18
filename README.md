@@ -24,7 +24,7 @@ comply walks your project, runs **1893 rules across 169 categories**, and report
 - **Interactive TUI** — browse and triage diagnostics in your terminal.
 - **Editor integration** — built-in Language Server (LSP) for inline diagnostics as you type.
 - **Inline suppressions with mandatory justification** — `// comply-ignore:` requires a reason, so silenced rules stay accountable.
-- **Type-aware analysis (opt-in)** — `--type-aware` enables rules that query a real TypeScript checker for deeper correctness checks.
+- **Type-aware analysis (on by default)** — rules that query a real TypeScript checker for deeper correctness checks; pass `--no-type-aware` to skip them for an AstCheck-only run.
 
 ## Getting started
 
@@ -89,7 +89,7 @@ comply --working-tree --diff-only   # restrict findings to changed lines only
 | `--json` | Emit diagnostics as JSON (for editors and CI) |
 | `--tui` | Launch the interactive terminal UI |
 | `--comply-only` | Run only the in-process tree-sitter rules (skip oxlint/clippy subprocesses) |
-| `--type-aware` | Opt into type-aware rules (slower; needs a TypeScript checker) |
+| `--no-type-aware` | Skip type-aware rules (on by default; they're slower and need a TypeScript checker) |
 | `--timings` | Print a per-phase timing breakdown to stderr |
 
 ### Subcommands
