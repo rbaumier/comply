@@ -22,9 +22,13 @@ impl TextCheck for Check {
             if !has_attr(elem.attrs, "checked") && !has_attr(elem.attrs, ":checked") {
                 continue;
             }
-            // Vue uses @change or v-model instead of onChange/readOnly.
+            // Vue write-back handlers (@change, @input, v-model) make the input
+            // controllable; readonly opts out. @input fires on every checkbox/radio
+            // toggle just like @change, so it is an accepted write-back handler.
             if has_attr(elem.attrs, "@change")
                 || has_attr(elem.attrs, "v-on:change")
+                || has_attr(elem.attrs, "@input")
+                || has_attr(elem.attrs, "v-on:input")
                 || has_attr(elem.attrs, "v-model")
                 || has_attr(elem.attrs, "readonly")
             {
@@ -69,6 +73,18 @@ mod tests {
     fn allows_checked_with_at_change() {
         let src =
             "<template>\n  <input type=\"checkbox\" checked @change=\"handler\" />\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bound_checked_with_at_input() {
+        let src = "<template>\n  <input :checked=\"disabled\" type=\"checkbox\" @input=\"onInput\" />\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_checked_with_v_on_input() {
+        let src = "<template>\n  <input type=\"checkbox\" checked v-on:input=\"onInput\" />\n</template>";
         assert!(run(src).is_empty());
     }
 
