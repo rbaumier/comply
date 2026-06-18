@@ -8,9 +8,12 @@
 //!
 //! Non-usage positions are exempt: a type alias definition
 //! (`type Lists<T> = Mutex<…>;`), the subject of an `impl` head
-//! (`impl<T> RwLock<T>`, `unsafe impl<T> Send for RwLock<T>`), and a function
-//! return type (`fn new() -> RwLock<T>`, `fn get(&self) -> &Mutex<T>`) name the
-//! lock type rather than use it, so none can be `Arc`-wrapped at that site.
+//! (`impl<T> RwLock<T>`, `unsafe impl<T> Send for RwLock<T>`), a function
+//! return type (`fn new() -> RwLock<T>`, `fn get(&self) -> &Mutex<T>`), a
+//! function parameter (`fn f(m: &Mutex<T>)` borrows a lock the caller owns),
+//! and a struct field — named (`struct S { m: Mutex<T> }`) or tuple
+//! (`struct S(Mutex<T>)`). None can be `Arc`-wrapped at that site: the lock is
+//! owned or wrapped elsewhere.
 //!
 //! Test code is exempted — tests commonly use bare `Mutex` for simple
 //! state without thread sharing, and rewriting them to `RefCell`
@@ -44,8 +47,16 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
                     }
                 }
             }
-            "field_declaration" | "field_declaration_list" => return,
+            "field_declaration" | "field_declaration_list"
+            | "ordered_field_declaration_list" => return,
             "static_item" | "const_item" => return,
+            // A function parameter (`fn f(m: &Mutex<T>)`) borrows a lock the
+            // caller owns and constructs; the callee can't `Arc`-wrap it, the
+            // owner does so at the lock's definition. Trait-method-signature
+            // params are also `parameter` nodes, so this covers them too. A
+            // `Mutex<T>` in the function body is reached through `body`, not
+            // `parameter`, and stays flagged.
+            "parameter" => return,
             // A type alias definition (`type Lists<T> = Mutex<…>;`) is not a
             // usage: callers wrap the alias in `Arc` at the use site, which the
             // alias body can't observe.
@@ -281,5 +292,26 @@ fn f() {
     #[test]
     fn allows_rwlock_in_trait_method_signature_return_type() {
         assert!(run("trait T { fn lock(&self) -> RwLock<u32>; }").is_empty());
+    }
+
+    #[test]
+    fn allows_mutex_ref_parameter() {
+        let src = "fn f(fs_watcher: &std::sync::Mutex<u32>) -> Result<(), ()> { let _g = fs_watcher.lock().unwrap(); Ok(()) }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_rwlock_ref_parameter() {
+        assert!(run("fn g(m: &RwLock<u32>) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_lock_in_tuple_struct_field() {
+        assert!(run("pub struct ResolverLock(parking_lot::RwLock<()>);").is_empty());
+    }
+
+    #[test]
+    fn allows_std_mutex_in_tuple_struct_field() {
+        assert!(run("struct S(std::sync::Mutex<u32>);").is_empty());
     }
 }
