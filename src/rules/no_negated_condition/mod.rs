@@ -1,4 +1,5 @@
-//! no-negated-condition — flag `if (!x) { A } else { B }` and `!x ? A : B`.
+//! no-negated-condition — flag `if (!x) { A } else { B }` (when the negated
+//! branch is at least as large as the else) and `!x ? A : B`.
 
 mod oxc_typescript;
 mod rust;

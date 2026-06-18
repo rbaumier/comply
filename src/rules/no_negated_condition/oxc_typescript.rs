@@ -1,5 +1,6 @@
 //! no-negated-condition OxcCheck backend — flag negated conditions in
-//! if/else and ternaries.
+//! if/else (only when the negated branch is at least as large as the else)
+//! and ternaries.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -32,7 +33,9 @@ impl OxcCheck for Check {
                 if matches!(alt, Statement::IfStatement(_)) {
                     return;
                 }
-                if is_negated_expr(&stmt.test) {
+                if is_negated_expr(&stmt.test)
+                    && branch_size(&stmt.consequent) >= branch_size(alt)
+                {
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, stmt.test.span().start as usize);
                     diagnostics.push(Diagnostic {
@@ -68,6 +71,18 @@ impl OxcCheck for Check {
             _ => {}
         }
         let _ = semantic;
+    }
+}
+
+/// Number of statements in an `if`/`else` branch — a block's length, or 1 for
+/// a single unbraced statement. The rule fires only when the negated (`if`)
+/// branch carries at least as much code as the `else`: that is the case where
+/// the main logic sits under the negation and swapping clarifies intent. A
+/// small negated branch with a larger `else` reads as a guard, not a win.
+fn branch_size(stmt: &Statement) -> usize {
+    match stmt {
+        Statement::BlockStatement(block) => block.body.len(),
+        _ => 1,
     }
 }
 
@@ -132,6 +147,19 @@ mod tests {
     #[test]
     fn allows_if_without_else() {
         assert!(run_on("if (!x) { a(); }").is_empty());
+    }
+
+    #[test]
+    fn allows_negated_if_smaller_than_else() {
+        // Small negated guard, larger else — swapping would bury the main
+        // branch under the negation rather than clarify it.
+        assert!(run_on("if (!x) { return; } else { a(); b(); c(); }").is_empty());
+    }
+
+    #[test]
+    fn flags_negated_if_larger_than_else() {
+        let d = run_on("if (!x) { a(); b(); c(); } else { d(); }");
+        assert_eq!(d.len(), 1);
     }
 
     #[test]
