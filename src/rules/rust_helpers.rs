@@ -1578,6 +1578,76 @@ fn attribute_is_cfg(attribute_item: Node, source: &[u8]) -> bool {
     matches!(path.utf8_text(source), Ok("cfg") | Ok("cfg_attr"))
 }
 
+/// True if a local `let` binding named `var`, visible at `node`, is a confirmable
+/// `Vec`: it binds `var` to a `Vec`-shaped initializer (`Vec::new()`,
+/// `Vec::with_capacity(...)`, `vec![...]`) or carries an explicit `: Vec<...>`
+/// type annotation.
+///
+/// Walks up the enclosing scopes from `node`, considering only `let` declarations
+/// that lexically precede `node` within their block. A parameter binding is NOT
+/// confirmed here — only an in-scope `let` — so callers that also want to confirm
+/// a `Vec`-typed parameter must check that separately.
+///
+/// `Vec` shares no API with the many other `.push`-/`.iter()`-exposing types
+/// (`VecDeque`, crossbeam `Worker`/`Injector`, custom queues), so confirming the
+/// binding is `Vec` before suggesting a `Vec`-only rewrite avoids false positives
+/// on those types.
+pub fn local_let_binds_vec(node: Node, var: &str, source: &[u8]) -> bool {
+    let mut child = node;
+    while let Some(parent) = child.parent() {
+        let mut cursor = parent.walk();
+        for sib in parent.children(&mut cursor) {
+            if sib.id() == child.id() {
+                break;
+            }
+            if sib.kind() == "let_declaration" && let_binds_vec(sib, var, source) {
+                return true;
+            }
+        }
+        child = parent;
+    }
+    false
+}
+
+/// Whether `let_node` declares `var` with a `Vec`-shaped initializer or an
+/// explicit `Vec<...>` type annotation.
+fn let_binds_vec(let_node: Node, var: &str, source: &[u8]) -> bool {
+    let Some(pattern) = let_node.child_by_field_name("pattern") else {
+        return false;
+    };
+    if !let_pattern_binds(pattern, var, source) {
+        return false;
+    }
+    if let Some(ty) = let_node.child_by_field_name("type")
+        && ty.utf8_text(source).unwrap_or("").trim_start().starts_with("Vec<")
+    {
+        return true;
+    }
+    if let Some(value) = let_node.child_by_field_name("value") {
+        let text = value.utf8_text(source).unwrap_or("");
+        if text.starts_with("Vec::") || text.starts_with("vec!") {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether a `let` pattern (`x` or `mut x`) binds the name `var`.
+fn let_pattern_binds(pattern: Node, var: &str, source: &[u8]) -> bool {
+    let name = match pattern.kind() {
+        "identifier" => pattern.utf8_text(source).ok(),
+        "mut_pattern" => {
+            let mut cursor = pattern.walk();
+            pattern
+                .children(&mut cursor)
+                .find(|c| c.kind() == "identifier")
+                .and_then(|c| c.utf8_text(source).ok())
+        }
+        _ => None,
+    };
+    name == Some(var)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2391,6 +2461,36 @@ mod tests {
                 is_under_cfg_debug_assertions(call, src.as_bytes()),
                 expected,
                 "is_under_cfg_debug_assertions mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn local_let_binds_vec_confirms_vec_shapes_and_rejects_others() {
+        // Anchor on the `for_expression`, mirroring how the caller passes the
+        // node whose enclosing scopes are searched for the `var` binding.
+        let cases = [
+            ("fn f(src: Vec<u32>) { let v = Vec::new(); for x in src { v.push(x); } }", "v", true),
+            ("fn f(src: Vec<u32>) { let v = vec![]; for x in src { v.push(x); } }", "v", true),
+            ("fn f(src: Vec<u32>) { let v = Vec::with_capacity(4); for x in src { v.push(x); } }", "v", true),
+            ("fn f(src: Vec<u32>) { let v: Vec<u32> = make(); for x in src { v.push(x); } }", "v", true),
+            ("fn f(src: Vec<u32>) { let mut v = Vec::new(); for x in src { v.push(x); } }", "v", true),
+            // A parameter binding is not confirmed here — only a `let`.
+            ("fn f(src: Vec<u32>, v: Vec<u32>) { for x in src { v.push(x); } }", "v", false),
+            // Non-`Vec` initializer / annotation.
+            ("fn f(src: Vec<u32>) { let v = Queue::new(); for x in src { v.push(x); } }", "v", false),
+            ("fn f(src: Vec<u32>) { let v: Queue<u32> = make(); for x in src { v.push(x); } }", "v", false),
+            // The `let` must lexically precede the loop in its block.
+            ("fn f(src: Vec<u32>) { for x in src { v.push(x); } let v = Vec::new(); }", "v", false),
+        ];
+        for (src, var, expected) in cases {
+            let tree = parse(src);
+            let for_node = first_of_kind(tree.root_node(), "for_expression")
+                .expect("snippet should contain a for_expression");
+            assert_eq!(
+                local_let_binds_vec(for_node, var, src.as_bytes()),
+                expected,
+                "local_let_binds_vec mismatch for `{src}`"
             );
         }
     }
