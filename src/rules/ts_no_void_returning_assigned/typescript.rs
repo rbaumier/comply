@@ -1,70 +1,12 @@
-//! Flag `const x = console.log(...)` / `const x = arr.forEach(...)` and a
-//! short list of other void-typical methods. Detection is pattern-based.
-
-use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::backend::{CheckCtx, TextCheck};
-use std::sync::Arc;
-
-#[derive(Debug)]
-pub struct Check;
-
-/// Suffixes of the `<callee>(` form we treat as void-returning.
-const VOID_PATTERNS: &[&str] = &[
-    "console.log(",
-    "console.error(",
-    "console.warn(",
-    "console.info(",
-    "console.debug(",
-    "console.table(",
-    ".forEach(",
-];
-
-const ASSIGN_KEYWORDS: &[&str] = &["const ", "let ", "var "];
-
-impl TextCheck for Check {
-    fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
-        'lines: for (idx, line) in ctx.source.lines().enumerate() {
-            let trimmed = line.trim_start();
-            // Must start with const/let/var.
-            let kw = ASSIGN_KEYWORDS.iter().find(|k| trimmed.starts_with(*k));
-            let Some(kw) = kw else { continue };
-            let leading = line.len() - trimmed.len();
-            let after_kw = &trimmed[kw.len()..];
-            // Find an `=` on this line.
-            let Some(eq_rel) = after_kw.find('=') else {
-                continue;
-            };
-            let rhs = &after_kw[eq_rel + 1..];
-            for pat in VOID_PATTERNS {
-                if rhs.contains(pat) {
-                    diagnostics.push(Diagnostic {
-                        path: Arc::clone(&ctx.path_arc),
-                        line: idx + 1,
-                        column: leading + 1,
-                        rule_id: super::META.id.into(),
-                        message: format!(
-                            "Storing the return of `{}` is always `undefined` — the call returns void.",
-                            pat.trim_end_matches('(')
-                        ),
-                        severity: Severity::Warning,
-                        span: None,
-                    });
-                    continue 'lines;
-                }
-            }
-        }
-        diagnostics
-    }
-}
+//! Tests for ts-no-void-returning-assigned.
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::path::Path;
+    use crate::diagnostic::Diagnostic;
+    use crate::rules::test_helpers::run_rule_by_id;
 
     fn run(source: &str) -> Vec<Diagnostic> {
-        Check.check(&CheckCtx::for_test(Path::new("t.ts"), source))
+        run_rule_by_id("ts-no-void-returning-assigned", source, "t.ts")
     }
 
     #[test]
@@ -94,6 +36,40 @@ mod tests {
     #[test]
     fn flags_let_console_error() {
         let src = "let y = console.error('boom');";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for #3876: an arrow function whose concise body is a void call
+    // holds a function, never `undefined`.
+    #[test]
+    fn allows_arrow_with_foreach_body() {
+        let src = "const notify = () => callbacks.forEach((fn) => fn());";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_arrow_single_param_foreach_body() {
+        let src = "const f = a => a.forEach(g);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_arrow_with_console_log_body() {
+        let src = "const logIt = () => console.log('hi');";
+        assert!(run(src).is_empty());
+    }
+
+    // The void value is genuinely assigned: the callback arrow is nested inside
+    // `.map(...)`, and `.forEach(...)` is the direct init of the binding.
+    #[test]
+    fn flags_chained_map_then_foreach() {
+        let src = "const x = items.map(y => y.z).forEach(f);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_reassignment_to_foreach() {
+        let src = "x = arr.forEach(f);";
         assert_eq!(run(src).len(), 1);
     }
 }
