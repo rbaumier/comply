@@ -26,6 +26,15 @@
 //! or `std::io::ErrorKind` — are exempt: the wildcard there is idiomatic
 //! or compiler-mandated, and all arms of a `match` share one type.
 //!
+//! Matches whose enum-like arms are all externally rooted — every arm path
+//! leads with a lowercase crate-name segment (`multer::Error::FieldSizeExceeded`,
+//! `std::io::ErrorKind::NotFound`) that is not `crate`/`super`/`self` — are
+//! also exempt: the scrutinee enum is defined in a foreign crate, where an
+//! upstream author can add variants (and a `#[non_exhaustive]` enum makes the
+//! `_` arm compiler-mandated outright). The rule's premise — that listing
+//! every variant turns a new upstream variant into a compile error here — does
+//! not hold across the crate boundary, so the wildcard is correct.
+//!
 //! Matches with a non-wildcard arm carrying a match guard (`pat if cond`)
 //! are exempt as a whole: a guarded arm never counts toward exhaustiveness
 //! (the guard may be false at runtime), so the `_` arm is compiler-mandated
@@ -125,6 +134,20 @@ impl AstCheck for Check {
         if enum_like_arms
             .iter()
             .all(|p| references_stdlib_closed_enum(*p, source_bytes))
+        {
+            return;
+        }
+        // When every enum-like arm path is rooted at a foreign-crate segment
+        // (a lowercase crate name, not `crate`/`super`/`self`), the scrutinee
+        // enum is defined outside this crate. An upstream author can add
+        // variants, and a `#[non_exhaustive]` enum makes the `_` arm
+        // compiler-mandated — so listing every variant here never turns a new
+        // upstream variant into a compile error. The wildcard is correct.
+        // A mix of external and local arms is treated as local (likely a
+        // project enum), so the exemption requires *all* arms to be external.
+        if enum_like_arms
+            .iter()
+            .all(|p| arm_path_is_externally_rooted(*p, source_bytes))
         {
             return;
         }
@@ -330,6 +353,56 @@ fn references_stdlib_closed_enum(pattern: tree_sitter::Node, source: &[u8]) -> b
     }
     // `std::io::ErrorKind` is #[non_exhaustive]: a `_` arm is mandatory.
     head.contains("ErrorKind::")
+}
+
+/// True if `pattern`'s head path is rooted at a foreign-crate segment: its
+/// leading path segment is a lowercase ASCII crate name (`multer`, `std`,
+/// `tokio`) that is not `crate`/`super`/`self`. Such a path
+/// (`multer::Error::FieldSizeExceeded`) names a variant of an enum defined in
+/// another crate, where the `_` arm is upstream-driven (compiler-mandated for
+/// `#[non_exhaustive]`). PascalCase-rooted (`Direction::North` → the local
+/// enum type), bare-unqualified (`Variant`), and `Self`/`crate`/`super`/`self`
+/// paths are all not external.
+///
+/// Accepted limitation: a relative *local* module path with a lowercase root
+/// and no `crate::` prefix (`some_mod::E::Variant`) reads as external here.
+/// That is a rare under-flag in the safe direction, far less common than the
+/// cross-crate case this targets.
+fn arm_path_is_externally_rooted(pattern: tree_sitter::Node, source: &[u8]) -> bool {
+    // Unwrap the `match_pattern` wrapper, mirroring `pattern_is_enum_like`.
+    if pattern.kind() == "match_pattern" {
+        let mut cursor = pattern.walk();
+        if let Some(inner) = pattern.named_children(&mut cursor).next() {
+            return arm_path_is_externally_rooted(inner, source);
+        }
+        return false;
+    }
+    // Or-pattern: every disjunct must be externally rooted.
+    if pattern.kind() == "or_pattern" {
+        let mut cursor = pattern.walk();
+        return pattern
+            .named_children(&mut cursor)
+            .all(|child| arm_path_is_externally_rooted(child, source));
+    }
+
+    let Ok(text) = pattern.utf8_text(source) else {
+        return false;
+    };
+    let text = text.trim();
+    // Strip tuple-struct / struct fields and any guard: `multer::Error::E(_)`
+    // → `multer::Error::E`. A path must be qualified (`::`) to have a root.
+    let head = text.split(['(', '{', ' ']).next().unwrap_or(text).trim();
+    let Some(root) = head.split("::").next() else {
+        return false;
+    };
+    let root = root.trim();
+    if matches!(root, "crate" | "super" | "self" | "Self") {
+        return false;
+    }
+    // Crate-name convention: a leading lowercase ASCII identifier. A
+    // PascalCase root (`Direction`) is the local enum type, not a crate.
+    root.starts_with(|c: char| c.is_ascii_lowercase())
+        && root.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// True if the `match_arm`'s body is a `Some(...)` constructor call — the
@@ -874,6 +947,31 @@ mod tests {
                    fn real_ip(a: Addr) -> i32 { match a { \
                    Addr::SocketAddr(addr) => 1, _ => 0 } }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_on_foreign_crate_non_exhaustive_enum() {
+        // Issue #3819: axum's `status_code_from_multer_error`. `multer::Error`
+        // is a third-party `#[non_exhaustive]` enum, so the `_` arm is
+        // compiler-mandated — every arm path is rooted at the lowercase crate
+        // segment `multer`, so the match is exempt.
+        let src = "fn f(err: &multer::Error) -> StatusCode { match err { \
+                   multer::Error::FieldSizeExceeded { .. } \
+                   | multer::Error::StreamSizeExceeded { .. } => a, \
+                   multer::Error::StreamReadFailed(_) => b, \
+                   _ => c, } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_mixed_external_and_local_rooted_match() {
+        // Issue #3819 negative space: a mix of one externally-rooted arm and
+        // one local PascalCase-rooted arm is likely a local enum, so the
+        // exemption does not apply and the `_` arm still flags.
+        let src = "fn f(x: Foo) -> i32 { match x { \
+                   multer::Error::StreamReadFailed(_) => 1, \
+                   Direction::North => 2, _ => 0 } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
