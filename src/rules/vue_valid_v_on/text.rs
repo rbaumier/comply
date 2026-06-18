@@ -2,11 +2,14 @@
 //!
 //! Walks `directive_attribute` nodes. For each `v-on` directive — long form
 //! (`directive_name` is `v-on`) or `@` shorthand (`directive_name` is `@`) —
-//! reports, in this order: a long-form directive with no event-name argument
-//! (`MissingEventName`); the first modifier that is not a known event/key/system
-//! modifier (`InvalidModifier`); a directive with no handler value
-//! (`MissingHandler`). The `@` shorthand always carries an argument, so it is
-//! never flagged for a missing event name.
+//! reports, in this order: a long-form directive with neither an event-name
+//! argument nor a value (`MissingEventName`); the first modifier that is not a
+//! known event/key/system modifier (`InvalidModifier`); a directive with no
+//! handler value (`MissingHandler`). The `@` shorthand always carries an
+//! argument, so it is never flagged for a missing event name. A long-form
+//! directive with a value but no argument (`v-on="{ click: f }"` /
+//! `v-on="listeners"`) is Vue's object syntax for binding multiple listeners and
+//! is valid.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -89,8 +92,9 @@ crate::ast_check! { on ["directive_attribute"] prefilter = ["v-on", "@"] => |nod
     }
 
     // The `@` shorthand always carries an argument; only the long form can be
-    // missing its event name.
-    if !is_shorthand && !has_argument {
+    // missing its event name. A value with no argument is the object syntax
+    // (`v-on="{ click: f }"`), where event names are keys in the bound object.
+    if !is_shorthand && !has_argument && !has_value {
         push(diagnostics, node, &ctx.path_arc, MSG_MISSING_EVENT_NAME);
         return;
     }
@@ -426,10 +430,9 @@ mod tests {
     }
 
     #[test]
-    fn flags_long_form_value_without_argument() {
-        let diags = run(&wrap("<div v-on=\"foo\"></div>"));
-        assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("missing an event name"));
+    fn allows_long_form_object_syntax_binding() {
+        // `v-on="<object>"` is Vue's documented object syntax (#3756).
+        assert!(run(&wrap("<div v-on=\"foo\"></div>")).is_empty());
     }
 
     #[test]
@@ -504,7 +507,6 @@ mod tests {
     fn flags_all_biome_invalid_fixtures() {
         let source = wrap(
             "<div v-on></div>\n\
-             <div v-on=\"foo\"></div>\n\
              <div v-on:click></div>\n\
              <div @click></div>\n\
              <div v-on:click.bogus=\"foo\"></div>\n\
@@ -515,7 +517,7 @@ mod tests {
              <MyComponent @click.weird=\"someHandler\"></MyComponent>\n\
              <div @keyup.enter></div>",
         );
-        assert_eq!(run(&source).len(), 11);
+        assert_eq!(run(&source).len(), 10);
     }
 
     // --- Valid fixtures (Biome valid.vue) ---
@@ -590,6 +592,24 @@ mod tests {
     #[test]
     fn allows_native_modifier() {
         assert!(run(&wrap("<div @click.native=\"handler\"></div>")).is_empty());
+    }
+
+    #[test]
+    fn allows_object_syntax_literal() {
+        // Object syntax binds multiple listeners without an argument (#3756).
+        assert!(run(&wrap(
+            "<button v-on=\"{ mousedown: onDown, mouseup: onUp }\">x</button>",
+        ))
+        .is_empty());
+    }
+
+    #[test]
+    fn allows_object_syntax_variable() {
+        // vee-validate `validationListeners` shape: object bound via a variable.
+        assert!(run(&wrap(
+            "<input :value=\"value\" v-on=\"validationListeners\" type=\"text\" />",
+        ))
+        .is_empty());
     }
 
     #[test]
