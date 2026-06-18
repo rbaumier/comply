@@ -1,4 +1,5 @@
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::rust_helpers::is_in_test_context;
 
 const ATOMIC_TYPES: &[(&str, &str)] = &[
     ("bool", "AtomicBool"),
@@ -15,6 +16,11 @@ const ATOMIC_TYPES: &[(&str, &str)] = &[
 ];
 
 crate::ast_check! { on ["type_identifier"] prefilter = ["Mutex"] => |node, source, ctx, diagnostics|
+    // Test fixtures deliberately exercise `Mutex<primitive>` shared-state
+    // plumbing (e.g. `Arc<Mutex<u32>>` passed through a handler); the
+    // lock-free-atomic discipline only applies to production code.
+    if is_in_test_context(node, source) { return; }
+
     let Ok(text) = node.utf8_text(source) else { return };
     if text != "Mutex" { return; }
 
@@ -183,5 +189,11 @@ mod tests {
         let diags = run(src);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("AtomicUsize"));
+    }
+
+    #[test]
+    fn allows_mutex_primitive_in_cfg_test_module() {
+        let src = "#[cfg(test)]\nmod tests {\n    type TestT = Arc<Mutex<u32>>;\n}";
+        assert!(run(src).is_empty());
     }
 }
