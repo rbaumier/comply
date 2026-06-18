@@ -1,8 +1,12 @@
 //! ts-no-empty-object-type — flag `{}` used as a type.
 //!
-//! Exempts the type-system idioms where `{}` is deliberate: a generic
-//! constraint/default (`T extends {}`, `T = {}`) and an intersection identity
-//! (`T & {}`) whose other operand is a non-empty type. Skipped entirely in test
+//! Targets annotation and declaration positions, where `{}` matches any
+//! non-nullish value rather than the empty object the author meant. Exempts the
+//! positions where `{}` is deliberate: a generic constraint/default
+//! (`T extends {}`, `T = {}`), an intersection identity (`T & {}`) whose other
+//! operand is a non-empty type, and an explicit type argument (`Foo<{}>`,
+//! `Component<{}>`, `TaggedError("x")<{}>()`) — instantiating a generic with `{}`
+//! fills a slot the API designed for an empty payload. Skipped entirely in test
 //! directories, where `{}` is the expected type under type-level assertions
 //! (`expectType<{}>(...)`) rather than a value annotation.
 

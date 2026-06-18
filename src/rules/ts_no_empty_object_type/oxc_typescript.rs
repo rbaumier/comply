@@ -4,7 +4,6 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::TSType;
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 /// True when the empty `{}` is a deliberate type-system idiom rather than a
@@ -57,22 +56,14 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Skip `{}` used as the type argument to a `TaggedError(...)` call
-        // (better-result convention for a zero-prop error class). Resolve through
-        // the type-argument list to the enclosing call and inspect the callee's
-        // full span, so a multi-line `TaggedError(...)` call doesn't defeat it.
+        // Skip `{}` used as an explicit type argument (`Foo<{}>`). Instantiating a
+        // generic with `{}` fills a slot the API designed — "empty payload/props" is
+        // the intended meaning, not the "matches any non-nullish value" footgun that
+        // bites in annotation and declaration positions. Covers React class props
+        // (`Component<{}>`), mixin constructors (`Constructor<{}>`), and error/schema
+        // factories (`TaggedError("x")<{}>()`).
         if matches!(parent.kind(), AstKind::TSTypeParameterInstantiation(_)) {
-            let callee_span = match semantic.nodes().parent_node(parent.id()).kind() {
-                AstKind::CallExpression(call) => Some(call.callee.span()),
-                AstKind::NewExpression(new) => Some(new.callee.span()),
-                _ => None,
-            };
-            if let Some(span) = callee_span {
-                let callee_src = &ctx.source[span.start as usize..span.end as usize];
-                if callee_src.contains("TaggedError") {
-                    return;
-                }
-            }
+            return;
         }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, lit.span.start as usize);
@@ -140,8 +131,19 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_empty_object_in_other_generics() {
-        assert_eq!(run_on("type X = Map<string, {}>;").len(), 1);
+    fn allows_empty_object_as_type_argument() {
+        // `{}` as an explicit type argument is a deliberate generic instantiation,
+        // not the "any non-nullish" footgun — exempt regardless of the generic.
+        assert!(run_on("type X = Map<string, {}>;").is_empty());
+        assert!(run_on("class App extends React.Component<{}> {}").is_empty());
+        assert!(run_on("function mix<T extends Constructor<{}>>(B: T) {}").is_empty());
+        assert!(run_on("const c = new C<{}>();").is_empty());
+    }
+
+    #[test]
+    fn still_flags_empty_object_in_union() {
+        // A union member is not a type-argument position — `{}` stays flagged.
+        assert_eq!(run_on("type X = string | {};").len(), 1);
     }
 
     #[test]
@@ -150,10 +152,10 @@ mod tests {
     }
 
     #[test]
-    fn allows_constraint_but_flags_value_positions_in_recursive_accumulator() {
-        // The `Acc extends {}` constraint is exempt; the `{}` in the type
-        // argument `IsAny<D, {}, D>` and the conditional else branch `: {}`
-        // are not constraint/intersection positions and remain flagged.
+    fn flags_only_conditional_branch_in_recursive_accumulator() {
+        // The `Acc extends {}` constraint and the `IsAny<D, {}, D>` type argument
+        // are deliberate type-system positions and exempt; only the bare `{}` in
+        // the conditional's else branch (`: {}`) is a value-shaped use and flagged.
         let src = r#"
             type ExtractDispatchFromMiddlewareTuple<
               MiddlewareTuple extends readonly any[],
@@ -165,7 +167,7 @@ mod tests {
                 >
               : Acc
         "#;
-        assert_eq!(run_on(src).len(), 2);
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
