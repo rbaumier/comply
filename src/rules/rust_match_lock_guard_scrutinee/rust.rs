@@ -73,14 +73,19 @@ impl AstCheck for Check {
 
 /// Peel the wrappers a guard acquisition is typically wrapped in so the
 /// scrutinee's underlying `.lock()`/`.read()`/`.write()` is reached:
-/// `?` (try), `.await`, and `.unwrap()` / `.expect(...)`. So `match
-/// mtx.lock()?`, `match lock.read().unwrap()`, and `match m.lock().await`
-/// all resolve to the lock call underneath.
+/// `?` (try) and `.unwrap()` / `.expect(...)`. So `match mtx.lock()?` and
+/// `match lock.read().unwrap()` resolve to the lock call underneath.
+///
+/// `.await` is deliberately not peeled: `std::sync` `Mutex`/`RwLock` guards
+/// (the only locks held across every match arm, and all this rule targets) are
+/// acquired synchronously and never awaited, so an awaited `.read()`/`.write()`/
+/// `.lock()` is an ordinary async method returning `Result`/`Option`, not a lock
+/// guard, and must not be treated as one.
 fn peel_guard_wrappers<'a>(node: tree_sitter::Node<'a>, source: &[u8]) -> tree_sitter::Node<'a> {
     let mut current = node;
     loop {
         match current.kind() {
-            "try_expression" | "await_expression" => {
+            "try_expression" => {
                 let Some(inner) = current.named_child(0) else {
                     return current;
                 };
@@ -329,6 +334,30 @@ mod tests {
     }
 
     #[test]
+    fn allows_awaited_write_with_result_arms() {
+        // Issue #3749 repro: an awaited async `write` returning a `Result`, not a
+        // lock guard. `.await` is never peeled, so the underlying `.write()` is
+        // not reached and the match is not treated as a guard acquisition.
+        let src = "async fn run(bundle: &mut Bundler) { let o = match bundle.write().await { Ok(output) => output, Err(_) => return }; let _ = o; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_value_match_after_awaited_write() {
+        // The genuine await-peel FP: value-matching an owned enum returned by an
+        // awaited async method named `write`. A synchronous lock guard is never
+        // awaited, so this is an async method, not a lock acquisition.
+        let src = "async fn run(s: &mut Stream) { match s.write().await { WriteOutcome::Done => {}, WriteOutcome::Partial(n) => {} } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_value_match_after_awaited_read() {
+        let src = "async fn f(m: &mut W) { match m.read().await { Foo::A => 1, Foo::B => 2 }; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
     fn flags_rwlock_read_guard() {
         let src = "fn f() { match lock.read().unwrap() { _ => () } }";
         assert_eq!(run_on(src).len(), 1);
@@ -337,6 +366,12 @@ mod tests {
     #[test]
     fn flags_mutex_lock_guard() {
         let src = "fn f() { match m.lock().unwrap() { _ => () } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_value_match_on_sync_lock_guard() {
+        let src = "fn f() { match m.lock().unwrap() { Foo::A => 1, _ => 2 } }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
