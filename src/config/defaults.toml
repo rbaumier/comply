@@ -441,3 +441,15 @@ ignore = []
 # ---------------------------------------------------------------
 [rules.no-unknown-pseudo-element]
 ignore = []
+
+# ---------------------------------------------------------------
+# filename-naming-convention
+# JS/TS source uses kebab-case by default, but Angular/Google mandate
+# snake_case for all TypeScript source. A snake_case file is accepted only when
+# snake_case is the project's *established* dominant convention: its share of
+# all classifiable TS/JS stems must reach `min_dominant_share`. A kebab-dominant
+# project with a few stray snake_case files stays below the threshold, so those
+# files are still flagged.
+# ---------------------------------------------------------------
+[rules.filename-naming-convention]
+min_dominant_share = 0.6

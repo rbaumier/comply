@@ -2058,6 +2058,15 @@ pub struct ProjectCtx {
     // caches a directory with no enclosing shadcn registry so the disk walk and
     // manifest parse run at most once per directory.
     registry_root_cache: Mutex<FxHashMap<PathBuf, Option<PathBuf>>>,
+
+    // The project's dominant TS/JS filename-casing convention and that
+    // convention's share of all classifiable TS/JS stems, or `None` when no stem
+    // classifies (empty/non-TS-JS project). Computed once over the indexed file
+    // set; `filename-naming-convention` uses it to accept snake_case files in a
+    // snake_case-dominant project (Angular/Google source) without weakening the
+    // rule for kebab-dominant projects.
+    dominant_ts_js_filename_convention:
+        OnceLock<Option<(crate::rules::filename_naming_convention::FilenameConvention, f64)>>,
 }
 
 impl ProjectCtx {
@@ -2186,6 +2195,47 @@ impl ProjectCtx {
     /// returns empty index if not built.
     pub fn locale_index(&self) -> &LocaleIndex {
         self.locale_index.get_or_init(LocaleIndex::default)
+    }
+
+    /// The project's dominant TS/JS filename-casing convention paired with that
+    /// convention's share (`0.0..=1.0`) of all classifiable TS/JS stems, or
+    /// `None` when no indexed TS/JS file classifies into a convention.
+    ///
+    /// Enumerates the already-built import index (`indexed_paths()`) — the only
+    /// in-memory retention of the per-run file set — so it adds no filesystem
+    /// walk. Each TS/JS stem is classified by `classify_ts_js_stem`; the plurality
+    /// convention and its share are computed once and memoized. `filename-naming-
+    /// convention` consults this to accept snake_case files in a snake_case-
+    /// dominant project while still flagging stray snake_case files elsewhere.
+    pub fn dominant_ts_js_filename_convention(
+        &self,
+    ) -> Option<(crate::rules::filename_naming_convention::FilenameConvention, f64)> {
+        *self.dominant_ts_js_filename_convention.get_or_init(|| {
+            use crate::rules::filename_naming_convention::{
+                FilenameConvention, classify_ts_js_stem,
+            };
+            let mut counts: FxHashMap<FilenameConvention, usize> = FxHashMap::default();
+            let mut total = 0usize;
+            for path in self.import_index().indexed_paths() {
+                if !crate::files::Language::from_path(path)
+                    .is_some_and(|lang| lang.is_typescript_family())
+                {
+                    continue;
+                }
+                let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                if let Some(convention) = classify_ts_js_stem(stem) {
+                    *counts.entry(convention).or_default() += 1;
+                    total += 1;
+                }
+            }
+            if total == 0 {
+                return None;
+            }
+            let (convention, count) = counts.into_iter().max_by_key(|&(_, count)| count)?;
+            Some((convention, count as f64 / total as f64))
+        })
     }
 
     /// Cross-file Kubernetes resource index. Always returns a handle:
