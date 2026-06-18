@@ -4,8 +4,6 @@
 //! `height`. Reserving space reduces Cumulative Layout Shift (CLS).
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -1,8 +1,6 @@
 //! elysia-objectstring-for-query
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

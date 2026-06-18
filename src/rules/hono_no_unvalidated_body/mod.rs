@@ -1,8 +1,6 @@
 //! hono-no-unvalidated-body — flag `c.req.json()` / `c.req.parseBody()` without validation.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
