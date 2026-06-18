@@ -6,8 +6,9 @@
 //!
 //! - `panic!` — turn it into a typed `Result` error.
 //! - `todo!` / `unimplemented!` — placeholders that must not ship.
-//! - `unreachable!` — only legitimate when marking a compiler-proven
-//!   impossible state; document it with an `// Impossible: …` comment.
+//! - `unreachable!` — asserts an invariant the compiler can't prove. A
+//!   documented `unreachable!("reason")` carrying an explanatory string
+//!   message is allowed; a bare, undocumented `unreachable!()` is not.
 //!
 //! Tests are exempted because panicking in a `#[test]` is a clean
 //! failure mode. Same exemption logic as `rust-no-unwrap`. cargo-fuzz
@@ -17,7 +18,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
+use crate::rules::rust_helpers::{
+    is_in_test_context, is_under_tests_dir, macro_body, split_top_level_args, string_literal_content,
+};
 
 const KINDS: &[&str] = &["macro_invocation"];
 
@@ -58,6 +61,15 @@ impl AstCheck for Check {
         {
             return;
         }
+        // `unreachable!` asserts an invariant, not a reachable failure. A
+        // documented `unreachable!("reason")` carrying an explanatory string
+        // message is the legitimate form — exempt it. A bare `unreachable!()`
+        // (or one whose first argument is not a string literal) still flags.
+        // The other three macros are unaffected: a message does not make "this
+        // can happen / isn't done" acceptable.
+        if macro_name == "unreachable" && has_documented_message(node, ctx.source) {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -67,14 +79,32 @@ impl AstCheck for Check {
             message: format!(
                 "`{macro_name}!` aborts at runtime. Replace with a typed \
                  `Result` error. `todo!`/`unimplemented!` are placeholders \
-                 that must not ship; `unreachable!` is only for \
-                 compiler-proven impossible states with an `// Impossible:` \
-                 comment. Tests are exempted."
+                 that must not ship; a bare `unreachable!()` needs a \
+                 documenting message — write `unreachable!(\"reason\")` to \
+                 assert the invariant. Tests are exempted."
             ),
             severity: Severity::Error,
             span: None,
         });
     }
+}
+
+/// True when an `unreachable!` invocation documents its invariant with an
+/// explanatory string-literal message, i.e. its first argument is a string
+/// literal (`unreachable!("reason")` / `unreachable!("BUG: {:?}", err)`). A
+/// bare `unreachable!()` or one whose first argument is not a string literal
+/// returns false.
+fn has_documented_message(node: tree_sitter::Node, source: &str) -> bool {
+    let Ok(text) = node.utf8_text(source.as_bytes()) else {
+        return false;
+    };
+    let Some(body) = macro_body(text) else {
+        return false;
+    };
+    let Some(first_arg) = split_top_level_args(body).into_iter().next() else {
+        return false;
+    };
+    string_literal_content(first_arg.trim()).is_some()
 }
 
 #[cfg(test)]
@@ -118,6 +148,53 @@ mod tests {
     #[test]
     fn flags_unreachable_macro() {
         assert_eq!(run_on("fn f() { unreachable!(); }").len(), 1);
+    }
+
+    #[test]
+    fn allows_documented_unreachable_with_message() {
+        // gitoxide gix-config/src/key.rs:117 — an invariant the compiler can't
+        // prove but the message documents; the arm has no value to return.
+        let source = r#"fn f() { unreachable!("iterator can't restart producing items"); }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_documented_unreachable_with_format_message() {
+        // gitoxide gix-config/src/file/includes/mod.rs:135.
+        let source =
+            r#"fn f() { unreachable!("BUG: {:?} not possible due to no-follow options", err); }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_unreachable_without_message() {
+        // No documented invariant — an undocumented `unreachable!()` still flags.
+        assert_eq!(run_on("fn f() { unreachable!(); }").len(), 1);
+    }
+
+    #[test]
+    fn flags_unreachable_with_non_string_first_arg() {
+        // A non-string first argument is not a documented-invariant message.
+        assert_eq!(run_on("fn f() { unreachable!(code); }").len(), 1);
+    }
+
+    #[test]
+    fn allows_documented_unreachable_with_padded_message() {
+        // Whitespace between the delimiter and the message must not defeat the
+        // exemption — the argument is trimmed before the literal check.
+        assert!(run_on(r#"fn f() { unreachable!( "padded reason" ); }"#).is_empty());
+    }
+
+    #[test]
+    fn flags_documented_panic_with_message() {
+        // A message does not exempt `panic!` — it can still happen at runtime.
+        assert_eq!(run_on(r#"fn f() { panic!("boom"); }"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_documented_unimplemented_with_message() {
+        // A message does not exempt `unimplemented!` — it must not ship.
+        assert_eq!(run_on(r#"fn f() { unimplemented!("later"); }"#).len(), 1);
     }
 
     #[test]
