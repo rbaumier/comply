@@ -361,6 +361,50 @@ mod tests {
     }
 
     #[test]
+    fn ignores_promise_executor_resolve_parameter() {
+        // `resolve` is the executor parameter of `new Promise(...)`; it is called
+        // with one value inside a nested callback. Its arity is supplied by the
+        // Promise runtime, so the call must not be flagged against the enclosing
+        // zero-param `checkRipgrepAvailable` (#3802).
+        let src = r#"
+            function checkRipgrepAvailable(): Promise<boolean> {
+                return new Promise((resolve) => {
+                    child.on("close", (code) => {
+                        resolve(code === 0);
+                    });
+                });
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_function_typed_parameter_called_with_args() {
+        // `executor` is a function-typed parameter; its call arity comes from its
+        // annotation, not the enclosing `makeTool` declaration (#3802).
+        let src = r#"
+            function makeTool(executor: SearchExecutor) {
+                return queries.map(async (query) => executor(query, cwd, context));
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_rest_function_typed_parameter() {
+        // `invokeOptional` is a parameter typed with a rest param; a multi-arg
+        // call must not be flagged against the enclosing function (#3802).
+        let src = r#"
+            async function coordinate(
+                invokeOptional: (method: string, ...args: unknown[]) => Promise<void>,
+            ) {
+                await invokeOptional("foo", a, b);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
     fn flags_extra_args_against_inner_shadow_in_its_scope() {
         // Negative-space guard: the in-scope binding at the call site is the
         // inner 0-param `g`, so an extra-args call inside that scope is still
