@@ -111,6 +111,71 @@ fn is_excluded_comment(lower: &str) -> bool {
     DIRECTIVE_MARKERS.iter().chain(BANNER_MARKERS).any(|m| lower.contains(m))
 }
 
+/// Tool/lint directives whose text is fixed by an external contract, so it is
+/// byte-identical in every file that needs it — copying it is the directive
+/// working as designed, not a copy-paste smell. Matched case-sensitively at the
+/// *start* of the stripped comment (the canonical tool spelling), so a free-form
+/// comment merely mentioning a tool name mid-sentence stays eligible to flag.
+/// `-next-line` / `-disable-next-line` suffixes are covered by the starts-with.
+const TOOL_DIRECTIVES: &[&str] = &[
+    "oxlint-disable",
+    "eslint-disable",
+    "biome-ignore",
+    "prettier-ignore",
+    "@ts-expect-error",
+    "@ts-ignore",
+    "@ts-nocheck",
+    "c8 ignore",
+    "v8 ignore",
+    "istanbul ignore",
+];
+
+/// Module-top string-literal pragmas (`"use client"`, `"use no memo"`, …). A
+/// comment trailing one of these on the same physical line is mandated identical
+/// across every file carrying the pragma, so it must not be flagged as a
+/// near-duplicate.
+const PRAGMA_LITERALS: &[&str] = &["use no memo", "use client", "use server", "use strict"];
+
+/// A directive/pragma comment whose text an external tool/framework contract
+/// fixes byte-for-byte — so it is the same in every file by design and the
+/// "keep one, point the rest at it" remedy cannot apply. Two shapes:
+///
+/// 1. the comment *is* a tool directive (`/* oxlint-disable … */`,
+///    `// eslint-disable-next-line …`): the stripped text starts with a known
+///    directive token;
+/// 2. the comment *trails* a string-literal pragma statement on the same line
+///    (`"use no memo"; // …`): the source before its column is exactly such a
+///    statement and nothing else.
+fn is_directive_or_pragma_comment(group: &CommentGroup, source: &str) -> bool {
+    let head = group.stripped.trim_start();
+    if TOOL_DIRECTIVES.iter().any(|d| head.starts_with(d)) {
+        return true;
+    }
+    line_before_comment(source, group.start_byte).is_some_and(is_pragma_literal_statement)
+}
+
+/// The source text on the comment's physical line, up to the comment's start.
+/// `None` when the comment is the first thing on the file (no preceding byte).
+fn line_before_comment(source: &str, comment_start: usize) -> Option<&str> {
+    let line_start = source[..comment_start].rfind('\n').map_or(0, |i| i + 1);
+    source.get(line_start..comment_start)
+}
+
+/// True when `before` (the source preceding a trailing comment) is exactly a
+/// recognized pragma string-literal statement and nothing else: an optional
+/// surrounding-whitespace `"use client"` / `'use no memo'`, with an optional
+/// trailing `;`. Arbitrary code before the comment is not a pragma, so it does
+/// not exempt the trailing comment.
+fn is_pragma_literal_statement(before: &str) -> bool {
+    let trimmed = before.trim();
+    let trimmed = trimmed.strip_suffix(';').unwrap_or(trimmed).trim_end();
+    let inner = trimmed
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .or_else(|| trimmed.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')));
+    inner.is_some_and(|lit| PRAGMA_LITERALS.contains(&lit))
+}
+
 /// Source-file extensions that mark a relative path as a citation target.
 const SOURCE_EXTS: &[&str] = &[".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".rs"];
 
@@ -410,7 +475,10 @@ fn extract_entries(
     let mut entries = Vec::new();
     for group in groups {
         let lower = group.stripped.to_lowercase();
-        if is_excluded_comment(&lower) || is_citation_comment(&lower) {
+        if is_excluded_comment(&lower)
+            || is_citation_comment(&lower)
+            || is_directive_or_pragma_comment(&group, &source)
+        {
             continue;
         }
         let words = normalize_words(&group.stripped);
@@ -894,6 +962,71 @@ pub fn run() {}
         let a = write(&dir, "a.ts", line);
         let b = write(&dir, "b.ts", line);
         assert!(run(&[&a, &b]).is_empty());
+    }
+
+    #[test]
+    fn ignores_oxlint_disable_directive_block() {
+        // Regression (#3843): a lint-disable directive is byte-identical in every
+        // file that needs it by an external contract, so "keep one, point the rest
+        // at it" cannot apply. Two files independently disabling the same rules is
+        // the directive working as designed, not copy-paste drift. The justification
+        // is long enough to clear the word/entropy gates, so only the directive
+        // exclusion keeps it out.
+        let dir = tempfile::tempdir().unwrap();
+        let line = "/* oxlint-disable ban-types, no-empty-object-type -- the TaggedError public API intentionally requires an empty object literal here so subclasses stay structurally compatible */\nexport const e = 1;\n";
+        let a = write(&dir, "forbidden.ts", line);
+        let b = write(&dir, "index.ts", line);
+        assert!(run(&[&a, &b]).is_empty(), "lint-disable directives must not be flagged");
+    }
+
+    #[test]
+    fn ignores_eslint_disable_next_line_directive() {
+        // The `-next-line` suffix is covered by starts-with on the canonical token.
+        let dir = tempfile::tempdir().unwrap();
+        let line = "// eslint-disable-next-line @typescript-eslint/no-explicit-any -- the upstream third-party callback signature is typed as any and we cannot widen it from here\nexport const f = 1;\n";
+        let a = write(&dir, "a.ts", line);
+        let b = write(&dir, "b.ts", line);
+        assert!(run(&[&a, &b]).is_empty(), "eslint-disable-next-line must not be flagged");
+    }
+
+    #[test]
+    fn ignores_use_no_memo_pragma_trailing_comment() {
+        // Regression (#3843): a comment trailing a module-top string-literal pragma
+        // is mandated identical across every file carrying the pragma, so it cannot
+        // be deduplicated. The comment text alone is ordinary prose long enough to
+        // flag — only the preceding `"use no memo"` pragma keeps it out.
+        let dir = tempfile::tempdir().unwrap();
+        let line = "\"use no memo\"; // RHF register and the formState proxy break under the React Compiler so this whole module opts out of memoization to keep the form bindings stable\nexport const g = 1;\n";
+        let a = write(&dir, "team-form.tsx", line);
+        let b = write(&dir, "lab-form.tsx", line);
+        assert!(run(&[&a, &b]).is_empty(), "comment trailing a pragma literal must not be flagged");
+    }
+
+    #[test]
+    fn still_flags_comment_mentioning_a_directive_mid_sentence() {
+        // Over-exclusion guard: a free-form comment that merely *mentions* a tool
+        // directive mid-sentence (not at the start) is ordinary prose. Starts-with,
+        // not contains, keeps a duplicated such rationale flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let line = "// Production builds intentionally trigger one oxlint-disable comment because the generated vendor bundle ships third-party types we cannot edit without breaking the upstream package contract.\nexport const h = 1;\n";
+        let a = write(&dir, "a.ts", line);
+        let b = write(&dir, "b.ts", line);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "a mid-sentence directive mention is prose, not a directive");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn still_flags_comment_trailing_ordinary_code() {
+        // Over-exclusion guard: a trailing comment after arbitrary code (not a
+        // pragma literal) is not exempt — only the recognized pragma statements are.
+        let dir = tempfile::tempdir().unwrap();
+        let line = "const config = loadConfig(); // The config loader resolves environment overrides before defaults so production secrets always win over the committed development fallbacks here.\nexport const i = 1;\n";
+        let a = write(&dir, "a.ts", line);
+        let b = write(&dir, "b.ts", line);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "a comment trailing real code is not a pragma trailer");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
     #[test]
