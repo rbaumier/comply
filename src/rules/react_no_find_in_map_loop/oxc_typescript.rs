@@ -93,6 +93,7 @@ fn flagged_inside_loop_or_map(
         if parent_id == current {
             return false;
         }
+        let child = current;
         current = parent_id;
         let parent = semantic.nodes().get_node(current);
         match parent.kind() {
@@ -112,8 +113,18 @@ fn flagged_inside_loop_or_map(
             }
             AstKind::CallExpression(call) => {
                 if is_map_call(call) {
-                    // If the find/filter receiver root matches the map callback param,
-                    // it's not the O(n^2) pattern.
+                    // Distinguish how the walk reached this `.map`. If we ascended
+                    // from its callee (the `X.map` member expression), the
+                    // find/filter is in the receiver chain — `arr.filter(...).map(...)`
+                    // — i.e. downstream chaining (two sequential O(n) passes), not
+                    // nesting. If we ascended from within the arguments (the
+                    // callback subtree), it's genuine per-iteration nesting.
+                    let child_span = semantic.nodes().get_node(child).kind().span();
+                    if child_span == call.callee.span() {
+                        return false;
+                    }
+                    // Inside the callback. If the find/filter receiver root matches
+                    // the map callback param, it's not the O(n^2) pattern.
                     let param = callback_first_param_name(call);
                     match (receiver_root, param.as_deref()) {
                         (Some(recv), Some(p)) if recv == p => {
@@ -235,6 +246,33 @@ mod tests {
     fn allows_filter_in_deferred_closure_in_for_loop() {
         let src = "for (const x of xs) { register(() => others.filter(o => o.id === x.id)); }";
         assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty());
+    }
+
+    // Regression for #3745: chained `arr.filter(...).map(...)` is two sequential
+    // O(n) passes — the `.filter` is the `.map` receiver, not nested in its
+    // callback. The walk reaches `.map` via its callee, so it must not flag.
+    #[test]
+    fn allows_chained_filter_then_map() {
+        let src = "const r = data.filter((env) => ids.includes(env.id)).map((env) => env.name);";
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty());
+    }
+
+    // Regression for #3745: a longer chain `arr.filter(...).map(...).join(...)`
+    // is still pure downstream chaining — must not flag.
+    #[test]
+    fn allows_longer_filter_map_chain() {
+        let src = r#"const r = arr.filter((x) => x.ok).map((x) => x.id).join(",");"#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty());
+    }
+
+    // Anti-over-broad guard for #3745: a genuinely nested `.find` inside the map
+    // callback, with a downstream `.name` access on the find result, is still
+    // O(n²). The fix only distinguishes callee vs arguments AT the `.map` call,
+    // not at every member step, so this must still flag.
+    #[test]
+    fn flags_nested_find_with_downstream_access() {
+        let src = "const r = items.map((i) => others.find((o) => o.id === i.id).name);";
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").len(), 1);
     }
 
     // Regression for #3936: the mantine MultiSelect shape — a `.filter()` inside
