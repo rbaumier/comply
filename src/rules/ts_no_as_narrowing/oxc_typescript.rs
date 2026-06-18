@@ -8,7 +8,7 @@ use crate::oxc_helpers::{
     name_is_generic_type_param_in_scope,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{TSType, TSTypeName};
+use oxc_ast::ast::{Expression, TSType, TSTypeName};
 use oxc_span::GetSpan;
 
 pub struct Check;
@@ -35,6 +35,27 @@ fn is_dom_element_type(name: &str) -> bool {
     name == "Element"
         || ((name.starts_with("HTML") || name.starts_with("SVG") || name.starts_with("MathML"))
             && name.ends_with("Element"))
+}
+
+/// Whether the cast operand is a freshly-constructed literal value: an object
+/// literal (`{} as RouteModules`), an array literal (`[1, 2] as ReadonlyArray<number>`),
+/// or a primitive literal (`"idle" as RevalidationState`). Casting such an
+/// operand is a construction-time type ascription, not a narrowing of a
+/// pre-existing binding — there is no variable to refine with a type predicate
+/// or `in`/`typeof` check, so the rule's remediation does not apply.
+fn operand_is_constructed_literal(expr: &Expression) -> bool {
+    matches!(
+        expr,
+        Expression::ObjectExpression(_)
+            | Expression::ArrayExpression(_)
+            | Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral(_)
+            | Expression::TemplateLiteral(_)
+            | Expression::BigIntLiteral(_)
+            | Expression::RegExpLiteral(_)
+    )
 }
 
 fn target_is_narrowing(ty: &TSType, _source: &str) -> bool {
@@ -84,6 +105,14 @@ impl OxcCheck for Check {
         let type_text = &ctx.source
             [as_expr.type_annotation.span().start as usize..as_expr.type_annotation.span().end as usize];
         if type_text.trim() == "const" {
+            return;
+        }
+
+        // Skip type-ascriptions of a freshly-constructed literal operand
+        // (`{} as T`, `[1, 2] as T`, `"idle" as Union`). These ascribe a type
+        // to a value being built inline; there is no pre-existing binding to
+        // narrow, so a type predicate / `in` / `typeof` guard cannot apply.
+        if operand_is_constructed_literal(&as_expr.expression) {
             return;
         }
 
@@ -311,6 +340,55 @@ mod tests {
         // type-predicate return type is still a narrowing and must fire.
         let src = "function f(x: unknown) { return (x as Foo).bar; }";
         let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_object_literal_ascription() {
+        // Regression for #3875: `{} as T` seeds a typed accumulator; the
+        // object literal is constructed inline, so there is no binding to
+        // narrow with a type predicate.
+        let diags = run_on("const seed = {} as RouteModules;");
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_object_spread_literal_ascription() {
+        // Regression for #3875: a spread object literal is still a freshly
+        // constructed value, not a pre-existing binding.
+        let diags = run_on("const l = { ...link, rel: \"prefetch\", as: \"style\" } as Link;");
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_string_literal_ascription() {
+        // Regression for #3875: `"idle" as Union` ascribes a union member to a
+        // primitive literal; there is no variable to refine.
+        let diags = run_on("const r = \"idle\" as RevalidationState;");
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_array_literal_ascription() {
+        // Regression for #3875: `[1, 2] as ReadonlyArray<number>` ascribes a
+        // type to a freshly constructed array literal.
+        let diags = run_on("const a = [1, 2] as ReadonlyArray<number>;");
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_identifier_operand_narrowing() {
+        // Control for #3875: an Identifier operand IS a pre-existing binding;
+        // `existingVar as NarrowType` is a genuine narrowing and must fire.
+        let diags = run_on("const x = existingVar as NarrowType;");
+        assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_member_expression_operand_narrowing() {
+        // Control for #3875: a member-expression operand reads a pre-existing
+        // value; `foo.bar as T` is still a narrowing.
+        let diags = run_on("const x = foo.bar as Narrowed;");
         assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
     }
 }
