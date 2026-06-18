@@ -1,10 +1,15 @@
 //! no-invariant-returns OXC backend — flag functions that always return the
-//! same literal value.
+//! same literal value with a trivial body (pure guards + returns). A function
+//! that does side-effecting work (a call, assignment, update, or await
+//! belonging directly to it) before returning a fixed sentinel is kept: it runs
+//! for its effects and the literal is a protocol value, not dead invariant
+//! logic.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Expression, Statement};
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -78,6 +83,35 @@ impl OxcCheck for Check {
                 continue;
             };
             if throw.span.start < func_span.start || throw.span.end > func_span.end {
+                continue;
+            }
+            if nearest_function_span(snode.id(), nodes) != Some(func_span) {
+                continue;
+            }
+            return;
+        }
+
+        // A function that should be a constant has a trivial body (returns +
+        // pure guards). A call / assignment / update / await belonging directly
+        // to THIS function means it does meaningful work and returns a fixed
+        // protocol sentinel (e.g. a ProseMirror `appendTransaction` returning
+        // `null`, a Tiptap handler returning `true`) — not dead invariant logic.
+        // Suppress. Nested closures are excluded via `nearest_function_span`, so
+        // a callback argument's own calls do not count against the outer
+        // function.
+        for snode in nodes.iter() {
+            let side_effecting = matches!(
+                snode.kind(),
+                AstKind::CallExpression(_)
+                    | AstKind::AssignmentExpression(_)
+                    | AstKind::UpdateExpression(_)
+                    | AstKind::AwaitExpression(_)
+            );
+            if !side_effecting {
+                continue;
+            }
+            let span = snode.kind().span();
+            if span.start < func_span.start || span.end > func_span.end {
                 continue;
             }
             if nearest_function_span(snode.id(), nodes) != Some(func_span) {
@@ -310,5 +344,61 @@ function outer() {
 }
 "#;
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_prosemirror_append_transaction_returning_null() {
+        // #3796: a ProseMirror `appendTransaction` callback returns `null` on
+        // every path but does heavy work (descendant traversal mutating storage)
+        // in between. Replacing it with a constant would delete the side effects.
+        let src = r#"
+const p = (transactions, oldState, newState) => {
+    if (!transactions.some((tr) => tr.docChanged)) return null;
+    newState.doc.descendants((node, pos) => { mutate(node); });
+    return null;
+};
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_tiptap_handler_returning_true() {
+        // #3796: a Tiptap keyboard-shortcut handler returns `true` on both
+        // branches but dispatches editor commands — a side-effecting handler
+        // returning a fixed protocol sentinel.
+        let src = r#"
+const h = ({ editor }) => {
+    if (cond) { editor.chain().run(); return true; }
+    else { editor.commands.selectAll(); return true; }
+};
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_guard_with_a_call() {
+        // #3796: a call inside the guard test is side-effecting work — `check()`
+        // may have effects, so the function is not safely replaceable by a
+        // constant.
+        let src = r#"
+function f() {
+    if (check()) return "X";
+    return "X";
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_assignment_work() {
+        // #3796: an assignment belonging directly to the function is meaningful
+        // work; the `return true` is a sentinel, not dead invariant logic.
+        let src = r#"
+function g(x) {
+    if (x) { state.value = 1; return true; }
+    return true;
+}
+"#;
+        assert!(run_on(src).is_empty());
     }
 }
