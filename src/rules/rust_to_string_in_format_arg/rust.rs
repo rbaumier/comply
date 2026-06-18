@@ -450,4 +450,32 @@ mod tests {
         let source = "fn f(x: u8) { let _ = format!(\"{{}} {}\", x.to_string()); }";
         assert_eq!(run_on(source).len(), 1);
     }
+
+    #[test]
+    fn allows_to_string_in_if_else_arm() {
+        // rolldown umd.rs: named placeholders suppress, and the `.to_string()`
+        // lives inside an `else { ... }` arm (depth ≥ 1), not a top-level arg.
+        let src = "fn render(stmt: &str, namespace: &str, deps: &str, extend: bool, empty: bool) -> String { \
+                   format!(\"factory(({stmt}{namespace} = {}){})\", \
+                   if extend { format!(\"{namespace} || {{}}\") } else { \"{}\".to_string() }, \
+                   if empty { String::new() } else { format!(\", {deps}\") }) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_to_string_inside_closure_arg() {
+        // `.to_string()` inside a closure passed to `.if_supports_color(..)` —
+        // depth ≥ 1, the formatter consumes the call's result, not the string.
+        let src = "fn f(info: &mut String, size: u8) { \
+                   let _ = write!(info, \"{}\", size.if_supports_color(Stream::Stdout, |t| t.bold().to_string())); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_to_string_in_map_join_chain() {
+        // `.map(|v| v.to_string()).join(\",\")` — the `.to_string()` feeds
+        // `Iterator::join`, not the outer `format!`. Depth ≥ 1.
+        let src = "fn f(inputs: Vec<u8>) { let _ = format!(\"[{}];\", inputs.map(|v| v.to_string()).join(\",\")); }";
+        assert!(run_on(src).is_empty());
+    }
 }
