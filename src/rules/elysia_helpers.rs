@@ -15,6 +15,44 @@
 //! silent on the common false-positive shapes.
 
 use oxc_ast::ast::Expression;
+use oxc_semantic::Semantic;
+
+/// True when `member`'s receiver object is an identifier whose binding is
+/// imported from `"msw"` or a `"msw/*"` subpath.
+///
+/// MSW's request handlers (`http.get(path, resolver)`,
+/// `http.put(path, resolver)`, …) share Elysia routes' `<obj>.<method>(path,
+/// handler)` call shape, so the elysia-route family would otherwise flag MSW
+/// mocks in test files. Resolving the receiver binding back to its import
+/// distinguishes `http` from `"msw"` from an Elysia app instance — it also
+/// handles aliased imports (`import { http as mockHttp } from "msw"`).
+pub fn member_receiver_is_from_msw<'a>(
+    member: &oxc_ast::ast::StaticMemberExpression<'a>,
+    semantic: &'a Semantic<'a>,
+) -> bool {
+    use oxc_ast::AstKind;
+
+    let Expression::Identifier(ident) = &member.object else {
+        return false;
+    };
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::ImportDeclaration(import) = kind {
+            let src = import.source.value.as_str();
+            return src == "msw" || src.starts_with("msw/");
+        }
+    }
+    false
+}
 
 /// True if `name` is a likely Elysia server-instance identifier.
 ///
