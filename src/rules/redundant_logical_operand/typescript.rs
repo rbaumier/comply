@@ -40,7 +40,8 @@ fn flags_false_and_x() {
 
 #[test]
 fn flags_x_and_true() {
-    assert_eq!(run_on("const r = x && true;").len(), 1);
+    // `x && true` is `x` only when `x` is provably boolean (#3741).
+    assert_eq!(run_on("const r = (a === b) && true;").len(), 1);
 }
 
 #[test]
@@ -60,7 +61,8 @@ fn flags_false_or_x() {
 
 #[test]
 fn flags_x_or_false() {
-    assert_eq!(run_on("const r = x || false;").len(), 1);
+    // `x || false` is `x` only when `x` is provably boolean (#3741).
+    assert_eq!(run_on("const r = (a === b) || false;").len(), 1);
 }
 
 // --- Biome valid.js fixtures (no diagnostic) ---
@@ -117,4 +119,54 @@ fn allows_non_null_left_coalesce() {
     // `??` only simplifies when the LEFT operand is the null literal.
     assert!(run_on("const r = x ?? null;").is_empty());
     assert!(run_on("const r = x ?? false;").is_empty());
+}
+
+// --- #3741: `x || false` / `x && true` only redundant when `x` is provably
+// boolean by shape; `||`/`&&` return an operand, not a coerced boolean, so on a
+// `boolean | undefined` operand the literal is a meaningful coercion to `boolean`.
+
+#[test]
+fn allows_or_false_on_bare_identifier() {
+    // `value || false` where `value: boolean | undefined` coerces to `boolean`.
+    assert!(run_on("const r = value || false;").is_empty());
+}
+
+#[test]
+fn allows_or_false_on_optional_chained_member() {
+    assert!(run_on("const r = obj?.flag || false;").is_empty());
+}
+
+#[test]
+fn allows_or_false_on_plain_member() {
+    assert!(run_on("const r = obj.flag || false;").is_empty());
+}
+
+#[test]
+fn allows_or_false_on_unknown_call() {
+    assert!(run_on("const r = getThing() || false;").is_empty());
+}
+
+#[test]
+fn allows_and_true_on_bare_identifier() {
+    assert!(run_on("const r = x && true;").is_empty());
+}
+
+#[test]
+fn flags_or_false_on_comparison() {
+    assert_eq!(run_on("const r = (a === b) || false;").len(), 1);
+}
+
+#[test]
+fn flags_or_false_on_boolean_builtin() {
+    assert_eq!(run_on("const r = list.includes(x) || false;").len(), 1);
+}
+
+#[test]
+fn flags_or_false_on_unary_not() {
+    assert_eq!(run_on("const r = !ready || false;").len(), 1);
+}
+
+#[test]
+fn flags_and_true_on_comparison() {
+    assert_eq!(run_on("const r = (a === b) && true;").len(), 1);
 }
