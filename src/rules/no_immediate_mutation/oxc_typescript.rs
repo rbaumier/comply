@@ -8,18 +8,12 @@ use std::sync::Arc;
 
 pub struct Check;
 
-/// Mutating methods on arrays that indicate immediate mutation.
-const ARRAY_MUTATORS: &[&str] = &[
-    "push",
-    "unshift",
-    "pop",
-    "shift",
-    "splice",
-    "sort",
-    "reverse",
-    "fill",
-    "copyWithin",
-];
+/// Array mutators that return the receiver, so the mutation can be chained onto
+/// the initialiser (`const arr = [3, 1, 2].sort()`). `push`/`unshift` (return a
+/// length), `pop`/`shift` (return the removed element) and `splice` (returns the
+/// removed elements) are excluded: they can't be chained, so the rule's
+/// remediation is impossible for them.
+const ARRAY_MUTATORS: &[&str] = &["sort", "reverse", "fill", "copyWithin"];
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
@@ -305,15 +299,15 @@ mod tests {
     }
 
     #[test]
-    fn flags_array_push() {
-        assert_eq!(run_on("const arr = [];\narr.push(1);").len(), 1);
+    fn flags_array_reverse() {
+        assert_eq!(run_on("const arr = [...xs];\narr.reverse();").len(), 1);
     }
 
-    // A spread-copy followed by a mutator method is still an immediate mutation —
-    // the mutator path is unchanged by the spread-init exemption.
+    // A spread-copy followed by a receiver-returning mutator is still an immediate
+    // mutation — the mutator path is unchanged by the spread-init exemption.
     #[test]
     fn flags_spread_copy_then_mutator() {
-        assert_eq!(run_on("const a = [...x];\na.push(y);").len(), 1);
+        assert_eq!(run_on("const a = [...x];\na.sort();").len(), 1);
     }
 
     #[test]
@@ -336,6 +330,37 @@ mod tests {
     #[test]
     fn flags_map_set() {
         assert_eq!(run_on("const m = new Map();\nm.set('a', 1);").len(), 1);
+    }
+
+    // --- Regressions for #3801: mutators that don't return the receiver can't be
+    // chained onto the initialiser, so they must not be flagged ---
+
+    // The canonical declare-empty-then-fill array builder (cline diff.ts:52).
+    #[test]
+    fn allows_array_push_builder() {
+        let src = "const output: string[] = [];\noutput.push(\"a\");";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // Multiple consecutive pushes can never collapse into one initialiser.
+    #[test]
+    fn allows_multi_push_builder() {
+        let src = "const sections = [];\nsections.push(x);\nsections.push(y);";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // `unshift` returns the new length, not the array.
+    #[test]
+    fn allows_array_unshift() {
+        let src = "const arr = [];\narr.unshift(x);";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // `splice` returns the removed elements, not the array.
+    #[test]
+    fn allows_array_splice() {
+        let src = "const arr = [1, 2, 3];\narr.splice(0, 1);";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
     }
 
     // --- Regressions for #3933: array indexed-assignment that cannot be inlined ---
