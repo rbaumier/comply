@@ -6,6 +6,8 @@ use crate::rules::sql_helpers::is_sql_string;
 use crate::rules::vue_sfc::{self, ScriptBlock};
 use crate::rules::walker::collect_nodes_of_kinds;
 
+use super::position::all_substitutions_in_identifier_position;
+
 #[derive(Debug)]
 pub struct Check;
 
@@ -59,6 +61,16 @@ fn lint_block(block: &ScriptBlock<'_>, ctx: &CheckCtx, diagnostics: &mut Vec<Dia
         if !other_side_dynamic {
             continue;
         }
+        // When the SQL string is the left operand, the dynamic right operand is
+        // appended at its end. If that end is an identifier position
+        // (`"... FROM " + table`), the value names a relation and cannot be a
+        // bind parameter.
+        if left_sql
+            && let Some(prefix) = string_node_text(left, source_bytes)
+            && all_substitutions_in_identifier_position(&[&prefix, ""])
+        {
+            continue;
+        }
         let combined = node.utf8_text(source_bytes).unwrap_or("");
         if combined.contains("$1") || combined.contains("$2") {
             continue;
@@ -99,6 +111,21 @@ fn string_node_is_sql(node: tree_sitter::Node, source: &[u8]) -> bool {
     is_sql_string(text)
 }
 
+/// The content of a `string` node with its surrounding quote characters
+/// stripped, for inspecting what precedes an appended concat operand. Returns
+/// `None` for a non-string node.
+fn string_node_text(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    if node.kind() != "string" {
+        return None;
+    }
+    let text = node.utf8_text(source).ok()?;
+    let trimmed = text
+        .strip_prefix(['\'', '"'])
+        .and_then(|t| t.strip_suffix(['\'', '"']))
+        .unwrap_or(text);
+    Some(trimmed.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,6 +157,14 @@ mod tests {
     #[test]
     fn does_not_flag_non_sql_concat() {
         let src = "<script>\nconst msg = \"hello \" + name;\n</script>";
+        assert!(run(src).is_empty());
+    }
+
+    // Issue #3878 — a table name appended in an identifier position cannot be a
+    // bind parameter, so it is the only possible form.
+    #[test]
+    fn does_not_flag_table_identifier_in_binary_concat() {
+        let src = "<script>\nconst q = \"SELECT * FROM \" + tableName;\n</script>";
         assert!(run(src).is_empty());
     }
 }
