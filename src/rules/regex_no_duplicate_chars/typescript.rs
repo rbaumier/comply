@@ -40,19 +40,18 @@ fn has_duplicate_in_char_class(pattern: &str) -> bool {
             if j < bytes.len() {
                 let content = &pattern[content_start..j];
                 let mut chars: Vec<char> = Vec::new();
-                let mut ci = 0;
-                let cbytes = content.as_bytes();
-                while ci < cbytes.len() {
-                    if cbytes[ci] == b'\\' {
-                        ci += 2; // skip escape sequences
+                let mut scalars = content.chars().peekable();
+                while let Some(c) = scalars.next() {
+                    if c == '\\' {
+                        scalars.next(); // skip the escaped scalar
                         continue;
                     }
-                    if ci + 1 < cbytes.len() && cbytes[ci + 1] == b'-' {
-                        ci += 3; // skip range like a-z
-                        continue;
+                    if scalars.peek() == Some(&'-') {
+                        scalars.next(); // consume `-`
+                        scalars.next(); // consume range-end scalar
+                        continue; // skip range like a-z
                     }
-                    chars.push(cbytes[ci] as char);
-                    ci += 1;
+                    chars.push(c);
                 }
                 let len_before = chars.len();
                 chars.sort_unstable();
@@ -143,6 +142,33 @@ mod tests {
     #[test]
     fn allows_ranges() {
         assert!(run_on("const re = /[a-z]/;").is_empty());
+    }
+
+    // --- Non-ASCII char classes: dedup over Unicode scalars, not bytes. ---
+
+    #[test]
+    fn allows_distinct_multibyte_chars() {
+        assert!(run_on("const re = /[ÁČĎ]*$/;").is_empty());
+    }
+
+    #[test]
+    fn allows_arabic_indic_digits() {
+        assert!(run_on("const ar = /^[٠١٢٣]+$/;").is_empty());
+    }
+
+    #[test]
+    fn allows_vee_validate_repro() {
+        assert!(run_on("const cs = /^[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ]*$/i;").is_empty());
+    }
+
+    #[test]
+    fn allows_cyrillic_range_plus_literal() {
+        assert!(run_on("const ru = /^[А-ЯЁ]*$/;").is_empty());
+    }
+
+    #[test]
+    fn flags_duplicate_multibyte_char() {
+        assert_eq!(run_on("const re = /[ÁČĎÁ]/;").len(), 1);
     }
 
     // --- Regression tests for the TextCheck false-positive class. ---
