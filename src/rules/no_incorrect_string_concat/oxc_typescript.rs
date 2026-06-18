@@ -1,10 +1,13 @@
 //! no-incorrect-string-concat OXC backend — flag `"..." + identifier`
-//! where the identifier's name suggests it holds a number.
+//! where the identifier's name suggests it holds a number. An empty or
+//! whitespace-only literal is the number→string coercion idiom (`x + ''`) and
+//! is never flagged; an identifier whose binding carries an explicit `: string`
+//! annotation is skipped, since the concatenation is then correct.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Expression, TSType};
 use std::sync::Arc;
 
 pub struct Check;
@@ -88,6 +91,52 @@ fn is_ordinal_affix(literal: &str) -> bool {
         && !trimmed.chars().any(|c| c.is_whitespace() || c == ':')
 }
 
+/// True when `literal` is the number→string coercion idiom (`x + ''`, `x + ' '`):
+/// an empty or whitespace-only string. This is the explicit conversion the rule
+/// recommends, not a descriptive label, so it is never flagged.
+fn is_coercion_idiom(literal: &str) -> bool {
+    literal.trim().is_empty()
+}
+
+/// True when `expr` is an identifier reference whose binding carries an explicit
+/// `: string` type annotation. Concatenating a string-typed variable is correct
+/// even when its name matches a numeric hint (`'invalid index: ' + index` where
+/// `index: string`). Only a literal `string` annotation suppresses; `: number`,
+/// no annotation, and member expressions keep the name heuristic.
+fn is_string_typed_identifier<'a>(
+    expr: &Expression<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Expression::Identifier(id) = expr else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(ref_id) = id.reference_id.get() else {
+        return false;
+    };
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let nodes = semantic.nodes();
+    let decl_id = scoping.symbol_declaration(sym_id);
+
+    // Walk from the binding up to the FormalParameter / VariableDeclarator that
+    // owns its type annotation, stopping at the first enclosing function so a
+    // sibling binding's annotation is never read.
+    for kind in std::iter::once(nodes.kind(decl_id)).chain(nodes.ancestor_kinds(decl_id)) {
+        let annotation = match kind {
+            AstKind::FormalParameter(p) => p.type_annotation.as_ref(),
+            AstKind::VariableDeclarator(d) => d.type_annotation.as_ref(),
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
+                return false;
+            }
+            _ => continue,
+        };
+        return annotation.is_some_and(|ann| matches!(ann.type_annotation, TSType::TSStringKeyword(_)));
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::BinaryExpression]
@@ -97,7 +146,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::BinaryExpression(bin) = node.kind() else { return };
@@ -110,7 +159,10 @@ impl OxcCheck for Check {
             .or_else(|| string_literal_value(&bin.right).map(|lit| (lit, &bin.left)));
 
         let flagged = pair.is_some_and(|(literal, ident_side)| {
-            final_ident_name(ident_side).is_some_and(looks_numeric) && !is_ordinal_affix(literal)
+            final_ident_name(ident_side).is_some_and(looks_numeric)
+                && !is_ordinal_affix(literal)
+                && !is_coercion_idiom(literal)
+                && !is_string_typed_identifier(ident_side, semantic)
         });
 
         if flagged {
@@ -220,5 +272,34 @@ mod tests {
         assert_eq!(run_on(r#"const s = "Got: " + pageIndex;"#).len(), 1);
         assert_eq!(run_on(r#"const s = "Got: " + bufferOffset;"#).len(), 1);
         assert_eq!(run_on(r#"const s = "Got: " + item_count;"#).len(), 1);
+    }
+
+    // An empty or whitespace-only literal is the number→string coercion idiom
+    // (the explicit conversion the rule recommends), never a label. See #3754.
+    #[test]
+    fn allows_empty_string_coercion() {
+        assert!(run_on(r#"const w = expanded.width + '';"#).is_empty());
+        assert!(run_on(r#"const s = '' + count;"#).is_empty());
+        assert!(run_on(r#"const s = count + ' ';"#).is_empty());
+    }
+
+    // A binding explicitly annotated `: string` is correctly concatenated even
+    // when its name matches a numeric hint. See #3754.
+    #[test]
+    fn allows_string_typed_binding() {
+        assert!(
+            run_on(r#"function f(index: string) { return 'invalid index: ' + index; }"#).is_empty()
+        );
+        assert!(run_on(r#"function g(count: string) { return 'Total: ' + count; }"#).is_empty());
+    }
+
+    // Only a `: string` annotation suppresses — a `: number`-annotated binding
+    // still flags, as does a binding with no annotation. See #3754.
+    #[test]
+    fn flags_number_typed_binding() {
+        assert_eq!(
+            run_on(r#"function f(itemCount: number) { return "Total: " + itemCount; }"#).len(),
+            1
+        );
     }
 }
