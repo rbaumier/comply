@@ -433,13 +433,18 @@ fn has_nullish_or_logical_fallback(
 ///      check on the same array (`obj_text`) — the truthiness equivalent of
 ///      `if (arr.length)`. This also exempts the guard condition's own `[0]`
 ///      access, which sits inside its enclosing `if.test`.
-///   3. a `<obj_text>.length` check in the condition of a ternary
-///      (`cond ? <access> : ...`), but only when the access is in the truthy
-///      branch (`consequent`) — that branch runs only when `cond` held. The
+///   3. in a ternary (`cond ? <consequent> : <alternate>`), an access in the
+///      truthy `consequent` branch — which runs only when `cond` held — guarded
+///      either by a `<obj_text>.length` check in the condition, or (for a
+///      first-element read) by a truthy `arr[0]` / `arr?.[0]` test on the same
+///      array. The truthy `arr[0]` test also exempts its OWN `[0]` access in the
+///      condition: it is the ternary equivalent of `if (arr[0])`. The `.length`
 ///      check is scoped to `obj_text` because an unrelated `.length` mention in
 ///      the condition would not bound this array. `Array.isArray(obj_text)`
 ///      alone is NOT a guard: it proves array-ness, not non-emptiness, and the
-///      empty array still yields `undefined` at index 0.
+///      empty array still yields `undefined` at index 0. The `alternate` (falsy)
+///      branch stays flagged — it runs when the test is falsy, so the element
+///      may be absent.
 fn has_length_guard_ancestor(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -470,10 +475,19 @@ fn has_length_guard_ancestor(
             AstKind::ConditionalExpression(cond) => {
                 let in_consequent = cond.consequent.span().start <= node_span.start
                     && node_span.end <= cond.consequent.span().end;
-                if in_consequent {
+                let in_test = cond.test.span().start <= node_span.start
+                    && node_span.end <= cond.test.span().end;
+                if in_consequent || in_test {
                     let cond_text = &source
                         [cond.test.span().start as usize..cond.test.span().end as usize];
-                    if cond_text.contains(&format!("{obj_text}.length")) {
+                    // `.length` guard applies to the truthy consequent.
+                    if in_consequent && cond_text.contains(&format!("{obj_text}.length")) {
+                        return true;
+                    }
+                    // A truthy `arr[0]` / `arr?.[0]` test narrows the consequent AND
+                    // exempts the test's own `[0]` access — the ternary equivalent of
+                    // `if (arr[0])`. The alternate branch stays flagged.
+                    if is_first && condition_guards_index0(&cond.test, obj_text, source) {
                         return true;
                     }
                 }
@@ -2331,6 +2345,37 @@ mod tests {
         // An access in the `alternate` (falsy) branch runs when the guard failed,
         // so it stays flagged.
         let src = "function f(arr) { return arr.length === 2 ? null : arr[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_truthy_index0_ternary_test_and_consequent_issue_3790() {
+        // The issue's repro: a truthy `sources[0]` test narrows the consequent,
+        // so the consequent's `sources[0]` is in-bounds, and the test's own
+        // `sources[0]` is exempt too — the ternary equivalent of `if (sources[0])`.
+        let src = "function f(sources: string[]) { return sources[0] ? new URL(sources[0]).hostname : null; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_truthy_index0_ternary_simple_issue_3790() {
+        let src = "function f(arr) { const v = arr[0] ? arr[0].id : null; return v; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_length_ternary_consequent_issue_3790() {
+        // The pre-existing `.length`-guarded ternary stays exempt.
+        let src = "function f(arr) { const v = arr.length ? arr[0] : 0; return v; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_index0_ternary_alternate_issue_3790() {
+        // Negative space: the truthy `a[0]` test narrows only the consequent, so
+        // the test's own `a[0]` is exempt but the `alternate` access runs when
+        // `a[0]` is falsy (`undefined`) — exactly one diagnostic, the alternate.
+        let src = "function f(a: string[]) { return a[0] ? 'x' : a[0]; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
