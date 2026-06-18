@@ -3,7 +3,7 @@ mod event;
 mod highlight;
 mod ui;
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
@@ -26,7 +26,7 @@ fn restore_terminal() {
 
 pub fn run(
     diagnostics: Vec<Diagnostic>,
-    sources: HashMap<Arc<Path>, String>,
+    sources: FxHashMap<Arc<Path>, String>,
     display_root: std::path::PathBuf,
     theme: Option<&str>,
 ) -> Result<()> {

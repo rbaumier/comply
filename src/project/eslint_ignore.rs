@@ -15,7 +15,7 @@
 //! resolved; patterns from imported variables, runtime file reads, or computed
 //! expressions are not. Fall back to `.complyignore` for those.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
@@ -186,8 +186,8 @@ fn collect_from_js(source: &str, key: Key, out: &mut Vec<String>) {
 
 /// Map of top-level `const NAME = [string-literals]` arrays, used to expand
 /// `...NAME` spreads inside ignore arrays.
-fn collect_const_arrays(tree: &tree_sitter::Tree, src: &[u8]) -> HashMap<String, Vec<String>> {
-    let mut map = HashMap::new();
+fn collect_const_arrays(tree: &tree_sitter::Tree, src: &[u8]) -> FxHashMap<String, Vec<String>> {
+    let mut map = FxHashMap::default();
     walk_tree(tree, |node| {
         if node.kind() != "variable_declarator" {
             return;
@@ -245,7 +245,7 @@ fn is_only_pair(pair: tree_sitter::Node) -> bool {
 fn collect_array_strings(
     array: tree_sitter::Node,
     src: &[u8],
-    consts: &HashMap<String, Vec<String>>,
+    consts: &FxHashMap<String, Vec<String>>,
     out: &mut Vec<String>,
 ) {
     let mut cursor = array.walk();

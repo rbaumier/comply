@@ -32,7 +32,7 @@ mod remap;
 mod schema;
 
 use anyhow::{Context, Result};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -89,7 +89,7 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
     for (workspace, files_in_ws) in workspaces {
         match workspace {
             Some(root) => {
-                let file_filter: HashSet<PathBuf> = files_in_ws
+                let file_filter: FxHashSet<PathBuf> = files_in_ws
                     .iter()
                     .map(|f| canonicalize_or_self(&f.path))
                     .collect();
@@ -195,8 +195,8 @@ fn build_lint_args(bindings: &[(&'static str, &'static RuleMeta, Severity)]) -> 
 /// land under the `None` key so the caller can warn the user.
 fn group_by_workspace<'a>(
     files: &[&'a SourceFile],
-) -> HashMap<Option<PathBuf>, Vec<&'a SourceFile>> {
-    let mut out: HashMap<Option<PathBuf>, Vec<&'a SourceFile>> = HashMap::new();
+) -> FxHashMap<Option<PathBuf>, Vec<&'a SourceFile>> {
+    let mut out: FxHashMap<Option<PathBuf>, Vec<&'a SourceFile>> = FxHashMap::default();
     for f in files {
         let root = crate::runner_helpers::find_cargo_workspace_root(&f.path);
         out.entry(root).or_default().push(*f);
@@ -286,8 +286,8 @@ fn invoke_clippy(
 fn parse_clippy_jsonl(
     stdout: &[u8],
     workspace_root: &Path,
-    file_filter: &HashSet<PathBuf>,
-    remap: &HashMap<String, &'static RuleMeta>,
+    file_filter: &FxHashSet<PathBuf>,
+    remap: &FxHashMap<String, &'static RuleMeta>,
 ) -> Vec<Diagnostic> {
     let reader = BufReader::new(stdout);
     let mut diagnostics = Vec::new();
@@ -385,13 +385,13 @@ mod tests {
             skip_in_test_dir: false,
             skip_in_relaxed_dir: false,
         };
-        let mut remap: HashMap<String, &'static RuleMeta> = HashMap::new();
+        let mut remap: FxHashMap<String, &'static RuleMeta> = FxHashMap::default();
         remap.insert("clippy::unwrap_used".to_string(), &META);
 
         let json = br#"{"reason":"compiler-message","message":{"message":"used unwrap","code":{"code":"clippy::unwrap_used"},"level":"warning","spans":[{"file_name":"/abs/src/main.rs","line_start":10,"column_start":5,"is_primary":true}]}}
 {"reason":"build-finished","success":true}"#;
 
-        let mut filter = HashSet::new();
+        let mut filter = FxHashSet::default();
         filter.insert(PathBuf::from("/abs/src/main.rs"));
 
         let diagnostics = parse_clippy_jsonl(json, Path::new("/abs"), &filter, &remap);
@@ -413,12 +413,12 @@ mod tests {
             skip_in_test_dir: false,
             skip_in_relaxed_dir: false,
         };
-        let mut remap: HashMap<String, &'static RuleMeta> = HashMap::new();
+        let mut remap: FxHashMap<String, &'static RuleMeta> = FxHashMap::default();
         remap.insert("clippy::unwrap_used".to_string(), &META);
 
         let json = br#"{"reason":"compiler-message","message":{"message":"used unwrap","code":{"code":"clippy::unwrap_used"},"level":"warning","spans":[{"file_name":"/abs/other.rs","line_start":1,"column_start":1,"is_primary":true}]}}"#;
 
-        let mut filter = HashSet::new();
+        let mut filter = FxHashSet::default();
         filter.insert(PathBuf::from("/abs/wanted.rs"));
 
         let diagnostics = parse_clippy_jsonl(json, Path::new("/abs"), &filter, &remap);
@@ -427,8 +427,8 @@ mod tests {
 
     #[test]
     fn parse_clippy_jsonl_skips_non_compiler_messages() {
-        let remap: HashMap<String, &'static RuleMeta> = HashMap::new();
-        let filter: HashSet<PathBuf> = HashSet::new();
+        let remap: FxHashMap<String, &'static RuleMeta> = FxHashMap::default();
+        let filter: FxHashSet<PathBuf> = FxHashSet::default();
         let json = br#"{"reason":"build-finished","success":true}
 {"reason":"compiler-artifact","package_id":"x"}"#;
         let diagnostics = parse_clippy_jsonl(json, Path::new("/abs"), &filter, &remap);
@@ -439,9 +439,9 @@ mod tests {
     fn parse_clippy_jsonl_passes_through_unbound_clippy_lints() {
         // No remap entry — but the lint code starts with `clippy::`,
         // so we keep the diagnostic with its raw rule_id.
-        let remap: HashMap<String, &'static RuleMeta> = HashMap::new();
+        let remap: FxHashMap<String, &'static RuleMeta> = FxHashMap::default();
         let json = br#"{"reason":"compiler-message","message":{"message":"needless borrow","code":{"code":"clippy::needless_borrow"},"level":"warning","spans":[{"file_name":"/abs/src/main.rs","line_start":4,"column_start":2,"is_primary":true}]}}"#;
-        let mut filter = HashSet::new();
+        let mut filter = FxHashSet::default();
         filter.insert(PathBuf::from("/abs/src/main.rs"));
 
         let diagnostics = parse_clippy_jsonl(json, Path::new("/abs"), &filter, &remap);
@@ -455,9 +455,9 @@ mod tests {
     fn parse_clippy_jsonl_skips_unbound_rustc_warnings() {
         // `dead_code` is a rustc lint, not clippy, and it has no
         // explicit binding — comply leaves it to the compiler.
-        let remap: HashMap<String, &'static RuleMeta> = HashMap::new();
+        let remap: FxHashMap<String, &'static RuleMeta> = FxHashMap::default();
         let json = br#"{"reason":"compiler-message","message":{"message":"function `foo` is never used","code":{"code":"dead_code"},"level":"warning","spans":[{"file_name":"/abs/src/main.rs","line_start":1,"column_start":1,"is_primary":true}]}}"#;
-        let mut filter = HashSet::new();
+        let mut filter = FxHashSet::default();
         filter.insert(PathBuf::from("/abs/src/main.rs"));
 
         let diagnostics = parse_clippy_jsonl(json, Path::new("/abs"), &filter, &remap);

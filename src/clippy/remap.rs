@@ -10,7 +10,7 @@
 //! `clippy::` namespace, but it serves the same role as the doc-coverage
 //! rule, so we accept it as a binding key without prefix.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::diagnostic::Severity;
 use crate::rules::meta::RuleMeta;
@@ -20,8 +20,8 @@ use crate::rules::meta::RuleMeta;
 /// emits exactly the name you pass to `-W`.
 pub fn build_table(
     bindings: &[(&'static str, &'static RuleMeta, Severity)],
-) -> HashMap<String, &'static RuleMeta> {
-    let mut table = HashMap::with_capacity(bindings.len());
+) -> FxHashMap<String, &'static RuleMeta> {
+    let mut table = FxHashMap::with_capacity_and_hasher(bindings.len(), Default::default());
     for (lint, meta, _) in bindings {
         table.insert((*lint).to_string(), *meta);
     }

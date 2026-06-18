@@ -5,7 +5,7 @@
 //! across locales.
 
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 
 /// Index of translation keys across locale files.
@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 pub struct LocaleIndex {
     /// Map: directory -> locale_name -> set of keys
     /// e.g., "/app/locales" -> "en" -> {"greeting", "farewell", "errors.notFound"}
-    dirs: HashMap<PathBuf, HashMap<String, HashSet<String>>>,
+    dirs: FxHashMap<PathBuf, FxHashMap<String, FxHashSet<String>>>,
 }
 
 impl LocaleIndex {
@@ -39,7 +39,7 @@ impl LocaleIndex {
                 continue;
             };
 
-            let mut keys = HashSet::new();
+            let mut keys = FxHashSet::default();
             extract_keys(&json, &mut String::new(), &mut keys);
 
             index
@@ -78,7 +78,7 @@ impl LocaleIndex {
                 continue;
             };
 
-            let mut keys = HashSet::new();
+            let mut keys = FxHashSet::default();
             extract_keys(&json, &mut String::new(), &mut keys);
 
             index
@@ -102,13 +102,13 @@ impl LocaleIndex {
     }
 
     /// Get all locales in the same directory as the given file.
-    pub fn get_locales_in_dir(&self, path: &Path) -> Option<&HashMap<String, HashSet<String>>> {
+    pub fn get_locales_in_dir(&self, path: &Path) -> Option<&FxHashMap<String, FxHashSet<String>>> {
         let dir = path.parent()?;
         self.dirs.get(dir)
     }
 
     /// Get keys for a specific locale file.
-    pub fn get_keys(&self, path: &Path) -> Option<&HashSet<String>> {
+    pub fn get_keys(&self, path: &Path) -> Option<&FxHashSet<String>> {
         let dir = path.parent()?;
         let locale = path.file_stem()?.to_str()?;
         self.dirs.get(dir)?.get(locale)
@@ -244,7 +244,7 @@ fn is_locale_file(path: &Path) -> bool {
     false
 }
 
-fn extract_keys(value: &Value, prefix: &mut String, keys: &mut HashSet<String>) {
+fn extract_keys(value: &Value, prefix: &mut String, keys: &mut FxHashSet<String>) {
     match value {
         Value::Object(map) => {
             for (key, val) in map {
@@ -285,7 +285,7 @@ mod tests {
     fn extracts_flat_keys() {
         let json = r#"{"greeting": "Hello", "farewell": "Goodbye"}"#;
         let val: Value = serde_json::from_str(json).unwrap();
-        let mut keys = HashSet::new();
+        let mut keys = FxHashSet::default();
         extract_keys(&val, &mut String::new(), &mut keys);
         assert!(keys.contains("greeting"));
         assert!(keys.contains("farewell"));
@@ -296,7 +296,7 @@ mod tests {
     fn extracts_nested_keys() {
         let json = r#"{"errors": {"notFound": "Not found", "forbidden": "Forbidden"}}"#;
         let val: Value = serde_json::from_str(json).unwrap();
-        let mut keys = HashSet::new();
+        let mut keys = FxHashSet::default();
         extract_keys(&val, &mut String::new(), &mut keys);
         assert!(keys.contains("errors.notFound"));
         assert!(keys.contains("errors.forbidden"));
