@@ -9,8 +9,9 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    BindingPattern, Expression, Statement,
+    BindingPattern, Expression, IdentifierReference, Statement,
 };
+use oxc_semantic::{Semantic, SymbolId};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -24,12 +25,12 @@ const CLOSURE_METHODS: &[&str] = &["then", "catch", "finally", "addEventListener
 
 pub struct Check;
 
-fn narrowed_identifier<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
+fn narrowed_identifier<'a>(expr: &'a Expression<'a>) -> Option<&'a IdentifierReference<'a>> {
     match expr {
-        Expression::Identifier(id) => Some(id.name.as_str()),
+        Expression::Identifier(id) => Some(id),
         Expression::BinaryExpression(bin) => {
             if let Expression::Identifier(id) = &bin.left {
-                Some(id.name.as_str())
+                Some(id)
             } else {
                 None
             }
@@ -66,16 +67,26 @@ fn has_local_const(stmts: &oxc_allocator::Vec<'_, Statement<'_>>, name: &str) ->
     false
 }
 
-/// Check if a callback body source text references the identifier name.
-/// Uses source-text substring check for simplicity — the identifier must
-/// appear as a word boundary.
-fn callback_body_references(source: &str, span: oxc_span::Span, name: &str) -> bool {
-    let body_text = &source[span.start as usize..span.end as usize];
-    // Simple word-boundary check: look for the name not preceded/followed by
-    // alphanumeric or underscore.
-    body_text.contains(name)
-        && body_text.split(|c: char| !c.is_alphanumeric() && c != '_')
-            .any(|word| word == name)
+fn span_contains(outer: oxc_span::Span, inner: oxc_span::Span) -> bool {
+    outer.start <= inner.start && inner.end <= outer.end
+}
+
+/// Returns true when an actual reference to `symbol` lies within `body_span`.
+///
+/// Enumerates the binding's resolved references and tests each reference node's
+/// span for containment. Object-literal property keys and member-expression
+/// property names are not `IdentifierReference` nodes, so they never appear here.
+fn callback_body_references(
+    semantic: &Semantic<'_>,
+    body_span: oxc_span::Span,
+    symbol: SymbolId,
+) -> bool {
+    let scoping = semantic.scoping();
+    let nodes = semantic.nodes();
+    scoping.get_resolved_references(symbol).any(|reference| {
+        let ref_span = nodes.kind(reference.node_id()).span();
+        span_contains(body_span, ref_span)
+    })
 }
 
 impl OxcCheck for Check {
@@ -87,13 +98,23 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::IfStatement(stmt) = node.kind() else {
             return;
         };
-        let Some(name) = narrowed_identifier(&stmt.test) else {
+        let Some(ident) = narrowed_identifier(&stmt.test) else {
+            return;
+        };
+        let name = ident.name.as_str();
+        // Resolve the narrowed binding to a symbol; an unresolvable reference
+        // (global, ambient) cannot be checked semantically, so do not flag.
+        let Some(symbol) = ident
+            .reference_id
+            .get()
+            .and_then(|ref_id| semantic.scoping().get_reference(ref_id).symbol_id())
+        else {
             return;
         };
         let Statement::BlockStatement(block) = &stmt.consequent else {
@@ -104,39 +125,48 @@ impl OxcCheck for Check {
         }
 
         // Walk the block body looking for closure-scheduling calls.
-        visit_stmts(&block.body, name, ctx, diagnostics);
+        visit_stmts(&block.body, name, symbol, semantic, ctx, diagnostics);
     }
 }
 
 fn visit_stmts(
     stmts: &oxc_allocator::Vec<'_, Statement<'_>>,
     name: &str,
+    symbol: SymbolId,
+    semantic: &Semantic<'_>,
     ctx: &CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for stmt in stmts.iter() {
-        visit_stmt(stmt, name, ctx, diagnostics);
+        visit_stmt(stmt, name, symbol, semantic, ctx, diagnostics);
     }
 }
 
-fn visit_stmt(stmt: &Statement, name: &str, ctx: &CheckCtx, diagnostics: &mut Vec<Diagnostic>) {
+fn visit_stmt(
+    stmt: &Statement,
+    name: &str,
+    symbol: SymbolId,
+    semantic: &Semantic<'_>,
+    ctx: &CheckCtx,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     match stmt {
         Statement::ExpressionStatement(es) => {
-            visit_expr(&es.expression, name, ctx, diagnostics);
+            visit_expr(&es.expression, name, symbol, semantic, ctx, diagnostics);
         }
         Statement::BlockStatement(block) => {
-            visit_stmts(&block.body, name, ctx, diagnostics);
+            visit_stmts(&block.body, name, symbol, semantic, ctx, diagnostics);
         }
         Statement::IfStatement(ifs) => {
-            visit_stmt(&ifs.consequent, name, ctx, diagnostics);
+            visit_stmt(&ifs.consequent, name, symbol, semantic, ctx, diagnostics);
             if let Some(alt) = &ifs.alternate {
-                visit_stmt(alt, name, ctx, diagnostics);
+                visit_stmt(alt, name, symbol, semantic, ctx, diagnostics);
             }
         }
         Statement::VariableDeclaration(vd) => {
             for decl in &vd.declarations {
                 if let Some(init) = &decl.init {
-                    visit_expr(init, name, ctx, diagnostics);
+                    visit_expr(init, name, symbol, semantic, ctx, diagnostics);
                 }
             }
         }
@@ -144,7 +174,14 @@ fn visit_stmt(stmt: &Statement, name: &str, ctx: &CheckCtx, diagnostics: &mut Ve
     }
 }
 
-fn visit_expr(expr: &Expression, name: &str, ctx: &CheckCtx, diagnostics: &mut Vec<Diagnostic>) {
+fn visit_expr(
+    expr: &Expression,
+    name: &str,
+    symbol: SymbolId,
+    semantic: &Semantic<'_>,
+    ctx: &CheckCtx,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     let Expression::CallExpression(call) = expr else {
         return;
     };
@@ -171,7 +208,7 @@ fn visit_expr(expr: &Expression, name: &str, ctx: &CheckCtx, diagnostics: &mut V
         if !is_callback {
             continue;
         }
-        if callback_body_references(ctx.source, body_span, name) {
+        if callback_body_references(semantic, body_span, symbol) {
             let (line, column) = byte_offset_to_line_col(ctx.source, cb_span.start as usize);
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
@@ -236,5 +273,24 @@ mod tests {
         let src =
             "function f(user: { name: string } | null) { if (user) { console.log(user.name); } }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_object_literal_key_matching_name() {
+        let src = "function f(error: Err | null, promise: Promise<void>, opts: any, path: string[]) { if (error) { promise.catch((cause) => { opts.onError?.({ error: cause, path }); }); promise = Promise.reject(error); } }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_member_property_name_matching_name() {
+        let src = "function g(u: string | null, p: Promise<{ u: string }>, use: (x: string) => void) { if (u) { p.then((res) => { console.log(res.u); }); use(u); } }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_real_reference_inside_callback() {
+        let src = "function f(error: Err | null, promise: Promise<void>) { if (error) { promise.catch(() => { console.log(error); }); } }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
     }
 }
