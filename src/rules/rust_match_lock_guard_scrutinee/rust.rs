@@ -8,6 +8,15 @@
 //! / `io::Write::write` and other custom `.read(buf)`/`.write(buf)` methods,
 //! which take a buffer argument and are not lock guards. We also walk through
 //! a single `?` (try_expression) so `match mtx.lock()?` is still caught.
+//!
+//! `Mutex::lock` / `RwLock::read`/`write` return a `LockResult<Guard>`. When the
+//! arms destructure that `LockResult` (every arm is `Ok(..)` / `Err(..)`, with an
+//! optional catch-all alongside) the match operates on the result, not the
+//! guarded value: the `Err` arm holds no lock and the `Ok` arm binds the guard
+//! into the surrounding scope. That is the idiomatic poison-handling shape, so it
+//! is not flagged. The anti-pattern this rule targets is value-matching the guard
+//! itself (`match m.lock().unwrap() { Variant => … }`), where each value-arm runs
+//! with the lock held.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -40,6 +49,11 @@ impl AstCheck for Check {
             return;
         };
         if !LOCK_METHODS.contains(&method.as_str()) {
+            return;
+        }
+        if let Some(match_block) = node.child_by_field_name("body")
+            && arms_destructure_lock_result(match_block, source)
+        {
             return;
         }
         diagnostics.push(Diagnostic::at_node(
@@ -124,6 +138,87 @@ fn outermost_method_call(node: tree_sitter::Node, source: &[u8]) -> Option<Strin
     field.utf8_text(source).ok().map(|s| s.to_string())
 }
 
+/// True if the `match_block`'s arms destructure a `LockResult` rather than
+/// value-match the guard: at least one arm pattern is a `Result` constructor
+/// (`Ok(..)` / `Err(..)`) and every other arm is either a `Result` constructor
+/// or a catch-all (`_` or a bare binding). In that shape the scrutinee is the
+/// raw `LockResult`, the lock is correctly scoped (the `Ok` arm binds the guard
+/// outward, the `Err` arm holds nothing), and the match must not be flagged.
+fn arms_destructure_lock_result(match_block: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = match_block.walk();
+    let mut saw_result_ctor = false;
+    for arm in match_block.named_children(&mut cursor) {
+        if arm.kind() != "match_arm" {
+            continue;
+        }
+        let Some(match_pattern) = arm.child_by_field_name("pattern") else {
+            return false;
+        };
+        match classify_arm(match_pattern, source) {
+            ArmShape::ResultCtor => saw_result_ctor = true,
+            ArmShape::CatchAll => {}
+            ArmShape::Other => return false,
+        }
+    }
+    saw_result_ctor
+}
+
+enum ArmShape {
+    /// `Ok(..)` / `Err(..)` (or an or-pattern of only those) — destructures the
+    /// `LockResult`.
+    ResultCtor,
+    /// `_` or a bare binding — matches the whole scrutinee, lock stays scoped.
+    CatchAll,
+    /// Anything else — the arm value-matches the guarded data.
+    Other,
+}
+
+/// Classify an arm's pattern. An `or_pattern` is a `ResultCtor` only when every
+/// branch is itself a `Result` constructor. The `match_pattern` wrapper (with an
+/// optional `if`-guard trailing the pattern) is unwrapped to its first named
+/// child; a guard never changes whether the pattern destructures the result.
+fn classify_arm(pattern: tree_sitter::Node, source: &[u8]) -> ArmShape {
+    match pattern.kind() {
+        // `_` surfaces as an unnamed token, so the wrapper has no named child.
+        "match_pattern" => match pattern.named_child(0) {
+            Some(inner) => classify_arm(inner, source),
+            None if matches!(pattern.utf8_text(source), Ok("_")) => ArmShape::CatchAll,
+            None => ArmShape::Other,
+        },
+        "tuple_struct_pattern" if pattern_is_result_ctor(pattern, source) => ArmShape::ResultCtor,
+        "wildcard_pattern" | "identifier" => ArmShape::CatchAll,
+        "or_pattern" => {
+            let mut cursor = pattern.walk();
+            let all_result_ctors = pattern
+                .named_children(&mut cursor)
+                .all(|branch| matches!(classify_arm(branch, source), ArmShape::ResultCtor));
+            if all_result_ctors {
+                ArmShape::ResultCtor
+            } else {
+                ArmShape::Other
+            }
+        }
+        _ => ArmShape::Other,
+    }
+}
+
+/// True if `pattern` is an `Ok(..)` / `Err(..)` tuple-struct pattern, the two
+/// `Result` constructors a `LockResult` is destructured into. The constructor
+/// may be path-qualified (`Result::Ok(..)`); the final segment is what counts.
+fn pattern_is_result_ctor(pattern: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(type_node) = pattern.child_by_field_name("type") else {
+        return false;
+    };
+    let name = match type_node.kind() {
+        "identifier" => type_node.utf8_text(source).ok(),
+        "scoped_identifier" => type_node
+            .child_by_field_name("name")
+            .and_then(|name| name.utf8_text(source).ok()),
+        _ => None,
+    };
+    matches!(name, Some("Ok" | "Err"))
+}
+
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
     fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
@@ -148,26 +243,64 @@ mod tests {
     }
 
     #[test]
-    fn flags_match_on_lock() {
+    fn allows_match_destructuring_lock_result() {
         let src = "fn f() { match m.lock() { Ok(g) => (), Err(_) => () } }";
-        assert_eq!(run_on(src).len(), 1);
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
-    fn flags_match_on_read() {
+    fn allows_match_destructuring_read_result() {
         let src = "fn f() { match rw.read() { Ok(g) => (), Err(_) => () } }";
-        assert_eq!(run_on(src).len(), 1);
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
-    fn flags_match_on_write() {
+    fn allows_match_destructuring_write_result() {
         let src = "fn f() { match rw.write() { Ok(g) => (), Err(_) => () } }";
-        assert_eq!(run_on(src).len(), 1);
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_match_destructuring_lock_result_with_early_return() {
+        // The nushell `nu-lsp` shape: destructure the `LockResult`, bind the
+        // guard in the `Ok` arm, return early on poison.
+        let src = "fn f() -> Result<u32, String> { \
+            let docs = match self.docs.lock() { \
+                Ok(it) => it, \
+                Err(err) => return Err(err.to_string()), \
+            }; \
+            Ok(docs.len() as u32) \
+        }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_match_destructuring_with_catch_all_arm() {
+        let src = "fn f() { match m.lock() { Ok(g) => (), _ => () } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_match_destructuring_or_pattern() {
+        let src = "fn f() { match m.lock() { Ok(a) | Err(a) => () } }";
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
     fn flags_match_on_lock_with_try() {
         let src = "fn f() -> Result<(), ()> { match m.lock()? { _ => Ok(()) } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_value_match_on_unwrapped_guard() {
+        let src = "fn f() { match m.lock().unwrap() { Foo::A => 1, Foo::B => 2 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_value_match_on_expected_guard() {
+        let src = "fn f() { match m.lock().expect(\"x\") { Foo::A => 1, _ => 2 } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
