@@ -44,6 +44,7 @@ mod runner_helpers;
 mod tui;
 mod typeaware;
 
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::io::IsTerminal;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -519,9 +520,9 @@ fn lint_project(cli: &Cli) -> Result<bool> {
             std::process::exit(2);
         }
         if has_violations {
-            let paths: std::collections::HashSet<&std::path::Path> =
+            let paths: FxHashSet<&std::path::Path> =
                 after_suppressions.iter().map(|d| d.path.as_ref()).collect();
-            let sources: std::collections::HashMap<std::sync::Arc<std::path::Path>, String> = paths
+            let sources: FxHashMap<std::sync::Arc<std::path::Path>, String> = paths
                 .into_iter()
                 .map(|p| {
                     let content = std::fs::read_to_string(p).unwrap_or_default();
@@ -562,7 +563,7 @@ fn collect_all_diagnostics(
     is_comply_only: bool,
     type_aware: bool,
     is_partial: bool,
-) -> Result<(Vec<Diagnostic>, std::collections::HashSet<std::path::PathBuf>)> {
+) -> Result<(Vec<Diagnostic>, FxHashSet<std::path::PathBuf>)> {
     let by_lang = partition_by_language(discovered);
     let mut diagnostics = Vec::with_capacity(discovered.len());
 

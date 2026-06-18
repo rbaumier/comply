@@ -13,7 +13,7 @@
 //!   enough (entropy gate) and long enough relative to the comment
 //!   (`prefix_pct`) is reported.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::path::Path;
 
 use rayon::prelude::*;
@@ -616,7 +616,7 @@ fn normalize_words(stripped: &str) -> Vec<String> {
 }
 
 fn prefix_passes_entropy(prefix: &[String]) -> bool {
-    let mut distinct: HashSet<&str> = HashSet::new();
+    let mut distinct: FxHashSet<&str> = FxHashSet::default();
     for word in prefix {
         if !is_stopword(word) {
             distinct.insert(word.as_str());
