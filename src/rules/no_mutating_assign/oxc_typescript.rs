@@ -1,5 +1,5 @@
 //! OXC backend for no-mutating-assign — flag `Object.assign(target, ...)`
-//! where `target` is not an empty object literal.
+//! where `target` is not a freshly-constructed, unaliased object.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -53,11 +53,13 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Allow `Object.assign({}, ...)`.
-        if let oxc_ast::ast::Argument::ObjectExpression(obj_expr) = first
-            && obj_expr.properties.is_empty() {
-                return;
-            }
+        // Allow `Object.assign({ ... }, ...)` — any object-literal target is a
+        // fresh, unaliased object (whether or not it has properties); nothing
+        // else references it, so `Object.assign({ x }, src)` is `{ x, ...src }`,
+        // not an in-place mutation of a pre-existing object.
+        if matches!(first, oxc_ast::ast::Argument::ObjectExpression(_)) {
+            return;
+        }
 
         // Allow `Object.assign(fn, { ...literal })` — attaching a static
         // property to a function. JS has no immutable alternative:
@@ -284,6 +286,22 @@ mod oxc_tests {
                 code: '23505',
                 constraint_name: 'user_email_key',
             });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    // === non-empty object-literal target (issue #3866) ===
+
+    #[test]
+    fn allows_non_empty_object_literal_target() {
+        // Regression for #3866 — `Object.assign({ 200: a }, b)` has a
+        // freshly-constructed object literal as its target; nothing else
+        // references it, so it is semantically `{ 200: a, ...b }`, not an
+        // in-place mutation of a pre-existing object.
+        let src = r#"
+            function pick(a: unknown, b: Record<number, unknown>) {
+                return Object.assign({ 200: a }, b);
+            }
         "#;
         assert!(run(src).is_empty());
     }
