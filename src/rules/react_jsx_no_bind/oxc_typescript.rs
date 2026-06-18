@@ -3,6 +3,12 @@
 //! `react` — are exempt, as are files importing from `solid-js`: Vue's own
 //! reactivity and Solid's fine-grained reactivity mean a fresh inline function
 //! per render is not a re-render hazard and `useCallback` does not apply.
+//!
+//! Also skipped when the project is configured with `babel-plugin-react-compiler`
+//! (detected via a dep in `package.json` or a reference inside `vite.config.*`,
+//! `next.config.*`, or `babel.config.*` walking up from the file): the compiler
+//! auto-memoises inline functions, so the new-reference-per-render concern — and
+//! the manual `useCallback`/`.bind` hoist this rule asks for — no longer applies.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -14,6 +20,18 @@ use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
+
+/// React-Compiler detection for the per-node fast path. The project-level answer
+/// (`ProjectCtx::uses_react_compiler`) is memoized per directory behind a
+/// `Mutex`; wrap it in the lock-free thread-local file slot — shared with the
+/// sibling JSX-prop rules — so a JSX-dense file takes the lock at most once.
+fn project_uses_react_compiler(ctx: &CheckCtx) -> bool {
+    crate::oxc_helpers::cached_file_bool(
+        ctx.source,
+        crate::oxc_helpers::SLOT_REACT_COMPILER,
+        || ctx.project.uses_react_compiler(ctx.path),
+    )
+}
 
 /// Module-level JSX is evaluated exactly once: there is no render cycle, so an
 /// inline function cannot create per-render reference churn and `useCallback`
@@ -50,6 +68,9 @@ impl OxcCheck for Check {
         // render is not a re-render hazard. React-named rules stay on when the
         // package declares `react` (or both) or has no resolvable framework dep.
         if crate::oxc_helpers::in_non_react_framework_package(ctx.project, ctx.path) {
+            return;
+        }
+        if project_uses_react_compiler(ctx) {
             return;
         }
         let AstKind::JSXOpeningElement(opening) = node.kind() else {
@@ -298,5 +319,24 @@ mod tests {
         let src = "function App() { return <input onInput={(e) => setFilter(e.target.value)} />; }";
         let d = run_with_pkg_at_path(pkg, "src/App.tsx", src);
         assert_eq!(d.len(), 1, "react+vue package should still flag: {d:?}");
+    }
+
+    #[test]
+    fn skips_arrow_when_react_compiler_enabled() {
+        // A React project with `babel-plugin-react-compiler` auto-memoises inline
+        // functions, so the manual `useCallback`/`.bind` hoist this rule asks for
+        // is unnecessary churn-avoidance — stay silent.
+        let pkg = r#"{"dependencies":{"react":"^19"},"devDependencies":{"babel-plugin-react-compiler":"^1.0.0"}}"#;
+        let src = "function App() { return <button onClick={() => f()} />; }";
+        let d = run_with_pkg_at_path(pkg, "src/App.tsx", src);
+        assert!(d.is_empty(), "react-compiler project must not flag inline arrow: {d:?}");
+    }
+
+    #[test]
+    fn skips_bind_when_react_compiler_enabled() {
+        let pkg = r#"{"dependencies":{"react":"^19"},"devDependencies":{"babel-plugin-react-compiler":"^1.0.0"}}"#;
+        let src = "function App() { return <button onClick={this.f.bind(this)} />; }";
+        let d = run_with_pkg_at_path(pkg, "src/App.tsx", src);
+        assert!(d.is_empty(), "react-compiler project must not flag `.bind()`: {d:?}");
     }
 }
