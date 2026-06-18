@@ -31,7 +31,11 @@ fn pattern_can_match_empty(pattern: &str) -> bool {
             if j > 0 && (pbytes[j - 1] == b'*' || pbytes[j - 1] == b'+' || pbytes[j - 1] == b'?') {
                 continue;
             }
-            if j + 1 < pbytes.len() && pbytes[j + 1] == b':' {
+            // `(?` always introduces a group/lookaround (`(?:`, `(?=`, `(?!`,
+            // `(?<=`, `(?<!`, `(?<name>`); a quantifier `?` never follows `(`.
+            // So a `?` right after `(` is a group prefix, not an optional
+            // quantifier.
+            if j > 0 && pbytes[j - 1] == b'(' {
                 continue;
             }
             return true;
@@ -145,5 +149,27 @@ mod tests {
     #[test]
     fn ignores_import_path() {
         assert!(run_on(r#"import X from "@scope/pkg/sub";"#).is_empty());
+    }
+
+    // --- #3775: lookaround group prefixes must not be read as optional. ---
+
+    #[test]
+    fn allows_lookahead_group_prefix() {
+        assert!(run_on(r#"const grouped = (s) => s.replace(/(\d)(?=(\d\d\d)+(?!\d))/g, '$1,');"#).is_empty());
+    }
+
+    #[test]
+    fn allows_alternation_with_negative_lookahead() {
+        assert!(run_on(r#"const cased = (d) => d.replace(/[A-Z]+(?![a-z])|[A-Z]/g, (m) => m);"#).is_empty());
+    }
+
+    #[test]
+    fn allows_positive_lookbehind() {
+        assert!(run_on(r#"const r = s.replace(/(?<=\d)x/g, '');"#).is_empty());
+    }
+
+    #[test]
+    fn allows_negative_lookbehind() {
+        assert!(run_on(r#"const r = s.replace(/(?<!\d)x/g, '');"#).is_empty());
     }
 }
