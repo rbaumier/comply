@@ -144,6 +144,28 @@ fn has_dom_write_intermediary(expr: &Expression) -> bool {
     }
 }
 
+/// True when the assignment target is an imperative browser host-object write
+/// that has no immutable/spread equivalent — assigning the property *is* the API:
+/// - any `Location` property (`location.href = x`, `window.location.hash = x`, …):
+///   every write triggers navigation;
+/// - `window.location = x`: assigning `Location` itself navigates;
+/// - `history.scrollRestoration` / `window.history.scrollRestoration`: the only
+///   writable `History` property (`state`/`length` are read-only).
+fn is_imperative_host_write(obj_text: &str, prop_text: &str) -> bool {
+    if obj_text == "location" || obj_text == "window.location" {
+        return true;
+    }
+    if obj_text == "window" && prop_text == "location" {
+        return true;
+    }
+    if (obj_text == "history" || obj_text == "window.history")
+        && prop_text == "scrollRestoration"
+    {
+        return true;
+    }
+    false
+}
+
 fn is_create_element_call(expr: &Expression) -> bool {
     let Expression::CallExpression(call) = expr else { return false };
     let Expression::StaticMemberExpression(member) = &call.callee else { return false };
@@ -239,6 +261,7 @@ impl OxcCheck for Check {
                         if obj_text == "module" || obj_text == "exports" { return; }
                         if prop_text == "current" { return; }
                         if obj_text == "document" && prop_text == "cookie" { return; }
+                        if is_imperative_host_write(obj_text, prop_text) { return; }
                         if is_rooted_at_this(&m.object)
                             && is_inside_constructor_or_setter(node, semantic) { return; }
                         if is_inside_sentry_hook(node, semantic) { return; }
@@ -266,6 +289,8 @@ impl OxcCheck for Check {
                             [m.object.span().start as usize..m.object.span().end as usize];
 
                         if obj_text == "module" || obj_text == "exports" { return; }
+                        if let Expression::StringLiteral(key) = &m.expression
+                            && is_imperative_host_write(obj_text, key.value.as_str()) { return; }
                         if is_rooted_at_this(&m.object)
                             && is_inside_constructor_or_setter(node, semantic) { return; }
                         if is_inside_sentry_hook(node, semantic) { return; }
@@ -742,6 +767,44 @@ mod tests {
             function reset(el: HTMLElement): void {
                 el.style = someObj;
             }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Imperative browser host writes (Location / History) — issue #3874
+
+    #[test]
+    fn skips_imperative_location_and_history_writes_issue_3874() {
+        // Assigning these host-object properties IS the browser API — navigation
+        // and scroll-restoration side effects with no spread/immutable form.
+        let src = r#"
+            function go(target) {
+                window.location.href = target;
+                location.href = target;
+                window.location = target;
+                window.history.scrollRestoration = "manual";
+                history.scrollRestoration = "auto";
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_arbitrary_window_property_write_3874() {
+        // Negative space: an arbitrary `window.<x>` write is not a documented
+        // imperative host API — stashing app state on the global stays flagged.
+        let src = r#"
+            window.myAppState = { ready: true };
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_readonly_history_property_write_3874() {
+        // Only `scrollRestoration` is a writable History setter; writing other
+        // History properties is a genuine (and invalid) mutation, stays flagged.
+        let src = r#"
+            history.length = 0;
         "#;
         assert_eq!(run(src).len(), 1);
     }
