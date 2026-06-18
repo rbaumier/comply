@@ -824,6 +824,21 @@ pub fn is_inside_non_public_module(node: Node, source: &[u8]) -> bool {
     false
 }
 
+/// True if `item` is effectively reachable from outside the crate: it carries a
+/// bare `pub` modifier itself AND no enclosing module restricts it.
+///
+/// Effective visibility is the product of the item's own modifier and every
+/// enclosing module's, so a bare-`pub` item buried in a non-public module (e.g.
+/// `mod imp { pub fn … }`) is not part of the crate's public API. Combines
+/// [`is_pub`] (the item's own modifier) with [`is_inside_non_public_module`]
+/// (the enclosing chain).
+///
+/// Rules whose rationale is "this is part of the crate's public surface" gate on
+/// this rather than bare [`is_pub`].
+pub fn is_effectively_pub(item: Node, source: &[u8]) -> bool {
+    is_pub(item, source) && !is_inside_non_public_module(item, source)
+}
+
 /// True if the `match_arm`'s body is a single diverging or error
 /// expression — a `unreachable!`/`panic!`/`unimplemented!`/`todo!`/`bail!`
 /// macro invocation, or a `return Err(...)`. Such an arm is an explicit
@@ -1582,6 +1597,34 @@ mod tests {
                 is_inside_non_public_module(use_decl, src.as_bytes()),
                 expected,
                 "is_inside_non_public_module mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_effectively_pub_combines_own_and_enclosing_visibility() {
+        let cases = [
+            // Bare-`pub` at file scope: effectively public.
+            ("pub fn f() {}", true),
+            // Bare-`pub` inside a bare-`pub mod`: still effectively public.
+            ("pub mod m { pub fn f() {} }", true),
+            // Non-public own modifier: not public regardless of enclosing module.
+            ("pub(crate) fn f() {}", false),
+            ("fn f() {}", false),
+            // Bare-`pub` confined to a non-public module: not effectively public.
+            ("mod imp { pub fn f() {} }", false),
+            ("pub(crate) mod m { pub fn f() {} }", false),
+            // Nested: a private module anywhere in the chain confines it.
+            ("pub(crate) mod outer { pub mod inner { pub fn f() {} } }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let func = first_of_kind(tree.root_node(), "function_item")
+                .expect("snippet should contain a function_item");
+            assert_eq!(
+                is_effectively_pub(func, src.as_bytes()),
+                expected,
+                "is_effectively_pub mismatch for `{src}`"
             );
         }
     }
