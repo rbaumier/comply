@@ -1,21 +1,20 @@
 //! rust-prefer-channel-over-arc-mutex-vec backend.
 //!
-//! Matches either `Arc::new(Mutex::new(Vec::new()))` construction chains
-//! or `Arc<Mutex<Vec<_>>>` type annotations, gated on the file also
-//! containing `.lock()` and `.push(` — the signal that the shared Vec is
-//! being used as a collector across threads.
+//! Flags a `let`-bound `Arc::new(Mutex::new(Vec::new()))` construction — the
+//! transient fan-in collector shape: a local Vec cloned into spawned tasks that
+//! each `.push(` a result, drained once by the parent. Gated on the file also
+//! containing `.lock()` and `.push(`. Only the local `let` initializer matches;
+//! a `Arc<Mutex<Vec<_>>>` type annotation or a construction used elsewhere
+//! (struct-field initializer, closure body, return, argument) declares
+//! persistent shared state, not the fan-in local, so it is left alone.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["call_expression", "generic_type"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     if !ctx.source_contains(".lock()") || !ctx.source_contains(".push(") { return; }
 
-    let matched = match node.kind() {
-        "call_expression" => is_arc_mutex_vec_call(node, source),
-        "generic_type" => is_arc_mutex_vec_type(node, source),
-        _ => false,
-    };
-    if !matched { return; }
+    if !is_arc_mutex_vec_call(node, source) { return; }
+    if !is_local_let_initializer(node) { return; }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -80,41 +79,18 @@ fn is_arc_mutex_vec_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     }
 }
 
-fn type_name<'a>(gt: tree_sitter::Node, source: &'a [u8]) -> &'a str {
-    gt.child_by_field_name("type")
-        .and_then(|n| n.utf8_text(source).ok())
-        .unwrap_or("")
-}
-
-fn first_type_arg(gt: tree_sitter::Node) -> Option<tree_sitter::Node> {
-    let args = gt.child_by_field_name("type_arguments")?;
-    let mut cursor = args.walk();
-    args.named_children(&mut cursor).next()
-}
-
-fn is_arc_mutex_vec_type(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let outer = type_name(node, source);
-    if outer != "Arc" && outer != "std::sync::Arc" {
-        return false;
-    }
-    let Some(mutex_ty) = first_type_arg(node) else {
+/// True when `node` is the `value` initializer of a local `let` binding
+/// (`let x = <node>;`). A struct-field initializer, closure body, return
+/// expression, or call argument is not the fan-in collector local, so they
+/// fail this check.
+fn is_local_let_initializer(node: tree_sitter::Node) -> bool {
+    let Some(parent) = node.parent() else {
         return false;
     };
-    if mutex_ty.kind() != "generic_type" {
+    if parent.kind() != "let_declaration" {
         return false;
     }
-    let mutex_name = type_name(mutex_ty, source);
-    if mutex_name != "Mutex" && mutex_name != "std::sync::Mutex" {
-        return false;
-    }
-    let Some(vec_ty) = first_type_arg(mutex_ty) else {
-        return false;
-    };
-    if vec_ty.kind() != "generic_type" {
-        return false;
-    }
-    let vec_name = type_name(vec_ty, source);
-    vec_name == "Vec" || vec_name == "std::vec::Vec"
+    parent.child_by_field_name("value").map(|v| v.id()) == Some(node.id())
 }
 
 
@@ -157,5 +133,29 @@ mod tests {
     #[test]
     fn allows_arc_mutex_without_push() {
         assert!(run("fn go() { let x = Arc::new(Mutex::new(Vec::new())); }").is_empty());
+    }
+
+    #[test]
+    fn allows_struct_field_type() {
+        let src = "struct IoWorker { wakers: Arc<Mutex<Vec<Waker>>> } fn wake(w: &Mutex<Vec<Waker>>) { w.lock().unwrap().push(noop()); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_type_alias() {
+        let src = "type CallbackQueue = Arc<Mutex<Vec<Op>>>; fn drain(q: &Mutex<Vec<Op>>) { q.lock().unwrap().push(op()); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_struct_field_initializer() {
+        let src = "fn make() -> S { S { pending: Arc::new(Mutex::new(Vec::new())) } } fn use_it(q: &Mutex<Vec<u8>>) { q.lock().unwrap().push(1); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_once_lock_get_or_init_closure() {
+        let src = "static E: OnceLock<Arc<Mutex<Vec<u8>>>> = OnceLock::new(); fn get() -> Arc<Mutex<Vec<u8>>> { E.get_or_init(|| Arc::new(Mutex::new(Vec::new()))).clone() } fn use_it(x: &Mutex<Vec<u8>>) { x.lock().unwrap().push(1); }";
+        assert!(run(src).is_empty());
     }
 }
