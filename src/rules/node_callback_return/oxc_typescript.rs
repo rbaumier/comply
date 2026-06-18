@@ -67,6 +67,13 @@ impl OxcCheck for Check {
             // An awaited call is structurally not a fire-and-forget Node error-first
             // callback, so a trailing `return` is neither expected nor correct.
             AstKind::AwaitExpression(_) => return,
+            // `result = callback(x)` / `const result = callback(x)` — the call's
+            // return value is captured into a binding, so it is consumed, not dropped.
+            // This is the opposite of the "forgot to `return`" mistake: a trailing
+            // `return callback(x)` would skip any surrounding cleanup (e.g. a
+            // `try/finally` that runs before the captured value is returned).
+            AstKind::AssignmentExpression(_) => return,
+            AstKind::VariableDeclarator(_) => return,
             // `push(callback(key))` / `new Wrapper(cb(x))` — the call's result is
             // passed as an argument to an enclosing call, so it is consumed
             // downstream, not dropped. A trailing `return` is impossible (the value
@@ -422,6 +429,42 @@ mod tests {
     #[test]
     fn no_fp_when_callback_result_is_new_argument() {
         let src = "function f(callback) { const e = new Error(callback(x)); throw e; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_callback_result_assigned_to_binding() {
+        // Issue #3861: `result = callback(x)` captures the callback's return value
+        // into a binding, then returns it after surrounding cleanup runs. A trailing
+        // `return callback(x)` would skip the cleanup, so this is not a missing return.
+        let src = "function run(callback) { let result; result = callback(x); return result; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_when_callback_result_declared_into_binding() {
+        // Issue #3861: `const result = callback(x)` — the result flows into a binding.
+        let src = "function run(callback) { const result = callback(x); return result; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_batch_capture_with_try_finally() {
+        // Issue #3861 (TanStack/query notifyManager): the callback result is captured
+        // so the surrounding try/finally cleanup runs before returning it.
+        let src = r#"
+            const batch = (callback) => {
+              let result;
+              transactions++;
+              try {
+                result = callback(x);
+              } finally {
+                transactions--;
+                if (!transactions) { flush(); }
+              }
+              return result;
+            };
+        "#;
         assert!(run(src).is_empty());
     }
 
