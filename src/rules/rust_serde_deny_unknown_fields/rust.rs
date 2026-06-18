@@ -17,6 +17,10 @@
 //! is exactly the mechanism for accepting unknown keys, so rejecting
 //! them before the flatten can catch them defeats the field's purpose.
 //!
+//! **Exception:** a `#[serde(transparent)]` struct is NOT flagged. It
+//! delegates all (de)serialization to its single inner field and has no
+//! field-name map of its own, so `deny_unknown_fields` is a no-op there.
+//!
 //! **Exception:** structs defined inside a test context (a `#[test]`
 //! function, a path-qualified test fn like `#[tokio::test]` /
 //! `#[crate::test]`, or a `#[cfg(test)]` module) are skipped — they are
@@ -63,6 +67,12 @@ impl AstCheck for Check {
         // Structs with a `#[serde(flatten)]` field cannot have
         // `deny_unknown_fields` — the two are mutually exclusive.
         if has_flatten_field(node, source_bytes) {
+            return;
+        }
+        // `#[serde(transparent)]` structs delegate all (de)serialization
+        // to their single inner field, so they have no field-name map of
+        // their own — `deny_unknown_fields` is inert there.
+        if attrs.iter().any(|a| has_transparent_attr(a)) {
             return;
         }
         // ORM structs (Diesel Queryable / Selectable) deserialize from
@@ -167,6 +177,22 @@ fn final_segment(path: &str) -> &str {
 
 fn has_deny_unknown_fields(attr_text: &str) -> bool {
     attr_text.contains("deny_unknown_fields")
+}
+
+/// True for a `#[serde(...)]` attribute whose argument list contains the
+/// `transparent` option. Scoped to the `serde(` argument list so an
+/// unrelated attribute (e.g. `#[cfg(feature = "transparent")]`) does not
+/// match.
+fn has_transparent_attr(attr_text: &str) -> bool {
+    attr_text
+        .split_once("serde(")
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .is_some_and(|(inside, _)| {
+            inside
+                .split(',')
+                .map(str::trim)
+                .any(|opt| opt == "transparent")
+        })
 }
 
 fn has_orm_derive(attrs: &[String]) -> bool {
@@ -309,6 +335,43 @@ mod tests {
         assert!(
             run_on(source).is_empty(),
             "false positive: struct with flatten field can't have deny_unknown_fields"
+        );
+    }
+
+    #[test]
+    fn allows_transparent_newtype_struct() {
+        // sqlx's `#[serde(transparent)] pub struct Json<T>(pub T);` —
+        // a transparent newtype delegates all (de)serialization to its
+        // inner field, so `deny_unknown_fields` is a no-op. (Closes #3879)
+        let source = "#[derive(Deserialize)]\n#[serde(transparent)]\npub struct Json<T>(pub T);";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: transparent newtype flagged despite deny_unknown_fields being inert"
+        );
+    }
+
+    #[test]
+    fn allows_transparent_named_field_struct() {
+        // A transparent struct with a single *named* field is not caught
+        // by the tuple/newtype guard — the transparent exemption must
+        // still skip it because field handling is delegated to `inner`.
+        let source =
+            "#[derive(Deserialize)]\n#[serde(transparent)]\nstruct Wrapper { inner: u32 }";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: transparent named-field struct flagged despite deny_unknown_fields being inert"
+        );
+    }
+
+    #[test]
+    fn flags_despite_unrelated_transparent_mention() {
+        // `transparent` outside a `serde(...)` arg list (here a cfg
+        // feature gate) must NOT trigger the exemption.
+        let source = "#[derive(Deserialize)]\n#[cfg(feature = \"transparent\")]\nstruct Config { rate: u32 }";
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "should still flag: `transparent` is a feature name, not serde(transparent)"
         );
     }
 
