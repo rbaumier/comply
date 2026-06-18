@@ -27,7 +27,7 @@ pub(crate) const CONFLICT_PREFIXES: &[&str] = &[
     "m-", "mx-", "my-", "mt-", "mr-", "mb-", "ml-",
     "w-", "h-", "min-w-", "min-h-", "max-w-", "max-h-",
     "bg-", "rounded-", "shadow-", "opacity-", "z-",
-    "gap-", "grid-cols-", "grid-rows-", "justify-", "items-", "self-", "order-", "overflow-",
+    "gap-", "gap-x-", "gap-y-", "grid-cols-", "grid-rows-", "justify-", "items-", "self-", "order-", "overflow-",
 ];
 
 pub(crate) const DISPLAY_CLASSES: &[&str] = &[

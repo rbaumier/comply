@@ -132,4 +132,36 @@ mod tests {
             run(r#"const x = <input className="text-md w-full text-black placeholder:text-neutral-500" />;"#).is_empty()
         );
     }
+
+    #[test]
+    fn allows_gap_x_with_gap_y() {
+        // Regression for rbaumier/comply#4072 — `gap-x-*` (column-gap) and
+        // `gap-y-*` (row-gap) control different axes and are designed to
+        // coexist, so they must not conflict.
+        assert!(
+            run(r#"const x = <div className="grid grid-cols-2 gap-x-8 gap-y-4 px-6 pb-6" />;"#)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_conflicting_gap_x_same_axis() {
+        let diags = run(r#"const x = <div className="gap-x-4 gap-x-8" />;"#);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("gap-x-"));
+    }
+
+    #[test]
+    fn flags_conflicting_gap_y_same_axis() {
+        let diags = run(r#"const x = <div className="gap-y-2 gap-y-6" />;"#);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("gap-y-"));
+    }
+
+    #[test]
+    fn flags_conflicting_gap_shorthand() {
+        let diags = run(r#"const x = <div className="gap-2 gap-6" />;"#);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("gap-2, gap-6"));
+    }
 }
