@@ -1,11 +1,16 @@
 //! rust-if-let-mutex-lock backend.
 //!
-//! Walks `if_let_expression` nodes whose scrutinee is a method call
-//! ending in `.lock()` / `.read()` / `.write()` / `.try_lock()` /
-//! `.try_read()` / `.try_write()`. The lock guard built by the
-//! scrutinee is alive for the entire `if/else`, so the `else`
-//! branch silently still holds the lock — usually the opposite of
-//! what the author intended.
+//! Walks `if_let_expression` nodes whose scrutinee is a blocking lock
+//! call ending in `.lock()` / `.read()` / `.write()`. Those return a
+//! `Result` whose `Err(PoisonError<Guard>)` temporary still wraps a
+//! guard, so the guard built by the scrutinee is alive for the entire
+//! `if/else` and the `else` branch silently still holds the lock —
+//! usually the opposite of what the author intended.
+//!
+//! The `try_*` family (`try_lock` / `try_read` / `try_write`) is
+//! excluded: it returns `Option<Guard>` (or `Result<Guard, _>`) and the
+//! `else` branch is the lock-not-acquired path, reached exactly when the
+//! scrutinee produced `None`/`Err` — so it never holds a guard.
 //!
 //! Tree-sitter Rust represents `if let` as an `if_expression` whose
 //! `condition` field holds a `let_condition` (or, in some grammar
@@ -16,7 +21,7 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 
 const KINDS: &[&str] = &["if_expression"];
 
-const LOCK_METHODS: &[&str] = &["lock", "read", "write", "try_lock", "try_read", "try_write"];
+const LOCK_METHODS: &[&str] = &["lock", "read", "write"];
 
 #[derive(Debug)]
 pub struct Check;
@@ -90,8 +95,8 @@ fn lock_method_name<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a
     if node.kind() != "call_expression" {
         return None;
     }
-    // Every `std::sync` lock guard (`Mutex::lock`, `RwLock::read`/`write`,
-    // and the `try_*` variants) is nullary. A call carrying arguments —
+    // Every blocking `std::sync` lock guard (`Mutex::lock`,
+    // `RwLock::read`/`write`) is nullary. A call carrying arguments —
     // e.g. `cache.read(id)` — is a same-named lookup, not a lock guard.
     if node
         .child_by_field_name("arguments")
@@ -186,6 +191,26 @@ mod tests {
     #[test]
     fn allows_lock_with_argument() {
         let source = "fn f() { if let Some(x) = registry.lock(key) { use_(x); } else { retry(); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_if_let_try_lock_with_else() {
+        // sea-orm: the `else` branch is the lock-not-acquired path
+        // (`try_lock` returned `None`), so it holds no guard.
+        let source = "fn f() { if let Some(mut conn) = self.conn.try_lock() { go(conn); } else { return Err(e); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_if_let_try_read_with_else() {
+        let source = "fn f() { if let Ok(g) = rw.try_read() { go(g); } else { fallback(); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_if_let_try_write_with_else() {
+        let source = "fn f() { if let Ok(g) = rw.try_write() { go(g); } else { fallback(); } }";
         assert!(run_on(source).is_empty());
     }
 }
