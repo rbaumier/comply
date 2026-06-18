@@ -1,46 +1,61 @@
 //! Detects `.clone()` on variables declared as `Arc<T>` or initialized
 //! with `Arc::new(...)` / `Arc::clone(...)`.
 
-use std::collections::HashMap;
-
 use crate::diagnostic::{Diagnostic, Severity};
 
+/// True when the binding named `target_name` that is in lexical scope at the
+/// `.clone()` call (byte offset `call_start`) was declared as `Arc`.
+///
+/// Walks up from the call through its ancestor scopes; the innermost scope that
+/// declares `target_name` before the call wins, and within it the
+/// latest-preceding `let` is used. Bindings nested in sibling or inner blocks do
+/// not contribute, so a same-named non-Arc parameter or outer binding is not
+/// shadowed by an unrelated `Arc` declaration elsewhere in the function.
 fn is_arc_binding_at_call(
-    root: tree_sitter::Node,
+    call_node: tree_sitter::Node,
     source: &[u8],
     call_start: usize,
     target_name: &str,
 ) -> bool {
-    let mut bindings = HashMap::new();
-    let mut cursor = root.walk();
-    collect_bindings_before_call(root, source, call_start, &mut cursor, &mut bindings);
-    bindings.get(target_name).copied().unwrap_or(false)
+    let mut scope = call_node.parent();
+    while let Some(node) = scope {
+        if matches!(
+            node.kind(),
+            "block" | "function_item" | "closure_expression" | "source_file"
+        ) && let Some(is_arc) =
+            nearest_binding_in_scope(node, source, call_start, target_name)
+        {
+            return is_arc;
+        }
+        scope = node.parent();
+    }
+    false
 }
 
-fn collect_bindings_before_call<'a>(
+/// Within a single scope `node`, returns the Arc state of the latest `let`
+/// declaration of `target_name` that starts before `call_start`. Only direct
+/// statements of this scope are considered — nested blocks and closures are not
+/// descended into, so bindings local to a child scope are ignored.
+fn nearest_binding_in_scope<'a>(
     node: tree_sitter::Node<'a>,
     source: &'a [u8],
     call_start: usize,
-    cursor: &mut tree_sitter::TreeCursor<'a>,
-    bindings: &mut HashMap<&'a str, bool>,
-) {
-    if node.start_byte() >= call_start {
-        return;
-    }
-    if node.kind() == "let_declaration"
-        && let Some((name, is_arc)) = binding_arc_state(node, source)
-    {
-        bindings.insert(name, is_arc);
-    }
-    if cursor.goto_first_child() {
-        loop {
-            collect_bindings_before_call(cursor.node(), source, call_start, cursor, bindings);
-            if !cursor.goto_next_sibling() {
-                break;
-            }
+    target_name: &str,
+) -> Option<bool> {
+    let mut cursor = node.walk();
+    let mut result = None;
+    for child in node.children(&mut cursor) {
+        if child.start_byte() >= call_start {
+            break;
         }
-        cursor.goto_parent();
+        if child.kind() == "let_declaration"
+            && let Some((name, is_arc)) = binding_arc_state(child, source)
+            && name == target_name
+        {
+            result = Some(is_arc);
+        }
     }
+    result
 }
 
 fn binding_arc_state<'a>(node: tree_sitter::Node<'a>, source: &'a [u8]) -> Option<(&'a str, bool)> {
@@ -89,13 +104,7 @@ crate::ast_check! { on ["call_expression"] prefilter = ["clone"] => |node, sourc
     if object.kind() != "identifier" { return; }
     let obj_name = object.utf8_text(source).unwrap_or("");
 
-    let root = node.parent().map(|n| {
-        let mut r = n;
-        while let Some(p) = r.parent() { r = p; }
-        r
-    }).unwrap_or(node);
-
-    if !is_arc_binding_at_call(root, source, node.start_byte(), obj_name) { return; }
+    if !is_arc_binding_at_call(node, source, node.start_byte(), obj_name) { return; }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -170,5 +179,33 @@ mod tests {
     fn flags_std_sync_arc_new() {
         let src = "fn f() { let x = std::sync::Arc::new(42); let y = x.clone(); }";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_clone_on_param_when_arc_binding_is_in_sibling_block() {
+        // `tls` in the else-branch resolves to the non-Arc fn parameter; the
+        // `let tls = Arc::new(tls)` lives in the sibling if-branch only.
+        let src = "fn build(tls: Config, c: bool) { \
+            if c { let tls = Arc::new(tls); let _ = (tls.clone(), tls); } \
+            else { let mut tls_proxy = tls.clone(); let _ = tls_proxy; } }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_clone_on_arc_binding_in_same_branch() {
+        // The if-branch `tls.clone()` resolves to the inner `let tls = Arc::new`.
+        let src = "fn build(tls: Config, c: bool) { \
+            if c { let tls = Arc::new(tls); let _ = tls.clone(); } }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_clone_when_arc_binding_is_in_nested_inner_block() {
+        // The inner `let resolver: Arc<_>` lives in a nested block that does not
+        // enclose the later `.clone()`; the outer `resolver` is not Arc.
+        let src = "fn f(resolver: DynResolver) { \
+            { let resolver: Arc<dyn Resolve> = make(); let _ = resolver; } \
+            let y = resolver.clone(); }";
+        assert!(run(src).is_empty());
     }
 }
