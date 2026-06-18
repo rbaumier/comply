@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, TSType};
+use oxc_ast::ast::{Expression, Statement, TSType};
 use std::sync::Arc;
 
 pub struct Check;
@@ -87,6 +87,76 @@ fn enclosing_return_type_allows_undefined<'a>(
     false
 }
 
+/// Walk ancestors to the enclosing function (`function`, arrow, or method)
+/// of the `return undefined` node and report whether that function returns a
+/// non-`undefined` value on another path. When it does, the function has
+/// mixed returns and the explicit `return undefined;` is the shape mandated by
+/// `consistent-return` / `require-explicit-undefined` (a bare `return;` or
+/// implicit fall-off would be rejected), so it must not be flagged.
+fn enclosing_function_has_value_return(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    for ancestor in semantic.nodes().ancestors(node_id) {
+        let body = match ancestor.kind() {
+            AstKind::Function(func) => func.body.as_ref(),
+            AstKind::ArrowFunctionExpression(arrow) => Some(&arrow.body),
+            _ => continue,
+        };
+        return body
+            .map(|b| stmts_have_value_return(&b.statements))
+            .unwrap_or(false);
+    }
+    false
+}
+
+/// True if any statement in `stmts` is a `return <non-undefined value>`.
+/// Descends only through control-flow statements, never into a nested
+/// `function`/arrow, so a `return` belonging to an inner function is not
+/// attributed to the outer one.
+fn stmts_have_value_return(stmts: &[Statement]) -> bool {
+    stmts.iter().any(stmt_has_value_return)
+}
+
+fn stmt_has_value_return(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::ReturnStatement(ret) => ret
+            .argument
+            .as_ref()
+            .is_some_and(|arg| !is_undefined_identifier(arg)),
+        Statement::BlockStatement(block) => stmts_have_value_return(&block.body),
+        Statement::IfStatement(if_stmt) => {
+            stmt_has_value_return(&if_stmt.consequent)
+                || if_stmt
+                    .alternate
+                    .as_ref()
+                    .is_some_and(|alt| stmt_has_value_return(alt))
+        }
+        Statement::ForStatement(f) => stmt_has_value_return(&f.body),
+        Statement::ForInStatement(f) => stmt_has_value_return(&f.body),
+        Statement::ForOfStatement(f) => stmt_has_value_return(&f.body),
+        Statement::WhileStatement(w) => stmt_has_value_return(&w.body),
+        Statement::DoWhileStatement(d) => stmt_has_value_return(&d.body),
+        Statement::SwitchStatement(s) => s
+            .cases
+            .iter()
+            .any(|case| stmts_have_value_return(&case.consequent)),
+        Statement::TryStatement(t) => {
+            stmts_have_value_return(&t.block.body)
+                || t.handler
+                    .as_ref()
+                    .is_some_and(|h| stmts_have_value_return(&h.body.body))
+                || t.finalizer
+                    .as_ref()
+                    .is_some_and(|f| stmts_have_value_return(&f.body))
+        }
+        Statement::LabeledStatement(l) => stmt_has_value_return(&l.body),
+        // Nested `function`/arrow declarations and expression statements own
+        // their own returns; do not attribute them to the enclosing function.
+        _ => false,
+    }
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::ReturnStatement, AstType::VariableDeclarator]
@@ -110,6 +180,9 @@ impl OxcCheck for Check {
                     return;
                 }
                 if enclosing_return_type_allows_undefined(node.id(), semantic) {
+                    return;
+                }
+                if enclosing_function_has_value_return(node.id(), semantic) {
                     return;
                 }
                 let (line, column) = byte_offset_to_line_col(ctx.source, ret.span.start as usize);
@@ -169,6 +242,10 @@ mod tests {
 
     fn run(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    fn run_tsx(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.tsx")
     }
 
     #[test]
@@ -315,6 +392,72 @@ mod tests {
         let src = "
             type Name = string;
             function f(): Name { return undefined; }
+        ";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    /// Regression for #3828 — a function with no return-type annotation that
+    /// returns a value on one path and `undefined` on another has mixed
+    /// returns. `consistent-return` requires the explicit `return undefined;`,
+    /// so it must not be flagged.
+    #[test]
+    fn allows_return_undefined_in_mixed_return_function_without_annotation() {
+        let src = "
+            function pick(x: number) {
+                if (x > 0) {
+                    return makeHandler();
+                }
+                return undefined;
+            }
+        ";
+        assert!(run(src).is_empty());
+    }
+
+    /// Regression for #3828 — the mui `Portal` case: an untyped `useEffect`
+    /// callback returning a cleanup function on one path and `undefined` on
+    /// the other.
+    #[test]
+    fn allows_return_undefined_in_untyped_useeffect_cleanup_callback() {
+        let src = "
+            React.useEffect(() => {
+                if (enabled) {
+                    return () => cleanup();
+                }
+                return undefined;
+            }, [enabled]);
+        ";
+        assert!(run_tsx(src).is_empty());
+    }
+
+    /// Non-regression for #3828 — a function whose only return is the
+    /// `undefined` one (no value-return on any path) is genuinely redundant
+    /// and must still be flagged.
+    #[test]
+    fn still_flags_lone_return_undefined() {
+        let src = "function f() { return undefined; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    /// Non-regression for #3828 — an arrow with side effects but no
+    /// value-return is genuinely redundant and must still be flagged.
+    #[test]
+    fn still_flags_return_undefined_in_arrow_without_value_return() {
+        let src = "const f = () => { doStuff(); return undefined; };";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    /// Non-regression for #3828 — a value-return inside a NESTED function
+    /// belongs to that inner function, not the outer one. The outer
+    /// `return undefined;` is still genuinely redundant and must be flagged.
+    #[test]
+    fn still_flags_return_undefined_when_only_value_return_is_in_nested_function() {
+        let src = "
+            function outer() {
+                const inner = () => {
+                    return makeHandler();
+                };
+                return undefined;
+            }
         ";
         assert_eq!(run(src).len(), 1);
     }
