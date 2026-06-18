@@ -1,11 +1,14 @@
 //! rust-hash-partial-eq-mismatch backend.
 //!
 //! For each `struct_item` / `enum_item` we collect the source of
-//! `Hash` and `PartialEq` (derive vs. manual `impl`). If one is
-//! derived and the other is manually implemented, we flag the
-//! definition. The Hash/Eq contract requires `a == b => hash(a) ==
-//! hash(b)`; mixing derive and manual is the canonical way to
-//! silently break it.
+//! `Hash` and `PartialEq` (derive vs. manual `impl`). We flag only a
+//! derived `Hash` paired with a manual `PartialEq`: a derived `Hash`
+//! reads every field, so a manual `eq` that ignores one can make
+//! `a == b` while `hash(a) != hash(b)`, breaking the `a == b =>
+//! hash(a) == hash(b)` contract. The reverse mix — a manual `Hash`
+//! with a derived `PartialEq` — is the idiomatic subset-hash
+//! optimization: derived `PartialEq` compares all fields, so equal
+//! values agree on the subset the manual `Hash` reads and hash equal.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -45,8 +48,11 @@ impl AstCheck for Check {
         if !has_hash || !has_eq {
             return;
         }
-        // Both are present; flag if their sources disagree.
-        let mismatch = (derived_hash && manual_eq) || (manual_hash && derived_eq);
+        // Both are present; flag only the contract-breaking direction:
+        // a derived `Hash` (reads all fields) with a manual `PartialEq`
+        // that may ignore some. A manual `Hash` over a subset of the
+        // derived-`PartialEq` fields is the safe idiomatic optimization.
+        let mismatch = derived_hash && manual_eq;
         if mismatch {
             diagnostics.push(Diagnostic::at_node(
                 std::sync::Arc::clone(&ctx.path_arc),
@@ -129,10 +135,15 @@ mod tests {
     }
 
     #[test]
-    fn flags_manual_hash_derived_partial_eq() {
-        let source = "#[derive(PartialEq)]\nstruct A;\n\
-                      impl std::hash::Hash for A { fn hash<H: std::hash::Hasher>(&self, _: &mut H) {} }";
-        assert_eq!(run_on(source).len(), 1);
+    fn allows_manual_hash_derived_partial_eq() {
+        // A manual `Hash` with a derived `PartialEq` is the idiomatic
+        // subset-hash optimization: derived `PartialEq` compares every
+        // field, so equal values agree on the subset the manual `Hash`
+        // reads and hash equal. Mirrors datafusion's `Alias` (#3806).
+        let source = "#[derive(PartialEq, Eq)]\n\
+                      struct Key { id: u64, cached_label: String }\n\
+                      impl std::hash::Hash for Key { fn hash<H: std::hash::Hasher>(&self, state: &mut H) { self.id.hash(state); } }";
+        assert!(run_on(source).is_empty());
     }
 
     #[test]
