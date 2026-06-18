@@ -15,7 +15,7 @@ impl OxcCheck for Check {
     }
 
     fn prefilter(&self) -> Option<&'static [&'static str]> {
-        Some(&["JSON.stringify"])
+        Some(&["@tanstack/start", "@tanstack/react-start"])
     }
 
     fn run<'a>(
@@ -45,6 +45,13 @@ impl OxcCheck for Check {
             return;
         }
 
+        // File must use TanStack Start, where `json()` is importable.
+        if !ctx.source_contains("@tanstack/start")
+            && !ctx.source_contains("@tanstack/react-start")
+        {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, new_expr.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -71,4 +78,57 @@ fn is_json_stringify_call(arg: &Argument) -> bool {
         return false;
     }
     matches!(&mem.object, Expression::Identifier(id) if id.name.as_str() == "JSON")
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, s, "t.ts")
+    }
+
+    const TANSTACK_IMPORT: &str = "import { json } from '@tanstack/react-start';\n";
+
+    #[test]
+    fn flags_new_response_json_stringify_in_tanstack_file() {
+        let src = format!("{TANSTACK_IMPORT}return new Response(JSON.stringify(data));");
+        assert_eq!(run(&src).len(), 1);
+    }
+
+    #[test]
+    fn flags_with_headers_opts_in_tanstack_file() {
+        let src = format!(
+            "{TANSTACK_IMPORT}return new Response(JSON.stringify(data), {{ headers: {{ 'content-type': 'application/json' }} }});"
+        );
+        assert_eq!(run(&src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_when_no_tanstack_start_import() {
+        let src = "const mockResponse = new Response(JSON.stringify(body), { status: 400, headers: { 'Content-Type': 'application/problem+json' } });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_new_response_text_in_tanstack_file() {
+        let src = format!("{TANSTACK_IMPORT}return new Response('hello');");
+        assert!(run(&src).is_empty());
+    }
 }
