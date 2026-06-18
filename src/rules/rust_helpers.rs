@@ -88,6 +88,33 @@ fn fn_modifiers_contain_const(function_item: Node, source: &[u8]) -> bool {
     false
 }
 
+/// True if `node` is the discriminant initializer of an enum variant — the
+/// expression after `=` in `Variant = <expr>` (tree-sitter-rust: the `value`
+/// field of an `enum_variant`).
+///
+/// A discriminant must be a constant expression, where `as` is the only
+/// conversion that compiles: `From`/`TryFrom` are unavailable (`i8: From<u8>`
+/// is not implemented, and `TryInto`/`TryFrom` are not const-stable), so the
+/// `as`-cast lints have no valid remediation to offer there.
+///
+/// Walks up parents and, at the first enclosing `enum_variant`, returns true
+/// only when the subtree it ascended through is that variant's `value` field
+/// (so `(b's' as i8) + 1` is covered too). The walk stops at a `function_item`
+/// / `closure_expression` boundary, so a cast inside an `impl Enum` method —
+/// which is a runtime body, not a discriminant — keeps being flagged.
+pub fn is_in_enum_discriminant(node: Node) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        match parent.kind() {
+            "enum_variant" => return parent.child_by_field_name("value") == Some(cur),
+            "function_item" | "closure_expression" => return false,
+            _ => {}
+        }
+        cur = parent;
+    }
+    false
+}
+
 /// True if `node` is inside a closure that is passed directly as an argument
 /// to a thread-spawning function (`thread::spawn`, `spawn_blocking`, etc.).
 /// Those closures execute on a separate OS thread, not on the async runtime
@@ -1269,6 +1296,44 @@ mod tests {
             }
         }
         None
+    }
+
+    /// Find the first `type_cast_expression` node anywhere in the tree.
+    fn first_type_cast_expression(node: Node) -> Option<Node> {
+        if node.kind() == "type_cast_expression" {
+            return Some(node);
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(found) = first_type_cast_expression(child) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn is_in_enum_discriminant_distinguishes_discriminant_from_method_body() {
+        let cases = [
+            // Direct discriminant value — the cast is the variant's `value`.
+            ("#[repr(i8)] enum E { Str = b's' as i8 }", true),
+            // Nested inside a larger const discriminant expression.
+            ("#[repr(i8)] enum E { Str = (b's' as i8) + 1 }", true),
+            // A cast in an `impl Enum` method body is a runtime body, not a
+            // discriminant.
+            (
+                "enum E { A } impl E { fn f(&self, x: u32) -> i8 { x as i8 } }",
+                false,
+            ),
+            // A plain function-body cast is never a discriminant.
+            ("fn f(x: u32) -> i8 { x as i8 }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_type_cast_expression(tree.root_node())
+                .expect("source should contain a cast");
+            assert_eq!(is_in_enum_discriminant(cast), expected, "src: {src}");
+        }
     }
 
     #[test]
