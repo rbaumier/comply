@@ -9,14 +9,15 @@
 //!
 //! - "wildcard": node kind `wildcard_pattern`, or a pattern whose full
 //!   text is exactly `_`.
-//! - "enum-like": node kind is one of `scoped_identifier`,
-//!   `tuple_struct_pattern`, `struct_pattern`, or the pattern text
-//!   contains `::`, or it is a bare PascalCase identifier (uppercase
-//!   lead with at least one lowercase letter). Literal patterns
-//!   (`"AltLeft"`, `'r'`, `1`, `-2`, `true`), range patterns
-//!   (`'a'..='z'`, `0..=9`) and SCREAMING_SNAKE_CASE constants
-//!   (`EOF_CHAR`) apply only to scalar/string types and are never
-//!   enum-like.
+//! - "enum-like": node kind is `tuple_struct_pattern` or `struct_pattern`,
+//!   or a `scoped_identifier`/`::`-containing path whose final segment is a
+//!   PascalCase variant (`Direction::North`), or a bare PascalCase
+//!   identifier (uppercase lead with at least one lowercase letter).
+//!   Literal patterns (`"AltLeft"`, `'r'`, `1`, `-2`, `true`), range
+//!   patterns (`'a'..='z'`, `0..=9`) and SCREAMING_SNAKE_CASE constants —
+//!   bare (`EOF_CHAR`) or scoped (`Interest::READABLE`, an associated
+//!   const of a newtype struct) — apply only to scalar/numeric types and
+//!   are never enum-like.
 //!   Or-patterns (`Foo::A | Foo::B`) are unwrapped and any disjunct
 //!   that qualifies makes the whole arm enum-like.
 //!
@@ -221,7 +222,22 @@ fn pattern_is_enum_like(pattern: tree_sitter::Node, source: &[u8]) -> bool {
     }
 
     match pattern.kind() {
-        "scoped_identifier" | "tuple_struct_pattern" | "struct_pattern" => return true,
+        // A scoped path (`Foo::Bar`) is enum-like unless its final segment is
+        // SCREAMING_SNAKE_CASE: those are associated constants of a struct
+        // (`Interest::READABLE` on a `usize`-backed newtype), matched as
+        // constant patterns. Such a `match` can never be exhaustive over a
+        // finite variant set, so its `_` arm is compiler-mandated — same
+        // reasoning as the bare-identifier heuristic below.
+        "scoped_identifier" => {
+            return match pattern.child_by_field_name("name") {
+                Some(name) => match name.utf8_text(source) {
+                    Ok(segment) => !is_screaming_snake_const(segment),
+                    Err(_) => true,
+                },
+                None => true,
+            };
+        }
+        "tuple_struct_pattern" | "struct_pattern" => return true,
         // Literal patterns match scalar/string values, never enum variants.
         // A `match key: &str { "AltLeft" => …, _ => … }` has an infinite
         // domain, so its `_` arm is compiler-mandated. Bail out before the
@@ -252,6 +268,17 @@ fn pattern_is_enum_like(pattern: tree_sitter::Node, source: &[u8]) -> bool {
         .find(|c| c.is_ascii_alphanumeric() || *c == '_');
     matches!(first_ident_char, Some(c) if c.is_ascii_uppercase())
         && text.chars().any(|c| c.is_ascii_lowercase())
+}
+
+/// True if `segment` is a SCREAMING_SNAKE_CASE associated constant rather
+/// than an enum variant: all letters uppercase, no lowercase, and at least
+/// two characters (`READABLE`, `EOF_CHAR`, `NUL`). A single uppercase
+/// letter (`A`, `B`) stays a variant — short enum variants are common,
+/// single-letter constants are not.
+fn is_screaming_snake_const(segment: &str) -> bool {
+    segment.chars().count() >= 2
+        && segment.chars().any(|c| c.is_ascii_uppercase())
+        && !segment.chars().any(|c| c.is_ascii_lowercase())
 }
 
 /// True if `pattern` references a variant of a known stdlib closed or
@@ -507,6 +534,18 @@ mod tests {
         // (lexer sentinels like `EOF_CHAR`/`NUL`), not enum variants.
         let src = "fn lex(c: char) -> i32 { match c { \
                    EOF_CHAR => 0, NUL => 1, '0'..='9' => 2, _ => 3 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_on_scoped_screaming_snake_const_patterns() {
+        // Issue #3865: `Interest` is a `usize`-backed newtype struct;
+        // `Interest::READABLE`/`WRITABLE`/`ERROR` are associated constants
+        // matched as constant patterns, not enum variants. The `_` arm is
+        // compiler-mandated and must not be flagged.
+        let src = "fn mask(self) -> Ready { match self { \
+                   Interest::READABLE => 1, Interest::WRITABLE => 2, \
+                   Interest::ERROR => 3, _ => 0 } }";
         assert!(run_on(src).is_empty());
     }
 
