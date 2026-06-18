@@ -667,6 +667,94 @@ fn attribute_allows_lint(attribute_item: Node, source: &[u8], lint: &str) -> boo
         .any(|tok| tok.kind() == "identifier" && tok.utf8_text(source) == Ok(lint))
 }
 
+/// True if `node` sits under a statement, expression, or item gated by
+/// `#[cfg(debug_assertions)]`. Such code compiles out entirely in release
+/// builds, so any runtime behavior it carries (a `.unwrap()`, a panic, a
+/// fallible call) has no effect on the release artifact — it is the
+/// declarative equivalent of `debug_assert!`.
+///
+/// Walks up from `node` via `parent()`; at each ancestor it scans the preceding
+/// `attribute_item` siblings (skipping interleaved comment siblings, traversing
+/// past unrelated attributes) for a `#[cfg(debug_assertions)]` attribute. The
+/// walk stops at the enclosing `function_item` / `closure_expression` /
+/// `source_file` boundary so a `cfg` gate on a *sibling* item far above does
+/// not leak in.
+pub fn is_under_cfg_debug_assertions(node: Node, source: &[u8]) -> bool {
+    let mut cur = node;
+    loop {
+        if cfg_debug_assertions_in_siblings(cur, source) {
+            return true;
+        }
+        if matches!(
+            cur.kind(),
+            "function_item" | "closure_expression" | "source_file"
+        ) {
+            return false;
+        }
+        match cur.parent() {
+            Some(parent) => cur = parent,
+            None => return false,
+        }
+    }
+}
+
+/// Scan `node`'s preceding `attribute_item` siblings for a
+/// `#[cfg(debug_assertions)]` attribute, skipping interleaved comments and
+/// traversing past unrelated attributes.
+fn cfg_debug_assertions_in_siblings(node: Node, source: &[u8]) -> bool {
+    let mut sibling = node.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "line_comment" | "block_comment" => {}
+            "attribute_item" => {
+                if attribute_is_cfg_debug_assertions(s, source) {
+                    return true;
+                }
+            }
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+/// True if `attribute_item` is `#[cfg(debug_assertions)]`: a `cfg` attribute
+/// whose `token_tree` arguments contain `debug_assertions` as a direct-child
+/// `identifier` token.
+///
+/// `attribute_item > attribute` parses as `seq($._path, optional(arguments:
+/// token_tree))`. We match on the path child being `cfg` and on a direct-child
+/// `identifier` token equal to `debug_assertions`, mirroring the AST traversal
+/// in `attribute_allows_lint`. Matching `debug_assertions` only as a *direct*
+/// child of the `cfg` token tree excludes `#[cfg(not(debug_assertions))]`,
+/// whose `debug_assertions` lives inside a nested `not(...)` token tree, and a
+/// compound `#[cfg(all(debug_assertions, ...))]` (nested in `all(...)`).
+fn attribute_is_cfg_debug_assertions(attribute_item: Node, source: &[u8]) -> bool {
+    let mut item_cursor = attribute_item.walk();
+    let Some(attribute) = attribute_item
+        .children(&mut item_cursor)
+        .find(|child| child.kind() == "attribute")
+    else {
+        return false;
+    };
+
+    let Some(path) = attribute.named_child(0) else {
+        return false;
+    };
+    if path.utf8_text(source) != Ok("cfg") {
+        return false;
+    }
+
+    let Some(token_tree) = attribute.child_by_field_name("arguments") else {
+        return false;
+    };
+
+    let mut tree_cursor = token_tree.walk();
+    token_tree
+        .children(&mut tree_cursor)
+        .any(|tok| tok.kind() == "identifier" && tok.utf8_text(source) == Ok("debug_assertions"))
+}
+
 /// Collect the trait names from the top-level `#[derive(...)]` attributes
 /// applied to `item`, an item node (`struct_item` / `enum_item`).
 ///
@@ -2257,6 +2345,52 @@ mod tests {
                 enum_has_cfg_gated_variant(enum_item, src.as_bytes()),
                 expected,
                 "enum_has_cfg_gated_variant mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_under_cfg_debug_assertions_distinguishes_debug_gate_from_other_cfgs() {
+        let cases = [
+            // The gated statement itself — compiles out in release.
+            (
+                "fn f() { #[cfg(debug_assertions)] foo().unwrap(); bar() }",
+                true,
+            ),
+            // A comment between the gate and the statement must not defeat it.
+            (
+                "fn f() { #[cfg(debug_assertions)]\n// note\nfoo().unwrap(); }",
+                true,
+            ),
+            // Gated `let` binding — the unwrap is still under the gate.
+            (
+                "fn f() { #[cfg(debug_assertions)] let _ = foo().unwrap(); }",
+                true,
+            ),
+            // No cfg gate at all — a real runtime unwrap.
+            ("fn f() { foo().unwrap(); }", false),
+            // A `#[cfg(feature = \"x\")]` gate is a real release path.
+            (
+                "fn f() { #[cfg(feature = \"x\")] foo().unwrap(); }",
+                false,
+            ),
+            // `#[cfg(not(debug_assertions))]` is release-only: `debug_assertions`
+            // is nested in `not(...)`, not a direct child of the `cfg` tree.
+            (
+                "fn f() { #[cfg(not(debug_assertions))] foo().unwrap(); }",
+                false,
+            ),
+            // An unrelated attribute (`#[allow(...)]`) is not a debug gate.
+            ("fn f() { #[allow(unused)] foo().unwrap(); }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let call = first_unwrap_call(tree.root_node(), src.as_bytes())
+                .expect("unwrap call present");
+            assert_eq!(
+                is_under_cfg_debug_assertions(call, src.as_bytes()),
+                expected,
+                "is_under_cfg_debug_assertions mismatch for `{src}`"
             );
         }
     }

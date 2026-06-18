@@ -4,10 +4,14 @@
 //! (so `impl From<X> for Y` and `impl<T> From<X<T>> for Y<T>`) and
 //! scans the impl body for `.unwrap()` / `.expect()` method calls.
 //! `TryFrom` impls are not flagged — there, fallibility is part of
-//! the contract.
+//! the contract. A `.unwrap()` / `.expect()` under a
+//! `#[cfg(debug_assertions)]` gate is also skipped: it compiles out in
+//! release builds, so it is a debug-only invariant check (the equivalent
+//! of `debug_assert!`), not a release failure path.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::is_under_cfg_debug_assertions;
 
 const KINDS: &[&str] = &["impl_item"];
 
@@ -70,6 +74,10 @@ fn collect_unwraps_in(
             && let Some(field) = function.child_by_field_name("field")
             && let Ok(field_text) = field.utf8_text(source)
             && (field_text == "unwrap" || field_text == "expect")
+            // A `#[cfg(debug_assertions)]`-gated statement compiles out in
+            // release builds, so its `.unwrap()` is a debug-only invariant
+            // check (like `debug_assert!`), not a release failure path.
+            && !is_under_cfg_debug_assertions(node, source)
         {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
@@ -143,5 +151,31 @@ mod tests {
     fn allows_clean_from_impl() {
         let source = "impl From<u32> for u64 { fn from(x: u32) -> Self { x as u64 } }";
         assert!(run_on(source).is_empty());
+    }
+
+    /// Closes #3799: a `.unwrap()` on a statement gated by
+    /// `#[cfg(debug_assertions)]` compiles out entirely in release builds, so
+    /// the conversion has no runtime fallible path — the idiomatic equivalent
+    /// of `debug_assert!`. It must not be flagged.
+    #[test]
+    fn allows_unwrap_gated_by_cfg_debug_assertions() {
+        let source = "impl From<Column> for BlockEntry {\n    fn from(col: Column) -> Self {\n        #[cfg(debug_assertions)]\n        col.check_valid().unwrap();\n        BlockEntry::Column(col)\n    }\n}";
+        assert!(
+            run_on(source).is_empty(),
+            "a #[cfg(debug_assertions)]-gated unwrap is a debug-only check, not a release failure path"
+        );
+    }
+
+    /// A `#[cfg(feature = "x")]` gate leaves the statement in release builds —
+    /// it is a real runtime path, so the unwrap must still flag. The exemption
+    /// is `debug_assertions`-specific.
+    #[test]
+    fn flags_unwrap_gated_by_cfg_feature() {
+        let source = "impl From<&str> for u32 {\n    fn from(s: &str) -> Self {\n        #[cfg(feature = \"x\")]\n        return s.parse().unwrap();\n        0\n    }\n}";
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "a #[cfg(feature = \"x\")]-gated unwrap is a real release path and must still flag"
+        );
     }
 }
