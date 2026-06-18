@@ -49,6 +49,14 @@ impl AstCheck for Check {
         if trimmed.starts_with("pub(crate)") || trimmed.starts_with("pub(super)") {
             return;
         }
+        // A bare `pub use` confined to a non-public module (`pub(crate) mod foo`,
+        // a private `mod foo`) cannot reach the crate's public API: effective
+        // visibility is the product of the item modifier and every enclosing
+        // module's. The "your crate's API quietly mirrors theirs" rationale is
+        // false there, so it is exempt just like a directly-written `pub(crate)`.
+        if crate::rules::rust_helpers::is_inside_non_public_module(node, source_bytes) {
+            return;
+        }
         // Must end with the wildcard import.
         if !trimmed
             .trim_end()
@@ -261,6 +269,30 @@ mod tests {
         // A `#[cfg(...)]` attribute alone does not remove the re-export from
         // the public API -> still flagged.
         let src = "#[cfg(feature = \"derive\")]\npub use serde::*;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn exempts_pub_use_glob_in_pub_crate_module_issue_3864() {
+        // Issue #3864: tokio src/loom/mocked.rs — a bare `pub use` inside a
+        // `pub(crate) mod` cannot reach the crate's public API.
+        let src = "pub(crate) mod thread {\n    pub use loom::thread::*;\n}";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn exempts_pub_use_glob_in_private_module_issue_3864() {
+        // A plain `mod foo` (no visibility modifier) is private; the re-export
+        // stays inside the module and never escapes the crate.
+        let src = "mod private_mod {\n    pub use foo::*;\n}";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn still_flags_pub_use_glob_in_pub_module_issue_3864() {
+        // A bare-`pub` enclosing module keeps the effective visibility public,
+        // so the re-export does reach the crate's API -> still flagged.
+        let src = "pub mod public_mod {\n    pub use foo::*;\n}";
         assert_eq!(run_on(src).len(), 1);
     }
 }
