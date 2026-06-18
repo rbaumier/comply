@@ -3,8 +3,13 @@
 //! Match `for_expression` whose body is a single-statement block calling
 //! `<receiver>.push(...)` where `<receiver>` is a local binding confirmed to
 //! be a `Vec`. We do not require the push argument to be the loop variable —
-//! `for x in src { v.push(transform(x)); }` is still better written as
-//! `v.extend(src.into_iter().map(transform))`.
+//! when the push value is infallible, `for x in src { v.push(transform(x)); }`
+//! is still better written as `v.extend(src.into_iter().map(transform))`.
+//!
+//! A push argument containing `?` (a `try_expression`) is skipped: the `?`
+//! propagates to the enclosing function, and a fallible value cannot be lifted
+//! into a `map` closure (the `?` would return from the closure, not the
+//! function), so `extend(...map(...))` would not compile.
 //!
 //! `.push` exists on many non-`Vec` types (`VecDeque`, crossbeam `Worker`,
 //! `Injector`, custom queues), none of which `extend`s the same way, so we
@@ -75,6 +80,14 @@ impl AstCheck for Check {
         if method != "push" {
             return;
         }
+        // A push argument that uses `?` propagates an error to the enclosing
+        // function; it can't be lifted into a `map` closure, so the
+        // `extend(...map(...))` rewrite would not compile. Skip it.
+        if let Some(arguments) = call.child_by_field_name("arguments")
+            && arg_contains_try(arguments)
+        {
+            return;
+        }
         // Only flag when the receiver is a plain local identifier we can
         // resolve to a confirmable `Vec`. A field access (`self.q.push`) or
         // method chain receiver can't be checked, so it is left untouched.
@@ -100,6 +113,17 @@ impl AstCheck for Check {
             Severity::Warning,
         ));
     }
+}
+
+/// Whether the subtree rooted at `node` contains a `?` (`try_expression`)
+/// anywhere. Used on the `push` argument list: a fallible push value cannot be
+/// expressed as `extend(...map(...))`.
+fn arg_contains_try(node: tree_sitter::Node) -> bool {
+    if node.kind() == "try_expression" {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor).any(arg_contains_try)
 }
 
 /// Walk up the enclosing scopes from `for_node` looking for a `let`
@@ -259,5 +283,27 @@ mod tests {
     fn allows_push_to_typed_queue_issue_1478() {
         let src = "fn f() { let q: Queue<i64> = Queue::new(); for i in 0..200 { q.push(i) } }";
         assert!(run_on(src).is_empty());
+    }
+
+    // A push argument using `?` (fallible) can't be lifted into a `map`
+    // closure, so `extend(...map(...))` would not compile.
+    #[test]
+    fn allows_fallible_push_argument_issue_3803() {
+        let src = "fn build(src: &[u32]) -> Result<Vec<u32>, ()> { let mut dst = Vec::with_capacity(src.len()); for x in src { dst.push(transform(*x)?); } Ok(dst) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // `?` nested deeper in the push argument is still fallible.
+    #[test]
+    fn allows_nested_fallible_push_argument_issue_3803() {
+        let src = "fn build(src: &[u32]) -> Result<Vec<u32>, ()> { let mut dst = Vec::new(); for x in src { dst.push(transform(parse(x)?)); } Ok(dst) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // The genuine target stays flagged: an infallible transform with no `?`.
+    #[test]
+    fn flags_infallible_transform_push_issue_3803() {
+        let src = "fn f(src: Vec<u32>) { let mut dst = Vec::new(); for x in src { dst.push(transform(x)); } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
