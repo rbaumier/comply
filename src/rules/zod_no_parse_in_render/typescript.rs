@@ -99,7 +99,11 @@ fn looks_like_in_component_render(source: &str, parse_offset: usize) -> bool {
             {
                 k += 1;
             }
-            if k > 0 && bs[0].is_ascii_uppercase() {
+            // PascalCase only: an uppercase head followed by at least one
+            // lowercase letter. SCREAMING_SNAKE_CASE module constants
+            // (`PRODUCT_ID`, `CABINETS_SEARCH_DEFAULTS`) are not components —
+            // they run once at import, never in a render path.
+            if k > 0 && bs[0].is_ascii_uppercase() && bs[1..k].iter().any(u8::is_ascii_lowercase) {
                 return true;
             }
             from = pos + keyword.len();
@@ -272,5 +276,13 @@ mod tests {
     fn still_flags_parse_outside_event_handler_in_component() {
         let src = "function Comp(props) { const data = Schema.parse(props.input); return <div />; }";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_parse_in_screaming_case_module_const() {
+        // Top-level branded-id / defaults constants run once at import, not
+        // per render. SCREAMING_SNAKE_CASE is not a React component name.
+        let src = "const CABINETS_SEARCH_DEFAULTS = ListTeamsQuerySchema.parse({});\nfunction Page() { return <div /> }";
+        assert!(run(src).is_empty());
     }
 }
