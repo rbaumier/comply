@@ -9,12 +9,14 @@ use crate::rules::meta::RuleMeta;
 pub const META: RuleMeta = RuleMeta {
     id: "rust-partial-eq-without-eq",
     description: "Type derives `PartialEq` but not `Eq`.",
-    remediation: "If your type doesn't contain floats (or other partial-only \
-                  types) it should also derive `Eq`. `Eq` is a marker trait \
-                  signalling reflexivity (`x == x`), and many APIs (`HashSet`, \
-                  `BTreeMap` keys via wrapping) require it. If the type \
-                  intentionally has only partial equality (contains `f32`/`f64`), \
-                  add a comment explaining why.",
+    remediation: "When every field type is provably `Eq` (non-float primitives, \
+                  known-`Eq` stdlib types, or local Eq-capable types) the type \
+                  should also derive `Eq`. `Eq` is a marker trait signalling \
+                  reflexivity (`x == x`), and many APIs (`HashSet`, `BTreeMap` \
+                  keys via wrapping) require it. A field whose `Eq`-ness cannot \
+                  be proven — a float (`f32`/`f64`), an imported/unknown type, or \
+                  a generic type parameter — leaves the type exempt, since adding \
+                  `Eq` would not compile.",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["rust"],
