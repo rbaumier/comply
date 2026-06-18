@@ -11,6 +11,15 @@
 //! `BTreeSet`, `IndexMap`, …), is left alone: those either cannot be
 //! proven to be a `Vec` or carry semantics (dedup, ordering, keying)
 //! that the round-trip preserves.
+//!
+//! The chain is also left alone when the owned iterator *escapes* its
+//! scope — it is a `return`/function-tail value or a struct field
+//! initializer — rather than being consumed locally. There the `Vec`
+//! materialization is load-bearing: it breaks a borrow so the source's
+//! owner can move into a downstream closure, or yields an owning
+//! `IntoIter` of the right type for the escaping slot. An escaping
+//! chain that immediately re-collects (`…into_iter().collect()`) is
+//! still a genuine round-trip and is flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -58,6 +67,11 @@ impl AstCheck for Check {
         if !receiver_is_collect_call(receiver, source_bytes) {
             return;
         }
+        // The owned iterator is load-bearing when it escapes its scope
+        // without being immediately re-collected.
+        if !into_iter_recollected(node, source_bytes) && chain_escapes(node) {
+            return;
+        }
         diagnostics.push(Diagnostic::at_node(
             std::sync::Arc::clone(&ctx.path_arc),
             &node,
@@ -70,6 +84,90 @@ impl AstCheck for Check {
             Severity::Warning,
         ));
     }
+}
+
+/// True when the `into_iter()` result is immediately re-collected —
+/// `…collect::<Vec<_>>().into_iter().collect(…)`. That is a genuine
+/// round-trip even when it escapes (e.g. returned), so it must still
+/// flag. The shape: `node`'s parent is a `field_expression` whose
+/// `value` is `node` and whose `field` is `collect`.
+fn into_iter_recollected(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    if parent.kind() != "field_expression" {
+        return false;
+    }
+    if parent.child_by_field_name("value") != Some(node) {
+        return false;
+    }
+    parent
+        .child_by_field_name("field")
+        .is_some_and(|f| f.utf8_text(source) == Ok("collect"))
+}
+
+/// True when the owned iterator (the `into_iter()` result plus any
+/// downstream lazy adapters) escapes its local scope: it is a
+/// `return`/function-tail value or a struct field initializer, rather
+/// than being consumed locally (a `let` binding, a `for`/`while`/loop
+/// subject, or a discarded `;` statement).
+fn chain_escapes(node: tree_sitter::Node) -> bool {
+    let outermost = chain_outermost(node);
+
+    let mut current = outermost;
+    while let Some(parent) = current.parent() {
+        match parent.kind() {
+            // Escape positions.
+            "return_expression" => return true,
+            "field_initializer" | "shorthand_field_initializer" => return true,
+            "block" => {
+                // The implicit-return tail is the block's last named child
+                // with no trailing `;` — i.e. the child is the expression
+                // itself, not an `expression_statement`.
+                let mut cursor = parent.walk();
+                let last_named = parent.named_children(&mut cursor).last();
+                return last_named == Some(current);
+            }
+            // Expression wrappers: keep climbing, the value still flows out.
+            "arguments"
+            | "call_expression"
+            | "tuple_expression"
+            | "reference_expression"
+            | "type_cast_expression"
+            | "try_expression"
+            | "await_expression"
+            | "parenthesized_expression"
+            | "unary_expression" => {
+                current = parent;
+            }
+            // Any other context (let, for/while/loop, expression_statement,
+            // …) consumes the iterator locally — not an escape.
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Walks up from the `into_iter()` call to the outermost expression of
+/// its method chain: while the parent is a `field_expression` whose
+/// `value` is the current node, or a `call_expression` whose `function`
+/// is the current node (the `.method().method()` continuation), the
+/// last such node is the chain's outermost expression.
+fn chain_outermost(node: tree_sitter::Node) -> tree_sitter::Node {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        let continues = match parent.kind() {
+            "field_expression" => parent.child_by_field_name("value") == Some(current),
+            "call_expression" => parent.child_by_field_name("function") == Some(current),
+            _ => false,
+        };
+        if continues {
+            current = parent;
+        } else {
+            break;
+        }
+    }
+    current
 }
 
 /// True when `node` is a `<expr>.collect::<Vec<_>>()` call.
@@ -204,5 +302,52 @@ mod tests {
     fn allows_other_method_after_collect() {
         let source = "fn f() { let n = it.collect::<Vec<_>>().len(); }";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_escape_via_return_tail_before_move_closure() {
+        // The submodule shape (issue #3715): the owned iterator escapes as
+        // the function-tail value, and a downstream `move` closure captures
+        // the owner. The `Vec` breaks the borrow — load-bearing.
+        let source =
+            "fn f() { Ok(Some(it.map(g).collect::<Vec<_>>().into_iter().map(move |n| X { n }))) }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_escape_via_explicit_return() {
+        let source = "fn f() -> std::vec::IntoIter<u8> { return xs.iter().map(g).collect::<Vec<_>>().into_iter(); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_escape_via_struct_field_store() {
+        // The ripgrep shape: the owned iterator is stored in a struct field
+        // of owning `IntoIter` type.
+        let source =
+            "fn f() -> W { W { its: xs.iter().map(g).collect::<Vec<_>>().into_iter() } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_escape_via_bare_function_tail() {
+        let source = "fn f() -> std::vec::IntoIter<u8> { xs.iter().map(g).collect::<Vec<_>>().into_iter() }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_recollect_even_in_return_position() {
+        // The owned iterator is immediately re-collected — a genuine
+        // round-trip — even though the result escapes as the function tail.
+        let source =
+            "fn f() -> Vec<u8> { xs.iter().map(g).collect::<Vec<_>>().into_iter().collect() }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_for_loop_subject() {
+        // Consumed locally by the loop — not an escape.
+        let source = "fn f() { for x in xs.iter().map(g).collect::<Vec<_>>().into_iter() {} }";
+        assert_eq!(run_on(source).len(), 1);
     }
 }
