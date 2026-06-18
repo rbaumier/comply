@@ -22,7 +22,8 @@ pub(crate) fn ts_language_for(language: Language) -> Option<tree_sitter::Languag
         | Language::Sql
         | Language::GraphQl
         | Language::Svelte
-        | Language::Markdown => return None,
+        | Language::Markdown
+        | Language::Astro => return None,
     })
 }
 

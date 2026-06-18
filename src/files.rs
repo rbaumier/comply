@@ -33,6 +33,7 @@ const DOCKERFILE_EXTENSIONS: &[&str] = &["dockerfile"];
 const SQL_EXTENSIONS: &[&str] = &["sql"];
 const GRAPHQL_EXTENSIONS: &[&str] = &["graphql", "gql"];
 const MARKDOWN_EXTENSIONS: &[&str] = &["md", "mdx"];
+const ASTRO_EXTENSIONS: &[&str] = &["astro"];
 
 /// A discovered file tagged with its detected language.
 #[derive(Debug)]
@@ -88,6 +89,12 @@ pub enum Language {
     /// docs page is recorded as a real cross-file usage. No tree-sitter grammar
     /// is bundled; no lint rule targets it.
     Markdown,
+    /// Astro component `.astro`. Indexed only for the ESM `import` statements in
+    /// the frontmatter script block (between the leading `---` fences), so a
+    /// module consumed exclusively from an `.astro` file is recorded as a real
+    /// cross-file usage. No tree-sitter grammar is bundled; no lint rule targets
+    /// it.
+    Astro,
 }
 
 impl Language {
@@ -110,6 +117,7 @@ impl Language {
             Language::GraphQl => "graphql",
             Language::Svelte => "svelte",
             Language::Markdown => "md",
+            Language::Astro => "astro",
         }
     }
 
@@ -167,6 +175,8 @@ impl Language {
             Some(Language::GraphQl)
         } else if MARKDOWN_EXTENSIONS.contains(&ext) {
             Some(Language::Markdown)
+        } else if ASTRO_EXTENSIONS.contains(&ext) {
+            Some(Language::Astro)
         } else if DOCKERFILE_EXTENSIONS.contains(&ext)
             || path
                 .file_name()
@@ -374,6 +384,8 @@ fn classify(path: &Path) -> Option<SourceFile> {
             Language::GraphQl
         } else if MARKDOWN_EXTENSIONS.contains(&ext) {
             Language::Markdown
+        } else if ASTRO_EXTENSIONS.contains(&ext) {
+            Language::Astro
         } else if DOCKERFILE_EXTENSIONS.contains(&ext) {
             Language::Dockerfile
         } else {
@@ -432,6 +444,13 @@ mod tests {
         // component consumed only from a docs page is recorded as used.
         assert_eq!(lang_for("md"), Language::Markdown);
         assert_eq!(lang_for("mdx"), Language::Markdown);
+    }
+
+    #[test]
+    fn classify_astro_files() {
+        // `.astro` is indexed for its frontmatter ESM imports so a module
+        // consumed only from an Astro component is recorded as used.
+        assert_eq!(lang_for("astro"), Language::Astro);
     }
 
     #[test]

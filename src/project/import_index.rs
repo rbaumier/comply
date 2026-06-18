@@ -1028,6 +1028,7 @@ fn is_indexable(lang: Language) -> bool {
             | Language::Rust
             | Language::Vue
             | Language::Markdown
+            | Language::Astro
     )
 }
 
@@ -1219,6 +1220,9 @@ fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileE
     if matches!(file.language, Language::Markdown) {
         return extract_markdown(&source, &file.path);
     }
+    if matches!(file.language, Language::Astro) {
+        return extract_astro(&source, &file.path);
+    }
     if !matches!(
         file.language,
         Language::Tsx | Language::TypeScript | Language::JavaScript
@@ -1361,6 +1365,80 @@ fn extract_markdown(source: &str, path: &Path) -> Option<(PathBuf, FileExtract)>
             ..FileExtract::default()
         },
     ))
+}
+
+/// Extract the ESM `import` statements from an Astro component's frontmatter.
+///
+/// An `.astro` file opens with a frontmatter script block fenced by a leading
+/// line that is exactly `---` and a closing line that is exactly `---`; that
+/// block is plain TS/JS, so a module consumed only from an Astro component is a
+/// real cross-file usage. The frontmatter text is isolated and handed to the
+/// shared oxc import-clause logic — reusing the exact extraction as TS/JS
+/// imports — while the HTML template that follows is ignored. Files without a
+/// frontmatter fence are indexed as participants with no edges.
+///
+/// Only import edges are produced; an Astro file declares no exports.
+fn extract_astro(source: &str, path: &Path) -> Option<(PathBuf, FileExtract)> {
+    let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let Some(frontmatter) = astro_frontmatter(source) else {
+        // No frontmatter fence — index the file as a participant with no edges,
+        // mirroring an import-free module.
+        return Some((canon, FileExtract::default()));
+    };
+
+    let imports = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        extract_imports_from_module(&frontmatter)
+    }))
+    .ok()
+    .unwrap_or_default();
+
+    Some((
+        canon,
+        FileExtract {
+            imports,
+            ..FileExtract::default()
+        },
+    ))
+}
+
+/// Return the frontmatter script block of an Astro component — the lines between
+/// the leading line that is exactly `---` and the next line that is exactly
+/// `---`. Blank lines preceding the script (and the closing line itself) are
+/// blanked to preserve the original line numbers, so import positions match the
+/// file. Returns `None` when the file has no opening fence.
+fn astro_frontmatter(source: &str) -> Option<String> {
+    let mut lines = source.lines();
+    let mut out = String::with_capacity(source.len());
+
+    // The opening fence must be the first non-empty line and equal to `---`.
+    // Preserve line numbers by emitting a blank line for each skipped line.
+    let mut opened = false;
+    for line in lines.by_ref() {
+        if line.trim().is_empty() {
+            out.push('\n');
+            continue;
+        }
+        if line.trim() != "---" {
+            return None;
+        }
+        out.push('\n'); // blank out the opening fence line
+        opened = true;
+        break;
+    }
+    if !opened {
+        return None;
+    }
+
+    let mut closed = false;
+    for line in lines {
+        if line.trim() == "---" {
+            closed = true;
+            break;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    closed.then_some(out)
 }
 
 /// Parse `source` as a JS module and return only its import edges. Shares the
@@ -4258,6 +4336,64 @@ mod tests {
         assert!(
             index.get_imports(doc).is_empty(),
             "prose and fenced-code imports must not create edges"
+        );
+    }
+
+    // Regression for #2141: a `.ts` module imported only from an `.astro`
+    // component's frontmatter is reached through the import graph, so its
+    // exports are not flagged dead and the file is not flagged unused.
+    #[test]
+    fn astro_frontmatter_imports_make_the_module_reachable() {
+        let (_dir, index, paths) = build_index(&[
+            (
+                "src/components/color-lib.ts",
+                "export function oklchToHex() {}\n",
+            ),
+            (
+                "src/components/color-editor.astro",
+                "---\nimport { oklchToHex } from './color-lib';\n---\n<div />\n",
+            ),
+        ]);
+
+        let lib = &paths[0];
+        let astro = &paths[1];
+
+        let imp = index
+            .get_imports(astro)
+            .iter()
+            .find(|i| i.local_name == "oklchToHex")
+            .expect("astro frontmatter import must be indexed");
+        assert_eq!(
+            imp.source_path.as_ref(),
+            Some(lib),
+            "astro import must resolve to the ts module source"
+        );
+
+        // The named import flows into the per-symbol usage map, so dead-export
+        // sees the export as used.
+        assert_eq!(
+            index.get_usages(lib, "oklchToHex").len(),
+            1,
+            "the astro component registers a usage of the export"
+        );
+    }
+
+    // The HTML template after the closing `---` fence is not JS — a stray
+    // `import` word there must not become an edge. Only the frontmatter counts.
+    #[test]
+    fn astro_template_body_is_not_scanned_for_imports() {
+        let (_dir, index, paths) = build_index(&[
+            ("src/lib/widget.ts", "export const Widget = 1;\n"),
+            (
+                "src/pages/page.astro",
+                "---\nconst title = 'hi';\n---\n<p>import the Widget from '../lib/widget'</p>\n",
+            ),
+        ]);
+
+        let astro = &paths[1];
+        assert!(
+            index.get_imports(astro).is_empty(),
+            "template-body text must not create import edges"
         );
     }
 
