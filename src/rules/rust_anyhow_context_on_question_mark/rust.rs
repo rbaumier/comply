@@ -3,10 +3,26 @@
 //! Scoped to application crates (`main.rs`, `src/bin/`, `src/cli`)
 //! so library code — which typically propagates typed errors with a
 //! `thiserror` enum — isn't nagged to add `anyhow`-style context.
-//! Walks every `try_expression` and flags the `?` when the receiver
+//! Walks every `try_expression` and flags the `?` only when the enclosing
+//! function/closure returns an `anyhow`/`eyre` error type (where
+//! `.context()` actually applies) and is not `fn main`, and the receiver
 //! expression doesn't already chain `.context(` or `.with_context(`.
+//! A typed-error-enum return (`Result<_, CliDiagnostic>`) is never flagged:
+//! adding `.context()` there changes the error type and wouldn't compile.
 
 use crate::diagnostic::{Diagnostic, Severity};
+
+/// True when a function/closure signature's return type is one where
+/// `anyhow::Context::context()` / `eyre::WrapErr` applies — `anyhow::Result<T>`,
+/// `Result<_, anyhow::Error>`, `eyre::Result<T>`, `Result<_, eyre::Report>`.
+/// A typed `thiserror` enum return (`Result<_, CliDiagnostic>`) does NOT match,
+/// so `.context()` cannot legally be added and the `?` is not flagged.
+fn return_type_context_applies(sig: &str) -> bool {
+    sig.contains("anyhow::Result")
+        || sig.contains("anyhow::Error")
+        || sig.contains("eyre::Result")
+        || sig.contains("eyre::Report")
+}
 
 crate::ast_check! { on ["try_expression"] => |node, source, ctx, diagnostics|
     let path_str = ctx.path.to_string_lossy();
@@ -30,28 +46,33 @@ crate::ast_check! { on ["try_expression"] => |node, source, ctx, diagnostics|
     }
 
     let mut cur = node;
-    let mut in_main_anyhow = false;
+    let mut should_flag = false;
     while let Some(parent) = cur.parent() {
         match parent.kind() {
-            "function_item" => {
+            "function_item" | "closure_expression" => {
                 let body_start = parent
                     .child_by_field_name("body")
                     .map(|b| b.start_byte())
                     .unwrap_or(parent.end_byte());
                 let sig = &source[parent.start_byte()..body_start];
                 if let Ok(text) = std::str::from_utf8(sig) {
-                    in_main_anyhow =
-                        text.contains("fn main(") && text.contains("anyhow::Result");
+                    // A `?` propagates to the enclosing function/closure's return.
+                    // Flag only when `.context()` applies there. `fn main` keeps
+                    // its exemption (anyhow prints the full chain); a closure is
+                    // never `fn main`.
+                    should_flag = return_type_context_applies(text)
+                        && !text.contains("fn main(");
                 }
                 break;
             }
-            "closure_expression" | "async_block" => break,
+            // Error type is undeterminable across an async block — skip.
+            "async_block" => break,
             _ => {
                 cur = parent;
             }
         }
     }
-    if in_main_anyhow {
+    if !should_flag {
         return;
     }
 
@@ -146,5 +167,26 @@ mod tests {
         let src = r#"fn load() -> anyhow::Result<String> { let s = std::fs::read_to_string("x")?; Ok(s) }"#;
         assert!(!crate::rules::test_helpers::run_rule(&Check, src, "src/cli/mod.rs").is_empty());
         assert!(!crate::rules::test_helpers::run_rule(&Check, src, "src/cli.rs").is_empty());
+    }
+
+    #[test]
+    fn no_diagnostic_for_typed_enum_return_cli_diagnostic() {
+        // `.context()` would change the error type and break the `?` From conversion,
+        // so a typed thiserror enum return must not be flagged (issue #3789 repro).
+        let src = r#"fn run_workspace(console: &mut C, command: B) -> Result<(), CliDiagnostic> { let r = Runtime::new()?; Ok(()) }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_diagnostic_for_typed_enum_return() {
+        let src = r#"fn f() -> Result<(), MyError> { do_it()?; Ok(()) }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_question_mark_in_eyre_result() {
+        // eyre's WrapErr provides `.context()`, so the `?` is flagged like anyhow.
+        let src = r#"fn f() -> eyre::Result<()> { x()?; Ok(()) }"#;
+        assert!(!run(src).is_empty());
     }
 }
