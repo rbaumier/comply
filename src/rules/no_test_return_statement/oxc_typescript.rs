@@ -9,6 +9,21 @@ pub struct Check;
 
 const TEST_FNS: &[&str] = &["test", "it"];
 
+/// A return statement is a guard clause when it is the consequence of an `if`,
+/// either directly (`if (c) return;`) or inside the consequent block
+/// (`if (c) { …; return; }`).
+fn is_guard_clause(node: &oxc_semantic::AstNode, semantic: &oxc_semantic::Semantic) -> bool {
+    let parent = semantic.nodes().parent_node(node.id());
+    match parent.kind() {
+        AstKind::IfStatement(_) => true,
+        AstKind::BlockStatement(_) => matches!(
+            semantic.nodes().parent_node(parent.id()).kind(),
+            AstKind::IfStatement(_)
+        ),
+        _ => false,
+    }
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::ReturnStatement]
@@ -24,6 +39,15 @@ impl OxcCheck for Check {
         let AstKind::ReturnStatement(ret) = node.kind() else {
             return;
         };
+
+        // A bare `return;` used as a guard clause (`if (cond) return;`) is a
+        // control-flow construct — TypeScript narrowing on discriminated unions,
+        // a precondition skip — not a value-returning test escape. Returning a
+        // value conditionally (`if (c) return 42;`) still flags: the guard
+        // exemption only covers the argument-less form.
+        if ret.argument.is_none() && is_guard_clause(node, semantic) {
+            return;
+        }
 
         // Walk ancestors to find the nearest enclosing function.
         // If that function is a direct callback argument of test()/it(), flag it.
@@ -180,6 +204,32 @@ mod tests {
     #[test]
     fn flags_bare_return_in_test() {
         let d = run("test('x', () => { return; });");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_narrowing_guard_return_in_test() {
+        // A bare `return;` guarding a discriminated-union narrow after an
+        // `expect` is control-flow narrowing, not a test escape.
+        let d = run(
+            "test('x', () => { expect(line?.kind).toBe('purchase'); \
+             if (line?.kind !== 'purchase') return; \
+             expect(line.lineNumber).toBe(2); });",
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_guard_clause_block_return_in_it() {
+        let d = run("it('x', () => { if (!line) { return; } expect(line.x).toBe(1); });");
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn flags_conditional_value_return_in_test() {
+        // The guard exemption is bare-return only: returning a value
+        // conditionally is still the anti-pattern.
+        let d = run("test('x', () => { if (skip) return 42; });");
         assert_eq!(d.len(), 1);
     }
 }
