@@ -3,13 +3,17 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Expression, IdentifierReference, VariableDeclarationKind};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
 
-const MUTATING_METHODS: &[&str] = &["reverse", "sort", "fill", "splice"];
+/// In-place array mutators that return `this` (the same reference). Assigning or
+/// returning their result is misleading — it looks like a copy but aliases the
+/// original. `splice` is deliberately excluded: it returns a brand-new array of
+/// the removed elements, never `this`, so its result is never a hidden alias.
+const MUTATING_METHODS: &[&str] = &["reverse", "sort", "fill"];
 
 /// Non-mutating array methods that always return a fresh array. Chaining a
 /// mutating method onto one of these is safe — the caller holds the only
@@ -56,9 +60,50 @@ fn is_fresh_array(expr: &Expression, source: &str) -> bool {
     }
 }
 
+/// Whether `id` resolves to a `const` binding whose initializer is itself a
+/// fresh array (`[...arr]`, `value.slice()`, `Array.from(...)`, ...). Such a
+/// receiver is the sole reference to a brand-new array, so mutating it in place
+/// is unobservable — the same reasoning as a literal fresh-array receiver.
+fn receiver_is_fresh_const(
+    id: &IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+    source: &str,
+) -> bool {
+    let Some(ref_id) = id.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        match kind {
+            // `const` is the only kind that is provably never reassigned; a `let`
+            // binding could be pointed at a shared array later, so stay conservative.
+            AstKind::VariableDeclaration(decl) => {
+                return decl.kind == VariableDeclarationKind::Const;
+            }
+            AstKind::VariableDeclarator(decl) => {
+                let Some(init) = &decl.init else {
+                    return false;
+                };
+                if !is_fresh_array(init, source) {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Check if a call expression is a mutating array method call (not on a spread
 /// copy nor a fresh array returned by a non-mutating method).
-fn is_mutating_call(expr: &Expression, source: &str) -> bool {
+fn is_mutating_call(expr: &Expression, semantic: &oxc_semantic::Semantic, source: &str) -> bool {
     let Expression::CallExpression(call) = expr else {
         return false;
     };
@@ -70,15 +115,26 @@ fn is_mutating_call(expr: &Expression, source: &str) -> bool {
     }
     // A receiver whose name starts with an uppercase letter (all-caps `MAP`/`BIT`
     // or PascalCase `Foo`/`Immutable`) names a namespace / class / constant
-    // object, not an array instance. `reverse`/`sort`/`fill`/`splice` are
+    // object, not an array instance. `reverse`/`sort`/`fill` are
     // `Array.prototype` instance methods; an uppercase-first receiver is a
-    // method-name collision with a user-defined static (e.g. `MAP.splice(body)`).
+    // method-name collision with a user-defined static (e.g. `Immutable.sort(x)`).
     if let Expression::Identifier(obj) = &member.object
         && obj.name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
     {
         return false;
     }
-    !is_fresh_array(&member.object, source)
+    // Not misleading when the receiver is a fresh array — either literally
+    // (`[...arr].sort()`) or an identifier resolving to a fresh-array `const`
+    // (`const a = [...arr]; a.sort()`).
+    if is_fresh_array(&member.object, source) {
+        return false;
+    }
+    if let Expression::Identifier(obj) = &member.object
+        && receiver_is_fresh_const(obj, semantic, source)
+    {
+        return false;
+    }
+    true
 }
 
 impl OxcCheck for Check {
@@ -87,14 +143,14 @@ impl OxcCheck for Check {
     }
 
     fn prefilter(&self) -> Option<&'static [&'static str]> {
-        Some(&[".reverse(", ".sort(", ".fill(", ".splice("])
+        Some(&[".reverse(", ".sort(", ".fill("])
     }
 
     fn run<'a>(
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         match node.kind() {
@@ -103,7 +159,7 @@ impl OxcCheck for Check {
                     let Some(init) = &declarator.init else {
                         continue;
                     };
-                    if is_mutating_call(init, ctx.source) {
+                    if is_mutating_call(init, semantic, ctx.source) {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, init.span().start as usize);
                         diagnostics.push(Diagnostic {
@@ -120,7 +176,7 @@ impl OxcCheck for Check {
             }
             AstKind::ReturnStatement(ret) => {
                 if let Some(arg) = &ret.argument
-                    && is_mutating_call(arg, ctx.source) {
+                    && is_mutating_call(arg, semantic, ctx.source) {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, arg.span().start as usize);
                         diagnostics.push(Diagnostic {
@@ -238,12 +294,6 @@ mod oxc_tests {
     // === issue #3950: uppercase-first receiver is a namespace/class, not an array ===
 
     #[test]
-    fn allows_uppercase_namespace_splice() {
-        // `MAP.splice` is a user-defined static factory, not `Array.prototype.splice`.
-        assert!(run("function a() { return MAP.splice(body); }").is_empty());
-    }
-
-    #[test]
     fn allows_pascalcase_class_reverse() {
         assert!(run("function c() { return Foo.reverse(x); }").is_empty());
     }
@@ -253,10 +303,24 @@ mod oxc_tests {
         assert!(run("const x = Immutable.sort(x);").is_empty());
     }
 
+    // === issue #3794: `splice` returns a new array of removed elements, never `this` ===
+
     #[test]
-    fn flags_lowercase_receiver_splice() {
-        // GUARD: a lowercase receiver is an array instance — still misleading.
-        assert_eq!(run("function f() { return arr.splice(0, 1); }").len(), 1);
+    fn allows_splice_on_shared_array() {
+        // `arr.splice(...)` returns the removed elements, not `arr` — never the
+        // "thought it was a copy but it's the same reference" bug, even on a
+        // shared receiver.
+        assert!(run("function f() { return arr.splice(0, 1); }").is_empty());
+    }
+
+    #[test]
+    fn allows_destructured_splice_on_shared_array() {
+        assert!(run("const [x] = data.splice(i, 1);").is_empty());
+    }
+
+    #[test]
+    fn allows_uppercase_namespace_splice() {
+        assert!(run("function a() { return MAP.splice(body); }").is_empty());
     }
 
     #[test]
@@ -306,5 +370,50 @@ mod oxc_tests {
         // GUARD: a non-`Object` receiver — `keys` is not a fresh-array method,
         // so freshness is unprovable and the mutation is still misleading.
         assert_eq!(run("const x = foo.keys().sort();").len(), 1);
+    }
+
+    // === issue #3794: receiver resolves to a local fresh-array `const` ===
+
+    #[test]
+    fn allows_spread_const_sort() {
+        // The receiver is a fresh copy held in a `const`, so sorting it in place
+        // is unobservable through the original `orgArray`.
+        assert!(
+            run("function f(orgArray) { const array = [...orgArray]; return array.sort((a, b) => 0); }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_slice_const_splice() {
+        assert!(
+            run("function f(value) { const result = value.slice(); const [item] = result.splice(0, 1); return item; }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_spread_const_reverse() {
+        assert!(run("function f(a) { const b = [...a]; return b.reverse(); }").is_empty());
+    }
+
+    #[test]
+    fn flags_let_spread_sort() {
+        // GUARD: a `let` binding could be reassigned to a shared array later, so
+        // freshness is not provable — stay conservative and flag.
+        assert_eq!(
+            run("function f(a) { let b = [...a]; return b.sort(); }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_const_non_fresh_init_sort() {
+        // GUARD: the initializer is a call returning an unknown (possibly shared)
+        // array, not a fresh copy — still misleading.
+        assert_eq!(
+            run("function f() { const b = getArr(); return b.sort(); }").len(),
+            1
+        );
     }
 }
