@@ -109,6 +109,33 @@ mod tests {
     }
 
     fn setup_with_pkg(pkg: &str, source: &str, rel_path: &str) -> Vec<crate::diagnostic::Diagnostic> {
+        run_pkg(pkg, source, rel_path, false)
+    }
+
+    /// Like `setup_at_path`, but routes through the engine's central
+    /// `applies_to_file` gate (which honours `skip_in_test_dir`) before running
+    /// the rule — so test-directory files are suppressed exactly as in
+    /// production.
+    fn setup_gated(
+        node_version: &str,
+        source: &str,
+        rel_path: &str,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        let pkg =
+            format!(r#"{{"name":"t","version":"0.0.0","engines":{{"node":"{node_version}"}}}}"#);
+        run_pkg(&pkg, source, rel_path, true)
+    }
+
+    /// Build a temp project with `pkg` at the root and `source` at `rel_path`,
+    /// then run the rule. When `gated`, the production `applies_to_file` gate is
+    /// applied first (returning `[]` for test-directory files); otherwise the
+    /// rule runs unconditionally.
+    fn run_pkg(
+        pkg: &str,
+        source: &str,
+        rel_path: &str,
+        gated: bool,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("package.json"), pkg).unwrap();
 
@@ -126,6 +153,13 @@ mod tests {
         let config = Config::default();
         let project = ProjectCtx::load(&refs, &config);
 
+        if gated {
+            let file = crate::rules::file_ctx::FileCtx::build(&full, source, lang, &project);
+            if !super::super::META.applies_to_file(&file) {
+                return vec![];
+            }
+        }
+
         let source_type = match lang {
             Language::Tsx => SourceType::tsx(),
             _ => SourceType::ts(),
@@ -135,6 +169,29 @@ mod tests {
         let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
         let ctx = CheckCtx::for_test_with_project(&full, source, &project);
         Check.run_on_semantic(&semantic, &ctx)
+    }
+
+    // Regression for rbaumier/comply#2342 — a conservative `engines.node`
+    // minimum does not constrain test files, which are never shipped to
+    // consumers. The engine's central `skip_in_test_dir` gate suppresses the
+    // rule for any file in a test directory.
+    #[test]
+    fn gated_skips_unsupported_builtin_in_test_dir() {
+        let d = setup_gated(
+            ">=12.22.0",
+            "const s = [3, 1, 2].toSorted();",
+            "test/sort.test.ts",
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    // The same unsupported builtin under a non-test path is shipped code and
+    // must still flag — no over-suppression.
+    #[test]
+    fn gated_still_flags_unsupported_builtin_in_source() {
+        let d = setup_gated(">=12.22.0", "const s = [3, 1, 2].toSorted();", "src/sort.ts");
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(d[0].message.contains("toSorted"));
     }
 
     #[test]

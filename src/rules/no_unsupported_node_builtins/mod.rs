@@ -27,7 +27,10 @@ pub const META: RuleMeta = RuleMeta {
     ),
     categories: &["node"],
 
-    skip_in_test_dir: false,
+    // Test files are never shipped to consumers, so `engines.node` does not
+    // constrain them; the engine's central test-dir gate suppresses the rule
+    // for test directories/files.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
