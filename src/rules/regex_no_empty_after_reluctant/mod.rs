@@ -12,7 +12,7 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "regex-no-empty-after-reluctant",
-    description: "Reluctant quantifier followed by end-of-pattern or group is useless.",
+    description: "Reluctant quantifier with nothing consumable after it (end-of-pattern or `$`) is useless.",
     remediation: "Remove the `?` from the quantifier — it has no effect when nothing follows it.",
     severity: Severity::Warning,
     doc_url: None,
