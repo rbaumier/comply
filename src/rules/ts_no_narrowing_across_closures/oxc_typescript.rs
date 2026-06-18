@@ -1,17 +1,19 @@
 //! ts-no-narrowing-across-closures oxc backend.
 //!
-//! Inside an `if (x)` / `if (x !== null)` block, if a call to
-//! `setTimeout`/`.then`/`.catch`/`addEventListener` takes a function
-//! expression that references `x` directly (not captured by a local
-//! const), flag it.
+//! Inside an `if (x)` / `if (x === null)` / `if (x !== undefined)` block whose
+//! test narrows a reassignable binding `x` (a `let`/`var`/parameter that is
+//! written somewhere — never a `const` or a never-reassigned binding, whose
+//! narrowing TypeScript preserves), if a call to
+//! `setTimeout`/`.then`/`.catch`/`addEventListener` takes a function expression
+//! that references `x` directly (not captured by a local const), flag it.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    BindingPattern, Expression, IdentifierReference, Statement,
+    BinaryOperator, BindingPattern, Expression, IdentifierReference, Statement, UnaryOperator,
 };
-use oxc_semantic::{Semantic, SymbolId};
+use oxc_semantic::{ReferenceFlags, Semantic, SymbolId};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -25,11 +27,34 @@ const CLOSURE_METHODS: &[&str] = &["then", "catch", "finally", "addEventListener
 
 pub struct Check;
 
+/// `null`, `undefined`, or `void 0` — the right-hand sides that make a `===`/`!==`
+/// comparison an actual nullability narrowing of the left operand.
+fn is_nullish_literal(expr: &Expression) -> bool {
+    match expr {
+        Expression::NullLiteral(_) => true,
+        Expression::Identifier(id) => id.name.as_str() == "undefined",
+        Expression::UnaryExpression(unary) => unary.operator == UnaryOperator::Void,
+        _ => false,
+    }
+}
+
 fn narrowed_identifier<'a>(expr: &'a Expression<'a>) -> Option<&'a IdentifierReference<'a>> {
     match expr {
         Expression::Identifier(id) => Some(id),
         Expression::BinaryExpression(bin) => {
-            if let Expression::Identifier(id) = &bin.left {
+            // Only equality comparisons against a nullish literal narrow the left
+            // operand. `x !== unrelated` / `x === other` change no nullability.
+            let is_equality = matches!(
+                bin.operator,
+                BinaryOperator::StrictEquality
+                    | BinaryOperator::StrictInequality
+                    | BinaryOperator::Equality
+                    | BinaryOperator::Inequality
+            );
+            if is_equality
+                && is_nullish_literal(&bin.right)
+                && let Expression::Identifier(id) = &bin.left
+            {
                 Some(id)
             } else {
                 None
@@ -69,6 +94,17 @@ fn has_local_const(stmts: &oxc_allocator::Vec<'_, Statement<'_>>, name: &str) ->
 
 fn span_contains(outer: oxc_span::Span, inner: oxc_span::Span) -> bool {
     outer.start <= inner.start && inner.end <= outer.end
+}
+
+/// True when the binding has a write reference, i.e. it is reassigned somewhere.
+/// A `const` and a never-reassigned `let`/`var`/parameter both have none. Modern
+/// TypeScript preserves the narrowing of a never-reassigned binding inside nested
+/// closures, so only a reassignable binding can lose narrowing across a closure.
+fn is_reassigned(semantic: &Semantic<'_>, symbol: SymbolId) -> bool {
+    semantic
+        .scoping()
+        .get_resolved_references(symbol)
+        .any(|reference| reference.flags().contains(ReferenceFlags::Write))
 }
 
 /// Returns true when an actual reference to `symbol` lies within `body_span`.
@@ -117,6 +153,11 @@ impl OxcCheck for Check {
         else {
             return;
         };
+        // A const or never-reassigned binding keeps its narrowing inside closures,
+        // so scheduling a closure that uses it loses nothing.
+        if !is_reassigned(semantic, symbol) {
+            return;
+        }
         let Statement::BlockStatement(block) = &stmt.consequent else {
             return;
         };
@@ -250,28 +291,28 @@ mod tests {
 
     #[test]
     fn flags_set_timeout_using_narrowed_var() {
-        let src = "function f(user: { name: string } | null) { if (user) { setTimeout(() => console.log(user.name), 0); } }";
+        let src = "function f() { let user: { name: string } | null = get(); if (user) { setTimeout(() => console.log(user.name), 0); } user = null; }";
         let diags = run(src);
         assert_eq!(diags.len(), 1);
     }
 
     #[test]
     fn flags_promise_then() {
-        let src = "function f(u: string | null) { if (u) { p.then(() => console.log(u)); } }";
+        let src = "function f() { let u: string | null = get(); if (u) { p.then(() => console.log(u)); } u = null; }";
         let diags = run(src);
         assert_eq!(diags.len(), 1);
     }
 
     #[test]
     fn allows_local_const_capture() {
-        let src = "function f(user: { name: string } | null) { if (user) { const user = user; setTimeout(() => console.log(user.name), 0); } }";
+        let src = "function f() { let user: { name: string } | null = get(); if (user) { const user = user; setTimeout(() => console.log(user.name), 0); } user = null; }";
         assert!(run(src).is_empty());
     }
 
     #[test]
     fn allows_plain_usage_without_closure() {
         let src =
-            "function f(user: { name: string } | null) { if (user) { console.log(user.name); } }";
+            "function f() { let user: { name: string } | null = get(); if (user) { console.log(user.name); } user = null; }";
         assert!(run(src).is_empty());
     }
 
@@ -289,7 +330,46 @@ mod tests {
 
     #[test]
     fn flags_real_reference_inside_callback() {
-        let src = "function f(error: Err | null, promise: Promise<void>) { if (error) { promise.catch(() => { console.log(error); }); } }";
+        let src = "function f(promise: Promise<void>) { let error: Err | null = get(); if (error) { promise.catch(() => { console.log(error); }); } error = null; }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_const_binding_narrowed_then_used_in_closure() {
+        // A const keeps its narrowing across closures, so nothing is lost.
+        let src = "function f() { const x = get(); if (x) { setTimeout(() => x.foo()); } }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_const_binding_with_non_nullability_test() {
+        // const promise + `!==` against an unrelated value: neither the binding
+        // nor the operator can lose narrowing. (jotai unwrap.ts repro.)
+        let src = "function f(prev) { const promise = get(); if (!isPromiseLike(promise)) return; if (promise !== prev?.p) { promise.then((v) => cache.set(promise, v)); } }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_reassigned_let_with_non_nullability_test() {
+        // Even a reassignable binding is not narrowed by `!==` against an
+        // unrelated value, so the closure loses no narrowing.
+        let src = "function f(prev) { let promise = get(); if (promise !== prev?.p) { promise.then((v) => cache.set(promise, v)); } promise = get(); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_reassigned_let_narrowed_truthy() {
+        // Reassigned `let` (write reference) narrowed by a truthy test and used
+        // in a closure: narrowing is genuinely lost across the closure.
+        let src = "function f() { let x = get(); if (x) { setTimeout(() => x.foo()); } x = null; }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_reassigned_let_narrowed_nullability() {
+        let src = "function f() { let x = get(); if (x !== null) { setTimeout(() => x.foo()); } x = null; }";
         let diags = run(src);
         assert_eq!(diags.len(), 1);
     }
