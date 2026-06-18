@@ -64,54 +64,13 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let source_bytes = ctx.source.as_bytes();
-        let Some(type_node) = node.child_by_field_name("type") else {
-            return;
-        };
-        let Ok(target_raw) = type_node.utf8_text(source_bytes) else {
-            return;
-        };
-        let target = target_raw.trim();
-        let Some(target_type) = numeric_type(target) else {
-            return;
-        };
-        if target == "usize" || target == "isize" {
+        if !fires_on_cast(node, source_bytes) {
             return;
         }
-        if is_in_test_context(node, source_bytes) {
-            return;
-        }
-        if is_in_enum_discriminant(node) {
-            return;
-        }
-        if is_literal_cast(node, source_bytes) {
-            return;
-        }
-        if is_bitwise_operand(node, source_bytes) {
-            return;
-        }
-        if cast_operand_is_collection_size(node, source_bytes) {
-            return;
-        }
-        if cast_operand_is_bool(node, source_bytes) {
-            return;
-        }
-        if cast_operand_is_enum_discriminant(node, source_bytes) {
-            return;
-        }
-        let source_type = source_numeric_type(node, source_bytes);
-        if target_type.kind == NumericKind::Float {
-            // `as f32`/`as f64` is the only std conversion unless the source
-            // has a matching `From` impl. Suggesting `f64::from(x)` for a
-            // wider or unresolved source would not compile, so only flag
-            // when `From` is provably available.
-            if !source_type.is_some_and(|src| from_available(src, target_type)) {
-                return;
-            }
-        } else if let Some(src) = source_type
-            && !is_dangerous_cast(src, target_type)
-        {
-            return;
-        }
+        let target = node
+            .child_by_field_name("type")
+            .and_then(|type_node| type_node.utf8_text(source_bytes).ok())
+            .map_or("", str::trim);
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -126,6 +85,64 @@ impl AstCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+/// Whether `rust-no-as-numeric-cast` flags this `type_cast_expression`.
+///
+/// Single source of truth for the rule's per-cast decision: a numeric target
+/// that is not `usize`/`isize`, outside a test/enum-discriminant context, not a
+/// literal/bitwise/collection-size/bool/enum-discriminant operand, and either a
+/// dangerous integer cast or a `From`-available float cast.
+///
+/// `rust-no-lossy-as-cast` calls this to suppress its own diagnostic on casts
+/// this rule already owns, so the pair emits one diagnostic per cast span.
+pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> bool {
+    let Some(type_node) = node.child_by_field_name("type") else {
+        return false;
+    };
+    let Ok(target_raw) = type_node.utf8_text(source_bytes) else {
+        return false;
+    };
+    let target = target_raw.trim();
+    let Some(target_type) = numeric_type(target) else {
+        return false;
+    };
+    if target == "usize" || target == "isize" {
+        return false;
+    }
+    if is_in_test_context(node, source_bytes) {
+        return false;
+    }
+    if is_in_enum_discriminant(node) {
+        return false;
+    }
+    if is_literal_cast(node, source_bytes) {
+        return false;
+    }
+    if is_bitwise_operand(node, source_bytes) {
+        return false;
+    }
+    if cast_operand_is_collection_size(node, source_bytes) {
+        return false;
+    }
+    if cast_operand_is_bool(node, source_bytes) {
+        return false;
+    }
+    if cast_operand_is_enum_discriminant(node, source_bytes) {
+        return false;
+    }
+    let source_type = source_numeric_type(node, source_bytes);
+    if target_type.kind == NumericKind::Float {
+        // `as f32`/`as f64` is the only std conversion unless the source
+        // has a matching `From` impl. Suggesting `f64::from(x)` for a
+        // wider or unresolved source would not compile, so only flag
+        // when `From` is provably available.
+        source_type.is_some_and(|src| from_available(src, target_type))
+    } else if let Some(src) = source_type {
+        is_dangerous_cast(src, target_type)
+    } else {
+        true
     }
 }
 
