@@ -4,7 +4,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -44,13 +43,10 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Get the full source text of the type annotation for the textual
-        // self-reference check below.
-        let ann_text =
-            &ctx.source[alias.type_annotation.span().start as usize..alias.type_annotation.span().end as usize];
-
-        // Must reference itself.
-        if !references_name(ann_text, name) {
+        // Must reference itself as a *type*. Walking the AST (not the source
+        // text) ensures a property key or an indexed-access string literal that
+        // merely shares the alias name does not count as a recursive call.
+        if !type_annotation_references_type(&alias.type_annotation, name) {
             return;
         }
 
@@ -100,27 +96,85 @@ fn is_conditional_or_mapped(ty: &oxc_ast::ast::TSType) -> bool {
     }
 }
 
-/// Check if the type annotation text references the given name as a standalone
-/// identifier (followed by `<` or non-alphanumeric).
-fn references_name(text: &str, name: &str) -> bool {
-    let mut start = 0;
-    while let Some(pos) = text[start..].find(name) {
-        let abs = start + pos;
-        let after = abs + name.len();
-        // Check the character before is not alphanumeric/_
-        let ok_before = abs == 0
-            || !text.as_bytes()[abs - 1].is_ascii_alphanumeric()
-                && text.as_bytes()[abs - 1] != b'_';
-        // Check the character after is not alphanumeric/_
-        let ok_after = after >= text.len()
-            || !text.as_bytes()[after].is_ascii_alphanumeric()
-                && text.as_bytes()[after] != b'_';
-        if ok_before && ok_after {
-            return true;
+/// Return true if `ty` contains a `TSTypeReference` whose name is `name`,
+/// i.e. the alias genuinely references itself as a *type*. Property keys and
+/// indexed-access string literals that share the name are not type references,
+/// so they do not match. Mirrors the traversal in [`collect`].
+fn type_annotation_references_type(ty: &oxc_ast::ast::TSType, name: &str) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeName};
+
+    match ty {
+        TSType::TSTypeReference(tref) => {
+            let is_self = matches!(
+                &tref.type_name,
+                TSTypeName::IdentifierReference(id) if id.name.as_str() == name
+            );
+            is_self
+                || tref.type_arguments.as_ref().is_some_and(|args| {
+                    args.params.iter().any(|arg| type_annotation_references_type(arg, name))
+                })
         }
-        start = abs + 1;
+        TSType::TSConditionalType(cond) => {
+            type_annotation_references_type(&cond.check_type, name)
+                || type_annotation_references_type(&cond.extends_type, name)
+                || type_annotation_references_type(&cond.true_type, name)
+                || type_annotation_references_type(&cond.false_type, name)
+        }
+        TSType::TSArrayType(arr) => type_annotation_references_type(&arr.element_type, name),
+        TSType::TSIndexedAccessType(idx) => {
+            type_annotation_references_type(&idx.object_type, name)
+                || type_annotation_references_type(&idx.index_type, name)
+        }
+        TSType::TSUnionType(u) => {
+            u.types.iter().any(|t| type_annotation_references_type(t, name))
+        }
+        TSType::TSIntersectionType(i) => {
+            i.types.iter().any(|t| type_annotation_references_type(t, name))
+        }
+        TSType::TSTupleType(tuple) => tuple
+            .element_types
+            .iter()
+            .any(|el| tuple_element_references_type(el, name)),
+        TSType::TSNamedTupleMember(member) => {
+            tuple_element_references_type(&member.element_type, name)
+        }
+        TSType::TSTypeOperatorType(op) => {
+            type_annotation_references_type(&op.type_annotation, name)
+        }
+        TSType::TSParenthesizedType(paren) => {
+            type_annotation_references_type(&paren.type_annotation, name)
+        }
+        TSType::TSTemplateLiteralType(tpl) => {
+            tpl.types.iter().any(|t| type_annotation_references_type(t, name))
+        }
+        TSType::TSMappedType(mapped) => {
+            type_annotation_references_type(&mapped.constraint, name)
+                || mapped
+                    .name_type
+                    .as_ref()
+                    .is_some_and(|t| type_annotation_references_type(t, name))
+                || mapped
+                    .type_annotation
+                    .as_ref()
+                    .is_some_and(|t| type_annotation_references_type(t, name))
+        }
+        _ => false,
     }
-    false
+}
+
+fn tuple_element_references_type(el: &oxc_ast::ast::TSTupleElement, name: &str) -> bool {
+    use oxc_ast::ast::TSTupleElement;
+    match el {
+        TSTupleElement::TSOptionalType(opt) => {
+            type_annotation_references_type(&opt.type_annotation, name)
+        }
+        TSTupleElement::TSRestType(rest) => {
+            type_annotation_references_type(&rest.type_annotation, name)
+        }
+        other => other
+            .as_ts_type()
+            .is_some_and(|inner| type_annotation_references_type(inner, name)),
+    }
 }
 
 fn has_depth_parameter(
@@ -401,6 +455,25 @@ export type KyInstance = {
     #[test]
     fn flags_unbounded_recursive_conditional_generic() {
         let src = "type Deep<T> = T extends object ? Deep<T[keyof T]> : T;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn exempts_property_key_name_collision() {
+        let src = "export type value<T> = T extends { value: infer V } ? V : never;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn exempts_indexed_access_string_literal_name_collision() {
+        let src =
+            r#"export type input<T> = T extends { _zod: { input: any } } ? T["_zod"]["input"] : unknown;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_self_reference_with_string_literal_index_in_body() {
+        let src = "type Deep<T> = T extends { next: infer N } ? Deep<T[\"next\"]> : T;";
         assert_eq!(run_on(src).len(), 1);
     }
 }
