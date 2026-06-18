@@ -66,7 +66,6 @@ pub fn register_all() -> Vec<RuleDef> {
         ),
         // --- v1.1 additions ---
         // `id-length` is handled natively — see `src/rules/id_length/`.
-        // `no-await-in-loop` handled natively — see src/rules/no_await_in_loop/.
         entry(
             "no-param-reassign",
             "no-param-reassign",
@@ -256,14 +255,6 @@ pub fn register_all() -> Vec<RuleDef> {
             "Move `var` declarations to the top of the function so the code \
              matches their hoisted semantics — or better, switch to \
              `let`/`const`.",
-        ),
-        entry(
-            "max-classes-per-file",
-            "max-classes-per-file",
-            Severity::Warning,
-            "Keep one class per file.",
-            "Move extra classes into their own files. One class per file \
-             keeps modules focused and imports predictable.",
         ),
         entry(
             "no-multi-str",

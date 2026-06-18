@@ -43,6 +43,5 @@ mod tests {
     #[test]
     fn unknown_rules_have_no_options() {
         assert!(for_rule("id-length", default_static_config()).is_none());
-        assert!(for_rule("no-await-in-loop", default_static_config()).is_none());
     }
 }
