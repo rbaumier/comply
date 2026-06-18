@@ -117,6 +117,17 @@ fn is_skipped_context(nodes: &oxc_semantic::AstNodes, node_id: NodeId) -> bool {
         // structure that consumes it, which hurts readability more
         // than a missing closure-capture indicator helps.
         AstKind::JSXExpressionContainer(_) => true,
+        // A default-parameter initializer (`cb = () => {}`) is the value bound
+        // to a parameter name, not a hoistable nested helper. An empty no-op
+        // default callback is the canonical way to express an optional callback
+        // parameter, so it stays nested even when it captures nothing.
+        AstKind::FormalParameter(param) => {
+            let node_span = nodes.kind(node_id).span();
+            param
+                .initializer
+                .as_ref()
+                .is_some_and(|default| default.span() == node_span)
+        }
         // A function that is *returned* is the value its parent produces — a
         // useEffect cleanup (`return () => …`), a factory's closure, etc.
         // Hoisting it to module scope separates the produced value from its
@@ -331,6 +342,31 @@ mod tests {
             }
         "#;
         assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_default_parameter_arrow_initializer() {
+        // Regression for rbaumier/comply#3833 — an empty default-callback
+        // arrow (`cb = () => {}`) is the value bound to a parameter name, not a
+        // hoistable nested helper.
+        let src = r#"
+            export function animate(property: string, cb = () => {}) {
+                cb();
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_default_parameter_arrow_initializer_with_body() {
+        // Regression for rbaumier/comply#3833 — a default arrow that uses only
+        // its own params is still a parameter default, not a hoistable helper.
+        let src = r#"
+            export function withDefault(onChange = (v: number) => v * 2) {
+                return onChange(3);
+            }
+        "#;
+        assert!(run(src).is_empty());
     }
 
     #[test]
