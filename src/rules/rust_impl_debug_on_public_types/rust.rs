@@ -7,6 +7,8 @@
 //!
 //! Suppressed for: `pub(crate)`/`pub(super)`/`pub(in …)` visibility,
 //! files under `tests/` or `benches/`, items in a `#[cfg(test)]` module,
+//! items gated on `#[cfg(doctest)]` (the README-doctest harness — compiled only
+//! when rustdoc collects doctests, never reachable by consumers),
 //! items in a `proc-macro = true` crate (whose `pub` types are unreachable by
 //! consumers), items with `#[doc(hidden)]`, items carrying
 //! `#[allow(missing_debug_implementations)]` or
@@ -50,7 +52,10 @@ impl AstCheck for Check {
         }) {
             return;
         }
-        if is_in_test_context(node, source_bytes) || has_test_attribute(node, source_bytes) {
+        if is_in_test_context(node, source_bytes)
+            || has_test_attribute(node, source_bytes)
+            || has_cfg_doctest_attr(node, source_bytes)
+        {
             return;
         }
         // A `proc-macro = true` crate can export only procedural macros; its
@@ -271,6 +276,72 @@ fn attribute_allows_lint(attribute_item: tree_sitter::Node, source: &[u8], lint:
         .any(|tok| tok.kind() == "identifier" && tok.utf8_text(source) == Ok(lint))
 }
 
+/// True if a preceding `attribute_item` sibling is `#[cfg(doctest)]`.
+///
+/// A `#[cfg(doctest)]` item is compiled only when rustdoc collects doctests —
+/// the README-doctest harness (`#[doc = include_str!("../README.md")]
+/// #[cfg(doctest)] pub struct ReadmeDoctests;`) — so it never exists in normal
+/// builds and is unreachable by consumers. It is the same class of build-gated,
+/// non-API item as `#[cfg(test)]`.
+///
+/// Walks preceding siblings like `has_allow_missing_debug`, skipping interleaved
+/// comment siblings; the `#[doc = include_str!(...)]` of the harness is itself
+/// an `attribute_item` sibling that the walk traverses. The match is specific:
+/// the attribute path must be `cfg` AND `doctest` must appear as a bare
+/// `identifier` token directly inside the `cfg(...)` token tree. So
+/// `#[cfg(feature = "x")]` does not match (no bare `doctest` identifier) and
+/// `#[cfg(not(doctest))]` does not match (its `doctest` is nested inside the
+/// `not(...)` token tree, not a direct child of the `cfg` token tree).
+fn has_cfg_doctest_attr(item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "attribute_item" => {
+                if attribute_is_cfg_doctest(s, source) {
+                    return true;
+                }
+            }
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+/// True if `attribute_item` is `#[cfg(doctest)]`: a `cfg` attribute whose
+/// `token_tree` arguments contain `doctest` as a direct-child `identifier`
+/// token. Mirrors the AST traversal in `attribute_allows_lint` — match on the
+/// path child (`cfg`) and on the `identifier` tokens inside the token tree
+/// rather than scanning raw text. Matching `doctest` only as a *direct* child of
+/// the `cfg` token tree excludes `#[cfg(not(doctest))]`, whose `doctest` lives
+/// inside a nested `not(...)` token tree.
+fn attribute_is_cfg_doctest(attribute_item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut item_cursor = attribute_item.walk();
+    let Some(attribute) = attribute_item
+        .children(&mut item_cursor)
+        .find(|child| child.kind() == "attribute")
+    else {
+        return false;
+    };
+
+    let Some(path) = attribute.named_child(0) else {
+        return false;
+    };
+    if path.utf8_text(source) != Ok("cfg") {
+        return false;
+    }
+
+    let Some(token_tree) = attribute.child_by_field_name("arguments") else {
+        return false;
+    };
+
+    let mut tree_cursor = token_tree.walk();
+    token_tree
+        .children(&mut tree_cursor)
+        .any(|tok| tok.kind() == "identifier" && tok.utf8_text(source) == Ok("doctest"))
+}
+
 fn has_raw_pointer_field(item: tree_sitter::Node) -> bool {
     let mut cursor = item.walk();
     loop {
@@ -415,6 +486,46 @@ mod tests {
     #[test]
     fn suppresses_raw_pointer_field() {
         assert!(run_on("pub struct W { p: *const u8 }").is_empty());
+    }
+
+    /// Closes #3834: the standard README-doctest harness — a unit struct
+    /// carrying `#[doc = include_str!("../README.md")]` gated on
+    /// `#[cfg(doctest)]` — is compiled only when rustdoc collects doctests, so
+    /// it is never reachable by consumers and requiring `Debug` is meaningless.
+    /// It is the same class of build-gated, non-API item as `#[cfg(test)]`.
+    #[test]
+    fn suppresses_cfg_doctest_readme_harness() {
+        let source = "#[doc = include_str!(\"../README.md\")]\n\
+                      #[cfg(doctest)]\n\
+                      pub struct ReadmeDoctests;";
+        assert!(
+            run_on(source).is_empty(),
+            "the #[cfg(doctest)] README-doctest harness struct must not be flagged"
+        );
+    }
+
+    /// A non-doctest `cfg` gate (`#[cfg(feature = "x")]`) leaves the type in the
+    /// public API of normal builds — the exemption is doctest-specific, so it
+    /// must still flag.
+    #[test]
+    fn still_flags_cfg_feature_gated_struct() {
+        assert_eq!(
+            run_on("#[cfg(feature = \"x\")]\npub struct Bar { name: String }").len(),
+            1,
+            "a #[cfg(feature = \"x\")] gate must not exempt; the exemption is doctest-specific"
+        );
+    }
+
+    /// `#[cfg(not(doctest))]` is production-only (compiled when rustdoc is *not*
+    /// collecting doctests), so it must still flag — the exemption triggers only
+    /// on a positive `doctest` predicate.
+    #[test]
+    fn still_flags_cfg_not_doctest_struct() {
+        assert_eq!(
+            run_on("#[cfg(not(doctest))]\npub struct Bar { name: String }").len(),
+            1,
+            "a #[cfg(not(doctest))] gate is production-only and must still flag"
+        );
     }
 
     #[test]
