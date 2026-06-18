@@ -3,9 +3,9 @@
 //! Flag functions/closures that mix `return expr;` with bare `return;`.
 //!
 //! Walks tree-sitter AST nodes (`function_item`, `closure_expression`) and
-//! collects only their direct `return_expression` children — nested function
-//! and closure subtrees are skipped so an inner closure's `return` is not
-//! attributed to the parent function.
+//! collects only their direct `return_expression` children — nested function,
+//! closure, and `async` block subtrees are skipped so an inner scope's
+//! `return` is not attributed to the parent function.
 //!
 //! A `return_expression` with at least one named child returns a value;
 //! otherwise it is bare.
@@ -13,15 +13,16 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 /// Recursively scan `node`'s subtree for `return_expression` nodes,
-/// stopping at nested function/closure boundaries so inner returns
-/// are attributed to the inner function only.
+/// stopping at nested function, closure, and `async` block boundaries so
+/// inner returns are attributed to the inner scope only.
 fn collect_returns<'t>(node: tree_sitter::Node<'t>, out: &mut Vec<tree_sitter::Node<'t>>) {
     let count = node.child_count();
     for i in 0..count {
         let Some(child) = node.child(i) else { continue };
         match child.kind() {
-            "function_item" | "closure_expression" => {
-                // Skip — its returns belong to that inner function.
+            "function_item" | "closure_expression" | "async_block" => {
+                // Skip — an inner fn, closure, or `async`/`async move` block
+                // is its own return scope; its returns belong to it, not here.
             }
             "return_expression" => {
                 out.push(child);
@@ -164,5 +165,31 @@ fn outer() {
 }
 "#;
         assert_eq!(run_on(code).len(), 1);
+    }
+
+    #[test]
+    fn does_not_attribute_async_block_returns_to_outer_fn() {
+        // `outer` returns a value on every path (42). The value-vs-bare mix
+        // comes entirely from distinct spawned `async` futures, each its own
+        // return scope — so `outer` must not be flagged.
+        let code = r#"
+pub async fn outer() -> u32 {
+    tokio::spawn(async move {
+        let r: Result<(), ()> = async {
+            if cond() { return Ok(()); }
+            Ok(())
+        }.await;
+        let _ = r;
+    });
+
+    tokio::spawn(async move {
+        if cond() { return; }
+        do_work();
+    });
+
+    42
+}
+"#;
+        assert!(run_on(code).is_empty());
     }
 }
