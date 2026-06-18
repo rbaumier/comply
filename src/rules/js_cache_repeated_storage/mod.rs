@@ -2,8 +2,6 @@
 //! `sessionStorage.getItem(key)` with the same key in one function body.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

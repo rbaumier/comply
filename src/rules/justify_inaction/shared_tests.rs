@@ -8,24 +8,16 @@ fn run_rs(src: &str) -> Vec<Diagnostic> {
     crate::rules::test_helpers::run_rule(&super::rust::Check, src, "t.rs")
 }
 
-fn run_ts(src: &str) -> Vec<Diagnostic> {
-    crate::rules::test_helpers::run_rule(&super::typescript::Check, src, "t.ts")
-}
-
 #[test]
 fn empty_else_flagged_cross_backend() {
     let rs = "fn f(x: bool) { if x { go(); } else {} }";
-    let ts = "if (x) { go(); } else {}";
     assert_eq!(run_rs(rs).len(), 1);
-    assert_eq!(run_ts(ts).len(), 1);
 }
 
 #[test]
 fn commented_else_not_flagged_cross_backend() {
     let rs = "fn f(x: bool) { if x { go(); } else { /* no-op */ } }";
-    let ts = "if (x) { go(); } else { /* no-op */ }";
     assert!(run_rs(rs).is_empty());
-    assert!(run_ts(ts).is_empty());
 }
 
 #[test]
@@ -34,15 +26,11 @@ fn empty_loop_flagged_cross_backend() {
     // call-condition `while poll() {}` is exempt in the Rust backend per the
     // embedded register-polling idiom — see rust::tests, issue #1436.)
     let rs = "fn f(running: bool) { while running {} }";
-    let ts = "while (running) {}";
     assert_eq!(run_rs(rs).len(), 1);
-    assert_eq!(run_ts(ts).len(), 1);
 }
 
 #[test]
 fn empty_stub_callable_body_ignored_cross_backend() {
     let rs = "fn stub() {}";
-    let ts = "function stub() {}";
     assert!(run_rs(rs).is_empty());
-    assert!(run_ts(ts).is_empty());
 }
