@@ -1,8 +1,6 @@
 //! prefer-regexp-test — prefer `RegExp#test()` over `String#match()` in boolean contexts.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

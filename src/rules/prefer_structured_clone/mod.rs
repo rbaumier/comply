@@ -1,8 +1,6 @@
 //! prefer-structured-clone — prefer `structuredClone()` over `JSON.parse(JSON.stringify())`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -1,8 +1,6 @@
 //! playwright-prefer-to-have-count — use web-first `toHaveCount` instead of `await locator.count()`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

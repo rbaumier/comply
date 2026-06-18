@@ -1,8 +1,6 @@
 //! playwright-no-force-option — flag `{ force: true }` on Playwright actions.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

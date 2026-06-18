@@ -1,8 +1,6 @@
 //! prisma-no-delete-without-where — `deleteMany()` without where wipes the table.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

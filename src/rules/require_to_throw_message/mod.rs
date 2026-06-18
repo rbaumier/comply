@@ -1,8 +1,6 @@
 //! require-to-throw-message — require a message argument on `.toThrow()`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

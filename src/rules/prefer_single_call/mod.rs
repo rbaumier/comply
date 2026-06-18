@@ -1,8 +1,6 @@
 //! prefer-single-call — combine consecutive `.push()` / `.classList.add()` / `.classList.remove()` calls.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

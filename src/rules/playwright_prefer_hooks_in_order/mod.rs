@@ -1,8 +1,6 @@
 //! playwright-prefer-hooks-in-order — enforce consistent hook ordering.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

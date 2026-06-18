@@ -1,8 +1,6 @@
 //! prefer-switch-over-chained-if — 4+ if/else-if on one discriminant.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

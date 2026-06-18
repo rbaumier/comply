@@ -1,8 +1,6 @@
 //! Prefer passing timer arguments directly instead of wrapping in arrow function.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

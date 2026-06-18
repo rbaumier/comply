@@ -1,8 +1,6 @@
 //! Prefer `URL.canParse()` over try-catch `new URL()` (ES2024).
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

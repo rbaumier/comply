@@ -1,8 +1,6 @@
 //! playwright-no-page-pause — flag `page.pause()` debug-only API.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

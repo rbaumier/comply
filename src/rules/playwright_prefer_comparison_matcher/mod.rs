@@ -1,8 +1,6 @@
 //! playwright-prefer-comparison-matcher — suggest built-in comparison matchers.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

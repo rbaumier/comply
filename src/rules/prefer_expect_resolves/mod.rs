@@ -1,8 +1,6 @@
 //! prefer-expect-resolves — prefer `await expect(promise).resolves` over `expect(await promise)`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

@@ -1,8 +1,6 @@
 //! prefer-logical-operator-over-ternary — flag `foo ? foo : bar` -> `foo || bar`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

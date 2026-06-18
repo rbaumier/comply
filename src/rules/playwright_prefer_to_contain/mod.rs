@@ -1,8 +1,6 @@
 //! playwright-prefer-to-contain — suggest `toContain` over `includes()` + equality.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

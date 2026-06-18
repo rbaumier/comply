@@ -4,8 +4,6 @@
 //! the same file wraps that component in `React.memo(...)` or `memo(...)`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;

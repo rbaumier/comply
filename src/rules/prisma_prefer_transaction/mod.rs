@@ -1,8 +1,6 @@
 //! prisma-prefer-transaction — multiple writes in one function need `$transaction`.
 
 mod oxc_typescript;
-#[cfg(test)]
-mod typescript;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
