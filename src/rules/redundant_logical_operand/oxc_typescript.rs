@@ -7,7 +7,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, LogicalExpression, LogicalOperator};
+use oxc_ast::ast::{Expression, LogicalExpression, LogicalOperator, UnaryOperator};
 use std::sync::Arc;
 
 pub struct Check;
@@ -20,6 +20,57 @@ fn bool_literal(expr: &Expression) -> Option<bool> {
     }
 }
 
+/// Names of builtin methods/functions whose return type is always `boolean`,
+/// regardless of the receiver — used to recognize a boolean-valued call by
+/// shape alone (no type information).
+const BOOL_RETURNING_METHODS: &[&str] = &[
+    "includes",
+    "some",
+    "every",
+    "has",
+    "test",
+    "startsWith",
+    "endsWith",
+    "isArray",
+    "isInteger",
+    "isNaN",
+];
+
+/// Whether a call expression is a boolean-returning builtin by callee shape:
+/// a member call to a known boolean method (`x.includes(y)`), or a global
+/// `Boolean(...)` / `Array.isArray(...)` / `Number.isInteger(...)` /
+/// `Number.isNaN(...)`.
+fn is_boolean_call(call: &oxc_ast::ast::CallExpression) -> bool {
+    match &call.callee {
+        Expression::Identifier(ident) => ident.name.as_str() == "Boolean",
+        Expression::StaticMemberExpression(member) => {
+            BOOL_RETURNING_METHODS.contains(&member.property.name.as_str())
+        }
+        _ => false,
+    }
+}
+
+/// Whether `expr` is provably a `boolean` value by its syntactic shape alone,
+/// with no type information. Conservative: returns `false` whenever the value
+/// type cannot be proven from the shape (bare identifiers, member access,
+/// unknown calls), so the redundancy rule errs toward a missed true-positive
+/// rather than a false positive.
+fn is_provably_boolean(expr: &Expression) -> bool {
+    match expr {
+        Expression::ParenthesizedExpression(paren) => is_provably_boolean(&paren.expression),
+        Expression::BooleanLiteral(_) => true,
+        Expression::BinaryExpression(bin) => {
+            bin.operator.is_equality() || bin.operator.is_compare() || bin.operator.is_relational()
+        }
+        Expression::UnaryExpression(unary) => unary.operator == UnaryOperator::LogicalNot,
+        Expression::CallExpression(call) => is_boolean_call(call),
+        Expression::LogicalExpression(logical) => {
+            is_provably_boolean(&logical.left) && is_provably_boolean(&logical.right)
+        }
+        _ => false,
+    }
+}
+
 /// The simplification message for a logical expression, or `None` when no
 /// operand is a redundant literal.
 fn redundant_message(logical: &LogicalExpression) -> Option<&'static str> {
@@ -27,7 +78,12 @@ fn redundant_message(logical: &LogicalExpression) -> Option<&'static str> {
         LogicalOperator::And => match (bool_literal(&logical.left), bool_literal(&logical.right)) {
             (Some(true), _) => Some("`true && x` is just `x` — drop the redundant `true`."),
             (Some(false), _) => Some("`false && x` is always `false` — drop the redundant operand."),
-            (_, Some(true)) => Some("`x && true` is just `x` — drop the redundant `true`."),
+            // `x && true` returns `x` (its original type), so it equals `x`
+            // only when `x` is already a boolean — otherwise `&& true` is a
+            // meaningful coercion to a strict `boolean`. Flag by shape only.
+            (_, Some(true)) if is_provably_boolean(&logical.left) => {
+                Some("`x && true` is just `x` — drop the redundant `true`.")
+            }
             (_, Some(false)) => Some("`x && false` is always `false` — drop the redundant operand."),
             _ => None,
         },
@@ -35,7 +91,12 @@ fn redundant_message(logical: &LogicalExpression) -> Option<&'static str> {
             (Some(true), _) => Some("`true || x` is always `true` — drop the redundant operand."),
             (Some(false), _) => Some("`false || x` is just `x` — drop the redundant `false`."),
             (_, Some(true)) => Some("`x || true` is always `true` — drop the redundant operand."),
-            (_, Some(false)) => Some("`x || false` is just `x` — drop the redundant `false`."),
+            // `x || false` returns `x` (its original type), so it equals `x`
+            // only when `x` is already a boolean — otherwise `|| false` is a
+            // meaningful coercion to a strict `boolean`. Flag by shape only.
+            (_, Some(false)) if is_provably_boolean(&logical.left) => {
+                Some("`x || false` is just `x` — drop the redundant `false`.")
+            }
             _ => None,
         },
         LogicalOperator::Coalesce => {
