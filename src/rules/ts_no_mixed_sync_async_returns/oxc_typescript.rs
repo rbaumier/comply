@@ -1,7 +1,9 @@
 //! ts-no-mixed-sync-async-returns OXC backend.
 //!
-//! Flags union return types that mix Promise<T> with non-Promise types,
-//! and non-async functions that return both sync values and Promises.
+//! Flags a non-async function whose body returns both a synchronous value and a
+//! Promise. An explicit `T | Promise<T>` return-type annotation is an
+//! intentional dual-mode contract (a handler returns sync when it can, async
+//! only when it must) and is not flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -14,24 +16,17 @@ pub struct Check;
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
-        &[
-            AstType::TSUnionType,
-            AstType::Function,
-            AstType::ArrowFunctionExpression,
-        ]
+        &[AstType::Function, AstType::ArrowFunctionExpression]
     }
 
     fn run<'a>(
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        semantic: &'a oxc_semantic::Semantic<'a>,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         match node.kind() {
-            AstKind::TSUnionType(union) => {
-                check_annotated_union(union, node, ctx, semantic, diagnostics);
-            }
             AstKind::Function(func) => {
                 check_function_body_fn(func, ctx, diagnostics);
             }
@@ -41,94 +36,6 @@ impl OxcCheck for Check {
             _ => {}
         }
     }
-}
-
-fn is_promise_type(ty: &TSType) -> bool {
-    if let TSType::TSTypeReference(tref) = ty
-        && let TSTypeName::IdentifierReference(id) = &tref.type_name {
-            return id.name.as_str() == "Promise";
-        }
-    false
-}
-
-/// Check if a union type in return position mixes Promise and non-Promise types.
-fn check_annotated_union(
-    union: &TSUnionType,
-    node: &oxc_semantic::AstNode,
-    ctx: &CheckCtx,
-    semantic: &oxc_semantic::Semantic,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    // Walk up to check if this union is in a return type position.
-    if !is_in_return_type_position(node, semantic) {
-        return;
-    }
-
-    let has_promise = union.types.iter().any(|t| is_promise_type(t));
-    let has_non_promise = union.types.iter().any(|t| !is_promise_type(t));
-
-    if has_promise && has_non_promise {
-        let (line, column) = byte_offset_to_line_col(ctx.source, union.span.start as usize);
-        diagnostics.push(Diagnostic {
-            path: Arc::clone(&ctx.path_arc),
-            line,
-            column,
-            rule_id: super::META.id.into(),
-            message: "Return type mixes sync and Promise values; mark the function `async` so it always returns a Promise.".into(),
-            severity: Severity::Warning,
-            span: None,
-        });
-    }
-}
-
-fn is_in_return_type_position(
-    node: &oxc_semantic::AstNode,
-    semantic: &oxc_semantic::Semantic,
-) -> bool {
-    let nodes = semantic.nodes();
-    let mut current_id = node.id();
-    for _ in 0..6 {
-        let parent_id = nodes.parent_id(current_id);
-        if parent_id == current_id {
-            return false; // root
-        }
-        let parent = nodes.get_node(parent_id);
-        match parent.kind() {
-            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
-                // Concrete callable with a body. `Promise<T> | T` here is a real
-                // mixed annotation worth flagging. (Class methods reach this arm
-                // via their inner `Function` value.)
-                return true;
-            }
-            AstKind::TSMethodSignature(_) | AstKind::TSFunctionType(_) => {
-                // Type-level signature (type alias, interface member, object
-                // type). `Promise<T> | T` is a contract meaning "an impl may be
-                // sync or async", not a concrete body mixing returns — never flag.
-                return false;
-            }
-            AstKind::TSTypeAnnotation(_)
-            | AstKind::TSParenthesizedType(_) => {
-                // Keep walking up
-                current_id = parent_id;
-                continue;
-            }
-            AstKind::FormalParameter(_)
-            | AstKind::FormalParameters(_)
-            | AstKind::VariableDeclarator(_)
-            | AstKind::VariableDeclaration(_)
-            | AstKind::PropertyDefinition(_)
-            | AstKind::TSPropertySignature(_) => {
-                // Binding or property type annotation (parameter, local `let`/`const`,
-                // class field, interface property), not a function return type.
-                return false;
-            }
-            _ => {
-                current_id = parent_id;
-                continue;
-            }
-        }
-    }
-    false
 }
 
 /// Check a `Function` node (covers function_declaration, function_expression,
@@ -373,11 +280,36 @@ mod tests {
     }
 
     #[test]
-    fn flags_function_return_type_mixing_sync_and_promise() {
-        // Genuine mixed sync/async RETURN type — must still flag (issue #3902
-        // must not over-suppress).
+    fn allows_explicit_dual_mode_return_type() {
+        // An explicit `T | Promise<T>` return annotation is an intentional
+        // dual-mode contract — the body returns a single value, so the body-scan
+        // path does not fire (issue #3779).
         let src = "function f(cond: boolean): string | Promise<string> { return cond ? \"x\" : Promise.resolve(\"y\"); }";
-        assert!(!run(src).is_empty());
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_explicit_dual_mode_arrow_html() {
+        // hono's `html` helper: explicit `Resp | Promise<Resp>` dual-mode
+        // contract on an arrow (issue #3779).
+        let src = "type Resp = unknown; const html = (input: string | Promise<string>): Resp | Promise<Resp> => { return typeof input === 'object' ? input.then((s) => s) : input; };";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_explicit_dual_mode_method_no_mirroring_param() {
+        // hono's `#handleError`/`#dispatch`: explicit union return, no mirroring
+        // `T | Promise<T>` parameter (issue #3779).
+        let src = "class C { handle(err: Error, c: Ctx): Response | Promise<Response> { return c.json(err); } }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_explicit_dual_mode_passthrough_arrow() {
+        // hono vercel adapter: pass-through arrow with explicit union return
+        // (issue #3779).
+        let src = "const h = (req: Request): Response | Promise<Response> => app.fetch(req);";
+        assert!(run(src).is_empty());
     }
 
     #[test]
