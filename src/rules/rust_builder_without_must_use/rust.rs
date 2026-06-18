@@ -1,8 +1,11 @@
 //! rust-builder-without-must-use backend.
 //!
-//! Heuristic: a `struct_item` whose name ends in `Builder` (the
+//! Heuristic: a `pub struct_item` whose name ends in `Builder` (the
 //! near-universal Rust convention for the builder pattern) must carry
-//! a `#[must_use]` attribute — but only when it is a *consuming*
+//! a `#[must_use]` attribute. Only `pub` builders are flagged: `#[must_use]`
+//! is an API-boundary lint, so a private, internally-consumed builder has no
+//! external caller to warn. Among `pub` builders the attribute is demanded
+//! only when it is a *consuming*
 //! builder, whose setters take `self` by value and return the builder
 //! by value (`Self` / `<Builder>`). Struct-level `#[must_use]` only
 //! fires when a value of that exact type is produced and dropped; it
@@ -39,6 +42,12 @@ impl AstCheck for Check {
             return;
         };
         if !name.ends_with("Builder") {
+            return;
+        }
+        // `#[must_use]` is an API-boundary lint: it warns when a returned value
+        // is dropped unused. A private builder has no external caller, so the
+        // remediation premise does not apply — only flag `pub` builders.
+        if !crate::rules::rust_helpers::is_pub(node, source_bytes) {
             return;
         }
         if has_must_use_attribute(node, source_bytes) {
@@ -271,9 +280,17 @@ mod tests {
     #[test]
     fn flags_builder_without_must_use() {
         assert_eq!(
-            run_on("struct RequestBuilder { headers: Vec<String> }").len(),
+            run_on("pub struct RequestBuilder { headers: Vec<String> }").len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_private_builder() {
+        // fd's `CommandBuilder` (issue #3848): a private builder constructed and
+        // consumed inside the same module. `#[must_use]` is an API-boundary lint
+        // with no external caller here, so the rule must not demand it.
+        assert!(run_on("struct CommandBuilder { pre_args: Vec<String> }").is_empty());
     }
 
     #[test]
