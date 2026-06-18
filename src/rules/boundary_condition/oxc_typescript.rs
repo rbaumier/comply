@@ -2727,4 +2727,45 @@ mod tests {
         let src = "function f(s: string) { const c = s[s.length - 1]; return c; }";
         assert_eq!(run_on(src).len(), 1);
     }
+
+    // Regression #4189: first/last-element access is an idiom in test files —
+    // an empty array makes `arr[0]` `undefined`, which fails the assertion (the
+    // test doing its job), not a shipped production bug. The rule is gated out of
+    // test dirs via the central `skip_in_test_dir` mechanism.
+    #[test]
+    fn skips_first_element_access_in_test_dir_issue_4189() {
+        let src = r#"const x = expect(withYears.result.current[0].filters["years"]).toEqual(["2024","2025"]);"#;
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "src/app/hooks/use-list-search-sync.test.ts",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn skips_bare_first_access_in_test_dir_issue_4189() {
+        let src = "const first = arr[0];";
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "src/api/features/imports/process.integration.test.ts",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_first_access_in_production_file_issue_4189() {
+        // The same unguarded access in a non-test path stays flagged — only test
+        // files are exempt, production code is unchanged.
+        let src = "const first = arr[0];";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "src/api/feature.ts").len(),
+            1
+        );
+    }
 }
