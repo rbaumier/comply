@@ -1,7 +1,9 @@
 //! rust-prefer-strum backend.
 //!
 //! On each `source_file` node, scans direct children for:
-//! 1. `enum_item` nodes — collect their names.
+//! 1. `enum_item` nodes whose variants are all unit variants — collect their
+//!    names. Enums with any data-carrying (tuple/struct) variant are skipped:
+//!    `strum`'s derives cannot represent a variant's payload.
 //! 2. `impl_item` nodes whose `trait` text matches a `Display` path —
 //!    record the target type name.
 //! 3. `impl_item` nodes whose `trait` text matches a `FromStr` path AND
@@ -33,6 +35,7 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
             "enum_item" => {
                 if let Some(name_node) = child.child_by_field_name("name")
                     && let Ok(name) = name_node.utf8_text(source)
+                    && !enum_has_data_variant(child)
                 {
                     enums.push((child, name.to_string()));
                 }
@@ -93,6 +96,36 @@ fn is_from_str_trait(text: &str) -> bool {
         text,
         "FromStr" | "str::FromStr" | "std::str::FromStr" | "core::str::FromStr"
     )
+}
+
+/// True when any variant of `enum_node` carries data — i.e. has a
+/// `field_declaration_list` (struct variant) or `ordered_field_declaration_list`
+/// (tuple variant) child.
+///
+/// `strum::Display`/`EnumString` map only variant name <-> string; they have no
+/// representation for a variant's payload. An enum whose manual impls
+/// serialize/parse that payload (e.g. `terminal_42` <-> `Terminal(42)`) would be
+/// silently broken by the derive, so such enums must not be flagged.
+fn enum_has_data_variant(enum_node: tree_sitter::Node) -> bool {
+    let Some(body) = enum_node.child_by_field_name("body") else {
+        return false;
+    };
+    let mut variant_cursor = body.walk();
+    for variant in body.named_children(&mut variant_cursor) {
+        if variant.kind() != "enum_variant" {
+            continue;
+        }
+        let mut field_cursor = variant.walk();
+        for child in variant.named_children(&mut field_cursor) {
+            if matches!(
+                child.kind(),
+                "field_declaration_list" | "ordered_field_declaration_list"
+            ) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// True when the `FromStr` `impl_item`'s body declares `type Err = ();`.
@@ -172,6 +205,95 @@ impl std::str::FromStr for Color {
 }
 "#;
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_enum_with_tuple_variant_payload() {
+        // `PaneId` (zellij): the manual impls serialize/parse the variant
+        // payload (`terminal_42` <-> `Terminal(42)`). `strum::Display`/
+        // `EnumString` map only variant name <-> string and would silently
+        // drop the payload, so a tuple-variant enum must never be flagged.
+        let src = r#"
+enum PaneId { Terminal(u32), Plugin(u32) }
+
+impl std::fmt::Display for PaneId {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            PaneId::Terminal(id) => write!(f, "terminal_{}", id),
+            PaneId::Plugin(id) => write!(f, "plugin_{}", id),
+        }
+    }
+}
+
+impl std::str::FromStr for PaneId {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some(n) = s.strip_prefix("terminal_") {
+            n.parse().map(PaneId::Terminal).map_err(|_| ())
+        } else if let Some(n) = s.strip_prefix("plugin_") {
+            n.parse().map(PaneId::Plugin).map_err(|_| ())
+        } else {
+            Err(())
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_enum_with_struct_variant_payload() {
+        let src = r#"
+enum E { A { x: u32 }, B }
+
+impl std::fmt::Display for E {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            E::A { x } => write!(f, "a_{}", x),
+            E::B => f.write_str("b"),
+        }
+    }
+}
+
+impl std::str::FromStr for E {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "b" => Ok(E::B),
+            _ => Err(()),
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_enum_with_mixed_unit_and_data_variants() {
+        let src = r#"
+enum BareKey { Esc, F(u8), Char(char) }
+
+impl std::fmt::Display for BareKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            BareKey::Esc => f.write_str("esc"),
+            BareKey::F(n) => write!(f, "f{}", n),
+            BareKey::Char(c) => write!(f, "{}", c),
+        }
+    }
+}
+
+impl std::str::FromStr for BareKey {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "esc" => Ok(BareKey::Esc),
+            _ => Err(()),
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
