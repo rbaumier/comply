@@ -1,5 +1,8 @@
 //! regex-anchor-precedence OxcCheck backend — flags patterns where anchors
-//! `^` / `$` appear in an alternation without grouping.
+//! `^` / `$` appear in an alternation without grouping. The deliberate
+//! head-or-tail idiom (first alternative `^`-anchored AND last alternative
+//! `$`-anchored, e.g. `/^a|b$/`) is exempt: it is the unambiguous "anchored at
+//! start OR anchored at end" construction, not an accidental missing-paren.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -29,6 +32,13 @@ fn has_anchor_precedence_issue(pattern: &str) -> bool {
 
     let first = alternatives[0];
     let last = alternatives[alternatives.len() - 1];
+
+    // Deliberate head-or-tail idiom: anchored at start OR anchored at end
+    // (e.g. `/^\n|\n$/`). The author cannot have meant `^(a|b$)`, so the
+    // precedence is intentional — do not flag.
+    if first.starts_with('^') && last.ends_with('$') && !last.ends_with("\\$") {
+        return false;
+    }
 
     if first.starts_with('^') {
         let others_have_caret = alternatives[1..].iter().all(|a| a.starts_with('^'));
@@ -158,6 +168,29 @@ mod tests {
     #[test]
     fn allows_no_alternation() {
         assert!(run_on(r#"const re = /^foo$/;"#).is_empty());
+    }
+
+    #[test]
+    fn allows_head_or_tail_newline_trim() {
+        // vite build.ts:976 — strip a leading OR trailing newline.
+        assert!(run_on(r#"const t = s.replace(/^\n|\n$/g, "");"#).is_empty());
+    }
+
+    #[test]
+    fn allows_head_or_tail_idiom() {
+        assert!(run_on(r#"const re = /^a|b$/;"#).is_empty());
+    }
+
+    #[test]
+    fn flags_caret_first_without_tail_dollar() {
+        // First `^`-anchored, last NOT `$`-anchored: genuinely ambiguous.
+        assert_eq!(run_on(r#"const re = /^a|b/;"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_tail_dollar_without_head_caret() {
+        // Last `$`-anchored, first NOT `^`-anchored: genuinely ambiguous.
+        assert_eq!(run_on(r#"const re = /a|b$/;"#).len(), 1);
     }
 
     #[test]
