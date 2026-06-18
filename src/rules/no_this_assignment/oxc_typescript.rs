@@ -78,10 +78,12 @@ impl OxcCheck for Check {
 /// the enclosing regular function relies on a non-arrow `this`.
 ///
 /// An arrow function has no own `arguments` and lexically binds `this`, so the
-/// alias is mandatory when the enclosing regular function either references
-/// `arguments` (generator-wrapper pattern) or forwards the captured `this` via
-/// `.apply(alias, …)` / `.call(alias, …)`. In both cases converting to an arrow
-/// would change behaviour, so the rule must not fire.
+/// alias is mandatory when the enclosing regular function references `arguments`
+/// (generator-wrapper pattern), forwards the captured `this` via
+/// `.apply(alias, …)` / `.call(alias, …)`, or when the alias is read from inside
+/// a nested non-arrow `function` (which has its own dynamic `this` and can only
+/// reach the outer receiver through the alias). In all three cases converting to
+/// an arrow would change behaviour, so the rule must not fire.
 fn alias_required_by_enclosing_function<'a>(
     node: &oxc_semantic::AstNode<'a>,
     var_name: &str,
@@ -105,10 +107,19 @@ fn alias_required_by_enclosing_function<'a>(
             return false;
         }
         match other.kind() {
-            // A bare `arguments` reference owned by *this* function — a deeper
-            // non-arrow function would have its own `arguments`, so skip those.
             AstKind::IdentifierReference(id) => {
-                id.name.as_str() == "arguments" && owning_function(other.id(), semantic) == Some(fn_id)
+                // A bare `arguments` reference owned by *this* function — a
+                // deeper non-arrow function would have its own `arguments`.
+                if id.name.as_str() == "arguments" {
+                    return owning_function(other.id(), semantic) == Some(fn_id);
+                }
+                // The alias read from inside a nested non-arrow function, whose
+                // own dynamic `this` makes the alias the only path to the outer
+                // receiver. A reference owned by a different non-arrow function
+                // than `fn_id` is nested (arrows defer to `fn_id` and resolve to
+                // it, so they do not satisfy this).
+                id.name.as_str() == var_name
+                    && matches!(owning_function(other.id(), semantic), Some(owner) if owner != fn_id)
             }
             // `fn.apply(alias, …)` / `fn.call(alias, …)` forwarding `this`.
             AstKind::CallExpression(call) => {
@@ -222,6 +233,34 @@ mod tests {
         let src = "function f() {
             const self = this;
             return self.x;
+        }";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("self"));
+    }
+
+    // Regression for #3849: alias read from inside a nested non-arrow
+    // `function` declaration, which has its own dynamic `this`. The alias is the
+    // only way for that function to reach the outer receiver, so an arrow cannot
+    // replace it.
+    #[test]
+    fn allows_alias_read_inside_nested_non_arrow_function() {
+        let src = "function withQueries() {
+            const self = this;
+            function select() { return self.getDialect(); }
+            return { select };
+        }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // The alias is only read inside arrow functions, which lexically bind `this`,
+    // so converting to an arrow is the right fix and the rule must still fire.
+    #[test]
+    fn still_flags_alias_read_only_inside_arrow() {
+        let src = "function f() {
+            const self = this;
+            const g = () => self.x;
+            return g;
         }";
         let d = run_on(src);
         assert_eq!(d.len(), 1);
