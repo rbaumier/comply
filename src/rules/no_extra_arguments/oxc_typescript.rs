@@ -67,6 +67,15 @@ fn resolve_arity<'a>(
 
     match decl_kind {
         AstKind::Function(func) => {
+            // An overloaded function shares one symbol across every signature
+            // plus the implementation. `symbol_declaration` resolves to the first
+            // signature only, whose param count is not the callable arity: a call
+            // matching a later, higher-arity overload would be wrongly flagged.
+            // When the resolved declaration is a bodyless signature, the callable
+            // arity is the max param count across the whole overload group.
+            if func.body.is_none() {
+                return overload_group_arity(sym_id, semantic);
+            }
             let (count, has_rest) = count_params(&func.params);
             Some(FunctionInfo { param_count: count, has_rest })
         }
@@ -96,6 +105,36 @@ fn resolve_arity<'a>(
         }
         _ => None,
     }
+}
+
+/// Callable arity of an overloaded function, computed as the max param count
+/// across every function declaration sharing `sym_id` (the overload signatures
+/// and the implementation). A call with more args than this max still exceeds
+/// every overload and is flagged. `has_rest` is set if any declaration in the
+/// group takes a rest parameter, since that accepts unbounded arguments.
+fn overload_group_arity<'a>(
+    sym_id: oxc_semantic::SymbolId,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<FunctionInfo> {
+    let scoping = semantic.scoping();
+    let nodes = semantic.nodes();
+    let mut max_params = 0;
+    let mut has_rest = false;
+    let mut found = false;
+    for decl_id in scoping.symbol_declarations(sym_id) {
+        let kind = std::iter::once(nodes.kind(decl_id))
+            .chain(nodes.ancestor_kinds(decl_id))
+            .find_map(|kind| match kind {
+                AstKind::Function(func) => Some(func),
+                _ => None,
+            });
+        let Some(func) = kind else { continue };
+        let (count, rest) = count_params(&func.params);
+        max_params = max_params.max(count);
+        has_rest |= rest;
+        found = true;
+    }
+    found.then_some(FunctionInfo { param_count: max_params, has_rest })
 }
 
 pub struct Check;
@@ -291,6 +330,34 @@ mod tests {
             }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_call_matching_later_overload_signature() {
+        // `useStore` is overloaded: a 1-param signature, a 2-param signature, and
+        // a 2-param implementation. A 2-arg call resolves to the second overload
+        // and is valid; flagging it against the first signature's single param is
+        // the false positive from #3868 (zustand `src/react.ts`).
+        let src = r#"
+            function useStore<S>(api: S): S
+            function useStore<S, U>(api: S, selector: (s: S) => U): U
+            function useStore<TState, StateSlice>(api: TState, selector = (x: any) => x) { return selector(api) }
+            useStore(api, (s: any) => s)
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_call_exceeding_max_overload_arity() {
+        // Negative-space guard: the callable arity is the max across signatures
+        // (2 params). A 3-arg call exceeds every overload and is still flagged.
+        let src = r#"
+            function useStore<S>(api: S): S
+            function useStore<S, U>(api: S, selector: (s: S) => U): U
+            function useStore<TState, StateSlice>(api: TState, selector = (x: any) => x) { return selector(api) }
+            useStore(api, (s: any) => s, extra)
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
