@@ -3,7 +3,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{JSXAttributeItem, JSXAttributeName, JSXElementName};
+use oxc_ast::ast::{
+    JSXAttributeItem, JSXAttributeName, JSXElementName, JSXMemberExpressionObject,
+};
 use std::sync::Arc;
 
 pub struct Check;
@@ -13,6 +15,21 @@ pub struct Check;
 const NATIVE_INTERACTIVE_TAGS: &[&str] =
     &["button", "a", "input", "select", "textarea", "summary", "details"];
 
+/// Component-name roots whose `*Item` descendants expose a native
+/// `menuitem`/`option`-style role (full keyboard + typeahead navigation by
+/// construction). Matched together with the `Item` suffix so only items of an
+/// interactive container are exempt — `ListItem`/`GridItem`/`AccordionItem`
+/// stay flagged.
+const INTERACTIVE_ITEM_CONTAINERS: &[&str] = &[
+    "Menu",
+    "Select",
+    "Combobox",
+    "Listbox",
+    "Command",
+    "Dropdown",
+    "Autocomplete",
+];
+
 fn tag_has_native_keyboard_support(tag: &str) -> bool {
     // Lowercase identifier = native HTML tag.
     if NATIVE_INTERACTIVE_TAGS.contains(&tag) {
@@ -21,7 +38,34 @@ fn tag_has_native_keyboard_support(tag: &str) -> bool {
     // Uppercase identifier = component. Treat names ending in `Button`
     // (Button, IconButton, PrimaryButton, …) as wrapping a real
     // `<button>` — same keyboard semantics apply.
-    tag.ends_with("Button")
+    if tag.ends_with("Button") {
+        return true;
+    }
+    // Link components (Link, NavLink, RouterLink, …) render an `<a href>`;
+    // Enter activates them natively, like the native `<a>` above.
+    if tag.ends_with("Link") {
+        return true;
+    }
+    // Menu/select/listbox/combobox item components carry a `menuitem`/`option`
+    // role with built-in keyboard navigation (DropdownMenuItem, SelectItem,
+    // ContextMenuItem, DropdownMenuRadioItem, …). `Option` is the bare case.
+    if tag == "Option" {
+        return true;
+    }
+    tag.ends_with("Item") && INTERACTIVE_ITEM_CONTAINERS.iter().any(|root| tag.contains(root))
+}
+
+/// Member-expression form of [`tag_has_native_keyboard_support`] — the
+/// namespaced component API (`<DropdownMenu.Item>`, `<NavigationMenu.Link>`,
+/// `<Select.Item>`). Exempt when the object root is an interactive container
+/// and the property is an item/option, or the property is a link.
+fn member_tag_has_native_keyboard_support(object: &str, property: &str) -> bool {
+    if property.ends_with("Link") {
+        return true;
+    }
+    let is_item_property =
+        property == "Option" || property.ends_with("Item") || property.ends_with("Option");
+    is_item_property && INTERACTIVE_ITEM_CONTAINERS.iter().any(|root| object.contains(root))
 }
 
 impl OxcCheck for Check {
@@ -40,16 +84,23 @@ impl OxcCheck for Check {
             return;
         };
 
-        let tag_name = match &opening.name {
-            JSXElementName::Identifier(id) => Some(id.name.as_str()),
-            JSXElementName::IdentifierReference(id) => Some(id.name.as_str()),
-            JSXElementName::MemberExpression(m) => Some(m.property.name.as_str()),
-            JSXElementName::NamespacedName(ns) => Some(ns.name.name.as_str()),
-            _ => None,
+        let exempt = match &opening.name {
+            JSXElementName::Identifier(id) => tag_has_native_keyboard_support(&id.name),
+            JSXElementName::IdentifierReference(id) => tag_has_native_keyboard_support(&id.name),
+            JSXElementName::NamespacedName(ns) => tag_has_native_keyboard_support(&ns.name.name),
+            JSXElementName::MemberExpression(m) => {
+                // Object root identifier, e.g. `DropdownMenu` in `<DropdownMenu.Item>`.
+                let object = match &m.object {
+                    JSXMemberExpressionObject::IdentifierReference(id) => Some(id.name.as_str()),
+                    _ => None,
+                };
+                object.is_some_and(|object| {
+                    member_tag_has_native_keyboard_support(object, &m.property.name)
+                })
+            }
+            _ => false,
         };
-        if let Some(tag) = tag_name
-            && tag_has_native_keyboard_support(tag)
-        {
+        if exempt {
             return;
         }
 
@@ -147,6 +198,72 @@ mod tests {
         for tag in ["a", "input", "select", "textarea"] {
             let src = format!("const x = <{tag} onClick={{h}} />;");
             assert!(run(&src).is_empty(), "<{tag}> should be ignored");
+        }
+    }
+
+    #[test]
+    fn ignores_link_component() {
+        // Regression for rbaumier/comply#4073 — TanStack <Link> renders <a href>.
+        let src = r#"const x = <Link to={href} onClick={handleClick}>Retour</Link>;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_dropdown_menu_item() {
+        // Regression for rbaumier/comply#4073 — Base UI <DropdownMenuItem> has
+        // full keyboard + typeahead navigation built in.
+        let src =
+            r#"const x = <DropdownMenuItem onClick={() => setEditing(true)}>Modifier</DropdownMenuItem>;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_link_and_item_families() {
+        for tag in ["NavLink", "SelectItem", "ContextMenuItem", "DropdownMenuRadioItem"] {
+            let src = format!("const x = <{tag} onClick={{h}}>x</{tag}>;");
+            assert!(run(&src).is_empty(), "<{tag}> should be ignored");
+        }
+    }
+
+    #[test]
+    fn ignores_namespaced_item_and_link_components() {
+        // The namespaced API (Base UI / Radix) — `<DropdownMenu.Item>`,
+        // `<Select.Item>`, `<NavigationMenu.Link>` — is exempt like the flat form.
+        for (object, property) in [
+            ("DropdownMenu", "Item"),
+            ("Select", "Item"),
+            ("ContextMenu", "RadioItem"),
+            ("NavigationMenu", "Link"),
+        ] {
+            let src = format!(
+                "const x = <{object}.{property} onClick={{h}}>x</{object}.{property}>;"
+            );
+            assert!(run(&src).is_empty(), "<{object}.{property}> should be ignored");
+        }
+    }
+
+    #[test]
+    fn flags_non_interactive_namespaced_item() {
+        // A non-interactive container's namespaced item still flags.
+        let src = r#"const x = <List.Item onClick={h}>x</List.Item>;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_deeply_nested_namespaced_item() {
+        // A multi-segment chain (object is itself a member expression) can't be
+        // resolved to an interactive container root, so it flags.
+        let src = r#"const x = <Foo.Bar.Item onClick={h}>x</Foo.Bar.Item>;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_non_interactive_item_and_generic_elements() {
+        // The bound must stay tight: non-interactive `*Item` components and
+        // generic elements still require a keyboard handler.
+        for tag in ["div", "span", "ListItem", "GridItem", "AccordionItem"] {
+            let src = format!("const x = <{tag} onClick={{h}}>x</{tag}>;");
+            assert_eq!(run(&src).len(), 1, "<{tag}> should be flagged");
         }
     }
 }
