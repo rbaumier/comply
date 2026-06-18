@@ -1,19 +1,12 @@
 //! no-loop-counter-reassign — TS / JS / TSX backend.
 //!
-//! Walks every binding declared in a `for (let i = …)` /
-//! `for (let x of …)` / `for (let k in …)` header, then checks the
-//! associated symbol's resolved references. Any write reference whose
-//! source position falls inside the loop body (and not the header
-//! itself) is flagged.
-//!
-//! Replaces a brittle line-based scan that:
-//! - parsed `for (` from raw source text, mishandling multi-line
-//!   loop headers,
-//! - matched the counter name with `find()` (substring), so a
-//!   reassignment to `iteration` would over-fire when the counter
-//!   was `i`,
-//! - tracked block depth by counting `{` / `}` characters, breaking
-//!   on object literals and template strings inside the body.
+//! Walks every binding declared in a C-style `for (let i = …; …; …)`
+//! header, then checks the associated symbol's resolved references. Any
+//! write reference whose source position falls inside the loop body
+//! (and not the header itself) is flagged. `for-of` / `for-in` head
+//! bindings are element/key bindings, not counters — the spec rebinds
+//! them each iteration, so reassigning them inside the body has no
+//! effect on iteration and is never flagged.
 
 use oxc_ast::AstKind;
 use oxc_semantic::ReferenceFlags;
@@ -76,9 +69,10 @@ impl crate::rules::backend::AstCheck for Check {
     }
 }
 
-/// Find the body span of the nearest enclosing `for` statement whose
-/// init declares the symbol at `decl_id`. Stops at the first
-/// function / arrow / program ancestor.
+/// Find the body span of the nearest enclosing C-style `for` statement
+/// whose init declares the symbol at `decl_id`. Stops at the first
+/// function / arrow / program ancestor. `for-of` / `for-in` are not
+/// counted loops, so their head bindings never match.
 fn enclosing_for_body_span(
     nodes: &oxc_semantic::AstNodes,
     decl_id: oxc_semantic::NodeId,
@@ -86,8 +80,6 @@ fn enclosing_for_body_span(
     for kind in nodes.ancestor_kinds(decl_id) {
         match kind {
             AstKind::ForStatement(stmt) => return Some(stmt.body.span()),
-            AstKind::ForOfStatement(stmt) => return Some(stmt.body.span()),
-            AstKind::ForInStatement(stmt) => return Some(stmt.body.span()),
             AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
                 return None;
             }
@@ -184,8 +176,38 @@ mod tests {
     }
 
     #[test]
-    fn flags_for_of_counter_reassign() {
-        let src = "for (let k of items) {\n  k = 'x';\n}";
+    fn allows_for_of_binding_reassign() {
+        // A `for-of` head binding is re-initialised each iteration, so
+        // reassigning it inside the body has no effect on iteration —
+        // it is an idiomatic local transformation, not a counter bug.
+        // Mirrors elysia `for (let [path, route] of Object.entries(x))
+        // { path = encodeURI(path) }`.
+        let src =
+            "for (let [path, route] of Object.entries(x)) {\n  path = encodeURI(path);\n  use(route);\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_for_in_binding_value_reassign() {
+        let src = "for (const k in obj) {\n  let value = obj[k];\n  value = f(value);\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_outer_c_counter_reassigned_inside_for_of() {
+        // The reassigned symbol IS the outer C-style counter `i`, so
+        // the for-of nesting does not shield it.
+        let src =
+            "for (let i = 0; i < n; i++) {\n  for (const x of items) {\n    i = 5;\n  }\n}";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_for_of_binding_reassign_inside_c_loop() {
+        // `x` is the for-of element binding, not the C-style counter, so
+        // reassigning it stays clean even nested inside a `for`.
+        let src =
+            "for (let i = 0; i < n; i++) {\n  for (const x of items) {\n    x = f(x);\n  }\n}";
+        assert!(run_on(src).is_empty());
     }
 }
