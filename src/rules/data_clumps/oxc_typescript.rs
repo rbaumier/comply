@@ -51,17 +51,25 @@ enum FnLocation {
 }
 
 /// Extract parameter names from a function's formal parameters.
+///
+/// Underscore-prefixed names (`_`, `__`, `_done`, …) are intentionally-unused
+/// positional placeholders: ignore markers with no semantic identity, fixed by
+/// the callee's API. They are not data-clump members, so they are dropped.
 fn extract_param_names(params: &FormalParameters) -> Vec<String> {
     let mut names = Vec::new();
     for param in &params.items {
-        if let BindingPattern::BindingIdentifier(ref id) = param.pattern {
+        if let BindingPattern::BindingIdentifier(ref id) = param.pattern
+            && !id.name.starts_with('_')
+        {
             names.push(id.name.to_string());
         }
     }
     if let Some(ref rest) = params.rest
-        && let BindingPattern::BindingIdentifier(id) = &rest.rest.argument {
-            names.push(id.name.to_string());
-        }
+        && let BindingPattern::BindingIdentifier(id) = &rest.rest.argument
+        && !id.name.starts_with('_')
+    {
+        names.push(id.name.to_string());
+    }
     names
 }
 
@@ -317,6 +325,33 @@ function createUser(name: string, email: string, age: number) {}
 function updateUser(name: string, email: string, age: number) {}
 "#;
         assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn no_fp_on_underscore_prefixed_placeholder_params() {
+        // Regression for issue #3857 — `_` and `_done` are intentionally-unused
+        // positional placeholders; after dropping them only `body` remains, below
+        // the clump threshold, so the pair must not be flagged.
+        let src = r#"
+function f1(_: unknown, body: string, _done: () => void) {}
+function f2(_: unknown, body: string, _done: () => void) {}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_real_params_when_placeholders_dropped() {
+        // After dropping `_`, three semantically-named params remain in both
+        // functions, so the clump must still flag and the message must list only
+        // the real params.
+        let src = r#"
+function f1(_: unknown, userId: string, name: string, email: string) {}
+function f2(_: unknown, userId: string, name: string, email: string) {}
+"#;
+        let diags = run(src);
+        assert_eq!(diags.len(), 2);
+        assert!(diags[0].message.contains("email, name, userId"));
+        assert!(!diags[0].message.contains('_'));
     }
 
     #[test]
