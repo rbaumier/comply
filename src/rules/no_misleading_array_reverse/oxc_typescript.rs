@@ -40,6 +40,15 @@ fn is_fresh_array(expr: &Expression, source: &str) -> bool {
             {
                 return true;
             }
+            // `Object.keys/values/entries/getOwnPropertyNames(...)` each return a
+            // brand-new array per spec, so the caller holds the only reference.
+            if matches!(
+                member.property.name.as_str(),
+                "keys" | "values" | "entries" | "getOwnPropertyNames"
+            ) && matches!(&member.object, Expression::Identifier(id) if id.name == "Object")
+            {
+                return true;
+            }
             // Chaining onto a fresh array, e.g. `arr.filter(p).sort(cmp)`.
             FRESH_ARRAY_METHODS.contains(&member.property.name.as_str())
         }
@@ -268,5 +277,34 @@ mod oxc_tests {
     #[test]
     fn allows_split_then_sort() {
         assert!(run("function f(text) { return text.split('\\n').sort(); }").is_empty());
+    }
+
+    // === issue #3746: Object.keys/values/entries/getOwnPropertyNames return fresh arrays ===
+
+    #[test]
+    fn allows_object_keys_sort() {
+        assert!(run("const sortedKeys = Object.keys(oauthData).sort();").is_empty());
+    }
+
+    #[test]
+    fn allows_object_values_sort() {
+        assert!(run("const v = Object.values(o).sort();").is_empty());
+    }
+
+    #[test]
+    fn allows_object_entries_sort() {
+        assert!(run("const e = Object.entries(o).sort();").is_empty());
+    }
+
+    #[test]
+    fn allows_object_get_own_property_names_reverse() {
+        assert!(run("const n = Object.getOwnPropertyNames(o).reverse();").is_empty());
+    }
+
+    #[test]
+    fn flags_non_object_keys_sort() {
+        // GUARD: a non-`Object` receiver — `keys` is not a fresh-array method,
+        // so freshness is unprovable and the mutation is still misleading.
+        assert_eq!(run("const x = foo.keys().sort();").len(), 1);
     }
 }
