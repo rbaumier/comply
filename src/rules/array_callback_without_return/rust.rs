@@ -5,7 +5,9 @@
 //!
 //! Exempt the idiomatic `Option`/`Result` side-effect form, which produces a
 //! deliberate unit return: a bare `_` wildcard parameter (explicit value
-//! discard) or a `?`-suffixed map (receiver is provably `Option`/`Result`).
+//! discard), a `?`-suffixed map, or a map whose result feeds an
+//! `Option`/`Result`-only query (`.is_some()`, `.is_ok()`, …) — each suffix
+//! proves the receiver is `Option`/`Result`, never a lazy `Iterator`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -102,6 +104,53 @@ fn map_is_try_operand(call: tree_sitter::Node) -> bool {
         .is_some_and(|parent| parent.kind() == "try_expression")
 }
 
+/// Query methods that exist only on `Option`/`Result`, never on a lazy
+/// `Iterator`. A chained call to one of these proves the receiver is an
+/// `Option`/`Result` (the same proof-by-receiver-method as `?`). Iterator
+/// methods like `count`, `collect`, or `all` are deliberately excluded.
+const OPTION_RESULT_QUERY_METHODS: &[&str] = &[
+    "is_some",
+    "is_none",
+    "is_some_and",
+    "is_none_or",
+    "is_ok",
+    "is_err",
+    "is_ok_and",
+    "is_err_and",
+];
+
+/// True when the `.map(...)` call is the receiver of an `Option`/`Result`-only
+/// query (`.is_some()`, `.is_ok()`, …).
+///
+/// These query methods do not exist on a lazy `Iterator`, so chaining one onto
+/// the map proves the receiver is `Option`/`Result` and the side-effecting unit
+/// return is intentional. In tree-sitter-rust the `.map(...)` `call_expression`
+/// is the `value` of a `field_expression` whose `field` names the query, and
+/// that `field_expression` is the `function` of the outer `call_expression`
+/// (i.e. `<map>.is_some()`).
+fn map_is_option_result_query_operand(call: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(field_expr) = call.parent() else {
+        return false;
+    };
+    if field_expr.kind() != "field_expression"
+        || field_expr.child_by_field_name("value") != Some(call)
+    {
+        return false;
+    }
+    let Some(field) = field_expr.child_by_field_name("field") else {
+        return false;
+    };
+    let name = field.utf8_text(source).unwrap_or("");
+    if !OPTION_RESULT_QUERY_METHODS.contains(&name) {
+        return false;
+    }
+    // The query must be invoked: `<map>.is_some()`, not a bare field access.
+    field_expr.parent().is_some_and(|outer| {
+        outer.kind() == "call_expression"
+            && outer.child_by_field_name("function") == Some(field_expr)
+    })
+}
+
 fn has_return(node: tree_sitter::Node) -> bool {
     if node.kind() == "return_expression" {
         return true;
@@ -132,9 +181,14 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
 
     // Exempt the idiomatic Option/Result side-effect form, detected via
     // type-free structural signals: a bare `_` wildcard parameter (explicit
-    // value discard) or a `?`-suffixed map (receiver is provably Option/Result,
-    // never a lazy Iterator).
-    if closure_param_is_wildcard(callback) || map_is_try_operand(node) {
+    // value discard), a `?`-suffixed map, or a map whose result feeds an
+    // Option/Result-only query (`.is_some()`, `.is_ok()`, …). The `?` operand
+    // and the query suffix both prove the receiver is Option/Result, never a
+    // lazy Iterator.
+    if closure_param_is_wildcard(callback)
+        || map_is_try_operand(node)
+        || map_is_option_result_query_operand(node, source)
+    {
         return;
     }
 
@@ -272,6 +326,44 @@ mod tests {
     fn flags_iterator_map_collected() {
         // Guard: bound param, no `?`, result collected — still a forgot-return bug.
         let src = "fn f() { xs.iter().map(|x| { transform(x); }).collect::<Vec<_>>(); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_map_feeding_is_some() {
+        // Issue #3830: clap parser.rs:243 — `Option::map(|at| { side_effect(); })`
+        // produces `Option<()>` on purpose; `.is_some()` reads back whether the
+        // closure ran. `is_some` exists only on Option, proving the receiver.
+        let src = "fn f(opt: Option<usize>, this: &mut S) { this.keep = opt.map(|at| { this.skip = at + 1; }).is_some(); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_map_feeding_is_ok() {
+        // Issue #3830: `.is_ok()` exists only on Result, proving the receiver.
+        let src = "fn f() { let ok = res.map(|x| { log(x); }).is_ok(); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_map_feeding_is_none() {
+        // Issue #3830: `.is_none()` exists only on Option, proving the receiver.
+        let src = "fn f() { let n = opt.map(|x| { record(x); }).is_none(); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_map_feeding_is_some_and() {
+        // Issue #3830: `.is_some_and(..)` is also an Option-only query.
+        let src = "fn f() { let b = opt.map(|x| { record(x); }).is_some_and(|()| true); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_map_feeding_count() {
+        // Guard: `.count()` exists on Iterator too, so it is NOT a proof of an
+        // Option/Result receiver — a side-effecting iterator map still flags.
+        let src = "fn f() { let n = xs.iter().map(|x| { transform(x); }).count(); }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
