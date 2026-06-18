@@ -5,7 +5,8 @@
 //! `v-model:` directives it checks the static `directive_argument`. An attribute
 //! whose name is neither kebab-case nor pure-lowercase is reported. Attributes on
 //! SVG-exclusive elements (`<svg>`, `<path>`, ...) are skipped, mirroring Biome's
-//! `useVueHyphenatedAttributes`.
+//! `useVueHyphenatedAttributes`. Bindings on a `<slot>` element are also skipped:
+//! they are slot props, not DOM attributes or component props.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -143,6 +144,14 @@ fn is_on_svg_element(attribute: tree_sitter::Node, source: &[u8]) -> bool {
         .is_some_and(|tag| SVG_EXCLUSIVE_ELEMENTS.binary_search(&tag).is_ok())
 }
 
+/// A `:`/`v-bind`/`v-model` binding on a `<slot>` element is a slot prop, not a
+/// DOM attribute or component prop. Slot props are consumed by exact name via JS
+/// destructuring (`v-slot="{ isOpen }"`) with no kebab↔camel normalization, so the
+/// hyphenation convention does not apply.
+fn is_slot_prop_binding(node: tree_sitter::Node, source: &[u8]) -> bool {
+    node.kind() == "directive_attribute" && owning_tag_name(node, source) == Some("slot")
+}
+
 /// Read the text of the first child of `node` with the given kind.
 fn child_text<'a>(node: tree_sitter::Node, kind: &str, source: &'a [u8]) -> Option<&'a str> {
     let mut cursor = node.walk();
@@ -175,7 +184,7 @@ crate::ast_check! { on ["attribute", "directive_attribute"] => |node, source, ct
     let Some(name) = checked_name(node, source) else {
         return;
     };
-    if is_hyphenated(name) || is_on_svg_element(node, source) {
+    if is_hyphenated(name) || is_on_svg_element(node, source) || is_slot_prop_binding(node, source) {
         return;
     }
     let pos = node.start_position();
@@ -324,5 +333,42 @@ mod tests {
     #[test]
     fn ignores_lowercase_event_like_attribute() {
         assert!(run(&wrap("<button onclick=\"go()\">x</button>")).is_empty());
+    }
+
+    // --- Slot-prop exemption (element-level: bindings on `<slot>` are slot props) ---
+
+    #[test]
+    fn allows_camelcase_shorthand_bind_on_slot() {
+        // `:isOpen` on `<slot>` is a slot prop consumed by exact name → not flagged.
+        assert!(run(&wrap("<slot name=\"trigger\" :isOpen=\"open\" />")).is_empty());
+    }
+
+    #[test]
+    fn allows_multiple_camelcase_slot_prop_bindings() {
+        assert!(
+            run(&wrap(
+                "<slot name=\"trigger\" :toggle=\"onMenuToggle\" :isOpen=\"isOpen\" />"
+            ))
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_v_bind_longhand_on_slot() {
+        assert!(run(&wrap("<slot v-bind:fooBar=\"x\" />")).is_empty());
+    }
+
+    #[test]
+    fn flags_camelcase_shorthand_bind_on_component() {
+        // The slot exemption is `<slot>`-only: the same binding on a component flags.
+        let diags = run(&wrap("<MyComp :isOpen=\"open\" />"));
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("isOpen"));
+    }
+
+    #[test]
+    fn flags_plain_camelcase_attribute_on_slot() {
+        // Only directive bindings are exempt on `<slot>`; a plain attr still flags.
+        assert_eq!(run(&wrap("<slot fooBar=\"x\" />")).len(), 1);
     }
 }
