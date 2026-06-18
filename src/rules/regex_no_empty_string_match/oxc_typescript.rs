@@ -29,7 +29,11 @@ fn pattern_can_match_empty(pattern: &str) -> bool {
             {
                 continue;
             }
-            if j + 1 < pbytes.len() && pbytes[j + 1] == b':' {
+            // `(?` always introduces a group/lookaround (`(?:`, `(?=`, `(?!`,
+            // `(?<=`, `(?<!`, `(?<name>`); a quantifier `?` never follows `(`.
+            // So a `?` right after `(` is a group prefix, not an optional
+            // quantifier.
+            if j > 0 && pbytes[j - 1] == b'(' {
                 continue;
             }
             return true;
@@ -97,5 +101,64 @@ fn is_arg_of_split_or_replace<'a>(
             return false;
         }
         cur_id = nodes.parent_id(cur_id);
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    // --- True positives (genuine optional / nullable patterns). ---
+
+    #[test]
+    fn flags_replace_with_optional() {
+        assert_eq!(run_on(r#"const r = s.replace(/a?/g, 'x');"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_split_with_star() {
+        assert_eq!(run_on(r#"const r = s.split(/x*/);"#).len(), 1);
+    }
+
+    // --- #3775: lookaround group prefixes must not be read as optional. ---
+
+    #[test]
+    fn allows_lookahead_group_prefix() {
+        assert!(run_on(r#"const grouped = (s) => s.replace(/(\d)(?=(\d\d\d)+(?!\d))/g, '$1,');"#).is_empty());
+    }
+
+    #[test]
+    fn allows_alternation_with_negative_lookahead() {
+        assert!(run_on(r#"const cased = (d) => d.replace(/[A-Z]+(?![a-z])|[A-Z]/g, (m) => m);"#).is_empty());
+    }
+
+    #[test]
+    fn allows_positive_lookbehind() {
+        assert!(run_on(r#"const r = s.replace(/(?<=\d)x/g, '');"#).is_empty());
+    }
+
+    #[test]
+    fn allows_negative_lookbehind() {
+        assert!(run_on(r#"const r = s.replace(/(?<!\d)x/g, '');"#).is_empty());
     }
 }
