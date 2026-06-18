@@ -1,4 +1,10 @@
 //! no-undefined-argument OXC backend — flag `undefined` passed as a function argument.
+//!
+//! A call whose sole argument is `undefined` and which carries an explicit
+//! `<...>` type-argument list (e.g. `useRef<U>(undefined)`,
+//! `createContext<T | undefined>(undefined)`) is exempt: the explicit type
+//! argument selects a value-providing overload, so omitting the argument
+//! changes overload resolution / type inference rather than being a no-op.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -34,6 +40,16 @@ fn is_create_context_call(call: &oxc_ast::ast::CallExpression) -> bool {
         Expression::StaticMemberExpression(m) => m.property.name == "createContext",
         _ => false,
     }
+}
+
+/// True when the call carries an explicit `<...>` type-argument list and its
+/// sole argument is `undefined` (e.g. `useRef<U>(undefined)`,
+/// `useState<T>(undefined)`). There, omitting the argument changes overload
+/// resolution / type inference — `useRef<U>()` is `error TS2554` under
+/// @types/react 19 — so the `undefined` is load-bearing, not omittable.
+fn is_sole_undefined_with_type_args(call: &oxc_ast::ast::CallExpression) -> bool {
+    call.type_arguments.is_some()
+        && matches!(call.arguments.as_slice(), [arg] if is_undefined_arg(arg))
 }
 
 /// True when a callee expression's member/call chain bottoms out in an
@@ -112,6 +128,10 @@ impl OxcCheck for Check {
         }
 
         if is_create_context_call(call) {
+            return;
+        }
+
+        if is_sole_undefined_with_type_args(call) {
             return;
         }
 
@@ -273,5 +293,50 @@ mod tests {
     fn allows_bare_create_context_undefined() {
         assert!(crate::rules::test_helpers::run_rule(&Check, "const Ctx = createContext<Foo | undefined>(undefined);", "t.ts")
         .is_empty());
+    }
+
+    #[test]
+    fn allows_use_ref_explicit_type_arg_undefined_issue_3869() {
+        // `React.useRef<U>(undefined)` selects the value-providing overload;
+        // omitting the argument is `error TS2554` under @types/react 19.
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, "const r = React.useRef<U>(undefined);", "t.tsx").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_use_state_explicit_type_arg_undefined_issue_3869() {
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, "const [s, setS] = useState<T>(undefined);", "t.tsx").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_any_generic_call_explicit_type_arg_sole_undefined_issue_3869() {
+        // Generic heuristic: explicit `<...>` type arguments + sole `undefined`
+        // argument means omitting it can change overload resolution / inference.
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, "const x = f<T>(undefined);", "t.ts").is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_use_ref_without_type_arg_issue_3869() {
+        // No explicit type argument: the `undefined` is omittable.
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, "const r = useRef(undefined);", "t.tsx").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn still_flags_explicit_type_arg_with_trailing_real_arg_issue_3869() {
+        // Explicit type args but `undefined` is not the sole argument: a real
+        // trailing argument means the leading `undefined` already cannot be
+        // omitted (placeholder rule), and a trailing one stays omittable.
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, "const x = f<T>(a, undefined);", "t.ts").len(),
+            1
+        );
     }
 }
