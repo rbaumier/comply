@@ -61,6 +61,18 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Allow `Object.assign(Object.create(proto), ...)` — `Object.create`
+        // returns a freshly constructed object with no pre-existing reference
+        // to mutate. A spread rewrite would also drop the prototype that
+        // `Object.create(proto)` installs, so there is no equivalent
+        // non-mutating alternative. An arbitrary call (`makeThing()`) does
+        // *not* qualify — its return value may be a shared object.
+        if let oxc_ast::ast::Argument::CallExpression(target_call) = first {
+            if is_object_create_call(target_call) {
+                return;
+            }
+        }
+
         // Allow `Object.assign(fn, { ...literal })` — attaching a static
         // property to a function. JS has no immutable alternative:
         // spreading a function strips its callable nature, and a cast +
@@ -91,6 +103,19 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// True when `call` is `Object.create(...)` — a `StaticMemberExpression`
+/// callee whose object is the `Object` identifier and whose property is
+/// `create`. Such a call always returns a freshly constructed object.
+fn is_object_create_call(call: &oxc_ast::ast::CallExpression) -> bool {
+    let oxc_ast::ast::Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    let oxc_ast::ast::Expression::Identifier(obj) = &member.object else {
+        return false;
+    };
+    obj.name == "Object" && member.property.name == "create"
 }
 
 /// True when `call` is `Object.assign(param, { ...literal })` where `param`
@@ -304,6 +329,44 @@ mod oxc_tests {
             }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    // === Object.create(...) target (issue #3871) ===
+
+    #[test]
+    fn allows_object_create_target_with_proto() {
+        // Regression for #3871 — `Object.assign(Object.create(proto), source)`
+        // has a freshly-constructed object as its target. A spread rewrite
+        // would drop the prototype that `Object.create(proto)` installs, so
+        // there is no non-mutating alternative.
+        let src = r#"
+            function build(proto: object, source: object) {
+                return Object.assign(Object.create(proto), source);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_object_create_null_target() {
+        let src = r#"
+            function build(opts: object) {
+                return Object.assign(Object.create(null), opts);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_arbitrary_call_target() {
+        // An arbitrary call's return value may be a pre-existing shared
+        // object — only `Object.create(...)` is provably fresh.
+        let src = r#"
+            function build(source: object) {
+                return Object.assign(makeThing(), source);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 
     // === test-file exemption (issue #481) ===
