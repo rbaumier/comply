@@ -14,6 +14,12 @@ pub struct Check;
 
 const SENTRY_HOOKS: &[&str] = &["beforeSend", "beforeBreadcrumb", "beforeSendTransaction"];
 
+/// Methods/callbacks whose documented contract is in-place mutation of a handed-in
+/// parameter. `onBeforeCompile` is a Three.js material lifecycle hook that receives a
+/// `shader` object and configures it by assigning sub-properties (`shader.uniforms`,
+/// `shader.defines`) — there is no immutable API.
+const MUTATION_HOOK_METHODS: &[&str] = &["onBeforeCompile"];
+
 /// Static name of an object-property key, if it's an identifier or string literal.
 fn static_key_name<'a>(key: &PropertyKey<'a>) -> Option<&'a str> {
     match key {
@@ -66,6 +72,44 @@ fn is_inside_sentry_hook<'a>(
             && id.name.as_str() == fn_name
         {
             return true;
+        }
+    }
+    false
+}
+
+/// True when the mutation sits inside a method or callback named for a documented
+/// in-place-mutation hook (`MUTATION_HOOK_METHODS`). Covers both the class-method
+/// shape `class M extends THREE.ShaderMaterial { onBeforeCompile(shader) { … } }`
+/// (a `MethodDefinition` keyed by the hook name) and the object-property-keyed
+/// callback shape `{ onBeforeCompile() {} }` / `{ onBeforeCompile: (shader) => {} }`.
+fn is_inside_mutation_hook_method<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let mut ancestors = semantic.nodes().ancestors(node.id()).peekable();
+    while let Some(ancestor) = ancestors.next() {
+        match ancestor.kind() {
+            // Class/object method: `onBeforeCompile(shader) { … }` — the method body
+            // is a `Function` node wrapped by a `MethodDefinition` keyed by the name.
+            AstKind::Function(_) => {
+                if let Some(next) = ancestors.peek()
+                    && let AstKind::MethodDefinition(method) = next.kind()
+                    && static_key_name(&method.key)
+                        .is_some_and(|name| MUTATION_HOOK_METHODS.contains(&name))
+                {
+                    return true;
+                }
+            }
+            // Object property whose value is the hook callback:
+            // `{ onBeforeCompile: (shader) => {} }` / `{ onBeforeCompile() {} }`.
+            AstKind::ObjectProperty(prop) => {
+                if static_key_name(&prop.key)
+                    .is_some_and(|name| MUTATION_HOOK_METHODS.contains(&name))
+                {
+                    return true;
+                }
+            }
+            _ => {}
         }
     }
     false
@@ -264,7 +308,7 @@ impl OxcCheck for Check {
                         if is_imperative_host_write(obj_text, prop_text) { return; }
                         if is_rooted_at_this(&m.object)
                             && is_inside_constructor_or_setter(node, semantic) { return; }
-                        if is_inside_sentry_hook(node, semantic) { return; }
+                        if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if root_object_name(&m.object) == Some("set") { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
@@ -293,7 +337,7 @@ impl OxcCheck for Check {
                             && is_imperative_host_write(obj_text, key.value.as_str()) { return; }
                         if is_rooted_at_this(&m.object)
                             && is_inside_constructor_or_setter(node, semantic) { return; }
-                        if is_inside_sentry_hook(node, semantic) { return; }
+                        if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if root_object_name(&m.object) == Some("set") { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
@@ -323,7 +367,7 @@ impl OxcCheck for Check {
                     SimpleAssignmentTarget::StaticMemberExpression(m) => {
                         // Vue 3 reactive ref: `count.value++` drives reactivity.
                         if is_vue_ref_value_target(m, semantic) { return; }
-                        if is_inside_sentry_hook(node, semantic) { return; }
+                        if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
                                 || is_get_context_call_binding(id, semantic)) { return; }
@@ -340,7 +384,7 @@ impl OxcCheck for Check {
                         });
                     }
                     SimpleAssignmentTarget::ComputedMemberExpression(m) => {
-                        if is_inside_sentry_hook(node, semantic) { return; }
+                        if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
                                 || is_get_context_call_binding(id, semantic)) { return; }
@@ -365,7 +409,7 @@ impl OxcCheck for Check {
                 }
                 match &unary.argument {
                     Expression::StaticMemberExpression(m) => {
-                        if is_inside_sentry_hook(node, semantic) { return; }
+                        if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
                                 || is_local_object_builder_binding(id, semantic)
@@ -374,7 +418,7 @@ impl OxcCheck for Check {
                         if has_dom_write_intermediary(&m.object) { return; }
                     }
                     Expression::ComputedMemberExpression(m) => {
-                        if is_inside_sentry_hook(node, semantic) { return; }
+                        if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
                                 || is_local_object_builder_binding(id, semantic)
@@ -738,6 +782,65 @@ mod tests {
         let src = r#"
             function scrubStringField(bag, key) {
                 bag[key] = scrubSensitiveQueryFromUrl(bag[key]);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // In-place mutation hooks (Three.js onBeforeCompile) — issue #2279
+
+    #[test]
+    fn allows_mutation_inside_on_before_compile_class_method_issue_2279() {
+        // `onBeforeCompile` is a Three.js material lifecycle hook whose sole API is
+        // configuring the handed-in `shader` by sub-property assignment.
+        let src = r#"
+            class M extends THREE.ShaderMaterial {
+                onBeforeCompile(shader) {
+                    shader.uniforms.tDiffuse = this._t;
+                    shader.defines.USE_UV = '';
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mutation_inside_on_before_compile_object_callback() {
+        // The hook can also be supplied as a callback on an inline options object
+        // passed to a call, mirroring the Sentry `init({ … })` shape.
+        let src = r#"
+            applyMaterial({
+                onBeforeCompile: (shader) => {
+                    shader.uniforms.tDiffuse = t;
+                },
+            });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_param_mutation_in_differently_named_object_callback() {
+        // Same inline-object shape with a non-hook key is still flagged: the
+        // exemption keys off the callback name, not the object-callback shape.
+        let src = r#"
+            applyMaterial({
+                notAHook: (shader) => {
+                    shader.uniforms.tDiffuse = t;
+                },
+            });
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_param_mutation_in_differently_named_class_method() {
+        // The exemption keys off the hook method name, not "is a parameter": a
+        // method with any other name mutating its param is still external state.
+        let src = r#"
+            class M {
+                notAHook(shader) {
+                    shader.uniforms.x = 1;
+                }
             }
         "#;
         assert_eq!(run(src).len(), 1);
