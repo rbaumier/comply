@@ -96,33 +96,50 @@ mod oxc_tests {
     }
 
     #[test]
-    fn flags_top_level_function_with_four_params() {
-        // `max-params` default is 3 — 4 params triggers the rule.
-        let src = "function foo(a: number, b: number, c: number, d: number) {}";
+    fn flags_top_level_function_with_five_params() {
+        // `max-params` default is 4 — 5 params triggers the rule.
+        let src = "function foo(a: number, b: number, c: number, d: number, e: number) {}";
         assert_eq!(run(src).len(), 1);
     }
 
     #[test]
-    fn flags_four_param_function_exactly_once_issue_1081() {
-        // Regression for rbaumier/comply#1081 — a 4-param function is flagged
-        // a single time. The duplicate `ts-max-params` rule that fired on the
-        // same line has been deleted.
-        let src = "function tooMany(a: number, b: number, c: number, d: number) {}";
+    fn flags_five_param_function_exactly_once_issue_1081() {
+        // Regression for rbaumier/comply#1081 — an over-limit function is
+        // flagged a single time. The duplicate `ts-max-params` rule that fired
+        // on the same line has been deleted.
+        let src = "function tooMany(a: number, b: number, c: number, d: number, e: number) {}";
         let diags = run(src);
         assert_eq!(diags.len(), 1, "unexpected: {diags:?}");
     }
 
     #[test]
-    fn allows_three_params() {
-        let src = "function foo(a: number, b: string, c: boolean) {}";
+    fn allows_four_params() {
+        let src = "function foo(a: number, b: string, c: boolean, d: number) {}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_caller_owned_transaction_helper_issue_4192() {
+        // Regression for rbaumier/comply#4192 — `replaceRows(tx, table, where,
+        // values)` is a deliberate 4-argument caller-owned-transaction helper.
+        // 4 params is within the default max=4, so it must not be flagged.
+        let src = r#"
+            export async function replaceRows<TTable extends PgTable>(
+                tx: DatabaseTransaction,
+                table: TTable,
+                where: SQL,
+                values: TTable["$inferInsert"][],
+            ) {}
+        "#;
         assert!(run(src).is_empty());
     }
 
     #[test]
     fn allows_use_mutation_on_error_callback_with_four_params() {
         // Regression for rbaumier/comply#203 — TanStack Query callback
-        // signatures are dictated by the library types. 4 params exceeds
-        // the default max=3 threshold, so the exemption must fire.
+        // signatures are dictated by the library types. The fixed 4-param
+        // `onError` signature is exempt; the over-limit exemption itself is
+        // exercised by `allows_use_query_query_fn_with_five_params`.
         let src = r#"
             import { useMutation } from "@tanstack/react-query";
             useMutation({
@@ -162,11 +179,12 @@ mod oxc_tests {
     }
 
     #[test]
-    fn still_flags_unknown_factory_callback_with_four_params() {
-        // `myFn` is not in the allowlist — the callback is still flagged.
+    fn still_flags_unknown_factory_callback_with_five_params() {
+        // `myFn` is not in the allowlist — a 5-param callback exceeds the
+        // default max=4 and is still flagged.
         let src = r#"
             myFn({
-                onError: (a, b, c, d) => 1,
+                onError: (a, b, c, d, e) => 1,
             });
         "#;
         assert_eq!(run(src).len(), 1);
