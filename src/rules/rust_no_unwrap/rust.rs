@@ -22,7 +22,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
+use crate::rules::rust_helpers::{is_in_const_initializer, is_in_test_context, is_under_tests_dir};
 
 const KINDS: &[&str] = &["call_expression"];
 
@@ -63,6 +63,11 @@ impl AstCheck for Check {
         }
         // Skip test code — `.unwrap()` is fine there.
         if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
+            return;
+        }
+        // Skip const/static item initializers — `unwrap`/`expect` is const-evaluated
+        // at compile time and is the only valid way to extract the value there.
+        if is_in_const_initializer(node) {
             return;
         }
         // Skip lock operations — .read()/.write()/.lock()/.try_lock() unwrap is idiomatic.
@@ -273,5 +278,27 @@ mod tests {
             .len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_unwrap_in_const_item_initializer() {
+        // #3860: `NonZeroU32::new(_).unwrap()` is the canonical way to build a
+        // const value — `?` does not compile and `unwrap_or_else` is not const.
+        let source = "impl W { pub const ONE: W = W(NonZeroU32::new(1).unwrap()); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_unwrap_in_static_item_initializer() {
+        let source = "static S: u32 = foo().unwrap();";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_unwrap_in_const_fn_body() {
+        // A `const fn` body is a runtime body that can return `Result` / use `?`,
+        // so unwrap there is still flagged.
+        let source = "const fn f(x: Option<u32>) -> u32 { x.unwrap() }";
+        assert_eq!(run_on(source).len(), 1);
     }
 }
