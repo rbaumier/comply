@@ -5,11 +5,15 @@
 //! as the receiver of `.test()` or `.exec()`. Bindings whose `lastIndex` is
 //! manually managed (e.g. `re.lastIndex = 0` before each call) are not
 //! flagged: the author has acknowledged and mitigated the statefulness.
+//! Bindings whose `.exec(...)` call sits in the test/condition of an enclosing
+//! loop are also not flagged: there the `lastIndex` advance is the intended
+//! match-iteration driver, not a footgun.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BindingPattern, RegExpFlags};
+use oxc_ast::ast::{BindingPattern, Expression, RegExpFlags};
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -49,6 +53,13 @@ impl OxcCheck for Check {
         // If the binding's `lastIndex` is manually managed (e.g. reset to 0
         // before each call), the statefulness is controlled — not a footgun.
         if manages_last_index(ctx.source, var_name) {
+            return;
+        }
+
+        // If a `<var_name>.exec(...)` call drives an enclosing loop (it sits in
+        // the loop's test/condition), the `lastIndex` advance is the intended
+        // match-iteration mechanism, not a footgun.
+        if exec_drives_loop(var_name, semantic) {
             return;
         }
 
@@ -97,6 +108,49 @@ fn has_stateful_usage(source: &str, var_name: &str) -> bool {
 fn manages_last_index(source: &str, var_name: &str) -> bool {
     let pattern = format!("{var_name}.lastIndex");
     crate::oxc_helpers::source_contains(source, &pattern)
+}
+
+/// True when a `<var_name>.exec(...)` call sits inside the **test/condition** of
+/// an enclosing loop — the canonical `while ((m = re.exec(s)) !== null)` shape.
+/// Here the `lastIndex` advance is what drives and terminates the loop, so it is
+/// intended, not a footgun. An `exec` call in the loop **body** is reuse (the
+/// cursor carries across iterations of an unrelated condition) and still flags,
+/// hence the containment check keys on the loop's `test` span, not loop ancestry.
+fn exec_drives_loop<'a>(var_name: &str, semantic: &'a oxc_semantic::Semantic<'a>) -> bool {
+    for node in semantic.nodes().iter() {
+        let AstKind::CallExpression(call) = node.kind() else {
+            continue;
+        };
+        let Expression::StaticMemberExpression(member) = &call.callee else {
+            continue;
+        };
+        if member.property.name != "exec" {
+            continue;
+        }
+        let Expression::Identifier(obj) = &member.object else {
+            continue;
+        };
+        if obj.name != var_name {
+            continue;
+        }
+
+        let call_span = call.span();
+        for ancestor in semantic.nodes().ancestors(node.id()) {
+            let test_span = match ancestor.kind() {
+                AstKind::WhileStatement(stmt) => Some(stmt.test.span()),
+                AstKind::DoWhileStatement(stmt) => Some(stmt.test.span()),
+                AstKind::ForStatement(stmt) => stmt.test.as_ref().map(GetSpan::span),
+                _ => None,
+            };
+            let Some(test_span) = test_span else {
+                continue;
+            };
+            if test_span.start <= call_span.start && call_span.end <= test_span.end {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -182,6 +236,32 @@ mod tests {
                    function byte(str) {\n\
                    \treturn BYTE.test(str);\n\
                    }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_exec_driving_while_loop() {
+        let src = "const regex = /[:]([a-zA-Z_]\\w*)/g;\n\
+                   let match;\n\
+                   while ((match = regex.exec(segment)) !== null) { out.push(match[1]); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_exec_driving_while_loop() {
+        let src = "const re = /x/g;\nwhile (re.exec(s)) {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_exec_driving_for_loop() {
+        let src = "const re = /x/g;\nfor (let m; (m = re.exec(s)) !== null; ) {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_exec_in_loop_body_not_test() {
+        let src = "const re = /x/g;\nwhile (cond) { re.exec(s); }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
