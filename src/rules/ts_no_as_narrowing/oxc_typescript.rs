@@ -58,6 +58,22 @@ fn operand_is_constructed_literal(expr: &Expression) -> bool {
     )
 }
 
+/// Whether the cast operand is one of the global objects (`globalThis`,
+/// `window`, `self`, `global`). `(globalThis as Interface).prop` is the
+/// canonical idiom for augmenting a global object with a custom property: the
+/// cast ADDS a property the base global type does not structurally declare, the
+/// opposite of narrowing. No type predicate / `in` / `typeof` guard can make TS
+/// believe a global has a property it doesn't declare, so the rule's
+/// remediation does not apply. Parentheses are peeled so `(globalThis as T)` is
+/// treated identically to `globalThis as T`.
+fn operand_is_global_object(expr: &Expression) -> bool {
+    matches!(
+        expr.without_parentheses(),
+        Expression::Identifier(id)
+            if matches!(id.name.as_str(), "globalThis" | "window" | "self" | "global")
+    )
+}
+
 fn target_is_narrowing(ty: &TSType, _source: &str) -> bool {
     match ty {
         TSType::TSLiteralType(_) | TSType::TSTemplateLiteralType(_) => true,
@@ -113,6 +129,14 @@ impl OxcCheck for Check {
         // to a value being built inline; there is no pre-existing binding to
         // narrow, so a type predicate / `in` / `typeof` guard cannot apply.
         if operand_is_constructed_literal(&as_expr.expression) {
+            return;
+        }
+
+        // Skip global-object augmentation casts (`(globalThis as T).prop`).
+        // Casting a global object to an interface ADDS a property at the type
+        // level rather than refining one out of a union, so the rule's
+        // type-predicate / `in` / `typeof` remediation cannot apply.
+        if operand_is_global_object(&as_expr.expression) {
             return;
         }
 
@@ -389,6 +413,36 @@ mod tests {
         // Control for #3875: a member-expression operand reads a pre-existing
         // value; `foo.bar as T` is still a narrowing.
         let diags = run_on("const x = foo.bar as Narrowed;");
+        assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_global_this_augmentation_cast() {
+        // Regression for #3837: `(globalThis as Interface)` is the canonical
+        // idiom for augmenting `globalThis` with a custom global property — the
+        // cast ADDS a property at the type level (the opposite of narrowing).
+        // No type predicate / `in` / `typeof` guard can make TS believe
+        // `globalThis` has a property it doesn't declare.
+        let src = "(globalThis as GlobalWithRegistry).__myRegistry ??= new Map();\n\
+                   export const reg = (globalThis as GlobalWithRegistry).__myRegistry!;";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_window_self_global_augmentation_casts() {
+        // Regression for #3837: `window`/`self`/`global` are the other global
+        // objects that the same augmentation idiom applies to.
+        assert!(run_on("const a = (window as Foo).x;").is_empty());
+        assert!(run_on("const b = (self as Foo).x;").is_empty());
+        assert!(run_on("const c = (global as Foo).x;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_regular_variable_operand_narrowing() {
+        // Control for #3837: a regular variable identifier operand (not a
+        // global object) is a genuine narrowing and must still fire.
+        let diags = run_on("const y = x as SpecificType;");
         assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
     }
 }
