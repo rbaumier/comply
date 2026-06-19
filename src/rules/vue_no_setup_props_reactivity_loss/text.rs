@@ -15,11 +15,17 @@ impl TextCheck for Check {
         // Reactive Props Destructuring is stable since Vue 3.5: the SFC compiler
         // rewrites destructured prop refs back to `props.x`, preserving reactivity,
         // so this rule does not apply. Suppress when the project provably declares
-        // vue >= 3.5; otherwise (vue < 3.5, or no declared vue version) keep warning.
-        if matches!(
+        // vue >= 3.5, OR nuxt >= 4 — Nuxt 4 ships Vue 3.5+ transitively, so its
+        // projects often declare only `nuxt` with no direct `vue` dependency.
+        let vue_ok = matches!(
             ctx.project.nearest_dependency_version_min(ctx.path, "vue"),
             Some(v) if v >= (3, 5)
-        ) {
+        );
+        let nuxt_ok = matches!(
+            ctx.project.nearest_dependency_version_min(ctx.path, "nuxt"),
+            Some(v) if v >= (4, 0)
+        );
+        if vue_ok || nuxt_ok {
             return Vec::new();
         }
         let mut diags = Vec::new();
@@ -86,6 +92,20 @@ mod tests {
         Check.check(&CheckCtx::for_test_with_project(&vue_path, src, &project))
     }
 
+    /// Like `run_with_vue`, but declares ONLY a `nuxt` dependency and no `vue` —
+    /// the Nuxt 4 case where Vue 3.5+ is provided transitively.
+    fn run_with_nuxt(nuxt_range: &str, src: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            format!(r#"{{"dependencies":{{"nuxt":"{nuxt_range}"}}}}"#),
+        )
+        .unwrap();
+        let vue_path = dir.path().join("App.vue");
+        let project = ProjectCtx::empty();
+        Check.check(&CheckCtx::for_test_with_project(&vue_path, src, &project))
+    }
+
     #[test]
     fn flags_destructured_defineprops() {
         let src = "const { foo } = defineProps<{ foo: string }>();";
@@ -111,5 +131,21 @@ mod tests {
         // The same source under Vue < 3.5 still loses reactivity, so it warns.
         let src = "const { items } = defineProps<{ items: string[] }>();";
         assert_eq!(run_with_vue("^3.4.0", src).len(), 1);
+    }
+
+    #[test]
+    fn suppressed_on_nuxt_4() {
+        // Regression for #4454 — Nuxt 4 ships Vue 3.5+ transitively, so a Nuxt 4
+        // project declaring only `nuxt` (no direct `vue`) must not be flagged.
+        let src = "<script setup lang=\"ts\">\nconst { type } = defineProps({ type: { type: String, required: true } })\n</script>";
+        assert!(run_with_nuxt("^4.4.5", src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_on_nuxt_3() {
+        // Nuxt 3's bundled Vue version is not guaranteed >= 3.5, so the warning
+        // stays below the nuxt >= 4 threshold.
+        let src = "<script setup lang=\"ts\">\nconst { type } = defineProps({ type: { type: String, required: true } })\n</script>";
+        assert_eq!(run_with_nuxt("^3.11.0", src).len(), 1);
     }
 }

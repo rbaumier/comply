@@ -1,11 +1,13 @@
 //! vue-no-setup-props-reactivity-loss — destructuring `defineProps` loses reactivity.
 //!
 //! Warns about destructured `defineProps()` in `<script setup>` ONLY when the
-//! project's nearest `package.json` declares a Vue version below 3.5. Reactive
-//! Props Destructuring is stable since Vue 3.5: the SFC compiler rewrites every
-//! destructured prop reference back to `props.x`, so reactivity is preserved and
-//! the pattern is safe. When the declared Vue version is >= 3.5 the rule is a
-//! no-op; with no declared Vue version it keeps warning.
+//! project does not provably ship Vue 3.5+. Reactive Props Destructuring is
+//! stable since Vue 3.5: the SFC compiler rewrites every destructured prop
+//! reference back to `props.x`, so reactivity is preserved and the pattern is
+//! safe. The rule is a no-op when the nearest `package.json` declares either
+//! `vue >= 3.5` or `nuxt >= 4` (Nuxt 4 ships Vue 3.5+ transitively, so its
+//! projects often declare only `nuxt` with no direct `vue` dependency). With
+//! neither declared it keeps warning.
 
 mod text;
 
