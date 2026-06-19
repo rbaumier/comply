@@ -11,7 +11,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
+use crate::rules::rust_helpers::{is_in_fn_main, is_in_test_context, is_under_tests_dir};
 
 const KINDS: &[&str] = &["call_expression"];
 
@@ -85,22 +85,6 @@ fn is_env_var_call(node: tree_sitter::Node, source: &[u8]) -> bool {
         Err(_) => return false,
     };
     text == "env::var" || text == "std::env::var" || text == "::std::env::var"
-}
-
-/// True if `node` is inside a function literally named `main`.
-fn is_in_fn_main(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let mut cur = node;
-    while let Some(parent) = cur.parent() {
-        if parent.kind() == "function_item"
-            && let Some(name) = parent.child_by_field_name("name")
-            && let Ok(t) = name.utf8_text(source)
-            && t == "main"
-        {
-            return true;
-        }
-        cur = parent;
-    }
-    false
 }
 
 #[cfg(test)]

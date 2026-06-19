@@ -16,10 +16,15 @@
 //! the outer `dyn` (`dyn Error ...` or `dyn ...::Error ...`), not merely
 //! to appear somewhere inside an inner type's generics (e.g.
 //! `dyn Future<Output = Result<_, Self::Error>>`).
+//!
+//! Test contexts, `fn main`, and Cargo build scripts (`build.rs`) are
+//! exempt: in all three the error stays single-threaded (the binary entry
+//! point prints to stderr; a build script runs synchronously at compile
+//! time), so the `Send + Sync` remediation is structurally inapplicable.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
+use crate::rules::rust_helpers::{is_in_fn_main, is_in_test_context, is_under_tests_dir};
 
 const KINDS: &[&str] = &["generic_type"];
 
@@ -69,7 +74,11 @@ impl AstCheck for Check {
         if has_non_static_lifetime(args_text) {
             return;
         }
-        if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
+        if is_in_test_context(node, source_bytes)
+            || is_under_tests_dir(ctx.path)
+            || is_in_fn_main(node, source_bytes)
+            || crate::rules::path_utils::is_rust_build_script(ctx.path)
+        {
             return;
         }
         let missing = match (has_send, has_sync) {
@@ -281,5 +290,34 @@ mod tests {
             }
         "#;
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_box_dyn_error_in_fn_main() {
+        // `fn main() -> Result<(), Box<dyn Error>>` is the binary entry point:
+        // the error is printed to stderr, never crossing a thread boundary.
+        let source = "fn main() -> Result<(), Box<dyn Error>> { Ok(()) }";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, source, "src/main.rs").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_box_dyn_error_in_build_script() {
+        // Build scripts run single-threaded at compile time (tokei build.rs:21).
+        let source =
+            "fn generate(out: &str) -> Result<(), Box<dyn std::error::Error>> { Ok(()) }";
+        assert!(crate::rules::test_helpers::run_rule(&Check, source, "build.rs").is_empty());
+    }
+
+    #[test]
+    fn flags_box_dyn_error_in_non_main_fn() {
+        // A non-main function in a normal source path is still flagged.
+        let source =
+            "fn helper() -> Result<(), Box<dyn std::error::Error>> { Ok(()) }";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, source, "src/lib.rs").len(),
+            1
+        );
     }
 }
