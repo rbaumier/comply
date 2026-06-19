@@ -273,4 +273,38 @@ mod tests {
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].line, 3);
     }
+
+    // --- Test-directory exemption (issue #4506) ---
+
+    fn applies_at(path: &str) -> bool {
+        let file = crate::rules::file_ctx::FileCtx::build(
+            Path::new(path),
+            "",
+            crate::files::Language::Json,
+            crate::project::default_static_project_ctx(),
+        );
+        crate::rules::no_empty_object_keys::META.applies_to_file(&file)
+    }
+
+    #[test]
+    fn skips_empty_key_in_nested_resources_test_fixture() {
+        // pest `grammars/resources/test/jsonfuzzsample1.json`: a fuzzing corpus
+        // full of intentional empty-string keys, nested under `resources/`.
+        assert!(!applies_at("grammars/resources/test/jsonfuzzsample1.json"));
+    }
+
+    #[test]
+    fn skips_empty_key_in_tests_fixture() {
+        // pest `grammars/tests/examples.json`: the json.org spec-conformance
+        // fixture whose empty key deliberately exercises the JSON grammar.
+        assert!(!applies_at("grammars/tests/examples.json"));
+    }
+
+    #[test]
+    fn flags_empty_key_in_production_json() {
+        // Control: the same empty key in a production data file is still a smell.
+        assert!(applies_at("src/data.json"));
+        let diags = check(r#"{"": "v"}"#);
+        assert_eq!(diags.len(), 1);
+    }
 }
