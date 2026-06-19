@@ -77,10 +77,20 @@ fn validates_state(text: &str) -> bool {
 fn is_oauth_callback_path(path: &str) -> bool {
     let unquoted = path.trim_matches(|c: char| c == '"' || c == '\'' || c == '`');
     let lower = unquoted.to_ascii_lowercase();
-    lower.contains("/callback")
-        || lower.contains("/oauth/callback")
-        || lower.contains("/auth/callback")
-        || lower.ends_with("/cb")
+    // Drop a query string and trailing slash so the terminal-segment check is robust.
+    let stem = lower.split('?').next().unwrap_or(&lower).trim_end_matches('/');
+    // Explicit OAuth/auth context anywhere covers provider sub-paths like
+    // `/auth/callback/:provider`.
+    if stem.contains("/oauth/callback")
+        || stem.contains("/oauth2/callback")
+        || stem.contains("/auth/callback")
+        || stem.contains("/sso/callback")
+    {
+        return true;
+    }
+    // A bare `/callback` (or `/cb`) is an OAuth redirect URI only as the terminal
+    // route segment; `/callback/request`, `/callback/response` are sub-routes.
+    matches!(stem.rsplit('/').next(), Some("callback" | "cb"))
 }
 
 impl OxcCheck for Check {
@@ -150,5 +160,88 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    // #3225: AWS Lambda@Edge adapter test routes — `/callback/request` and
+    // `/callback/response` — are not OAuth callbacks. They flagged under the old
+    // bare `/callback` substring match; the terminal-segment rule exempts them.
+    #[test]
+    fn ignores_lambda_callback_sub_routes() {
+        let src = r#"
+            app.get('/callback/request', async (c, next) => {
+              await next()
+              c.env.callback(null, c.env.request)
+            })
+            app.get('/callback/response', async (c, next) => {
+              await next()
+              c.env.callback(null, c.env.response)
+            })
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    // Security detection preserved: a bare `/callback` OAuth handler that never
+    // reads `state` is the canonical CSRF target and must still flag.
+    #[test]
+    fn flags_bare_callback_without_state() {
+        let src = r#"app.get('/callback', (c) => { return c.text('ok') })"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // `/auth/callback/:provider`-style provider sub-paths keep firing because the
+    // explicit auth context matches anywhere.
+    #[test]
+    fn flags_provider_sub_path() {
+        let src = r#"app.get('/auth/callback/google', (c) => { return c.text('ok') })"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Unit coverage for the path predicate across the cases the route harness
+    // can't reach as terminal route literals.
+    #[test]
+    fn callback_path_classification() {
+        // FP fixed: sub-routes under a `callback` segment are not OAuth endpoints.
+        assert!(!is_oauth_callback_path("/callback/request"));
+        assert!(!is_oauth_callback_path("/callback/response"));
+        // Bonus precision: a plural `callbacks` terminal segment is not a callback.
+        assert!(!is_oauth_callback_path("/callbacks"));
+
+        // Security detection preserved.
+        assert!(is_oauth_callback_path("/callback"));
+        assert!(is_oauth_callback_path("/auth/callback"));
+        assert!(is_oauth_callback_path("/oauth/callback"));
+        assert!(is_oauth_callback_path("/oauth2/callback"));
+        assert!(is_oauth_callback_path("/sso/callback"));
+        assert!(is_oauth_callback_path("/cb"));
+        // Explicit auth context still matches as a non-terminal prefix.
+        assert!(is_oauth_callback_path("/auth/callback/google"));
+        // Trailing slash and query string don't defeat the terminal-segment check.
+        assert!(is_oauth_callback_path("/callback/"));
+        assert!(is_oauth_callback_path("/callback?code=abc"));
     }
 }
