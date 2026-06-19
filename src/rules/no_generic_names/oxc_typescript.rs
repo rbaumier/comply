@@ -431,6 +431,92 @@ fn init_is_computed_member(init: &Expression) -> bool {
     }
 }
 
+/// True when the first character of `name` is an ASCII uppercase letter — the
+/// PascalCase convention React requires of component identifiers.
+fn is_pascal_case(name: &str) -> bool {
+    name.as_bytes().first().is_some_and(u8::is_ascii_uppercase)
+}
+
+/// React HOC factory names whose call result is a component (`forwardRef(...)`,
+/// `React.forwardRef(...)`, `memo(...)`, `React.memo(...)`). Matched by the
+/// callee's last identifier segment, so both the bare and `React.`-namespaced
+/// forms qualify.
+const REACT_COMPONENT_FACTORIES: &[&str] = &["forwardRef", "memo"];
+
+/// True when `body` (a function/arrow body) returns JSX: either a concise-arrow
+/// body whose sole `ExpressionStatement` is a `JSXElement`/`JSXFragment`, or a
+/// block body containing a `return <jsx/>;`. Only the body's own top-level
+/// statements are inspected — nested functions are not descended into.
+fn body_returns_jsx(body: &FunctionBody) -> bool {
+    body.statements.iter().any(|stmt| match stmt {
+        Statement::ExpressionStatement(es) => expr_is_jsx(&es.expression),
+        Statement::ReturnStatement(ret) => ret.argument.as_ref().is_some_and(expr_is_jsx),
+        _ => false,
+    })
+}
+
+/// True when `expr` (unwrapping parentheses) is a `JSXElement` or `JSXFragment`.
+fn expr_is_jsx(expr: &Expression) -> bool {
+    match expr {
+        Expression::JSXElement(_) | Expression::JSXFragment(_) => true,
+        Expression::ParenthesizedExpression(p) => expr_is_jsx(&p.expression),
+        _ => false,
+    }
+}
+
+/// True when `init` is a React component value: a `forwardRef(...)`/`memo(...)`
+/// (bare or `React.`-namespaced) call, or an arrow/function expression whose
+/// body returns JSX. Parenthesized wrappers are unwrapped.
+fn binding_is_react_component(init: &Expression) -> bool {
+    match init {
+        Expression::ParenthesizedExpression(p) => binding_is_react_component(&p.expression),
+        Expression::CallExpression(call) => {
+            let callee = match &call.callee {
+                Expression::Identifier(id) => Some(id.name.as_str()),
+                Expression::StaticMemberExpression(m) => Some(m.property.name.as_str()),
+                _ => None,
+            };
+            callee.is_some_and(|c| REACT_COMPONENT_FACTORIES.contains(&c))
+        }
+        Expression::ArrowFunctionExpression(arrow) => body_returns_jsx(&arrow.body),
+        Expression::FunctionExpression(func) => {
+            func.body.as_ref().is_some_and(|b| body_returns_jsx(b))
+        }
+        _ => false,
+    }
+}
+
+/// True when the flagged binding is a PascalCase React component: a
+/// `const Input = forwardRef(...)` / `(props) => <x/>` variable declarator whose
+/// initializer is a React component, or a `function Item() { return <x/>; }`
+/// declaration whose body returns JSX. `Input`/`Label`/`Item` are conventional
+/// design-system component export names, not generic value identifiers, so they
+/// are out of this rule's scope. The walk stops at the binding's own
+/// `VariableDeclarator` / `Function`, so a non-PascalCase name or a non-component
+/// initializer (`const Input = 5`, `class DataSource {}`) still flags.
+fn binding_is_pascal_case_react_component<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    name: &str,
+) -> bool {
+    if !is_pascal_case(name) {
+        return false;
+    }
+    for kind in semantic.nodes().ancestor_kinds(node.id()) {
+        match kind {
+            AstKind::VariableDeclarator(d) => {
+                return d.init.as_ref().is_some_and(binding_is_react_component);
+            }
+            AstKind::Function(func) => {
+                return func.body.as_ref().is_some_and(|b| body_returns_jsx(b));
+            }
+            AstKind::Program(_) => return false,
+            _ => continue,
+        }
+    }
+    false
+}
+
 /// True when the identifier is a `VariableDeclarator` binding whose initializer
 /// is a computed member access (`const value = rawStore[key]`) sitting inside a
 /// `for...in` body. This is the canonical value-lookup companion of the loop's
@@ -979,6 +1065,13 @@ impl OxcCheck for Check {
             {
                 let lower = name.to_ascii_lowercase();
                 if BANNED_WORDS.contains(&lower.as_str()) {
+                    // A PascalCase binding whose initializer is a React component
+                    // (`const Input = forwardRef(...)`, `const Label = (p) => <l/>`,
+                    // `function Item() { return <li/>; }`) is the conventional
+                    // design-system component export name, not a generic value.
+                    if binding_is_pascal_case_react_component(node, semantic, name) {
+                        return;
+                    }
                     if PARAM_ALLOWED_WORDS.contains(&lower.as_str())
                         && (is_function_param(node, semantic)
                             || is_for_of_or_in_binding(node, semantic)
@@ -1147,6 +1240,41 @@ mod tests {
 
     fn run(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    // JSX must be parsed as TSX; a `.tsx` path enables the JSX source type.
+    fn run_tsx(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.tsx")
+    }
+
+    #[test]
+    fn no_fp_pascal_case_react_component_exports_issue_4368() {
+        // Regression for #4368 — `Input`/`Label`/… are conventional design-system
+        // component export names (shadcn / Base UI). A PascalCase binding whose
+        // initializer is a React component is out of scope; `input`/`item`/etc.
+        // are banned words but the component shape proves they are not generic.
+        assert!(
+            run_tsx("export const Input = React.forwardRef((props, ref) => <input ref={ref} {...props} />);")
+                .is_empty()
+        );
+        assert!(
+            run_tsx("export const Input = forwardRef((props, ref) => <input {...props} />);").is_empty()
+        );
+        assert!(run_tsx("export const Label = (props) => <label {...props} />;").is_empty());
+        assert!(run_tsx("const Output = React.memo(() => <output />);").is_empty());
+        assert!(run_tsx("export function Item() { return <li />; }").is_empty());
+    }
+
+    #[test]
+    fn still_flags_pascal_case_non_component_bindings_issue_4368() {
+        // Negative space: the exemption requires the React-component shape, not
+        // just PascalCase. `DefaultData` (plain call), `class DataSource`, and
+        // `Input = 5` (literal) keep firing, while an ordinary generic value is
+        // unchanged.
+        assert_eq!(run_tsx("export const DefaultData = computeData();").len(), 1);
+        assert_eq!(run("const data = fetchData();").len(), 1);
+        assert_eq!(run("class DataSource {}").len(), 1);
+        assert_eq!(run_tsx("export const Input = 5;").len(), 1);
     }
 
     #[test]
