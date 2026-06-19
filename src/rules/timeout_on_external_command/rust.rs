@@ -1,7 +1,23 @@
+//! Flags `Command::new(...)` executions (`.output()`/`.spawn()`/`.status()`)
+//! that have no nearby timeout, as they can hang indefinitely.
+//!
+//! Exempted because they never run in production:
+//! - `build.rs` build scripts.
+//! - test contexts: a `#[cfg(test)]` module / `#[test]` fn, or a file under a
+//!   `tests/` integration directory.
+
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["call_expression"] prefilter = ["Command::new"] => |node, source, ctx, diagnostics|
     if ctx.path.file_name() == Some(std::ffi::OsStr::new("build.rs")) { return; }
+    // `Command::new()` inside a `#[cfg(test)]` module / `#[test]` fn, or under a
+    // `tests/` integration directory, is compile-time test setup that never runs
+    // in production, so the timeout requirement does not apply.
+    if crate::rules::rust_helpers::is_in_test_context(node, source)
+        || crate::rules::rust_helpers::is_under_tests_dir(ctx.path)
+    {
+        return;
+    }
     let Some(func_node) = node.child_by_field_name("function") else { return };
     let Ok(func_text) = func_node.utf8_text(source) else { return };
     if func_text != "Command::new" { return; }
@@ -111,11 +127,44 @@ fn invalid_justfile() {
     }
 
     #[test]
+    fn skips_command_in_cfg_test_module() {
+        let src = r#"#[cfg(test)]
+mod test {
+    fn helper() { Command::new("git").args(["status"]).output().ok(); }
+}"#;
+        assert!(
+            run(src).is_empty(),
+            "Command::new inside a #[cfg(test)] module is a false positive"
+        );
+    }
+
+    #[test]
+    fn skips_command_in_test_fn() {
+        let src = r#"#[cfg(test)]
+mod t {
+    #[test]
+    fn it_works() { Command::new("git").output().ok(); }
+}"#;
+        assert!(
+            run(src).is_empty(),
+            "Command::new inside a #[test] fn is a false positive"
+        );
+    }
+
+    #[test]
+    fn skips_command_under_tests_dir() {
+        let src = r#"fn f() { Command::new("git").output().ok(); }"#;
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "tests/integration.rs").is_empty(),
+            "Command::new under a tests/ directory is a false positive"
+        );
+    }
+
+    #[test]
     fn flags_command_in_non_test_dir() {
-        let src = r#"#[test]
-fn invalid_justfile() {
+        let src = r#"fn run_just() {
   let output = Command::new(JUST)
-    .current_dir(tmp.path())
+    .current_dir(work.path())
     .output()
     .unwrap();
   assert!(!output.status.success());
@@ -124,7 +173,7 @@ fn invalid_justfile() {
         assert_eq!(
             diags.len(),
             1,
-            "the same Command::new must still fire outside test directories"
+            "production Command::new outside a test context must still fire"
         );
     }
 }
