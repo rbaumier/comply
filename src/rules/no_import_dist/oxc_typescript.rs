@@ -254,4 +254,68 @@ import { isParentDirectory } from '../dist/path.js';"#;
             "a non-entry file importing from dist/ must still fire"
         );
     }
+
+    #[test]
+    fn ignores_package_own_bin_entry_dispatching_to_dist() {
+        // Issue #4514 — a `bin/*.mjs` CLI shim declared in package.json `"bin"`
+        // (object map form) whose sole job is to load the compiled dist/ output.
+        // npm installs it as an executable, so it is itself an entry point.
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"@antfu/ni","bin":{"na":"bin/na.mjs","ni":"bin/ni.mjs"}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("bin")).unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        let project = crate::project::ProjectCtx::empty();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+
+        let bin = dir.path().join("bin").join("na.mjs");
+        let bin_src = "import '../dist/na.mjs'\n";
+        let bin_diags =
+            crate::rules::test_helpers::run_rule_with_ctx(&Check, bin_src, &bin, &project, file);
+        assert!(
+            bin_diags.is_empty(),
+            "a declared bin entry shim should be exempt, got: {bin_diags:?}"
+        );
+
+        // Load-bearing negative: a non-bin, non-main source file importing from
+        // dist/ must STILL fire — the exemption is entry-point-scoped.
+        let other = dir.path().join("src").join("foo.ts");
+        let other_src = r#"import { x } from "../dist/bar";"#;
+        let other_diags =
+            crate::rules::test_helpers::run_rule_with_ctx(&Check, other_src, &other, &project, file);
+        assert_eq!(
+            other_diags.len(),
+            1,
+            "a non-entry file importing from dist/ must still fire"
+        );
+    }
+
+    #[test]
+    fn ignores_package_own_string_bin_entry_dispatching_to_dist() {
+        // Issue #4514 — the string form `"bin": "bin/cli.mjs"` names a single CLI
+        // entry point; a dist/ import in that shim is an entry point, not an FP.
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"mycli","bin":"bin/cli.mjs"}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("bin")).unwrap();
+        let project = crate::project::ProjectCtx::empty();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+
+        let bin = dir.path().join("bin").join("cli.mjs");
+        let bin_src = "import '../dist/cli.mjs'\n";
+        let bin_diags =
+            crate::rules::test_helpers::run_rule_with_ctx(&Check, bin_src, &bin, &project, file);
+        assert!(
+            bin_diags.is_empty(),
+            "a declared string-form bin entry shim should be exempt, got: {bin_diags:?}"
+        );
+    }
 }

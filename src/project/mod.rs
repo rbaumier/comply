@@ -564,7 +564,9 @@ fn collect_substitute_targets(node: &Value, out: &mut BTreeSet<String>) {
 /// string `exports` (no subpath map) is itself the `.` target. Also includes the
 /// `browser` and `react-native` substitute targets — the browser/native build of
 /// the library that bundlers swap in at build time, reachable only through the
-/// substitution map, never `import`ed.
+/// substitution map, never `import`ed — and every `bin` target, the CLI entry
+/// shims npm installs as executables (a string names one command, an object maps
+/// command → file).
 fn collect_entry_files(json: &Value) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     if let Some(main) = json.get("main").and_then(Value::as_str)
@@ -580,6 +582,24 @@ fn collect_entry_files(json: &Value) -> BTreeSet<String> {
     }
     if let Some(native) = json.get("react-native") {
         collect_substitute_targets(native, &mut out);
+    }
+    // `bin` entries are CLI entry points (npm installs them as executables); like
+    // `main`/`exports`, a bin shim importing the package's own `dist/` output is
+    // an entry point, not a misdirected import.
+    match json.get("bin") {
+        Some(Value::String(s)) => {
+            if let Some(rel) = normalize_main_path(s) {
+                out.insert(rel);
+            }
+        }
+        Some(Value::Object(map)) => {
+            for target in map.values().filter_map(Value::as_str) {
+                if let Some(rel) = normalize_main_path(target) {
+                    out.insert(rel);
+                }
+            }
+        }
+        _ => {}
     }
     out
 }
@@ -5297,6 +5317,53 @@ mod tests {
         assert!(ctx.is_package_entry_file(&dir.path().join("inputrules/index.ts")));
         assert!(ctx.is_package_entry_file(&dir.path().join("state/index.ts")));
         assert!(!ctx.is_package_entry_file(&dir.path().join("other/index.ts")));
+    }
+
+    #[test]
+    fn is_package_entry_file_matches_bin_object_targets() {
+        // Issue #4514 — the `bin` object map names CLI entry shims (e.g. antfu/ni
+        // exposing `na`/`ni` → `bin/na.mjs`/`bin/ni.mjs`). Each is an entry point.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"@antfu/ni","bin":{"na":"bin/na.mjs","ni":"bin/ni.mjs"}}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.is_package_entry_file(&dir.path().join("bin/na.mjs")));
+        assert!(ctx.is_package_entry_file(&dir.path().join("bin/ni.mjs")));
+        assert!(!ctx.is_package_entry_file(&dir.path().join("bin/other.mjs")));
+    }
+
+    #[test]
+    fn is_package_entry_file_matches_bin_string_target() {
+        // Issue #4514 — the string form `"bin": "bin/cli.mjs"` names a single CLI
+        // entry point.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"mycli","bin":"bin/cli.mjs"}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.is_package_entry_file(&dir.path().join("bin/cli.mjs")));
+        assert!(!ctx.is_package_entry_file(&dir.path().join("bin/other.mjs")));
+    }
+
+    #[test]
+    fn is_package_entry_file_no_bin_leaves_non_entry_unmatched() {
+        // Negative space: with no `bin` field, an ordinary file is not an entry.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"mylib","main":"index.js"}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(!ctx.is_package_entry_file(&dir.path().join("bin/cli.mjs")));
     }
 
     #[test]
