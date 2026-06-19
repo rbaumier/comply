@@ -972,6 +972,24 @@ pub fn is_in_trait_impl(node: Node) -> bool {
     false
 }
 
+/// True if `node` sits inside a trait definition (`trait Foo { … }`).
+///
+/// Walks up via `node.parent()` and returns true at the first enclosing
+/// `trait_item` ancestor. A trait definition fixes its method signatures as part
+/// of the public API contract, so rules use this — alongside [`is_in_trait_impl`]
+/// — to exempt method shapes the trait author can't change without breaking
+/// callers.
+pub fn is_in_trait_definition(node: Node) -> bool {
+    let mut current = node.parent();
+    while let Some(ancestor) = current {
+        if ancestor.kind() == "trait_item" {
+            return true;
+        }
+        current = ancestor.parent();
+    }
+    false
+}
+
 /// True if `item` is publicly visible outside the crate, i.e. it carries a bare
 /// `pub` visibility modifier.
 ///
@@ -2058,6 +2076,31 @@ mod tests {
                 is_in_trait_impl(func),
                 expected,
                 "is_in_trait_impl mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_in_trait_definition_distinguishes_trait_def_from_free_and_inherent() {
+        // Anchor on the `Result<…>` return type (`generic_type`) — the same
+        // node the `rust-string-as-error` rule fires on.
+        let trait_def = "trait T { fn f() -> Result<(), String>; }";
+        let free_fn = "fn f() -> Result<(), String> { Ok(()) }";
+        let inherent_impl = "struct S; impl S { fn f() -> Result<(), String> { Ok(()) } }";
+
+        let cases = [
+            (trait_def, true),
+            (free_fn, false),
+            (inherent_impl, false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let ret = first_of_kind(tree.root_node(), "generic_type")
+                .expect("snippet should contain a generic_type");
+            assert_eq!(
+                is_in_trait_definition(ret),
+                expected,
+                "is_in_trait_definition mismatch for `{src}`"
             );
         }
     }
