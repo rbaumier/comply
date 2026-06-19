@@ -969,6 +969,41 @@ pub fn is_local_object_builder_binding(
     false
 }
 
+/// True when `id` resolves (via its binding) to an import whose source module
+/// is one of `modules`. Returns `false` for an unresolved reference or a binding
+/// that is not an import (e.g. a local function/param shadowing the name), so a
+/// same-named non-import call is never mistaken for the imported one.
+///
+/// Resolves the reference via `reference_id` → symbol → declaration node, then
+/// walks the declaration node and its ancestors for the enclosing
+/// `ImportDeclaration` and matches its `source.value` against `modules`.
+#[must_use]
+pub fn resolves_to_import_from(
+    id: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+    modules: &[&str],
+) -> bool {
+    use oxc_ast::AstKind;
+
+    let Some(ref_id) = id.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::ImportDeclaration(import) = kind {
+            return modules.contains(&import.source.value.as_str());
+        }
+    }
+    false
+}
+
 /// True when `expr` is a primitive literal — `string`, `number`, or `boolean` —
 /// or an identifier whose binding's initializer is directly such a literal
 /// (`const k = "abc"; … x === k`). A binding initialized from a call
