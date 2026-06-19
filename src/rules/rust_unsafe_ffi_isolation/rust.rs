@@ -14,6 +14,11 @@
 //! untouched: the `wasm_bindgen` proc macro rewrites the block into safe
 //! JavaScript interop with no C calling convention or raw-pointer ABI,
 //! and its items must stay in the surrounding module's scope.
+//!
+//! A block nested inside a function body (a `function_item` ancestor) is
+//! left untouched as well: it is already scoped to that one function, more
+//! isolated than any module-level `mod sys`, so only module-scope blocks
+//! are flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -127,6 +132,15 @@ crate::ast_check! { on ["foreign_mod_item"] => |node, source, ctx, diagnostics|
 
     let mut current = node.parent();
     while let Some(ancestor) = current {
+        // A function-scoped `extern` block is already isolated to one
+        // function — invisible outside it, more isolated than `mod sys`.
+        // Relocating it into a module would *decrease* isolation, so only
+        // module-scope blocks need the wrapper. The block's own foreign `fn`
+        // declarations are children, never ancestors, so this matches only an
+        // enclosing function body.
+        if ancestor.kind() == "function_item" {
+            return;
+        }
         if ancestor.kind() == "mod_item"
             && let Some(name) = ancestor.child_by_field_name("name")
             && let Ok(text) = name.utf8_text(source)
@@ -240,6 +254,32 @@ mod tests {
         // marker, not a foreign function interface.
         let src = "#[crate::declare_sql_function]\n\
                    extern \"SQL\" {\n    fn lower(x: VarChar) -> VarChar;\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_function_scoped_extern_block() {
+        // cxx `src/result.rs`: an `extern "C"` block inside a function body is
+        // already isolated to that one function and cannot leak further.
+        let src = "unsafe fn to_c_error() -> Result {\n    \
+                   extern \"C\" {\n        \
+                   fn error(ptr: *const u8, len: usize) -> NonNull<u8>;\n    }\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_extern_block_in_nested_function() {
+        // cxx `tests/test.rs`: an `extern "C"` block nested two functions deep.
+        let src = "fn outer() {\n    fn inner() {\n        \
+                   extern \"C\" {\n            fn cxx_run_test() -> *const i8;\n        }\n    }\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_extern_block_in_impl_method() {
+        // A method body is a function body: the block is function-scoped.
+        let src = "impl Foo {\n    fn m(&self) {\n        \
+                   extern \"C\" {\n            fn g();\n        }\n    }\n}";
         assert!(run(src).is_empty());
     }
 }
