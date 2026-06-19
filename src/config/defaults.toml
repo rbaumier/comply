@@ -179,6 +179,14 @@ min_words = 15
 shared_prefix_words = 8
 prefix_pct = 0.25
 
+# Cross-file exact-duplicate named functions. Flags a named function whose
+# identifier AND body (tokens, comments/whitespace ignored) are identical across
+# two or more files — the copy-paste that clone detection misses when the body
+# is shorter than its 100-token window. `min_body_tokens` keeps trivial bodies
+# (`noop`, one-line getters) out of scope.
+[rules.no-duplicate-function]
+min_body_tokens = 10
+
 # ---------------------------------------------------------------
 # Disabled by default — opt-in only.
 # ---------------------------------------------------------------
