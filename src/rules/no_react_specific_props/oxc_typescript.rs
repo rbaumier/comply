@@ -1,4 +1,8 @@
 //! no-react-specific-props oxc backend.
+//!
+//! Exempts test files: they deliberately feed React-style props into a
+//! non-React JSX runtime to assert prop normalization, so rewriting them to
+//! `class`/`for` would defeat the test.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -26,6 +30,13 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Test files deliberately use React-style props (`className`/`htmlFor`) as the
+        // INPUT to a non-React JSX runtime's prop-normalization checks; flagging them
+        // would defeat the test. Rewriting to `class`/`for` is wrong there.
+        if crate::rules::path_utils::is_extraneous_test_file(ctx.path) {
+            return;
+        }
+
         // React-only files use `className`/`htmlFor` correctly. Fire only in
         // non-React JSX (Solid, Qwik, Vue JSX, Preact, Stencil), where the
         // DOM-native attribute names are the supported form.
@@ -84,6 +95,10 @@ mod tests {
 
     fn run(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, src, "t.tsx")
+    }
+
+    fn run_at(src: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, path)
     }
 
     // --- Invalid (Biome fixtures), gated to non-React JSX via a solid-js import ---
@@ -147,5 +162,38 @@ mod tests {
         let src = "import { createSignal } from 'solid-js';\n\
                    const x = <label className=\"a\" htmlFor=\"b\">x</label>;";
         assert_eq!(run(src).len(), 2);
+    }
+
+    // --- Test-file exemption: deliberate React-prop assertions on JSX normalization ---
+
+    #[test]
+    fn skips_test_file_by_suffix() {
+        // `.test.tsx` outside any test directory (e.g. Hono's `src/jsx/base.test.tsx`).
+        let src = "import { createSignal } from 'solid-js';\n\
+                   const x = <div className=\"foo\" />;";
+        assert!(run_at(src, "jsx.test.tsx").is_empty());
+    }
+
+    #[test]
+    fn skips_test_file_in_test_dir() {
+        // Test directory (e.g. Hono's `runtime-tests/deno-jsx/jsx.test.tsx`).
+        let src = "import { createSignal } from 'solid-js';\n\
+                   const x = <div className=\"foo\" />;";
+        assert!(run_at(src, "runtime-tests/deno-jsx/jsx.test.tsx").is_empty());
+    }
+
+    #[test]
+    fn skips_test_file_with_hono_pragma() {
+        let src = "/** @jsxImportSource hono/jsx */\n\
+                   const x = <div className=\"foo\" />;";
+        assert!(run_at(src, "base.test.tsx").is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_test_file() {
+        // Same non-React JSX + `className`, but in a non-test source file: must flag.
+        let src = "import { createSignal } from 'solid-js';\n\
+                   const x = <div className=\"foo\" />;";
+        assert_eq!(run_at(src, "src/app.tsx").len(), 1);
     }
 }
