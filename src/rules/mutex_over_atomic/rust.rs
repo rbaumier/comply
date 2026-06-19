@@ -1,5 +1,5 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::{is_in_test_context, is_suppressed_by_clippy_allow};
 
 const ATOMIC_TYPES: &[(&str, &str)] = &[
     ("bool", "AtomicBool"),
@@ -31,6 +31,14 @@ crate::ast_check! { on ["type_identifier"] prefilter = ["Mutex"] => |node, sourc
     // latch pattern: `Condvar::wait` takes a `MutexGuard`, so the `Mutex` is
     // structurally required and has no atomic equivalent. Skip it.
     if has_condvar_sibling_field(parent, source) {
+        return;
+    }
+
+    // `#[allow(clippy::mutex_atomic)]` / `#[expect(...)]` on the field or its
+    // enclosing struct is the author explicitly overriding the equivalent
+    // clippy lint (e.g. the value is guarded together with sibling fields under
+    // one lock). Honor that suppression like the other clippy-mirroring rules.
+    if is_suppressed_by_clippy_allow(node, &["mutex_atomic"], source) {
         return;
     }
 
@@ -195,5 +203,33 @@ mod tests {
     fn allows_mutex_primitive_in_cfg_test_module() {
         let src = "#[cfg(test)]\nmod tests {\n    type TestT = Arc<Mutex<u32>>;\n}";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_field_with_clippy_mutex_atomic_allow() {
+        // winit FP (#4504): a field-level `#[allow(clippy::mutex_atomic)]`.
+        let src = "struct SharedStateX11 {\n    #[allow(clippy::mutex_atomic)]\n    cursor_visible: Mutex<bool>,\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_struct_with_clippy_mutex_atomic_allow() {
+        let src = "#[allow(clippy::mutex_atomic)]\nstruct S {\n    x: Mutex<bool>,\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_field_with_clippy_mutex_atomic_expect() {
+        let src = "struct S {\n    #[expect(clippy::mutex_atomic)]\n    x: Mutex<bool>,\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_field_with_unrelated_clippy_allow() {
+        // A *different* clippy lint allow must not suppress `mutex_atomic`.
+        let src = "struct S {\n    #[allow(clippy::other_lint)]\n    x: Mutex<bool>,\n}";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("AtomicBool"));
     }
 }

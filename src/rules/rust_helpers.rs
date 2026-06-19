@@ -374,8 +374,10 @@ fn attr_marks_test(text: &str) -> bool {
 /// `#[expect(clippy::<lint>)]` naming one of `lints` (each given WITHOUT the
 /// `clippy::` prefix, e.g. `"result_unit_err"`). Walks the same ancestry as
 /// `is_in_test_context`: crate-root inner attributes (`#![allow(...)]`) plus
-/// outer attributes on the enclosing function / mod / impl. Lets a comply rule
-/// that mirrors a clippy lint honor the author's in-source suppression of it.
+/// outer attributes on an enclosing function / mod / impl / struct /
+/// field. Lets a comply rule that mirrors a clippy lint honor the author's
+/// in-source suppression of it — including a struct-level or field-level
+/// `#[allow]` covering a type written in that struct's field.
 pub fn is_suppressed_by_clippy_allow(node: Node, lints: &[&str], source: &[u8]) -> bool {
     // Crate-root inner attributes: `#![allow(clippy::X)]`.
     let mut root = node;
@@ -391,11 +393,17 @@ pub fn is_suppressed_by_clippy_allow(node: Node, lints: &[&str], source: &[u8]) 
             return true;
         }
     }
-    // Outer attributes on an enclosing function / mod / impl.
+    // Outer attributes on an enclosing function / mod / impl / struct / field.
+    // For each, the `#[allow(...)]` parses as a preceding `attribute_item`
+    // sibling (a field's attribute is a sibling inside the
+    // `field_declaration_list`, not a child), so the same preceding-sibling
+    // scan covers all of them.
     let mut cur = node;
     while let Some(parent) = cur.parent() {
-        if matches!(parent.kind(), "function_item" | "mod_item" | "impl_item")
-            && item_has_clippy_allow(parent, lints, source)
+        if matches!(
+            parent.kind(),
+            "function_item" | "mod_item" | "impl_item" | "struct_item" | "field_declaration"
+        ) && item_has_clippy_allow(parent, lints, source)
         {
             return true;
         }
@@ -2299,6 +2307,44 @@ mod tests {
                 .expect("snippet should contain a generic_type");
             assert_eq!(
                 is_suppressed_by_clippy_allow(node, &["result_unit_err"], src.as_bytes()),
+                expected,
+                "is_suppressed_by_clippy_allow mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_suppressed_by_clippy_allow_honors_struct_and_field_scopes() {
+        let test_cases = [
+            // Field-level `#[allow]` over the field's own type suppresses.
+            (
+                "struct S { #[allow(clippy::mutex_atomic)] x: Mutex<bool> }",
+                true,
+            ),
+            // Struct-level `#[allow]` covers a type in one of its fields.
+            (
+                "#[allow(clippy::mutex_atomic)]\nstruct S { x: Mutex<bool> }",
+                true,
+            ),
+            // The `#[expect(...)]` form on the field suppresses too.
+            (
+                "struct S { #[expect(clippy::mutex_atomic)] x: Mutex<bool> }",
+                true,
+            ),
+            // A different clippy lint on the field does not suppress.
+            (
+                "struct S { #[allow(clippy::other_lint)] x: Mutex<bool> }",
+                false,
+            ),
+            // No attribute at all.
+            ("struct S { x: Mutex<bool> }", false),
+        ];
+        for (src, expected) in test_cases {
+            let tree = parse(src);
+            let node = first_of_kind(tree.root_node(), "generic_type")
+                .expect("snippet should contain a generic_type");
+            assert_eq!(
+                is_suppressed_by_clippy_allow(node, &["mutex_atomic"], src.as_bytes()),
                 expected,
                 "is_suppressed_by_clippy_allow mismatch for `{src}`"
             );
