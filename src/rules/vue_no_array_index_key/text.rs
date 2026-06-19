@@ -11,10 +11,16 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::vue_template_helpers::{extract_elements, is_vue_file};
 
 /// A destructured `v-for` variable whose name marks it as the numeric loop
-/// index (`(item, index)` / `(value, key, index)`), as opposed to an object
-/// property key (`(value, key)`), which is a stable `:key`.
+/// index (`(item, index)` / `(value, key, index)` / `(row, rowIndex)`), as
+/// opposed to an object property key (`(value, key)`), which is a stable `:key`.
+///
+/// The source-type (array vs object) is unknowable from text, so the index is
+/// identified by name shape: the bare loop counters `i`/`j`/`n`, or any name
+/// containing `index`/`idx` (`rowIndex`, `idx2`, `_idx`). Object keys
+/// (`key`/`name`/`id`/...) never match, so they are not flagged.
 fn is_loop_index_name(name: &str) -> bool {
-    matches!(name, "i" | "j" | "n" | "index" | "idx" | "_index" | "_idx")
+    let name = name.trim_start_matches('_').to_ascii_lowercase();
+    name == "i" || name == "j" || name == "n" || name.contains("index") || name.contains("idx")
 }
 
 #[derive(Debug)]
@@ -134,6 +140,18 @@ mod tests {
     #[test]
     fn flags_array_index_named_index() {
         let source = "<template>\n  <div v-for=\"(item, index) in items\" :key=\"index\">{{ item }}</div>\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_descriptive_index_name() {
+        let source = "<template>\n  <tr v-for=\"(row, rowIndex) in rows\" :key=\"rowIndex\">{{ row }}</tr>\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_suffixed_index_name() {
+        let source = "<template>\n  <div v-for=\"(item, idx2) in items\" :key=\"idx2\">{{ item }}</div>\n</template>";
         assert_eq!(run(source).len(), 1);
     }
 }
