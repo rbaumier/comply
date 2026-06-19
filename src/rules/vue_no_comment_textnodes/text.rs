@@ -21,6 +21,7 @@ impl TextCheck for Check {
         let lines_before = ctx.source[..template_offset].matches('\n').count();
 
         let mut diagnostics = Vec::new();
+        let mut prev_nonempty: &str = "";
 
         for (i, line) in template.lines().enumerate() {
             let trimmed = line.trim();
@@ -29,18 +30,27 @@ impl TextCheck for Check {
             if (trimmed.starts_with("//") || trimmed.starts_with("/*"))
                 && !trimmed.starts_with("///")
             {
-                // Skip if inside an HTML comment context or a <script> tag.
-                // Simple heuristic: just flag bare comment-like text.
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: lines_before + 1 + i,
-                    column: 1,
-                    rule_id: "vue-no-comment-textnodes".into(),
-                    message: "JS comment syntax in template renders as text — use `<!-- -->`."
-                        .into(),
-                    severity: Severity::Warning,
-                    span: None,
-                });
+                // A comment sitting inside a multi-line attribute-value expression
+                // (`:style="{`, `:class="cn("`, `@click="() => {`) is a real JS
+                // comment, not a rendered text node. Such a line always follows an
+                // open-expression / continuation char, whereas a text-node comment
+                // follows template markup (its previous line ends with `>` or text).
+                let in_expression = prev_nonempty.ends_with(['{', '(', '[', ',']);
+                if !in_expression {
+                    diagnostics.push(Diagnostic {
+                        path: std::sync::Arc::clone(&ctx.path_arc),
+                        line: lines_before + 1 + i,
+                        column: 1,
+                        rule_id: "vue-no-comment-textnodes".into(),
+                        message: "JS comment syntax in template renders as text — use `<!-- -->`."
+                            .into(),
+                        severity: Severity::Warning,
+                        span: None,
+                    });
+                }
+            }
+            if !trimmed.is_empty() {
+                prev_nonempty = trimmed;
             }
         }
         diagnostics
@@ -75,5 +85,29 @@ mod tests {
             "// comment in template",
         ));
         assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_comment_in_event_handler_arrow_body() {
+        let src = "<template>\n  <button @mousedown=\"(e) => {\n    // only left button\n    handle();\n  }\" />\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_comment_in_object_binding() {
+        let src = "<template>\n  <div :style=\"{\n    // prevent interaction\n    pointerEvents: 'none',\n  }\" />\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_comment_after_trailing_comma_in_call() {
+        let src = "<template>\n  <div :class=\"cn(\n    base,\n    // Selected\n    'x',\n  )\" />\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_block_comment_text_node_after_markup() {
+        let src = "<template>\n  <span>hi</span>\n  /* stray */\n</template>";
+        assert_eq!(run(src).len(), 1);
     }
 }
