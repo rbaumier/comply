@@ -167,6 +167,8 @@ pub fn lint_files(
         });
     }
 
+    all.retain(|d| keep_delegated_diagnostic(d.rule_id.as_ref(), d.path.as_ref()));
+
     Ok(all)
 }
 
@@ -179,6 +181,39 @@ fn changed_path_set(files: &[&SourceFile]) -> FxHashSet<PathBuf> {
 
 fn is_require_import_rule(key: &str) -> bool {
     matches!(key, "typescript/no-require-imports" | "no-require-imports")
+}
+
+/// The delegated eslint-plugin-jest rule ids (see `rules::delegated::jest`).
+/// oxlint runs them on every TS/JS file, but they only make sense on files
+/// the test runner executes.
+fn is_jest_delegated_rule(rule_id: &str) -> bool {
+    matches!(rule_id, "jest-no-export" | "jest-consistent-test-it")
+}
+
+/// True for a file the jest/vitest runner actually executes: its name carries a
+/// `.test.`/`.spec.` infix (case-insensitive), e.g. `foo.test.ts`,
+/// `foo.spec.tsx`. A helper module that merely re-exports a parametrised
+/// `it`/`test` wrapper (`test-helpers/tx-test.ts`) has no such infix and is not
+/// a test file.
+fn is_jest_test_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| {
+            let name = name.to_ascii_lowercase();
+            name.contains(".test.") || name.contains(".spec.")
+        })
+}
+
+/// eslint-plugin-jest rules are only meaningful on actual jest/vitest test
+/// files (executed by the runner), not on helper modules that re-export a
+/// parametrised `it`/`test` wrapper. A delegated `jest-*` diagnostic on a
+/// non-test file (e.g. a `test-helpers/tx-test.ts` wrapper) is a false
+/// positive, so keep jest diagnostics only on test files.
+fn keep_delegated_diagnostic(rule_id: &str, path: &Path) -> bool {
+    if is_jest_delegated_rule(rule_id) && !is_jest_test_file(path) {
+        return false;
+    }
+    true
 }
 
 fn es_module_files<'a>(files: &[&'a SourceFile], project: &ProjectCtx) -> Vec<&'a SourceFile> {
@@ -460,6 +495,40 @@ mod tests {
         let json = br#"{ "diagnostics": [] }"#;
         let result = parse_json_bytes(json, b"", &remap).expect("must parse");
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn jest_diagnostics_dropped_on_non_test_files() {
+        // The `tx-test.ts` wrapper helper and an ordinary source file are not
+        // executed by the runner, so jest diagnostics on them are FPs.
+        assert!(!keep_delegated_diagnostic(
+            "jest-no-export",
+            Path::new("src/api/test-helpers/tx-test.ts")
+        ));
+        assert!(!keep_delegated_diagnostic(
+            "jest-consistent-test-it",
+            Path::new("src/foo.ts")
+        ));
+    }
+
+    #[test]
+    fn jest_diagnostics_kept_on_real_test_files() {
+        assert!(keep_delegated_diagnostic(
+            "jest-no-export",
+            Path::new("src/foo.test.ts")
+        ));
+        assert!(keep_delegated_diagnostic(
+            "jest-consistent-test-it",
+            Path::new("src/foo.spec.tsx")
+        ));
+    }
+
+    #[test]
+    fn non_jest_delegated_diagnostics_untouched_on_non_test_files() {
+        assert!(keep_delegated_diagnostic(
+            "no-floating-promises",
+            Path::new("src/foo.ts")
+        ));
     }
 
     #[test]
