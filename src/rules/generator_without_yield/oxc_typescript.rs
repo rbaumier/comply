@@ -156,11 +156,21 @@ impl OxcCheck for Check {
         if !func.generator {
             return;
         }
-        // `*.test-d.{ts,tsx}` are tsd / `expect-type` type-declaration tests:
-        // an empty `function* () {}` there asserts the inferred generator type
-        // shape (a resolver that yields nothing), checked by `tsc --noEmit` and
-        // never executed, so a missing `yield` is the contract under test.
-        if crate::rules::path_utils::has_test_d_infix(ctx.path) {
+        // Test, spec, and benchmark files use empty generators as fixtures: a
+        // `function* () {}` value there only has to BE a generator function (the
+        // test asserts its type/identity), it is never meant to produce a
+        // sequence, so the absent `yield` is the point, not a forgotten one.
+        // `*.test-d.{ts,tsx}` tsd / `expect-type` type-declaration tests are
+        // covered specifically because they live outside the runner-test naming
+        // (`tsc --noEmit` checks them, they are never executed). Such yield-less
+        // generators never ship to production, so a file-level exemption carries
+        // no false-negative risk — and benchmark/spec fixtures appear at file
+        // top level, not only inside a wrapper call, so only a file-level check
+        // catches them.
+        if crate::rules::path_utils::has_test_d_infix(ctx.path)
+            || crate::rules::path_utils::is_extraneous_test_file(ctx.path)
+            || ctx.file.in_benchmark_dir()
+        {
             return;
         }
         if has_yield_in_body(node, semantic) {
@@ -251,6 +261,39 @@ it('supports returning undefined from generator resolvers', () => {
     #[test]
     fn allows_empty_generator_in_test_d_tsx() {
         assert!(run_at("function* gen() {}", "src/Component.test-d.tsx").is_empty());
+    }
+
+    // Regression for issue #4432: an empty generator used as a fixture value in a
+    // `.spec.ts` test only has to BE a generator (the test asserts its identity),
+    // so the absent `yield` is the point, not a forgotten one.
+    #[test]
+    fn allows_empty_generator_fixture_in_spec_file() {
+        assert!(
+            run_at(
+                "it('x', () => { const genFunc = function* () {}; });",
+                "src/predicate/isFunction.spec.ts",
+            )
+            .is_empty(),
+            "empty generator fixture in a .spec.ts file must not be flagged"
+        );
+    }
+
+    // Regression for issue #4432: a `.bench.ts` benchmark file uses empty
+    // generators as fixture data, sometimes at top level (not inside a
+    // `bench(...)` wrapper). `in_benchmark_dir` is populated from the `.bench.`
+    // infix, so this must run through `run_rule_gated` (which builds a real
+    // `FileCtx`); `run_at` would not set it.
+    #[test]
+    fn allows_empty_generator_fixture_in_bench_file() {
+        let d = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            "isJSONObjectToolkit({ nested: { a: function* () {} } });",
+            "benchmarks/performance/isJSONObject.bench.ts",
+        );
+        assert!(
+            d.is_empty(),
+            "empty generator fixture in a .bench.ts file must not be flagged"
+        );
     }
 
     // Regression for issue #3362: an empty generator assigned to `[Symbol.iterator]`
