@@ -53,11 +53,17 @@ fn is_composable_name(stem: &str) -> bool {
 }
 
 /// Returns `true` when `stem` is exactly a BCP 47 / CLDR locale tag of the form
-/// `<language>_<COUNTRY>`: 2-3 lowercase ASCII letters (ISO 639 language), a
-/// single underscore, then 2-3 uppercase ASCII letters (ISO 3166 region). The
-/// underscore separator is mandated by intl conventions, so locale files such
-/// as `ar_EG.ts`, `zh_CN.ts`, or `en_US.ts` cannot adopt kebab-case.
-fn is_locale_tag(stem: &str) -> bool {
+/// `<language>_<region>`: 2-3 lowercase ASCII letters (ISO 639 language), a
+/// single underscore, then 2-3 ASCII letters (ISO 3166 region). The underscore
+/// separator is mandated by intl conventions, so locale files such as `ar_EG.ts`,
+/// `zh_CN.ts`, or `en_US.ts` cannot adopt kebab-case.
+///
+/// An UPPERCASE region (`zh_CN`) is accepted anywhere — it never collides with a
+/// lowercase snake_case source filename. A lowercase region (`en_gb`, `zh_tw`) is
+/// accepted only when `in_locale_dir` is true: outside a locale/i18n directory it
+/// is indistinguishable from an ordinary snake_case filename whose first segment
+/// happens to be a 2-letter ISO 639 code (`to_str`, `id_map`, `de_dup`).
+fn is_locale_tag(stem: &str, in_locale_dir: bool) -> bool {
     let Some((language, country)) = stem.split_once('_') else {
         return false;
     };
@@ -71,7 +77,9 @@ fn is_locale_tag(stem: &str) -> bool {
                 }
             })
     };
-    is_iso_segment(language, false) && is_iso_segment(country, true)
+    is_iso_segment(language, false)
+        && (is_iso_segment(country, true)
+            || (in_locale_dir && is_iso_segment(country, false)))
 }
 
 pub(crate) fn is_pascal_case(stem: &str) -> bool {
@@ -206,6 +214,19 @@ fn is_test_context_path(path: &std::path::Path) -> bool {
         .any(|c| c.as_os_str() == std::ffi::OsStr::new("regression"))
 }
 
+/// Returns `true` when any ancestor segment of `path` is a locale/i18n
+/// directory. Gates the lowercase-region locale-tag form: a stem like `en_gb`
+/// is a valid BCP 47 tag only when it lives in such a directory, otherwise it
+/// is indistinguishable from an ordinary snake_case filename (`to_str`, `id_map`).
+fn is_in_locale_dir(path: &std::path::Path) -> bool {
+    path.components().any(|c| {
+        matches!(
+            c.as_os_str().to_str(),
+            Some("locale" | "locales" | "i18n" | "lang" | "langs" | "translations" | "messages")
+        )
+    })
+}
+
 fn is_ts_or_jsx_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
     s.ends_with(".ts")
@@ -278,7 +299,7 @@ impl TextCheck for Check {
         if is_composable_name(convention_stem) {
             return Vec::new();
         }
-        if is_locale_tag(convention_stem) {
+        if is_locale_tag(convention_stem, is_in_locale_dir(ctx.path)) {
             return Vec::new();
         }
         if is_ts_or_jsx_file(ctx.path)
@@ -574,13 +595,46 @@ mod tests {
     fn flags_camel_concat_not_locale_issue_1994() {
         // `arEG` has no underscore separator; camelCase allowance handles it,
         // so the behavior is unchanged (no diagnostic) — but NOT via locale.
-        assert!(!is_locale_tag("arEG"));
+        assert!(!is_locale_tag("arEG", false));
     }
 
     #[test]
     fn flags_screaming_snake_not_locale_issue_1994() {
         assert_eq!(run("src/API_KEYS.ts").len(), 1);
-        assert!(!is_locale_tag("API_KEYS"));
+        assert!(!is_locale_tag("API_KEYS", false));
+    }
+
+    // Regression for #3294: BCP 47 locale tags with a LOWERCASE region segment
+    // (`en_gb`, `zh_tw`) are valid and used by Nuxt UI under `locale/`. They are
+    // accepted only inside a locale/i18n directory.
+    #[test]
+    fn allows_lowercase_region_locale_tag_in_locale_dir_issue_3294() {
+        assert!(run("src/runtime/locale/en_gb.ts").is_empty());
+        assert!(run("src/runtime/locale/zh_tw.ts").is_empty());
+    }
+
+    // Load-bearing FN guard for #3294: a lowercase `xx_yy` stem that is NOT under
+    // a locale directory is an ordinary snake_case filename (here `to_str`, with
+    // `to` = Tongan) and must STILL be flagged. This fails if the lowercase-region
+    // form is accepted globally instead of being gated on the locale dir.
+    #[test]
+    fn flags_lowercase_region_snake_case_outside_locale_dir_issue_3294() {
+        assert_eq!(run("src/utils/to_str.ts").len(), 1);
+        assert_eq!(run("src/runtime/id_map.ts").len(), 1);
+    }
+
+    // Guard for #3294: the lowercase-region form requires the locale dir — the
+    // same `en_gb` stem directly under `src/` (no locale ancestor) still fires.
+    #[test]
+    fn flags_lowercase_region_locale_tag_outside_locale_dir_issue_3294() {
+        assert_eq!(run("src/en_gb.ts").len(), 1);
+    }
+
+    // Guard for #3294: the UPPERCASE-region form stays global — it is collision-
+    // safe against snake_case source and is accepted with no locale dir.
+    #[test]
+    fn allows_uppercase_region_locale_tag_anywhere_issue_3294() {
+        assert!(run("src/zh_CN.ts").is_empty());
     }
 
     // Regression for #1758: Next.js Pages Router dynamic-segment and numeric
@@ -629,7 +683,7 @@ mod tests {
     #[test]
     fn flags_wrong_case_locale_shape_issue_1994() {
         // `Ar_eg` inverts the required case pattern, so it is not a locale tag.
-        assert!(!is_locale_tag("Ar_eg"));
+        assert!(!is_locale_tag("Ar_eg", true));
         assert_eq!(run("src/Ar_eg.ts").len(), 1);
     }
 
