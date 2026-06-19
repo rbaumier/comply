@@ -13,8 +13,11 @@
 //! consumers), items with `#[doc(hidden)]`, items carrying
 //! `#[allow(missing_debug_implementations)]` or
 //! `#[expect(missing_debug_implementations)]` (the rustc lint this rule
-//! mirrors — the author has explicitly opted out), and types with
-//! raw-pointer fields.
+//! mirrors — the author has explicitly opted out), types with
+//! raw-pointer fields, and types that store a closure/function in a field
+//! whose generic type parameter carries an `Fn`/`FnMut`/`FnOnce` bound (the
+//! combinator pattern in poem/tower/axum — closures don't implement `Debug`,
+//! so neither a derive nor a `Debug`-bounded field is viable).
 //!
 //! We accept manual impls because libraries with closure or PhantomData
 //! fields legitimately can't derive — they hand-roll the impl. The manual
@@ -83,6 +86,14 @@ impl AstCheck for Check {
         let Ok(name) = name_node.utf8_text(source_bytes) else {
             return;
         };
+        // A field holding a closure/function (its type is a generic param with
+        // an `Fn`/`FnMut`/`FnOnce` bound) can't derive `Debug`: closures don't
+        // implement it, and the bound usually lives on an `impl` block, not the
+        // struct itself — so this scans both. Same "can't derive" class as a
+        // raw-pointer field.
+        if holds_closure_typed_field(node, name, source_bytes) {
+            return;
+        }
         if has_debug_derive(node, source_bytes) {
             return;
         }
@@ -360,6 +371,222 @@ fn has_raw_pointer_field(item: tree_sitter::Node) -> bool {
             }
         }
     }
+}
+
+/// True when `struct_node` stores a field whose type is one of the struct's own
+/// generic type parameters, and that parameter carries an `Fn`/`FnMut`/`FnOnce`
+/// bound somewhere reachable. Such a field holds a closure/function, which never
+/// implements `Debug`, so the type genuinely can't derive it.
+///
+/// The closure bound is searched in two places, because the combinator pattern
+/// (`pub struct Map<E, F> { inner: E, f: F }` with the `Fn` bound on a separate
+/// `impl ... for Map<E, F> where F: Fn(...) -> ...` block) puts it on the impl,
+/// not the struct:
+///   a. the struct's own inline type-parameter bounds and struct-level
+///      `where_clause`, and
+///   b. every `impl_item` in the file whose target base type equals `name`
+///      (its inline impl-parameter bounds and `where_clause`).
+///
+/// In tree-sitter-rust, `F: Fn(R) -> Fut` is a `where_predicate`
+/// (`left: type_identifier` `F`, `bounds: trait_bounds`) and the `Fn(R) -> Fut`
+/// itself is a `function_type` whose `trait` field is `Fn`/`FnMut`/`FnOnce`
+/// (bare `type_identifier` or the final segment of a `scoped_type_identifier`
+/// like `std::ops::Fn`). The same `function_type` shape appears in inline
+/// type-parameter bounds (`F: Fn() -> i32`).
+fn holds_closure_typed_field(struct_node: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    let field_param_names = field_typed_generic_params(struct_node, source);
+    if field_param_names.is_empty() {
+        return false;
+    }
+
+    // (a) The struct's own generic-parameter bounds and struct-level where clause.
+    if let Some(type_params) = struct_node.child_by_field_name("type_parameters")
+        && type_parameters_bind_closure(type_params, &field_param_names, source)
+    {
+        return true;
+    }
+    if let Some(where_clause) = child_of_kind(struct_node, "where_clause")
+        && where_clause_binds_closure(where_clause, &field_param_names, source)
+    {
+        return true;
+    }
+
+    // (b) Every `impl ... for <name>` block in the file.
+    let mut root = struct_node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    let mut cursor = root.walk();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "impl_item"
+            && let Some(target) = n.child_by_field_name("type")
+            && base_type_name(target, source) == Some(name)
+        {
+            if let Some(type_params) = n.child_by_field_name("type_parameters")
+                && type_parameters_bind_closure(type_params, &field_param_names, source)
+            {
+                return true;
+            }
+            if let Some(where_clause) = child_of_kind(n, "where_clause")
+                && where_clause_binds_closure(where_clause, &field_param_names, source)
+            {
+                return true;
+            }
+        }
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
+/// The struct's declared generic type parameters that are used directly as the
+/// type of a field — i.e. a `field_declaration` whose `type` is a bare
+/// `type_identifier` equal to a declared parameter name (e.g. `f: F`). Only
+/// these can be closure-typed, so they are the candidates we test for an `Fn`
+/// bound. Lifetimes and const generics are skipped (only `type_identifier`
+/// parameters are collected).
+fn field_typed_generic_params<'a>(struct_node: tree_sitter::Node, source: &'a [u8]) -> Vec<&'a str> {
+    let declared = declared_type_param_names(struct_node, source);
+    if declared.is_empty() {
+        return Vec::new();
+    }
+    let Some(body) = struct_node.child_by_field_name("body") else {
+        return Vec::new();
+    };
+    let mut cursor = body.walk();
+    let mut params = Vec::new();
+    for field in body.children(&mut cursor) {
+        if field.kind() != "field_declaration" {
+            continue;
+        }
+        if let Some(ty) = field.child_by_field_name("type")
+            && ty.kind() == "type_identifier"
+            && let Ok(text) = ty.utf8_text(source)
+            && declared.contains(&text)
+            && !params.contains(&text)
+        {
+            params.push(text);
+        }
+    }
+    params
+}
+
+/// Names of the `type_identifier` generic parameters declared on the struct's
+/// `type_parameters` node (skipping lifetimes and const generics).
+fn declared_type_param_names<'a>(struct_node: tree_sitter::Node, source: &'a [u8]) -> Vec<&'a str> {
+    let Some(type_params) = struct_node.child_by_field_name("type_parameters") else {
+        return Vec::new();
+    };
+    let mut cursor = type_params.walk();
+    let mut names = Vec::new();
+    for param in type_params.children(&mut cursor) {
+        if param.kind() != "type_parameter" {
+            continue;
+        }
+        if let Some(name_node) = param.child_by_field_name("name")
+            && name_node.kind() == "type_identifier"
+            && let Ok(text) = name_node.utf8_text(source)
+        {
+            names.push(text);
+        }
+    }
+    names
+}
+
+/// True if any inline `type_parameter` bound binds one of `field_params` to an
+/// `Fn`/`FnMut`/`FnOnce` trait (`<F: Fn() -> i32>`). A `type_parameter`'s
+/// `name` is the bound left-hand side, and its `bounds: trait_bounds` holds the
+/// `function_type` nodes.
+fn type_parameters_bind_closure(
+    type_params: tree_sitter::Node,
+    field_params: &[&str],
+    source: &[u8],
+) -> bool {
+    let mut cursor = type_params.walk();
+    for param in type_params.children(&mut cursor) {
+        if param.kind() != "type_parameter" {
+            continue;
+        }
+        let Some(name_node) = param.child_by_field_name("name") else {
+            continue;
+        };
+        let Ok(lhs) = name_node.utf8_text(source) else {
+            continue;
+        };
+        if !field_params.contains(&lhs) {
+            continue;
+        }
+        if let Some(bounds) = param.child_by_field_name("bounds")
+            && trait_bounds_have_closure(bounds, source)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// True if any `where_predicate` in `where_clause` constrains one of
+/// `field_params` to an `Fn`/`FnMut`/`FnOnce` trait. A `where_predicate` has a
+/// `left` type and a `bounds: trait_bounds`; the predicate matches only when its
+/// `left` is a bare `type_identifier` equal to a field parameter.
+fn where_clause_binds_closure(
+    where_clause: tree_sitter::Node,
+    field_params: &[&str],
+    source: &[u8],
+) -> bool {
+    let mut cursor = where_clause.walk();
+    for predicate in where_clause.children(&mut cursor) {
+        if predicate.kind() != "where_predicate" {
+            continue;
+        }
+        let Some(left) = predicate.child_by_field_name("left") else {
+            continue;
+        };
+        if left.kind() != "type_identifier" {
+            continue;
+        }
+        let Ok(lhs) = left.utf8_text(source) else {
+            continue;
+        };
+        if !field_params.contains(&lhs) {
+            continue;
+        }
+        if let Some(bounds) = predicate.child_by_field_name("bounds")
+            && trait_bounds_have_closure(bounds, source)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// True if a `trait_bounds` list contains a `function_type` bound whose trait is
+/// `Fn`/`FnMut`/`FnOnce`. `Fn(R) -> Fut`, `FnMut()`, `FnOnce()` each parse as a
+/// `function_type` (not a `trait_bound`), with a `trait` field that is a bare
+/// `type_identifier` or a `scoped_type_identifier` (`std::ops::Fn`) whose final
+/// segment is the trait name.
+fn trait_bounds_have_closure(bounds: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = bounds.walk();
+    bounds.children(&mut cursor).any(|bound| {
+        bound.kind() == "function_type"
+            && bound
+                .child_by_field_name("trait")
+                .and_then(|t| base_type_name(t, source))
+                .is_some_and(is_closure_trait)
+    })
+}
+
+fn is_closure_trait(name: &str) -> bool {
+    matches!(name, "Fn" | "FnMut" | "FnOnce")
+}
+
+/// First direct child of `node` of the given `kind` (used for `where_clause`,
+/// which is a non-field named child of both `struct_item` and `impl_item`).
+fn child_of_kind<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
+    let mut cursor = node.walk();
+    node.children(&mut cursor).find(|c| c.kind() == kind)
 }
 
 #[cfg(test)]
@@ -693,6 +920,74 @@ name = "normal_lib"
     #[test]
     fn still_flags_when_no_debug_impl_at_all() {
         assert_eq!(run_on("pub struct NoDebug { x: u32 }").len(), 1);
+    }
+
+    /// Closes #4440 (issue repro): a poem-style combinator struct holds a
+    /// closure in `f: F`, with the `Fn` bound on the `impl` block's `where`
+    /// clause (not the struct). Closures don't implement `Debug`, so the type
+    /// can't derive it and must not be flagged.
+    #[test]
+    fn suppresses_combinator_with_fn_bound_on_impl() {
+        let source = "pub struct Map<E, F> {\n    inner: E,\n    f: F,\n}\n\
+                      impl<E, F, Fut, R, R2> Endpoint for Map<E, F>\n\
+                      where\n    F: Fn(R) -> Fut + Send + Sync,\n{\n}";
+        assert!(
+            run_on(source).is_empty(),
+            "a combinator struct with an `Fn`-bound closure field must not be flagged"
+        );
+    }
+
+    /// The `FnMut`/`FnOnce` variants of the impl-`where` closure bound are the
+    /// same case and must also be suppressed.
+    #[test]
+    fn suppresses_combinator_with_fnmut_and_fnonce_bound_on_impl() {
+        let fnmut = "pub struct After<E, F> {\n    inner: E,\n    f: F,\n}\n\
+                     impl<E, F> Endpoint for After<E, F>\n\
+                     where\n    F: FnMut() -> i32,\n{\n}";
+        assert!(
+            run_on(fnmut).is_empty(),
+            "an `FnMut`-bound closure field must not be flagged"
+        );
+        let fnonce = "pub struct AndThen<E, F> {\n    inner: E,\n    f: F,\n}\n\
+                      impl<E, F> Endpoint for AndThen<E, F>\n\
+                      where\n    F: FnOnce() -> i32,\n{\n}";
+        assert!(
+            run_on(fnonce).is_empty(),
+            "an `FnOnce`-bound closure field must not be flagged"
+        );
+    }
+
+    /// The bound can also sit on the struct itself (`<F: Fn() -> i32>`), as an
+    /// inline type-parameter bound — that case is suppressed too.
+    #[test]
+    fn suppresses_struct_level_inline_fn_bound() {
+        assert!(
+            run_on("pub struct S<F: Fn() -> i32> { f: F }").is_empty(),
+            "an inline struct-level `Fn` bound on the field's param must not be flagged"
+        );
+    }
+
+    /// Load-bearing negative: a plain generic data wrapper with NO `Fn` bound
+    /// anywhere can and should derive `Debug` — the closure guard must not
+    /// over-suppress it.
+    #[test]
+    fn still_flags_plain_generic_wrapper() {
+        assert_eq!(
+            run_on("pub struct Wrapper<T> { value: T }").len(),
+            1,
+            "a plain generic data wrapper (no Fn bound) must still be flagged"
+        );
+    }
+
+    /// Load-bearing negative: a plain non-generic struct is unaffected by the
+    /// closure guard and must still be flagged.
+    #[test]
+    fn still_flags_plain_non_generic_struct() {
+        assert_eq!(
+            run_on("pub struct Foo { x: i32 }").len(),
+            1,
+            "a plain non-generic struct must still be flagged"
+        );
     }
 
     #[test]
