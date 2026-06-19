@@ -4,7 +4,11 @@
 //! type is an unforced local choice — free-function return types, inherent-impl
 //! methods, struct fields, type aliases. Suppressed in trait method signatures
 //! (trait definitions and trait impls), where the error type is a fixed public
-//! API contract the author can't change without breaking callers.
+//! API contract the author can't change without breaking callers, and in free
+//! functions wired as a clap custom `value_parser` (`#[arg(value_parser = …)]`
+//! or `#[clap(value_parser = …)]`), where clap requires `fn(&str) -> Result<T, E>`
+//! with `E: Into<Box<dyn Error + Send + Sync>>` and consumes the error internally,
+//! so `String` is the idiomatic error and a structured error adds no value.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::result_error_type;
@@ -28,6 +32,9 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     {
         return;
     }
+    if is_in_clap_value_parser_fn(node, source) {
+        return;
+    }
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -43,6 +50,55 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     });
 }
 
+/// True when `source` wires `fn_name` as a clap value parser via a
+/// `value_parser = <fn_name>` attribute argument (`#[arg(value_parser = …)]`
+/// or `#[clap(value_parser = …)]`). Tolerates surrounding whitespace and
+/// requires `fn_name` to match as a whole identifier (so `value_parser =
+/// parse_dir_2` does not match `parse_dir`).
+fn source_wires_value_parser(source: &str, fn_name: &str) -> bool {
+    for (idx, _) in source.match_indices("value_parser") {
+        let rest = source[idx + "value_parser".len()..].trim_start();
+        let Some(rest) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some(after) = rest.strip_prefix(fn_name) else {
+            continue;
+        };
+        if after
+            .bytes()
+            .next()
+            .is_none_or(|b| !b.is_ascii_alphanumeric() && b != b'_')
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when the `Result<_, String>` node sits inside a free function that is
+/// wired as a clap custom `value_parser`. clap requires `fn(&str) -> Result<T, E>`
+/// with `E: Into<Box<dyn Error + Send + Sync>>`; `String` is the idiomatic `E`
+/// and clap internals consume the error, so a structured error is unwarranted.
+fn is_in_clap_value_parser_fn(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "function_item" {
+            let Some(name) = parent
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok())
+            else {
+                return false;
+            };
+            let Ok(src) = std::str::from_utf8(source) else {
+                return false;
+            };
+            return source_wires_value_parser(src, name);
+        }
+        cur = parent;
+    }
+    false
+}
 
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
@@ -109,5 +165,50 @@ mod tests {
     fn flags_result_string_in_struct_field() {
         // A struct field is not a trait method signature.
         assert_eq!(run_on("struct S { e: Result<i32, String> }").len(), 1);
+    }
+
+    #[test]
+    fn allows_result_string_in_clap_value_parser_fn() {
+        // clap's custom value_parser requires `fn(&str) -> Result<T, E>`;
+        // `String` is the idiomatic error and clap consumes it internally.
+        let src = "#[derive(Parser)]\n\
+                   struct Args { #[arg(value_parser = parse_dir)] dir: PathBuf }\n\
+                   fn parse_dir(dir: &str) -> Result<PathBuf, String> { Ok(PathBuf::from(dir)) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_result_string_in_clap_value_parser_fn_clap_spelling() {
+        // The `#[clap(value_parser = …)]` spelling is equally a value-parser wiring.
+        let src = "#[derive(Parser)]\n\
+                   struct Args { #[clap(value_parser = parse_dir)] dir: PathBuf }\n\
+                   fn parse_dir(dir: &str) -> Result<PathBuf, String> { Ok(PathBuf::from(dir)) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_result_string_fn_without_value_parser_wiring() {
+        // No `value_parser` wiring anywhere — the author chose `String` freely.
+        assert_eq!(run_on("fn f() -> Result<i32, String> { Ok(0) }").len(), 1);
+    }
+
+    #[test]
+    fn flags_value_parser_word_boundary_different_fn() {
+        // `value_parser = parse_dir_2` must not word-match `parse_dir`, so the
+        // unwired `parse_dir` is still flagged.
+        let src = "#[derive(Parser)]\n\
+                   struct Args { #[arg(value_parser = parse_dir_2)] dir: PathBuf }\n\
+                   fn parse_dir(d: &str) -> Result<PathBuf, String> { Ok(PathBuf::from(d)) }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_struct_field_even_with_value_parser_elsewhere() {
+        // A struct field has no enclosing function, so the value-parser
+        // exemption can't apply even when wiring exists elsewhere in the file.
+        let src = "struct S { e: Result<i32, String> }\n\
+                   #[arg(value_parser = something)]\n\
+                   fn g() {}";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
