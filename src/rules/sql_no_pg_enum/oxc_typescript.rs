@@ -79,4 +79,12 @@ mod tests {
         let src = r#"const q = "status TEXT CHECK(status IN ('active', 'inactive'))";"#;
         assert!(run_on(src).is_empty());
     }
+
+    #[test]
+    fn does_not_flag_has_enum_values_prose() {
+        // Issue #3264: a Jest test description, not SQL. "has enumValues" spells
+        // "as enum" across the word boundary under a bare substring match.
+        let src = r#"const x = "Should generate ... when enum has enumValues set as object with explicit values";"#;
+        assert!(run_on(src).is_empty());
+    }
 }
