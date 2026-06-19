@@ -62,6 +62,13 @@ impl OxcCheck for Check {
             return;
         };
 
+        // A perf-optimization suggestion has no place in a benchmark file, which
+        // exists to compare `z.union` against `z.discriminatedUnion` — the
+        // `z.union` is the deliberate comparison baseline, not a mistake.
+        if ctx.file.in_benchmark_dir() {
+            return;
+        }
+
         // Callee must be z.union
         let callee_text =
             &ctx.source[call.callee.span().start as usize..call.callee.span().end as usize];
@@ -105,5 +112,56 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Routes through a built `FileCtx` so the benchmark-dir gate is exercised
+    // exactly as in a real run (`in_benchmark_dir()` is only populated there).
+    fn run_at(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_gated(&Check, source, path)
+    }
+
+    // The union-of-objects-with-shared-`z.literal`-discriminant shape from
+    // issue #4435's benchmark file, kept here as the single source repro.
+    const BENCH_REPRO: &str = r#"
+        const z4Union = z.union([
+            z.object({ type: z.literal("a"), value: z.string() }),
+            z.object({ type: z.literal("b"), value: z.number() }),
+        ]);
+    "#;
+
+    // Issue #4435: a perf suggestion inside a benchmark file is a false positive
+    // — the `z.union` is the deliberate baseline of a `z.union` vs
+    // `z.discriminatedUnion` comparison.
+    #[test]
+    fn skips_union_in_benchmark_file() {
+        assert!(run_at(BENCH_REPRO, "packages/bench/discriminated-union.ts").is_empty());
+    }
+
+    // Load-bearing: the identical shape in a production file is still flagged —
+    // the benchmark gate must not erase the rule's purpose.
+    #[test]
+    fn flags_union_in_production_file() {
+        assert_eq!(run_at(BENCH_REPRO, "src/schema.ts").len(), 1);
     }
 }
