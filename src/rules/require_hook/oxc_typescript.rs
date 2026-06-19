@@ -8,7 +8,7 @@
 //! hoisted mock APIs, and imports/`require` that must stay at module scope.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, peel_parens};
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
 use oxc_span::GetSpan;
@@ -388,6 +388,18 @@ fn top_level_is_allowed(
             }
             // node:test: top-level await is idiomatic setup — the framework has no beforeAll equivalent
             if node_test_mode && matches!(expr, Expression::AwaitExpression(_)) {
+                return true;
+            }
+            // A bare (un-invoked) function expression is a pure definition — it creates a
+            // value but runs nothing, so it has no runtime side effect. Module-scope
+            // type-test fixtures (`() => { /* @ts-expect-error */ ... }`) are the common
+            // case. `(function () {})` parses with a parens wrapper, so peel it first. An
+            // IIFE `(() => { ... })()` is a CallExpression (parens wrap the callee, not the
+            // whole statement) so it is untouched here and still fires.
+            if matches!(
+                peel_parens(expr),
+                Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_)
+            ) {
                 return true;
             }
             // Must be a call expression.
@@ -1414,6 +1426,70 @@ describe("x", () => { it("works", () => {}); });
         assert!(
             d.is_empty(),
             "declare global namespace augmentation must be allowed at top level: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_bare_arrow_type_test_fixture_at_top_level() {
+        let src = r#"
+import { createStore } from 'solid-js/store';
+
+() => {
+  const [, setStore] = createStore<{ a?: string }>({});
+  setStore("a", "b");
+};
+
+describe("store", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "store.spec.ts");
+        assert!(
+            d.is_empty(),
+            "a bare un-invoked arrow (type-test fixture) runs nothing and must not be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_bare_function_expressions_at_top_level() {
+        let src = r#"
+() => {};
+(function () {});
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert!(
+            d.is_empty(),
+            "bare un-invoked function expressions execute nothing and must not be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_top_level_iife_side_effect() {
+        let src = r#"
+(() => { sideEffectCall(); })();
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "an IIFE actually invokes the function (a CallExpression) and must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_top_level_parenthesized_iife_side_effect() {
+        let src = r#"
+((() => { sideEffectCall(); })());
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "foo.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "peeling parens must reach the CallExpression of a wrapped IIFE, which still fires and must be flagged: {d:?}"
         );
     }
 }
