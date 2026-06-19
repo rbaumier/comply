@@ -1,7 +1,6 @@
 //! Detection: a `function_item` whose body references `std::fs::*`
 //! (or the common re-exported form `fs::read`, `File::open`, …) and
-//! whose parameter list contains a parameter typed `&Path`, `&str`
-//! or `PathBuf`.
+//! whose parameter list contains a parameter typed `&Path` or `&str`.
 //!
 //! We heuristically flag only the first offending parameter per
 //! function so the rule doesn't spam on helpers that take two paths.
@@ -71,15 +70,10 @@ fn classify_path_like_type<'a>(type_node: Node<'a>, source: &'a [u8]) -> Option<
                 _ => None,
             }
         }
-        "type_identifier" | "scoped_type_identifier" => {
-            let text = type_node.utf8_text(source).ok()?;
-            let leaf = text.rsplit("::").next().unwrap_or(text);
-            if leaf == "PathBuf" {
-                Some("PathBuf")
-            } else {
-                None
-            }
-        }
+        // An owned `PathBuf` parameter is a deliberate ownership transfer — the
+        // function stores or moves it, so `impl AsRef<Path>` would force a
+        // `.to_path_buf()` allocation to recover ownership. Only borrowed path
+        // params (`&Path`/`&str`) benefit from the `impl AsRef<Path>` advice.
         _ => None,
     }
 }
@@ -121,16 +115,28 @@ mod tests {
     }
 
     #[test]
-    fn flags_pathbuf_param_in_fs_fn() {
+    fn allows_pathbuf_param_in_fs_fn() {
+        // An owned `PathBuf` is an ownership transfer, not an `impl AsRef<Path>`
+        // candidate — swapping it would force a `.to_path_buf()` allocation.
         let src = "pub fn load(p: PathBuf) -> String { fs::read_to_string(&p).unwrap() }";
-        assert_eq!(run(src).len(), 1);
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_moved_pathbuf_param() {
+        // Regression for #3736: the function moves/stores the owned `PathBuf`,
+        // so it must keep ownership rather than borrow via `impl AsRef<Path>`.
+        let src = "pub fn run(cache: PathBuf) -> Source { \
+                   let lock_dir = cache.join(\"locks\"); \
+                   std::fs::create_dir_all(&lock_dir).unwrap(); \
+                   Source::new(cache) }";
+        assert!(run(src).is_empty());
     }
 
     #[test]
     fn allows_asref_path_param() {
         // `impl AsRef<Path>` shows up as a different parameter kind
-        // (not reference_type / type_identifier of PathBuf), so it
-        // should pass unflagged.
+        // (not a `reference_type` of `&Path`/`&str`), so it passes unflagged.
         let src = "fn load<P: AsRef<Path>>(p: P) -> String { fs::read_to_string(p).unwrap() }";
         assert!(run(src).is_empty());
     }
