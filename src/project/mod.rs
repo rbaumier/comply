@@ -2313,6 +2313,23 @@ impl ProjectCtx {
             .is_some_and(|pkg| pkg.has_dep_or_engine("@sveltejs/kit"))
     }
 
+    /// True when the project does Vue server-side rendering — Nuxt is detected,
+    /// or a Vue SSR renderer / SSR meta-framework is a declared dependency. A
+    /// pure client-side SPA (e.g. Vite + `@vitejs/plugin-vue` with no SSR) has
+    /// none of these, so SSR-only concerns (top-level `window`/`document`
+    /// access) do not apply.
+    pub fn uses_vue_ssr(&self) -> bool {
+        if self.has_framework("nuxt") {
+            return true;
+        }
+        self.package_json.as_ref().is_some_and(|pkg| {
+            pkg.has_dep_or_engine("@vue/server-renderer")
+                || pkg.has_dep_or_engine("vue-server-renderer")
+                || pkg.has_dep_or_engine("vike")
+                || pkg.has_dep_or_engine("vite-plugin-ssr")
+        })
+    }
+
     /// True when the project root contains a Cloudflare marker file —
     /// `wrangler.toml`, `wrangler.jsonc`, `wrangler.json`, `.dev.vars`,
     /// or `_routes.json`. Used by Cloudflare-specific rules to skip
