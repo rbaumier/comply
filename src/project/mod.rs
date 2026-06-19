@@ -86,8 +86,12 @@ pub struct PackageJson {
     /// True if `browserslist` is present at any form (array, object, string).
     pub has_browserslist: bool,
     pub workspaces: Vec<String>,
-    /// True if the package declares `main`, `exports`, or `module` — indicators
-    /// that it's an npm library whose exports are consumed externally.
+    /// True if the package declares `main`, `exports`, `module`, or
+    /// `publishConfig` — indicators that it's an npm library whose exports are
+    /// consumed externally. `publishConfig` (npm/yarn publish settings) marks a
+    /// package as intentionally published even when its entry-point fields are
+    /// injected by the build pipeline at publish time and absent in source
+    /// (common in lerna/Nx/Turborepo monorepos).
     pub is_library: bool,
     /// True if the package declares a `bin` field — it's a CLI-tool package whose
     /// `src/**` implements one or more published binaries. Sibling packages
@@ -191,7 +195,8 @@ impl PackageJson {
             has_browserslist: json.get("browserslist").is_some(),
             is_library: json.get("main").is_some()
                 || json.get("exports").is_some()
-                || json.get("module").is_some(),
+                || json.get("module").is_some()
+                || json.get("publishConfig").is_some(),
             has_bin: json.get("bin").is_some(),
             is_private: parse_private(&json),
             workspaces: parse_workspaces(&json),
@@ -5036,6 +5041,21 @@ mod tests {
         assert!(!PackageJson::parse(r#"{"dependencies":{"a":"1"}}"#).unwrap().is_marker_only());
         assert!(!PackageJson::parse(r#"{"devDependencies":{"a":"1"}}"#).unwrap().is_marker_only());
         assert!(!PackageJson::parse(r#"{"workspaces":["packages/*"]}"#).unwrap().is_marker_only());
+    }
+
+    #[test]
+    fn publish_config_marks_library_without_entry_fields() {
+        // Regression for #3253 — a lerna/Nx/Turborepo monorepo package whose
+        // source manifest declares `publishConfig` but no `main`/`exports`/
+        // `module` (those entry-point fields are injected at publish time) is a
+        // library, so dead-export does not flag its public re-exports.
+        let json = r#"{"name":"@x/y","publishConfig":{"access":"public"}}"#;
+        assert!(PackageJson::parse(json).unwrap().is_library);
+
+        // Load-bearing: the same manifest without `publishConfig` is not a
+        // library — `publishConfig` is the only signal in play here.
+        let plain = r#"{"name":"@x/y"}"#;
+        assert!(!PackageJson::parse(plain).unwrap().is_library);
     }
 
     #[test]
