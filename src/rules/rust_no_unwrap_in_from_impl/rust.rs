@@ -12,6 +12,10 @@
 //! `#[cfg(debug_assertions)]` gate is also skipped: it compiles out in
 //! release builds, so it is a debug-only invariant check (the equivalent
 //! of `debug_assert!`), not a release failure path.
+//! A `.expect("…")` whose message documents an infallible invariant (it
+//! contains "invariant" or "unreachable") is also skipped: the author is
+//! asserting a guaranteed condition (such as a validated newtype's inner
+//! value), not handling a real failure path.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -85,6 +89,9 @@ fn collect_unwraps_in(
             // release builds, so its `.unwrap()` is a debug-only invariant
             // check (like `debug_assert!`), not a release failure path.
             && !is_under_cfg_debug_assertions(node, source)
+            // A `.expect("…")` whose message documents an infallible invariant
+            // asserts a guaranteed condition, not a real failure path.
+            && !expect_documents_invariant(node, source)
         {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
@@ -106,6 +113,21 @@ fn collect_unwraps_in(
             stack.push(child);
         }
     }
+}
+
+/// True when a `.expect("…")` carries a message documenting an infallible
+/// invariant (it contains "invariant" or "unreachable"), i.e. an assertion of a
+/// guaranteed condition (such as a validated newtype's inner value) rather than
+/// a real failure path. A bare `.unwrap()` (no message) never matches.
+fn expect_documents_invariant(call: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(args) = call.child_by_field_name("arguments") else {
+        return false;
+    };
+    let Ok(args_text) = args.utf8_text(source) else {
+        return false;
+    };
+    let lower = args_text.to_ascii_lowercase();
+    lower.contains("invariant") || lower.contains("unreachable")
 }
 
 #[cfg(test)]
@@ -239,5 +261,49 @@ mod tests {
             1,
             "a #[cfg(feature = \"x\")]-gated unwrap is a real release path and must still flag"
         );
+    }
+
+    /// Closes #4409: a `.expect("invariant broken: …")` documents a condition
+    /// guaranteed by a validated newtype, so the `try_from` can never fail. The
+    /// message asserts an infallible invariant, not a runtime failure path.
+    #[test]
+    fn allows_expect_documenting_invariant() {
+        let source = r#"impl From<NonNegativeI64> for u64 {
+            fn from(x: NonNegativeI64) -> u64 {
+                u64::try_from(x.0).expect("invariant broken: NonNegativeI64 should contain a non-negative i64 value")
+            }
+        }"#;
+        assert!(
+            run_on(source).is_empty(),
+            "an `.expect()` documenting an infallible invariant is not a runtime failure path"
+        );
+    }
+
+    /// An `.expect("unreachable: …")` also documents a guaranteed condition and
+    /// must not be flagged.
+    #[test]
+    fn allows_expect_documenting_unreachable() {
+        let source = r#"impl From<A> for B {
+            fn from(a: A) -> B { build(a).expect("unreachable: validated on construction") }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// A bare `.unwrap()` has no message documenting an invariant, so the
+    /// exemption must not catch it — it stays flagged.
+    #[test]
+    fn flags_bare_unwrap_in_from_impl() {
+        let source = "impl From<A> for B { fn from(a: A) -> B { something(a).unwrap() } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// An `.expect()` whose message does not mention an invariant is a real
+    /// failure path — the exemption requires the invariant/unreachable keyword,
+    /// so this must still flag.
+    #[test]
+    fn flags_expect_with_non_invariant_message() {
+        let source =
+            r#"impl From<A> for B { fn from(a: A) -> B { parse(a).expect("failed to parse input") } }"#;
+        assert_eq!(run_on(source).len(), 1);
     }
 }
