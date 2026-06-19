@@ -5,6 +5,13 @@
 //! requires `unsafe` and there's no race-free path to use it
 //! correctly without wrapping in a sync primitive — at which point
 //! you might as well use the sync primitive directly.
+//!
+//! Exempt: a `static mut` whose enclosing scope also holds a `static`
+//! annotated with a Windows CRT initializer section
+//! (`#[link_section = ".CRT$..."]`). That sibling static is a C function
+//! pointer the CRT runs before any Rust code — single-threaded, before
+//! `main` — so the `static mut` is written exactly once with no race, and
+//! the suggested sync primitives cannot replace a linker-section init hook.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -53,6 +60,14 @@ impl AstCheck for Check {
         {
             return;
         }
+        // CRT-init exemption: the enclosing scope holds a sibling `static`
+        // carrying a Windows CRT initializer linker section
+        // (`#[link_section = ".CRT$..."]`). The CRT runs that function pointer
+        // before any Rust code (single-threaded, before `main`), so the
+        // `static mut` is written exactly once with no race.
+        if scope_has_crt_init_section(node, source_bytes) {
+            return;
+        }
         // Surface the static's name in the message if we can read it.
         let name = node
             .child_by_field_name("name")
@@ -74,6 +89,24 @@ impl AstCheck for Check {
             span: None,
         });
     }
+}
+
+/// Returns `true` when the `static mut`'s enclosing scope contains a sibling
+/// `static` annotated with a Windows CRT initializer linker section. The signal
+/// is an `attribute_item` whose text carries both `link_section` and the `.CRT$`
+/// section prefix (`.CRT$XCU`, `.CRT$XIU`, …), which is distinctive enough to
+/// identify the CRT-init pattern without matching arbitrary `link_section` uses.
+fn scope_has_crt_init_section(static_node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(parent) = static_node.parent() else {
+        return false;
+    };
+    let mut cursor = parent.walk();
+    parent.children(&mut cursor).any(|child| {
+        child.kind() == "attribute_item"
+            && child
+                .utf8_text(source)
+                .is_ok_and(|t| t.contains("link_section") && t.contains(".CRT$"))
+    })
 }
 
 #[cfg(test)]
@@ -210,6 +243,76 @@ mod tests {
             run_in_crate(STD_CARGO_TOML, "fn main() {}", "pub static mut X: usize = 0;").len(),
             1,
             "must keep flagging `static mut` in ordinary std crates"
+        );
+    }
+
+    // ── CRT-init linker-section exemption (Closes #4500) ──────────────────
+
+    /// The winit Windows main-thread-id pattern: a `static mut` written once by
+    /// a C function pointer the CRT runs (before any Rust code) via a sibling
+    /// `static` in the `.CRT$XCU` linker section.
+    #[test]
+    fn allows_static_mut_with_sibling_crt_init_section() {
+        let src = r#"
+fn main_thread_id() -> u32 {
+    static mut MAIN_THREAD_ID: u32 = 0;
+
+    #[used]
+    #[allow(non_upper_case_globals)]
+    #[unsafe(link_section = ".CRT$XCU")]
+    static INIT_MAIN_THREAD_ID: unsafe extern "C" fn() = {
+        unsafe extern "C" fn initer() {
+            unsafe { MAIN_THREAD_ID = get_current_thread_id(); }
+        }
+        initer
+    };
+
+    unsafe { MAIN_THREAD_ID }
+}
+"#;
+        assert!(
+            run_on(src).is_empty(),
+            "must not flag a `static mut` written once via a sibling `.CRT$` init section"
+        );
+    }
+
+    /// The non-`unsafe()` `#[link_section = ".CRT$XIU"]` form (different CRT
+    /// sub-section) co-located with the `static mut` is exempt just the same.
+    #[test]
+    fn allows_static_mut_with_sibling_crt_xiu_init_section() {
+        let src = r#"
+fn init() {
+    static mut STATE: u32 = 0;
+
+    #[link_section = ".CRT$XIU"]
+    static INIT: unsafe extern "C" fn() = {
+        unsafe extern "C" fn run() { unsafe { STATE = 1; } }
+        run
+    };
+}
+"#;
+        assert!(
+            run_on(src).is_empty(),
+            "must not flag a `static mut` co-located with a `.CRT$XIU` init section"
+        );
+    }
+
+    /// The exemption is specific to `.CRT$`: a sibling `static` with a non-CRT
+    /// `link_section` (e.g. `.text`) does not suppress the diagnostic.
+    #[test]
+    fn still_flags_static_mut_with_non_crt_link_section() {
+        let src = r#"
+fn f() {
+    static mut COUNTER: u64 = 0;
+
+    #[link_section = ".text"]
+    static OTHER: u8 = 0;
+}
+"#;
+        assert_eq!(
+            run_on(src).len(),
+            1,
+            "a non-`.CRT$` `link_section` must not exempt a `static mut`"
         );
     }
 }
