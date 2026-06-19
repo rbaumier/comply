@@ -1,4 +1,9 @@
 //! react-no-string-refs oxc backend.
+//!
+//! Flags `ref="stringValue"` on JSX elements (string refs are a deprecated React
+//! API). Files for a non-React JSX framework (Vue, Solid, Preact, Qwik, Stencil)
+//! are exempt: there `ref="name"` is the framework's own template-ref binding
+//! (Vue exposes it as `this.$refs.name`), not React's legacy string ref.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -20,6 +25,13 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // String refs are a React-only concern. A Vue / Solid / Preact JSX file
+        // uses `ref="x"` as its own template-ref API, so it must not be judged
+        // by them.
+        if crate::oxc_helpers::is_non_react_jsx_file(ctx.source, ctx.project, ctx.path) {
+            return;
+        }
+
         let AstKind::JSXOpeningElement(opening) = node.kind() else {
             return;
         };
@@ -51,5 +63,44 @@ impl OxcCheck for Check {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.tsx")
+    }
+
+    #[test]
+    fn flags_string_ref_in_react() {
+        let src = r#"const x = <input ref="myInput" />;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_string_ref_in_vue_tsx() {
+        // Regression for issue #4523: `ref="x"` is Vue's template-ref API.
+        let src = "import { defineComponent } from 'vue';\n\
+                   const C = defineComponent({ render() { return <NxScrollbar ref=\"scrollbarInstRef\" />; } });";
+        assert!(run(src).is_empty(), "unexpected: {:?}", run(src));
     }
 }
