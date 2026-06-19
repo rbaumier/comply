@@ -22,15 +22,21 @@ const SIDE_EFFECT_MARKERS: &[&str] = &[
     "emit(", "console.", "fetch(", "axios.", ".post(", ".put(", ".delete(", ".patch(", "$emit(",
 ];
 
-/// Byte range `[open_brace ..= close_brace]` of the writable-computed `set`
-/// function block within `body`, or `None` when there is no such block.
+/// Byte range `[key_start ..= end]` spanning the writable-computed `set`
+/// property within `body`, or `None` when there is no such property.
 ///
 /// Matches a `set` property KEY — a `set` whose preceding char is not part of a
 /// larger identifier (`offset`/`reset`/`asset` are rejected) and whose next
 /// non-whitespace char is `(` (method shorthand) or `:` (arrow / function
-/// expression). From the key it finds the next `{` (the function body open
-/// brace) and brace-matches to the close. String-literal awareness is out of
-/// scope: a `{`/`}` inside a string in the params or body could skew the match.
+/// expression). From the key it scans forward tracking bracket nesting over
+/// `()`, `{}` and `[]`, and ends at the first top-level (depth 0) `,` or
+/// closing `}`/`)`/`]` — the boundary of the `set` property within the
+/// enclosing options object — or at `body.len()` when none is found. This
+/// covers both a brace body (`set() { ... }`, `set: (v) => { ... }`, where the
+/// `{ ... }` is consumed as nested depth) and a concise arrow without braces
+/// (`set: v => emit('x', v)`, whose argument comma sits at depth > 0 and is
+/// ignored). String-literal awareness is out of scope: a bracket/comma inside a
+/// string in the params or body could skew the match.
 fn set_block_range(body: &str) -> Option<(usize, usize)> {
     let bytes = body.as_bytes();
     let mut search = 0;
@@ -53,24 +59,23 @@ fn set_block_range(body: &str) -> Option<(usize, usize)> {
         if k >= bytes.len() || (bytes[k] != b'(' && bytes[k] != b':') {
             continue;
         }
-        let open_rel = body[key_end..].find('{')?;
-        let open = key_end + open_rel;
         let mut depth: i32 = 0;
-        let mut j = open;
+        let mut j = key_end;
         while j < bytes.len() {
             match bytes[j] {
-                b'{' => depth += 1,
-                b'}' => {
-                    depth -= 1;
+                b'{' | b'(' | b'[' => depth += 1,
+                b'}' | b')' | b']' => {
                     if depth == 0 {
-                        return Some((open, j));
+                        return Some((key_start, j));
                     }
+                    depth -= 1;
                 }
+                b',' if depth == 0 => return Some((key_start, j)),
                 _ => {}
             }
             j += 1;
         }
-        return None;
+        return Some((key_start, bytes.len()));
     }
     None
 }
@@ -212,6 +217,45 @@ mod tests {
     #[test]
     fn set_substring_in_identifier_is_not_a_set_block() {
         let sfc = "<script setup>\nconst c = computed(() => { offset.value = 1; return offset.value })\n</script>";
+        assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn allows_emit_in_concise_arrow_setter() {
+        let sfc = "<script setup>\nconst value = computed({\n  get: () => props.modelValue,\n  set: value => emit('update:modelValue', value),\n})\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_emit_in_parenthesized_concise_arrow_setter() {
+        let sfc = "<script setup>\nconst value = computed({\n  get: () => props.modelValue,\n  set: (value) => emit('x', value),\n})\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_emit_in_brace_arrow_setter() {
+        let sfc = "<script setup>\nconst value = computed({\n  get: () => props.modelValue,\n  set: (v) => { emit('x', v) },\n})\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_emit_in_method_shorthand_setter() {
+        let sfc = "<script setup>\nconst value = computed({\n  get() { return props.modelValue },\n  set(v) { emit('x', v) },\n})\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn flags_emit_in_getter_with_concise_arrow_setter() {
+        let sfc = "<script setup>\nconst value = computed({\n  get: () => emit('x'),\n  set: v => {},\n})\n</script>";
+        let diags = run(sfc);
+        assert_eq!(diags.len(), 1);
+        // The diagnostic is the getter emit (line 3), not the setter.
+        assert_eq!(diags[0].line, 3);
+    }
+
+    #[test]
+    fn flags_emit_in_readonly_computed() {
+        let sfc = "<script setup>\nconst c = computed(() => emit('x'))\n</script>";
         assert_eq!(run(sfc).len(), 1);
     }
 }
