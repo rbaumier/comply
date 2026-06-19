@@ -1,7 +1,8 @@
 //! Walks `attribute_item` nodes matching `#[allow(...)]`.
 //! Flags when no justification exists: neither an inline `reason = "..."`
-//! argument (stabilized in Rust 1.81) nor a `//` comment on the same line,
-//! the line above, or the line below.
+//! argument (stabilized in Rust 1.81) nor a `//` comment. For a single-line
+//! attribute the comment may sit on the same line, the line above, or the line
+//! below; for a multiline attribute it may sit on any line the attribute spans.
 
 use tree_sitter::Node;
 
@@ -48,7 +49,11 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
     let has_preceding_comment = row > 0 && lines.get(row - 1).is_some_and(|l| l.trim().starts_with("//"));
     let has_following_comment = lines.get(row + 1).is_some_and(|l| l.trim().starts_with("//"));
 
-    if has_inline_comment || has_preceding_comment || has_following_comment {
+    let end_row = node.end_position().row;
+    let has_inner_comment = end_row > row
+        && (row..=end_row).any(|r| lines.get(r).is_some_and(|l| l.contains("//")));
+
+    if has_inline_comment || has_preceding_comment || has_following_comment || has_inner_comment {
         return;
     }
 
@@ -230,5 +235,30 @@ mod tests {
     fn allows_dead_code_in_tests_dir() {
         assert!(crate::rules::test_helpers::run_rule(&Check, "#[allow(dead_code)]\ntype BoxStream<T> = Box<dyn Send>;", "tests/async_send_sync.rs")
         .is_empty());
+    }
+
+    #[test]
+    fn allows_with_comment_inside_multiline_attribute() {
+        // Regression for #3894: the `//` justification lives between the opening
+        // `#[allow(` and the closing `)]`, not on an adjacent physical line.
+        assert!(
+            run("#[repr(transparent)]\n#[allow(\n    unknown_lints,\n    renamed_and_removed_lints,\n    // False positive: https://github.com/rust-lang/rust/issues/115922\n    repr_transparent_non_zst_fields,\n)]\npub struct WithSpan {\n    pub span: Span,\n}")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_with_inner_comment_simple_multiline() {
+        assert!(
+            run("#[allow(\n    foo,\n    // because reasons\n    bar,\n)]\nfn f() {}")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_multiline_allow_without_inner_comment() {
+        // Load-bearing guard: a multiline allow with no `//` in its span must
+        // still be flagged — the inner scan must not blanket-exempt multiline.
+        assert_eq!(run("#[allow(\n    foo,\n    bar,\n)]\nfn f() {}").len(), 1);
     }
 }
