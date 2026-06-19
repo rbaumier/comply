@@ -1769,6 +1769,8 @@ fn merge_tsconfig(parent: Tsconfig, child: Tsconfig) -> Tsconfig {
 pub struct CargoManifest {
     /// Directory containing the `Cargo.toml`.
     manifest_dir: PathBuf,
+    /// `[package].name`, when present.
+    name: Option<String>,
     /// `[lib]` table is present.
     has_lib_table: bool,
     /// `[lib] proc-macro = true` — the crate builds a procedural-macro target.
@@ -1793,6 +1795,12 @@ impl CargoManifest {
     /// when the text is not valid TOML.
     pub fn parse(raw: &str, manifest_dir: PathBuf) -> Option<Self> {
         let value = raw.parse::<toml::Value>().ok()?;
+
+        let name = value
+            .get("package")
+            .and_then(|p| p.get("name"))
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned);
 
         let has_lib_table = value.get("lib").is_some();
 
@@ -1821,6 +1829,7 @@ impl CargoManifest {
 
         Some(CargoManifest {
             manifest_dir,
+            name,
             has_lib_table,
             proc_macro,
             has_bin_table,
@@ -1872,6 +1881,19 @@ impl CargoManifest {
     /// True when `[package].categories` lists `"no-std"`.
     pub fn is_no_std(&self) -> bool {
         self.no_std_category
+    }
+
+    /// True when the crate is a dedicated test-helper crate, identified by a
+    /// `[package].name` ending in a conventional test-helper suffix
+    /// (`-test`, `-testing`, `-testkit`, `-test-util`, `-test-utils`). Such crates
+    /// (e.g. `tower-test`, `tokio-test`) are consumed only as `[dev-dependencies]`;
+    /// their source is the test infrastructure itself and is not `#[cfg(test)]`-gated.
+    pub fn is_test_helper(&self) -> bool {
+        self.name.as_deref().is_some_and(|n| {
+            ["-test", "-testing", "-testkit", "-test-util", "-test-utils"]
+                .iter()
+                .any(|suffix| n.ends_with(suffix))
+        })
     }
 }
 
@@ -5808,6 +5830,42 @@ tokio = "1"
         );
         assert!(first.has_async_runtime(), "tokio is declared");
         assert!(first.is_no_std(), "categories lists no-std");
+    }
+
+    #[test]
+    fn cargo_manifest_classifies_test_helper_crate() {
+        let dir = PathBuf::from("/crate");
+
+        let parse_name = |name: &str| {
+            CargoManifest::parse(
+                &format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n"),
+                dir.clone(),
+            )
+            .unwrap()
+        };
+
+        assert!(
+            parse_name("tower-test").is_test_helper(),
+            "name ending in `-test` => test-helper crate"
+        );
+        assert!(
+            parse_name("foo-test-utils").is_test_helper(),
+            "name ending in `-test-utils` => test-helper crate"
+        );
+        assert!(
+            !parse_name("tower").is_test_helper(),
+            "name without a test-helper suffix => not a test-helper crate"
+        );
+        assert!(
+            !parse_name("fastest").is_test_helper(),
+            "`-test` must be a suffix on a `-`-delimited segment, not a substring of `fastest`"
+        );
+
+        let no_name = CargoManifest::parse("[lib]\nname = \"anon\"\n", dir).unwrap();
+        assert!(
+            !no_name.is_test_helper(),
+            "no [package].name => not a test-helper crate"
+        );
     }
 
     #[test]

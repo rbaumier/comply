@@ -11,7 +11,10 @@
 //! `Drop` to record drop order for assertions is intentional instrumentation,
 //! not a production deadlock. The exemption fires when the impl is gated by
 //! `#[cfg(test)]` (on the impl or an enclosing `mod`/`fn`), under a `#![cfg(test)]`
-//! file, or located in a `tests/` directory.
+//! file, located in a `tests/` directory, or belonging to a dedicated
+//! test-helper crate (`[package].name` ending in `-test`/`-testing`/`-testkit`/
+//! `-test-util`/`-test-utils`, e.g. `tower-test`), whose whole source is test
+//! infrastructure and is not `#[cfg(test)]`-gated.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -47,10 +50,16 @@ impl AstCheck for Check {
         }
         // Test-only `Drop` impls legitimately lock shared state to record drop
         // order for assertions. Exempt them; a production `Drop` that locks
-        // `self` still fires.
+        // `self` still fires. A dedicated test-helper crate (e.g. `tower-test`)
+        // is the test infrastructure itself, so its lock-in-`Drop` teardown is
+        // intentional even though the source is not `#[cfg(test)]`-gated.
         if is_in_test_context(node, source_bytes)
             || has_test_attribute(node, source_bytes)
             || is_under_tests_dir(ctx.path)
+            || ctx
+                .project
+                .nearest_cargo_manifest(ctx.path)
+                .is_some_and(|m| m.is_test_helper())
         {
             return;
         }
@@ -120,6 +129,20 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
     }
 
+    /// Run on a file in `dir/src/x.rs` next to the given `Cargo.toml`, so
+    /// `nearest_cargo_manifest` resolves the temp crate's manifest (e.g. for
+    /// the test-helper-crate exemption).
+    fn run_on_with_cargo(cargo_toml_contents: &str, source: &str) -> Vec<Diagnostic> {
+        use std::fs;
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("Cargo.toml"), cargo_toml_contents).unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        let src_path = dir.path().join("src/x.rs");
+        fs::write(&src_path, source).unwrap();
+        crate::rules::test_helpers::run_rule(&Check, source, &src_path)
+    }
+
     #[test]
     fn flags_lock_on_self_field_in_drop() {
         let source = "struct A; impl Drop for A { fn drop(&mut self) { let _g = self.m.lock(); } }";
@@ -181,5 +204,27 @@ mod tests {
             impl Drop for A { fn drop(&mut self) { let _g = self.m.lock(); } } \
             #[cfg(test)] mod tests { fn t() {} }";
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    // Regression for #4444: `tower-test`'s mock teardown locks `self.state` in
+    // `Drop`. The crate is a dedicated test helper (consumed only as a
+    // dev-dependency); its source is not `#[cfg(test)]`-gated, so the only
+    // signal is the `[package].name` suffix. Must not fire.
+    const TOWER_TEST_DROP: &str =
+        "impl<T, U> Drop for Mock<T, U> { fn drop(&mut self) { let _g = self.state.lock(); } }";
+
+    #[test]
+    fn allows_lock_on_self_in_test_helper_crate() {
+        let cargo = "[package]\nname = \"tower-test\"\nversion = \"0.1.0\"\n";
+        assert!(run_on_with_cargo(cargo, TOWER_TEST_DROP).is_empty());
+    }
+
+    // Load-bearing negative: the SAME lock-in-`Drop` in a PRODUCTION crate
+    // (name `tower`, no test-helper suffix) must STILL fire — the exemption is
+    // crate-specific, not a blanket suppression of a serious-deadlock rule.
+    #[test]
+    fn flags_lock_on_self_in_production_crate() {
+        let cargo = "[package]\nname = \"tower\"\nversion = \"0.1.0\"\n";
+        assert_eq!(run_on_with_cargo(cargo, TOWER_TEST_DROP).len(), 1);
     }
 }
