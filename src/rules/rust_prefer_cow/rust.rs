@@ -15,13 +15,16 @@
 //!
 //! A parameter is also left alone when the body moves it by value, either
 //! into a struct/enum-variant literal (`Thing { name }` / `Variant { error }`
-//! / `Thing { name: name }`) or as a bare argument of a call — a function
+//! / `Thing { name: name }`), as a bare argument of a call — a function
 //! call, a method call, or an enum tuple-variant constructor
-//! (`some_fn(name)` / `Variant::String(name)`). There the function genuinely
-//! needs ownership, so taking `String` is the correct API — switching to
-//! `&str` would only shift the allocation into the body. A borrow (`&name`)
-//! or a clone (`name.clone()`) does not consume the owned value and still
-//! warrants the warning.
+//! (`some_fn(name)` / `Variant::String(name)`) — or by being referenced
+//! anywhere inside a `move` closure (`move || { … name … }`), which captures
+//! every used variable by value. There the function genuinely needs ownership,
+//! so taking `String` is the correct API — switching to `&str` would only
+//! shift the allocation into the body, and a `move` closure that must be
+//! `'static` (e.g. `thread::spawn`) cannot capture a borrow at all. A borrow
+//! (`&name`) or a clone (`name.clone()`) outside a `move` closure does not
+//! consume the owned value and still warrants the warning.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{is_in_test_context, is_pub};
@@ -110,6 +113,19 @@ fn param_is_moved(node: tree_sitter::Node, source: &[u8], param_name: &str) -> b
                 }
             }
         }
+        "closure_expression" => {
+            // A `move` closure captures every used variable BY VALUE, so a
+            // `String` referenced anywhere inside `move || { … }` is moved into
+            // the closure (which often must be `'static`, e.g. `thread::spawn`,
+            // where a borrow cannot compile). Ownership transfer — the same
+            // class as moving into a struct/enum literal. A non-`move` closure
+            // borrows instead, so it is left to the child recursion below.
+            if closure_is_move(node)
+                && subtree_references_identifier(node, source, param_name)
+            {
+                return true;
+            }
+        }
         _ => {}
     }
 
@@ -120,6 +136,28 @@ fn param_is_moved(node: tree_sitter::Node, source: &[u8], param_name: &str) -> b
         }
     }
     false
+}
+
+/// Whether a `closure_expression` is a `move` closure (`move || …`). The
+/// grammar exposes the `move` keyword as a dedicated anonymous child token.
+fn closure_is_move(node: tree_sitter::Node) -> bool {
+    let mut cursor = node.walk();
+    node.children(&mut cursor).any(|c| c.kind() == "move")
+}
+
+/// Whether `param_name` appears as a bare `identifier` anywhere in `node`'s
+/// subtree.
+fn subtree_references_identifier(
+    node: tree_sitter::Node,
+    source: &[u8],
+    param_name: &str,
+) -> bool {
+    if node.kind() == "identifier" && node.utf8_text(source) == Ok(param_name) {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .any(|child| subtree_references_identifier(child, source, param_name))
 }
 
 /// Whether `node` is a bare `identifier` whose text equals `param_name`.
@@ -292,5 +330,44 @@ mod tests {
     #[test]
     fn flags_param_cloned_into_call() {
         assert_eq!(run("pub fn f(s: String) { g(s.clone()) }").len(), 1);
+    }
+
+    #[test]
+    fn allows_param_referenced_in_move_closure() {
+        // Repro of #4399: `thread::spawn(move || …)` requires a `'static`
+        // closure, so the captured `String` must be owned — a borrow or `Cow`
+        // would not compile. The param is referenced as `&output_display`
+        // inside the move closure, which still captures it by value.
+        assert!(
+            run("pub fn spawn(output_display: String) { std::thread::spawn(move || { let _ = format!(\"{}\", &output_display); }); }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_param_consumed_in_move_closure() {
+        assert!(
+            run("pub fn run(s: String) { std::thread::spawn(move || { consume(s); }); }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_param_borrowed_in_non_move_closure() {
+        // A non-`move` closure borrows the param, so `&str` would compile.
+        assert_eq!(
+            run("pub fn f(s: String) { let c = || println!(\"{}\", s); c(); }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_param_borrowed_when_move_closure_skips_it() {
+        // The move closure does not reference the param; the param is only
+        // borrowed elsewhere, so `&str` would compile.
+        assert_eq!(
+            run("pub fn f(s: String) { std::thread::spawn(move || { unrelated(); }); show(&s); }").len(),
+            1
+        );
     }
 }
