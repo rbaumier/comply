@@ -135,4 +135,45 @@ mod tests {
         let src = "<script setup>\nconst model = defineModel()\nconst props = defineProps()\nconst emit = defineEmits([])\n</script>\n\n<template><div /></template>";
         assert!(run(src).is_empty());
     }
+
+    // --- `defineOptions` / `defineSlots` / `defineExpose` are neutral (#4516) ---
+
+    #[test]
+    fn allows_define_options_before_props() {
+        // shadcn-vue repro: defineOptions() precedes the ordered macros and must
+        // not flag the later defineProps as out of order.
+        let src = "<script lang=\"ts\" setup>\nimport type { DialogContentEmits, DialogContentProps } from 'reka-ui'\n\ndefineOptions({ inheritAttrs: false })\n\nconst props = defineProps<DialogContentProps>()\nconst emits = defineEmits<DialogContentEmits>()\n</script>\n\n<template><div /></template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_define_slots_before_props() {
+        let src = "<script lang=\"ts\" setup>\ndefineSlots<{ default(): unknown }>()\nconst props = defineProps<P>()\n</script>\n\n<template><div /></template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_define_expose_interspersed() {
+        // defineExpose between ordered macros does not block them.
+        let src = "<script lang=\"ts\" setup>\nconst props = defineProps<P>()\ndefineExpose({ focus() {} })\nconst emits = defineEmits<E>()\n</script>\n\n<template><div /></template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_genuine_ordering_violation() {
+        // emits before props is a real ordering violation — still flagged.
+        let src = "<script lang=\"ts\" setup>\nconst emits = defineEmits<E>()\nconst props = defineProps<P>()\n</script>\n\n<template><div /></template>";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("defineProps"));
+    }
+
+    #[test]
+    fn still_flags_macro_after_non_neutral_bare_call() {
+        // `useThing()` is not a neutral macro — it blocks the later defineProps.
+        let src = "<script lang=\"ts\" setup>\nuseThing()\nconst props = defineProps<P>()\n</script>\n\n<template><div /></template>";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("defineProps"));
+    }
 }
