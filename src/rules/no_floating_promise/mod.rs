@@ -1,5 +1,9 @@
 //! no-floating-promise — flag promise-returning calls whose result is
 //! discarded at statement level.
+//!
+//! An async-looking method call on a private-field receiver (`this.#field.insert()`)
+//! is exempt: a private class field is an internal data structure, never a public
+//! async DB adapter, so the async-looking-method heuristic does not fire there.
 
 mod oxc_typescript;
 mod shared;
