@@ -205,11 +205,12 @@ pub fn register_all() -> Vec<RuleDef> {
         // ══════════════════════════════════════════════════════════════════
         // METHODS / THIS
         // ══════════════════════════════════════════════════════════════════
-        entry(
+        entry_with_filter(
             "unbound-method",
             "unbound-method",
             "Method passed as callback loses its `this` binding.",
             "Bind the method: `.bind(this)` or use an arrow function.",
+            Some(Arc::new(UnboundMethodFilter)),
         ),
         entry(
             "no-this-alias",
@@ -640,6 +641,22 @@ fn is_test_path(path: &std::path::Path) -> bool {
         || lower.contains("/test/")
         || lower.starts_with("tests/")
         || lower.starts_with("test/")
+}
+
+// ── unbound-method post-filter ─────────────────────────────────────────────
+//
+// typescript-eslint documents that `unbound-method` should be disabled in test
+// files: standard mock/spy inspection (`expect(vi.mocked(x).method)`,
+// `jest.spyOn(obj, 'method')`) references a method to read its call records
+// without invoking it detached, so there is no `this`-binding hazard. Suppress
+// it in test files. (Closes #4369)
+
+struct UnboundMethodFilter;
+
+impl PostFilter for UnboundMethodFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, _source: Option<&str>) -> bool {
+        !is_test_path(&diag.path)
+    }
 }
 
 // ── ban-types post-filter ──────────────────────────────────────────────────
@@ -1726,6 +1743,24 @@ mod tests {
     fn keeps_await_thenable_in_production_file() {
         let f = AwaitThenableFilter;
         assert!(f.keep(&diag("src/features/product/product-row-actions.tsx"), None));
+    }
+
+    // ── unbound-method ──────────────────────────────────────────────────────
+
+    // Regression for #4369: `expect(vi.mocked(log).error).not.toHaveBeenCalled()`
+    // in a test file inspects a mock's call records, not a detached method —
+    // unbound-method must not fire there.
+    #[test]
+    fn drops_unbound_method_in_test_file() {
+        let f = UnboundMethodFilter;
+        assert!(!f.keep(&diag("src/api/csv/csv-stream.test.ts"), None));
+        assert!(!f.keep(&diag("src/api/csv/csv-stream.spec.ts"), None));
+    }
+
+    #[test]
+    fn keeps_unbound_method_in_non_test_file() {
+        let f = UnboundMethodFilter;
+        assert!(f.keep(&diag("src/api/csv/csv-stream.ts"), None));
     }
 
     // ── ban-types ───────────────────────────────────────────────────────────
