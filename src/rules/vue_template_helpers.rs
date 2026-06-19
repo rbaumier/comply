@@ -44,6 +44,10 @@ pub struct VueElement<'a> {
     pub attrs: &'a str,
     /// Whether this is a self-closing tag (`<br />`).
     pub self_closing: bool,
+    /// Source-relative byte offset of the character immediately after the
+    /// opening tag's terminating `>`, so `source[open_end..]` is the text that
+    /// follows the opening tag (a child's text, the next sibling, etc.).
+    pub open_end: usize,
 }
 
 /// Extract all opening/self-closing HTML elements from a Vue SFC template.
@@ -123,11 +127,16 @@ pub fn extract_elements(source: &str) -> Vec<VueElement<'_>> {
             let tag_byte_pos = tag_start;
             let line_num = lines_before + 1 + template[..tag_byte_pos].matches('\n').count();
 
+            // `i` indexes the terminating `>` within `template`; map it back to
+            // `source` and step past `>` to the start of the following content.
+            let open_end = byte_offset + i + 1;
+
             elements.push(VueElement {
                 line: line_num,
                 tag: tag_name,
                 attrs,
                 self_closing,
+                open_end,
             });
             i += 1; // skip '>'
         } else {
@@ -332,6 +341,22 @@ mod tests {
         assert!(elems[0].self_closing);
         assert_eq!(elems[1].tag, "div");
         assert!(!elems[1].self_closing);
+    }
+
+    #[test]
+    fn extract_elements_open_end_multiline() {
+        // A multi-line opening tag: `open_end` must point at the byte right
+        // after the real `>`, i.e. the newline + sibling that follow it, not
+        // anywhere inside the attribute list.
+        let source =
+            "<template>\n  <input\n    type=\"range\"\n  >\n  <div>child of div</div>\n</template>";
+        let elems = extract_elements(source);
+        assert_eq!(elems[0].tag, "input");
+        assert!(
+            source[elems[0].open_end..].starts_with("\n  <div>"),
+            "open_end should be just after the opening tag `>`, got: {:?}",
+            &source[elems[0].open_end..]
+        );
     }
 
     #[test]
