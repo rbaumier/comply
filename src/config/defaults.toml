@@ -149,6 +149,13 @@ min_occurrences = 3
 [rules.drizzle-chunk-large-batch-insert]
 max = 500
 
+# Maximum number of statements allowed between a Drizzle read-probe and the
+# write it guards (or a write and its re-read) for the redundant-roundtrip
+# pattern to be reported. A wider gap means the two operations are unlikely to
+# be a single check-then-act / write-then-reread sequence.
+[rules.drizzle-no-redundant-roundtrip-around-write]
+max_statement_gap = 2
+
 # ---------------------------------------------------------------
 # Cross-file centralisation heuristics.
 # ---------------------------------------------------------------
