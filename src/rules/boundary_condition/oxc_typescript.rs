@@ -1427,9 +1427,18 @@ fn has_preceding_nullish_exit_guard(
     }
 }
 
-/// Returns true when `expr` is a guard condition that is satisfied exactly when
-/// `name` is nullish/falsy: `!name`, `name === null` / `name == null`, or
-/// `name === undefined` / `name == undefined`.
+/// Returns true when `expr` is a guard condition that holds whenever `name` is
+/// nullish/falsy: `!name`, `name === null` / `name == null`,
+/// `name === undefined` / `name == undefined`, or a compound `||` whose left or
+/// right arm is itself such a check (e.g. `!name || name === "/"`).
+///
+/// The caller (`has_preceding_nullish_exit_guard`) only reaches the index access
+/// when this condition is *false* — the guard is `if (test) { early_exit }`. For
+/// `test = left || right`, fall-through means `!(left || right)`, i.e. both arms
+/// are false. If either arm is a nullish check for `name`, that arm being false
+/// proves `name` is non-nullish, so the access is safe. This is sound for `||`
+/// only: under `&&`, fall-through is `!left || !right`, which does not prove
+/// `name` is non-nullish even when one arm is `!name`, so `&&` is not recognized.
 fn condition_is_nullish_check(expr: &Expression, name: &str) -> bool {
     match expr {
         Expression::UnaryExpression(unary) => {
@@ -1441,6 +1450,12 @@ fn condition_is_nullish_check(expr: &Expression, name: &str) -> bool {
                 bin.operator,
                 BinaryOperator::StrictEquality | BinaryOperator::Equality
             ) && binary_compares_identifier_to_nullish(&bin.left, &bin.right, name)
+        }
+        Expression::LogicalExpression(logical)
+            if logical.operator == LogicalOperator::Or =>
+        {
+            condition_is_nullish_check(&logical.left, name)
+                || condition_is_nullish_check(&logical.right, name)
         }
         _ => false,
     }
@@ -2770,6 +2785,33 @@ mod tests {
     fn still_flags_string_last_without_truthy_exit_issue_1337() {
         // Negative space: no preceding `if (!s)` guard, so the string may be empty.
         let src = "function f(s: string) { const c = s[s.length - 1]; return c; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_string_last_char_after_compound_or_exit_issue_4430() {
+        // The issue's exact shape: `if (!base || base === "/") return ...` excludes
+        // both empty/undefined and the single-char "/" string, so `base` has length
+        // >= 2 at the last-element read. The left arm `!base` is a nullish check, so
+        // the compound `||` guard is recognized.
+        let src = "function joinURL(base?: string, path?: string): string {\n  if (!base || base === \"/\") {\n    return path || \"/\";\n  }\n  if (!path || path === \"/\") {\n    return base || \"/\";\n  }\n  const baseHasTrailing = base[base.length - 1] === \"/\";\n  const pathHasLeading = path[0] === \"/\";\n  return baseHasTrailing ? base + path : base + \"/\" + path;\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_string_index_after_compound_or_right_arm_issue_4430() {
+        // Right-arm recursion: the nullish check sits on the right of the `||`
+        // (`other || !base`), still proving `base` non-nullish on fall-through.
+        let src = "function f(base: string, other: boolean) { if (other || !base) { return \"\"; } const c = base[base.length - 1]; return c; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_string_last_after_compound_and_guard_issue_4430() {
+        // Load-bearing negative: under `&&`, fall-through is `!base || !other`, which
+        // does not prove `base` is non-nullish even though one arm is `!base`. The
+        // `&&` guard must not be recognized, so the read stays flagged.
+        let src = "function f(base: string, other: boolean) { if (!base && other) { return \"\"; } const c = base[base.length - 1]; return c; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
