@@ -60,16 +60,21 @@ impl OxcCheck for Check {
             }
         }
 
-        // Check if third argument contains `passive: true`.
-        let has_passive = if let Some(third_arg) = call.arguments.get(2) {
+        // An explicit `passive: true` (already optimal) or `passive: false` (a deliberate
+        // opt-out so the handler can call preventDefault()) means the author consciously
+        // chose the passive behavior — do not suggest changing it.
+        let has_explicit_passive = if let Some(third_arg) = call.arguments.get(2) {
             let opt_src =
                 &ctx.source[third_arg.span().start as usize..third_arg.span().end as usize];
-            opt_src.contains("passive: true") || opt_src.contains("passive:true")
+            opt_src.contains("passive: true")
+                || opt_src.contains("passive:true")
+                || opt_src.contains("passive: false")
+                || opt_src.contains("passive:false")
         } else {
             false
         };
 
-        if !has_passive {
+        if !has_explicit_passive {
             let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
@@ -83,5 +88,71 @@ impl OxcCheck for Check {
                 span: None,
             });
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Check;
+    use crate::diagnostic::Diagnostic;
+
+    fn run(s: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, s, "t.ts")
+    }
+
+    #[test]
+    fn flags_touchmove_no_options() {
+        assert_eq!(run("el.addEventListener('touchmove', handler)").len(), 1);
+    }
+
+    #[test]
+    fn flags_touchmove_options_without_passive_key() {
+        assert_eq!(
+            run("el.addEventListener('touchmove', handler, { capture: true })").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_passive_true() {
+        assert!(
+            run("el.addEventListener('touchmove', handler, { passive: true })").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_explicit_passive_false() {
+        assert!(
+            run("document.addEventListener('touchmove', handleTouchMove, { passive: false })")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_explicit_passive_false_no_space() {
+        assert!(run("el.addEventListener('touchmove', h, { passive:false })").is_empty());
+    }
+
+    #[test]
+    fn allows_inline_prevent_default() {
+        assert!(
+            run("el.addEventListener('touchmove', (e) => { e.preventDefault(); })").is_empty()
+        );
     }
 }
