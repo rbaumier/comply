@@ -1,4 +1,8 @@
 //! filename-naming-convention — Vue backend (PascalCase or kebab-case).
+//!
+//! A leading `_`/`__` private-prefix is stripped before the case check, so a
+//! private/internal SFC (`_NavigationMenu.vue`) is validated by its remainder —
+//! mirroring the TS text backend's `strip_private_prefix`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -51,7 +55,14 @@ impl TextCheck for Check {
         if super::is_numeric_stem(stem) {
             return Vec::new();
         }
-        if stem.is_empty() || is_pascal_case(stem) || super::text::is_kebab_case(stem) {
+        // A leading `_`/`__` marks a private/internal SFC (Storybook stories,
+        // internal sub-components, fixtures); the convention is validated against
+        // the name after the prefix, mirroring the TS text backend.
+        let convention_stem = super::text::strip_private_prefix(stem);
+        if stem.is_empty()
+            || is_pascal_case(convention_stem)
+            || super::text::is_kebab_case(convention_stem)
+        {
             return Vec::new();
         }
         vec![Diagnostic {
@@ -197,9 +208,9 @@ mod tests {
     // whose suffix is not a documented role is validated normally.
     #[test]
     fn flags_component_suffix_outside_routes_issue_2149() {
-        // `__root` stem is neither PascalCase nor kebab-case; outside `routes/`
-        // it gets no exemption and still flags.
-        assert_eq!(run("src/components/__root.component.vue").len(), 1);
+        // `my_route` is snake_case (non-conforming even after private-prefix
+        // stripping); outside `routes/` it gets no exemption and still flags.
+        assert_eq!(run("src/components/my_route.component.vue").len(), 1);
     }
 
     #[test]
@@ -341,5 +352,42 @@ mod tests {
     #[test]
     fn flags_camel_case_not_widened_by_numeric_exemption_issue_3217() {
         assert_eq!(run("src/components/myComponent.vue").len(), 1);
+    }
+
+    // Regression for #4522: a leading `_`/`__` marks a private/internal Vue SFC
+    // (Storybook stories, internal sub-components, fixtures); the convention is
+    // validated against the name after the prefix, mirroring the TS text backend.
+    // `_NavigationMenu` strips to `NavigationMenu`, valid PascalCase.
+    #[test]
+    fn allows_underscore_private_pascal_case_issue_4522() {
+        assert!(run("packages/core/src/NavigationMenu/story/_NavigationMenu.vue").is_empty());
+        assert!(run("packages/core/src/LinkGroup/story/_LinkGroup.vue").is_empty());
+        assert!(run("packages/core/src/Radio/story/_Radio.vue").is_empty());
+    }
+
+    #[test]
+    fn allows_double_underscore_private_pascal_case_issue_4522() {
+        assert!(run("src/components/__Internal.vue").is_empty());
+    }
+
+    #[test]
+    fn allows_underscore_private_kebab_case_issue_4522() {
+        assert!(run("src/components/_my-component.vue").is_empty());
+    }
+
+    // Load-bearing guard for #4522: stripping the prefix does NOT blanket-exempt —
+    // the remainder must still be a valid name. `_navigationMenu` strips to
+    // `navigationMenu`, which is neither PascalCase nor kebab-case, so it still
+    // fires. This fails if the prefix were treated as an unconditional allowance.
+    #[test]
+    fn flags_underscore_private_camel_case_remainder_issue_4522() {
+        assert_eq!(run("src/components/_navigationMenu.vue").len(), 1);
+    }
+
+    // Guard for #4522: an all-underscore stem strips to an empty remainder, which
+    // is neither PascalCase nor kebab-case, so it still fires.
+    #[test]
+    fn flags_all_underscore_stem_issue_4522() {
+        assert_eq!(run("src/components/__.vue").len(), 1);
     }
 }

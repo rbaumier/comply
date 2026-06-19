@@ -145,8 +145,9 @@ pub(crate) fn classify_ts_js_stem(stem: &str) -> Option<FilenameConvention> {
 /// `$extends`, jQuery, RxJS, SvelteKit `$lib`), so the convention is validated
 /// against the name after the prefix. Returns an empty string for an
 /// all-sigil stem; the bare-`$` case is allowed earlier, and an all-underscore
-/// stem then fails every convention check and is still flagged.
-fn strip_private_prefix(stem: &str) -> &str {
+/// stem then fails every convention check and is still flagged. Shared with the
+/// sibling `vue` backend, which applies the same private-prefix stripping.
+pub(super) fn strip_private_prefix(stem: &str) -> &str {
     stem.trim_start_matches(['_', '$'])
 }
 
