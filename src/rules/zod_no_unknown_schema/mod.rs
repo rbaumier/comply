@@ -19,7 +19,10 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["zod"],
 
-    skip_in_test_dir: false,
+    // In test files, `z.unknown()` is the schema type under test (a validation
+    // library exercising its own `unknown` behavior) or a harmless fixture — not
+    // a shipped-schema oversight the author should replace with a concrete type.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 

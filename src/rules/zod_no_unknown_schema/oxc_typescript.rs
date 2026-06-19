@@ -82,6 +82,7 @@ impl crate::rules::test_helpers::RunRule for Check {
 mod tests {
     use super::*;
     use crate::diagnostic::Diagnostic;
+    use crate::rules::test_helpers::run_rule_gated;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
@@ -125,5 +126,34 @@ mod tests {
         // case is whitelisted (anything else should keep flagging).
         let src = "const s = z.unknown().optional();";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Issue #4452: zod's own test suite exercises `z.unknown()`'s accept-any /
+    // `unknown`-inference behavior (it is the schema under test, not a lazy
+    // placeholder). The central `skip_in_test_dir` gate exempts `/tests/` dirs
+    // and `.test.`/`.spec.` infixes.
+    #[test]
+    fn silent_in_test_dir_issue4452() {
+        assert!(
+            run_rule_gated(
+                &Check,
+                "const t1 = z.unknown();",
+                "packages/zod/src/v4/classic/tests/anyunknown.test.ts",
+            )
+            .is_empty()
+        );
+        assert!(
+            run_rule_gated(&Check, "const t1 = z.unknown();", "src/schema.test.ts").is_empty()
+        );
+    }
+
+    // Suppression is test-scoped: the same `z.unknown()` in production source is
+    // still flagged, preserving the rule's purpose.
+    #[test]
+    fn flags_z_unknown_in_production_issue4452() {
+        assert_eq!(
+            run_rule_gated(&Check, "const t1 = z.unknown();", "src/schema.ts").len(),
+            1
+        );
     }
 }
