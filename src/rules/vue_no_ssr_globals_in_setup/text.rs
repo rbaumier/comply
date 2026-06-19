@@ -1,4 +1,8 @@
 //! vue-no-ssr-globals-in-setup AST backend.
+//!
+//! Applies only to projects that do Vue server-side rendering (Nuxt, or a Vue
+//! SSR renderer dependency). A pure client-side SPA never renders on the server,
+//! so top-level access to these globals is safe there and is not flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -75,6 +79,13 @@ fn script_setup_range(source: &str) -> Option<(usize, usize)> {
 
 crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
     let _ = source;
+    // SSR-only concern: top-level `window`/`document` crashes during server
+    // render. A pure client-side SPA (no Nuxt, no Vue SSR renderer) never
+    // renders on the server, so the access is safe there — only flag
+    // SSR-capable projects.
+    if !ctx.project.uses_vue_ssr() {
+        return;
+    }
     let Some((start, end)) = script_setup_range(ctx.source) else {
         return;
     };
@@ -127,16 +138,52 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
     use crate::rules::backend::{AstCheck, CheckCtx};
-    use std::path::Path;
 
-    fn run(source: &str) -> Vec<Diagnostic> {
+    /// Run the rule against a `.vue` file inside a tempdir whose `package.json`
+    /// is `pkg_json`, with a real `ProjectCtx` so the SSR gate (`uses_vue_ssr`)
+    /// can read framework detection and declared dependencies from it.
+    fn run_with_pkg(pkg_json: &str, source: &str) -> Vec<Diagnostic> {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), pkg_json).unwrap();
+        let file_path = dir.path().join("t.vue");
+        std::fs::write(&file_path, source).unwrap();
+        let source_file = SourceFile {
+            path: file_path.clone(),
+            language: Language::Vue,
+        };
+        let refs = vec![&source_file];
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+        let canon = std::fs::canonicalize(&file_path).unwrap();
         let mut parser = tree_sitter::Parser::new();
         parser
             .set_language(&tree_sitter_vue_updated::language())
             .expect("vue grammar");
         let tree = parser.parse(source, None).expect("parser");
-        Check.check(&CheckCtx::for_test(Path::new("t.vue"), source), &tree)
+        Check.check(
+            &CheckCtx::for_test_with_project(&canon, source, &project),
+            &tree,
+        )
+    }
+
+    /// `package.json` of a Vue SSR project: declares the SSR renderer, so
+    /// `uses_vue_ssr()` is true and top-level global access is flagged. The
+    /// positive cases run under this manifest.
+    const SSR_PKG: &str = r#"{ "dependencies": { "vue": "^3.4.0", "@vue/server-renderer": "^3.4.0" } }"#;
+
+    /// `package.json` of a pure client-side Vue SPA (koel shape): `vue` plus the
+    /// Vite plugin, no SSR renderer and no Nuxt. `uses_vue_ssr()` is false here,
+    /// so top-level global access is safe and must not be flagged.
+    const SPA_PKG: &str = r#"{ "dependencies": { "vue": "^3.4.0" }, "devDependencies": { "@vitejs/plugin-vue": "^5.0.0" } }"#;
+
+    /// Positive cases run under a Vue SSR project, where top-level `window` /
+    /// `document` access really crashes during server render.
+    fn run(source: &str) -> Vec<Diagnostic> {
+        run_with_pkg(SSR_PKG, source)
     }
 
     #[test]
@@ -228,5 +275,23 @@ mod tests {
         assert!(diags[0].message.contains("`window`"));
         // `window` starts at byte offset 32 on the line (column 33, 1-based).
         assert_eq!(diags[0].column, 33);
+    }
+
+    #[test]
+    fn skips_pure_spa_project() {
+        // Issue #4499: phanan/koel is a Laravel + Vue SPA (vue + @vitejs/plugin-vue,
+        // no Nuxt, no SSR renderer). Top-level `window` access is safe in a
+        // client-only build, so the rule must not fire there.
+        let sfc = "<script lang=\"ts\" setup>\nconst demoAccount = window.KOEL.demo_account || {}\n</script>";
+        assert!(run_with_pkg(SPA_PKG, sfc).is_empty());
+    }
+
+    #[test]
+    fn flags_in_nuxt_project() {
+        // Nuxt does SSR, so `uses_vue_ssr()` is true via framework detection and
+        // top-level `window` access is still flagged.
+        let pkg = r#"{ "dependencies": { "nuxt": "^3.11.0" } }"#;
+        let sfc = "<script setup>\nconst w = window.innerWidth\n</script>";
+        assert_eq!(run_with_pkg(pkg, sfc).len(), 1);
     }
 }
