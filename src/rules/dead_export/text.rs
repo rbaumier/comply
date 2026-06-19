@@ -103,8 +103,11 @@
 //!     `pages/api/**`), Next.js App Router special files (`page`/`layout`/`route`/
 //!     `loading`/`error`/`not-found`/`template`/`default`/`global-error` under an
 //!     `app/` directory), Remix / React Router v7 route modules (`routes/**`) and
-//!     the app root (`root.{tsx,jsx}`), and SvelteKit route files (`+page`/
-//!     `+layout`/`+server` and their `.server` variants). This check is
+//!     the app root (`root.{tsx,jsx}`), SvelteKit route files (`+page`/
+//!     `+layout`/`+server` and their `.server` variants), and the `@next/mdx`
+//!     provider module (a `mdx-components.{tsx,jsx,js,mjs}` file's
+//!     `useMDXComponents` export, which `@next/mdx` discovers by filename at
+//!     build time). This check is
 //!     path-convention-based and does NOT require the framework dependency to be
 //!     detected, so it covers monorepo
 //!     route files whose framework dep is invisible to nearest-manifest
@@ -368,6 +371,13 @@ fn is_framework_route_export(path: &Path, export_name: &str) -> bool {
     if crate::rules::path_utils::is_sveltekit_route_file(basename)
         && SVELTEKIT_ROUTE_EXPORTS.contains(&export_name)
     {
+        return true;
+    }
+
+    // Next.js `@next/mdx` provider module: a file named `mdx-components.{tsx,jsx,js,mjs}`
+    // must export a named `useMDXComponents`, which @next/mdx discovers by filename
+    // at build time — there is never a static import of it.
+    if stem == "mdx-components" && export_name == "useMDXComponents" {
         return true;
     }
 
@@ -2122,6 +2132,69 @@ mod tests {
             "a `setup` export in a non-globalSetup module must still be flagged: {diags:?}"
         );
         assert!(diags[0].message.contains("setup"));
+    }
+
+    #[test]
+    fn ignores_mdx_components_use_mdx_components_export_issue_4391() {
+        // Regression for #4391 (t3-env, better-auth docs) — `@next/mdx` requires a
+        // `mdx-components.tsx` file exporting `useMDXComponents`, which it discovers
+        // by filename at build time. There is no static importer, so the export must
+        // not be flagged dead.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "mdx-components.tsx",
+                "export function useMDXComponents(components) { return components; }\n",
+            ),
+            ("src/other.ts", "export const z = 1;\nz;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "mdx-components.tsx");
+        assert!(
+            diags.is_empty(),
+            "`useMDXComponents` in `mdx-components.tsx` is consumed by @next/mdx: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_other_dead_export_in_mdx_components_file_issue_4391() {
+        // Negative-space guard for #4391 — the exemption is scoped to the
+        // `useMDXComponents` export. An ordinary unused export in
+        // `mdx-components.tsx`, with no importer, is genuinely dead and must fire.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "mdx-components.tsx",
+                "export function useMDXComponents(components) { return components; }\n\
+                 export function unusedHelper() {}\n",
+            ),
+            ("src/other.ts", "export const z = 1;\nz;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "mdx-components.tsx");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a non-`useMDXComponents` unused export in `mdx-components.tsx` is dead: {diags:?}"
+        );
+        assert!(diags[0].message.contains("unusedHelper"));
+    }
+
+    #[test]
+    fn still_flags_use_mdx_components_in_non_mdx_components_file_issue_4391() {
+        // Negative-space guard for #4391 — the filename gate is required. A
+        // `useMDXComponents` export from a file that is NOT `mdx-components.*`, with
+        // no importer, is genuinely dead and must still fire.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/utils.tsx",
+                "export function useMDXComponents() {}\n",
+            ),
+            ("src/other.ts", "export const z = 1;\nz;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/utils.tsx");
+        assert_eq!(
+            diags.len(),
+            1,
+            "`useMDXComponents` outside an `mdx-components.*` file is dead: {diags:?}"
+        );
+        assert!(diags[0].message.contains("useMDXComponents"));
     }
 
     #[test]
