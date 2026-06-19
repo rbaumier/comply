@@ -57,9 +57,13 @@ fn exports_value(source: &str) -> bool {
 }
 
 /// Runtime test markers: standard runner/assertion calls (Jest, Mocha, Vitest,
-/// Node `assert`).
+/// Node `assert`). `RuleTester` is the test-only class from
+/// `@typescript-eslint/rule-tester` (or `eslint`) that drives every ESLint-rule
+/// test suite via `new RuleTester()` + `ruleTester.run(name, rule, { valid,
+/// invalid })`; such files carry their assertions inside the cases array and
+/// have no bare `expect(`.
 const RUNTIME_TEST_MARKERS: &[&str] =
-    &["test(", "it(", "describe(", "expect(", "assert(", "assert."];
+    &["test(", "it(", "describe(", "expect(", "assert(", "assert.", "RuleTester"];
 
 /// Runner functions whose calls may be chained through modifier properties
 /// (`it.concurrent(`, `test.each([...])(`, `describe.skip(`, `it.concurrent.skip(`).
@@ -639,6 +643,64 @@ mod tests {
         let source = "import { Button } from './Button';\n\
                       // it.would be nice to test this\n";
         assert_eq!(run("components.spec.tsx", source).len(), 1);
+    }
+
+    #[test]
+    fn allows_eslint_rule_tester_suite() {
+        // TanStack/query packages/eslint-plugin-query/src/__tests__/*.test.ts:
+        // ESLint-rule test suites drive execution through `RuleTester.run(...)`
+        // and carry their assertions inside the `valid`/`invalid` case arrays —
+        // there is no bare `expect(`. Recognizing the `RuleTester` class marks
+        // the file as a real test suite. Without the marker this file flags.
+        let source = "import { RuleTester } from '@typescript-eslint/rule-tester';\n\
+                      import { rule } from '../rules/no-unstable-deps/no-unstable-deps.rule';\n\
+                      \n\
+                      const ruleTester = new RuleTester();\n\
+                      \n\
+                      ruleTester.run('no-unstable-deps', rule, {\n\
+                      \tvalid: [],\n\
+                      \tinvalid: [],\n\
+                      });\n";
+        assert!(
+            run(
+                "packages/eslint-plugin-query/src/__tests__/no-unstable-deps.test.ts",
+                source
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_eslint_rule_tester_run_near_top() {
+        // stable-query-client.test.ts opens with `ruleTester.run(...)` on line 7;
+        // the `RuleTester` import alone marks it as a test suite.
+        let source = "import { RuleTester } from '@typescript-eslint/rule-tester';\n\
+                      import { rule } from '../rules/stable-query-client/stable-query-client.rule';\n\
+                      \n\
+                      const ruleTester = new RuleTester();\n\
+                      \n\
+                      ruleTester.run('stable-query-client', rule, { valid: [], invalid: [] });\n";
+        assert!(
+            run(
+                "packages/eslint-plugin-query/src/__tests__/stable-query-client.test.ts",
+                source
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_empty_test_file_without_rule_tester() {
+        // Core preserved: a genuinely empty test file (a lone import of a
+        // non-test util, no `test(`/`RuleTester`/etc.) is still flagged.
+        assert_eq!(
+            run(
+                "__tests__/foo.test.ts",
+                "import { helper } from '../helper';\n"
+            )
+            .len(),
+            1
+        );
     }
 
     #[test]
