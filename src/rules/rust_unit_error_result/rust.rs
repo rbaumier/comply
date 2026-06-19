@@ -21,10 +21,19 @@
 //! handlers and extractors. We exempt the structurally-detectable cases:
 //! an `impl IntoResponse` ok-type, a `#[debug_handler]` handler, and a
 //! `FromRequest`/`FromRequestParts` extractor whose `type Rejection = ()`.
+//!
+//! Trait-contract exception: `Result<(), ()>` (BOTH params `()`) in a trait
+//! method signature — a trait definition or a trait impl — is a deliberate
+//! binary success/failure signal in transport abstractions (e.g. gRPC, where
+//! the error detail travels out-of-band via Status trailers). It is an API
+//! contract every impl must conform to, not a discarded error. `Result<Value,
+//! ()>` (a real value alongside a discarded error) stays flagged everywhere,
+//! and `Result<(), ()>` in a free or inherent function stays flagged too.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
-    is_in_test_context, is_suppressed_by_clippy_allow, result_error_type,
+    is_in_test_context, is_in_trait_definition, is_in_trait_impl, is_suppressed_by_clippy_allow,
+    result_error_type, result_ok_type,
 };
 use tree_sitter::Node;
 
@@ -42,6 +51,15 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
         return;
     }
     if is_axum_unit_response(node, source) {
+        return;
+    }
+    // gRPC/transport trait interfaces use `Result<(), ()>` as a deliberate binary
+    // success/failure signal — error detail travels out-of-band (e.g. gRPC Status
+    // trailers), not through the Rust error type. When BOTH params are `()` and the
+    // type is a trait method signature (definition or impl), it is an API contract
+    // every impl must conform to, not a discarded error detail.
+    let ok_type_is_unit = result_ok_type(node, source).is_some_and(|t| t.kind() == "unit_type");
+    if ok_type_is_unit && (is_in_trait_impl(node) || is_in_trait_definition(node)) {
         return;
     }
     let pos = node.start_position();
@@ -411,6 +429,56 @@ mod tests {
                  fn q() -> Result<(), ()> { Ok(()) }"
             )
             .len(),
+            1
+        );
+    }
+
+    // --- trait contract: `Result<(), ()>` is a binary ok/err signal (#4442) ---
+
+    #[test]
+    fn allows_unit_unit_result_in_trait_definition() {
+        // gRPC/transport trait interface: `Result<(), ()>` is a binary
+        // success/failure event, error detail travels out-of-band.
+        assert!(
+            run_on_src("pub trait T { fn f(&self) -> Result<(), ()>; }").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_unit_unit_result_in_trait_impl() {
+        // The impl conforms to the trait contract, so it is exempt too.
+        assert!(
+            run_on_src(
+                "impl T for S { fn f(&self) -> Result<(), ()> { Ok(()) } }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_unit_unit_result_in_free_fn() {
+        // Load-bearing negative: a free function is not a trait contract, so
+        // `Result<(), ()>` stays flagged (the exemption is not blanket).
+        assert_eq!(run_on_src("fn f() -> Result<(), ()> { Ok(()) }").len(), 1);
+    }
+
+    #[test]
+    fn flags_unit_unit_result_in_inherent_impl() {
+        // Load-bearing negative: an inherent-impl method is not a trait
+        // contract, so it stays flagged.
+        assert_eq!(
+            run_on_src("impl S { fn f(&self) -> Result<(), ()> { Ok(()) } }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_value_unit_result_in_trait_definition() {
+        // Load-bearing negative: `Result<i32, ()>` returns real data while
+        // discarding the error detail — a stronger smell that stays flagged
+        // even inside a trait contract.
+        assert_eq!(
+            run_on_src("pub trait T { fn f(&self) -> Result<i32, ()>; }").len(),
             1
         );
     }
