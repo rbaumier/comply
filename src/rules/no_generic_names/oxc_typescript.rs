@@ -327,6 +327,34 @@ fn expr_is_entries_call(expr: &Expression) -> bool {
     }
 }
 
+/// Member-call property names whose result is a directory or collection
+/// listing, for which `entries` is the conventional, self-documenting binding
+/// name. `readdir`/`readdirSync` return the entries of a directory (Node `fs`);
+/// `entries` returns the `[key, value]` pairs of an object/Map/Set/FormData
+/// (`Object.entries(obj)`, `map.entries()`).
+const LISTING_CALL_METHODS: &[&str] = &["entries", "readdir", "readdirSync"];
+
+/// True when `expr` is (or unwraps to) a directory/collection-listing call: a
+/// member call whose property name is in `LISTING_CALL_METHODS`
+/// (`fs.readdir(dir)`, `map.entries()`, `Object.entries(obj)`). The `await` of
+/// `await fs.readdir(dir)` is peeled, and the same computed/static member,
+/// parenthesized, and non-null wrappers as `expr_is_entries_call` are unwrapped.
+fn expr_is_listing_call(expr: &Expression) -> bool {
+    match expr {
+        Expression::CallExpression(call) => matches!(
+            &call.callee,
+            Expression::StaticMemberExpression(m)
+                if LISTING_CALL_METHODS.contains(&m.property.name.as_str())
+        ),
+        Expression::AwaitExpression(e) => expr_is_listing_call(&e.argument),
+        Expression::ComputedMemberExpression(m) => expr_is_listing_call(&m.object),
+        Expression::StaticMemberExpression(m) => expr_is_listing_call(&m.object),
+        Expression::ParenthesizedExpression(p) => expr_is_listing_call(&p.expression),
+        Expression::TSNonNullExpression(e) => expr_is_listing_call(&e.expression),
+        _ => false,
+    }
+}
+
 /// True when the identifier is bound as an element of an array-destructuring
 /// pattern (`[key, value]`) whose initializer is a `.entries()` call. `[key,
 /// value]` is the canonical, MDN-blessed destructuring for `Object.entries()` /
@@ -353,6 +381,39 @@ fn is_in_entries_destructuring<'a>(
             }
             AstKind::AssignmentExpression(a) if in_array_pattern => {
                 return expr_is_entries_call(&a.right);
+            }
+            AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Program(_) => return false,
+            _ => continue,
+        }
+    }
+    false
+}
+
+/// True when the identifier is a *simple* `entries` variable binding
+/// (`const entries = await fs.readdir(dir)`) whose initializer is a
+/// directory/collection-listing call (`fs.readdir`/`readdirSync`,
+/// `Object.entries`/`map.entries`). `entries` is the canonical name for the
+/// directory entries / `[key, value]` pairs such a call returns, so it is
+/// self-documenting there. Scoped to the `entries` banned word at the call site.
+/// The binding must be the declarator's own `id`, not an array/object-pattern
+/// element — a `[k, v]`/`{ x }` destructuring from a listing call is handled by
+/// `is_in_entries_destructuring`, and `entries` from an arbitrary call stays
+/// generic. The walk stops at a function/program boundary so only the binding's
+/// own surroundings are inspected.
+fn is_entries_simple_listing_binding<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    for kind in nodes.ancestor_kinds(node.id()) {
+        match kind {
+            // A destructuring pattern between the binding and its declarator
+            // means this is not a simple `const entries = …` binding.
+            AstKind::ArrayPattern(_) | AstKind::ObjectPattern(_) => return false,
+            AstKind::VariableDeclarator(d) => {
+                return d.init.as_ref().is_some_and(expr_is_listing_call);
             }
             AstKind::Function(_)
             | AstKind::ArrowFunctionExpression(_)
@@ -1085,6 +1146,13 @@ impl OxcCheck for Check {
                     if is_in_entries_destructuring(node, semantic) {
                         return;
                     }
+                    // `const entries = await fs.readdir(dir)` /
+                    // `const entries = Object.entries(obj)`: `entries` is the
+                    // canonical name for the directory entries / pairs returned
+                    // by a listing call, so the binding is self-documenting.
+                    if lower == "entries" && is_entries_simple_listing_binding(node, semantic) {
+                        return;
+                    }
                     // A descriptive type annotation (`result: Result<…>`,
                     // `rows: readonly TRow[]`) carries the domain info the
                     // identifier name would otherwise need to.
@@ -1442,9 +1510,11 @@ mod tests {
     #[test]
     fn flags_bare_items_and_entries_whole_identifier() {
         // `items`/`entries` are as vague as their already-banned singulars
-        // (`item`/`entry`) — flag them only as the *whole* identifier.
+        // (`item`/`entry`) — flag them only as the *whole* identifier. (A bare
+        // `entries` bound to a listing call is exempt; see #4532. Here the
+        // initializer is a plain literal, so `entries` stays generic.)
         assert_eq!(run("const items = [];").len(), 1);
-        assert_eq!(run("const entries = Object.entries(o);").len(), 1);
+        assert_eq!(run("const entries = [];").len(), 1);
     }
 
     #[test]
@@ -1885,6 +1955,33 @@ mod tests {
             function f(data) { return data; }
         "#;
         assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn no_fp_entries_bound_to_listing_call_issue_4532() {
+        // Regression for #4532 — `entries` is the canonical name for the
+        // directory entries / `[key, value]` pairs a listing call returns
+        // (`fs.readdir`, `readdirSync`, `Object.entries`, `map.entries`), so a
+        // simple `const entries = …` bound from such a call is self-documenting.
+        let repro = r#"async function* walk(d) { const entries = await fs.readdir(d); use(entries); }"#;
+        assert!(run(repro).is_empty(), "entries from await fs.readdir must not flag");
+        assert!(run("const entries = fs.readdirSync(dir);").is_empty());
+        assert!(run("const entries = map.entries();").is_empty());
+        assert!(run("const entries = Object.entries(obj);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_entries_from_non_listing_call_issue_4532() {
+        // Negative space: the exemption is scoped to listing calls. `entries`
+        // bound from an arbitrary call is genuinely generic and must still flag.
+        assert_eq!(run("const entries = computeStuff();").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_data_bound_to_listing_call_issue_4532() {
+        // Negative space: the exemption is name-specific to `entries`. A `data`
+        // binding from the same `fs.readdir` call is still a generic name.
+        assert_eq!(run("async function f(dir) { const data = await fs.readdir(dir); use(data); }").len(), 1);
     }
 
     #[test]
