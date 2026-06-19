@@ -1,8 +1,10 @@
 //! OxcCheck backend for js-index-maps — flag a bare-identifier
 //! `.find()`/`.findIndex()`/`.filter()`/`.includes()`/`.indexOf()` inside a loop
-//! as a possible O(n*m) array scan. EXCEPTION: `.includes()`/`.indexOf()` whose
+//! as a possible O(n*m) array scan. EXCEPTIONS: `.includes()`/`.indexOf()` whose
 //! sole argument is a string literal is a `String.prototype` substring search,
-//! not array membership — there is no collection to index, so it is not flagged.
+//! not array membership — there is no collection to index, so it is not flagged;
+//! a two-argument `.indexOf(value, fromIndex)` is a forward-scan cursor (a
+//! positional string/array walk), never a membership lookup, so it is not flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -57,6 +59,16 @@ impl OxcCheck for Check {
             && call.arguments.len() == 1
             && matches!(call.arguments.first(), Some(Argument::StringLiteral(_)))
         {
+            return;
+        }
+
+        // A two-argument `indexOf(value, fromIndex)` is a forward-scan cursor: it
+        // finds the next occurrence starting at an offset, walking a string/array
+        // positionally (`s.indexOf('}', i + 3)`). There is no membership
+        // collection to replace with a Map/Set, regardless of receiver type —
+        // `Array`/`String.prototype.indexOf` both take exactly
+        // `(searchValue, fromIndex)`.
+        if method == "indexOf" && call.arguments.len() == 2 {
             return;
         }
 
@@ -589,6 +601,46 @@ arr.filter((x) => x.ok).forEach((y) => use(y));
         // The inner `.filter` is nested in the `.map` callback — per-iteration.
         let diags = run(r#"
 const r = items.map((i) => others.filter((o) => o.id === i.id));
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_two_arg_index_of_cursor_in_loop() {
+        // Regression for #4529: `indexOf('}', i + 3)` is a forward-scan cursor
+        // (string positional walk), not an array-membership lookup.
+        assert!(
+            run(r#"
+for (let i = 0; i < n; i++) {
+    rawIndex = rawTemplate.indexOf('}', rawIndex + 3);
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_two_arg_index_of_variable_search_in_loop() {
+        // A 2-arg `indexOf(value, fromIndex)` is a positional scan regardless of
+        // whether the search value is a literal or a variable.
+        assert!(
+            run(r#"
+for (const x of xs) {
+    const j = arr.indexOf(x, 5);
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_one_arg_index_of_membership_in_loop() {
+        // A 1-arg `indexOf(value)` membership test is the genuine O(n*m) scan —
+        // only the 2-arg `(value, fromIndex)` cursor form is exempt.
+        let diags = run(r#"
+for (const item of list) {
+    if (bigList.indexOf(item) !== -1) { found.push(item); }
+}
 "#);
         assert_eq!(diags.len(), 1);
     }
