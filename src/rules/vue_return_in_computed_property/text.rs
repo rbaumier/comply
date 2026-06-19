@@ -1,4 +1,7 @@
 //! vue-return-in-computed-property text backend.
+//!
+//! Comments are masked before scanning, so a commented-out `computed()` call
+//! (and any `return` inside a comment) is ignored.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -45,7 +48,11 @@ fn matching_brace(src: &str, start: usize) -> Option<usize> {
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        let src = ctx.source;
+        // Mask comments so a commented-out `computed()` is not matched and a
+        // `return` inside a comment is not counted. `mask_comments` preserves
+        // byte offsets and newlines, so computed line/column stay correct.
+        let masked = crate::oxc_helpers::mask_comments(ctx.source);
+        let src = masked.as_str();
         if !src.contains("computed(") {
             return Vec::new();
         }
@@ -111,5 +118,40 @@ mod tests {
     fn allows_expression_body() {
         let src = "const x = computed(() => a.value + 1);";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_commented_out_computed_line_comment() {
+        // Regression #4427: the commented-out, return-less `computed()` must
+        // not be flagged; only the real one below it is considered.
+        let src = "// const x = computed(() => {\n//   return null\n// })\n\
+                   const y = computed(() => { return 'ok' });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_commented_out_computed_block_comment() {
+        let src = "/* const z = computed(() => {\n  doStuff()\n}) */";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_real_returnless_block() {
+        let src = "const c = computed(() => { doStuff() });";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_real_block_with_return() {
+        let src = "const c = computed(() => { return 1 });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn double_slash_inside_string_is_not_a_comment() {
+        // The `//` lives inside a string literal, so `mask_comments` leaves it
+        // and the block is genuinely return-less → still flagged.
+        let src = "const c = computed(() => { const u = \"a//b\"; });";
+        assert_eq!(run(src).len(), 1);
     }
 }
