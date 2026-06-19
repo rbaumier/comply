@@ -24,6 +24,24 @@ fn is_business_logic_path(path: &std::path::Path) -> bool {
     BUSINESS_DIR_PATTERNS.iter().any(|p| path_str.contains(p))
 }
 
+/// True when the file's name marks it as dedicated logging infrastructure
+/// (`logging.interceptor.ts`, `log.service.ts`, `audit-log.ts`, `logger.ts`),
+/// whose sole purpose is to log — `console.*`/`logger.*` there is the file's
+/// reason to exist, not a cross-cutting leak into business logic.
+///
+/// Matching is on whole `.`/`-`/`_`-delimited stem segments, so a segment that
+/// merely *contains* a logging word (`login`, `catalog`, `blog`, `dialog`) is
+/// not exempted — those remain business logic.
+fn is_logging_file(path: &std::path::Path) -> bool {
+    let stem = path
+        .file_stem()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    stem.split(['.', '-', '_'])
+        .any(|seg| matches!(seg, "log" | "logger" | "logging" | "logs"))
+}
+
 /// Return the leftmost identifier name in a (possibly chained) member expression.
 fn root_identifier_name<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
     match expr {
@@ -54,7 +72,10 @@ impl OxcCheck for Check {
         // `core/__tests__/logger.test.ts`) exercises the logger to assert on
         // its behaviour — it is not production business logic, so `logger.*`
         // calls there are expected, not a leak of a cross-cutting concern.
-        if ctx.file.path_segments.in_test_dir {
+        // A dedicated logging-infrastructure file (e.g. `logging.interceptor.ts`)
+        // is the logging wrapper itself, so its `console.*`/`logger.*` calls are
+        // its purpose, not a leak.
+        if ctx.file.path_segments.in_test_dir || is_logging_file(ctx.path) {
             return;
         }
 
@@ -244,6 +265,57 @@ mod tests {
         let pkg = r#"{ "name": "my-app", "private": true }"#;
         let src = "logger.info('order placed');";
         let diags = run_with_pkg_at_path(pkg, "src/core/order.ts", src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn skips_dedicated_logging_interceptor() {
+        // Issue #3260: a NestJS interceptor whose sole purpose is request
+        // logging lives under `/core/` but IS the logging infrastructure.
+        let diags = run_rule_gated(
+            &Check,
+            "console.log('Before...');",
+            "src/core/interceptors/logging.interceptor.ts",
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn skips_dedicated_log_service() {
+        let diags = run_rule_gated(&Check, "console.log('x');", "src/core/log.service.ts");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn skips_dedicated_audit_log_util() {
+        let diags = run_rule_gated(&Check, "console.log('x');", "src/core/utils/audit-log.ts");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn skips_dedicated_logger_module() {
+        let diags = run_rule_gated(&Check, "console.log('x');", "src/core/logger.ts");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn flags_login_service_not_exempted_as_logging() {
+        // Over-broad-guard guard: `login` merely contains "log" — it is business
+        // logic and must STILL be flagged (word-segment match, not `contains`).
+        let diags = run_rule_gated(&Check, "console.log('x');", "src/core/login.service.ts");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn flags_catalog_service_not_exempted_as_logging() {
+        let diags = run_rule_gated(&Check, "console.log('x');", "src/core/catalog.service.ts");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn flags_ordinary_business_file_with_console_log() {
+        // Core preserved: a regular business-logic file still fires.
+        let diags = run_rule_gated(&Check, "console.log('x');", "src/core/cats.service.ts");
         assert_eq!(diags.len(), 1, "{diags:?}");
     }
 }
