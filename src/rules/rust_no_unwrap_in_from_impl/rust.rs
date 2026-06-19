@@ -1,8 +1,12 @@
 //! rust-no-unwrap-in-from-impl backend.
 //!
-//! Walks `impl_item` nodes whose `trait` field starts with `From`
-//! (so `impl From<X> for Y` and `impl<T> From<X<T>> for Y<T>`) and
+//! Walks `impl_item` nodes implementing the `From` trait itself — its
+//! `trait` field is `From<...>` or a qualified path `…::From<...>`
+//! (so `impl From<X> for Y` and `impl<T> From<X<T>> for Y<T>`) — and
 //! scans the impl body for `.unwrap()` / `.expect()` method calls.
+//! Traits whose name merely begins with `From` (`FromRequest`,
+//! `FromRequestParts`, `FromStr`, `FromIterator`, …) are unrelated
+//! fallible traits and are not matched.
 //! `TryFrom` impls are not flagged — there, fallibility is part of
 //! the contract. A `.unwrap()` / `.expect()` under a
 //! `#[cfg(debug_assertions)]` gate is also skipped: it compiles out in
@@ -51,13 +55,16 @@ impl AstCheck for Check {
     }
 }
 
-/// True if the trait reference is `From<...>` (NOT `TryFrom<...>`).
+/// True if the trait reference is the `From` trait itself (NOT `TryFrom<...>`).
 fn is_from_impl(text: &str) -> bool {
     let trimmed = text.trim_start();
     if trimmed.starts_with("TryFrom") {
         return false;
     }
-    trimmed.starts_with("From")
+    // Only the `From` trait itself: it's generic, so the trait-field text is
+    // `From<...>` or a qualified `path::From<...>`. `FromRequest`, `FromStr`,
+    // `FromIterator`, … have extra characters before `<`, so they don't match.
+    trimmed.starts_with("From<") || trimmed.contains("::From<")
 }
 
 fn collect_unwraps_in(
@@ -151,6 +158,61 @@ mod tests {
     fn allows_clean_from_impl() {
         let source = "impl From<u32> for u64 { fn from(x: u32) -> Self { x as u64 } }";
         assert!(run_on(source).is_empty());
+    }
+
+    /// Closes #3228: `FromRequest`/`FromRequestParts` are axum extractor traits
+    /// returning `Result` with an associated `Rejection` — explicitly fallible,
+    /// unrelated to `std::convert::From`. Their name merely begins with `From`,
+    /// so the old `starts_with("From")` predicate flagged them. They must not be.
+    #[test]
+    fn allows_unwrap_in_from_request_impl() {
+        let source = r#"impl<S> FromRequest<S> for X {
+            async fn from_request(mut req: Request, state: &S) -> Result<Self, Self::Rejection> {
+                let v = req.extract_parts().await.unwrap();
+                Ok(Self { v })
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_unwrap_in_from_request_parts_impl() {
+        let source = r#"impl FromRequestParts<S> for X {
+            async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+                let v = parts.extract().await.unwrap();
+                Ok(Self { v })
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_unwrap_in_from_str_impl() {
+        let source = r#"impl FromStr for X {
+            type Err = ParseIntError;
+            fn from_str(s: &str) -> Result<Self, Self::Err> { Ok(X(s.parse().unwrap())) }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_unwrap_in_from_iterator_impl() {
+        let source = r#"impl<T> FromIterator<T> for X {
+            fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+                X(iter.into_iter().next().unwrap())
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// A qualified `core::convert::From<...>` is still the real `From` trait and
+    /// must stay flagged via the `::From<` branch of the predicate.
+    #[test]
+    fn flags_unwrap_in_qualified_from_impl() {
+        let source = r#"impl core::convert::From<String> for X {
+            fn from(s: String) -> Self { X(s.parse().unwrap()) }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
     }
 
     /// Closes #3799: a `.unwrap()` on a statement gated by
