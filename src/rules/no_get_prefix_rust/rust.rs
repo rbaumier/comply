@@ -1,5 +1,5 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::is_in_trait_impl;
+use crate::rules::rust_helpers::{is_in_trait_definition, is_in_trait_impl};
 
 crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, ctx, diagnostics|
     let Some(name_node) = node.child_by_field_name("name") else { return };
@@ -13,10 +13,21 @@ crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, 
     // the name there.
     if is_in_trait_impl(node) { return; }
 
+    // A `get_`-prefixed method declared inside a `trait { … }` definition (a
+    // declaration or a default method) is the trait's public API contract: the
+    // author cannot rename it without a breaking change, and implementors inherit
+    // the name verbatim.
+    if is_in_trait_definition(node) { return; }
+
     // Stripping `get_` from e.g. `get_ref`/`get_mut` would yield a Rust
     // reserved keyword, which is not a legal method name. The suggested rename
     // is impossible, so these accessors are forced to keep the prefix.
     if is_rust_keyword(&name[4..]) { return; }
+
+    // Stripping `get_` from e.g. `get_u8`/`get_i32`/`get_bool` would yield a Rust
+    // primitive type name; `buf.u8()` collides with the type name and is
+    // confusing, so the prefix is the only sensible name.
+    if is_rust_primitive_type_name(&name[4..]) { return; }
 
     if !has_self_param(node, source) { return; }
 
@@ -125,6 +136,32 @@ fn is_rust_keyword(name: &str) -> bool {
             | "unsized"
             | "virtual"
             | "yield"
+    )
+}
+
+/// True when `name` is a Rust primitive type name (`u8`, `i32`, `bool`, `str`,
+/// …). Stripping `get_` from an accessor like `get_u8` would suggest `u8()`,
+/// which collides with the type name and reads confusingly, so such accessors
+/// are exempt from the rename.
+fn is_rust_primitive_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "u8" | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
+            | "f32"
+            | "f64"
+            | "bool"
+            | "char"
+            | "str"
     )
 }
 
@@ -298,6 +335,53 @@ mod tests {
         // A parameterless `get_name(&self)` is still a field accessor and must
         // flag even though the guard exempts keyed lookups.
         let src = "impl Foo {\n    pub fn get_name(&self) -> &str { &self.name }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_get_prefix_in_trait_definition_with_default_body_issue_4507() {
+        // A `get_`-prefixed default method in a trait definition is the trait's
+        // public API contract — the author cannot rename it. Covers `get_u16_le`
+        // too, whose bare name is not a primitive type name.
+        let src = "pub trait Buf {\n\
+            fn get_u8(&mut self) -> u8 { 0 }\n\
+            fn get_u16_le(&mut self) -> u16 { 0 }\n\
+        }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_get_prefix_in_trait_declaration_issue_4507() {
+        // A `get_`-prefixed declaration (no body) in a trait definition is part of
+        // the contract and never flagged. (A body-less signature is a
+        // `function_signature_item`, outside the rule's `function_item` filter.)
+        let src = "pub trait Buf {\n    fn get_i32(&mut self) -> i32;\n}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_get_prefix_primitive_name_in_inherent_impl_issue_4507() {
+        // `get_u8` strips to `u8`, a primitive type name — `foo.u8()` collides
+        // with the type and reads confusingly, so the prefix stays even outside a
+        // trait.
+        let src = "impl Foo {\n    fn get_u8(&self) -> u8 { 0 }\n}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_get_prefix_non_primitive_name_in_inherent_impl_issue_4507() {
+        // `get_name` strips to `name`, not a primitive type name — the author
+        // owns the name and can rename to `name()`.
+        let src = "impl Foo {\n    fn get_name(&self) -> String { String::new() }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_get_prefix_non_primitive_return_type_in_inherent_impl_issue_4507() {
+        // Only the method name after `get_` (`count`), not the return type
+        // (`usize`), matters for the primitive-name guard — `count` is not a
+        // primitive type name, so this still flags.
+        let src = "impl Foo {\n    fn get_count(&self) -> usize { 0 }\n}";
         assert_eq!(run(src).len(), 1);
     }
 }
