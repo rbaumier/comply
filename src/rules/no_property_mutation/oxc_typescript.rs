@@ -1,4 +1,10 @@
 //! no-property-mutation OXC backend — flag property mutations.
+//!
+//! Three Three.js/react-three-fiber imperative-write categories are exempt, as
+//! each mutates a stateful renderer-managed instance with no immutable form:
+//! the `onBeforeCompile` material hook, browser host-object writes
+//! (Location/History), and in-place scene-object mutation inside a `useFrame`
+//! animation callback (`mesh.current.position.y`, `state.camera.position.x`).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
@@ -111,6 +117,32 @@ fn is_inside_mutation_hook_method<'a>(
                 }
             }
             _ => {}
+        }
+    }
+    false
+}
+
+/// True when `node` is inside a function/arrow passed as an argument to a
+/// `useFrame(...)` call — react-three-fiber's per-frame animation hook, where
+/// in-place mutation of Three.js scene objects (`mesh.current.position.y`,
+/// `state.camera.position.x`) is the sole supported animation API: Three.js
+/// `Vector3`/`Euler`/etc. are stateful instances with no immutable alternative.
+/// The callback is a direct argument of the `CallExpression` (no `Argument`
+/// wrapper node), so the enclosing arrow/function's parent is that call.
+fn is_inside_useframe_callback<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        if matches!(
+            ancestor.kind(),
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+        ) && let AstKind::CallExpression(call) = nodes.parent_node(ancestor.id()).kind()
+            && let Expression::Identifier(callee) = &call.callee
+            && callee.name.as_str() == "useFrame"
+        {
+            return true;
         }
     }
     false
@@ -295,6 +327,14 @@ impl OxcCheck for Check {
                 if is_react_display_name_assignment(assign) {
                     return;
                 }
+                // react-three-fiber `useFrame((state) => …)` is the per-frame
+                // animation callback; mutating Three.js scene objects in place
+                // (`mesh.current.position.y`, `state.camera.position.x`) is the
+                // sole supported animation API — Three.js `Vector3`/`Euler`/etc.
+                // are stateful instances with no immutable alternative.
+                if is_inside_useframe_callback(node, semantic) {
+                    return;
+                }
                 match &assign.left {
                     AssignmentTarget::StaticMemberExpression(m) => {
                         let obj_text = &ctx.source
@@ -364,6 +404,12 @@ impl OxcCheck for Check {
                 }
             }
             AstKind::UpdateExpression(update) => {
+                // See the AssignmentExpression arm: in-place Three.js scene-object
+                // mutation inside react-three-fiber's `useFrame` callback is the
+                // sole supported animation API and has no immutable alternative.
+                if is_inside_useframe_callback(node, semantic) {
+                    return;
+                }
                 // update.argument is a SimpleAssignmentTarget.
                 // Check if it's a member expression.
                 match &update.argument {
@@ -847,6 +893,53 @@ mod tests {
                     shader.uniforms.x = 1;
                 }
             }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // react-three-fiber useFrame per-frame animation callback — issue #4412
+
+    #[test]
+    fn allows_three_object_mutation_inside_useframe_issue_4412() {
+        // Regression for rbaumier/comply#4412 — `useFrame` is R3F's per-frame
+        // animation hook; mutating Three.js scene-object properties in place is
+        // the sole supported API, with no immutable/spread alternative.
+        let src = r#"
+            function Box() {
+                const mesh = useRef(null);
+                useFrame((state) => (mesh.current.position.y = Math.sin(state.clock.elapsedTime)));
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_camera_mutation_inside_useframe_block_body() {
+        // Block-body `useFrame` mutating the camera the same way.
+        let src = r#"
+            useFrame((state) => { state.camera.position.x = 1; });
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_same_mutation_outside_useframe() {
+        // Negative space: the exemption is `useFrame`-scoped, not a blanket
+        // `.current` pass — the same write outside a `useFrame` callback flags.
+        let src = r#"
+            function f() {
+                mesh.current.position.y = 1;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_mutation_inside_different_hook_callback() {
+        // Negative space: only `useFrame` is exempt — the same mutation inside a
+        // different hook callback (`useEffect`) stays flagged.
+        let src = r#"
+            useEffect(() => { obj.position.y = 1; });
         "#;
         assert_eq!(run(src).len(), 1);
     }
