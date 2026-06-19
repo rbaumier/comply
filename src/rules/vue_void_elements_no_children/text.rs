@@ -18,19 +18,24 @@ impl TextCheck for Check {
             return Vec::new();
         }
         let mut diagnostics = Vec::new();
-        for elem in extract_elements(ctx.source) {
+        // Mask HTML comments so a void tag written inside `<!-- ... -->` is not
+        // seen as live markup. `mask_html_comments` preserves byte offsets, so
+        // `elem.open_end` still indexes correctly into the masked source.
+        let masked = crate::rules::vue_template_helpers::mask_html_comments(ctx.source);
+        for elem in extract_elements(&masked) {
             if !VOID_ELEMENTS.contains(&elem.tag) {
                 continue;
             }
-            // A void element has no children: the only thing that could be
-            // (mis)placed as content is text directly after its opening `>` and
-            // before the next `<`. A following element (`<div>`) is a sibling,
-            // and multi-line attributes are part of the opening tag — neither is
-            // content.
-            let after_open = &ctx.source[elem.open_end..];
-            let direct = match after_open.find('<') {
-                Some(lt) => &after_open[..lt],
-                None => after_open,
+            // A void element has no children. Only text on the SAME line as its
+            // opening `>`, before the next `<`, can be misplaced inline content.
+            // Text on a following line is a sibling owned by the parent, a
+            // following element (`<div>`) is a sibling, and multi-line attributes
+            // are part of the opening tag — none of these is content.
+            let after_open = &masked[elem.open_end..];
+            let same_line = after_open.split('\n').next().unwrap_or("");
+            let direct = match same_line.find('<') {
+                Some(lt) => &same_line[..lt],
+                None => same_line,
             };
             if !elem.self_closing && !direct.trim().is_empty() {
                 diagnostics.push(Diagnostic {
@@ -93,5 +98,35 @@ mod tests {
         // Genuine misplaced content: text placed directly after a void `>`.
         let source = "<template>\n  <input>some text\n</template>";
         assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_img_with_following_sibling_text() {
+        // #4389: text on the line after an `<img>` is a sibling owned by the
+        // parent `<div>`, not a child of the void element.
+        let source =
+            "<template>\n  <div class=\"logo\">\n    <img alt=\"Elk\" src=\"/logo.svg\">\n    Elk\n  </div>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_input_with_following_sibling_expression() {
+        // #4389: a `{{ }}` expression on the next line is a sibling, not content.
+        let source = "<template>\n  <input name=\"choices\" :value=\"index\">\n  {{ option.title }}\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_br_at_line_end_with_following_expression() {
+        // #4389: a `<br>` at end of line followed by a `{{ }}` sibling expression.
+        let source = "<template>\n  <button>x</button><br>\n  {{ $t('report.unfollow_desc') }}\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_void_inside_html_comment() {
+        // #4389: a void tag written inside an HTML comment is not live markup.
+        let source = "<template>\n  <!-- <img alt=\"x\" src=\"y\"> -->\n</template>";
+        assert!(run(source).is_empty());
     }
 }
