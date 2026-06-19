@@ -340,6 +340,69 @@ fn attr_marks_test(text: &str) -> bool {
         || cfg_predicate_activates_test(text)
 }
 
+/// True when an enclosing scope carries `#[allow(clippy::<lint>)]` or
+/// `#[expect(clippy::<lint>)]` naming one of `lints` (each given WITHOUT the
+/// `clippy::` prefix, e.g. `"result_unit_err"`). Walks the same ancestry as
+/// `is_in_test_context`: crate-root inner attributes (`#![allow(...)]`) plus
+/// outer attributes on the enclosing function / mod / impl. Lets a comply rule
+/// that mirrors a clippy lint honor the author's in-source suppression of it.
+pub fn is_suppressed_by_clippy_allow(node: Node, lints: &[&str], source: &[u8]) -> bool {
+    // Crate-root inner attributes: `#![allow(clippy::X)]`.
+    let mut root = node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        if child.kind() == "inner_attribute_item"
+            && let Ok(text) = child.utf8_text(source)
+            && attr_allows_clippy_lint(text, lints)
+        {
+            return true;
+        }
+    }
+    // Outer attributes on an enclosing function / mod / impl.
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if matches!(parent.kind(), "function_item" | "mod_item" | "impl_item")
+            && item_has_clippy_allow(parent, lints, source)
+        {
+            return true;
+        }
+        cur = parent;
+    }
+    false
+}
+
+/// True if any `attribute_item` immediately preceding `item` is an
+/// `#[allow(clippy::X)]` / `#[expect(clippy::X)]` naming one of `lints`.
+/// Mirrors `has_test_attribute`'s preceding-sibling scan.
+fn item_has_clippy_allow(item: Node, lints: &[&str], source: &[u8]) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        if s.kind() != "attribute_item" {
+            break;
+        }
+        if let Ok(text) = s.utf8_text(source)
+            && attr_allows_clippy_lint(text, lints)
+        {
+            return true;
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+/// True if `text` is an `allow`/`expect` attribute naming `clippy::<lint>` for
+/// one of `lints`.
+fn attr_allows_clippy_lint(text: &str, lints: &[&str]) -> bool {
+    let is_allow_or_expect = text.contains("allow(")
+        || text.contains("expect(")
+        || text.contains("allow (")
+        || text.contains("expect (");
+    is_allow_or_expect && lints.iter().any(|lint| text.contains(&format!("clippy::{lint}")))
+}
+
 /// True if `text` contains a `cfg(…)` / `cfg_attr(…)` predicate in which the
 /// `test` configuration option appears as a positive standalone predicate.
 ///
@@ -2105,6 +2168,44 @@ mod tests {
                 has_test_attribute(item, src.as_bytes()),
                 expected,
                 "has_test_attribute mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_suppressed_by_clippy_allow_honors_matching_allow_and_ignores_others() {
+        let test_cases = [
+            // Function-level `#[allow(clippy::result_unit_err)]` suppresses.
+            (
+                "#[allow(clippy::result_unit_err)]\nfn f() -> Result<(), ()> { Ok(()) }",
+                true,
+            ),
+            // The `#[expect(...)]` form suppresses too.
+            (
+                "#[expect(clippy::result_unit_err)]\nfn f() -> Result<(), ()> { Ok(()) }",
+                true,
+            ),
+            // Crate-root inner attribute suppresses.
+            (
+                "#![allow(clippy::result_unit_err)]\nfn f() -> Result<(), ()> { Ok(()) }",
+                true,
+            ),
+            // An unrelated allow (not the named lint) does not suppress.
+            (
+                "#[allow(dead_code)]\nfn f() -> Result<(), ()> { Ok(()) }",
+                false,
+            ),
+            // No attribute at all.
+            ("fn f() -> Result<(), ()> { Ok(()) }", false),
+        ];
+        for (src, expected) in test_cases {
+            let tree = parse(src);
+            let node = first_of_kind(tree.root_node(), "generic_type")
+                .expect("snippet should contain a generic_type");
+            assert_eq!(
+                is_suppressed_by_clippy_allow(node, &["result_unit_err"], src.as_bytes()),
+                expected,
+                "is_suppressed_by_clippy_allow mismatch for `{src}`"
             );
         }
     }

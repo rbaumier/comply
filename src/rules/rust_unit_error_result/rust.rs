@@ -10,6 +10,12 @@
 //! types idiomatically set `type Error = ()` because the test never
 //! exercises the error path.
 //!
+//! Clippy-allow exception: a `Result<_, ()>` under an enclosing scope that
+//! carries `#[allow(clippy::result_unit_err)]` or
+//! `#[expect(clippy::result_unit_err)]` (on the function / mod / impl, or the
+//! crate root) is exempt — the author has formally dismissed the equivalent
+//! clippy lint, so comply honors that suppression.
+//!
 //! Axum/tower exception: in that ecosystem `()` deliberately implements
 //! `IntoResponse` (an empty `200 OK`), so `Result<_, ()>` is idiomatic for
 //! handlers and extractors. We exempt the structurally-detectable cases:
@@ -17,7 +23,9 @@
 //! `FromRequest`/`FromRequestParts` extractor whose `type Rejection = ()`.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{is_in_test_context, result_error_type};
+use crate::rules::rust_helpers::{
+    is_in_test_context, is_suppressed_by_clippy_allow, result_error_type,
+};
 use tree_sitter::Node;
 
 crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
@@ -28,6 +36,9 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
         return;
     }
     if is_in_test_context(node, source) {
+        return;
+    }
+    if is_suppressed_by_clippy_allow(node, &["result_unit_err"], source) {
         return;
     }
     if is_axum_unit_response(node, source) {
@@ -307,6 +318,97 @@ mod tests {
                  \x20   type Rejection = String;\n\
                  \x20   fn helper() -> Result<u8, ()> { Ok(0) }\n\
                  }"
+            )
+            .len(),
+            1
+        );
+    }
+
+    // --- clippy-allow: author formally dismissed `result_unit_err` (#3735) ---
+
+    #[test]
+    fn allows_unit_error_under_expect_clippy_attr() {
+        // #3735: `#[expect(clippy::result_unit_err)]` on the function suppresses
+        // the equivalent clippy lint, so comply honors it.
+        assert!(
+            run_on_src(
+                "#[expect(clippy::result_unit_err)]\n\
+                 pub fn f() -> Result<(), ()> { Ok(()) }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_unit_error_under_allow_clippy_attr() {
+        // The `#[allow(...)]` form suppresses it just as `#[expect(...)]` does.
+        assert!(
+            run_on_src(
+                "#[allow(clippy::result_unit_err)]\n\
+                 fn g() -> Result<(), ()> { Ok(()) }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_unit_error_for_issue_from_file_path_shape() {
+        // The issue's exact shape: a `pub fn` returning a wrapped upstream
+        // `Result<_, ()>` under `#[expect(clippy::result_unit_err)]`.
+        assert!(
+            run_on_src(
+                "#[expect(clippy::result_unit_err)]\n\
+                 pub fn from_file_path(path: &str) -> Result<Self, ()> {\n\
+                 \x20   Ok(Self(url::Url::from_file_path(path)?))\n\
+                 }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_unit_error_under_crate_level_inner_attr() {
+        // A crate-root `#![allow(clippy::result_unit_err)]` suppresses every
+        // `Result<_, ()>` in the file.
+        assert!(
+            run_on_src(
+                "#![allow(clippy::result_unit_err)]\n\
+                 fn h() -> Result<(), ()> { Ok(()) }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_unit_error_under_enclosing_impl_allow() {
+        // The allow on an enclosing `impl` block reaches a method's
+        // `Result<_, ()>`.
+        assert!(
+            run_on_src(
+                "#[allow(clippy::result_unit_err)]\n\
+                 impl Foo { fn m() -> Result<(), ()> { Ok(()) } }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_without_any_allow() {
+        // Load-bearing guard: no suppression at all still fires.
+        assert_eq!(
+            run_on_src("fn p() -> Result<(), ()> { Ok(()) }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_with_unrelated_allow() {
+        // Load-bearing guard: an allow that does not name `result_unit_err`
+        // (here `dead_code`) does not suppress the finding.
+        assert_eq!(
+            run_on_src(
+                "#[allow(dead_code)]\n\
+                 fn q() -> Result<(), ()> { Ok(()) }"
             )
             .len(),
             1
