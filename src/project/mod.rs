@@ -3492,6 +3492,49 @@ impl ProjectCtx {
         is_no_std
     }
 
+    /// True when the file at `path` is a split-file module that its parent module
+    /// declares as non-public (`mod foo;` / `pub(crate) mod foo;`, never bare
+    /// `pub mod foo;`).
+    ///
+    /// A `pub use ...::*` confined to a non-public module never reaches the
+    /// crate's public API. The AST-local [`is_inside_non_public_module`] catches
+    /// that for *inline* modules; this catches the *split-file* form, where the
+    /// flagged file is parsed standalone and the `mod` declaration lives in the
+    /// parent file on disk.
+    ///
+    /// Resolves the module name and candidate parent files from `path`:
+    /// `<g>/<name>/mod.rs` is declared in `<g>/{mod,lib,main}.rs` or `<g>.rs`;
+    /// `<dir>/<name>.rs` is declared in `<dir>/{mod,lib,main}.rs` or `<dir>.rs`.
+    /// A crate root (`lib.rs`/`main.rs`) has no parent module and returns false.
+    /// Returns false whenever the parent declaration cannot be read or does not
+    /// declare the module privately — conservative, so genuine public re-exports
+    /// stay flagged.
+    ///
+    /// [`is_inside_non_public_module`]: crate::rules::rust_helpers::is_inside_non_public_module
+    pub fn rust_module_declared_private_in_parent(&self, path: &Path) -> bool {
+        let Some((module_name, parent_dir, sibling_stem)) = rust_module_parent_resolution(path)
+        else {
+            return false;
+        };
+
+        let mut candidates: Vec<PathBuf> = ["mod.rs", "lib.rs", "main.rs"]
+            .iter()
+            .map(|f| parent_dir.join(f))
+            .collect();
+        candidates.push(parent_dir.join(format!("{sibling_stem}.rs")));
+
+        for candidate in candidates {
+            let Ok(src) = std::fs::read_to_string(&candidate) else {
+                continue;
+            };
+            match source_declares_module_private(&src, &module_name) {
+                Some(is_private) => return is_private,
+                None => continue,
+            }
+        }
+        false
+    }
+
     /// True if a non-relative `spec` resolves to a local source file via the
     /// nearest tsconfig's `baseUrl` (e.g. `baseUrl: "."` turns `src/types/Foo`
     /// into `<tsconfig_dir>/src/types/Foo.ts`). Such imports are project files,
@@ -4088,6 +4131,80 @@ pub(crate) fn source_declares_no_std(src: &str) -> bool {
         let line = line.trim_start();
         line.starts_with("#![") && line.contains("no_std")
     })
+}
+
+/// Resolve the module name, parent directory, and sibling-form stem for `path`,
+/// or `None` when `path` is a crate root or has no parent directory.
+///
+/// For `<g>/<name>/mod.rs` the module is `<name>`, declared in `<g>` (the
+/// grandparent), whose non-`mod.rs` form would be `<g>.rs`. For `<dir>/<name>.rs`
+/// the module is `<name>`, declared in `<dir>`, whose non-`mod.rs` form would be
+/// `<dir>.rs`.
+fn rust_module_parent_resolution(path: &Path) -> Option<(String, PathBuf, String)> {
+    let file_name = path.file_name()?.to_str()?;
+    let dir = path.parent()?;
+
+    if file_name == "mod.rs" {
+        let module_name = dir.file_name()?.to_str()?.to_owned();
+        let grandparent = dir.parent()?;
+        let sibling_stem = module_name.clone();
+        return Some((module_name, grandparent.to_path_buf(), sibling_stem));
+    }
+
+    let stem = path.file_stem()?.to_str()?;
+    if matches!(stem, "lib" | "main") {
+        return None;
+    }
+    let dir_stem = dir.file_name()?.to_str()?.to_owned();
+    Some((stem.to_owned(), dir.to_path_buf(), dir_stem))
+}
+
+/// Whether `parent_src` declares a file-backed module `mod <name>;`:
+/// `Some(true)` if it is non-public (no modifier or a restricted `pub(...)`),
+/// `Some(false)` if it is bare `pub mod <name>;`, `None` if it is not declared
+/// (so the caller tries the next candidate parent file).
+///
+/// "Public" mirrors [`is_pub`](crate::rules::rust_helpers::is_pub): only a bare
+/// `pub` modifier counts; `pub(crate)`/`pub(super)`/`pub(in path)` are
+/// non-public. Only file-backed declarations (`mod <name>;`, no inline body)
+/// match — an inline `mod <name> { ... }` is not the parent of a split file.
+fn source_declares_module_private(parent_src: &str, name: &str) -> Option<bool> {
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&tree_sitter_rust::LANGUAGE.into()).ok()?;
+    let tree = parser.parse(parent_src, None)?;
+    let bytes = parent_src.as_bytes();
+    find_file_backed_mod_visibility(tree.root_node(), name, bytes)
+}
+
+/// Walk the tree for a file-backed `mod_item` named `name` (no `body` field).
+/// Returns `Some(true)` when it has no bare-`pub` modifier, `Some(false)` when
+/// it does, and `None` when no such declaration exists.
+fn find_file_backed_mod_visibility(
+    node: tree_sitter::Node,
+    name: &str,
+    source: &[u8],
+) -> Option<bool> {
+    if node.kind() == "mod_item"
+        && node.child_by_field_name("body").is_none()
+        && node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+            == Some(name)
+    {
+        let is_pub = node
+            .children(&mut node.walk())
+            .find(|c| c.kind() == "visibility_modifier")
+            .and_then(|m| m.utf8_text(source).ok())
+            .is_some_and(|text| text.trim() == "pub");
+        return Some(!is_pub);
+    }
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if let Some(found) = find_file_backed_mod_visibility(child, name, source) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 pub(crate) fn walk_up_finding(start: &Path, target: &str) -> Option<PathBuf> {
@@ -5918,6 +6035,44 @@ tokio = "1"
             !no_lib.is_proc_macro(),
             "no [lib] table => not a proc-macro crate"
         );
+    }
+
+    #[test]
+    fn source_declares_module_private_mirrors_is_pub_notion() {
+        // Bare `pub` is the only public form; restricted forms are non-public.
+        assert_eq!(source_declares_module_private("pub mod foo;", "foo"), Some(false));
+        assert_eq!(source_declares_module_private("mod foo;", "foo"), Some(true));
+        assert_eq!(
+            source_declares_module_private("pub(crate) mod foo;", "foo"),
+            Some(true)
+        );
+        assert_eq!(
+            source_declares_module_private("pub(super) mod foo;", "foo"),
+            Some(true)
+        );
+        // An inline module (`mod foo { ... }`) is not the parent of a split file.
+        assert_eq!(source_declares_module_private("mod foo {}", "foo"), None);
+        // Not declared at all → None, so the caller tries the next candidate.
+        assert_eq!(source_declares_module_private("mod bar;", "foo"), None);
+    }
+
+    #[test]
+    fn rust_module_parent_resolution_handles_both_forms_and_crate_root() {
+        // `<g>/<name>/mod.rs` → module `<name>`, declared in `<g>`.
+        let (name, dir, sibling) =
+            rust_module_parent_resolution(Path::new("/c/src/platform_impl/mod.rs")).unwrap();
+        assert_eq!(name, "platform_impl");
+        assert_eq!(dir, Path::new("/c/src"));
+        assert_eq!(sibling, "platform_impl");
+        // `<dir>/<name>.rs` → module `<name>`, declared in `<dir>`.
+        let (name, dir, sibling) =
+            rust_module_parent_resolution(Path::new("/c/src/platform.rs")).unwrap();
+        assert_eq!(name, "platform");
+        assert_eq!(dir, Path::new("/c/src"));
+        assert_eq!(sibling, "src");
+        // Crate roots have no parent module.
+        assert!(rust_module_parent_resolution(Path::new("/c/src/lib.rs")).is_none());
+        assert!(rust_module_parent_resolution(Path::new("/c/src/main.rs")).is_none());
     }
 
     #[test]
