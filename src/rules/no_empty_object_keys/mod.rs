@@ -13,7 +13,10 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["correctness"],
 
-    skip_in_test_dir: false,
+    // JSON parser test suites store fuzzing corpora and spec-conformance
+    // fixtures full of intentional empty-string keys to exercise the grammar;
+    // those `""` keys are the test input, not a production typo.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
