@@ -210,6 +210,36 @@ pub fn result_error_type<'a>(node: Node<'a>, source: &[u8]) -> Option<Node<'a>> 
     Some(positional[1])
 }
 
+/// If `node` is a `Result<T, E>` `generic_type`, return its first
+/// positional type argument (the ok type `T`). Returns `None` for
+/// any other node, or for `Result<T>` aliases like `io::Result<T>`
+/// where the error type isn't visible from the AST.
+///
+/// Mirrors [`result_error_type`] but yields the ok type instead of the
+/// error type. `rust-unit-error-result` needs both arms to tell a pure
+/// binary `Result<(), ()>` from a `Result<Value, ()>` that discards a
+/// real error while still returning data.
+pub fn result_ok_type<'a>(node: Node<'a>, source: &[u8]) -> Option<Node<'a>> {
+    if node.kind() != "generic_type" {
+        return None;
+    }
+    let type_node = node.child_by_field_name("type")?;
+    let type_text = type_node.utf8_text(source).ok()?;
+    if type_text != "Result" && !type_text.ends_with("::Result") {
+        return None;
+    }
+    let args = node.child_by_field_name("type_arguments")?;
+    let mut cursor = args.walk();
+    let positional: Vec<_> = args
+        .named_children(&mut cursor)
+        .filter(|c| c.kind() != "type_binding")
+        .collect();
+    if positional.len() < 2 {
+        return None;
+    }
+    Some(positional[0])
+}
+
 /// True if `node` is inside any form of Rust test context:
 ///
 /// - inside a `#[test]` function
@@ -2103,6 +2133,28 @@ mod tests {
                 "is_in_trait_definition mismatch for `{src}`"
             );
         }
+    }
+
+    #[test]
+    fn result_ok_type_returns_first_positional_arg() {
+        // `Result<(), E>` → the ok type is the `unit_type` first arg.
+        let unit_ok = "fn f() -> Result<(), String> { Ok(()) }";
+        let tree = parse(unit_ok);
+        let result = first_of_kind(tree.root_node(), "generic_type")
+            .expect("snippet should contain a generic_type");
+        let ok = result_ok_type(result, unit_ok.as_bytes())
+            .expect("Result<(), E> should expose an ok type");
+        assert_eq!(ok.kind(), "unit_type");
+
+        // `Result<i32, ()>` → the ok type is the value, not the unit error.
+        let value_ok = "fn f() -> Result<i32, ()> { Ok(0) }";
+        let tree = parse(value_ok);
+        let result = first_of_kind(tree.root_node(), "generic_type")
+            .expect("snippet should contain a generic_type");
+        let ok = result_ok_type(result, value_ok.as_bytes())
+            .expect("Result<i32, ()> should expose an ok type");
+        assert_ne!(ok.kind(), "unit_type");
+        assert_eq!(ok.utf8_text(value_ok.as_bytes()).unwrap(), "i32");
     }
 
     #[test]
