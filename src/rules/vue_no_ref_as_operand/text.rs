@@ -248,6 +248,14 @@ impl TextCheck for Check {
             return Vec::new();
         }
         let shadow_scopes = collect_shadow_scopes(ctx.source);
+        // Vue 3 auto-unwraps top-level refs/computed inside `<template>` expressions,
+        // so a bare ref name there is correct (`.value` would be wrong). Suppress any
+        // match whose offset falls inside the root `<template>` block.
+        let template_range =
+            crate::rules::vue_template_helpers::extract_template(ctx.source).map(|t| {
+                let start = t.as_ptr() as usize - ctx.source.as_ptr() as usize;
+                start..start + t.len()
+            });
         let mut diagnostics = Vec::new();
         // Look for `<name> + ` / `<name> ===` / `<name>++` / `<name>--`
         // patterns where the binding is used like a primitive.
@@ -260,6 +268,9 @@ impl TextCheck for Check {
                     .iter()
                     .any(|s| s.body.contains(&i) && s.params.contains(name))
                 {
+                    continue;
+                }
+                if template_range.as_ref().is_some_and(|r| r.contains(&i)) {
                     continue;
                 }
                 // Word boundary on left.
@@ -373,6 +384,27 @@ mod tests {
     fn flags_ref_misuse_outside_shadow_scope() {
         // The function shadows `page`, but the module-scope misuse must still flag.
         let src = "const page = ref(1);\nfunction f(page: number) { return page - 1; }\nconst y = page + 1;";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_ref_as_operand_inside_template() {
+        // Vue auto-unwraps `activeIndex` in the template; the bare name is correct.
+        let src = "<script setup lang=\"ts\">\nconst activeIndex = ref(0)\n</script>\n<template>\n  <div :class=\"{ 'x': activeIndex === index }\" />\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_computed_as_operand_inside_template() {
+        let src = "<script setup lang=\"ts\">\nconst count = computed(() => 0)\n</script>\n<template>\n  <div v-if=\"count > 1\" />\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_ref_misuse_in_script_with_template_present() {
+        // The misuse is in `<script>`, where `.value` IS required; the template
+        // skip must not over-suppress script-context misuse.
+        let src = "<script setup lang=\"ts\">\nconst count = ref(0)\nconst doubled = count + 1\n</script>\n<template>\n  <div />\n</template>";
         assert_eq!(run(src).len(), 1);
     }
 }
