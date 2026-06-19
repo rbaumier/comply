@@ -3,7 +3,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
     byte_offset_to_line_col, is_get_context_call_binding, is_local_object_builder_binding,
-    is_react_display_name_assignment, is_reduce_accumulator_param, is_vue_ref_value_target,
+    is_react_display_name_assignment, is_reduce_accumulator_param, is_vue_reactive_object_target,
+    is_vue_ref_value_target,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
@@ -302,6 +303,8 @@ impl OxcCheck for Check {
 
                         // Vue 3 reactive ref: `count.value = x` drives reactivity.
                         if is_vue_ref_value_target(m, semantic) { return; }
+                        // Vue 3 reactive() object: `state.n = x` is the idiomatic update.
+                        if is_vue_reactive_object_target(m, semantic) { return; }
                         if obj_text == "module" || obj_text == "exports" { return; }
                         if prop_text == "current" { return; }
                         if obj_text == "document" && prop_text == "cookie" { return; }
@@ -367,6 +370,8 @@ impl OxcCheck for Check {
                     SimpleAssignmentTarget::StaticMemberExpression(m) => {
                         // Vue 3 reactive ref: `count.value++` drives reactivity.
                         if is_vue_ref_value_target(m, semantic) { return; }
+                        // Vue 3 reactive() object: `state.incrementedTimes++` is the idiomatic update.
+                        if is_vue_reactive_object_target(m, semantic) { return; }
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
@@ -1095,6 +1100,76 @@ mod tests {
             import { ref } from 'vue'
             const r = ref(0);
             r.config = 5;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Vue 3 reactive() object property mutation — issue #4457
+
+    #[test]
+    fn allows_vue_reactive_object_mutation_issue_4457() {
+        // Regression for rbaumier/comply#4457 — `reactive()` returns a reactive
+        // proxy whose property mutations (`state.n += amount`,
+        // `state.incrementedTimes++`) are the idiomatic Pinia setup-store / Vue 3
+        // way to drive reactivity, not a plain-object mutation.
+        let src = r#"
+            import { reactive } from 'vue'
+            function f() {
+                const state = reactive({ n: 0, incrementedTimes: 0 });
+                function increment(amount = 1) {
+                    state.incrementedTimes++;
+                    state.n += amount;
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_vue_shallow_reactive_object_mutation() {
+        // `shallowReactive` follows the same reactive-proxy mutation contract.
+        let src = r#"
+            import { shallowReactive } from 'vue'
+            const state = shallowReactive({ n: 0 });
+            state.n = 5;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_plain_object_property_mutation() {
+        // Negative space: a parameter object is not a reactive proxy — mutating
+        // its property stays flagged (the reactive exemption must not leak to
+        // non-reactive bindings).
+        let src = r#"
+            function f(o) {
+                o.n = 5;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_local_reactive_not_imported_from_vue() {
+        // Negative space: a same-named local `reactive()` (not imported from vue)
+        // returns a plain object — mutating its property stays flagged.
+        let src = r#"
+            function reactive(x) { return x; }
+            const s = reactive({ n: 0 });
+            s.n = 1;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_nested_member_mutation_on_reactive_object() {
+        // Negative space: the exemption requires a direct-identifier base, so a
+        // nested write `state.inner.n = x` (whose object is itself a member
+        // expression) stays flagged.
+        let src = r#"
+            import { reactive } from 'vue'
+            const state = reactive({ inner: { n: 0 } });
+            state.inner.n = 1;
         "#;
         assert_eq!(run(src).len(), 1);
     }
