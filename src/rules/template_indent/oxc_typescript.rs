@@ -43,10 +43,13 @@ impl OxcCheck for Check {
         if matches!(parent.kind(), AstKind::TaggedTemplateExpression(_)) {
             return;
         }
-        // Angular `@Component({ template: `...` })` inline templates inherit the
-        // class-body indentation by construction; the template compiler strips
+        // Angular `@Component({ template: `...` })` and Vue
+        // `defineComponent({ template: `...` })` inline templates inherit the
+        // surrounding indentation by construction; the template compiler strips
         // it, so it is not excess whitespace the author can remove.
-        if is_angular_component_template(parent, semantic, ctx.source) {
+        if is_angular_component_template(parent, semantic, ctx.source)
+            || is_vue_define_component_template(parent, semantic, ctx.source)
+        {
             return;
         }
         // Rule-tester test cases embed code-under-test as template literals
@@ -173,6 +176,41 @@ fn is_angular_component_template<'a>(
         semantic.nodes().parent_node(call.id()).kind(),
         AstKind::Decorator(_)
     )
+}
+
+/// Whether the template literal is the value of a Vue `defineComponent`
+/// inline `template` property.
+///
+/// Walks `TemplateLiteral` → `ObjectProperty { key: template }`
+/// → `ObjectExpression` → `CallExpression { callee: defineComponent }`.
+/// Such templates inherit the surrounding indentation by construction and the
+/// Vue compiler strips it, so the indentation is not excess whitespace the
+/// author can remove.
+fn is_vue_define_component_template<'a>(
+    parent: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    source: &str,
+) -> bool {
+    use oxc_ast::ast::Expression;
+
+    let AstKind::ObjectProperty(prop) = parent.kind() else {
+        return false;
+    };
+    if object_property_key(&prop.key) != Some("template") {
+        return false;
+    }
+    if !crate::oxc_helpers::source_contains(source, "defineComponent") {
+        return false;
+    }
+    let object = semantic.nodes().parent_node(parent.id());
+    if !matches!(object.kind(), AstKind::ObjectExpression(_)) {
+        return false;
+    }
+    let call = semantic.nodes().parent_node(object.id());
+    let AstKind::CallExpression(call_expr) = call.kind() else {
+        return false;
+    };
+    matches!(&call_expr.callee, Expression::Identifier(id) if id.name.as_str() == "defineComponent")
 }
 
 /// Whether a method call on the template literal removes its leading
@@ -430,6 +468,41 @@ import { Component } from '@angular/core';
 export class AppComponent {}
 "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_vue_define_component_inline_template() {
+        let src = r#"
+import { defineComponent } from 'vue';
+
+const ReactiveComponent = defineComponent({
+    template: `
+        <pre data-testid="conditionResult">{{ conditionSupported }}</pre>
+        <button @click="condition = 'e18e'">invalid condition</button>
+    `,
+    setup() {},
+});
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_template_property_in_non_define_component_object() {
+        // A `template` property in a plain object literal that is not passed to
+        // `defineComponent(...)` is not a Vue inline template — the indented
+        // template literal still fires.
+        let src = r#"
+const config = {
+    template: `
+        <div>
+            <p>Hello</p>
+        </div>
+    `,
+};
+"#;
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("common leading indentation"));
     }
 
     #[test]
