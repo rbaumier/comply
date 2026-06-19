@@ -155,6 +155,12 @@ fn is_tanstack_vue_sfc_route(path: &std::path::Path, file_name: &str) -> bool {
     has_routes_ancestor(path)
 }
 
+/// True when `stem` is purely numeric (`404`, `500`) — an HTTP-status / numeric
+/// page name that can be neither PascalCase nor kebab-case.
+fn is_numeric_stem(stem: &str) -> bool {
+    !stem.is_empty() && stem.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// Returns `true` for a Next.js Pages Router numeric error-page stem (`404.tsx`,
 /// `500.tsx`) living under any `pages/` ancestor directory. The stem is dictated
 /// by Next.js file-based routing and cannot adopt kebab/camel/Pascal case without
@@ -162,8 +168,7 @@ fn is_tanstack_vue_sfc_route(path: &std::path::Path, file_name: &str) -> bool {
 /// by the shared `is_file_based_route_segment`.
 /// See https://nextjs.org/docs/pages/building-your-application/routing/custom-error.
 fn is_nextjs_numeric_error_page(path: &std::path::Path, stem: &str) -> bool {
-    let is_numeric_page = !stem.is_empty() && stem.bytes().all(|b| b.is_ascii_digit());
-    if !is_numeric_page {
+    if !is_numeric_stem(stem) {
         return false;
     }
     path.components()

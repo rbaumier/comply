@@ -42,6 +42,12 @@ impl TextCheck for Check {
         if super::is_tanstack_vue_sfc_route(ctx.path, file_name) {
             return Vec::new();
         }
+        // `404.vue` / `500.vue` are the idiomatic Vue Router HTTP-status error
+        // pages; a purely numeric stem fits neither PascalCase nor kebab-case.
+        // Unlike Next.js, the convention is not gated on a `pages/` directory.
+        if super::is_numeric_stem(stem) {
+            return Vec::new();
+        }
         if stem.is_empty() || is_pascal_case(stem) || super::text::is_kebab_case(stem) {
             return Vec::new();
         }
@@ -281,5 +287,28 @@ mod tests {
     #[test]
     fn flags_camel_case() {
         assert_eq!(run("src/components/userProfile.vue").len(), 1);
+    }
+
+    // Regression for #3217: `404.vue` / `500.vue` are the idiomatic Vue Router
+    // HTTP-status error pages. A purely numeric stem satisfies neither
+    // PascalCase nor kebab-case, so without the numeric-stem exemption it would
+    // fall through to the case check and flag. The exemption is unconditional —
+    // these are valid in `views/`, `pages/`, or anywhere.
+    #[test]
+    fn allows_numeric_error_page_in_views_issue_3217() {
+        assert!(run("packages/playground/src/views/404.vue").is_empty());
+    }
+
+    #[test]
+    fn allows_numeric_error_page_in_pages_issue_3217() {
+        assert!(run("src/pages/500.vue").is_empty());
+    }
+
+    // Negative space for #3217: the exemption is narrow — only purely numeric
+    // stems are spared. A camelCase SFC stem (neither numeric, PascalCase, nor
+    // kebab-case) still fires.
+    #[test]
+    fn flags_camel_case_not_widened_by_numeric_exemption_issue_3217() {
+        assert_eq!(run("src/components/myComponent.vue").len(), 1);
     }
 }
