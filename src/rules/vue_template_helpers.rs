@@ -12,6 +12,36 @@ pub fn is_vue_file(path: &Path) -> bool {
     path.extension().is_some_and(|e| e == "vue")
 }
 
+/// Replace every `<!-- ... -->` HTML comment (delimiters included) with spaces,
+/// preserving newlines so byte offsets and line numbers are unchanged. A
+/// `v-if` (or any directive) inside a commented-out block is thus invisible to
+/// a text scan, while live markup on other lines is byte-for-byte identical.
+pub fn mask_html_comments(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"<!--") {
+            // Mask the whole comment, including `<!--` and the closing `-->`,
+            // keeping newlines so line/column positions don't shift.
+            while i < bytes.len() {
+                if bytes[i..].starts_with(b"-->") {
+                    out.extend_from_slice(b"   ");
+                    i += 3;
+                    break;
+                }
+                out.push(if bytes[i] == b'\n' { b'\n' } else { b' ' });
+                i += 1;
+            }
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    // Output is original non-comment bytes + ASCII spaces/newlines → valid UTF-8.
+    String::from_utf8(out).unwrap_or_else(|_| source.to_string())
+}
+
 /// Extract the inner content of the SFC's root `<template>` block.
 ///
 /// A valid Vue SFC has exactly one top-level `<template>` block; any other
@@ -288,6 +318,53 @@ pub fn collect_attr_names(attrs: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mask_html_comments_single_line() {
+        let source = "<a v-if=\"y\" /><!-- v-if=\"x\" -->";
+        let masked = mask_html_comments(source);
+        // Live markup is byte-for-byte identical; the comment is blanked but
+        // byte length is preserved (no offset shift).
+        assert!(masked.starts_with("<a v-if=\"y\" />"));
+        assert_eq!(masked.len(), source.len());
+        assert!(!masked.contains("v-if=\"x\""));
+    }
+
+    #[test]
+    fn mask_html_comments_multi_line_keeps_line_count() {
+        let source = "<a />\n<!-- line1\n v-if=\"x\"\n -->\n<b />";
+        let masked = mask_html_comments(source);
+        assert_eq!(masked.lines().count(), source.lines().count());
+        assert!(!masked.contains("v-if=\"x\""));
+        // Live markup on the surrounding lines is untouched.
+        let lines: Vec<&str> = masked.lines().collect();
+        assert_eq!(lines[0], "<a />");
+        assert_eq!(lines[4], "<b />");
+    }
+
+    #[test]
+    fn mask_html_comments_leaves_live_markup_unchanged() {
+        let source = "<div v-if=\"a\">x</div>";
+        assert_eq!(mask_html_comments(source), source);
+    }
+
+    #[test]
+    fn mask_html_comments_unterminated_masks_to_eof() {
+        // No closing `-->`: mask to EOF without panicking.
+        let masked = mask_html_comments("<a /><!-- v-if=\"x\"\nmore");
+        assert!(!masked.contains("v-if=\"x\""));
+        assert!(masked.starts_with("<a />"));
+        assert_eq!(masked.lines().count(), 2);
+    }
+
+    #[test]
+    fn mask_html_comments_preserves_multibyte_outside_comment() {
+        // Multi-byte chars outside comments are copied verbatim (UTF-8 safe).
+        let source = "<p>café</p><!-- é -->";
+        let masked = mask_html_comments(source);
+        assert!(masked.starts_with("<p>café</p>"));
+        assert!(!masked.contains("é -->"));
+    }
 
     #[test]
     fn extract_template_basic() {
