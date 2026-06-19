@@ -1,5 +1,8 @@
-//! OxcCheck backend for js-index-maps — flag `.find()` / `.findIndex()` /
-//! `.filter()` etc. inside loops.
+//! OxcCheck backend for js-index-maps — flag a bare-identifier
+//! `.find()`/`.findIndex()`/`.filter()`/`.includes()`/`.indexOf()` inside a loop
+//! as a possible O(n*m) array scan. EXCEPTION: `.includes()`/`.indexOf()` whose
+//! sole argument is a string literal is a `String.prototype` substring search,
+//! not array membership — there is no collection to index, so it is not flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -41,6 +44,19 @@ impl OxcCheck for Check {
         };
         let method = member.property.name.as_str();
         if !LOOKUP_METHODS.contains(&method) {
+            return;
+        }
+
+        // `String.prototype.includes`/`indexOf` take a search STRING. A sole
+        // string-literal argument (`x.includes("figma")`, `x.indexOf("/")`) is a
+        // substring search — there is no array to index into a Map/Set, so the
+        // O(1)-lookup advice is a category error. Array-membership checks pass a
+        // variable/element, not a literal substring. (`find`/`findIndex`/`filter`
+        // take a callback, so this only affects `includes`/`indexOf`.)
+        if matches!(method, "includes" | "indexOf")
+            && call.arguments.len() == 1
+            && matches!(call.arguments.first(), Some(Argument::StringLiteral(_)))
+        {
             return;
         }
 
@@ -439,6 +455,54 @@ const unknownGtins = parsedRows
   .map((r) => r.gtin);
 "#);
         assert!(!diags.is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_string_literal_includes_in_loop() {
+        // Regression for #3730: `fullPath` is a string, `.includes("figma")` is a
+        // substring search — there is no array to index into a Map/Set.
+        assert!(
+            run(r#"
+for (const entry of entries) {
+    const fullPath = join(dir, entry.name);
+    if (fullPath.includes("figma")) continue;
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_string_literal_index_of_in_loop() {
+        assert!(
+            run(r#"
+for (const s of strings) {
+    const i = s.indexOf("/");
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_includes_with_variable_arg_in_loop() {
+        // Array-membership with a variable argument is the genuine O(n*m) scan.
+        let diags = run(r#"
+for (const r of rows) {
+    if (updatedGtins.includes(r.gtin)) {}
+}
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_includes_with_identifier_arg_in_loop() {
+        let diags = run(r#"
+for (const k of keys) {
+    if (allowed.includes(k)) {}
+}
+"#);
+        assert_eq!(diags.len(), 1);
     }
 
     #[test]
