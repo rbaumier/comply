@@ -167,9 +167,10 @@ fn is_fmt_param(node: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 /// Single-letter names idiomatic in Rust: loop indices, counts, math
-/// coordinates, key/value pairs, error/string/file handles.
+/// coordinates, key/value pairs, error/string/file handles, and RGB
+/// color components (r/g/b).
 const CONVENTIONAL_RUST_NAMES: &[&str] = &[
-    "i", "j", "k", "n", "x", "y", "z", "s", "f", "v", "e", "w", "r",
+    "i", "j", "k", "n", "x", "y", "z", "s", "f", "v", "e", "w", "r", "g",
     "a", "b", "c", "d", "m", "p", "h", "l", "o",
 ];
 
@@ -350,5 +351,25 @@ mod tests {
     #[test]
     fn allows_loop_var_l() {
         assert!(run_on("fn main() { for l in vec![1] {} }").is_empty());
+    }
+
+    // Regression for #4405: `g` (green RGB component) is conventional like its
+    // siblings `r` and `b`.
+    #[test]
+    fn allows_conventional_rgb_let_bindings() {
+        assert!(run_on("fn main() { let r = 0u8; let g = 0u8; let b = 0u8; }").is_empty());
+    }
+
+    #[test]
+    fn allows_rgb_function_params() {
+        assert!(run_on("const fn rgb_bytes(r: u8, g: u8, b: u8) -> u32 { 0 }").is_empty());
+    }
+
+    // Load-bearing: a single letter genuinely absent from the allowlist is still flagged.
+    #[test]
+    fn flags_non_conventional_single_letter_u() {
+        let diags = run_on("fn main() { let u = 0; }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`u`"));
     }
 }
