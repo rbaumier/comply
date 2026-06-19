@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    BindingPattern, Expression, ImportDeclarationSpecifier, JSXAttributeName,
+    BindingPattern, Expression, ImportDeclarationSpecifier, JSXAttributeName, JSXElementName,
 };
 use rustc_hash::FxHashSet;
 use std::sync::Arc;
@@ -213,6 +213,18 @@ impl OxcCheck for Check {
                     found_client_api = true;
                     break;
                 }
+                // Rendering a React Context `Provider` (`<QueryClientProvider>`,
+                // `<ThemeProvider>`, `<SomeContext.Provider>`) requires the
+                // `"use client"` boundary: context cannot be provided in a
+                // Server Component, and `*Provider` wrappers call `useContext` /
+                // hold state internally, so the directive is legitimate even
+                // when the file calls no hook directly.
+                AstKind::JSXOpeningElement(opening) => {
+                    if jsx_name_is_provider(&opening.name) {
+                        found_client_api = true;
+                        break;
+                    }
+                }
                 // Calls to a recognized component-factory / HOC
                 // (`chakra("div")`, `createRecipeContext({...})`,
                 // `withContext("span")`). The produced component uses hooks and
@@ -378,6 +390,23 @@ fn is_client_react_factory_call(name: &str) -> bool {
 /// (`onClick`, `onChange`, `onSubmit`, …). These are browser-only APIs.
 fn is_event_handler_name(name: &str) -> bool {
     name.starts_with("on") && name.len() > 2 && name.as_bytes()[2].is_ascii_uppercase()
+}
+
+/// True when a rendered JSX element is a React Context `Provider`: an identifier
+/// ending in `Provider` (`QueryClientProvider`, `ThemeProvider`, redux's
+/// `Provider`) or a member expression whose property is `Provider`
+/// (`<SomeContext.Provider>`). Rendering a context Provider requires the
+/// `"use client"` boundary — context cannot be created or provided in a Server
+/// Component, and `*Provider` wrappers call `useContext` / hold state
+/// internally — so the directive is legitimately needed even when the file
+/// itself calls no hook directly.
+fn jsx_name_is_provider(name: &JSXElementName) -> bool {
+    match name {
+        JSXElementName::Identifier(id) => id.name.as_str().ends_with("Provider"),
+        JSXElementName::IdentifierReference(id) => id.name.as_str().ends_with("Provider"),
+        JSXElementName::MemberExpression(member) => member.property.name.as_str() == "Provider",
+        _ => false,
+    }
 }
 
 fn is_client_api_name(name: &str) -> bool {
@@ -996,6 +1025,46 @@ export function useDerived(count) {
 import { createReactor } from 'some-lib';
 
 export const r = createReactor();
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression tests for #3231 — a `"use client"` provider-wrapper component
+    // that renders a React Context `Provider` (`<QueryClientProvider>`,
+    // `<SomeContext.Provider>`) legitimately needs the directive even though it
+    // calls no hook directly: context cannot be provided in a Server Component.
+    #[test]
+    fn no_fp_for_query_client_provider_wrapper_oxc() {
+        let src = r#"'use client';
+import { QueryClientProvider } from '@tanstack/react-query';
+
+export default function Providers({ children }) {
+  const qc = getQueryClient();
+  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_context_member_provider_wrapper_oxc() {
+        let src = r#"'use client';
+import { MyContext } from './my-context';
+
+export default function Provider({ children, x }) {
+  return <MyContext.Provider value={x}>{children}</MyContext.Provider>;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Negative space: a `"use client"` file rendering no Provider and using no
+    // hook/handler/factory is still flagged — the signal is the `*Provider`
+    // render, not any JSX.
+    #[test]
+    fn still_flags_use_client_with_static_jsx_only_oxc() {
+        let src = r#"'use client';
+export function Title() { return <div>hi</div>; }
 "#;
         assert_eq!(run(src).len(), 1);
     }
