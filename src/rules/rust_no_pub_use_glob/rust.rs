@@ -15,7 +15,11 @@
 //! - a `pub use` confined to a non-public module — whether inline
 //!   (`mod foo { pub use ...::*; }`) or split-file (the flagged file's `mod foo;`
 //!   declaration is non-public in its parent file) — since effective visibility
-//!   stays inside the crate.
+//!   stays inside the crate;
+//! - a glob re-export of a proc-macro companion crate (`pub use serde_derive::*;`,
+//!   `pub use thiserror_impl::*;`), identified by the `_derive` / `_impl` / `_macros`
+//!   naming convention — the only way a parent crate can expose a `proc-macro = true`
+//!   crate's derive macro, and a documented part of its public API.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -96,8 +100,13 @@ impl AstCheck for Check {
         // the public API shape — not the dependency-surface mirroring this rule
         // targets. (External / cross-module globs like `pub use serde::*;` or
         // `pub use crate::types::*;` are not exempt — no local `mod` matches.)
+        // The same first segment also identifies a proc-macro companion crate
+        // (`pub use thiserror_impl::*;`), the only way a parent crate can expose
+        // a `proc-macro = true` crate's derive macro — see the helper below.
         if let Some(seg) = first_use_segment(trimmed) {
-            if declares_submodule(node, seg, source_bytes) {
+            if declares_submodule(node, seg, source_bytes)
+                || is_proc_macro_companion_crate(seg)
+            {
                 return;
             }
         }
@@ -146,6 +155,17 @@ fn first_use_segment(trimmed: &str) -> Option<&str> {
     let after = after.strip_prefix("self::").unwrap_or(after);
     let seg = after.split("::").next()?.trim();
     (!seg.is_empty()).then_some(seg)
+}
+
+/// True when `crate_name` follows the conventional naming of a proc-macro /
+/// derive companion crate (`serde_derive`, `thiserror_impl`, `async_trait_impl`,
+/// `*_macros`). A `proc-macro = true` crate can export only procedural macros, so
+/// the parent crate re-exports them with `pub use <impl_crate>::*` — the
+/// universal, documented derive-library pattern, not a hidden API mirror.
+fn is_proc_macro_companion_crate(crate_name: &str) -> bool {
+    crate_name.ends_with("_derive")
+        || crate_name.ends_with("_impl")
+        || crate_name.ends_with("_macros")
 }
 
 /// True if the file declares a submodule named `seg` (`mod seg;` or
@@ -226,6 +246,43 @@ mod tests {
     #[test]
     fn flags_pub_use_glob() {
         assert_eq!(run_on("pub use crate::types::*;").len(), 1);
+    }
+
+    #[test]
+    fn exempts_proc_macro_companion_thiserror_impl_issue_4510() {
+        // Issue #4510: thiserror re-exports its `proc-macro = true` impl crate via
+        // `pub use thiserror_impl::*;` (no `#[doc(hidden)]`) — the documented way to
+        // expose the derive macro, not a hidden API mirror.
+        assert!(run_on("pub use thiserror_impl::*;").is_empty());
+    }
+
+    #[test]
+    fn exempts_proc_macro_companion_serde_derive_issue_4510() {
+        // serde's bridge: `pub use serde_derive::*;`.
+        assert!(run_on("pub use serde_derive::*;").is_empty());
+    }
+
+    #[test]
+    fn exempts_proc_macro_companion_async_trait_impl_issue_4510() {
+        assert!(run_on("pub use async_trait_impl::*;").is_empty());
+    }
+
+    #[test]
+    fn exempts_proc_macro_companion_macros_suffix_issue_4510() {
+        assert!(run_on("pub use foo_macros::*;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_external_crate_without_companion_suffix_issue_4510() {
+        // No `_derive` / `_impl` / `_macros` suffix -> a normal glob re-export that
+        // does mirror the dependency's surface. The exemption must stay suffix-gated.
+        assert_eq!(run_on("pub use some_external_lib::*;").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_std_collections_glob_issue_4510() {
+        // First segment `std` has no companion suffix -> still flagged.
+        assert_eq!(run_on("pub use std::collections::*;").len(), 1);
     }
 
     #[test]
