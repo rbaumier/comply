@@ -8,6 +8,11 @@
 //! library-facing error type which should derive `thiserror::Error`
 //! rather than hand-roll `Display`/`Error`.
 //!
+//! Names ending in `Kind` are exempt: by Rust convention (cf.
+//! `std::io::ErrorKind`) a `*ErrorKind` / `*Kind` enum is an error
+//! *classifier*, not an error type — it does not implement
+//! `std::error::Error`, so deriving `thiserror::Error` does not apply.
+//!
 //! ## no_std exemption
 //!
 //! `thiserror` generates `impl std::error::Error`, which requires `std`.
@@ -30,6 +35,10 @@ crate::ast_check! { on ["enum_item"] => |node, source, ctx, diagnostics|
     let Some(name) = node.child_by_field_name("name") else { return; };
     let Ok(name_text) = name.utf8_text(source) else { return; };
     if !name_text.contains("Error") { return; }
+    // `*ErrorKind` / `*Kind` enums are error CLASSIFIERS (cf. `std::io::ErrorKind`),
+    // not error types — they don't implement `std::error::Error`, so deriving
+    // `thiserror::Error` would be pointless.
+    if name_text.ends_with("Kind") { return; }
 
     if ctx.project.nearest_cargo_manifest(ctx.path).is_some_and(|m| m.is_no_std()) { return; }
 
@@ -96,6 +105,30 @@ mod tests {
     #[test]
     fn flags_pub_enum_error_without_thiserror() {
         assert_eq!(run("pub enum MyError { NotFound, Unauthorized }").len(), 1);
+    }
+
+    #[test]
+    fn flags_pub_app_error_without_thiserror() {
+        assert_eq!(run("pub enum AppError { Network }").len(), 1);
+    }
+
+    /// Regression for #4402: `*ErrorKind` enums are error classifiers
+    /// (cf. `std::io::ErrorKind`), not error types — they don't implement
+    /// `std::error::Error`, so `thiserror::Error` does not apply.
+    #[test]
+    fn allows_pub_error_kind_classifier() {
+        assert!(
+            run("pub enum CommitProcessingErrorKind { Io, Parse, Json, Other }").is_empty(),
+            "must not flag *ErrorKind classifier enums"
+        );
+    }
+
+    #[test]
+    fn allows_pub_plain_error_kind() {
+        assert!(
+            run("pub enum ErrorKind { NotFound, Other }").is_empty(),
+            "must not flag *Kind classifier enums"
+        );
     }
 
     #[test]
