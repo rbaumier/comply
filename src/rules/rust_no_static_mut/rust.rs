@@ -40,10 +40,11 @@ impl AstCheck for Check {
         // live in `std`, not `core`. In a `no_std` crate (bare-metal, embedded)
         // `static mut` is the only mechanism available for hardware singletons,
         // interrupt state and MMIO addresses — the suggested alternatives don't
-        // compile. Skip when this file declares `no_std`, the crate's manifest
-        // is categorized no-std, or the crate root declares `#![no_std]` (the
-        // attribute usually lives in `lib.rs`/`main.rs`, not the flagged file).
-        if ctx.source_contains("no_std")
+        // compile. Skip when this file declares a `#![no_std]` inner attribute,
+        // the crate's manifest is categorized no-std, or the crate root declares
+        // `#![no_std]` (the attribute usually lives in `lib.rs`/`main.rs`, not
+        // the flagged file).
+        if crate::project::source_declares_no_std(ctx.source)
             || ctx
                 .project
                 .nearest_cargo_manifest(ctx.path)
@@ -130,6 +131,28 @@ mod tests {
     #[test]
     fn allows_const() {
         assert!(run_on("const MAX: u32 = 100;").is_empty());
+    }
+
+    /// The text `no_std` in a comment must not exempt the file: it is not a
+    /// `#![no_std]` declaration, so a real `static mut` in a `std` file is still
+    /// flagged (regression for #4021 — the old substring guard over-suppressed).
+    #[test]
+    fn still_flags_static_mut_when_no_std_only_in_comment() {
+        assert_eq!(
+            run_on("// works in no_std too\nstatic mut COUNTER: usize = 0;").len(),
+            1,
+            "`no_std` in a comment must not exempt a real `static mut`"
+        );
+    }
+
+    /// The text `no_std` in an identifier must not exempt the file either.
+    #[test]
+    fn still_flags_static_mut_when_no_std_only_in_identifier() {
+        assert_eq!(
+            run_on("fn supports_no_std() {}\nstatic mut X: u8 = 0;").len(),
+            1,
+            "`no_std` in an identifier must not exempt a real `static mut`"
+        );
     }
 
     // ── no_std exemptions (Closes #1331) ──────────────────────────────────
