@@ -147,6 +147,9 @@ fn is_async_looking_member_call(call: &CallExpression, ctx: &CheckCtx) -> bool {
     if is_threejs_sync_method(member, ctx) {
         return false;
     }
+    if is_trpc_procedure_builder_query(member, ctx) {
+        return false;
+    }
     let method = member.property.name.as_str();
     ASYNC_LOOKING_METHODS.contains(&method)
 }
@@ -191,6 +194,61 @@ fn file_imports_threejs(source: &str) -> bool {
     SPECIFIERS
         .iter()
         .any(|s| crate::oxc_helpers::source_contains(source, s))
+}
+
+/// tRPC's procedure builder reuses `.query(resolver)` to register a synchronous
+/// resolver, returning a `Procedure` value (not a Promise/thenable). In a file
+/// that imports `@trpc/`, a statement-level `.query(...)` whose receiver chain
+/// carries a procedure-builder marker is therefore not a floating promise.
+///
+/// Both signals are required so a genuine Promise-returning `db.query(...)` /
+/// `pool.query(...)` (DB clients) is never masked: those receivers are plain
+/// identifiers with no builder marker, so [`chain_has_trpc_builder_marker`]
+/// returns false and the call still fires.
+fn is_trpc_procedure_builder_query(member: &StaticMemberExpression, ctx: &CheckCtx) -> bool {
+    member.property.name.as_str() == "query"
+        && ctx.source_contains("@trpc/")
+        && chain_has_trpc_builder_marker(&member.object)
+}
+
+/// Walk the receiver chain of a `.query()` call and return true when any link is
+/// a tRPC procedure-builder marker:
+///   - a `StaticMemberExpression` whose property is `procedure` (e.g. `t.procedure`),
+///   - a `CallExpression` whose callee method is a builder step
+///     (`use` / `input` / `output` / `meta` / `concat` / `unstable_concat`), or
+///   - an `Identifier` named `procedure` or ending in `Procedure`
+///     (`publicProcedure`, `protectedProcedure`, ...).
+///
+/// The walk descends `StaticMemberExpression.object` and
+/// `CallExpression.callee` → `.object`, stopping at any other expression kind.
+fn chain_has_trpc_builder_marker(expr: &Expression) -> bool {
+    const BUILDER_METHODS: &[&str] =
+        &["use", "input", "output", "meta", "concat", "unstable_concat"];
+    let mut current = peel_parens(expr);
+    loop {
+        match current {
+            Expression::Identifier(id) => {
+                let name = id.name.as_str();
+                return name == "procedure" || name.ends_with("Procedure");
+            }
+            Expression::StaticMemberExpression(member) => {
+                if member.property.name.as_str() == "procedure" {
+                    return true;
+                }
+                current = peel_parens(&member.object);
+            }
+            Expression::CallExpression(call) => {
+                let Expression::StaticMemberExpression(callee) = &call.callee else {
+                    return false;
+                };
+                if BUILDER_METHODS.contains(&callee.property.name.as_str()) {
+                    return true;
+                }
+                current = peel_parens(&callee.object);
+            }
+            _ => return false,
+        }
+    }
 }
 
 /// Web Audio's `AudioNode.prototype.connect(destination)` returns the destination
@@ -986,6 +1044,71 @@ class Trie {
         // Negative-space guard: an identifier receiver `db.insert(...)` stays
         // flagged.
         let d = run_on("db.insert(userData);");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression tests for issue #3295: tRPC's procedure builder reuses
+    // `.query(resolver)` to register a synchronous resolver, returning a
+    // `Procedure` value (not a Promise). In a file that imports `@trpc/`, a
+    // statement-level `.query(...)` on a procedure-builder chain must not be
+    // flagged.
+
+    #[test]
+    fn allows_trpc_procedure_use_query() {
+        // The issue's exact example from trpc/trpc.
+        let src = "\
+import { initTRPC } from '@trpc/server';
+t.procedure.use(fooMiddleware).query((opts) => {
+  expectTypeOf(opts.ctx).toEqualTypeOf<{ user: User; foo: 'foo' }>();
+});
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_trpc_procedure_query() {
+        let src = "\
+import { initTRPC } from '@trpc/server';
+t.procedure.query(() => {});
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_trpc_named_procedure_query() {
+        let src = "\
+import { publicProcedure } from '@trpc/server';
+publicProcedure.query(() => {});
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_trpc_procedure_input_query() {
+        let src = "\
+import { initTRPC } from '@trpc/server';
+t.procedure.input(schema).query(() => {});
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_db_query_in_trpc_file() {
+        // Load-bearing FN guard: a genuine Promise-returning `db.query(...)` in a
+        // file that also imports `@trpc/server` stays flagged — the receiver `db`
+        // carries no builder marker, proving the suppressor is not import-gating.
+        let src = "\
+import { initTRPC } from '@trpc/server';
+db.query(\"SELECT 1\");
+";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_db_query_in_non_trpc_file() {
+        // Negative-space guard: `db.query(...)` in a non-tRPC file stays flagged.
+        let d = run_on("db.query(\"SELECT 1\");");
         assert_eq!(d.len(), 1);
     }
 }
