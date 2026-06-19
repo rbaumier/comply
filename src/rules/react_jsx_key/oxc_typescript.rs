@@ -1,7 +1,9 @@
 //! react-jsx-key OxcCheck backend.
 //!
 //! Flags JSX elements inside `.map()` / `.flatMap()` / `.from()` callbacks and
-//! array literals that lack a `key` prop.
+//! array literals that lack a `key` prop. Files for a non-React JSX framework
+//! (Vue, Solid, Preact, Qwik, Stencil) are exempt: their virtual-DOM
+//! reconciliation differs from React's, so a Vue JSX array slot needs no `key`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -87,6 +89,13 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Stable `key` props are a React-only concern. A Vue / Solid / Preact JSX
+        // file uses a different reconciliation model where an array slot needs no
+        // `key`, so it must not be judged by this rule.
+        if crate::oxc_helpers::is_non_react_jsx_file(ctx.source, ctx.project, ctx.path) {
+            return;
+        }
+
         let AstKind::JSXElement(element) = node.kind() else {
             return;
         };
@@ -112,5 +121,44 @@ impl OxcCheck for Check {
                 span: None,
             });
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.tsx")
+    }
+
+    #[test]
+    fn flags_array_without_key_in_react() {
+        let src = "const x = [<div>a</div>, <div>b</div>];";
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn allows_array_without_key_in_vue_tsx() {
+        // Regression for issue #4523: Vue JSX array slots need no `key`.
+        let src = "import { defineComponent, h } from 'vue';\n\
+                   const C = defineComponent({ setup() { return () => [<ChevronDownIcon />, <ChevronUpIcon />]; } });";
+        assert!(run(src).is_empty(), "unexpected: {:?}", run(src));
     }
 }
