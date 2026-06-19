@@ -7,6 +7,12 @@
 //! only way in TypeScript to attach per-export JSDoc (`@category`/`@since`) to a
 //! namespace re-export, since the suggested `export * as X from "…"` cannot
 //! carry per-member documentation.
+//!
+//! A binding that is also referenced locally (in any position other than the
+//! `export { X }` specifier itself — a value use, a type reference, etc.) is
+//! exempt too: `export … from "…"` creates no local binding, so the suggested
+//! rewrite would break every local use. Only a binding that is *solely*
+//! re-exported can become a direct `export … from "…"`.
 
 use std::sync::Arc;
 
@@ -48,18 +54,25 @@ impl OxcCheck for Check {
         }
 
         for specifier in specifiers {
-            let (local_name, span) = match specifier {
+            let (local_name, span, symbol_id) = match specifier {
                 ImportDeclarationSpecifier::ImportSpecifier(named) => {
-                    (named.local.name.as_str(), named.span)
+                    (named.local.name.as_str(), named.span, named.local.symbol_id.get())
                 }
                 ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
-                    (default.local.name.as_str(), default.local.span)
+                    (default.local.name.as_str(), default.local.span, default.local.symbol_id.get())
                 }
                 ImportDeclarationSpecifier::ImportNamespaceSpecifier(ns) => {
-                    (ns.local.name.as_str(), ns.span)
+                    (ns.local.name.as_str(), ns.span, ns.local.symbol_id.get())
                 }
             };
             if exported_locals.contains(local_name) {
+                // `export … from "…"` binds no local name, so the suggested
+                // rewrite only applies when the import is *solely* re-exported.
+                // A binding used anywhere else (value or type position) must keep
+                // its `import`, so leave it alone.
+                if binding_used_locally(symbol_id, semantic) {
+                    continue;
+                }
                 let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),
@@ -75,6 +88,38 @@ impl OxcCheck for Check {
             }
         }
     }
+}
+
+/// True when the import binding `symbol_id` is referenced locally — in any
+/// position other than the re-export occurrence itself.
+///
+/// Each resolved reference's direct parent is inspected. The two re-export
+/// positions this rule flags have a distinctive parent: `export { X }` parents
+/// the reference under an `ExportSpecifier`, and `export default X` under an
+/// `ExportDefaultDeclaration`. Every other parent is a genuine local use — a
+/// `StaticMemberExpression` (`X.foo()`), a `TSQualifiedName` (`X.Type`), a call
+/// argument, etc. Type-position references count: `get_resolved_references`
+/// yields them, and dropping the `import` would break a `X.Type` annotation just
+/// as it would break a value use.
+///
+/// When `symbol_id` is `None` (no resolved binding), returns `false` so the
+/// caller falls back to flagging.
+fn binding_used_locally(
+    symbol_id: Option<oxc_semantic::SymbolId>,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let Some(symbol_id) = symbol_id else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let nodes = semantic.nodes();
+    scoping.get_resolved_references(symbol_id).any(|reference| {
+        let parent_kind = nodes.kind(nodes.parent_id(reference.node_id()));
+        !matches!(
+            parent_kind,
+            AstKind::ExportSpecifier(_) | AstKind::ExportDefaultDeclaration(_)
+        )
+    })
 }
 
 /// Collect the local binding names the module re-exports through a *plain*
@@ -288,6 +333,62 @@ export { default as D } from \"mod\";";
         // different binding.
         let diags = run_on("import { A } from \"mod\";\nexport { B } from \"mod\";\nconsole.log(A);");
         assert!(diags.is_empty(), "unexpected: {diags:?}");
+    }
+
+    // ── Locally-used (not solely re-exported) bindings are exempt (#4515) ───
+
+    #[test]
+    fn allows_namespace_import_used_in_type_then_re_exported() {
+        // `z3` is referenced in a type position *and* re-exported. Rewriting to
+        // `export * as z3 from "…"` would leave the `z3.ZodType` annotation
+        // dangling, so the import-then-export pattern is required.
+        let diags = run_on("import * as z3 from \"zod/v3\";\nexport type T = z3.ZodType;\nexport { z3 };");
+        assert!(diags.is_empty(), "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn allows_named_import_used_as_value_then_re_exported() {
+        // `foo` is called locally and re-exported; converting to a direct
+        // re-export would remove the local binding `foo` calls.
+        let diags = run_on("import { foo } from \"m\";\nconst x = foo();\nexport { foo };");
+        assert!(diags.is_empty(), "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn allows_namespace_import_used_in_type_and_body_then_re_exported() {
+        // The LlamaIndexTS `packages/core/src/zod/index.ts` repro shape: a
+        // namespace import used in a type alias, a generic constraint, and a
+        // function body, then re-exported. Every `z3`/`z4` use needs the local
+        // binding, so the rule must stay silent.
+        let src = "\
+import * as z3 from \"zod/v3\";
+import * as z4 from \"zod/v4/core\";
+export type ZodSchema<T = any> = z3.ZodType<T> | z4.$ZodType<T>;
+export function parseSchema<T>(schema: ZodSchema<T>, data: unknown): T {
+  if (\"_zod\" in schema) {
+    return z4.parse(schema as z4.$ZodType<T>, data);
+  }
+  return (schema as z3.ZodType<T>).parse(data);
+}
+export { z3, z4 };";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_named_import_solely_re_exported() {
+        // No local use: `bar` can become `export { bar } from "m"`. Proves the
+        // exemption requires a genuine local usage, not mere co-occurrence.
+        let diags = run_on("import { bar } from \"m\";\nexport { bar };");
+        assert_eq!(diags.len(), 1, "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_namespace_import_solely_re_exported() {
+        // `ns` is never referenced locally — `export * as ns from "m"` is the
+        // correct rewrite, so the rule must still flag it.
+        let diags = run_on("import * as ns from \"m\";\nexport { ns };");
+        assert_eq!(diags.len(), 1, "unexpected: {diags:?}");
     }
 
     // ── JSDoc-annotated re-exports are exempt (fp-ts barrel pattern) ────────
