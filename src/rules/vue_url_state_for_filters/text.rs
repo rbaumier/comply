@@ -9,6 +9,15 @@
 //! The detector suppresses itself when the file already references
 //! `useUrlSearchParams`, `useRouteQuery`, or assigns to `route.query` —
 //! those are the blessed patterns.
+//!
+//! Individual candidates are also exempted when their actual usage shows
+//! they are not page-level filter state:
+//! - validation-constraint parameter: the var feeds a schema-validation
+//!   constraint (`.max(<name>)` / `.min(<name>)` / `.length(<name>)`) and the
+//!   file uses a validation library (`yup`, `zod`, `valibot`, `joi`,
+//!   `superstruct`, `arktype`);
+//! - widget named v-model binding: the var is the bound value of a
+//!   `v-model:<arg>="<name>"` directive (widget-scoped two-way state).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -69,6 +78,9 @@ impl TextCheck for Check {
                 continue;
             };
             if !is_filter_name(name) {
+                continue;
+            }
+            if used_as_validation_constraint(src, name) || bound_as_named_vmodel(src, name) {
                 continue;
             }
 
@@ -133,6 +145,54 @@ fn is_filter_name(name: &str) -> bool {
     FILTER_NAMES.contains(&name)
 }
 
+/// Validation libraries whose constraint methods exempt a filter-named var.
+const VALIDATION_LIBS: &[&str] = &["yup", "zod", "valibot", "joi", "superstruct", "arktype"];
+
+/// True when `name` flows into a schema-validation constraint method
+/// (`.max(<name>`, `.min(<name>`, `.length(<name>`) and the file uses a
+/// validation library. The library gate prevents exempting a pagination
+/// `limit` passed to `Math.max(limit, 10)`.
+fn used_as_validation_constraint(src: &str, name: &str) -> bool {
+    if !VALIDATION_LIBS.iter().any(|lib| src.contains(lib)) {
+        return false;
+    }
+    for method in [".max(", ".min(", ".length("] {
+        let needle = format!("{method}{name}");
+        let mut from = 0;
+        while let Some(rel) = src[from..].find(&needle) {
+            let after = from + rel + needle.len();
+            let boundary = src[after..]
+                .chars()
+                .next()
+                .is_none_or(|c| !c.is_alphanumeric() && c != '_' && c != '$');
+            if boundary {
+                return true;
+            }
+            from = after;
+        }
+    }
+    false
+}
+
+/// True when `name` is the bound value of a `v-model:<arg>="<name>"`
+/// directive — widget-scoped two-way state, not page-level filter state.
+fn bound_as_named_vmodel(src: &str, name: &str) -> bool {
+    for (idx, _) in src.match_indices("v-model:") {
+        let rest = &src[idx..];
+        let Some(eq) = rest.find('=') else { continue };
+        let after = rest[eq + 1..].trim_start();
+        for q in ['"', '\''] {
+            if let Some(s) = after.strip_prefix(q)
+                && let Some(end) = s.find(q)
+                && s[..end].trim() == name
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,5 +247,28 @@ mod tests {
     #[test]
     fn ignores_comment_lines() {
         assert!(run("// const page = ref(1)").is_empty());
+    }
+
+    #[test]
+    fn allows_limit_as_validation_constraint() {
+        let src = "const limit = ref(5)\nconst schema = yup.object({ content: yup.string().max(limit.value) })";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_search_term_as_named_vmodel() {
+        let src = "const searchTerm = ref('')\n<UListbox v-model:search-term=\"searchTerm\" :items=\"items\" />";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_limit_without_validation_lib() {
+        let src = "const limit = ref(5)\nconst capped = Math.max(limit.value, 10)";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_search_term_without_vmodel() {
+        assert_eq!(run("const searchTerm = ref('')").len(), 1);
     }
 }
