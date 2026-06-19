@@ -1,4 +1,5 @@
-//! zod-prefer-error-over-message — Zod v4 renamed the `message` param to `error`.
+//! zod-prefer-error-over-message — Zod v4's error-customization key is
+//! bidirectional: `z.*`/`.refine` take `error`, `ctx.addIssue` takes `message`.
 
 mod oxc_typescript;
 
@@ -10,10 +11,13 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "zod-prefer-error-over-message",
-    description: "Zod v4 renamed the `message` error-customization param to `error`. A string \
-                  `message` key in a `z.*` call still works but is the deprecated v3 spelling.",
-    remediation: "Rename the `message` key to `error` in the Zod call, e.g. \
-                  `z.string({ error: '...' })` or `.min(1, { error: '...' })`.",
+    description: "Zod v4's error-customization key is bidirectional: `z.*` calls and `.refine` \
+                  options take `error` (a string `message` there is the deprecated v3 spelling), \
+                  while `ctx.addIssue({ ... })` takes `message` (an `error` key there is silently \
+                  dropped).",
+    remediation: "In a `z.*`/`.refine` call rename `message` to `error` (e.g. \
+                  `z.string({ error: '...' })`); in `ctx.addIssue({ ... })` rename `error` to \
+                  `message`.",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["zod"],
