@@ -48,10 +48,13 @@ impl OxcCheck for Check {
         // (backward-compatible: fire on all).
         if let Expression::StaticMemberExpression(inner) = &member.object {
             let model_name = inner.property.name.as_str();
-            if let Some(models) = ctx.project.prisma_soft_delete_models() {
-                if !models.contains(model_name.to_lowercase().as_str()) {
-                    return;
-                }
+            if ctx.project.prisma_model_is_soft_delete(ctx.path, model_name) == Some(false) {
+                // A schema governs this file's package and this model has no
+                // `deletedAt` column — there are no soft-deleted rows, so the
+                // missing filter is not a bug. (`None` = no schema → fall
+                // through to fire-on-all; `Some(true)` = the model is
+                // soft-delete → fall through to flag.)
+                return;
             }
         }
         // Heuristic: scan the entire call source range for
@@ -104,8 +107,30 @@ mod tests {
         crate::rules::test_helpers::run_rule_gated(&Check, src, path)
     }
 
-    fn run_with_project(src: &str, project: &ProjectCtx) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.ts", project, crate::rules::file_ctx::default_static_file_ctx())
+    fn run_with_project(src: &str, path: &std::path::Path, project: &ProjectCtx) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, src, path, project, crate::rules::file_ctx::default_static_file_ctx())
+    }
+
+    /// Build a single-package project under a tempdir whose `prisma/schema.prisma`
+    /// declares an `Envelope` model with `deletedAt` (and an `Account` without),
+    /// returning the loaded `ProjectCtx` and a source file path inside the package.
+    fn project_with_envelope_schema() -> (tempfile::TempDir, ProjectCtx, std::path::PathBuf) {
+        use crate::config::Config;
+        use crate::files::{Language, SourceFile};
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"app"}"#).unwrap();
+        std::fs::create_dir_all(dir.path().join("prisma")).unwrap();
+        std::fs::write(
+            dir.path().join("prisma/schema.prisma"),
+            "model Account {\n  id String @id\n}\n\nmodel Envelope {\n  id String @id\n  deletedAt DateTime?\n}\n",
+        )
+        .unwrap();
+        let file_path = dir.path().join("src/repo.ts");
+        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        std::fs::write(&file_path, "export const x = 1;").unwrap();
+        let source = SourceFile { path: file_path.clone(), language: Language::TypeScript };
+        let ctx = ProjectCtx::load(&[&source], &Config::default());
+        (dir, ctx, file_path)
     }
 
     #[test]
@@ -131,18 +156,18 @@ mod tests {
     #[test]
     fn ignores_find_first_on_model_without_deleted_at_in_schema() {
         // schema contains "envelope" with deletedAt, but not "user"
-        let project = ProjectCtx::for_test_with_prisma_models(&["envelope"]);
+        let (_dir, project, file_path) = project_with_envelope_schema();
         let src =
             r#"const u = await prisma.user.findFirst({ where: { email: "x" } });"#;
-        assert!(run_with_project(src, &project).is_empty());
+        assert!(run_with_project(src, &file_path, &project).is_empty());
     }
 
     #[test]
     fn flags_find_first_on_model_with_deleted_at_in_schema() {
-        let project = ProjectCtx::for_test_with_prisma_models(&["envelope"]);
+        let (_dir, project, file_path) = project_with_envelope_schema();
         let src =
             r#"const e = await prisma.envelope.findFirst({ where: { id: "1" } });"#;
-        assert_eq!(run_with_project(src, &project).len(), 1);
+        assert_eq!(run_with_project(src, &file_path, &project).len(), 1);
     }
 
     // Regression for issue #1358: schemas defined via TypeScript template strings
