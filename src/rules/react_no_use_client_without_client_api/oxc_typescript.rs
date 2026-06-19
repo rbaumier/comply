@@ -20,11 +20,23 @@ const CLIENT_GLOBALS: &[&str] = &[
     "fetch",
 ];
 
-/// Factory calls that produce client-only React values, so a file calling one
+/// Factory calls that produce client-only values, so a file calling one
 /// legitimately needs `"use client"` even without hooks or event handlers:
-/// `createContext` (context must be created on the client) and `createSvgIcon`
-/// (MUI's component factory wrapping JSX into a client icon component).
-const CLIENT_FACTORY_APIS: &[&str] = &["createContext", "createSvgIcon"];
+/// `createContext` (React context must be created on the client),
+/// `createSvgIcon` (MUI's component factory wrapping JSX into a client icon
+/// component), and SolidJS's reactive primitives `createSignal` / `createMemo`
+/// / `createEffect` / `createResource` (client-only reactive state, derivations,
+/// effects, and resources — the SolidJS analog of React's hooks). Bare
+/// `createStore` is excluded: it also names zustand/vanilla's SSR-safe store
+/// creator, so on its own it carries no client-only signal.
+const CLIENT_FACTORY_APIS: &[&str] = &[
+    "createContext",
+    "createSvgIcon",
+    "createSignal",
+    "createMemo",
+    "createEffect",
+    "createResource",
+];
 
 /// Component-factory / higher-order-component call names that build React
 /// components which use hooks, `forwardRef`, and context internally. A module
@@ -911,9 +923,9 @@ export const hooks = createReactQueryHooks();
         assert!(run(src).is_empty());
     }
 
-    // Negative space: a `create*` call that is not a React factory
-    // (`createServer`, `createStore`) carries no client signal and is still
-    // flagged — the pattern is anchored to a capitalized `React` segment.
+    // Negative space: a `create*` call that is not a recognized client factory
+    // (`createServer`) carries no client signal and is still flagged — the
+    // `create*React*` pattern is anchored to a capitalized `React` segment.
     #[test]
     fn still_flags_create_server_call_oxc() {
         let src = r#"'use client';
@@ -925,6 +937,9 @@ export const server = createServer();
         assert_eq!(run(src).len(), 1);
     }
 
+    // Negative space: bare `createStore` is zustand/vanilla's SSR-safe store
+    // creator — created server-side for SSR, so on its own it carries no
+    // client-only signal and a `"use client"` file using only it is still flagged.
     #[test]
     fn still_flags_create_store_call_oxc() {
         let src = r#"'use client';
@@ -934,6 +949,41 @@ import { createStore } from 'zustand/vanilla';
 export const store = createStore(() => ({}));
 "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression tests for #3215 — SolidJS reactive primitives (`createSignal`,
+    // `createMemo`, `createEffect`, …) are client-only reactive state/effect
+    // calls, so a `"use client"` file calling one legitimately needs the
+    // directive even though it calls no React hook.
+    #[test]
+    fn no_fp_for_solid_create_signal_oxc() {
+        let src = r#""use client";
+import { createSignal } from "solid-js";
+import counterContext from "./counterContext";
+
+export default function Provider(props) {
+  return (
+    <counterContext.Provider value={createSignal(props.initialCount)}>
+      {props.children}
+    </counterContext.Provider>
+  );
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_solid_create_memo_and_effect_oxc() {
+        let src = r#""use client";
+import { createMemo, createEffect } from "solid-js";
+
+export function useDerived(count) {
+  const doubled = createMemo(() => count() * 2);
+  createEffect(() => console.log(doubled()));
+  return doubled;
+}
+"#;
+        assert!(run(src).is_empty());
     }
 
     // Negative space: `createReactor` contains `React` only as a prefix of a
