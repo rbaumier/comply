@@ -70,9 +70,25 @@ fn is_guarded_by_not_panicking(
     false
 }
 
-/// True when `condition` is `!<expr>` and `<expr>` is a bare `panicking()`
-/// call (see [`is_bare_panicking_call`]).
+/// True when `condition` proves the thread is not unwinding: either `!<expr>`
+/// where `<expr>` is a bare `panicking()` call (see [`is_bare_panicking_call`]),
+/// or a top-level `&&` whose left or right operand satisfies this predicate.
+/// A `&&` body runs only when both operands hold, so a negated `panicking()`
+/// in either operand still guarantees `drop` is not running while unwinding.
+/// `||` is rejected: its body can run while panicking via the other operand.
 fn is_negated_panicking_call(condition: tree_sitter::Node, source: &[u8]) -> bool {
+    if condition.kind() == "binary_expression" {
+        let Some(op) = condition.child_by_field_name("operator") else {
+            return false;
+        };
+        if op.utf8_text(source).unwrap_or("") != "&&" {
+            return false;
+        }
+        let left = condition.child_by_field_name("left");
+        let right = condition.child_by_field_name("right");
+        return left.is_some_and(|n| is_negated_panicking_call(n, source))
+            || right.is_some_and(|n| is_negated_panicking_call(n, source));
+    }
     if condition.kind() != "unary_expression" {
         return false;
     }
@@ -328,6 +344,43 @@ mod tests {
     fn flags_non_negated_panicking_guard() {
         let source = "struct A; impl Drop for A { fn drop(&mut self) { \
                       if std::thread::panicking() { panic!(); } } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_compound_and_guard_left_operand() {
+        let source = "struct Server; impl Drop for Server { fn drop(&mut self) { \
+                      if !std::thread::panicking() && !self.no_hit_checks { \
+                      let x = *self.total_hits.lock().unwrap(); \
+                      assert!(x > 0, \"test server exited without being called\"); } } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_compound_and_guard_right_operand() {
+        let source = "struct A; impl Drop for A { fn drop(&mut self) { \
+                      if other_cond && !std::thread::panicking() { panic!(\"x\"); } } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_compound_and_guard_nested_chain() {
+        let source = "struct A; impl Drop for A { fn drop(&mut self) { \
+                      if a && !std::thread::panicking() && b { panic!(\"x\"); } } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_compound_or_does_not_guard() {
+        let source = "struct A; impl Drop for A { fn drop(&mut self) { \
+                      if !std::thread::panicking() || other { panic!(\"x\"); } } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_non_negated_panicking_in_compound_and() {
+        let source = "struct A; impl Drop for A { fn drop(&mut self) { \
+                      if std::thread::panicking() && other { panic!(\"x\"); } } }";
         assert_eq!(run_on(source).len(), 1);
     }
 
