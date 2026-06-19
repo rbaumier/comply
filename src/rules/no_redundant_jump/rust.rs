@@ -5,6 +5,11 @@
 //! `continue;` is redundant iff walking up reaches a loop boundary
 //! (`for_expression` / `while_expression` / `loop_expression`).
 //!
+//! A jump carrying an operand (`return x`) or a label (`continue 'outer`)
+//! is never flagged: a labeled `continue 'L` targets the loop named `'L`,
+//! which may be an outer loop, so it is not redundant even in tail
+//! position of the innermost loop.
+//!
 //! "Tail position" means: when the current node's parent is a `block`,
 //! the node must be the last named child of that block; when it is an
 //! `if_expression` / `else_clause` / `match_arm` / `match_block` /
@@ -29,7 +34,12 @@ crate::ast_check! { on ["return_expression", "continue_expression"] => |node, _s
             }
             JumpKind::Return
         }
-        "continue_expression" => JumpKind::Continue,
+        "continue_expression" => {
+            if node.named_child_count() != 0 {
+                return;
+            }
+            JumpKind::Continue
+        }
         _ => return,
     };
 
@@ -270,5 +280,60 @@ fn f(x: u8) {
 }
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    /// Regression for #3897: a labeled `continue 'table` at the tail of an
+    /// inner loop targets the OUTER labeled loop, so removing it changes the
+    /// program. It must never be flagged.
+    #[test]
+    fn allows_labeled_continue_to_outer_loop() {
+        let src = r#"
+fn f(state: &[i32]) {
+    'table: loop {
+        for rule in state {
+            do_x();
+            continue 'table;
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Regression for #3897 (second syn shape): a labeled `continue 'outer`
+    /// inside a nested bare `loop` targets a loop further out.
+    #[test]
+    fn allows_labeled_continue_from_nested_loop() {
+        let src = r#"
+fn f(b: u8, rest: i32) {
+    let mut s = 0;
+    'outer: loop {
+        loop {
+            match b {
+                0 => s = rest,
+                _ => continue 'outer,
+            }
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// A bare `continue;` at the tail of a single loop body is still
+    /// redundant — the labeled-continue guard must not suppress it.
+    #[test]
+    fn flags_bare_continue_at_tail_of_loop() {
+        let src = r#"
+fn f() {
+    loop {
+        do_x();
+        continue;
+    }
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("continue;"));
     }
 }
