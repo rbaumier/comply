@@ -2,9 +2,12 @@
 //!
 //! Walk every `call_expression` matching `<recv>.unwrap()` (or `.expect(...)`)
 //! whose receiver is itself a `call_expression` to `env::var(...)` /
-//! `std::env::var(...)`. Skip when the call is inside a test context or
-//! inside `fn main` — both are explicitly allowed places to read env
-//! vars without graceful fallback.
+//! `std::env::var(...)`. Skip when the call is inside a test context,
+//! inside `fn main`, or in a Cargo build script (`build.rs`) — all are
+//! explicitly allowed places to read env vars without graceful fallback.
+//! A build script runs at build time (single-threaded, with Cargo-set env
+//! vars guaranteed present), so panicking on a missing env var there
+//! correctly fails the build rather than degrading a running service.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -49,7 +52,11 @@ impl AstCheck for Check {
         if !is_env_var_call(receiver, source) {
             return;
         }
-        if is_in_test_context(node, source) || is_in_fn_main(node, source) || is_under_tests_dir(ctx.path) {
+        if is_in_test_context(node, source)
+            || is_in_fn_main(node, source)
+            || is_under_tests_dir(ctx.path)
+            || crate::rules::path_utils::is_rust_build_script(ctx.path)
+        {
             return;
         }
         diagnostics.push(Diagnostic::at_node(
@@ -156,5 +163,32 @@ fn t() { let url = std::env::var("URL").unwrap(); }"#;
         // unwrap_or_default is a graceful fallback, not a panic — but our
         // rule only matches the literal `unwrap` / `expect` methods.
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_env_var_unwrap_in_build_script_helper() {
+        let src = r#"fn helper() { let root = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()); }"#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "build.rs").is_empty());
+    }
+
+    #[test]
+    fn allows_env_var_expect_in_build_script_helper() {
+        let src = r#"fn helper() { let o = std::env::var("OUT_DIR").expect("set by cargo"); }"#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "build.rs").is_empty());
+    }
+
+    #[test]
+    fn allows_custom_env_var_in_build_script() {
+        let src = r#"fn helper() { let x = std::env::var("MY_CUSTOM").unwrap(); }"#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "build.rs").is_empty());
+    }
+
+    #[test]
+    fn flags_env_var_unwrap_in_non_build_script_path() {
+        let src = r#"fn load() { let url = std::env::var("DATABASE_URL").unwrap(); }"#;
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, src, "src/lib.rs").len(),
+            1
+        );
     }
 }

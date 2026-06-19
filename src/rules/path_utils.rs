@@ -390,6 +390,13 @@ fn is_root_level_build_script(path: &Path, project_root: &Path) -> bool {
     ) && (stem == "build" || stem == "bundle")
 }
 
+/// True for a Cargo build script: a file named `build.rs`. Cargo compiles and
+/// runs it at build time (single-threaded, with Cargo-set env vars guaranteed
+/// present), so it is not the crate's runtime code.
+pub fn is_rust_build_script(path: &Path) -> bool {
+    path.file_name().and_then(|n| n.to_str()) == Some("build.rs")
+}
+
 /// True for demonstration code under `samples/`, `sample/`, `samples-dev/`,
 /// `examples/`, `example/`, `example-apps/`, `demo/`, or `demos/`. Compiled and
 /// run at dev time to show library usage; it never ships in the published
