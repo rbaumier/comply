@@ -6463,4 +6463,81 @@ model User {
             "a private workspace root must not inherit parent deps"
         );
     }
+
+    // Issue #4385: in a project whose `tsconfig.json` sets a non-React
+    // `jsxImportSource`, a file carrying an explicit React signal
+    // (react/next import or `"use client"`/`"use server"` directive) must NOT be
+    // classified as non-React — `className`/`htmlFor` are correct there. A file
+    // with no React signal still falls back to the project default, and an
+    // explicit non-React framework import still wins.
+    #[test]
+    fn is_non_react_jsx_file_react_signal_overrides_project_default_issue_4385() {
+        use crate::oxc_helpers::is_non_react_jsx_file;
+
+        let (dir, ctx) = load_with_files(&[
+            (
+                "tsconfig.json",
+                r#"{"compilerOptions":{"jsxImportSource":"preact"}}"#,
+            ),
+            ("app.tsx", "export const x = 1;"),
+        ]);
+        let path = dir.path().join("app.tsx");
+
+        // React-signal file (better-auth shape) → not non-React (FP fixed).
+        let react_file = "\"use client\";\nimport Link from \"next/link\";\nimport type { ReactNode } from \"react\";\nconst x = <path className=\"fill-current\" />;";
+        assert!(
+            !is_non_react_jsx_file(react_file, &ctx, &path),
+            "a file importing react/next must override the project preact default"
+        );
+
+        // `"use client"`-only file (no react/next import) → not non-React.
+        let use_client_only = "\"use client\";\nconst x = <div className=\"x\" />;";
+        assert!(
+            !is_non_react_jsx_file(use_client_only, &ctx, &path),
+            "a \"use client\" directive alone must override the project default"
+        );
+
+        // Next.js-import-only file (no react import, no directive) → not non-React.
+        let next_only = "import Link from \"next/link\";\nconst x = <div className=\"x\" />;";
+        assert!(
+            !is_non_react_jsx_file(next_only, &ctx, &path),
+            "a Next.js import alone must override the project default"
+        );
+
+        // Plain JSX with NO React signal → still non-React (project default kept).
+        let plain = "const x = <div className=\"x\" />;";
+        assert!(
+            is_non_react_jsx_file(plain, &ctx, &path),
+            "a file with no React signal must keep the project preact default"
+        );
+
+        // Solid file (tier-1 non-React import) wins even with a server directive.
+        let solid = "\"use server\";\nimport { createSignal } from 'solid-js';\nconst x = <div class=\"x\" />;";
+        assert!(
+            is_non_react_jsx_file(solid, &ctx, &path),
+            "an explicit non-React framework import must win over a server directive"
+        );
+    }
+
+    // Issue #4385 baseline: with NO project tsconfig (no project default), a
+    // React-signal file and a plain JSX file are both treated as React.
+    #[test]
+    fn is_non_react_jsx_file_without_project_default_issue_4385() {
+        use crate::oxc_helpers::is_non_react_jsx_file;
+
+        let ctx = ProjectCtx::default();
+        let path = Path::new("app.tsx");
+
+        let react_file = "import type { ReactNode } from \"react\";\nconst x = <div className=\"x\" />;";
+        assert!(
+            !is_non_react_jsx_file(react_file, &ctx, path),
+            "a React-signal file with no project default stays React"
+        );
+
+        let plain = "const x = <div className=\"x\" />;";
+        assert!(
+            !is_non_react_jsx_file(plain, &ctx, path),
+            "a plain JSX file with no project default stays React (default-on)"
+        );
+    }
 }

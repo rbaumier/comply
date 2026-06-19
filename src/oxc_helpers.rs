@@ -455,7 +455,9 @@ pub fn in_non_react_framework_package(
 /// via [`source_contains`].
 #[must_use]
 pub fn is_non_react_jsx_file(source: &str, project: &crate::project::ProjectCtx, path: &Path) -> bool {
-    source_contains(source, "solid-js")
+    // An explicit per-file non-React framework signal (import or pragma) wins
+    // outright — the file's JSX is unambiguously processed by that runtime.
+    if source_contains(source, "solid-js")
         || source_contains(source, "@solidjs/")
         || source_contains(source, "solid-start")
         || source_contains(source, "@tanstack/solid-router")
@@ -468,7 +470,33 @@ pub fn is_non_react_jsx_file(source: &str, project: &crate::project::ProjectCtx,
         || source_contains(source, "'preact'")
         || source_contains(source, "\"preact\"")
         || has_non_react_jsx_import_source_pragma(source)
-        || project.has_non_react_jsx_import_source(path)
+    {
+        return true;
+    }
+    // An explicit per-file React signal (react/react-dom import, Next.js import,
+    // or a `"use client"`/`"use server"` directive) means this file's JSX is
+    // React, overriding any project-level non-React `jsxImportSource` default.
+    if file_has_explicit_react_signal(source) {
+        return false;
+    }
+    // Fall back to the project-level `jsxImportSource` default.
+    project.has_non_react_jsx_import_source(path)
+}
+
+/// True when the file carries an explicit React signal: it imports from
+/// `react`/`react-dom`/`react/*`, imports a Next.js package (`next`, `next/*`),
+/// or declares a `"use client"`/`"use server"` directive. Such a file's JSX is
+/// processed by the React runtime, so `className`/`htmlFor` are correct there.
+fn file_has_explicit_react_signal(source: &str) -> bool {
+    imports_react(source)
+        || source_contains(source, "from \"next/")
+        || source_contains(source, "from 'next/")
+        || source_contains(source, "from \"next\"")
+        || source_contains(source, "from 'next'")
+        || source_contains(source, "\"use client\"")
+        || source_contains(source, "'use client'")
+        || source_contains(source, "\"use server\"")
+        || source_contains(source, "'use server'")
 }
 
 /// The value of the file's `@jsxImportSource` pragma — the JSX factory package
