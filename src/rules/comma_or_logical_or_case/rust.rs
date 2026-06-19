@@ -11,8 +11,19 @@ crate::ast_check! { on ["match_arm"] => |node, source, ctx, diagnostics|
     // Get the pattern of the match arm.
     let Some(pattern) = node.child_by_field_name("pattern") else { return };
 
-    // Check the full text of the pattern for `||`.
-    let Ok(pat_text) = pattern.utf8_text(source) else { return };
+    // `match_pattern` = seq(_pattern, optional("if" condition)). A `||` in the
+    // guard's condition is a boolean OR, not a pattern-alternative typo, so scan
+    // only the pattern bytes before any `if` guard.
+    let pat_text = match pattern.child_by_field_name("condition") {
+        Some(cond) => match std::str::from_utf8(&source[pattern.start_byte()..cond.start_byte()]) {
+            Ok(t) => t,
+            Err(_) => return,
+        },
+        None => match pattern.utf8_text(source) {
+            Ok(t) => t,
+            Err(_) => return,
+        },
+    };
 
     if !pat_text.contains("||") {
         return;
@@ -65,6 +76,48 @@ fn f(x: i32) {
 }
 "#;
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_logical_or_in_guard_char_literal() {
+        // Regression for #3896: `||` lives in the match-arm guard, not the pattern.
+        let src = r#"
+fn f() {
+    match c {
+        b't' | b'f' if repr == "true" || repr == "false" => {}
+        _ => {}
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_logical_or_in_guard_method_call() {
+        // Regression for #3896 (syn src/stmt.rs shape).
+        let src = r#"
+fn f() {
+    match e {
+        E::M(x) if a.is_some() || b.is_brace() => {}
+        _ => {}
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_logical_or_in_guard_range() {
+        // Regression for #3896 (syn src/pat.rs shape).
+        let src = r#"
+fn f() {
+    match p {
+        P::Range(r) if r.start.is_none() || r.end.is_none() => {}
+        _ => {}
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
