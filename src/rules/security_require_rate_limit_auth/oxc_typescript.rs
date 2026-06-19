@@ -169,4 +169,26 @@ mod tests {
         let src = r#"server.post("*/auth/login", handler);"#;
         assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty(), "{:?}", crate::rules::test_helpers::run_rule(&Check, src, "t.tsx"));
     }
+
+    // Regression for #3229: an auth route registered in a `*.test.ts` file is
+    // exercising the router (e.g. Hono's `basePath()` composition), not deploying
+    // a real credential endpoint. Rate-limiting is an operational concern that
+    // cannot be enforced on test routes. The engine's central `skip_in_test_dir`
+    // gate suppresses the rule for files in test directories.
+    #[test]
+    fn gated_skips_auth_route_in_test_file() {
+        let src = r#"app.get("/login", (c) => c.text("get /login"));"#;
+        let d = crate::rules::test_helpers::run_rule_gated(&Check, src, "src/hono.test.ts");
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    // The same auth route under a non-test path is shipped code and must still
+    // flag — no over-suppression.
+    #[test]
+    fn gated_still_flags_auth_route_in_source() {
+        let src = r#"app.get("/login", (c) => c.text("get /login"));"#;
+        let d = crate::rules::test_helpers::run_rule_gated(&Check, src, "src/routes.ts");
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(d[0].message.contains("/login"));
+    }
 }
