@@ -102,7 +102,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else {
@@ -112,6 +112,12 @@ impl OxcCheck for Check {
             return;
         };
         if callee.name != "useEffect" {
+            return;
+        }
+        // React's `useEffect` is always `import { useEffect } from "react"`. Skip a
+        // `useEffect` bound to anything else (Hono's `../../hooks`, Preact's
+        // `preact/hooks`, a local function) so the rule only targets React's hook.
+        if !crate::oxc_helpers::is_imported_from_react("useEffect", semantic) {
             return;
         }
         if call.arguments.len() != 2 {
@@ -195,6 +201,7 @@ mod tests {
     #[test]
     fn ignores_set_interval_timer() {
         let src = r#"
+import { useEffect, useState } from 'react';
 function App() {
   const [okay, setOkay] = useState(true);
   useEffect(() => {
@@ -211,6 +218,7 @@ function App() {
     #[test]
     fn ignores_set_timeout_timer() {
         let src = r#"
+import { useEffect } from 'react';
 function App() {
   useEffect(() => {
     setTimeout(() => setSecondScene(true), 500);
@@ -225,6 +233,7 @@ function App() {
     #[test]
     fn flags_direct_setter_in_effect_body() {
         let src = r#"
+import { useEffect, useState } from 'react';
 function App() {
   const [count, setCount] = useState(0);
   useEffect(() => {
@@ -234,5 +243,39 @@ function App() {
 }
 "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for #3254: Hono's own hook runtime imports `useEffect` from a
+    // relative path, not from react — its `useSyncExternalStore` implementation
+    // legitimately sets state in an effect and must not be flagged.
+    #[test]
+    fn skips_useeffect_imported_from_hono_hooks() {
+        let src = r#"
+import { useEffect } from '../../hooks';
+function App() {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    setCount(1);
+  }, []);
+  return <div />;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Regression for #3254: Preact's `useEffect` (preact/hooks) is not React's.
+    #[test]
+    fn skips_useeffect_imported_from_preact() {
+        let src = r#"
+import { useEffect } from 'preact/hooks';
+function App() {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    setCount(1);
+  }, []);
+  return <div />;
+}
+"#;
+        assert!(run(src).is_empty());
     }
 }

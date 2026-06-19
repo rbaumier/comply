@@ -54,7 +54,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else {
@@ -65,6 +65,13 @@ impl OxcCheck for Check {
             return;
         };
         if callee.name.as_str() != "useEffect" {
+            return;
+        }
+
+        // React's `useEffect` is always `import { useEffect } from "react"`. Skip a
+        // `useEffect` bound to anything else (Hono's `../../hooks`, Preact's
+        // `preact/hooks`, a local function) so the rule only targets React's hook.
+        if !crate::oxc_helpers::is_imported_from_react("useEffect", semantic) {
             return;
         }
 
@@ -105,5 +112,95 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
+    }
+
+    // An effect chaining two setter calls remains the genuine antipattern.
+    #[test]
+    fn flags_chained_setters_in_effect() {
+        let src = r#"
+import { useEffect } from 'react';
+function App() {
+  useEffect(() => {
+    setA(1);
+    setB(2);
+  }, []);
+  return <div />;
+}
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // A single setter call is not a chain.
+    #[test]
+    fn ignores_single_setter_in_effect() {
+        let src = r#"
+import { useEffect } from 'react';
+function App() {
+  useEffect(() => {
+    setA(1);
+  }, []);
+  return <div />;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Regression for #3254: Hono's hook runtime imports `useEffect` from a relative
+    // path; its `useSyncExternalStore` implementation intentionally chains state
+    // updates and must not be flagged.
+    #[test]
+    fn skips_useeffect_imported_from_hono_hooks() {
+        let src = r#"
+import { useEffect } from '../../hooks';
+function App() {
+  useEffect(() => {
+    setA(1);
+    setB(2);
+  }, []);
+  return <div />;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Regression for #3254: Preact's `useEffect` (preact/hooks) is not React's.
+    #[test]
+    fn skips_useeffect_imported_from_preact() {
+        let src = r#"
+import { useEffect } from 'preact/hooks';
+function App() {
+  useEffect(() => {
+    setA(1);
+    setB(2);
+  }, []);
+  return <div />;
+}
+"#;
+        assert!(run(src).is_empty());
     }
 }
