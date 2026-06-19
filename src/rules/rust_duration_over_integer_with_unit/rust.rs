@@ -17,8 +17,8 @@
 //! check is intentionally shallow to keep false positives low.
 //! Names that mark an absolute time *coordinate* (a point on a timeline:
 //! `julian_days`, `unix_seconds`, `created_at_seconds`, `*_timestamp`,
-//! `*_epoch`) are exempted — `Duration` models an elapsed span, not an
-//! absolute timeline point, so the suggestion would be wrong.
+//! `*_epoch`, `*_epoch_*`) are exempted — `Duration` models an elapsed span,
+//! not an absolute timeline point, so the suggestion would be wrong.
 //! Test code is exempted via `is_in_test_context`.
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -114,6 +114,7 @@ fn is_absolute_time_coordinate(lower: &str) -> bool {
         || lower.contains("timestamp")
         || lower.contains("_since_epoch")
         || lower.ends_with("_epoch")
+        || lower.contains("_epoch_")
         || lower.contains("_at_")
         || lower.ends_with("_at")
 }
@@ -270,6 +271,19 @@ mod tests {
     #[test]
     fn allows_fn_parameter_ms_f32_math_parameter() {
         assert!(run_on("fn f(timeout_ms: f32) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_current_date_epoch_seconds_absolute_coordinate() {
+        // bootandy/dust `current_date_epoch_seconds: i64` is a Unix epoch
+        // timestamp (absolute point in time), not an elapsed span; `Duration`
+        // cannot model it. `epoch` here is a middle segment. Regression for #4407.
+        assert!(run_on("fn f(current_date_epoch_seconds: i64) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_file_modified_epoch_seconds_absolute_coordinate() {
+        assert!(run_on("struct S { file_modified_epoch_seconds: u64 }").is_empty());
     }
 
     #[test]
