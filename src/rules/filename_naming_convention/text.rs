@@ -53,18 +53,21 @@ fn is_composable_name(stem: &str) -> bool {
 }
 
 /// Returns `true` when `stem` is exactly a BCP 47 / CLDR locale tag of the form
-/// `<language>_<region>`: 2-3 lowercase ASCII letters (ISO 639 language), a
-/// single underscore, then 2-3 ASCII letters (ISO 3166 region). The underscore
-/// separator is mandated by intl conventions, so locale files such as `ar_EG.ts`,
-/// `zh_CN.ts`, or `en_US.ts` cannot adopt kebab-case.
+/// `<language><sep><region>`, where `sep` is either an underscore (`zh_CN`) or a
+/// hyphen (`zh-CN`): 2-3 lowercase ASCII letters (ISO 639 language), the
+/// separator, then 2-3 ASCII letters (ISO 3166 region). Both separators are in
+/// widespread use — underscore by CLDR/Java intl conventions, hyphen by BCP 47
+/// itself (Vue/JS libraries such as Varlet use it exclusively) — so locale files
+/// like `ar_EG.ts`, `zh_CN.ts`, `en-US.ts`, or `ja-JP.ts` cannot adopt kebab-case.
 ///
-/// An UPPERCASE region (`zh_CN`) is accepted anywhere — it never collides with a
-/// lowercase snake_case source filename. A lowercase region (`en_gb`, `zh_tw`) is
-/// accepted only when `in_locale_dir` is true: outside a locale/i18n directory it
-/// is indistinguishable from an ordinary snake_case filename whose first segment
-/// happens to be a 2-letter ISO 639 code (`to_str`, `id_map`, `de_dup`).
+/// An UPPERCASE region (`zh_CN`, `en-US`) is accepted anywhere — it never collides
+/// with a lowercase snake_case or kebab-case source filename. A lowercase region
+/// (`en_gb`, `zh-tw`) is accepted only when `in_locale_dir` is true: outside a
+/// locale/i18n directory it is indistinguishable from an ordinary snake_case or
+/// kebab-case filename whose first segment happens to be a 2-letter ISO 639 code
+/// (`to_str`, `id_map`, `de_dup`).
 fn is_locale_tag(stem: &str, in_locale_dir: bool) -> bool {
-    let Some((language, country)) = stem.split_once('_') else {
+    let Some((language, country)) = stem.split_once('_').or_else(|| stem.split_once('-')) else {
         return false;
     };
     let is_iso_segment = |segment: &str, want_upper: bool| {
@@ -635,6 +638,55 @@ mod tests {
     #[test]
     fn allows_uppercase_region_locale_tag_anywhere_issue_3294() {
         assert!(run("src/zh_CN.ts").is_empty());
+    }
+
+    // Regression for #4521: BCP 47 locale tags with a HYPHEN separator (`zh-CN`,
+    // `en-US`, `ja-JP`) are valid and used exclusively by Vue/JS libraries such as
+    // Varlet. The UPPERCASE-region hyphen form is collision-safe (kebab-case never
+    // has an uppercase segment), so it is accepted anywhere, mirroring `zh_CN`.
+    #[test]
+    fn allows_hyphen_locale_tag_zh_cn_in_locale_dir_issue_4521() {
+        assert!(run("packages/varlet-ui/src/uploader/example/locale/zh-CN.ts").is_empty());
+        assert!(run("src/locale/zh-CN.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_hyphen_locale_tag_en_us_ja_jp_issue_4521() {
+        assert!(run("src/locales/en-US.ts").is_empty());
+        assert!(run("src/locales/ja-JP.ts").is_empty());
+    }
+
+    // The lowercase-region hyphen form is gated on the locale dir, exactly like the
+    // underscore form: inside a locale dir it is a valid BCP 47 tag.
+    #[test]
+    fn allows_lowercase_region_hyphen_locale_tag_in_locale_dir_issue_4521() {
+        assert!(run("src/locale/zh-cn.ts").is_empty());
+    }
+
+    // The UPPERCASE-region hyphen form stays global — accepted with no locale dir.
+    #[test]
+    fn allows_uppercase_region_hyphen_locale_tag_anywhere_issue_4521() {
+        assert!(run("src/zh-CN.ts").is_empty());
+    }
+
+    // Load-bearing guard for #4521: the hyphen exemption is locale-SHAPED, not a
+    // blanket hyphen allowance. `bad-Name` is neither kebab-case (uppercase `N`)
+    // nor a 2-3-letter locale tag (`Name` is mixed-case, length 4), so it must
+    // STILL fire. This fails if the split is treated as a blanket hyphen allow.
+    #[test]
+    fn flags_hyphen_non_locale_shape_issue_4521() {
+        assert_eq!(run("src/bad-Name.ts").len(), 1);
+        assert!(!is_locale_tag("bad-Name", true));
+    }
+
+    // Load-bearing guard for #4521: an ordinary kebab-case name is not over-matched
+    // as a locale tag by the hyphen split — `my-component` splits to `("my",
+    // "component")`, and `component` (length 9) fails the 2-3-letter ISO check, so
+    // the name is classified as kebab-case (its real convention), not a locale tag.
+    #[test]
+    fn kebab_case_name_is_not_a_locale_tag_issue_4521() {
+        assert!(!is_locale_tag("my-component", true));
+        assert!(run("src/my-component.ts").is_empty());
     }
 
     // Regression for #1758: Next.js Pages Router dynamic-segment and numeric
