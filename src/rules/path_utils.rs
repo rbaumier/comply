@@ -266,6 +266,30 @@ pub fn is_cargo_example_path(path: &Path) -> bool {
     has_path_segment(path, &["examples"])
 }
 
+/// True when `path` is a Cargo binary target file: a file sitting directly in a
+/// `src/bin/` directory (the immediate parent is `bin` and the directory above
+/// it is `src`, e.g. `src/bin/stdio-fixture.rs` or a workspace member's
+/// `crates/foo/src/bin/my-tool.rs`). Cargo turns each such file into a binary
+/// target whose name is the file stem (`cargo run --bin stdio-fixture`), so
+/// kebab-case stems are the standard Rust community convention and
+/// filename-convention checks exempt them. The `src` grandparent is required, so
+/// an unrelated `bin/tool.rs` not under `src/` stays checked; and only files
+/// directly in `src/bin/` qualify — a file nested deeper (`src/bin/foo/helper.rs`)
+/// is a module of a directory-based binary and must still follow snake_case.
+pub fn is_cargo_bin_target_path(path: &Path) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    if parent.file_name().and_then(|n| n.to_str()) != Some("bin") {
+        return false;
+    }
+    parent
+        .parent()
+        .and_then(|gp| gp.file_name())
+        .and_then(|n| n.to_str())
+        == Some("src")
+}
+
 /// True when `path` lives under an Angular `schematics/` or `migrations/`
 /// directory. These hold Angular CLI schematic and `ng update` migration entry
 /// points: each is an `index.ts` exporting a default factory function that the
@@ -1668,5 +1692,20 @@ mod aux_path_tests {
         assert!(!is_rust_trybuild_fixture(&PathBuf::from("tests/pass/x.rs")));
         // A `pass`/`fail` dir not under `tests/` is unrelated source.
         assert!(!is_rust_trybuild_fixture(&PathBuf::from("src/pass/x.rs")));
+    }
+
+    #[test]
+    fn cargo_bin_target_path_matches_src_bin_files_issue3230() {
+        // The issue's exact reproducer path (clap).
+        assert!(is_cargo_bin_target_path(&PathBuf::from("src/bin/stdio-fixture.rs")));
+        // A workspace member's `src/bin/` is the same convention.
+        assert!(is_cargo_bin_target_path(&PathBuf::from("crates/foo/src/bin/my-tool.rs")));
+        // A file nested deeper under `src/bin/` is a module of a directory-based
+        // binary and must still follow snake_case.
+        assert!(!is_cargo_bin_target_path(&PathBuf::from("src/bin/foo/my-helper.rs")));
+        // A `bin/` dir not directly under `src/` is unrelated.
+        assert!(!is_cargo_bin_target_path(&PathBuf::from("bin/tool.rs")));
+        // Ordinary library source is not a binary target.
+        assert!(!is_cargo_bin_target_path(&PathBuf::from("src/lib.rs")));
     }
 }
