@@ -54,6 +54,15 @@ impl OxcCheck for Check {
             return;
         };
 
+        // SolidJS compiles JSX to DOM-creation expressions that run once; there
+        // is no component re-render cycle re-evaluating prop values, so JSX as a
+        // prop value carries no referential-equality cost. Gate on `!imports_solid`
+        // (not `imports_react`) so React `.tsx` files using the new JSX transform
+        // without an explicit `import React` are still covered.
+        if crate::oxc_helpers::imports_solid(ctx.source) {
+            return;
+        }
+
         for attr_item in &opening.attributes {
             let JSXAttributeItem::Attribute(attr) = attr_item else {
                 continue;
@@ -161,6 +170,32 @@ mod tests {
     fn still_flags_non_allowed_prop_with_jsx_value() {
         // Negative-space guard: a prop outside the allowlist still fires.
         let src = r#"const x = <Wrapper foo={<Bar />} />;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_solidjs_jsx_as_prop() {
+        // Regression for rbaumier/comply#3218 — SolidJS has fine-grained
+        // reactivity (the component body runs once), so JSX as a prop value
+        // carries no re-render cost. Files importing solid-js are not flagged.
+        let src = r#"import { createSignal } from "solid-js";
+const x = <Comp assets={<HydrationScript />} />;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_solidjs_start_jsx_as_prop() {
+        let src = r#"import { StartServer } from "@solidjs/start/server";
+const x = <Comp assets={<HydrationScript />} />;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_react_jsx_as_prop_without_explicit_react_import() {
+        // `!imports_solid` (not `imports_react`) preserves the core case: a
+        // React `.tsx` using the new JSX transform has no `import React`, yet
+        // the referential-equality concern still applies.
+        let src = r#"const x = <Comp assets={<Child />} />;"#;
         assert_eq!(run(src).len(), 1);
     }
 }
