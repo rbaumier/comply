@@ -24,23 +24,7 @@ fn varchar_is_non_pg_dialect<'a>(
     id: &oxc_ast::ast::IdentifierReference<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
-    let Some(ref_id) = id.reference_id.get() else {
-        return false;
-    };
-    let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-        return false;
-    };
-    let decl_node_id = scoping.symbol_declaration(sym_id);
-    let nodes = semantic.nodes();
-    for kind in
-        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
-    {
-        if let AstKind::ImportDeclaration(import) = kind {
-            return NON_PG_DIALECT_MODULES.contains(&import.source.value.as_str());
-        }
-    }
-    false
+    crate::oxc_helpers::resolves_to_import_from(id, semantic, NON_PG_DIALECT_MODULES)
 }
 
 impl OxcCheck for Check {
