@@ -14,6 +14,13 @@
 //! We deliberately keep the detector narrow: multi-statement bodies, calls
 //! that produce side effects (console, fetch, emit, push, ...), and
 //! conditional assignments are left alone.
+//!
+//! Two usage-context exemptions, because `computed()` is read-only:
+//! - A constant RHS (`''`, `0`, `true`, ...) is a reset on a trigger, not a
+//!   derivation; `computed()` would freeze the ref to that constant.
+//! - A target ref assigned at another site in the file is mutable interactive
+//!   state, not a derived value; converting it to `computed()` would break the
+//!   other assignment.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -48,7 +55,19 @@ impl TextCheck for Check {
                 continue;
             };
 
-            if body_is_single_value_assignment(&body) {
+            if let Some((ident, rhs)) = parse_single_value_assignment(&body) {
+                // A constant RHS can't be lazily derived — the watch is a reset
+                // on a trigger, not a derived value, so `computed()` would
+                // freeze it.
+                if rhs_is_constant_literal(&rhs) {
+                    continue;
+                }
+                // A ref assigned at another site in the file is mutable
+                // interactive state, not a derived value; `computed()` is
+                // read-only and would break it.
+                if value_assignment_count(src, &ident) >= 2 {
+                    continue;
+                }
                 diags.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
                     line: i + 1,
@@ -131,23 +150,23 @@ fn extract_watch_callback_body(lines: &[&str], start: usize) -> Option<(String, 
     None
 }
 
-/// Returns true when `body` is a single bare `<ident>.value = <expr>`
-/// assignment. Whitespace, empty lines, and trailing semicolons are ignored.
-fn body_is_single_value_assignment(body: &str) -> bool {
+/// Parses `body` as a single bare `<ident>.value = <rhs>` assignment and
+/// returns `(ident, rhs)` when it matches. Whitespace, empty lines, and
+/// trailing semicolons are ignored; `+=`, comparisons, member chains, and
+/// bracket/call access are rejected.
+fn parse_single_value_assignment(body: &str) -> Option<(String, String)> {
     let mut non_empty: Vec<&str> = body
         .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty() && !l.starts_with("//"))
         .collect();
     if non_empty.len() != 1 {
-        return false;
+        return None;
     }
     let stmt = non_empty.pop().unwrap().trim_end_matches(';').trim();
 
     // Require `<ident>.value = ...`, not `+=`, `-=`, etc.
-    let Some(eq) = stmt.find('=') else {
-        return false;
-    };
+    let eq = stmt.find('=')?;
     // Reject `==`, `!=`, `>=`, `<=`, `=>`.
     let before = &stmt[..eq];
     let after = &stmt[eq + 1..];
@@ -162,33 +181,84 @@ fn body_is_single_value_assignment(body: &str) -> bool {
         || after.starts_with('=')
         || after.starts_with('>')
     {
-        return false;
+        return None;
     }
 
     let lhs = before.trim();
     // Must be `<ident>.value` — single token, no spaces, no bracket access.
     if !lhs.ends_with(".value") {
-        return false;
+        return None;
     }
     let ident = &lhs[..lhs.len() - ".value".len()];
     if ident.is_empty() || ident.contains(' ') || ident.contains('[') || ident.contains('(') {
-        return false;
+        return None;
     }
     // Reject member chains like `a.b.value` — computed is still a fine
     // suggestion but the pattern then usually feeds into a reactive object,
     // not a ref. Keep the heuristic narrow to avoid false positives.
     if ident.contains('.') {
-        return false;
+        return None;
     }
     // Identifier must be a valid JS identifier.
     if !ident
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
     {
-        return false;
+        return None;
     }
+    let rhs = after.trim();
     // RHS must be non-empty.
-    !after.trim().is_empty()
+    if rhs.is_empty() {
+        return None;
+    }
+    Some((ident.to_string(), rhs.to_string()))
+}
+
+/// Returns true when `rhs` is a constant literal: a string/template literal
+/// with no interpolation, a numeric literal, or one of `true`/`false`/`null`/
+/// `undefined`/`[]`/`{}`. Biased toward NOT over-exempting.
+fn rhs_is_constant_literal(rhs: &str) -> bool {
+    if matches!(rhs, "true" | "false" | "null" | "undefined" | "[]" | "{}") {
+        return true;
+    }
+    if rhs.parse::<f64>().is_ok() {
+        return true;
+    }
+    // String / template literal: same quote at both ends, no concatenation,
+    // and (for templates) no `${...}` interpolation.
+    if let Some(q) = rhs.chars().next()
+        && matches!(q, '\'' | '"' | '`')
+        && rhs.len() >= 2
+        && rhs.ends_with(q)
+        && !rhs.contains('+')
+        && !(q == '`' && rhs.contains("${"))
+    {
+        return true;
+    }
+    false
+}
+
+/// Counts the sites in `src` where `<ident>.value` is the target of an
+/// assignment (`=`, not `==`/`=>`). The match requires a non-identifier char
+/// before `ident` so `overview.value` does not count for `view`.
+fn value_assignment_count(src: &str, ident: &str) -> usize {
+    let needle = format!("{ident}.value");
+    let bytes = src.as_bytes();
+    let mut count = 0;
+    let mut from = 0;
+    while let Some(rel) = src[from..].find(&needle) {
+        let pos = from + rel;
+        let before_ok = pos == 0
+            || !matches!(bytes[pos - 1], b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'$' | b'.');
+        let after = src[pos + needle.len()..].trim_start();
+        let is_assign =
+            after.starts_with('=') && !after.starts_with("==") && !after.starts_with("=>");
+        if before_ok && is_assign {
+            count += 1;
+        }
+        from = pos + needle.len();
+    }
+    count
 }
 
 #[cfg(test)]
@@ -210,6 +280,31 @@ mod tests {
     fn flags_watch_one_liner_assignment() {
         let src = "watch(source, () => { target.value = source.value + 1 })";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_single_site_non_constant_derivation() {
+        let src = "watch(count, (v) => {\n  doubled.value = v * 2\n})";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_constant_numeric_reset() {
+        let src = "watch(items, () => {\n  selectedIndex.value = 0\n})";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_constant_string_reset() {
+        let src = "watch(countryCode, () => {\n  phone.value = ''\n})";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_ref_mutated_elsewhere() {
+        let src = "watch(() => props.type, () => {\n  view.value = minView.value\n})\n\
+                   function clampView(v) {\n  view.value = clamp(v)\n}";
+        assert!(run(src).is_empty());
     }
 
     #[test]
