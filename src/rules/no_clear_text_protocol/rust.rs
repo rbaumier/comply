@@ -19,12 +19,13 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        let source_bytes = ctx.source.as_bytes();
         if ctx.file.path_segments.in_test_dir
             || crate::rules::rust_helpers::is_under_tests_dir(ctx.path)
+            || crate::rules::rust_helpers::is_in_test_context(node, source_bytes)
         {
             return;
         }
-        let source_bytes = ctx.source.as_bytes();
         let Ok(text) = node.utf8_text(source_bytes) else {
             return;
         };
@@ -122,6 +123,32 @@ mod tests {
             "axum/src/test_helpers/test_client.rs",
         );
         assert!(diags.is_empty());
+    }
+
+    // #4398 — an `http://` test-fixture URL inside an inline `#[cfg(test)] mod`
+    // block in a `src/` file makes no network call; HTTPS is meaningless there.
+    #[test]
+    fn does_not_flag_http_in_inline_cfg_test_module() {
+        let src = r#"
+            #[cfg(test)]
+            mod tests {
+                fn t() {
+                    let _ = "http://foo".to_string();
+                }
+            }
+        "#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/cli.rs");
+        assert!(diags.is_empty());
+    }
+
+    // #4398 negative space — an `http://` literal in production code (no test
+    // context) still fires, proving the exemption is test-context-scoped, not
+    // global. `example.com` is an allowlisted dummy host, so use a real host.
+    #[test]
+    fn still_flags_http_in_production_code() {
+        let src = r#"fn connect() { let _ = "http://api.acme.io".to_string(); }"#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/lib.rs");
+        assert_eq!(diags.len(), 1);
     }
 
     // #1260 negative space — a concrete external host in production code still fires.
