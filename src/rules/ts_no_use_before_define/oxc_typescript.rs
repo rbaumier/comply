@@ -51,13 +51,16 @@
 //! A function or arrow *expression* assigned to a variable
 //! (`const App = () => <View style={styles.x} />`, the React Native
 //! styles-at-bottom convention) is also treated as a deferred body, as long as
-//! that variable is never *called* before the referenced binding's declaration
-//! line. The expression runs only when its variable is invoked, so a
+//! that variable is never *eagerly called* before the referenced binding's
+//! declaration line. The expression runs only when its variable is invoked, so a
 //! `const`/`let` declared later in an enclosing scope is already initialized by
 //! then. The expression stays flagged when it could run during the synchronous
 //! initialization pass that precedes the declaration: an IIFE, or a variable
-//! that is called before the declaration (`const f = () => later; f(); const
-//! later = 1`). An anonymous function/arrow expression passed straight to a call
+//! that is *eagerly* called before the declaration (`const f = () => later;
+//! f(); const later = 1`). A call counts as eager only when its own site runs at
+//! module-evaluation time; a call nested inside another deferred body does not
+//! (`const g = () => f(); const later = 1` stays safe). An anonymous
+//! function/arrow expression passed straight to a call
 //! (`someFn((x) => later)`) is not deferred this way — the callee may invoke it
 //! eagerly — so it stays flagged unless a more specific exemption (React hook,
 //! test runner, decorator thunk, ...) applies.
@@ -500,8 +503,14 @@ fn is_inside_deferred_definition<'a>(
 /// - an IIFE (`(() => x)()`), which runs immediately;
 /// - an anonymous expression not bound to a variable (e.g. passed straight to a
 ///   call as in `someFn((x) => later)`), since the callee may invoke it eagerly;
-/// - a variable whose value is the expression and that is called before
-///   `decl_start` (`const f = () => later; f(); const later = 1`).
+/// - a variable whose value is the expression and that is *eagerly* called before
+///   `decl_start` (`const f = () => later; f(); const later = 1`). "Called before"
+///   means the call site itself runs during module evaluation: a call nested in
+///   another deferred function body (`const g = () => f(); const later = 1`) runs
+///   only when that body is later invoked, so it does not make the expression
+///   eager. (Tolerated contrived false negative: a call inside a named function
+///   that is itself eagerly invoked is treated as deferred — see
+///   `call_is_eagerly_reachable`.)
 fn is_deferred_function_expression<'a>(
     nodes: &'a oxc_semantic::AstNodes<'a>,
     scoping: &Scoping,
@@ -537,9 +546,12 @@ fn function_expression_binding<'a>(
     id.symbol_id.get()
 }
 
-/// True when the binding is the callee of a call expression whose call site
-/// starts before `decl_start` — meaning the function/arrow it holds runs during
-/// the synchronous initialization pass that precedes the declaration.
+/// True when the binding is the callee of an *eager* call expression whose call
+/// site starts before `decl_start` — meaning the function/arrow it holds runs
+/// during the synchronous initialization pass that precedes the declaration. A
+/// call only counts when its own site is reachable during module evaluation: a
+/// call nested inside another deferred function body executes only when that body
+/// is later invoked, not eagerly, so it does not run the bound expression early.
 fn binding_called_before(
     nodes: &oxc_semantic::AstNodes,
     scoping: &Scoping,
@@ -558,8 +570,30 @@ fn binding_called_before(
         let AstKind::CallExpression(call) = nodes.kind(nodes.parent_id(ref_id)) else {
             return false;
         };
-        call.callee.span() == ref_span
+        call.callee.span() == ref_span && call_is_eagerly_reachable(nodes, ref_id)
     })
+}
+
+/// True when the node `call_ref_id` (a call's callee reference) executes during
+/// the synchronous module-evaluation pass — i.e. it is not nested inside a
+/// deferred function body. Walking ancestors to the `Program`, a `Function` /
+/// `ArrowFunctionExpression` boundary defers the call UNLESS that function is
+/// immediately invoked (an IIFE runs eagerly). Conservative on one rare chain:
+/// a call inside a named function that is itself eagerly invoked is treated as
+/// deferred (a tolerated, contrived false negative — see the rule docblock).
+fn call_is_eagerly_reachable(nodes: &oxc_semantic::AstNodes, call_ref_id: NodeId) -> bool {
+    for ancestor_id in nodes.ancestor_ids(call_ref_id) {
+        match nodes.kind(ancestor_id) {
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
+                if !is_immediately_invoked(nodes, ancestor_id) {
+                    return false;
+                }
+            }
+            AstKind::Program(_) => return true,
+            _ => {}
+        }
+    }
+    true
 }
 
 /// True when the reference sits inside a function/arrow *expression* that lives
@@ -1635,5 +1669,67 @@ mod tests {
             1,
             "lazy arrow in a non-decorator call must still be flagged: {d:?}"
         );
+    }
+
+    // Regression for #4520: a module-level arrow expression references a
+    // later-defined module const from inside its deferred body. The arrow runs
+    // only on invocation (it is never *eagerly* called before the const's
+    // declaration line), so the const is already initialized by then.
+    #[test]
+    fn no_fp_arrow_calls_later_arrow_issue_4520() {
+        // Pattern A: an arrow body calls a later-defined arrow.
+        let source = "const getFdNumber = (a) => { const n = parseFdNumber(a); return n; };\n\
+                      const parseFdNumber = (a) => a + 1;";
+        assert!(
+            run_on(source).is_empty(),
+            "arrow body calling a later-defined arrow should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_concise_arrow_refs_later_const_issue_4520() {
+        // Pattern B: a concise arrow references a later-defined const.
+        let source = "export const getCommandLines = (s) => s.filter((line) => isCommandLine(line));\n\
+                      const isCommandLine = (line) => line.includes('$');";
+        assert!(
+            run_on(source).is_empty(),
+            "concise arrow referencing a later-defined const should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_arrow_called_only_from_deferred_body_issue_4520() {
+        // Pattern C: `compareValues` is called only from `checkEncoding`'s
+        // deferred arrow body (not eagerly), so its own body — which reads the
+        // later-defined `BUFFER_TO_ENCODE` — must not be flagged. The call site
+        // executes only when `checkEncoding` is invoked, never during module eval.
+        let source = "const checkEncoding = (t) => compareValues(t);\n\
+                      const compareValues = (t) => t === BUFFER_TO_ENCODE;\n\
+                      const BUFFER_TO_ENCODE = 1;";
+        assert!(
+            run_on(source).is_empty(),
+            "arrow called only from a deferred body should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn still_flags_arrow_eagerly_called_before_define_issue_4520() {
+        // Critical false-negative guard: the arrow's variable is called EAGERLY
+        // at module top level before `USES_LATER`, so its body runs during the
+        // synchronous init pass — a genuine TDZ hazard that must still fire.
+        let d = run_on(
+            "const f = () => USES_LATER;\n\
+             f();\n\
+             const USES_LATER = 1;",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "an eagerly-called arrow reading a not-yet-declared const must still be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`USES_LATER`"));
     }
 }
