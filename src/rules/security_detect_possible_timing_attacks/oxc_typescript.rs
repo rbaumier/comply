@@ -50,6 +50,22 @@ fn is_string_literal(expr: &Expression) -> bool {
     matches!(expr, Expression::StringLiteral(_))
 }
 
+/// An operand that provably cannot hold secret string bytes, so timing the
+/// compare leaks nothing. Two cases:
+/// - a PascalCase `Identifier`: almost always a class/constructor or namespace
+///   reference (e.g. a NestJS DI token `FooService`), compared by reference
+///   equality on a function object, not a secret byte sequence;
+/// - a numeric literal: a number carries no secret bytes.
+///
+/// Scoped to leading-uppercase identifiers only: a lowercase identifier
+/// (`password === userInput`, `token === name`) can bind a real secret string,
+/// so it stays flagged — exempting it would be a security false negative.
+fn is_non_secret_operand(expr: &Expression) -> bool {
+    matches!(expr, Expression::Identifier(id)
+        if id.name.chars().next().is_some_and(|c| c.is_ascii_uppercase()))
+        || matches!(expr, Expression::NumericLiteral(_))
+}
+
 /// True when `expr` is an enum/constant member access, e.g.
 /// `AnnotationEditorType.SIGNATURE` or `Limits.MAX_LEN`: the chain is rooted on a
 /// PascalCase type/enum identifier and the accessed property is SCREAMING_SNAKE_CASE
@@ -143,6 +159,9 @@ impl OxcCheck for Check {
             return;
         }
         if is_string_literal(&bin.left) || is_string_literal(&bin.right) {
+            return;
+        }
+        if is_non_secret_operand(&bin.left) || is_non_secret_operand(&bin.right) {
             return;
         }
         if is_const_member(&bin.left) || is_const_member(&bin.right) {
@@ -365,5 +384,39 @@ mod tests {
     fn flags_secret_vs_const_bound_to_env() {
         let src = r#"const secret = process.env.SECRET; if (token === secret) {}"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for #3257: a NestJS DI token compared against a class/constructor
+    // reference (`token === FooService`) is a reference-equality dispatch on a
+    // function object, not a secret byte compare. The PascalCase operand is
+    // exempt on either side.
+    #[test]
+    fn allows_di_token_vs_class_reference() {
+        assert!(run(r#"if (token === FooService) {}"#).is_empty());
+        assert!(run(r#"if (FooService === token) {}"#).is_empty());
+    }
+
+    // A numeric-literal operand carries no secret bytes, so the compare leaks
+    // nothing via timing.
+    #[test]
+    fn allows_secret_vs_numeric_literal() {
+        assert!(run(r#"if (token === 42) {}"#).is_empty());
+    }
+
+    // Security guard: a secret-name identifier compared against a lowercase
+    // identifier stays flagged. `userInput` can be attacker-controlled — the
+    // classic timing attack. Exempting lowercase identifiers would be a security
+    // false negative.
+    #[test]
+    fn flags_secret_vs_lowercase_identifier() {
+        assert_eq!(run(r#"if (password === userInput) {}"#).len(), 1);
+    }
+
+    // Security guard: the issue's lowercase second example (`token === name`)
+    // stays flagged — `name` is a lowercase identifier that could bind a secret
+    // string, so exempting it would be a security false negative.
+    #[test]
+    fn flags_di_token_vs_lowercase_name() {
+        assert_eq!(run(r#"if (token === name) {}"#).len(), 1);
     }
 }
