@@ -3,8 +3,11 @@
 //!
 //! Tests are exempted: a `let _ = fn_under_test()` pattern is the
 //! idiomatic way to assert "this call doesn't panic" without caring
-//! about the return value. Skipped via
-//! `rust_helpers::is_in_test_context`.
+//! about the return value. Exempt when in a test context — a
+//! `#[test]`/`#[cfg(test)]` attribute walk via
+//! `rust_helpers::is_in_test_context` — or when the file lives under a
+//! `tests/` directory (`rust_helpers::is_under_tests_dir`), since plain
+//! helper fns there are integration-test infrastructure.
 //!
 //! Four non-error idioms are also exempted:
 //! - `let _ = expr?`: the `?` operator already propagates any `Err`/`None` to
@@ -71,7 +74,7 @@
 //! fix for this class of FP — document intent in the calling code if needed.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
 use tree_sitter::Node;
 
 crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
@@ -101,8 +104,10 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    // Skip inside tests — `let _ = …` there is "call and don't care".
-    if is_in_test_context(node, source) {
+    // Skip inside tests — `let _ = …` there is "call and don't care". Covers
+    // both a `#[test]`/`#[cfg(test)]` attribute context and a file under a
+    // `tests/` directory, where plain helper fns are test infrastructure too.
+    if is_in_test_context(node, source) || is_under_tests_dir(ctx.path) {
         return;
     }
 
@@ -955,6 +960,33 @@ mod tests {
         let src = "fn f() { let _ = do_something(); }";
         let diagnostics =
             crate::rules::test_helpers::run_rule(&Check, src, "src/fail/handler.rs");
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_in_tests_dir_helper() {
+        // Regression for #3298: a plain `pub fn` (NO `#[test]` attribute) in a
+        // file under a `tests/` directory is integration-test infrastructure.
+        // The issue's exact ripgrep `tests/util.rs` `link_dir` best-effort
+        // cleanup, which the attribute walk alone does not exempt.
+        let src = r#"
+            pub fn link_dir<S: AsRef<Path>, T: AsRef<Path>>(&self, src: S, target: T) {
+                let target = self.dir.join(target);
+                let _ = fs::remove_file(&target);
+                nice_err(&target, symlink(&src, &target));
+            }
+        "#;
+        let diagnostics = crate::rules::test_helpers::run_rule(&Check, src, "tests/util.rs");
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_in_non_test_path() {
+        // Negative space for #3298: the `tests/` exemption is scoped to test
+        // infra. The same discarded fallible call in production code (not under
+        // `tests/`, no `#[test]`) genuinely swallows the error and must fire.
+        let src = "pub fn cleanup() { let _ = fallible(); }";
+        let diagnostics = crate::rules::test_helpers::run_rule(&Check, src, "src/lib.rs");
         assert_eq!(diagnostics.len(), 1);
     }
 
