@@ -1,15 +1,19 @@
 //! factory-di-shape — oxc backend.
 //!
-//! Flags exported `create*` functions that take 3+ separate dependency
-//! parameters instead of a single deps object. The dependency-injection
-//! smell is multiple *service* dependencies, so only non-primitive
-//! (interface/class/type-reference/object/function) params count toward the
-//! threshold. Params with primitive types (`string`/`number`/`boolean`/...,
-//! and optionals/unions of only those) are configuration values, not
-//! injected services, and a `create*` function whose params are all
-//! primitives is a value/DOM factory rather than a DI factory.
+//! Flags exported `create*` functions in TypeScript (`.ts`/`.tsx`) that take
+//! 3+ separate dependency parameters instead of a single deps object. The
+//! dependency-injection smell is multiple *service* dependencies, so only
+//! non-primitive (interface/class/type-reference/object/function) params count
+//! toward the threshold. Params with primitive types (`string`/`number`/
+//! `boolean`/..., and optionals/unions of only those) are configuration
+//! values, not injected services, and a `create*` function whose params are
+//! all primitives is a value/DOM factory rather than a DI factory.
+//!
+//! Plain JavaScript is skipped: distinguishing a service dependency from a
+//! primitive value relies on parameter type annotations, which JS lacks.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::files::Language;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use std::sync::Arc;
 
@@ -21,6 +25,14 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        // The DI-factory heuristic relies on parameter TYPE ANNOTATIONS to tell
+        // a service dependency from a primitive value. Plain JavaScript has no
+        // param type annotations, so every param looks like a dependency — the
+        // heuristic is unreliable there. Restrict to TypeScript (.ts/.tsx).
+        if ctx.lang == Language::JavaScript {
+            return Vec::new();
+        }
+
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {
             let trimmed = line.trim();
@@ -142,6 +154,10 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
+    fn run_on_js(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.js")
+    }
+
     #[test]
     fn flags_create_with_three_service_deps() {
         let src = "export function createService(db: DB, cache: Cache, logger: Logger) {}";
@@ -191,6 +207,31 @@ mod tests {
         let src =
             "export function createBox(a: string | number, b: 'x' | 'y', c: boolean | undefined) {}";
         assert!(run_on(src).is_empty());
+    }
+
+    /// #3255: plain JavaScript has no param type annotations, so every param
+    /// looks non-primitive and the DI heuristic is meaningless. A code-gen
+    /// `create*` util in a `.js` file must not be flagged.
+    #[test]
+    fn ignores_untyped_javascript_codegen_factory() {
+        let src = "export function create_static_module(id, env, disabled) { return id + env + disabled; }";
+        assert!(run_on_js(src).is_empty());
+    }
+
+    /// Load-bearing: the same source DOES flag at a `.ts` path, proving the
+    /// `.js` skip (not some other guard) is what suppresses the FP.
+    #[test]
+    fn same_untyped_factory_flags_at_ts_path() {
+        let src = "export function create_static_module(id, env, disabled) { return id + env + disabled; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// #3255: SvelteKit's 5-param proxy factory in a `.js` file is not a DI
+    /// factory and must not be flagged.
+    #[test]
+    fn ignores_untyped_javascript_proxy_factory() {
+        let src = "export function create_field_proxy(target, get, set, issues, path) { return target; }";
+        assert!(run_on_js(src).is_empty());
     }
 
     #[test]
