@@ -7,7 +7,7 @@
 //!
 //! Detects these shapes:
 //!   * `ref(new Chart(...))`
-//!   * `shallowRef(new Map(...))`
+//!   * `shallowRef(new EditorView(...))`
 //!   * `reactive(new Editor(...))` — always wrong, flagged too
 //!   * `foo.value = new Chart(...)`
 //!
@@ -27,7 +27,6 @@ const THIRD_PARTY_CLASSES: &[&str] = &[
     "ECharts",
     "Highcharts",
     "Plotly",
-    "Map", // leaflet / maplibre / mapbox (L.Map, mapboxgl.Map)
     "LeafletMap",
     "Marker",
     "Editor", // tiptap, monaco, codemirror, quill
@@ -188,5 +187,17 @@ mod tests {
     #[test]
     fn ignores_comment_lines() {
         assert!(run("// const chart = ref(new Chart(ctx, config))").is_empty());
+    }
+
+    #[test]
+    fn allows_reactive_native_map() {
+        let src = "const blocks: Map<number, HTMLElement> = reactive(new Map())\n\
+                   const slidePreviews: Map<number, HTMLElement> = reactive(new Map())";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_reactive_wrapping_chart() {
+        assert_eq!(run("const chart = reactive(new Chart(ctx, config))").len(), 1);
     }
 }
