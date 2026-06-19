@@ -11,6 +11,12 @@
 //! equivalent `if std::thread::panicking() { ... } else { panic!() }`) is
 //! exempt: the panic only runs when unwinding is not in progress, so `drop`
 //! returns normally and no double-panic abort occurs.
+//!
+//! A `Drop` impl nested inside a diverging function (`fn … -> !`) is also
+//! exempt: that is the no_std double-panic abort idiom (`let _a = Abort;
+//! panic!()` unwinds, runs the `Drop`, and the second panic aborts the
+//! process), and the rule's "return instead" advice is impossible in a
+//! function that can never return.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -103,6 +109,26 @@ fn is_bare_panicking_call(expr: tree_sitter::Node, source: &[u8]) -> bool {
     last_segment == "panicking"
 }
 
+/// True when the first `function_item` enclosing `node` is diverging — its
+/// `return_type` is the never type `!`. Only the immediate enclosing function
+/// counts: a non-diverging helper nested inside a `-> !` function is not
+/// exempt. The `drop` method is a child of the `impl_item`, not an ancestor,
+/// so the ancestor walk reaches the enclosing function past it.
+fn impl_is_in_diverging_fn(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "function_item" {
+            return parent
+                .child_by_field_name("return_type")
+                .is_some_and(|ret| {
+                    ret.kind() == "never_type" || ret.utf8_text(source).map(str::trim) == Ok("!")
+                });
+        }
+        cur = parent;
+    }
+    false
+}
+
 #[derive(Debug)]
 pub struct Check;
 
@@ -125,6 +151,13 @@ impl AstCheck for Check {
         let trait_text = trait_node.utf8_text(source_bytes).unwrap_or("");
         let bare = trait_text.rsplit("::").next().unwrap_or(trait_text);
         if bare != "Drop" {
+            return;
+        }
+        // A `Drop` impl nested inside a diverging function (`fn … -> !`) is the
+        // no_std double-panic abort idiom: `let _a = Abort; panic!()` unwinds,
+        // runs the `Drop`, and the second panic aborts the process. The "return
+        // instead" advice is impossible in a `-> !` function, so do not flag it.
+        if impl_is_in_diverging_fn(node, source_bytes) {
             return;
         }
         let Some(body) = node.child_by_field_name("body") else {
@@ -311,5 +344,29 @@ mod tests {
                       if std::thread::panicking() { eprintln!(\"x\"); } \
                       else { panic!(\"y\"); } } }";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_panic_in_drop_inside_diverging_fn_no_std_abort() {
+        let source = "fn abort() -> ! { struct Abort; \
+                      impl Drop for Abort { fn drop(&mut self) { panic!(); } } \
+                      let _a = Abort; panic!(\"abort\"); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_assert_and_unreachable_in_drop_inside_diverging_fn() {
+        let source = "fn abort() -> ! { struct Abort; \
+                      impl Drop for Abort { fn drop(&mut self) { \
+                      assert!(false); unreachable!(); } } \
+                      let _a = Abort; panic!(\"abort\"); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_panic_in_drop_inside_non_diverging_fn() {
+        let source = "fn foo() { struct X; \
+                      impl Drop for X { fn drop(&mut self) { panic!(); } } }";
+        assert_eq!(run_on(source).len(), 1);
     }
 }
