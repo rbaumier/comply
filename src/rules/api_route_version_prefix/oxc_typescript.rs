@@ -139,6 +139,14 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Benchmark / example / demo / scaffold scripts register dummy routes
+        // that are never deployed — they have no API contract or versioning
+        // concern. Reuses the central aux-dir classifier (`benchmarks/`,
+        // `bench/`, `perf/`, `examples/`, …) shared across rules.
+        if ctx.file.path_segments.in_aux_dir {
+            return;
+        }
+
         let Expression::StaticMemberExpression(member) = &call.callee else {
             return;
         };
@@ -214,6 +222,18 @@ mod tests {
 
     fn run(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    /// Path-aware variant: builds a real `FileCtx` so the rule's
+    /// `ctx.file.path_segments.in_aux_dir` bail is exercised from the path
+    /// (the default `run` helper uses an empty `FileCtx`).
+    fn run_at(source: &str, path: &str) -> Vec<Diagnostic> {
+        use crate::files::Language;
+        let path_ref = std::path::Path::new(path);
+        let lang = Language::from_path(path_ref).unwrap_or(Language::TypeScript);
+        let project = crate::project::default_static_project_ctx();
+        let file = crate::rules::file_ctx::FileCtx::build(path_ref, source, lang, project);
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, path_ref, project, &file)
     }
 
     #[test]
@@ -423,5 +443,25 @@ mod tests {
         // Negative space: the `/.well-known/` exemption must not broaden to ordinary
         // unversioned API routes.
         assert_eq!(run("app.get('/users', handler);").len(), 1);
+    }
+
+    #[test]
+    fn ignores_routes_in_benchmark_dir() {
+        // Issue #3238 — router-performance benchmark scripts register dummy
+        // routes (no handler logic, never deployed) to compare routing
+        // throughput across frameworks. They have no API contract, so their
+        // unversioned paths must not be flagged.
+        assert!(run_at("app.get('/user', () => {})", "benchmarks/deno/faster.ts").is_empty());
+        assert!(run_at("app.get('/user/comments', () => {})", "benchmarks/deno/faster.ts").is_empty());
+        assert!(run_at("app.get('/event/:id', () => {})", "benchmarks/webapp/itty-router.js").is_empty());
+    }
+
+    #[test]
+    fn flags_same_route_at_production_path() {
+        // Load-bearing for #3238: the identical route at a production path still
+        // requires a version prefix — the aux-dir bail must not leak to source.
+        let d = run_at("app.get('/user', () => {})", "src/routes.ts");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("/user"));
     }
 }
