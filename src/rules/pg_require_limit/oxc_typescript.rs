@@ -1,6 +1,8 @@
 //! pg-require-limit OXC backend.
 //!
 //! Flags SQL `SELECT` queries without `LIMIT` in string/template literals.
+//! Azure CosmosDB-for-NoSQL queries (the container-alias idiom `FROM c`) are
+//! exempt: that dialect limits rows with `TOP n`, not `LIMIT`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -58,6 +60,9 @@ impl OxcCheck for Check {
             return;
         }
         if is_plpgsql_select_into(&lower) {
+            return;
+        }
+        if is_cosmosdb_container_query(&lower) {
             return;
         }
         if is_passed_to_data_sink(node, semantic) {
@@ -188,6 +193,19 @@ fn next_word_after<'a>(lower: &'a str, keyword: &str) -> Option<&'a str> {
         .and_then(|_| words.next())
 }
 
+/// True when the SQL targets the Azure CosmosDB-for-NoSQL container-alias idiom
+/// `FROM c` (the container is conventionally aliased `c`: `SELECT * FROM c`,
+/// `SELECT c.id … FROM c`). CosmosDB SQL limits rows with `TOP n`, not `LIMIT`,
+/// so the PostgreSQL `LIMIT` rule does not apply. A single-letter table `c` is
+/// not a real PostgreSQL table, so this exempts CosmosDB without losing pg cases.
+///
+/// `lower` is the already-lowercased SQL. Matches `from c` only when `c` is a
+/// standalone token — bounded by a non-identifier char or end-of-string on both
+/// sides — so a longer name like `from customers` / `from cart` does not match.
+fn is_cosmosdb_container_query(lower: &str) -> bool {
+    matches!(next_word_after(lower, "from"), Some("c"))
+}
+
 fn contains_phrase(lower: &str, phrase: &str) -> bool {
     lower
         .split_whitespace()
@@ -306,5 +324,55 @@ mod tests {
     fn flags_tagged_template_query() {
         let source = r#"const rows = sql`SELECT * FROM users WHERE active = true`;"#;
         assert_eq!(run(source).len(), 1);
+    }
+
+    // Regression for #4524: Azure CosmosDB-for-NoSQL queries use the container
+    // alias `FROM c` and limit rows with `TOP n`, not `LIMIT` — the LlamaIndexTS
+    // `SimpleCosmosDBReader` configs. These are not PostgreSQL and must not flag.
+    #[test]
+    fn allows_cosmosdb_select_star_from_c() {
+        let source = r#"const query = "SELECT * FROM c";"#;
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_cosmosdb_projected_columns_from_c() {
+        let source =
+            r#"const q = "SELECT c.id, c.text as text, c.metadata as metadata FROM c";"#;
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_cosmosdb_from_c_with_where() {
+        let source = r#"const q = "SELECT * FROM c WHERE c.type = 'doc'";"#;
+        assert!(run(source).is_empty());
+    }
+
+    // Over-exemption guard: the CosmosDB exemption matches only the standalone
+    // FROM token `c`, never a `c`-prefixed real table. A PostgreSQL `SELECT`
+    // from `users` / `customers` / `cart` without `LIMIT` must still flag.
+    #[test]
+    fn flags_from_users_not_cosmosdb() {
+        let source = r#"const q = "SELECT * FROM users";"#;
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_from_customers_not_cosmosdb() {
+        let source = r#"const q = "SELECT * FROM customers";"#;
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_from_cart_not_cosmosdb() {
+        let source = r#"const q = "SELECT * FROM cart";"#;
+        assert_eq!(run(source).len(), 1);
+    }
+
+    // Existing `LIMIT` short-circuit must keep suppressing a real pg query.
+    #[test]
+    fn allows_from_users_with_limit() {
+        let source = r#"const q = "SELECT * FROM users LIMIT 10";"#;
+        assert!(run(source).is_empty());
     }
 }
