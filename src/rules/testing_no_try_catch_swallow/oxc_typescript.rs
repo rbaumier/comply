@@ -15,16 +15,26 @@ fn catch_body_is_empty(handler: &oxc_ast::ast::CatchClause, source: &str) -> boo
         .all(|c| c.is_whitespace() || c == '{' || c == '}')
 }
 
+/// True only when the catch's nearest enclosing function is the direct callback
+/// of a `test(...)` / `it(...)` call. A catch nested inside a deeper function —
+/// a stream transform, generator, or helper handling its own cleanup (e.g.
+/// swallowing an `AbortError`) — is not the test body and must not fire.
 fn inside_test_callback<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
     for ancestor in semantic.nodes().ancestors(node.id()) {
-        if let AstKind::CallExpression(call) = ancestor.kind()
-            && let Expression::Identifier(id) = &call.callee
-                && matches!(id.name.as_str(), "test" | "it") {
-                    return true;
-                }
+        if matches!(
+            ancestor.kind(),
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+        ) {
+            return matches!(
+                semantic.nodes().parent_kind(ancestor.id()),
+                AstKind::CallExpression(call)
+                    if matches!(&call.callee, Expression::Identifier(id)
+                        if matches!(id.name.as_str(), "test" | "it"))
+            );
+        }
     }
     false
 }
@@ -116,6 +126,23 @@ mod tests {
     #[test]
     fn allows_finally_only_without_empty_catch() {
         let src = "test('a', () => { try { doThing(); } finally { cleanup(); } });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_empty_catch_in_nested_generator() {
+        let src = "test('a', async t => {\n\
+                     const final = async function * () {\n\
+                       try { await foo(); } catch {}\n\
+                       yield * [];\n\
+                     };\n\
+                   });";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_empty_catch_in_nested_arrow_callback() {
+        let src = "test('a', () => { arr.forEach(() => { try { foo(); } catch {} }); });";
         assert!(run(src).is_empty());
     }
 }
