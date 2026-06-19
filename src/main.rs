@@ -22,6 +22,7 @@ mod cli;
 mod clippy;
 mod clone_detection;
 mod comment_duplicate_detection;
+mod function_duplicate_detection;
 mod config;
 mod diagnostic;
 mod engine;
@@ -308,7 +309,11 @@ fn print_timings(t: &Timings) {
 /// Cross-file detectors that run in-process outside the rule engine, so they
 /// are absent from `all_rule_defs()`. `comply rules` dispatches these directly
 /// when their ID is requested.
-const CROSS_FILE_RULE_IDS: &[&str] = &[clone_detection::RULE_ID, comment_duplicate_detection::RULE_ID];
+const CROSS_FILE_RULE_IDS: &[&str] = &[
+    clone_detection::RULE_ID,
+    comment_duplicate_detection::RULE_ID,
+    function_duplicate_detection::RULE_ID,
+];
 
 /// Cargo-backed subprocess detectors, also absent from `all_rule_defs()`.
 /// Producing them requires shelling out to cargo, so a `comply rules` filter
@@ -372,6 +377,9 @@ fn run_cross_file_rules(
         }
         if wants(comment_duplicate_detection::RULE_ID) {
             out.extend(comment_duplicate_detection::lint_files(files, config));
+        }
+        if wants(function_duplicate_detection::RULE_ID) {
+            out.extend(function_duplicate_detection::lint_files(files, config));
         }
     }
     out
@@ -608,6 +616,8 @@ fn collect_all_diagnostics(
         discovered.len() >= 2 && !config.is_rule_globally_disabled(clone_detection::RULE_ID);
     let dup_comments_enabled = discovered.len() >= 2
         && !config.is_rule_globally_disabled(comment_duplicate_detection::RULE_ID);
+    let func_dups_enabled = discovered.len() >= 2
+        && !config.is_rule_globally_disabled(function_duplicate_detection::RULE_ID);
 
     // Clone detection only needs the file list, not the import index, so its
     // `rayon::join` arm runs concurrently with the other arm's full chain:
@@ -681,13 +691,23 @@ fn collect_all_diagnostics(
         let all_refs: Vec<&SourceFile> = discovered.iter().collect();
         comment_duplicate_detection::lint_files(&all_refs, config)
     };
+    let func_dups_work = || -> Vec<Diagnostic> {
+        if !func_dups_enabled {
+            return Vec::new();
+        }
+        let all_refs: Vec<&SourceFile> = discovered.iter().collect();
+        function_duplicate_detection::lint_files(&all_refs, config)
+    };
 
-    let (engine_res, ((clone_diags, clones_elapsed), dup_diags)) =
-        rayon::join(engine_work, || rayon::join(clones_work, dup_comments_work));
+    let (engine_res, ((clone_diags, clones_elapsed), (dup_diags, func_dup_diags))) =
+        rayon::join(engine_work, || {
+            rayon::join(clones_work, || rayon::join(dup_comments_work, func_dups_work))
+        });
     let (project, engine_diags) = engine_res?;
     diagnostics.extend(engine_diags);
     diagnostics.extend(clone_diags);
     diagnostics.extend(dup_diags);
+    diagnostics.extend(func_dup_diags);
     timings.clones = clones_elapsed;
 
     if project.has_framework("drizzle") {
