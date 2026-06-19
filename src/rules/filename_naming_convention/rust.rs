@@ -79,6 +79,12 @@ impl TextCheck for Check {
         if crate::rules::path_utils::is_cargo_example_path(ctx.path) {
             return Vec::new();
         }
+        // Cargo binary targets directly in `src/bin/` produce a `--bin <stem>`
+        // executable whose name is the file stem, so kebab-case stems are the
+        // standard Rust convention; nested modules under `src/bin/` are not.
+        if crate::rules::path_utils::is_cargo_bin_target_path(ctx.path) {
+            return Vec::new();
+        }
         if is_snake_case(strip_ordering_prefix(strip_private_prefix(stem))) {
             return Vec::new();
         }
@@ -196,6 +202,17 @@ mod tests {
     #[test]
     fn allows_snake_case_in_cargo_examples() {
         assert!(run("examples/basic_search.rs").is_empty());
+    }
+
+    #[test]
+    fn allows_kebab_case_cargo_bin_target() {
+        assert!(run("src/bin/stdio-fixture.rs").is_empty());
+        assert!(run("crates/searcher/src/bin/my-tool.rs").is_empty());
+    }
+
+    #[test]
+    fn still_flags_kebab_case_module_nested_under_src_bin() {
+        assert_eq!(run("src/bin/foo/my-helper.rs").len(), 1);
     }
 
     #[test]
