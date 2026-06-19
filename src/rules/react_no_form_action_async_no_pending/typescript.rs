@@ -3,7 +3,9 @@
 //! arrow, or `function` expression), AND the file does NOT mention
 //! `useFormStatus`, `useActionState`, or `useTransition`. A string-valued
 //! `action` (call expression like `fn.toString()`, template literal, or quoted
-//! string) is a plain URL form action and is never flagged.
+//! string) is a plain URL form action and is never flagged. Files importing
+//! SolidJS are skipped: the React 19 pending hooks this rule recommends do not
+//! exist there.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -66,6 +68,12 @@ fn action_expr_is_function_ref(expr: &str) -> bool {
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+        // `useFormStatus`/`useActionState` are React-only DOM hooks. SolidJS
+        // uses `<form action={serverFn}>` idiomatically with its own pending
+        // primitives (`useSubmission`), so the remediation does not apply.
+        if crate::oxc_helpers::imports_solid(ctx.source) {
+            return Vec::new();
+        }
         if has_pending_hook(ctx.source) {
             return Vec::new();
         }
@@ -199,6 +207,38 @@ mod tests {
         // Negative-space guard: a genuine async function action without any
         // pending-state hook must still fire.
         let src = "function F() { return <form action={async (data) => { await save(data); }}><button>Go</button></form>; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_solidstart_form_action() {
+        // Issue #3210: SolidStart uses `<form action={serverFn}>` idiomatically;
+        // `useFormStatus`/`useActionState` are React-only, so this is a FP.
+        let src = "import { createSignal } from \"solid-js\";\n\
+                   export default function Todos() {\n\
+                     return <form action={addTodo} method=\"post\"><button>Add</button></form>;\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_solid_start_scope_form_action() {
+        let src = "import { useSubmission } from \"@solidjs/start\";\n\
+                   export default function Todos() {\n\
+                     return <form action={addTodo}><button>Add</button></form>;\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_react_without_explicit_react_import() {
+        // Gating on `!imports_solid` (not `imports_react`) keeps the core React
+        // case firing even with the new JSX transform, where the file imports
+        // only the server action and never `react`.
+        let src = "import { addTodo } from \"./actions\";\n\
+                   export default function Todos() {\n\
+                     return <form action={addTodo}><button>Add</button></form>;\n\
+                   }";
         assert_eq!(run(src).len(), 1);
     }
 }
