@@ -9,10 +9,20 @@
 //! A `foreign_mod_item` with a non-foreign ABI string (e.g.
 //! `extern "SQL"`, a DSL marker for diesel's `#[declare_sql_function]`
 //! proc macro) is not a C/foreign interface and is left untouched.
+//!
+//! A block carrying an outer `#[wasm_bindgen]` attribute is also left
+//! untouched: the `wasm_bindgen` proc macro rewrites the block into safe
+//! JavaScript interop with no C calling convention or raw-pointer ABI,
+//! and its items must stay in the surrounding module's scope.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
 const SAFE_MOD_NAMES: &[&str] = &["sys", "ffi", "raw", "bindings"];
+
+/// Proc macros that rewrite an `extern` block's semantics into safe,
+/// non-C interop. A block annotated with one of these is not foreign FFI
+/// and cannot be relocated into a `mod sys`/`ffi` wrapper.
+const BINDING_MACRO_ATTRS: &[&str] = &["wasm_bindgen"];
 
 /// Genuine foreign calling conventions accepted by rustc. A bare
 /// `extern { ... }` carries no ABI string and implicitly means `"C"`,
@@ -61,7 +71,53 @@ fn abi<'a>(node: &tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
     content.utf8_text(source).ok()
 }
 
+/// Whether the `foreign_mod_item` carries an outer attribute naming a
+/// binding-generation proc macro (see `BINDING_MACRO_ATTRS`). Outer
+/// attributes are preceding siblings of the block, optionally separated
+/// from it by comments, so the scan walks back over `attribute_item`
+/// siblings and skips interleaved comments.
+fn has_binding_macro_attr(node: &tree_sitter::Node, source: &[u8]) -> bool {
+    let mut sibling = node.prev_sibling();
+    while let Some(prev) = sibling {
+        match prev.kind() {
+            "line_comment" | "block_comment" => {}
+            "attribute_item" => {
+                if attr_path_head(&prev, source)
+                    .is_some_and(|head| BINDING_MACRO_ATTRS.contains(&head))
+                {
+                    return true;
+                }
+            }
+            _ => break,
+        }
+        sibling = prev.prev_sibling();
+    }
+    false
+}
+
+/// The leading path identifier of an `attribute_item`, e.g. `wasm_bindgen`
+/// for both `#[wasm_bindgen]` and `#[wasm_bindgen(extends = Window)]`.
+/// Returns `None` when the attribute's path is not a bare identifier (a
+/// scoped path like `crate::foo` never names a binding macro here).
+fn attr_path_head<'a>(attribute_item: &tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    let mut item_cursor = attribute_item.walk();
+    let attribute = attribute_item
+        .children(&mut item_cursor)
+        .find(|child| child.kind() == "attribute")?;
+    let path = attribute.named_child(0)?;
+    if path.kind() != "identifier" {
+        return None;
+    }
+    path.utf8_text(source).ok()
+}
+
 crate::ast_check! { on ["foreign_mod_item"] => |node, source, ctx, diagnostics|
+    // `#[wasm_bindgen]` and friends turn the block into safe JS interop,
+    // not C FFI, and the items cannot move into a `mod sys`/`ffi` wrapper.
+    if has_binding_macro_attr(&node, source) {
+        return;
+    }
+
     // A bare `extern { ... }` (no ABI string) is implicitly `"C"` FFI.
     if let Some(abi) = abi(&node, source)
         && !FOREIGN_ABIS.contains(&abi)
@@ -134,6 +190,48 @@ mod tests {
     fn flags_bare_extern_block() {
         // A bare `extern { ... }` is implicitly the `"C"` ABI.
         assert_eq!(run(r#"extern { fn foo(); }"#).len(), 1);
+    }
+
+    #[test]
+    fn allows_wasm_bindgen_extern_block() {
+        // `#[wasm_bindgen]` rewrites the block into safe JS interop, not C FFI.
+        assert!(run("#[wasm_bindgen]\nextern \"C\" {\n    pub type WindowExt;\n}").is_empty());
+    }
+
+    #[test]
+    fn allows_wasm_bindgen_extern_block_with_inner_attrs() {
+        // The full winit repro shape: inner `#[wasm_bindgen(...)]` attributes
+        // on the foreign items must not defeat the outer-attribute exemption.
+        let src = "#[wasm_bindgen]\n\
+                   extern \"C\" {\n    \
+                   #[wasm_bindgen(extends = Window)]\n    \
+                   pub(crate) type WindowExt;\n    \
+                   #[wasm_bindgen(method, getter, js_name = getScreenDetails)]\n    \
+                   fn has_screen_details(this: &WindowExt) -> JsValue;\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wasm_bindgen_extern_block_with_outer_args() {
+        // The outer attribute may itself carry arguments.
+        let src = "#[wasm_bindgen(module = \"/js/shim.js\")]\nextern \"C\" {\n    fn shim();\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wasm_bindgen_extern_block_with_comment() {
+        // A comment may sit between the attribute and the block.
+        let src = "#[wasm_bindgen]\n// JS bindings\nextern \"C\" {\n    fn shim();\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_link_extern_block() {
+        // `#[link]` is not a binding macro: a genuine C FFI block stays flagged.
+        assert_eq!(
+            run("#[link(name = \"foo\")]\nextern \"C\" {\n    fn foo();\n}").len(),
+            1
+        );
     }
 
     #[test]
