@@ -42,12 +42,25 @@ fn word_segments(name: &str) -> Vec<String> {
 }
 
 /// Whether the RHS identifier names a collection. A whole word segment must
-/// match an array hint, and the final segment must not be a singular suffix —
-/// `listItem` is one element of `list`, not the array.
+/// match an array hint, the final segment must not be a singular suffix
+/// (`listItem` is one element of `list`, not the array), and a compound name
+/// whose final segment is the plural `values`/`entries` is treated as a record
+/// (`segmentValues` is a map keyed by segment), not a collection.
 fn looks_like_array_name(name: &str) -> bool {
     let segments = word_segments(name);
     if let Some(last) = segments.last()
         && SINGULAR_SUFFIXES.contains(&last.as_str())
+    {
+        return false;
+    }
+    // A *trailing* plural `values`/`entries` segment on a compound name
+    // (`segmentValues`, `formEntries`) names a record/map keyed by the preceding
+    // noun — exactly the object the `in` operator narrows — not a flat array. A
+    // bare single-segment `values`/`entries` (an `Object.values()` /
+    // `Object.entries()` result) stays an array hint.
+    if segments.len() > 1
+        && let Some(last) = segments.last()
+        && matches!(last.as_str(), "values" | "entries")
     {
         return false;
     }
@@ -347,5 +360,41 @@ mod tests {
             run_on(r#"if (typeof other == "number" && key in items) {}"#).len(),
             1
         );
+    }
+
+    // Regression for #3726: huntabyte/bits-ui. `segmentValues` is a mapped-type
+    // record `{ [K in DateSegmentPart]: string | null }`, not an array — `"hour"
+    // in segmentValues` is the idiomatic structural-union narrow. A compound name
+    // whose final segment is the plural `values`/`entries` names a record.
+    #[test]
+    fn allows_in_on_compound_trailing_values() {
+        assert!(run_on(r#"if ("hour" in segmentValues) {}"#).is_empty());
+    }
+
+    #[test]
+    fn allows_in_on_compound_form_values() {
+        assert!(run_on(r#"if ("x" in formValues) {}"#).is_empty());
+    }
+
+    #[test]
+    fn allows_in_on_compound_field_entries() {
+        assert!(run_on(r#"if ("x" in fieldEntries) {}"#).is_empty());
+    }
+
+    // Load-bearing: a bare single-segment `values` is an `Object.values()` result
+    // — a real array — so the array hint must still fire.
+    #[test]
+    fn flags_in_on_bare_values() {
+        assert_eq!(run_on(r#"if ("x" in values) {}"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_in_on_bare_array_hint_items() {
+        assert_eq!(run_on(r#"if ("x" in items) {}"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_in_on_user_list() {
+        assert_eq!(run_on(r#"if ("x" in userList) {}"#).len(), 1);
     }
 }
