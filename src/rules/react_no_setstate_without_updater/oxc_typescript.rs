@@ -8,13 +8,15 @@ use std::sync::Arc;
 
 pub struct Check;
 
-/// Extract `(state_name, setter_name)` from a `useState` variable declarator.
-fn extract_usestate(decl: &oxc_ast::ast::VariableDeclarator) -> Option<(String, String)> {
+/// Extract `(state_name, setter_name, callee_is_bare_identifier)` from a
+/// `useState` variable declarator. `callee_is_bare_identifier` is true for
+/// `useState(...)` and false for the namespaced `React.useState(...)` form.
+fn extract_usestate(decl: &oxc_ast::ast::VariableDeclarator) -> Option<(String, String, bool)> {
     let init = decl.init.as_ref()?;
     let Expression::CallExpression(call) = init else {
         return None;
     };
-    let callee_name = match &call.callee {
+    let callee_is_bare_identifier = match &call.callee {
         Expression::Identifier(id) => {
             if id.name != "useState" {
                 return None;
@@ -22,13 +24,13 @@ fn extract_usestate(decl: &oxc_ast::ast::VariableDeclarator) -> Option<(String, 
             true
         }
         Expression::StaticMemberExpression(mem) => {
-            mem.property.name == "useState"
+            if mem.property.name != "useState" {
+                return None;
+            }
+            false
         }
         _ => return None,
     };
-    if !callee_name {
-        return None;
-    }
     let oxc_ast::ast::BindingPattern::ArrayPattern(arr) = &decl.id else {
         return None;
     };
@@ -42,7 +44,11 @@ fn extract_usestate(decl: &oxc_ast::ast::VariableDeclarator) -> Option<(String, 
     let oxc_ast::ast::BindingPattern::BindingIdentifier(setter_id) = elems[1] else {
         return None;
     };
-    Some((state_id.name.to_string(), setter_id.name.to_string()))
+    Some((
+        state_id.name.to_string(),
+        setter_id.name.to_string(),
+        callee_is_bare_identifier,
+    ))
 }
 
 /// Check if an expression references the given identifier name (recursively),
@@ -133,9 +139,20 @@ impl OxcCheck for Check {
         let AstKind::VariableDeclarator(decl) = node.kind() else {
             return;
         };
-        let Some((state_name, setter_name)) = extract_usestate(decl) else {
+        let Some((state_name, setter_name, callee_is_bare_identifier)) = extract_usestate(decl)
+        else {
             return;
         };
+
+        // A bare `useState(...)` is React's only when `import { useState } from "react"`.
+        // Skip a `useState` bound to anything else (Hono's `../../hooks`, Preact's
+        // `preact/hooks`, a local function); the namespaced `React.useState(...)` form
+        // is already React-scoped and keeps firing.
+        if callee_is_bare_identifier
+            && !crate::oxc_helpers::is_imported_from_react("useState", semantic)
+        {
+            return;
+        }
 
         // Find the enclosing function body and scan for setter calls.
         let mut current = node.id();
@@ -300,6 +317,52 @@ mod tests {
     // Regression for #911: a spread argument to the setter made `Argument::to_expression()` panic.
     #[test]
     fn does_not_panic_on_spread_arg_to_setter() {
-        assert!(run("const [x, setX] = useState(0); setX(...args)").is_empty());
+        let src = "import { useState } from 'react';\nfunction C() { const [x, setX] = useState(0); setX(...args); }";
+        assert!(run(src).is_empty());
+    }
+
+    // A setter called with an expression referencing its own state remains the
+    // genuine antipattern.
+    #[test]
+    fn flags_setter_referencing_own_state() {
+        let src = r#"
+import { useState } from 'react';
+function App() {
+  const [count, setCount] = useState(0);
+  const inc = () => setCount(count + 1);
+  return <div />;
+}
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for #3254: Hono's hook runtime imports `useState` from a relative
+    // path; its internal `setValues([values[0], value])` is not a React setter and
+    // must not be flagged.
+    #[test]
+    fn skips_usestate_imported_from_hono_hooks() {
+        let src = r#"
+import { useState } from '../../hooks';
+function App() {
+  const [count, setCount] = useState(0);
+  const inc = () => setCount(count + 1);
+  return <div />;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Regression for #3254: Preact's `useState` (preact/hooks) is not React's.
+    #[test]
+    fn skips_usestate_imported_from_preact() {
+        let src = r#"
+import { useState } from 'preact/hooks';
+function App() {
+  const [count, setCount] = useState(0);
+  const inc = () => setCount(count + 1);
+  return <div />;
+}
+"#;
+        assert!(run(src).is_empty());
     }
 }
