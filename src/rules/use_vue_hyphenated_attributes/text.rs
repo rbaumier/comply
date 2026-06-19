@@ -162,13 +162,27 @@ fn child_text<'a>(node: tree_sitter::Node, kind: &str, source: &'a [u8]) -> Opti
 
 /// The attribute name to validate, or `None` when the node is out of scope.
 ///
-/// - plain `attribute` → its `attribute_name`.
+/// - plain `attribute` → its `attribute_name`, unless the name contains a `:`. A
+///   colon-bearing plain attribute is a namespaced / variant-prefixed name (an
+///   XML/SVG namespace like `xlink:href`, or a UnoCSS/Windi attributify utility
+///   like `md:grid-cols-2`), not a component prop or DOM attribute subject to the
+///   kebab-case convention, so it is skipped.
 /// - `directive_attribute` with name `:`, `v-bind`, or `v-model` → its static
 ///   `directive_argument`. Dynamic arguments (`:[key]`), argument-less directives,
 ///   and any other directive (`v-on`, `@`, `v-if`, ...) are skipped.
 fn checked_name<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
     match node.kind() {
-        "attribute" => child_text(node, "attribute_name", source),
+        "attribute" => {
+            let name = child_text(node, "attribute_name", source)?;
+            // A plain attribute name containing `:` is a namespaced / variant-prefixed
+            // name (XML/SVG namespace like `xlink:href`, or a UnoCSS/Windi attributify
+            // utility like `md:grid-cols-2`), not a component prop or DOM attribute
+            // subject to the kebab-case convention.
+            if name.contains(':') {
+                return None;
+            }
+            Some(name)
+        }
         "directive_attribute" => {
             let directive_name = child_text(node, "directive_name", source)?;
             if !matches!(directive_name, ":" | "v-bind" | "v-model") {
@@ -370,5 +384,39 @@ mod tests {
     fn flags_plain_camelcase_attribute_on_slot() {
         // Only directive bindings are exempt on `<slot>`; a plain attr still flags.
         assert_eq!(run(&wrap("<slot fooBar=\"x\" />")).len(), 1);
+    }
+
+    // --- Colon-bearing plain attributes (UnoCSS/Windi attributify + XML/SVG namespaces) ---
+
+    #[test]
+    fn allows_unocss_responsive_attributify_utility() {
+        // Issue #4383: `md:grid-cols-2` is a UnoCSS attributify utility, the `:` is the
+        // `md:` breakpoint variant, not a Vue namespace → not flagged.
+        assert!(run(&wrap("<div grid md:grid-cols-2 gap-2></div>")).is_empty());
+    }
+
+    #[test]
+    fn allows_unocss_state_and_theme_variants() {
+        assert!(run(&wrap("<div hover:bg-red dark:text-white 2xl:gap-4 />")).is_empty());
+    }
+
+    #[test]
+    fn allows_xml_namespace_plain_attribute() {
+        // `<a>` is not SVG-exclusive, so this locks the colon guard, not the SVG exemption.
+        assert!(run(&wrap("<a xlink:href=\"#x\" />")).is_empty());
+    }
+
+    #[test]
+    fn flags_camelcase_plain_attribute_without_colon() {
+        // The colon guard only skips colon-bearing names; a plain camelCase attribute
+        // with no colon is still a genuine kebab-case violation.
+        assert_eq!(run(&wrap("<div myProp=\"x\" />")).len(), 1);
+    }
+
+    #[test]
+    fn flags_camelcase_directive_argument_with_colon() {
+        // `:fooBar` flows through the directive arm (argument validation), which the
+        // plain-attribute colon guard does not touch → still flagged.
+        assert_eq!(run(&wrap("<div :fooBar=\"x\" />")).len(), 1);
     }
 }
