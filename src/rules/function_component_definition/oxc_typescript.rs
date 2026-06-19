@@ -23,20 +23,6 @@ fn starts_with_uppercase(name: &str) -> bool {
         .is_some_and(|c| c.is_ascii_uppercase())
 }
 
-/// True when the program imports from `solid-js` or any `solid-js/*` subpath
-/// (`solid-js/web`, `solid-js/store`, …). Solid renders JSX but is not React:
-/// its components are plain arrow functions by convention, so the React-only
-/// "use a function declaration" guidance does not apply to a Solid file.
-fn imports_solid_js(semantic: &oxc_semantic::Semantic) -> bool {
-    semantic.nodes().iter().any(|node| {
-        let AstKind::ImportDeclaration(import) = node.kind() else {
-            return false;
-        };
-        let source = import.source.value.as_str();
-        source == "solid-js" || source.starts_with("solid-js/")
-    })
-}
-
 /// Check if any node under `start` contains JSX by iterating all nodes
 /// whose byte range falls within the start node's span.
 fn contains_jsx(start: &oxc_semantic::AstNode, semantic: &oxc_semantic::Semantic) -> bool {
@@ -90,9 +76,13 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Solid.js files use JSX but are not React; arrow-function components
-        // are idiomatic there, so the rule does not apply (issue #1924).
-        if imports_solid_js(semantic) {
+        // Non-React JSX frameworks (Solid, Vue, Preact, Qwik, Stencil) use JSX
+        // but not React; arrow-function components are idiomatic there, so the
+        // React-only "use a function declaration" guidance does not apply. The
+        // framework is detected via a framework import, an in-file
+        // `@jsxImportSource` pragma, or the nearest `tsconfig.json`'s
+        // `compilerOptions.jsxImportSource` (project-wide JSX factory).
+        if crate::oxc_helpers::is_non_react_jsx_file(ctx.source, ctx.project, ctx.path) {
             return;
         }
 
@@ -140,6 +130,44 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
     }
 
+    /// Run the check against `source` placed at `importer_rel`, with a
+    /// `tsconfig.json` written at `tsconfig_rel`, both under a fresh temp dir.
+    /// Exercises the on-disk tsconfig `jsxImportSource` lookup the rule performs.
+    fn run_with_tsconfig(
+        importer_rel: &str,
+        source: &str,
+        tsconfig_rel: &str,
+        tsconfig: &str,
+    ) -> Vec<Diagnostic> {
+        use crate::config::Config;
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
+        let ts_path = dir.path().join(tsconfig_rel);
+        fs::create_dir_all(ts_path.parent().unwrap()).unwrap();
+        fs::write(&ts_path, tsconfig).unwrap();
+        let importer = dir.path().join(importer_rel);
+        fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        fs::write(&importer, source).unwrap();
+        let canon = fs::canonicalize(&importer).unwrap();
+        let source_file = SourceFile {
+            path: canon.clone(),
+            language: Language::from_path(&canon).unwrap(),
+        };
+        let project = ProjectCtx::load(&[&source_file], &Config::default());
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
     #[test]
     fn flags_react_arrow_component() {
         let src = "export const Display = (props) => <div>{props.x}</div>;";
@@ -171,5 +199,35 @@ export const Counter = () => {
 }
 "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_solidstart_arrow_component_via_tsconfig_jsx_import_source() {
+        // A SolidJS `.tsx` arrow component with NO per-file `solid-js` import —
+        // the JSX factory comes solely from the package tsconfig's
+        // `compilerOptions.jsxImportSource: "solid-js"`. Must not be flagged.
+        // (Closes #3235)
+        let diags = run_with_tsconfig(
+            "packages/start/src/server/assets/PatchVirtualDevStyles.tsx",
+            "const PatchVirtualDevStyles = (props: { nonce?: string }) => {\n\
+             \x20 return <script nonce={props.nonce} />;\n\
+             };",
+            "packages/start/tsconfig.json",
+            r#"{"compilerOptions":{"jsx":"preserve","jsxImportSource":"solid-js"}}"#,
+        );
+        assert!(diags.is_empty(), "got unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn flags_react_arrow_component_via_tsconfig_react_jsx_import_source() {
+        // A real React project whose tsconfig sets `jsxImportSource: "react"`
+        // (or omits it) — a `.tsx` arrow component must still be flagged.
+        let diags = run_with_tsconfig(
+            "src/App.tsx",
+            "const App = () => <div />;",
+            "tsconfig.json",
+            r#"{"compilerOptions":{"jsx":"react-jsx","jsxImportSource":"react"}}"#,
+        );
+        assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
     }
 }
