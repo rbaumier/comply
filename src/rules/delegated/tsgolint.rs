@@ -977,11 +977,15 @@ fn pfa_is_single_return_block_no_await(block: &str) -> bool {
 
 // ── no-unnecessary-condition post-filter (composite) ─────────────────────
 //
-// Two FP shapes are dropped:
+// Three FP shapes are dropped:
 // 1. Elysia lifecycle-hook callbacks with `??` — `.derive` fields are
 //    runtime-undefined on short-circuit paths even though TS types them as set.
 // 2. Discriminated-union exhaustiveness gates — `=== "literal"` followed by a
 //    `: never = <discriminant>` binding within 50 lines.
+// 3. Optional chains/`??` flagged right after a non-narrowing jest/vitest
+//    assertion on the same variable — `expect(V).not.toBeNull()` (and the
+//    other non-narrowing matchers) does not narrow `V`'s static type, so a
+//    later `V?.…` / `V ?? …` is still required by `tsc`.
 
 const NUC_ELYSIA_HOOK_OPENERS: &[&str] = &[
     ".mapResponse(",
@@ -1006,6 +1010,7 @@ impl PostFilter for NoUnnecessaryConditionFilter {
         };
         !nuc_is_elysia_lifecycle_nullish_fp(src, diag.line)
             && !nuc_is_exhaustiveness_gate_fp(src, diag.line)
+            && !nuc_is_jest_nonnull_assertion_fp(src, diag.line)
     }
 }
 
@@ -1053,6 +1058,88 @@ fn nuc_is_exhaustiveness_gate_fp(src: &str, line_1based: usize) -> bool {
     lines[window_start..window_end]
         .iter()
         .any(|l| l.contains(&needle))
+}
+
+// Non-narrowing jest/vitest matchers: they assert non-nullishness at runtime
+// but do NOT narrow the variable's static type, so `tsc` still requires a
+// later `?.` / `??` on the same variable.
+const NUC_JEST_NONNULL_MATCHERS: &[&str] = &[
+    ".not.toBeNull(",
+    ".not.toBeUndefined(",
+    ".toBeDefined(",
+    ".toBeTruthy(",
+    ".not.toBeFalsy(",
+];
+
+fn nuc_is_jest_nonnull_assertion_fp(src: &str, line_1based: usize) -> bool {
+    let lines: Vec<&str> = src.lines().collect();
+    if line_1based == 0 || line_1based > lines.len() {
+        return false;
+    }
+    let flagged = lines[line_1based - 1];
+    let Some(var) = nuc_extract_chain_root(flagged) else {
+        return false;
+    };
+    let start = line_1based.saturating_sub(25).max(1);
+    (start..line_1based)
+        .rev()
+        .map(|i| lines[i - 1])
+        .any(|l| nuc_line_has_nonnull_assertion(l, &var))
+}
+
+// The root identifier of the first optional-chain (`?.`) or nullish-coalescing
+// (`??`) on the line: walk left over identifier characters from that operator.
+fn nuc_extract_chain_root(line: &str) -> Option<String> {
+    let opt = nuc_find_substr(line, "?.");
+    let coalesce = nuc_find_substr(line, "??");
+    let op_idx = match (opt, coalesce) {
+        (None, None) => return None,
+        (Some(i), None) => i,
+        (None, Some(j)) => j,
+        (Some(i), Some(j)) => i.min(j),
+    };
+    let prefix = &line[..op_idx];
+    let start = prefix
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !nuc_is_ident_char(*c))
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    let root = &prefix[start..];
+    if root.is_empty() {
+        return None;
+    }
+    Some(root.to_owned())
+}
+
+// True when the line asserts non-nullishness on exactly `var` via a
+// non-narrowing matcher: `expect(<var>)` (word-boundaried on `var`, allowing
+// whitespace inside the parens) followed by one of the matchers on the line.
+fn nuc_line_has_nonnull_assertion(line: &str, var: &str) -> bool {
+    let mut search_from = 0;
+    while let Some(rel) = nuc_find_substr(&line[search_from..], "expect(") {
+        let open = search_from + rel + "expect(".len();
+        let inner = line[open..].trim_start();
+        if let Some(after_var) = inner.strip_prefix(var) {
+            // Word boundary: the char after `var` must not extend the identifier.
+            let boundary_ok = after_var
+                .chars()
+                .next()
+                .is_none_or(|c| !nuc_is_ident_char(c));
+            if boundary_ok
+                && after_var.trim_start().starts_with(')')
+                && NUC_JEST_NONNULL_MATCHERS.iter().any(|m| line.contains(m))
+            {
+                return true;
+            }
+        }
+        search_from = open;
+    }
+    false
+}
+
+fn nuc_is_ident_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '$'
 }
 
 fn nuc_extract_comparison_lhs(line: &str) -> Option<String> {
@@ -1895,6 +1982,96 @@ export function loader() {
         let path = write_temp("nuc_no_gate.ts", src);
         let src_content = source_for(&path);
         let line = line_of(src, "props.action === \"create\"");
+        let f = NoUnnecessaryConditionFilter;
+        assert!(f.keep(&nuc_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn nuc_drops_optional_chain_after_jest_not_to_be_null() {
+        let src = "const hint = cond ? null : document.querySelector(sel);\nexpect(hint).not.toBeNull();\nexpect(hint?.textContent?.trim().length ?? 0).toBeGreaterThan(0);\n";
+        let path = write_temp("nuc_jest_not_null.test.tsx", src);
+        let src_content = source_for(&path);
+        let line = line_of(src, "hint?.textContent");
+        let f = NoUnnecessaryConditionFilter;
+        assert!(!f.keep(&nuc_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn nuc_drops_optional_chain_after_jest_to_be_defined() {
+        let src = "const hint = maybe();\nexpect(hint).toBeDefined();\nconst len = hint?.value;\n";
+        let path = write_temp("nuc_jest_defined.test.tsx", src);
+        let src_content = source_for(&path);
+        let line = line_of(src, "hint?.value");
+        let f = NoUnnecessaryConditionFilter;
+        assert!(!f.keep(&nuc_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn nuc_drops_optional_chain_after_jest_to_be_truthy() {
+        let src = "const hint = maybe();\nexpect(hint).toBeTruthy();\nconst len = hint?.value;\n";
+        let path = write_temp("nuc_jest_truthy.test.tsx", src);
+        let src_content = source_for(&path);
+        let line = line_of(src, "hint?.value");
+        let f = NoUnnecessaryConditionFilter;
+        assert!(!f.keep(&nuc_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn nuc_drops_chain_after_jest_assertion_with_whitespace() {
+        let src = "const hint = maybe();\nexpect( hint ).not.toBeNull();\nconst len = hint?.value;\n";
+        let path = write_temp("nuc_jest_ws.test.tsx", src);
+        let src_content = source_for(&path);
+        let line = line_of(src, "hint?.value");
+        let f = NoUnnecessaryConditionFilter;
+        assert!(!f.keep(&nuc_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn nuc_drops_optional_chain_after_jest_not_to_be_falsy() {
+        let src = "const hint = maybe();\nexpect(hint).not.toBeFalsy();\nconst len = hint?.value;\n";
+        let path = write_temp("nuc_jest_not_falsy.test.tsx", src);
+        let src_content = source_for(&path);
+        let line = line_of(src, "hint?.value");
+        let f = NoUnnecessaryConditionFilter;
+        assert!(!f.keep(&nuc_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn nuc_keeps_optional_chain_without_preceding_assertion() {
+        let src = "const hint = maybe();\nconst len = hint?.value;\n";
+        let path = write_temp("nuc_jest_no_assertion.test.tsx", src);
+        let src_content = source_for(&path);
+        let line = line_of(src, "hint?.value");
+        let f = NoUnnecessaryConditionFilter;
+        assert!(f.keep(&nuc_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn nuc_keeps_chain_when_assertion_is_on_different_var() {
+        let src = "const hint = maybe();\nexpect(other).not.toBeNull();\nconst len = hint?.value;\n";
+        let path = write_temp("nuc_jest_other_var.test.tsx", src);
+        let src_content = source_for(&path);
+        let line = line_of(src, "hint?.value");
+        let f = NoUnnecessaryConditionFilter;
+        assert!(f.keep(&nuc_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn nuc_keeps_chain_when_assertion_var_is_a_prefix() {
+        let src = "const hint = maybe();\nexpect(hintFoo).not.toBeNull();\nconst len = hint?.value;\n";
+        let path = write_temp("nuc_jest_prefix_var.test.tsx", src);
+        let src_content = source_for(&path);
+        let line = line_of(src, "hint?.value");
+        let f = NoUnnecessaryConditionFilter;
+        assert!(f.keep(&nuc_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn nuc_keeps_flagged_line_without_chain_or_coalesce() {
+        let src = "const hint = maybe();\nexpect(hint).not.toBeNull();\nconst len = hint.value;\n";
+        let path = write_temp("nuc_jest_no_chain.test.tsx", src);
+        let src_content = source_for(&path);
+        let line = line_of(src, "hint.value");
         let f = NoUnnecessaryConditionFilter;
         assert!(f.keep(&nuc_diag(&path, line), Some(&src_content)));
     }
