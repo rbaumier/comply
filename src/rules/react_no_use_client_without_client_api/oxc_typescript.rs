@@ -5,6 +5,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     BindingPattern, Expression, ImportDeclarationSpecifier, JSXAttributeName, JSXElementName,
+    VariableDeclarationKind,
 };
 use rustc_hash::FxHashSet;
 use std::sync::Arc;
@@ -274,6 +275,29 @@ impl OxcCheck for Check {
                     ) && let BindingPattern::BindingIdentifier(id) = &decl.id
                         && is_hook_name(id.name.as_str())
                     {
+                        found_client_api = true;
+                        break;
+                    }
+                }
+                // A module-level mutable binding (`let browserQueryClient`) is
+                // module state that is only safe in a client bundle — in a
+                // Server Component module it would be shared across requests.
+                // Marking the file `"use client"` to isolate it per browser is
+                // the documented Next.js pattern for browser-only singletons
+                // (caches, connection pools, client instances), so the directive
+                // is legitimate. `const` is excluded (immutable, safe in RSC),
+                // and a `let`/`var` inside a function body is ordinary local
+                // state, not module state, so it carries no signal.
+                AstKind::VariableDeclaration(decl) => {
+                    if matches!(
+                        decl.kind,
+                        VariableDeclarationKind::Let | VariableDeclarationKind::Var
+                    ) && !semantic.nodes().ancestors(node.id()).any(|a| {
+                        matches!(
+                            a.kind(),
+                            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+                        )
+                    }) {
                         found_client_api = true;
                         break;
                     }
@@ -1065,6 +1089,74 @@ export default function Provider({ children, x }) {
     fn still_flags_use_client_with_static_jsx_only_oxc() {
         let src = r#"'use client';
 export function Title() { return <div>hi</div>; }
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression tests for #4388 — a `"use client"` utility file whose only
+    // client signal is a module-level mutable binding (`let browserQueryClient`)
+    // legitimately needs the directive: module state is only safe in a client
+    // bundle, where it is isolated per browser instead of shared across requests.
+    #[test]
+    fn no_fp_for_module_level_browser_singleton_oxc() {
+        let src = r#""use client";
+import { isServer, QueryClient } from "@tanstack/react-query";
+function makeQueryClient() { return new QueryClient(); }
+let browserQueryClient: QueryClient | undefined = undefined;
+export function getQueryClient() {
+  if (isServer) return makeQueryClient();
+  if (!browserQueryClient) browserQueryClient = makeQueryClient();
+  return browserQueryClient;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_minimal_module_singleton_oxc() {
+        let src = r#""use client";
+let cache = undefined;
+export function get() { return cache; }
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_for_module_level_var_singleton_oxc() {
+        let src = r#""use client";
+var pool;
+export function p() { return pool; }
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Negative space: a `const`-only module declares no mutable module state
+    // (immutable bindings are safe in a Server Component), so it is still flagged.
+    #[test]
+    fn still_flags_const_only_module_oxc() {
+        let src = r#""use client";
+export const CONFIG = { a: 1 };
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Negative space: a pure function with no module-level mutable state is still
+    // flagged.
+    #[test]
+    fn still_flags_pure_function_no_module_state_oxc() {
+        let src = r#""use client";
+export function add(a, b) { return a + b; }
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Negative space: a `let` declared inside a function body is ordinary local
+    // state, not module state, so it carries no client signal and is still
+    // flagged — this proves the module-level (no function ancestor) scoping.
+    #[test]
+    fn still_flags_function_local_let_oxc() {
+        let src = r#""use client";
+export function f() { let x = 0; x++; return x; }
 "#;
         assert_eq!(run(src).len(), 1);
     }
