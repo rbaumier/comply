@@ -1584,10 +1584,12 @@ fn ep_is_ident_byte(b: u8) -> bool {
 
 // ── strict-void-return post-filter ────────────────────────────────────────
 //
-// Two FP shapes are dropped:
+// Three FP shapes are dropped:
 // 1. `vi.fn()` mocks — inline or aliased via const/let/var. (Closes #…)
 // 2. `renderHook(() => …)` callbacks — the callback must return the hook
 //    value. A 2-line window is used to avoid bleeding into adjacent calls.
+// 3. `new Promise(r => setTimeout(r, ms))` executors — the executor's `void`
+//    return type discards the timer handle (the canonical sleep idiom).
 
 struct StrictVoidReturnFilter;
 
@@ -1596,8 +1598,34 @@ impl PostFilter for StrictVoidReturnFilter {
         let Some(src) = source else {
             return true;
         };
-        !svr_is_vi_fn_fp(src, diag.line, diag.column) && !svr_is_render_hook_fp(src, diag.line)
+        !svr_is_vi_fn_fp(src, diag.line, diag.column)
+            && !svr_is_render_hook_fp(src, diag.line)
+            && !svr_is_promise_executor_timer_fp(src, diag.line)
     }
+}
+
+/// Timer / scheduling APIs whose return value is idiomatically discarded.
+const SVR_TIMER_CALLS: &[&str] = &[
+    "setTimeout(",
+    "setInterval(",
+    "clearTimeout(",
+    "clearInterval(",
+    "setImmediate(",
+    "requestAnimationFrame(",
+    "cancelAnimationFrame(",
+    "queueMicrotask(",
+];
+
+/// True when the diagnostic sits on a `new Promise(...)` executor whose concise
+/// body returns a timer/scheduling call (`new Promise(r => setTimeout(r, ms))`).
+/// The Promise executor is typed `(resolve, reject) => void`, so TypeScript
+/// permits and discards the returned timer handle — the canonical sleep idiom,
+/// not a leaked value.
+fn svr_is_promise_executor_timer_fp(src: &str, line_1based: usize) -> bool {
+    let Some(line) = src.lines().nth(line_1based.saturating_sub(1)) else {
+        return false;
+    };
+    line.contains("new Promise(") && SVR_TIMER_CALLS.iter().any(|t| line.contains(t))
 }
 
 fn svr_is_vi_fn_fp(src: &str, line_1based: usize, column_1based: usize) -> bool {
@@ -2356,5 +2384,65 @@ test('a', () => {
         let src_content = source_for(&path);
         let f = StrictVoidReturnFilter;
         assert!(f.keep(&svr_diag(&path, line, value_col), Some(&src_content)));
+    }
+
+    // Regression for #4397: `new Promise(r => setTimeout(r, ms))` is the
+    // canonical sleep idiom — the executor's `void` return type discards the
+    // timer handle. Must not fire.
+    #[test]
+    fn svr_drops_promise_executor_set_timeout_with_delay() {
+        let src = "await new Promise((resolve) => setTimeout(resolve, 10))\n";
+        let path = write_temp("svr_promise_set_timeout_delay.ts", src);
+        let (line, _) = line_col_of(src, "new Promise(");
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(!f.keep(&svr_diag(&path, line, 1), Some(&src_content)));
+    }
+
+    #[test]
+    fn svr_drops_promise_executor_set_timeout_no_delay() {
+        let src = "await new Promise((resolve) => setTimeout(resolve))\n";
+        let path = write_temp("svr_promise_set_timeout_no_delay.ts", src);
+        let (line, _) = line_col_of(src, "new Promise(");
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(!f.keep(&svr_diag(&path, line, 1), Some(&src_content)));
+    }
+
+    #[test]
+    fn svr_drops_promise_executor_set_interval() {
+        let src = "const sleep = (ms: number) => new Promise(resolve => setInterval(resolve, ms))\n";
+        let path = write_temp("svr_promise_set_interval.ts", src);
+        let (line, _) = line_col_of(src, "new Promise(");
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(!f.keep(&svr_diag(&path, line, 1), Some(&src_content)));
+    }
+
+    #[test]
+    fn svr_keeps_set_timeout_outside_promise() {
+        let src = "setTimeout(() => doReturn(), 10)\n";
+        let path = write_temp("svr_set_timeout_no_promise.ts", src);
+        let (line, _) = line_col_of(src, "setTimeout(");
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(f.keep(&svr_diag(&path, line, 1), Some(&src_content)));
+    }
+
+    #[test]
+    fn svr_keeps_promise_executor_returning_non_timer_value() {
+        let src = "new Promise((resolve) => resolve(computeValue()))\n";
+        let path = write_temp("svr_promise_non_timer.ts", src);
+        let (line, _) = line_col_of(src, "new Promise(");
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(f.keep(&svr_diag(&path, line, 1), Some(&src_content)));
+    }
+
+    #[test]
+    fn svr_keeps_promise_executor_timer_when_source_missing() {
+        let f = StrictVoidReturnFilter;
+        let d = svr_diag(Path::new("src/foo.ts"), 1, 1);
+        assert!(f.keep(&d, None));
     }
 }
