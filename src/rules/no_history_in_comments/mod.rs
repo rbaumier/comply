@@ -34,7 +34,6 @@ pub fn register() -> RuleDef {
 /// Phrases that always narrate the evolution of *code*. They have no plausible
 /// runtime/domain reading, so they fire unconditionally.
 const HISTORY_PHRASES: &[&str] = &[
-    "was replaced",
     "was refactored",
     "was rewritten",
     "was converted",
@@ -56,6 +55,7 @@ const AMBIGUOUS_PHRASES: &[&str] = &[
     "was changed",
     "was modified",
     "was removed",
+    "was replaced",
     "was deleted",
     "was moved",
     "was renamed",

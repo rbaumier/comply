@@ -97,4 +97,18 @@ mod tests {
     fn flags_in_favor_of_marker() {
         assert_eq!(run("// The old cache layer was removed in favor of Redis\nfn f() {}").len(), 1);
     }
+
+    #[test]
+    fn allows_was_replaced_test_assertion() {
+        // Regression for issue #4526: "content was replaced" is a test-assertion
+        // description (subject "content" is not a code artifact), not code history.
+        assert!(run("// Check if node content was replaced correctly\nfn f() {}").is_empty());
+        assert!(run("// the value was replaced at runtime\nfn f() {}").is_empty());
+    }
+
+    #[test]
+    fn flags_was_replaced_with_code_subject() {
+        assert_eq!(run("// the function was replaced with a hook\nfn f() {}").len(), 1);
+        assert_eq!(run("// this method was replaced by useFoo\nfn f() {}").len(), 1);
+    }
 }
