@@ -1,6 +1,11 @@
 //! no-mutable-exports oxc backend — flag `export let` / `export var`, except
-//! the companion-setter pattern (a mutable binding paired with an exported
-//! function that assigns to it).
+//! two intentional patterns:
+//! - the companion-setter pattern (a mutable binding paired with an exported
+//!   function that assigns to it);
+//! - the top-level init-only pattern (the binding is reassigned only in the
+//!   module's own top-level scope — a `try`/`if`/block at module level still
+//!   counts as top-level — and never inside a function body, as with the
+//!   optional-dependency initializer `export let x = null; x = await import(...)`).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -33,6 +38,12 @@ impl OxcCheck for Check {
         // is mutated through a controlled, exported entry point (companion
         // setter), so an `export let x` paired with it is intentional.
         let mut controlled: FxHashSet<&str> = FxHashSet::default();
+        // Names assigned inside ANY function body (exported or not).
+        let mut assigned_in_fn: FxHashSet<&str> = FxHashSet::default();
+        // Names assigned in the module's own top-level scope (a `try`/`if`/block
+        // at module level still counts as top-level — only a function boundary
+        // does not).
+        let mut assigned_top_level: FxHashSet<&str> = FxHashSet::default();
         let mut exports: Vec<MutableExport<'a>> = Vec::new();
 
         for node in nodes.iter() {
@@ -41,8 +52,14 @@ impl OxcCheck for Check {
                     let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left else {
                         continue;
                     };
-                    if assignment_in_exported_fn(semantic, node.id()) {
-                        controlled.insert(target.name.as_str());
+                    let name = target.name.as_str();
+                    if assignment_in_fn(semantic, node.id()) {
+                        assigned_in_fn.insert(name);
+                        if assignment_in_exported_fn(semantic, node.id()) {
+                            controlled.insert(name);
+                        }
+                    } else {
+                        assigned_top_level.insert(name);
                     }
                 }
                 AstKind::ExportNamedDeclaration(export) => {
@@ -76,10 +93,16 @@ impl OxcCheck for Check {
         let mut diagnostics = Vec::new();
         for export in exports {
             // A destructuring export (`export let { a } = ...`) yields no simple
-            // binding names; still flag it as a mutable export.
-            let all_controlled =
-                !export.names.is_empty() && export.names.iter().all(|n| controlled.contains(n));
-            if all_controlled {
+            // binding names; still flag it as a mutable export. A binding is
+            // exempt when it is a companion setter (mutated through an exported
+            // function) or follows the top-level init-only pattern (reassigned
+            // only at module load, never inside a function body).
+            let all_exempt = !export.names.is_empty()
+                && export.names.iter().all(|n| {
+                    controlled.contains(n)
+                        || (assigned_top_level.contains(n) && !assigned_in_fn.contains(n))
+                });
+            if all_exempt {
                 continue;
             }
             let (line, column) = byte_offset_to_line_col(ctx.source, export.export_start as usize);
@@ -98,6 +121,18 @@ impl OxcCheck for Check {
         }
         diagnostics
     }
+}
+
+/// True when the assignment node `id` is nested inside any function body
+/// (exported or not). A `try`/`if`/block at module top level has no function
+/// ancestor and is therefore not "in a function".
+fn assignment_in_fn(semantic: &oxc_semantic::Semantic, id: oxc_semantic::NodeId) -> bool {
+    semantic.nodes().ancestors(id).any(|ancestor| {
+        matches!(
+            ancestor.kind(),
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+        )
+    })
 }
 
 /// True when the assignment node `id` is nested inside the body of a function
@@ -216,6 +251,46 @@ mod tests {
         let src = "export let value = 0;\n\
                    export let other = 0;\n\
                    export function set_other(v) {\n  other = v;\n}";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression for #3252: the optional-dependency initializer pattern — the
+    // binding is reassigned only at module load (a `try`/`catch` at top level),
+    // never inside a function body, so it is not an externally-mutable live
+    // binding and must not be flagged.
+    #[test]
+    fn allows_export_let_top_level_init_in_try() {
+        let src = "export let ts = undefined;\n\
+                   try { ts = (await import('typescript')).default; } catch {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    // Regression for #3252: conditional init-time reassignment in a top-level
+    // `if` block is still top-level only — exempt.
+    #[test]
+    fn allows_export_let_top_level_init_in_if() {
+        let src = "export let otel = null;\n\
+                   if (FLAG) { otel = load(); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // Negative-space guard for #3252: an `export let` that is NEVER reassigned
+    // gives no top-level init signal and must still be flagged (prefer `const`).
+    #[test]
+    fn flags_export_let_never_reassigned() {
+        let d = run_on("export let x = 0;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("`let`"));
+    }
+
+    // Negative-space guard for #3252: a binding mutated inside a *non-exported*
+    // function is a genuinely mutable live binding (callers can trigger it) and
+    // must still be flagged even though no top-level assignment is required.
+    #[test]
+    fn flags_export_let_mutated_in_non_exported_fn() {
+        let src = "export let y;\n\
+                   function helper() {\n  y = 1;\n}";
         let d = run_on(src);
         assert_eq!(d.len(), 1);
     }
