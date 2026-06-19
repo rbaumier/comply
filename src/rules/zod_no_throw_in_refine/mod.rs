@@ -17,7 +17,10 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["zod"],
 
-    skip_in_test_dir: false,
+    // In a test/spec file, a `throw` inside `.refine()` is the behavior under
+    // test (e.g. asserting Zod re-throws / wraps it via `expect(...).toThrow()`),
+    // not a production mistake — and such files never ship. Suppress there.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 

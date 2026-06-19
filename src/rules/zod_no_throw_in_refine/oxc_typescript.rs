@@ -96,6 +96,12 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
+    // Routes through the production applicability gate so the
+    // `skip_in_test_dir` suppression is exercised exactly as in a real run.
+    fn run_at(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_gated(&Check, source, path)
+    }
+
     #[test]
     fn flags_throw_in_refine() {
         let src = r#"
@@ -157,5 +163,58 @@ mod tests {
             });
         "#;
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Issue #4433: in a test file, throwing inside `.refine()` is the behavior
+    // under test (asserting Zod re-throws / wraps it), not a production mistake.
+    #[test]
+    fn allows_throw_in_refine_in_test_file() {
+        let src = r#"
+            test("safeparse unexpected error", () => {
+                expect(() =>
+                    stringSchema
+                        .refine((data) => {
+                            throw new Error(data);
+                        })
+                        .safeParse("12")
+                ).toThrow();
+            });
+        "#;
+        // Production path still flags this shape — the only difference is the path.
+        assert_eq!(run_at(src, "src/schema.ts").len(), 1);
+        assert!(run_at(src, "packages/zod/src/v3/tests/safeparse.test.ts").is_empty());
+    }
+
+    // Issue #4433: the schema (with the throwing `.refine()`) is declared in one
+    // statement and asserted in a later `expect(...).toThrow()`. A file-level
+    // exemption catches this; a lexical "refine inside expect().toThrow()" guard
+    // would not.
+    #[test]
+    fn allows_throw_in_refine_when_schema_asserted_separately() {
+        let src = r#"
+            const schema = z
+                .string()
+                .transform((val) => val.length)
+                .refine(() => false, { message: "always fails" })
+                .refine((val) => {
+                    if (typeof val !== "number") throw new Error();
+                    return (val ^ 2) > 10;
+                });
+            expect(() => schema.parse("hello")).toThrow(z.ZodError);
+        "#;
+        // Production path still flags this shape — the only difference is the path.
+        assert_eq!(run_at(src, "src/schema.ts").len(), 1);
+        assert!(run_at(src, "packages/zod/src/v4/classic/tests/error.test.ts").is_empty());
+    }
+
+    #[test]
+    fn flags_throw_in_refine_in_production_file() {
+        let src = r#"
+            const schema = z.string().refine((val) => {
+                if (val.length < 3) throw new Error("too short");
+                return true;
+            });
+        "#;
+        assert_eq!(run_at(src, "src/schema.ts").len(), 1);
     }
 }
