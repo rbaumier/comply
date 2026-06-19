@@ -1,5 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{is_in_test_context, is_suppressed_by_clippy_allow};
+use crate::rules::rust_helpers::{
+    is_in_test_context, is_suppressed_by_clippy_allow, is_under_tests_dir,
+};
 
 const ATOMIC_TYPES: &[(&str, &str)] = &[
     ("bool", "AtomicBool"),
@@ -18,8 +20,13 @@ const ATOMIC_TYPES: &[(&str, &str)] = &[
 crate::ast_check! { on ["type_identifier"] prefilter = ["Mutex"] => |node, source, ctx, diagnostics|
     // Test fixtures deliberately exercise `Mutex<primitive>` shared-state
     // plumbing (e.g. `Arc<Mutex<u32>>` passed through a handler); the
-    // lock-free-atomic discipline only applies to production code.
-    if is_in_test_context(node, source) { return; }
+    // lock-free-atomic discipline only applies to production code. Both an
+    // in-file `#[cfg(test)]` module and a standalone integration-test support
+    // module under `tests/` (which carries no `#[cfg(test)]` attribute) are
+    // test-only and exempt.
+    if is_in_test_context(node, source) || is_under_tests_dir(ctx.path) {
+        return;
+    }
 
     let Ok(text) = node.utf8_text(source) else { return };
     if text != "Mutex" { return; }
@@ -123,6 +130,10 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, s, "t.rs")
     }
 
+    fn run_at(s: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, s, path)
+    }
+
     #[test]
     fn flags_mutex_bool() {
         let diags = run("static ERRORED: Mutex<bool> = Mutex::new(false);");
@@ -203,6 +214,24 @@ mod tests {
     fn allows_mutex_primitive_in_cfg_test_module() {
         let src = "#[cfg(test)]\nmod tests {\n    type TestT = Arc<Mutex<u32>>;\n}";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mutex_primitive_in_integration_tests_dir() {
+        // xh FP (#4395): integration-test support module under `tests/` has no
+        // `#[cfg(test)]` attribute, so it is exempted by path, not by attribute.
+        let src = "pub struct Server {\n    successful_hits: Arc<Mutex<u8>>,\n}";
+        assert!(run_at(src, "tests/server/mod.rs").is_empty());
+    }
+
+    #[test]
+    fn flags_mutex_primitive_field_in_src() {
+        // The tests-dir exemption is path-scoped: the same field in `src/`
+        // production code must still be flagged.
+        let src = "pub struct Server {\n    successful_hits: Mutex<u8>,\n}";
+        let diags = run_at(src, "src/lib.rs");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("AtomicU8"));
     }
 
     #[test]
