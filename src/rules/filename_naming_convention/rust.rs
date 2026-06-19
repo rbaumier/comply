@@ -1,8 +1,35 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
 
+/// Rust backend for `filename-naming-convention`: flags `.rs` filenames whose
+/// stem is not snake_case, after stripping a numeric ordering prefix
+/// (`0065_`) and a leading `_` private-module marker. Cargo target, trybuild
+/// and rustc-UI fixture paths are exempt because their kebab-case name is the
+/// build-target / scenario identifier. Files carrying a machine-generated
+/// marker near the top of their content are also exempt: the generator
+/// dictates the name (e.g. wasm-bindgen WebIDL `gen_*.rs`).
 #[derive(Debug)]
 pub struct Check;
+
+/// Number of leading lines scanned for a machine-generated marker. Generated
+/// banners sit at the very top of the file, so a small window keeps the scan
+/// cheap and avoids matching the marker text inside an unrelated string or
+/// comment further down.
+const GENERATED_MARKER_SCAN_LINES: usize = 15;
+
+/// Returns `true` when the first few lines carry a machine-generated marker:
+/// a blanket `#![allow(clippy::all)]` inner attribute (whitespace-tolerant,
+/// since codegen may emit odd spacing), an `@generated` header, or a
+/// `Code generated … DO NOT EDIT` banner. Such files take their name from the
+/// generator, so the snake_case convention cannot apply.
+fn is_generated_rust_source(source: &str) -> bool {
+    source.lines().take(GENERATED_MARKER_SCAN_LINES).any(|line| {
+        let compact: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+        compact.contains("#![allow(clippy::all)]")
+            || line.contains("@generated")
+            || line.contains("DO NOT EDIT")
+    })
+}
 
 /// Strips a leading zero-padded numeric ordering prefix (`<digits>_`) from a
 /// stem, e.g. `0065_comment_newline` -> `comment_newline`. Such prefixes are a
@@ -56,6 +83,13 @@ fn is_snake_case(stem: &str) -> bool {
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+        // Machine-generated Rust (wasm-bindgen WebIDL `gen_*.rs`, etc.) takes its
+        // filename from the generator (the PascalCase suffix mirrors the source
+        // interface name) and cannot be renamed. A blanket `#![allow(clippy::all)]`
+        // inner attribute / `@generated` / `DO NOT EDIT` header marks such files.
+        if is_generated_rust_source(ctx.source) {
+            return Vec::new();
+        }
         let Some(file_name) = ctx.path.file_name().and_then(|s| s.to_str()) else {
             return Vec::new();
         };
@@ -107,6 +141,10 @@ mod tests {
 
     fn run(path: &str) -> Vec<Diagnostic> {
         Check.check(&CheckCtx::for_test(Path::new(path), ""))
+    }
+
+    fn run_with_source(path: &str, source: &str) -> Vec<Diagnostic> {
+        Check.check(&CheckCtx::for_test(Path::new(path), source))
     }
 
     #[test]
@@ -254,5 +292,57 @@ mod tests {
     #[test]
     fn still_flags_pascal_case_without_underscore() {
         assert_eq!(run("src/MyModule.rs").len(), 1);
+    }
+
+    #[test]
+    fn allows_wasm_bindgen_generated_pascal_suffix() {
+        assert!(
+            run_with_source(
+                "crates/webidl-tests/src/features/gen_MixinFoo.rs",
+                "#![allow(unused_imports)]\n#![allow(clippy::all)]\nuse super::*;\n",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_generated_header_marker() {
+        assert!(
+            run_with_source("src/features/gen_Foo.rs", "// @generated\npub struct Foo;\n")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_clippy_all_marker_with_codegen_spacing() {
+        assert!(
+            run_with_source(
+                "src/features/gen_Bar.rs",
+                "# ! [ allow ( clippy :: all ) ]\nuse super::*;\n",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_generated_name_without_marker() {
+        assert_eq!(
+            run_with_source(
+                "crates/webidl-tests/src/features/gen_MixinFoo.rs",
+                "pub struct MixinFoo;\n",
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn still_flags_bad_name_without_marker_with_source() {
+        assert_eq!(run_with_source("src/BadName.rs", "pub fn x() {}").len(), 1);
+    }
+
+    #[test]
+    fn allows_snake_case_with_marker_absent() {
+        assert!(run_with_source("src/foo_bar.rs", "pub fn x() {}").is_empty());
     }
 }
