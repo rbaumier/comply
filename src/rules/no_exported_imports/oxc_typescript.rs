@@ -1,6 +1,12 @@
 //! no-exported-imports oxc backend — flag an imported binding that is
 //! re-exported with a plain `export { … }` / `export default …` rather than a
 //! direct `export … from "…"` re-export.
+//!
+//! A re-export specifier carrying a leading JSDoc block comment
+//! (`export { /** … */ X }`) is exempt: `import * as X` + `export { X }` is the
+//! only way in TypeScript to attach per-export JSDoc (`@category`/`@since`) to a
+//! namespace re-export, since the suggested `export * as X from "…"` cannot
+//! carry per-member documentation.
 
 use std::sync::Arc;
 
@@ -9,6 +15,7 @@ use rustc_hash::FxHashSet;
 use oxc_ast::ast::{
     ExportDefaultDeclarationKind, ImportDeclarationSpecifier, ModuleExportName,
 };
+use oxc_span::GetSpan;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -76,7 +83,13 @@ impl OxcCheck for Check {
 /// local name — its specifiers reference the source module, not a local
 /// binding — so its specifiers are excluded by skipping any
 /// `ExportNamedDeclaration` that carries a `source`.
+///
+/// A specifier carrying a leading JSDoc block comment is also excluded: such a
+/// re-export documents the binding per-member, which `export * as X from "…"`
+/// cannot, so the import-then-export pattern is intentional there.
 fn locally_exported_names<'a>(semantic: &'a oxc_semantic::Semantic<'a>) -> FxHashSet<&'a str> {
+    let comments = semantic.comments();
+    let source = semantic.source_text();
     let mut names = FxHashSet::default();
     for node in semantic.nodes().iter() {
         match node.kind() {
@@ -88,6 +101,13 @@ fn locally_exported_names<'a>(semantic: &'a oxc_semantic::Semantic<'a>) -> FxHas
                     continue;
                 }
                 for spec in &decl.specifiers {
+                    if specifier_has_leading_jsdoc(
+                        comments,
+                        source,
+                        spec.local.span().start as usize,
+                    ) {
+                        continue;
+                    }
                     if let Some(name) = module_export_local_name(&spec.local) {
                         names.insert(name);
                     }
@@ -114,6 +134,32 @@ fn module_export_local_name<'a>(name: &ModuleExportName<'a>) -> Option<&'a str> 
         ModuleExportName::IdentifierName(identifier) => Some(identifier.name.as_str()),
         ModuleExportName::StringLiteral(_) => None,
     }
+}
+
+/// True when the export specifier whose local name starts at `span_start` is
+/// immediately preceded (whitespace-only gap) by a JSDoc block comment
+/// (`/** … */`). Such a re-export carries per-member documentation that
+/// `export * as X from "…"` cannot, so the import-then-export pattern is
+/// intentional there. Matching against the real comment spans from
+/// `semantic.comments()` keeps a `/**` that merely appears inside a string
+/// literal from counting, and the whitespace-only gap check keeps a far-above
+/// JSDoc that documents a different specifier from leaking onto this one. Only
+/// `/**`-style block comments qualify — a plain `/* … */` or `//` does not.
+fn specifier_has_leading_jsdoc(
+    comments: &[oxc_ast::ast::Comment],
+    source: &str,
+    span_start: usize,
+) -> bool {
+    comments.iter().any(|comment| {
+        let end = comment.span.end as usize;
+        if end > span_start {
+            return false;
+        }
+        if !source[end..span_start].chars().all(char::is_whitespace) {
+            return false;
+        }
+        source[comment.span.start as usize..end].starts_with("/**")
+    })
 }
 
 #[cfg(test)]
@@ -242,5 +288,69 @@ export { default as D } from \"mod\";";
         // different binding.
         let diags = run_on("import { A } from \"mod\";\nexport { B } from \"mod\";\nconsole.log(A);");
         assert!(diags.is_empty(), "unexpected: {diags:?}");
+    }
+
+    // ── JSDoc-annotated re-exports are exempt (fp-ts barrel pattern) ────────
+
+    #[test]
+    fn allows_jsdoc_annotated_namespace_re_export() {
+        // `import * as X` + `export { /** … */ X }` is the only way to attach
+        // per-export JSDoc to a namespace re-export; `export * as X from "…"`
+        // cannot carry it, so the pattern is intentional.
+        let src = "\
+import * as alt from './Alt'
+export {
+  /**
+   * @category model
+   * @since 2.0.0
+   */
+  alt,
+}";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn allows_jsdoc_annotated_re_exports_across_a_block() {
+        // Each specifier in the block carries its own JSDoc — detection is
+        // per-specifier, so both are exempt.
+        let src = "\
+import * as alt from './Alt'
+import * as alternative from './Alternative'
+export {
+  /**
+   * @category model
+   * @since 2.0.0
+   */
+  alt,
+  /**
+   * @category model
+   * @since 2.0.0
+   */
+  alternative,
+}";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn exempts_only_the_jsdoc_annotated_specifier_in_a_block() {
+        // `a` is JSDoc-annotated (exempt); `b` re-exports an import with no
+        // leading JSDoc, so `b` is still flagged. Proves the exemption is
+        // per-specifier, not whole-block.
+        let src = "\
+import * as a from './A'
+import * as b from './B'
+export {
+  /** @category model */
+  a,
+  b,
+}";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "unexpected: {diags:?}");
+        assert!(
+            diags[0].message.contains('b'),
+            "the flagged binding should be `b`: {diags:?}"
+        );
     }
 }
