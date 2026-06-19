@@ -1,4 +1,11 @@
 //! OXC backend for arguments-order.
+//!
+//! Flags call sites whose identifier arguments match the callee's parameter
+//! names in reversed order (a likely accidental swap). A call is exempt when it
+//! is a branch of a ternary whose consequent and alternate both call the same
+//! function with argument lists that are exact reverses of each other
+//! (`cond ? f(a, b) : f(b, a)`) — the deliberate argument-reversal idiom for
+//! selecting sort order, not an accidental swap.
 
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
@@ -64,6 +71,10 @@ impl OxcCheck for Check {
                 continue;
             };
 
+            if in_reversed_arg_ternary(node, semantic, name) {
+                continue;
+            }
+
             check_call_args(call, name, params, ctx, &mut diagnostics);
         }
 
@@ -79,6 +90,54 @@ fn extract_param_names(func: &oxc_ast::ast::Function) -> Vec<String> {
         }
     }
     result
+}
+
+/// Names of the identifier arguments of `expr` if it is a `CallExpression` whose
+/// callee is the bare identifier `name`; otherwise `None`. Non-identifier args
+/// map to a `None` slot so positions still line up.
+fn call_arg_names_if_to<'a>(expr: &Expression<'a>, name: &str) -> Option<Vec<Option<String>>> {
+    let Expression::CallExpression(call) = expr else {
+        return None;
+    };
+    let Expression::Identifier(callee) = &call.callee else {
+        return None;
+    };
+    if callee.name.as_str() != name {
+        return None;
+    }
+    Some(
+        call.arguments
+            .iter()
+            .map(|a| match a {
+                oxc_ast::ast::Argument::Identifier(id) => Some(id.name.to_string()),
+                _ => None,
+            })
+            .collect(),
+    )
+}
+
+/// True when `node` (a `CallExpression` to `name`) is a branch of a ternary whose
+/// consequent and alternate both call `name` with argument lists that are exact
+/// reverses of each other (`cond ? f(a, b) : f(b, a)`) — the deliberate
+/// argument-reversal idiom for selecting sort order, not an accidental swap.
+fn in_reversed_arg_ternary<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    name: &str,
+) -> bool {
+    let parent = semantic.nodes().parent_node(node.id());
+    let AstKind::ConditionalExpression(cond) = parent.kind() else {
+        return false;
+    };
+    let (Some(consequent), Some(alternate)) = (
+        call_arg_names_if_to(&cond.consequent, name),
+        call_arg_names_if_to(&cond.alternate, name),
+    ) else {
+        return false;
+    };
+    consequent.len() >= 2
+        && consequent.len() == alternate.len()
+        && consequent.iter().rev().eq(alternate.iter())
 }
 
 fn check_call_args(
@@ -148,4 +207,50 @@ fn names_match(arg: &str, param: &str) -> bool {
 
 fn normalize_name(name: &str) -> String {
     name.to_lowercase().trim_start_matches('_').to_string()
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn allows_reversed_comparator_ternary() {
+        // #4411: `cond ? f(a, b) : f(b, a)` is the deliberate sort-order idiom.
+        let src = "function compareAscending(a, b) { return 0; }\n\
+                   function compareValues(a, b, order) { return order === 'asc' ? compareAscending(a, b) : compareAscending(b, a); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_genuine_swap() {
+        let src = "function foo(a, b) {}\nfunction bar(a, b) { foo(b, a); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_ternary_with_single_matching_branch() {
+        // Only the alternate calls `cmp`; not a reversed pair, so still flagged.
+        let src = "function cmp(a, b) {}\nfunction g(a, b, c) { return c ? cmp(b, a) : other(); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
 }
