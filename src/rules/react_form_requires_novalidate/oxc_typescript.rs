@@ -1,4 +1,9 @@
 //! react-form-requires-novalidate oxc backend.
+//!
+//! Flags a native lowercase `<form>` that lacks a `noValidate` attribute.
+//! Storybook story files (`*.stories.tsx`) are exempt: they are component demos
+//! rendered in an isolated iframe where native HTML validation is expected, so
+//! `noValidate` would suppress the behavior the story demonstrates.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -24,6 +29,15 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Storybook story files (`*.stories.tsx`) are component demos rendered in
+        // an isolated iframe where native HTML validation is expected (often the
+        // behavior being demonstrated), not production app routes — same
+        // non-production category as the test files already skipped. `noValidate`
+        // would suppress the very validation the story shows.
+        if crate::rules::path_utils::is_storybook_story(ctx.path) {
+            return;
+        }
+
         let AstKind::JSXOpeningElement(opening) = node.kind() else {
             return;
         };
@@ -96,6 +110,10 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, src, "t.tsx")
     }
 
+    fn run_at(src: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, path)
+    }
+
     #[test]
     fn flags_form_without_novalidate() {
         let src = r#"const x = <form onSubmit={handle}>body</form>;"#;
@@ -166,5 +184,24 @@ mod tests {
         let src = r#"const x = <form onSubmit={handle}>body</form>;"#;
         let d = crate::rules::test_helpers::run_rule_gated(&Check, src, "src/EditForm.tsx");
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn skips_form_in_storybook_story_issue4448() {
+        // Issue #4448 (tremorlabs/tremor): a story renders a native `<form>` to
+        // demo the component; Storybook runs it in an isolated iframe where
+        // native HTML validation is expected (often the behavior shown), so
+        // `noValidate` would suppress the very thing the story demonstrates.
+        let src = r#"const x = <form className="flex">body</form>;"#;
+        assert!(run_at(src, "src/components/RadioGroup/radiogroup.stories.tsx").is_empty());
+        assert!(run_at(src, "src/components/RadioGroup/radiogroup.stories.ts").is_empty());
+    }
+
+    #[test]
+    fn still_flags_form_in_regular_tsx_issue4448() {
+        // Negative space for #4448: the exemption is path-scoped to story
+        // files — the same `<form>` in a regular `.tsx` is still flagged.
+        let src = r#"const x = <form className="flex">body</form>;"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
