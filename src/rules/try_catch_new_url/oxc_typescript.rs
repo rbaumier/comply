@@ -1,6 +1,9 @@
 //! OxcCheck backend for try-catch-new-url.
 //!
-//! Flags `new URL(...)` not wrapped in a try block.
+//! Flags `new URL(...)` not wrapped in a try block. Test files are exempt:
+//! they build URLs from controlled fixtures and the framework-under-test's own
+//! output, so a throw there surfaces a test bug rather than mishandling of
+//! untrusted input.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -36,6 +39,13 @@ impl OxcCheck for Check {
             return;
         };
         if id.name.as_str() != "URL" {
+            return;
+        }
+
+        // Test files build URLs from controlled fixtures and the framework-under-test's
+        // own output; a throw there surfaces a test bug, not mishandling of untrusted
+        // input, so the defensive try/catch requirement does not apply.
+        if crate::rules::path_utils::is_extraneous_test_file(ctx.path) {
             return;
         }
 
@@ -325,6 +335,10 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
+    fn run_at(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, path)
+    }
+
     #[test]
     fn flags_bare_new_url() {
         let d = run_on("const u = new URL(input);");
@@ -516,5 +530,26 @@ mod tests {
     fn still_flags_arbitrary_dot_url_object() {
         // `meta.url` is a plain member read, not the `import.meta` meta-property.
         assert_eq!(run_on("const u = new URL(meta.url);").len(), 1);
+    }
+
+    // Regression for #4392: a redirect-asserting test builds a URL from the
+    // framework-under-test's own `Location` header; a throw there is a test
+    // bug, not untrusted input, so the test file is exempt.
+    #[test]
+    fn allows_untrusted_new_url_in_test_file() {
+        let d = run_at("const loc = new URL(resp.headers.get('location')!);", "index.test.ts");
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    #[test]
+    fn allows_untrusted_new_url_in_test_dir() {
+        let d = run_at("const loc = new URL(resp.headers.get('location')!);", "src/tests/foo.ts");
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    #[test]
+    fn still_flags_untrusted_new_url_in_production_file() {
+        let d = run_at("const loc = new URL(resp.headers.get('location')!);", "src/app.ts");
+        assert_eq!(d.len(), 1, "{d:?}");
     }
 }
