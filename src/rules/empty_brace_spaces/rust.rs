@@ -1,5 +1,8 @@
-//! empty-brace-spaces Rust backend — flag `{ }`, `{  }` (spaces inside
-//! empty braces).
+//! empty-brace-spaces Rust backend — flag single-line `{ }`, `{  }` (spaces
+//! inside empty braces). Multi-line empty bodies (`{\n}`) are exempt: rustfmt
+//! emits them whenever it cannot collapse an empty impl/fn/struct body to
+//! `{}` (a `where` clause or a long signature), so they are not the `{ }`
+//! space smell this rule targets.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -26,6 +29,13 @@ crate::ast_check! { on ["block", "field_declaration_list", "declaration_list", "
 
     if !inner.chars().all(|c| c.is_whitespace()) {
         return; // has content
+    }
+
+    // rustfmt formats an empty impl/fn/struct body with the braces on separate
+    // lines whenever it can't collapse to `{}` (a `where` clause or a long
+    // signature). A multi-line empty body is rustfmt-standard, not a `{ }` space.
+    if inner.contains('\n') {
+        return;
     }
 
     let pos = node.start_position();
@@ -85,5 +95,27 @@ mod tests {
     #[test]
     fn allows_braces_with_content() {
         assert!(run_on("struct Foo { x: i32 }").is_empty());
+    }
+
+    #[test]
+    fn allows_multiline_empty_impl_with_where() {
+        // rustfmt puts the braces on separate lines for an empty impl body that
+        // has a `where` clause — this is the FP from issue #3237.
+        let src = "impl Copy for Foo\nwhere\n    Foo: Bar,\n{\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_multiline_empty_fn_with_where() {
+        let src = "fn f<T>()\nwhere\n    T: Bound,\n{\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_nested_multiline_empty_impl() {
+        // A nested empty impl body — inner is a newline followed by indentation
+        // (`"\n    "`), which the newline-only exemption would have missed.
+        let src = "mod m {\n    impl Copy for Foo\n    where\n        Foo: Bar,\n    {\n    }\n}";
+        assert!(run_on(src).is_empty());
     }
 }
