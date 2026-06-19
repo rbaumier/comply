@@ -1444,6 +1444,33 @@ fn is_imported_from_vue(local_name: &str, semantic: &oxc_semantic::Semantic) -> 
     })
 }
 
+/// True when `local_name` is the local binding of a named import from `react`
+/// or `react-dom` (`import { use } from 'react'`). Used to confirm an
+/// identifier resolves to a React export before applying a React-specific rule.
+#[must_use]
+pub fn is_imported_from_react(local_name: &str, semantic: &oxc_semantic::Semantic) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::ImportDeclarationSpecifier;
+
+    semantic.nodes().iter().any(|node| {
+        let AstKind::ImportDeclaration(decl) = node.kind() else {
+            return false;
+        };
+        if !matches!(decl.source.value.as_str(), "react" | "react-dom") {
+            return false;
+        }
+        let Some(specifiers) = &decl.specifiers else {
+            return false;
+        };
+        specifiers.iter().any(|spec| match spec {
+            ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                named.local.name.as_str() == local_name
+            }
+            _ => false,
+        })
+    })
+}
+
 /// True when `assign` sets a `displayName` property to a string literal
 /// (`Component.displayName = "Component"`). React reads `displayName` off the
 /// component function object to name anonymous `forwardRef`/`memo` results in
@@ -2746,5 +2773,25 @@ mod oxc_helpers_tests {
     #[test]
     fn groups_destructure_ignores_direct_property_access() {
         assert!(destructured_keys("const x = match.groups.year;").is_empty());
+    }
+
+    fn use_imported_from_react(src: &str) -> bool {
+        super::with_oxc_parse(src, std::path::Path::new("t.tsx"), |semantic| {
+            super::is_imported_from_react("use", semantic)
+        })
+    }
+
+    #[test]
+    fn imported_from_react_matches_react_and_react_dom() {
+        assert!(use_imported_from_react("import { use } from 'react';"));
+        assert!(use_imported_from_react("import { use } from 'react-dom';"));
+    }
+
+    #[test]
+    fn imported_from_react_rejects_other_sources_and_local() {
+        assert!(!use_imported_from_react("import { use } from '../../hooks';"));
+        assert!(!use_imported_from_react("import { use } from 'preact';"));
+        assert!(!use_imported_from_react("function use(p) {}"));
+        assert!(!use_imported_from_react("const x = 1;"));
     }
 }

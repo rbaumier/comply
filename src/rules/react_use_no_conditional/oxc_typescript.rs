@@ -60,6 +60,13 @@ impl OxcCheck for Check {
             return;
         }
 
+        // React 19's `use` is always `import { use } from "react"`. Skip a `use`
+        // bound to anything else (another library's hook, a local function) so we
+        // only enforce React's conditional-call rule on React's `use`.
+        if !crate::oxc_helpers::is_imported_from_react("use", semantic) {
+            return;
+        }
+
         if !is_inside_conditional(semantic, node.id()) {
             return;
         }
@@ -104,31 +111,51 @@ mod tests {
 
     #[test]
     fn flags_use_in_if() {
-        let src = "function C({p, x}: any) { if (x) { const v = use(p); return v; } return null; }";
+        let src = "import { use } from 'react';\nfunction C({p, x}: any) { if (x) { const v = use(p); return v; } return null; }";
         assert_eq!(run(src).len(), 1);
     }
 
     #[test]
     fn flags_use_in_ternary() {
-        let src = "function C({p, x}: any) { const v = x ? use(p) : null; return v; }";
+        let src = "import { use } from 'react';\nfunction C({p, x}: any) { const v = x ? use(p) : null; return v; }";
         assert_eq!(run(src).len(), 1);
     }
 
     #[test]
     fn flags_use_in_loop() {
-        let src = "function C({ps}: any) { for (const p of ps) { use(p); } return null; }";
+        let src = "import { use } from 'react';\nfunction C({ps}: any) { for (const p of ps) { use(p); } return null; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_use_imported_from_react_dom() {
+        let src = "import { use } from 'react-dom';\nfunction C({p, x}: any) { if (x) { const v = use(p); return v; } return null; }";
         assert_eq!(run(src).len(), 1);
     }
 
     #[test]
     fn allows_use_at_top_level() {
-        let src = "function C({p}: any) { const v = use(p); return v; }";
+        let src = "import { use } from 'react';\nfunction C({p}: any) { const v = use(p); return v; }";
         assert!(run(src).is_empty());
     }
 
     #[test]
     fn allows_use_inside_jsx_attr() {
-        let src = "function C({p}: any) { const v = use(p); return <div>{v}</div>; }";
+        let src = "import { use } from 'react';\nfunction C({p}: any) { const v = use(p); return <div>{v}</div>; }";
+        assert!(run(src).is_empty());
+    }
+
+    // Hono's `use` is imported from its own hooks module, not React, and is
+    // intentionally conditional. Without the react-import gate this flags (FP).
+    #[test]
+    fn allows_use_imported_from_other_framework_in_if() {
+        let src = "import { use } from '../../hooks';\nfunction f(x: any) { if (x) { use(p); } }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_locally_defined_use_in_if() {
+        let src = "function use(p: any) {}\nfunction f(x: any) { if (x) { use(p); } }";
         assert!(run(src).is_empty());
     }
 }
