@@ -5,6 +5,11 @@
 //! it appears: function return types, struct fields, type aliases,
 //! generic bounds, etc.
 //!
+//! Test-context exception: a `Result<_, ()>` inside a test context
+//! (`#[test]` / `#[cfg(test)]` fn, mod, or impl) is exempt. Mock test
+//! types idiomatically set `type Error = ()` because the test never
+//! exercises the error path.
+//!
 //! Axum/tower exception: in that ecosystem `()` deliberately implements
 //! `IntoResponse` (an empty `200 OK`), so `Result<_, ()>` is idiomatic for
 //! handlers and extractors. We exempt the structurally-detectable cases:
@@ -12,7 +17,7 @@
 //! `FromRequest`/`FromRequestParts` extractor whose `type Rejection = ()`.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::result_error_type;
+use crate::rules::rust_helpers::{is_in_test_context, result_error_type};
 use tree_sitter::Node;
 
 crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
@@ -20,6 +25,9 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
         return;
     };
     if err_type.kind() != "unit_type" {
+        return;
+    }
+    if is_in_test_context(node, source) {
         return;
     }
     if is_axum_unit_response(node, source) {
@@ -166,6 +174,10 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
     }
 
+    fn run_on_src(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "src/svc.rs")
+    }
+
     #[test]
     fn flags_result_unit_error_in_return() {
         assert_eq!(run_on("fn f() -> Result<i32, ()> { Ok(0) }").len(), 1);
@@ -237,6 +249,51 @@ mod tests {
         // Negative space: a plain parser with no axum/IntoResponse/Rejection
         // marker is still flagged.
         assert_eq!(run_on("fn parse() -> Result<Foo, ()> { Ok(Foo) }").len(), 1);
+    }
+
+    // --- test context: mock types idiomatically use `()` errors (#3891) ---
+
+    #[test]
+    fn allows_unit_error_in_cfg_test_mod_mock_service() {
+        // #3891: a mock `tower::Service` impl inside a `#[cfg(test)] mod tests`
+        // block in a `src/` file uses `type Error = ()` and a unit-error
+        // future; the test never exercises the error path, so neither fires.
+        assert!(
+            run_on_src(
+                "#[cfg(test)]\n\
+                 mod tests {\n\
+                 \x20   struct TestSvc;\n\
+                 \x20   impl Service<Request<()>> for TestSvc {\n\
+                 \x20       type Response = ();\n\
+                 \x20       type Error = ();\n\
+                 \x20       type Future = std::future::Ready<Result<(), ()>>;\n\
+                 \x20   }\n\
+                 }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_unit_error_in_plain_test_fn() {
+        // The `#[test]` form: a unit-error result declared inside a test
+        // function is exempt as well.
+        assert!(
+            run_on_src(
+                "#[test]\n\
+                 fn t() {\n\
+                 \x20   let _r: Result<(), ()> = Ok(());\n\
+                 }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_production_unit_error_in_src_file() {
+        // Load-bearing guard: a production fn in a `src/` file with no
+        // `#[test]`/`#[cfg(test)]` still fires.
+        assert_eq!(run_on_src("fn f() -> Result<(), ()> { Ok(()) }").len(), 1);
     }
 
     #[test]
