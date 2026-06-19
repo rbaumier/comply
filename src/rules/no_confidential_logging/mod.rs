@@ -11,8 +11,8 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-confidential-logging",
-    description: "Logging calls must not contain sensitive data such as passwords, tokens, or API keys.",
-    remediation: "Remove or redact sensitive values before logging. Use structured logging with explicit field allow-lists instead of interpolating raw secrets.",
+    description: "Logging calls and thrown error messages must not contain sensitive data such as passwords, tokens, or API keys.",
+    remediation: "Remove or redact sensitive values before logging or throwing. Use structured logging with explicit field allow-lists instead of interpolating raw secrets.",
     severity: Severity::Error,
     doc_url: None,
     categories: &["security"],
