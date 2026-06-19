@@ -5,11 +5,14 @@
 //! reports, in this order: a long-form directive with neither an event-name
 //! argument nor a value (`MissingEventName`); the first modifier that is not a
 //! known event/key/system modifier (`InvalidModifier`); a directive with no
-//! handler value (`MissingHandler`). The `@` shorthand always carries an
-//! argument, so it is never flagged for a missing event name. A long-form
-//! directive with a value but no argument (`v-on="{ click: f }"` /
-//! `v-on="listeners"`) is Vue's object syntax for binding multiple listeners and
-//! is valid.
+//! handler value and no verb modifier (`MissingHandler`). A verb modifier
+//! (`.stop`/`.prevent`) is the entire behaviour, so a directive carrying one is
+//! valid without a handler (`@change.stop`, `@submit.prevent`); a directive with
+//! neither a value nor a verb modifier (`@click`, `@keyup.enter`) is flagged. The
+//! `@` shorthand always carries an argument, so it is never flagged for a missing
+//! event name. A long-form directive with a value but no argument
+//! (`v-on="{ click: f }"` / `v-on="listeners"`) is Vue's object syntax for
+//! binding multiple listeners and is valid.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -35,6 +38,24 @@ fn is_valid_modifier(text: &str) -> bool {
         || VALID_MODIFIERS.contains(&text)
         || VALID_KEY_ALIASES.contains(&text)
         || text.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Whether the directive carries a verb modifier (`.stop`/`.prevent`). A verb
+/// modifier is the entire behaviour, so such a directive needs no handler value.
+fn has_verb_modifier(directive: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = directive.walk();
+    let Some(modifiers) = directive
+        .children(&mut cursor)
+        .find(|c| c.kind() == "directive_modifiers")
+    else {
+        return false;
+    };
+    let mut mod_cursor = modifiers.walk();
+    modifiers.children(&mut mod_cursor).any(|m| {
+        m.kind() == "directive_modifier"
+            && m.utf8_text(source)
+                .is_ok_and(|text| VERB_MODIFIERS.contains(&text))
+    })
 }
 
 /// The first invalid `directive_modifier` node inside a directive's
@@ -104,10 +125,16 @@ crate::ast_check! { on ["directive_attribute"] prefilter = ["v-on", "@"] => |nod
         return;
     }
 
-    if !has_value {
+    // A verb modifier (`.stop`/`.prevent`) is the whole behaviour, so the
+    // directive is valid with no handler (`@change.stop`, `@submit.prevent`).
+    if !has_value && !has_verb_modifier(node, source) {
         push(diagnostics, node, &ctx.path_arc, MSG_MISSING_HANDLER);
     }
 }
+
+/// Verb modifiers whose presence makes a handler expression optional: the
+/// modifier performs the action by itself. Mirrors eslint-plugin-vue.
+const VERB_MODIFIERS: &[&str] = &["stop", "prevent"];
 
 /// Known event/system modifiers accepted on a `v-on` directive.
 const VALID_MODIFIERS: &[&str] = &[
@@ -504,6 +531,24 @@ mod tests {
     }
 
     #[test]
+    fn flags_modifier_only_with_non_verb_modifier() {
+        // `.enter` is a key modifier, not a verb modifier, so a handler is still
+        // required. Mirrors eslint-plugin-vue (only `.stop`/`.prevent` exempt).
+        let diags = run(&wrap("<div @keyup.exact></div>"));
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("missing a handler"));
+    }
+
+    #[test]
+    fn flags_invalid_modifier_only_without_handler() {
+        // An invalid modifier must still report (`has_verb_modifier` must not
+        // short-circuit the invalid-modifier path).
+        let diags = run(&wrap("<button @click.bogusmod></button>"));
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Invalid v-on modifier"));
+    }
+
+    #[test]
     fn flags_all_biome_invalid_fixtures() {
         let source = wrap(
             "<div v-on></div>\n\
@@ -592,6 +637,22 @@ mod tests {
     #[test]
     fn allows_native_modifier() {
         assert!(run(&wrap("<div @click.native=\"handler\"></div>")).is_empty());
+    }
+
+    #[test]
+    fn allows_verb_modifier_only_without_handler() {
+        // A `.stop`/`.prevent` modifier is the whole behaviour; no handler needed
+        // (nuxt/ui `@change.stop`, vueuse `@pointerdown.stop`, #4376).
+        assert!(run(&wrap("<ComboboxInput @change.stop />")).is_empty());
+        assert!(run(&wrap("<input @change.stop />")).is_empty());
+        assert!(run(&wrap("<div @pointerdown.stop>x</div>")).is_empty());
+        assert!(run(&wrap("<form @submit.prevent />")).is_empty());
+    }
+
+    #[test]
+    fn allows_verb_modifier_with_handler() {
+        // A verb modifier alongside a handler stays valid (regression guard).
+        assert!(run(&wrap("<button @click.stop=\"onClick\" />")).is_empty());
     }
 
     #[test]
