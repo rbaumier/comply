@@ -3,8 +3,14 @@
 //! Match `for_expression` whose body is a single-statement block calling
 //! `<receiver>.push(...)` where `<receiver>` is a local binding confirmed to
 //! be a `Vec`. We do not require the push argument to be the loop variable —
-//! when the push value is infallible, `for x in src { v.push(transform(x)); }`
-//! is still better written as `v.extend(src.into_iter().map(transform))`.
+//! when the push value is infallible and does not read the receiver,
+//! `for x in src { v.push(transform(x)); }` is still better written as
+//! `v.extend(src.into_iter().map(transform))`.
+//!
+//! A push value that reads the receiver (`v.push(... v[i] ...)`) is a scan over
+//! a self-referential accumulator, not a `map`. A closure passed to `extend`
+//! cannot borrow the receiver while `extend` holds `&mut` it, so that rewrite
+//! would not compile; such loops are not flagged.
 //!
 //! A push argument containing `?` (a `try_expression`) is skipped: the `?`
 //! propagates to the enclosing function, and a fallible value cannot be lifted
@@ -103,6 +109,15 @@ impl AstCheck for Check {
         if !crate::rules::rust_helpers::local_let_binds_vec(node, var, source) {
             return;
         }
+        // A push value that reads the destination vector (`curr.push(curr[j] + 1)`) is
+        // a scan/fold over a self-referential accumulator. An `extend(map(closure))`
+        // rewrite can't borrow the receiver inside the closure while `extend` holds
+        // `&mut` it, so it would not compile — skip it.
+        if let Some(arguments) = call.child_by_field_name("arguments")
+            && arg_references_receiver(arguments, var, source)
+        {
+            return;
+        }
         diagnostics.push(Diagnostic::at_node(
             ctx.path,
             &node,
@@ -124,6 +139,21 @@ fn arg_contains_try(node: tree_sitter::Node) -> bool {
     }
     let mut cursor = node.walk();
     node.children(&mut cursor).any(arg_contains_try)
+}
+
+/// True if any `identifier` in the push-argument subtree equals the receiver
+/// name `var` — i.e. the push value reads the destination vector.
+fn arg_references_receiver(node: tree_sitter::Node, var: &str, source: &[u8]) -> bool {
+    if node.kind() == "identifier" && node.utf8_text(source) == Ok(var) {
+        return true;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if arg_references_receiver(child, var, source) {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -246,5 +276,22 @@ mod tests {
     fn flags_infallible_transform_push_issue_3803() {
         let src = "fn f(src: Vec<u32>) { let mut dst = Vec::new(); for x in src { dst.push(transform(x)); } }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    // A push value that reads the receiver is a scan over a self-referential
+    // accumulator; `extend(...map(...))` can't borrow the receiver in the
+    // closure, so the loop is not flagged.
+    #[test]
+    fn allows_self_referential_scan_issue_3739() {
+        let src = "fn scan(src: &[usize]) -> Vec<usize> { let mut acc: Vec<usize> = Vec::new(); for (i, &x) in src.iter().enumerate() { acc.push(x + acc[i.saturating_sub(1)]); } acc }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // Levenshtein two-row DP: the push value reads the receiver via an index
+    // expression (`curr[j]`), the same self-dependency `extend` can't express.
+    #[test]
+    fn allows_self_referential_index_read_issue_3739() {
+        let src = "fn f(prev: &[usize], b: &[u8], n: usize) -> Vec<usize> { let mut curr: Vec<usize> = Vec::with_capacity(n + 1); for (j, &cb) in b.iter().enumerate() { curr.push((prev[j]).min(curr[j] + 1)); } curr }";
+        assert!(run_on(src).is_empty());
     }
 }
