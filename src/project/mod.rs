@@ -2605,6 +2605,21 @@ impl ProjectCtx {
             .map(|(_, pkg)| pkg)
     }
 
+    /// The `(major, minor)` lower bound of the version range declared for `dep`
+    /// in the nearest `package.json` to `path` (checking `dependencies`,
+    /// `devDependencies`, then `peerDependencies`). `None` when no such dependency
+    /// is declared, or its range has no parseable leading version. Lets a rule gate
+    /// itself on "feature available since version X" without re-implementing semver.
+    pub fn nearest_dependency_version_min(&self, path: &Path, dep: &str) -> Option<(u32, u32)> {
+        let pkg = self.nearest_package_json(path)?;
+        let range = pkg
+            .dependencies
+            .get(dep)
+            .or_else(|| pkg.dev_dependencies.get(dep))
+            .or_else(|| pkg.peer_dependencies.get(dep))?;
+        parse_node_range_min(range)
+    }
+
     /// Resolve the nearest *substantive* `package.json` for `path`, returning
     /// its directory paired with the parsed manifest. Starting from the nearest
     /// manifest on disk, marker-only manifests are skipped and the walk
@@ -4953,6 +4968,32 @@ mod tests {
             "sibling files should share the same cached Arc"
         );
         assert_eq!(first.name.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn nearest_dependency_version_min_reads_each_section() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"dependencies":{"vue":"^3.5.4"},"devDependencies":{"vite":"~3.4.0"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("App.vue");
+
+        let ctx = ProjectCtx::empty();
+        assert_eq!(ctx.nearest_dependency_version_min(&src, "vue"), Some((3, 5)));
+        assert_eq!(ctx.nearest_dependency_version_min(&src, "vite"), Some((3, 4)));
+        assert_eq!(ctx.nearest_dependency_version_min(&src, "react"), None);
+    }
+
+    #[test]
+    fn nearest_dependency_version_min_none_without_manifest() {
+        let dir = TempDir::new().unwrap();
+        let ctx = ProjectCtx::empty();
+        assert_eq!(
+            ctx.nearest_dependency_version_min(&dir.path().join("App.vue"), "vue"),
+            None
+        );
     }
 
     #[test]
