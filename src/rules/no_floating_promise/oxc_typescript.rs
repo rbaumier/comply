@@ -123,6 +123,12 @@ fn is_async_looking_member_call(call: &CallExpression, ctx: &CheckCtx) -> bool {
     let Expression::StaticMemberExpression(member) = &call.callee else {
         return false;
     };
+    // `this.#field.insert()` is a call on an internal private class field — an
+    // in-memory data structure (trie/tree node, etc.), never a public async DB
+    // adapter (those expose a public API). Skip.
+    if matches!(&member.object, Expression::PrivateFieldExpression(_)) {
+        return false;
+    }
     if receiver_is_cast(member) {
         return false;
     }
@@ -930,6 +936,56 @@ execa.sync('yarn', ['link', '--private', '--all', rootDirectory], {
         // Negative-space guard: an async-dominant method name still in the
         // heuristic (`fetch`) used as a statement stays flagged.
         let d = run_on("api.fetch(url);");
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression tests for issue #3262: an async-looking method call on a
+    // private-field receiver (`this.#node.insert(...)`) is a call on an internal
+    // class data structure (Hono's trie/reg-exp routers), not a public async DB
+    // adapter — it must not be flagged.
+
+    #[test]
+    fn allows_insert_on_private_field_node() {
+        // Hono's trie-router: `this.#node` is an in-memory trie node whose
+        // `insert` returns void.
+        let src = "\
+class TrieRouter {
+  #node = new Node();
+  add(method, path, handler) {
+    this.#node.insert(method, path, handler);
+  }
+}
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_insert_on_private_field_root() {
+        // Hono's reg-exp-router: `this.#root` is an in-memory trie.
+        let src = "\
+class Trie {
+  #root = new Node();
+  insert(tokens) {
+    this.#root.insert(a, b, c, d, e);
+  }
+}
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_insert_on_public_field_receiver() {
+        // Negative-space guard: only private-field receivers are exempt — a
+        // public-field `this.db.insert(...)` (a DB adapter) stays flagged.
+        let d = run_on("this.db.insert(userData);");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_insert_on_identifier_receiver() {
+        // Negative-space guard: an identifier receiver `db.insert(...)` stays
+        // flagged.
+        let d = run_on("db.insert(userData);");
         assert_eq!(d.len(), 1);
     }
 }
