@@ -1,6 +1,5 @@
 //! sql-nullable-requires-comment
 
-mod rust;
 mod text;
 mod oxc_typescript;
 
@@ -38,7 +37,6 @@ pub fn register() -> RuleDef {
                 Language::Tsx,
                 Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
-            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
             (Language::Vue, Backend::Text(Box::new(text::Check))),
             (Language::Sql, Backend::Text(Box::new(text::Check))),
         ],
