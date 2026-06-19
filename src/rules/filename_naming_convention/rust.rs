@@ -20,6 +20,16 @@ fn strip_ordering_prefix(stem: &str) -> &str {
     }
 }
 
+/// Strips a leading `_` private-module prefix from a stem, e.g. `_features` ->
+/// `features`. A leading underscore marks a Rust module as pseudo-private / not
+/// part of the primary public API surface (compiled normally, often
+/// `pub mod _features;`, used for rustdoc doc sub-modules); the remainder is
+/// what must satisfy the convention. Scoped to `_` only, since `$` is not a
+/// valid Rust identifier character.
+fn strip_private_prefix(stem: &str) -> &str {
+    stem.trim_start_matches('_')
+}
+
 fn is_snake_case(stem: &str) -> bool {
     if stem.is_empty() {
         return false;
@@ -69,7 +79,7 @@ impl TextCheck for Check {
         if crate::rules::path_utils::is_cargo_example_path(ctx.path) {
             return Vec::new();
         }
-        if is_snake_case(strip_ordering_prefix(stem)) {
+        if is_snake_case(strip_ordering_prefix(strip_private_prefix(stem))) {
             return Vec::new();
         }
         vec![Diagnostic {
@@ -206,5 +216,26 @@ mod tests {
     #[test]
     fn still_flags_kebab_case_outside_any_fixture() {
         assert_eq!(run("src/my-mod.rs").len(), 1);
+    }
+
+    #[test]
+    fn allows_leading_underscore_private_module() {
+        assert!(run("src/_features.rs").is_empty());
+        assert!(run("src/_faq.rs").is_empty());
+    }
+
+    #[test]
+    fn allows_leading_underscore_private_module_nested() {
+        assert!(run("src/_derive/_tutorial.rs").is_empty());
+    }
+
+    #[test]
+    fn still_flags_pascal_case_remainder_after_underscore() {
+        assert_eq!(run("src/_FooBar.rs").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_pascal_case_without_underscore() {
+        assert_eq!(run("src/MyModule.rs").len(), 1);
     }
 }
