@@ -1,11 +1,21 @@
 //! vue-no-array-index-key — Vue text backend.
 //!
-//! In Vue, the equivalent pattern is `v-for="(item, index) in items" :key="index"`.
-//! This is similarly problematic — use a stable id from the data instead.
+//! Flags `v-for="(item, index) in items" :key="index"`, where the numeric loop
+//! index is used as `:key` — unstable on reorder/filter; use a stable id instead.
+//!
+//! `v-for` over an object (`v-for="(value, key) in obj"`) binds the property key
+//! (stable) in the 2nd slot, so only the index-named loop variable is flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::vue_template_helpers::{extract_elements, is_vue_file};
+
+/// A destructured `v-for` variable whose name marks it as the numeric loop
+/// index (`(item, index)` / `(value, key, index)`), as opposed to an object
+/// property key (`(value, key)`), which is a stable `:key`.
+fn is_loop_index_name(name: &str) -> bool {
+    matches!(name, "i" | "j" | "n" | "index" | "idx" | "_index" | "_idx")
+}
 
 #[derive(Debug)]
 pub struct Check;
@@ -30,8 +40,10 @@ impl TextCheck for Check {
             };
             let vfor_val = &vfor_rest[..vfor_end];
 
-            // Extract the index variable: (item, index) or (item, index, i)
-            // Pattern: (var, indexVar) in ...
+            // Extract the loop index variable. The first slot is always the
+            // item/value; the numeric index lives in a later slot, but object
+            // iteration `(value, key)` binds a stable key there too — so select
+            // the first later param whose name is index-like, skipping the rest.
             let Some(paren_start) = vfor_val.find('(') else {
                 continue;
             };
@@ -40,10 +52,14 @@ impl TextCheck for Check {
             };
             let params = &vfor_val[paren_start + 1..paren_end];
             let parts: Vec<&str> = params.split(',').map(|s| s.trim()).collect();
-            let Some(index_var) = parts.get(1) else {
+            let Some(index_var) = parts
+                .iter()
+                .skip(1)
+                .copied()
+                .find(|name| is_loop_index_name(name))
+            else {
                 continue;
             };
-            let index_var = index_var.trim();
 
             // Check if :key uses the index variable
             // Look on the same line and nearby lines
@@ -94,5 +110,30 @@ mod tests {
     fn allows_stable_key() {
         let source = "<template>\n  <div v-for=\"item in items\" :key=\"item.id\">{{ item.name }}</div>\n</template>";
         assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_object_iteration_key() {
+        // Object `v-for` binds the property key in the 2nd slot — stable, not an index.
+        let source = "<template v-for=\"(value, key) in myMap\" :key=\"key\">\n  <div>{{ key }}: {{ value }}</div>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_object_three_arg_key_as_key() {
+        let source = "<template>\n  <div v-for=\"(value, key, index) in obj\" :key=\"key\">{{ value }}</div>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn flags_object_three_arg_index_as_key() {
+        let source = "<template>\n  <div v-for=\"(value, key, index) in obj\" :key=\"index\">{{ value }}</div>\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_array_index_named_index() {
+        let source = "<template>\n  <div v-for=\"(item, index) in items\" :key=\"index\">{{ item }}</div>\n</template>";
+        assert_eq!(run(source).len(), 1);
     }
 }
