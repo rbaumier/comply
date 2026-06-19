@@ -1,5 +1,8 @@
 //! no-unsafe-shell-exec OXC backend — flag shell-exec APIs whose first
-//! argument is not a plain string literal.
+//! argument is not a plain string literal. Exempts calls that cannot be a
+//! subprocess: an object-literal first argument (`child_process.exec` only
+//! takes a command string) and an exact-match database receiver (`db`,
+//! `database`), whose `.exec(sql)` is a query, not a shell command.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -11,6 +14,11 @@ const UNSAFE_FNS: &[&str] = &["exec", "execSync", "spawn", "spawnSync"];
 // Compared against an ASCII-lowercased receiver prefix, so entries must be
 // lowercase. `regexp` covers the common `<name>RegExp` getter/field convention.
 const SAFE_RECEIVERS: &[&str] = &["regexp", "regex", "re", "pattern", "matcher"];
+// Database clients expose `.exec(sql)` — not a subprocess. Matched EXACTLY (not
+// via `ends_with` like `SAFE_RECEIVERS`): suffix-matching would wrongly exempt
+// shell tools like `adb`/`gdb`. Excludes `client`/`connection`/`conn`, which are
+// ambiguous with remote-shell APIs (e.g. ssh2 `client.exec(command)`).
+const DB_RECEIVERS: &[&str] = &["db", "database"];
 
 pub struct Check;
 
@@ -106,6 +114,15 @@ impl OxcCheck for Check {
             }
         }
 
+        // `child_process.exec` takes a command string, never an object. A
+        // `.exec({...})` with an object-literal first argument is a different API
+        // (e.g. a SQLite adapter `db.exec({ sql, ... })`), not a subprocess.
+        if let Some(first) = call.arguments.first() {
+            if matches!(first.as_expression(), Some(Expression::ObjectExpression(_))) {
+                return;
+            }
+        }
+
         // Skip method calls whose receiver is a `RegExp` — `re.exec(str)` is a
         // regex match, not a subprocess. The name-based `SAFE_RECEIVERS` list
         // catches canonical names; the binding-origin check below covers any
@@ -118,6 +135,9 @@ impl OxcCheck for Check {
         if let Some(prefix) = name.rsplit('.').nth(1) {
             let prefix_lower = prefix.to_ascii_lowercase();
             if SAFE_RECEIVERS.iter().any(|r| prefix_lower == *r || prefix_lower.ends_with(r)) {
+                return;
+            }
+            if DB_RECEIVERS.contains(&prefix_lower.as_str()) {
                 return;
             }
         }
@@ -275,5 +295,44 @@ exec(`rm -rf ${userInput}`);"#;
     fn allows_exec_with_this_first_arg_issue_3977() {
         let src = "_keyboardManager.exec(this, event);";
         assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    // Regression for #4455: a SQLite adapter `db.exec({ sql, ... })` passes a
+    // config object — `child_process.exec` never takes an object first arg.
+    #[test]
+    fn allows_db_exec_with_object_arg_issue_4455() {
+        let src = r#"db.exec({ sql, bind: params, rowMode: 'object', returnValue: 'resultRows' });"#;
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    // Regression for #4455: `db.exec(sql)` is a database query, not a subprocess.
+    #[test]
+    fn allows_db_exec_with_string_variable_issue_4455() {
+        let src = "await db.exec(sql);";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    // Regression for #4455: `db.exec(`...`)` with an interpolated SQL string is
+    // still a database query on a `db` receiver, not a shell command.
+    #[test]
+    fn allows_db_exec_with_template_literal_issue_4455() {
+        let src = "db.exec(`DROP TABLE IF EXISTS ${infoCollection.tableName}`);";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    // Regression for #4455: the `database` receiver name is also a DB client.
+    #[test]
+    fn allows_database_exec_with_string_variable_issue_4455() {
+        let src = "database.exec(query);";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    // Regression for #4455: the DB-receiver exemption is exact-match. `adb`
+    // (Android Debug Bridge) ends with `db` but is a shell tool, so a dynamic
+    // command must still flag — proves the exemption is not a `ends_with("db")`.
+    #[test]
+    fn still_flags_adb_exec_issue_4455() {
+        let src = "adb.exec(cmd);";
+        assert_eq!(run(src).len(), 1, "got {:?}", run(src));
     }
 }
