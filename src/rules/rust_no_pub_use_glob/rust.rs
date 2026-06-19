@@ -6,12 +6,16 @@
 //! deep in the tree, and the `pub` modifier is a separate child —
 //! easier to scan the line.
 //!
-//! Two cases are exempt because they do not invisibly mirror an external
+//! Cases that are exempt because they do not invisibly mirror an external
 //! dependency's surface:
 //! - prelude modules (`prelude.rs` / `prelude/mod.rs`), which exist
 //!   precisely to be glob-imported (`use my_crate::prelude::*`);
 //! - local-submodule flattening (`mod foo; pub use foo::*;`), which
-//!   re-exports a submodule the author owns in the same file.
+//!   re-exports a submodule the author owns in the same file;
+//! - a `pub use` confined to a non-public module — whether inline
+//!   (`mod foo { pub use ...::*; }`) or split-file (the flagged file's `mod foo;`
+//!   declaration is non-public in its parent file) — since effective visibility
+//!   stays inside the crate.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -54,7 +58,14 @@ impl AstCheck for Check {
         // visibility is the product of the item modifier and every enclosing
         // module's. The "your crate's API quietly mirrors theirs" rationale is
         // false there, so it is exempt just like a directly-written `pub(crate)`.
-        if crate::rules::rust_helpers::is_inside_non_public_module(node, source_bytes) {
+        // The first check handles inline modules (`mod foo { pub use ...::*; }`);
+        // the second handles split-file modules, where the `mod foo;` declaration
+        // is non-public in the parent file on disk (e.g. `mod platform_impl;`).
+        if crate::rules::rust_helpers::is_inside_non_public_module(node, source_bytes)
+            || ctx
+                .project
+                .rust_module_declared_private_in_parent(ctx.path)
+        {
             return;
         }
         // Must end with the wildcard import.
@@ -189,6 +200,29 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
     }
 
+    /// Write `parent_rel` and `child_rel` into a temp crate, then run the rule
+    /// on the child so `rust_module_declared_private_in_parent` can read the
+    /// parent's `mod` declaration off disk.
+    fn run_split_module(
+        parent_rel: &str,
+        parent_src: &str,
+        child_rel: &str,
+        child_src: &str,
+    ) -> Vec<Diagnostic> {
+        use std::fs;
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        for rel in [parent_rel, child_rel] {
+            if let Some(parent) = std::path::Path::new(rel).parent() {
+                fs::create_dir_all(dir.path().join(parent)).unwrap();
+            }
+        }
+        fs::write(dir.path().join(parent_rel), parent_src).unwrap();
+        let child_path = dir.path().join(child_rel);
+        fs::write(&child_path, child_src).unwrap();
+        crate::rules::test_helpers::run_rule(&Check, child_src, &child_path)
+    }
+
     #[test]
     fn flags_pub_use_glob() {
         assert_eq!(run_on("pub use crate::types::*;").len(), 1);
@@ -294,5 +328,71 @@ mod tests {
         // so the re-export does reach the crate's API -> still flagged.
         let src = "pub mod public_mod {\n    pub use foo::*;\n}";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn exempts_pub_use_glob_in_split_file_private_mod_rs_issue_4501() {
+        // Issue #4501: winit src/platform_impl/mod.rs — the parent declares the
+        // module privately (`mod platform_impl;`), so the glob never reaches the
+        // crate's public API even though it sits in a standalone file.
+        let diags = run_split_module(
+            "src/lib.rs",
+            "mod platform_impl;\n",
+            "src/platform_impl/mod.rs",
+            "#[allow(unused_imports)]\npub use self::platform::*;\n",
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn exempts_pub_use_glob_in_split_file_private_named_module_issue_4501() {
+        // The `<name>.rs` form: parent declares `mod platform;` privately, child
+        // is the sibling file `src/platform.rs`.
+        let diags = run_split_module(
+            "src/lib.rs",
+            "mod platform;\n",
+            "src/platform.rs",
+            "pub use foo::*;\n",
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn still_flags_pub_use_glob_in_split_file_public_module_issue_4501() {
+        // A `pub mod platform_impl;` parent keeps the module public, so the glob
+        // reaches the crate's API -> still flagged.
+        let diags = run_split_module(
+            "src/lib.rs",
+            "pub mod platform_impl;\n",
+            "src/platform_impl/mod.rs",
+            "pub use self::platform::*;\n",
+        );
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn still_flags_pub_use_glob_when_parent_declaration_absent_issue_4501() {
+        // No parent file declares the module — privacy cannot be proven, so the
+        // rule conservatively keeps flagging.
+        let diags = run_split_module(
+            "src/unrelated.rs",
+            "// no mod declaration here\n",
+            "src/platform_impl/mod.rs",
+            "pub use self::platform::*;\n",
+        );
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn still_flags_pub_use_glob_at_crate_root_issue_4501() {
+        // A crate root (`lib.rs`) has no parent module, so a `pub use *` there is
+        // always part of the public API -> still flagged.
+        let diags = run_split_module(
+            "src/other.rs",
+            "// sibling file, irrelevant\n",
+            "src/lib.rs",
+            "pub use self::platform::*;\n",
+        );
+        assert_eq!(diags.len(), 1, "{diags:?}");
     }
 }
