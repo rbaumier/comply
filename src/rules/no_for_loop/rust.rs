@@ -4,6 +4,12 @@
 //! Rust doesn't have C-style `for` loops, but `while i < len { ... i += 1 }`
 //! is the equivalent anti-pattern.
 //!
+//! The rule fires only when the condition's `<`-comparison index is a bare
+//! local identifier (`i < x.len()`) that the body increments. A struct-field
+//! cursor (`self.index < … { self.index += 1 }`) has a `field_expression`
+//! index — there is no local index to convert to a `for` binding — so it is
+//! not flagged; likewise a body that only mutates a different target.
+//!
 //! Index loops that remove elements from the indexed collection during
 //! traversal (`vec.remove(i)` / `vec.swap_remove(i)`) are exempt: removal
 //! shifts the remaining elements, so a `for`/iterator rewrite is impossible.
@@ -54,7 +60,21 @@ crate::ast_check! { on ["while_expression"] => |node, source, ctx, diagnostics|
     // mutated inside the body (`old_idx += 1`, `new_idx += 1`), the indices
     // advance at different rates and the traversal cannot be expressed as a
     // single `for`/iterator rewrite.
-    if count_mutated_index_variables(body, source) >= 2 {
+    let mutated = mutated_index_variables(body, source);
+    if mutated.len() >= 2 {
+        return;
+    }
+
+    // The loop must have a bare-identifier index variable (`i < x.len()`) that
+    // the body actually increments. A persistent field cursor (`self.index <
+    // … ; self.index += 1`) has a `field_expression` index — there is no local
+    // index to convert to a `for` binding — so `index_variable` returns None
+    // and the cursor is never in `mutated`. (This also drops conditional
+    // field-cursor search loops.)
+    let Some(index_var) = index_variable(condition, source) else {
+        return;
+    };
+    if !mutated.contains(index_var) {
         return;
     }
 
@@ -95,13 +115,13 @@ fn index_variable<'a>(condition: tree_sitter::Node, source: &'a [u8]) -> Option<
     None
 }
 
-/// Count the distinct bare-identifier index variables mutated anywhere in the
+/// Collect the distinct bare-identifier index variables mutated anywhere in the
 /// loop body. A mutation is a `compound_assignment_expr` (`x += k`) or an
 /// `assignment_expression` (`x = …`) whose left-hand side is a plain
 /// identifier. Property/element/deref targets (`*sum += …`, `self.n += 1`,
-/// `v[i] = …`) are not bare identifiers and do not count, so a single-index
-/// loop accumulating into `*sum` still reports one mutated index.
-fn count_mutated_index_variables(body: tree_sitter::Node, source: &[u8]) -> usize {
+/// `v[i] = …`) are not bare identifiers and are not collected, so a
+/// single-index loop accumulating into `*sum` still yields just one variable.
+fn mutated_index_variables<'a>(body: tree_sitter::Node, source: &'a [u8]) -> FxHashSet<&'a str> {
     let mut vars: FxHashSet<&str> = FxHashSet::default();
     let mut stack = vec![body];
     while let Some(cur) = stack.pop() {
@@ -117,7 +137,7 @@ fn count_mutated_index_variables(body: tree_sitter::Node, source: &[u8]) -> usiz
             stack.push(child);
         }
     }
-    vars.len()
+    vars
 }
 
 /// True if `node` contains a `.len()` method call anywhere in its subtree.
@@ -348,5 +368,26 @@ mod tests {
                    let mut i = 0; \
                    while i < v.len() { map.remove(&key); i += 1; } }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_field_cursor_search_loop_issue_3898() {
+        // serde_json read.rs skip_to_escape_slow: `self.index` is a persistent
+        // struct-field cursor read by the rest of the parser after the loop,
+        // and the condition is a conditional search (`&& !is_escape(...)`).
+        // There is no local index to convert to a `for` binding.
+        let src = "fn f(&mut self) { \
+                   while self.index < self.slice.len() && !is_escape(self.slice[self.index], true) { \
+                   self.index += 1; \
+                   } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_plain_field_cursor_loop() {
+        // A field cursor without the search conjunct is still not flaggable:
+        // `self.i` is a `field_expression`, not a bare local index.
+        let src = "fn f(&mut self) { while self.i < self.buf.len() { self.i += 1; } }";
+        assert!(run_on(src).is_empty());
     }
 }
