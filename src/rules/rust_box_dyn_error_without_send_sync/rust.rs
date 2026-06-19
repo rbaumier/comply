@@ -11,8 +11,11 @@
 //! The check is text-based on the trait-object substring because
 //! tree-sitter-rust models `dyn Trait + Send + Sync` as a single
 //! `dynamic_type` whose internal layout is grammar-version
-//! dependent — substring matching is robust enough and avoids
-//! false positives by anchoring on the literal `Error` token.
+//! dependent — substring matching is robust enough. To avoid false
+//! positives we require the `Error` token to be the *primary* trait of
+//! the outer `dyn` (`dyn Error ...` or `dyn ...::Error ...`), not merely
+//! to appear somewhere inside an inner type's generics (e.g.
+//! `dyn Future<Output = Result<_, Self::Error>>`).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -49,9 +52,10 @@ impl AstCheck for Check {
         let Ok(args_text) = args.utf8_text(source_bytes) else {
             return;
         };
-        // We need a `dyn ... Error` type argument. We match `Error` as a
-        // standalone token (not `MyError`) by checking the boundary char.
-        if !args_text.contains("dyn") || !contains_word(args_text, "Error") {
+        // We need a `dyn Error` type argument where `Error` is the primary
+        // trait of the outer `dyn` — not `Error` buried inside an inner
+        // type's generics (`dyn Future<Output = Result<_, Self::Error>>`).
+        if !dyn_primary_trait_is_error(args_text) {
             return;
         }
         let has_send = args_text.contains("Send");
@@ -88,19 +92,28 @@ impl AstCheck for Check {
     }
 }
 
-/// Returns true if `needle` appears in `haystack` as a standalone token
-/// (preceded and followed by a non-identifier character or string boundary).
-fn contains_word(haystack: &str, needle: &str) -> bool {
-    let bytes = haystack.as_bytes();
-    let needle_bytes = needle.as_bytes();
+/// True when the outer `dyn` trait object's primary trait is the `Error`
+/// trait (`dyn Error ...` or a path `dyn ...::Error ...`), as opposed to
+/// `Error` merely appearing inside an inner type's generics
+/// (`dyn Future<Output = Result<_, Self::Error>>`).
+///
+/// We locate the first standalone `dyn` keyword (boundary-checked so
+/// `mydyn`/`dynamic` don't match), then read the primary trait path: the
+/// text after `dyn`, trimmed, up to the first `<`, `+`, `>`, or whitespace.
+fn dyn_primary_trait_is_error(args_text: &str) -> bool {
+    let bytes = args_text.as_bytes();
     let mut i = 0;
-    while i + needle_bytes.len() <= bytes.len() {
-        if &bytes[i..i + needle_bytes.len()] == needle_bytes {
+    while i + 3 <= bytes.len() {
+        if &bytes[i..i + 3] == b"dyn" {
             let before_ok = i == 0 || !is_ident_char(bytes[i - 1]);
-            let after_idx = i + needle_bytes.len();
-            let after_ok = after_idx == bytes.len() || !is_ident_char(bytes[after_idx]);
+            let after_ok = i + 3 == bytes.len() || !is_ident_char(bytes[i + 3]);
             if before_ok && after_ok {
-                return true;
+                let rest = args_text[i + 3..].trim_start();
+                let path_end = rest
+                    .find(|c: char| c == '<' || c == '+' || c == '>' || c.is_whitespace())
+                    .unwrap_or(rest.len());
+                let path = &rest[..path_end];
+                return path == "Error" || path.ends_with("::Error");
             }
         }
         i += 1;
@@ -213,6 +226,37 @@ mod tests {
         // `dyn MyError` should NOT match — only the standalone `Error` token does.
         let source = "fn f() -> Box<dyn MyError> { todo!() }";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_box_dyn_future_with_self_error_in_generics() {
+        // axum from_fn.rs: the Box holds `dyn Future<...>`, not `dyn Error`.
+        // `Error` appears only as `Self::Error` inside the Future's generics —
+        // it is not the primary trait of the `dyn`, so it must not be flagged.
+        // (Failed under the old `contains_word(args_text, "Error")` check.)
+        let source = r#"
+            impl Service<Request> for Next {
+                type Response = Response;
+                type Error = Infallible;
+                type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+            }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_box_dyn_error_no_path() {
+        // Bare `dyn Error` (primary trait is the unqualified `Error` token),
+        // missing both Send and Sync → still flagged.
+        let source = "fn f() -> Result<(), Box<dyn Error>> { Ok(()) }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_bare_box_dyn_error_send_only_no_path() {
+        // Bare `dyn Error + Send` (missing Sync) → still flagged.
+        let source = "fn f() -> Result<(), Box<dyn Error + Send>> { Ok(()) }";
+        assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
