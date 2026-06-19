@@ -1,5 +1,10 @@
 //! no-assign-mutated-array OxcCheck backend — flag assignments whose RHS
 //! is a mutating array method call (sort, reverse, fill).
+//!
+//! Receivers known to be a fresh array (spread copy, `new Array`, `Array.from`/
+//! `of`, `Object.keys`/`values`/`entries`/`getOwnPropertyNames`, and
+//! fresh-returning methods like `slice`/`filter`/`map`) are exempt: mutating
+//! them in place is not observable through any other reference.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -61,6 +66,15 @@ fn is_fresh_array(expr: &Expression, source: &str) -> bool {
             // `Array.from(...)` / `Array.of(...)` also return a brand-new array.
             if matches!(method, "from" | "of")
                 && matches!(&member.object, Expression::Identifier(id) if id.name == "Array")
+            {
+                return true;
+            }
+            // `Object.keys/values/entries/getOwnPropertyNames(obj)` return a NEW
+            // array, not a reference to `obj` — sorting/reversing them in place is
+            // safe. The `Object` receiver is load-bearing: a `.keys()` on any other
+            // receiver (e.g. `myMap.keys()`) is not a fresh-array producer.
+            if matches!(method, "keys" | "values" | "entries" | "getOwnPropertyNames")
+                && matches!(&member.object, Expression::Identifier(id) if id.name == "Object")
             {
                 return true;
             }
@@ -188,5 +202,37 @@ mod oxc_tests {
     fn flags_preexisting_array_fill() {
         // GUARD: a pre-existing receiver is still mutated in place.
         assert_eq!(run("const x = arr.fill(0);").len(), 1);
+    }
+
+    // === issue #4527: Object.keys/values/entries/getOwnPropertyNames return fresh arrays ===
+
+    #[test]
+    fn allows_object_keys_sort() {
+        assert!(
+            run("const sortedTokens = Object.keys(valueCounts).sort((a, b) => valueCounts[b] - valueCounts[a]);")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_object_values_sort() {
+        assert!(run("const v = Object.values(obj).sort();").is_empty());
+    }
+
+    #[test]
+    fn allows_object_entries_reverse() {
+        assert!(run("const e = Object.entries(obj).reverse();").is_empty());
+    }
+
+    #[test]
+    fn allows_object_get_own_property_names_sort() {
+        assert!(run("const n = Object.getOwnPropertyNames(obj).sort();").is_empty());
+    }
+
+    #[test]
+    fn flags_non_object_keys_sort() {
+        // GUARD: a non-`Object` receiver — `keys` is not a fresh-array method,
+        // so freshness is unprovable and the mutation is still flagged.
+        assert_eq!(run("const k = obj.keys().sort();").len(), 1);
     }
 }
