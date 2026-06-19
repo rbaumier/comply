@@ -362,11 +362,18 @@ fn cfg_predicate_activates_test(text: &str) -> bool {
     false
 }
 
-/// If a `cfg(` / `cfg_attr(` token begins at or after the byte cursor `*i`,
-/// advance `*i` past the keyword and opening paren and return the index of the
-/// first byte inside the parentheses. Otherwise advance `*i` by one and return
-/// `None`.
+/// If a `cfg(` / `cfg_attr(` token begins at the byte cursor `*i`, advance `*i`
+/// past the keyword and opening paren and return the index of the first byte
+/// inside the parentheses. Otherwise return `None` without moving `*i`.
+///
+/// Returns `None` at a byte that is not a UTF-8 char boundary (the interior of a
+/// multi-byte character): the ASCII `cfg(` / `cfg_attr(` keywords can only begin
+/// on a char boundary, so skipping such a byte loses no match, and the caller
+/// advances `*i` past it.
 fn cfg_arg_open(text: &str, i: &mut usize) -> Option<usize> {
+    if !text.is_char_boundary(*i) {
+        return None;
+    }
     for keyword in ["cfg_attr(", "cfg("] {
         if text[*i..].starts_with(keyword) {
             *i += keyword.len();
@@ -2100,6 +2107,49 @@ mod tests {
                 "has_test_attribute mismatch for `{src}`"
             );
         }
+    }
+
+    #[test]
+    fn cfg_predicate_scan_does_not_panic_on_multibyte_attribute_literals() {
+        // A non-ASCII attribute literal must not panic the byte-cursor scan,
+        // even when the cursor walks through the interior of a multi-byte char.
+        assert!(!cfg_predicate_activates_test(
+            "#[test_case(\"中-broken\"; \"case\")]"
+        ));
+        assert!(!attr_marks_test("#[doc = \"中\"]"));
+    }
+
+    #[test]
+    fn cfg_predicate_detection_holds_with_multibyte_chars_present() {
+        let cases = [
+            ("#[cfg(test)]", true),
+            ("#[cfg(not(test))]", false),
+            // A multi-byte literal inside the group must neither break detection
+            // nor panic the scan.
+            ("#[cfg(all(feature = \"中\", test))]", true),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(
+                cfg_predicate_activates_test(text),
+                expected,
+                "cfg_predicate_activates_test mismatch for `{text}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_in_test_context_handles_multibyte_test_case_attribute() {
+        // Issue #3732 repro: a `#[test_case]` with a non-ASCII literal inside a
+        // `#[cfg(test)] mod`. Must not panic, and the `#[cfg(test)]` mod must
+        // still be recognized as test context.
+        let src = "#[cfg(test)]\nmod tests { #[test_case(\"中-broken\"; \"case\")]\nfn t() { let x: Option<u32> = Some(1); x.unwrap(); } }";
+        let tree = parse(src);
+        let node = first_of_kind(tree.root_node(), "call_expression")
+            .expect("snippet should contain a call_expression");
+        assert!(
+            is_in_test_context(node, src.as_bytes()),
+            "the #[cfg(test)] mod should be recognized as test context"
+        );
     }
 
     #[test]
