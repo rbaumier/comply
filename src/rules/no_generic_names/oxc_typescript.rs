@@ -414,6 +414,52 @@ fn is_for_of_or_in_binding<'a>(
     false
 }
 
+/// True when `init` is a computed member access (`obj[key]`), including the
+/// optional-chained form (`obj?.[key]`), possibly wrapped in a non-null
+/// assertion. This is the property-value lookup that companions the `for...in`
+/// key — the shape that distinguishes `const value = rawStore[key]` from an
+/// unrelated `const value = computeUnrelated()`.
+fn init_is_computed_member(init: &Expression) -> bool {
+    match init {
+        Expression::ComputedMemberExpression(_) => true,
+        Expression::ChainExpression(chain) => {
+            matches!(chain.expression, ChainElement::ComputedMemberExpression(_))
+        }
+        Expression::TSNonNullExpression(e) => init_is_computed_member(&e.expression),
+        Expression::ParenthesizedExpression(p) => init_is_computed_member(&p.expression),
+        _ => false,
+    }
+}
+
+/// True when the identifier is a `VariableDeclarator` binding whose initializer
+/// is a computed member access (`const value = rawStore[key]`) sitting inside a
+/// `for...in` body. This is the canonical value-lookup companion of the loop's
+/// key variable — `key` names the property, `value` holds the looked-up value —
+/// the same `[key, value]` pairing that exempts `Object.entries()` destructuring.
+/// The exemption is deliberately narrow: only a computed-member initializer
+/// qualifies, so an unrelated `const value = computeUnrelated()` in the same body
+/// still flags.
+fn is_for_in_value_lookup<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let mut init_is_lookup = false;
+    for kind in nodes.ancestor_kinds(node.id()) {
+        match kind {
+            AstKind::VariableDeclarator(d) => {
+                init_is_lookup = d.init.as_ref().is_some_and(init_is_computed_member);
+            }
+            AstKind::ForInStatement(_) => return init_is_lookup,
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
+                return false;
+            }
+            _ => continue,
+        }
+    }
+    false
+}
+
 /// True when the identifier sits inside an `import { … }` / `import x from …`
 /// / `import * as x from …` declaration. The author has no rename freedom
 /// for a third-party export (e.g. `import { Result } from "better-result"`).
@@ -935,7 +981,8 @@ impl OxcCheck for Check {
                 if BANNED_WORDS.contains(&lower.as_str()) {
                     if PARAM_ALLOWED_WORDS.contains(&lower.as_str())
                         && (is_function_param(node, semantic)
-                            || is_for_of_or_in_binding(node, semantic))
+                            || is_for_of_or_in_binding(node, semantic)
+                            || is_for_in_value_lookup(node, semantic))
                     {
                         return;
                     }
@@ -1589,6 +1636,45 @@ mod tests {
         // Negative: the exemption is for the loop *binding* only — a generic
         // name declared inside the loop body is still flagged.
         let src = r#"for (const product of products) { const item = product.x; use(item); }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_value_lookup_companion_in_for_in_body_issue_3224() {
+        // Regression for #3224 — `const value = rawStore[key]` in a `for...in`
+        // body is the canonical value-lookup companion of the `key` variable,
+        // the same `[key, value]` pairing exempted for `Object.entries()`.
+        let src = r#"
+            for (const key in rawStore) {
+                const value = rawStore[key];
+                if (value.effect) { use(value); }
+            }
+        "#;
+        assert!(run(src).is_empty(), "for...in value-lookup companion must not flag");
+    }
+
+    #[test]
+    fn no_fp_value_lookup_optional_chained_computed_member_issue_3224() {
+        // The optional-chained computed member (`obj?.[key]`) is the same lookup.
+        let src = r#"for (const key in obj) { const value = obj?.[key]; use(value); }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_value_unrelated_init_in_for_in_body_issue_3224() {
+        // Negative space: the exemption is precise — it requires a computed-member
+        // initializer. A `value` initialized from an unrelated call inside the same
+        // `for...in` body is genuinely generic and must still flag.
+        let src = r#"for (const key in obj) { const value = computeUnrelated(); use(value); }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_value_lookup_outside_for_in_issue_3224() {
+        // Negative space: the computed-member lookup is only exempt inside a
+        // `for...in` body. A top-level `const value = obj[key]` is not the
+        // companion of any iterating key variable and must still flag.
+        let src = r#"const value = obj[key];"#;
         assert_eq!(run(src).len(), 1);
     }
 
