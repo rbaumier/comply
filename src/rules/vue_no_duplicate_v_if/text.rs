@@ -8,6 +8,10 @@
 //! elements. The pattern signals "should be v-if/v-else" — two
 //! separate v-if directives evaluate independently and can both render
 //! or both hide if timing is unlucky.
+//!
+//! Directives inside `<!-- ... -->` HTML comments are ignored: the source
+//! is masked before scanning, so commented-out markup never pairs with live
+//! markup.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -21,7 +25,8 @@ impl TextCheck for Check {
         let mut diagnostics = Vec::new();
         // Collect all v-if conditions with their line numbers.
         let mut conditions: FxHashMap<String, Vec<usize>> = FxHashMap::default();
-        for (idx, line) in ctx.source.lines().enumerate() {
+        let masked = crate::rules::vue_template_helpers::mask_html_comments(ctx.source);
+        for (idx, line) in masked.lines().enumerate() {
             let trimmed = line.trim();
             if let Some(cond) = extract_v_if_condition(trimmed) {
                 conditions
@@ -101,5 +106,24 @@ mod tests {
     fn allows_unrelated_v_ifs() {
         let source = "<div v-if=\"a\">A</div>\n<div v-if=\"b\">B</div>";
         assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_commented_out_v_if() {
+        // Regression #4424 (nuxt/devtools): a live `v-if="!x"` + `v-else` must
+        // not pair with a `v-if="x"` that lives inside an HTML comment.
+        let source = "<NButton v-if=\"!metrics.options.enabled\">Start</NButton>\n\
+            <NButton v-else>Stop</NButton>\n\
+            <!-- <template v-if=\"metrics.options.enabled\">\n\
+            <NCheckbox />\n\
+            </template> -->";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn flags_live_duplicate_with_comment_present() {
+        // Two LIVE opposite `v-if`s still flag even when a comment is nearby.
+        let source = "<X v-if=\"a\" />\n<Y v-if=\"!a\" />";
+        assert_eq!(run(source).len(), 1);
     }
 }
