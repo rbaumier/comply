@@ -4,7 +4,10 @@
 //! order, identifies the configured Vue compiler-macro calls (bare or assigned,
 //! including the `withDefaults(defineProps(...))` wrapper), and flags the
 //! lowest-order macro that sits out of order — either after a later-ordered
-//! macro or after a non-skippable non-macro statement.
+//! macro or after a non-skippable non-macro statement. A bare call to a Vue
+//! compiler macro that is not in the configured order (`defineOptions` /
+//! `defineSlots` / `defineExpose`) is neutral: it may precede an ordered macro
+//! without flagging it.
 //!
 //! The macros are auto-imported globals that exist only inside `<script
 //! setup>`, so the check fires only when invoked from the Vue backend
@@ -100,8 +103,13 @@ fn find_out_of_order_macro(
                 update_for_bare_call(&mut found_macro, order_index, span, non_macro_found);
                 continue;
             }
-            // A bare call that is not a configured macro is non-macro content.
-            non_macro_found = true;
+            // `defineOptions` / `defineSlots` / `defineExpose` set component
+            // options / slots / the exposed API; they do not participate in the
+            // configured ordering, so they are neutral and must not block a
+            // later ordered macro. Any other bare call is real non-macro content.
+            if !is_neutral_macro(name) {
+                non_macro_found = true;
+            }
             continue;
         }
 
@@ -204,6 +212,16 @@ fn is_skippable_before_macro(statement: &Statement<'_>) -> bool {
             | Statement::ExportAllDeclaration(_)
             | Statement::ExportDefaultDeclaration(_)
     )
+}
+
+/// `defineOptions` / `defineSlots` / `defineExpose` are Vue compiler macros that
+/// set component options / slots / the exposed API. They do not participate in
+/// the `defineModel → defineProps → defineEmits` ordering, so a bare call to one
+/// is neutral and must not block a later ordered macro. A macro the user added to
+/// the configured `order` is matched as an ordered macro before this is reached,
+/// so an explicit ordering choice still wins.
+fn is_neutral_macro(name: &str) -> bool {
+    matches!(name, "defineOptions" | "defineSlots" | "defineExpose")
 }
 
 /// The macro name and reportable span of a bare `defineProps({})` /
