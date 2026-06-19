@@ -98,6 +98,12 @@ impl OxcCheck for Check {
         if import.source.value.as_str() != "vue-router" {
             return;
         }
+        // `import type { … } from 'vue-router'` is erased at compile time and has no
+        // runtime representation, so Nuxt auto-imports cannot supply these names — the
+        // explicit type import is required, not a misuse.
+        if import.import_kind.is_type() {
+            return;
+        }
         if !is_nuxt_source(ctx.source) {
             return;
         }
@@ -228,6 +234,35 @@ mod tests {
     fn still_flags_nuxt_imports_virtual_import() {
         let src = "import { useRouter } from 'vue-router';\n\
             import { useState } from '#imports';";
+        assert_eq!(run_on(src).len(), 1, "got: {:?}", run_on(src));
+    }
+
+    /// Regression for issue #4377: a Nuxt middleware imports a `vue-router` type
+    /// with `import type`. The type is erased at compile time and cannot come
+    /// from an auto-import, so the rule must not fire.
+    #[test]
+    fn allows_type_only_import_in_nuxt_middleware_issue_4377() {
+        let src = "import type { RouteLocationNormalized } from 'vue-router';\n\
+            export default defineNuxtRouteMiddleware((to) => {});";
+        assert!(run_on(src).is_empty(), "unexpected: {:?}", run_on(src));
+    }
+
+    /// Regression for issue #4377: same for a Nuxt plugin importing a
+    /// `vue-router` type with `import type`.
+    #[test]
+    fn allows_type_only_import_in_nuxt_plugin_issue_4377() {
+        let src = "import type { RouteLocationRaw } from 'vue-router';\n\
+            export default defineNuxtPlugin(() => {});";
+        assert!(run_on(src).is_empty(), "unexpected: {:?}", run_on(src));
+    }
+
+    /// Guard: a mixed import that pulls a runtime value (`useRouter`) alongside an
+    /// inline `type` specifier is a value import (`import_kind == Value`) and must
+    /// STILL fire — only declaration-level `import type` is exempt.
+    #[test]
+    fn still_flags_mixed_value_and_type_import_issue_4377() {
+        let src = "import { useRouter, type RouteLocationNormalized } from 'vue-router';\n\
+            const plugin = defineNuxtPlugin(() => {});";
         assert_eq!(run_on(src).len(), 1, "got: {:?}", run_on(src));
     }
 }
