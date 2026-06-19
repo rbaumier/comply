@@ -24,7 +24,10 @@ fn is_pascal_case(stem: &str) -> bool {
             return false;
         }
     }
-    has_lower
+    // A single uppercase letter (`P`, `A`) is valid PascalCase by definition —
+    // Nuxt Content names prose components after the HTML tag they override.
+    // Multi-letter all-caps (`HTTP`) has no lowercase letter and is still rejected.
+    has_lower || stem.len() == 1
 }
 
 impl TextCheck for Check {
@@ -287,6 +290,34 @@ mod tests {
     #[test]
     fn flags_camel_case() {
         assert_eq!(run("src/components/userProfile.vue").len(), 1);
+    }
+
+    // Regression for #3294: a single uppercase letter (`P`, `A`) is valid
+    // PascalCase. Nuxt Content prose components are named after the HTML tag they
+    // override, so single-letter SFC names must not be flagged.
+    #[test]
+    fn allows_single_letter_pascal_case_issue_3294() {
+        assert!(run("src/runtime/components/prose/P.vue").is_empty());
+        assert!(run("src/runtime/components/prose/A.vue").is_empty());
+    }
+
+    // Guard for #3294: multi-letter all-caps (`HTTP`) has no lowercase letter and
+    // is NOT PascalCase — it must still fire. This fails if the single-letter
+    // allowance were widened to any all-caps stem.
+    #[test]
+    fn flags_multi_letter_all_caps_issue_3294() {
+        assert_eq!(run("src/components/HTTP.vue").len(), 1);
+    }
+
+    // Guard for #3294: the single-letter allowance is PascalCase-only — a single
+    // LOWERCASE letter (`p`) is NOT PascalCase (it fails the uppercase-first
+    // check). At the rule level `p.vue` stays clean via the kebab-case allowance
+    // (like `app.vue`), but the PascalCase classifier must reject it.
+    #[test]
+    fn single_lowercase_letter_is_not_pascal_case_issue_3294() {
+        assert!(!is_pascal_case("p"));
+        assert!(is_pascal_case("P"));
+        assert!(!is_pascal_case("HTTP"));
     }
 
     // Regression for #3217: `404.vue` / `500.vue` are the idiomatic Vue Router
