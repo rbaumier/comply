@@ -16,7 +16,10 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["zod"],
 
-    skip_in_test_dir: false,
+    // In test files, `z.string().uuid()` is either the correct v3 API (no
+    // top-level `z.uuid()` exists there) or a deliberate backward-compat test of
+    // the deprecated chained form — not a v4 migration the author should make.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
