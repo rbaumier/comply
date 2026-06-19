@@ -5,8 +5,12 @@
 //!
 //! 1. its name ends (case-insensitively) with a time-unit suffix
 //!    like `_seconds`, `_ms`, `_days`, `_nanos`, ...
-//! 2. its type text, trimmed, is one of the primitive numeric types
-//!    (`u8`..`u128`, `i8`..`i128`, `usize`, `isize`, `f32`, `f64`).
+//! 2. its type text, trimmed, is one of the primitive integer types
+//!    (`u8`..`u128`, `i8`..`i128`, `usize`, `isize`).
+//!
+//! A `*_ns`/`*_ms` value typed `f32`/`f64` is a floating-point mathematical
+//! parameter (an EWMA decay factor, a continuous statistical estimate) where
+//! the integer-based `Duration` does not apply, so float types are not flagged.
 //!
 //! Qualified types (`std::time::Duration`), generic wrappers
 //! (`Option<u64>`), and aliases are deliberately not flagged — the
@@ -47,9 +51,8 @@ const SUFFIXES: &[&str] = &[
 /// for these names even though they carry a unit word.
 const ABSOLUTE_TIME_PREFIXES: &[&str] = &["julian_", "gregorian_", "unix_", "epoch_"];
 
-const NUMERIC_TYPES: &[&str] = &[
-    "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128", "usize", "isize", "f32",
-    "f64",
+const INTEGER_TYPES: &[&str] = &[
+    "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128", "usize", "isize",
 ];
 
 #[derive(Debug)]
@@ -78,7 +81,7 @@ impl AstCheck for Check {
             && let Ok(name) = name_node.utf8_text(source_bytes)
             && let Ok(type_text) = type_node.utf8_text(source_bytes)
             && has_time_unit_suffix(name)
-            && is_numeric_type(type_text)
+            && is_integer_type(type_text)
         {
             diagnostics.push(make_diagnostic(ctx, node, name, type_text));
             return;
@@ -90,7 +93,7 @@ impl AstCheck for Check {
             && let Ok(name) = pattern.utf8_text(source_bytes)
             && let Ok(type_text) = type_node.utf8_text(source_bytes)
             && has_time_unit_suffix(name)
-            && is_numeric_type(type_text)
+            && is_integer_type(type_text)
         {
             diagnostics.push(make_diagnostic(ctx, node, name, type_text));
         }
@@ -115,9 +118,9 @@ fn is_absolute_time_coordinate(lower: &str) -> bool {
         || lower.ends_with("_at")
 }
 
-fn is_numeric_type(text: &str) -> bool {
+fn is_integer_type(text: &str) -> bool {
     let trimmed = text.trim();
-    NUMERIC_TYPES.contains(&trimmed)
+    INTEGER_TYPES.contains(&trimmed)
 }
 
 fn make_diagnostic(
@@ -182,8 +185,11 @@ mod tests {
     }
 
     #[test]
-    fn flags_fn_parameter_minutes_f64() {
-        assert_eq!(run_on("fn f(duration_minutes: f64) {}").len(), 1);
+    fn allows_fn_parameter_minutes_f64() {
+        // A float-typed unit-suffixed value is a math parameter (continuous
+        // estimate), not a `Duration` candidate; the integer-based `Duration`
+        // cannot represent it.
+        assert!(run_on("fn f(duration_minutes: f64) {}").is_empty());
     }
 
     #[test]
@@ -244,5 +250,35 @@ mod tests {
     fn allows_in_test_context() {
         let source = "#[cfg(test)]\nmod tests { struct S { timeout_ms: u32 } }";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_decay_ns_f64_math_parameter() {
+        // tower's PeakEwma load balancer: `decay_ns: f64` is an EWMA decay
+        // factor, a floating-point math parameter, not an integer time span.
+        // Regression for #4443.
+        assert!(run_on("struct S { decay_ns: f64 }").is_empty());
+    }
+
+    #[test]
+    fn allows_rtt_ns_f64_math_parameter() {
+        // tower's RttEstimate: `rtt_ns: f64` is a continuous latency estimate,
+        // not a `Duration` candidate. Regression for #4443.
+        assert!(run_on("struct S { rtt_ns: f64 }").is_empty());
+    }
+
+    #[test]
+    fn allows_fn_parameter_ms_f32_math_parameter() {
+        assert!(run_on("fn f(timeout_ms: f32) {}").is_empty());
+    }
+
+    #[test]
+    fn flags_struct_field_window_days_u64() {
+        assert_eq!(run_on("struct S { window_days: u64 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_fn_parameter_delay_ms_i64() {
+        assert_eq!(run_on("fn f(delay_ms: i64) {}").len(), 1);
     }
 }
