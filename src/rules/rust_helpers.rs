@@ -329,6 +329,25 @@ pub fn is_under_tests_dir(path: &std::path::Path) -> bool {
         .is_some_and(|name| TEST_FILE_NAMES.iter().any(|test_name| name == *test_name))
 }
 
+/// True if `node` is inside a function literally named `main`. Walks up
+/// the ancestors looking for an enclosing `function_item` whose `name`
+/// field is `main` — the binary entry point, where errors are printed to
+/// stderr and never cross a thread boundary.
+pub fn is_in_fn_main(node: Node, source: &[u8]) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "function_item"
+            && let Some(name) = parent.child_by_field_name("name")
+            && let Ok(t) = name.utf8_text(source)
+            && t == "main"
+        {
+            return true;
+        }
+        cur = parent;
+    }
+    false
+}
+
 /// True if the item has a test-marking attribute as a preceding
 /// `attribute_item` sibling. In tree-sitter-rust, outer attributes on an item
 /// appear as `attribute_item` nodes immediately before the item they decorate.
