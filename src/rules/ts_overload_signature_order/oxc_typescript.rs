@@ -1,4 +1,9 @@
 //! ts-overload-signature-order OXC backend — overloads ordered specific-to-general.
+//!
+//! Strictly-ascending-arity progressive groups (each overload takes more required
+//! params than the previous — the `flow`/`pipe`/`compose` pipeline idiom) are exempt
+//! from the arity-based check: TypeScript dispatches by arity, so this order is
+//! required and never misorders. Same-arity type-specificity checks still apply.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -239,12 +244,17 @@ fn check_statements(
         }
 
         if group.len() >= 2 {
+            // A pipeline/composition idiom (`flow`, `pipe`, `compose`, zod
+            // `partial`/`required`): each successive overload takes strictly more
+            // required params than the one before. TypeScript dispatches by arity,
+            // so this ascending order is required and correct — it never intercepts
+            // a call meant for a higher-arity overload. Do not apply the arity-based
+            // misorder flag to such groups.
+            let progressive_arity = group
+                .windows(2)
+                .all(|w| w[0].required_params < w[1].required_params);
             'outer: for a in 0..group.len() {
                 for b in (a + 1)..group.len() {
-                    // Disjoint first-parameter types mean the overloads accept
-                    // structurally incompatible discriminating arguments;
-                    // TypeScript resolves them regardless of order, so neither
-                    // arity nor type-generality implies a misordering.
                     // Disjoint first-parameter types mean the overloads accept
                     // structurally incompatible discriminating arguments;
                     // TypeScript resolves them regardless of order, so neither
@@ -253,7 +263,7 @@ fn check_statements(
                         continue;
                     }
                     // Flag if earlier has strictly fewer required params.
-                    if group[a].required_params < group[b].required_params {
+                    if !progressive_arity && group[a].required_params < group[b].required_params {
                         let (line, column) = byte_offset_to_line_col(
                             ctx.source,
                             group[a].span.start as usize,
@@ -479,13 +489,42 @@ export function interceptReads(thing, property?, handler?): Lambda {
     }
 
     #[test]
-    fn same_head_lower_arity_before_higher_still_flags() {
-        // Same first-parameter type (`Foo`), the lower-arity overload first:
-        // a genuine specific-to-general violation that must still fire.
+    fn progressive_flow_ascending_arity_does_not_flag() {
+        // Issue #4447: fp-ts `flow` — successive overloads each add one more
+        // required parameter (1 → 2 → 3). TypeScript dispatches by arity, so
+        // this ascending order is required and correct, not a misordering.
+        let src = "\
+export function flow<A extends ReadonlyArray<unknown>, B>(ab: (...a: A) => B): (...a: A) => B
+export function flow<A extends ReadonlyArray<unknown>, B, C>(ab: (...a: A) => B, bc: (b: B) => C): (...a: A) => C
+export function flow<A extends ReadonlyArray<unknown>, B, C, D>(ab: (...a: A) => B, bc: (b: B) => C, cd: (c: C) => D): (...a: A) => D
+export function flow(...fns: Function[]): unknown {
+    return fns;
+}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn progressive_pipe_ascending_arity_does_not_flag() {
+        // Issue #4447: valibot-style `pipe` — ascending arity 2 → 3 → 4.
+        let src = "\
+export function pipe<A, B, C>(a: A, b: B): C;
+export function pipe<A, B, C, D>(a: A, b: B, c: C): D;
+export function pipe<A, B, C, D, E>(a: A, b: B, c: C, d: D): E;
+export function pipe(...items: unknown[]): unknown {
+    return items;
+}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn progressive_ascending_arity_two_overloads_does_not_flag() {
+        // Issue #4447: a two-overload ascending-arity group (1 → 2 required
+        // params over the same base type). Arity is the sole discriminator and
+        // ascending order is correct, so this must not flag.
         let src = "\
 function f(a: Foo): void;
 function f(a: Foo, b: Bar): void;
 function f(a: Foo, b?: Bar): void {}";
-        assert_eq!(run(src).len(), 1);
+        assert!(run(src).is_empty());
     }
 }
