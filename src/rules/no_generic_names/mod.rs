@@ -4,6 +4,13 @@
 //! camelCase/`_` boundary (`data` → `updatedData`, `getUserData`); and generic
 //! verbs matched only as a leading prefix (`process`, `do`, `execute`, `run`,
 //! `perform`). `handle` is excluded because `handleXxx` is a React idiom.
+//!
+//! A PascalCase binding whose initializer is a React component — a
+//! `forwardRef`/`memo` call or an arrow/function returning JSX, including
+//! `function Item() { return <li/>; }` — is exempt: `Input`/`Label` are the
+//! conventional design-system component export names, not generic values. Other
+//! PascalCase bindings still flag (`const DefaultData = computeData()`,
+//! `class DataSource {}`, `const Input = 5`).
 
 mod oxc_typescript;
 
