@@ -21,6 +21,11 @@
 //! delegates all (de)serialization to its single inner field and has no
 //! field-name map of its own, so `deny_unknown_fields` is a no-op there.
 //!
+//! **Exception:** a `#[non_exhaustive]` struct is NOT flagged. It is the
+//! explicit forward-compatibility opt-in — the struct may gain fields in
+//! future versions — which directly contradicts `deny_unknown_fields`'s
+//! rejection of any not-yet-declared field.
+//!
 //! **Exception:** structs defined inside a test context (a `#[test]`
 //! function, a path-qualified test fn like `#[tokio::test]` /
 //! `#[crate::test]`, or a `#[cfg(test)]` module) are skipped — they are
@@ -67,6 +72,14 @@ impl AstCheck for Check {
         // Structs with a `#[serde(flatten)]` field cannot have
         // `deny_unknown_fields` — the two are mutually exclusive.
         if has_flatten_field(node, source_bytes) {
+            return;
+        }
+        // `#[non_exhaustive]` is the explicit forward-compatibility opt-in: the
+        // struct may gain fields in future versions. `deny_unknown_fields` has
+        // the opposite semantics (reject any not-yet-declared field), so the two
+        // are contradictory — a `#[non_exhaustive]` Deserialize struct must NOT
+        // use deny_unknown_fields.
+        if attrs.iter().any(|a| has_non_exhaustive_attr(a)) {
             return;
         }
         // `#[serde(transparent)]` structs delegate all (de)serialization
@@ -193,6 +206,18 @@ fn has_transparent_attr(attr_text: &str) -> bool {
                 .map(str::trim)
                 .any(|opt| opt == "transparent")
         })
+}
+
+/// True for the bare `#[non_exhaustive]` attribute. Matches on the
+/// attribute's meta path being exactly `non_exhaustive` (after stripping
+/// the `#[` / `]` delimiters and surrounding whitespace), so an unrelated
+/// occurrence of the word — e.g. `#[serde(rename = "non_exhaustive")]` —
+/// does not match.
+fn has_non_exhaustive_attr(attr_text: &str) -> bool {
+    attr_text
+        .strip_prefix("#[")
+        .and_then(|rest| rest.strip_suffix(']'))
+        .is_some_and(|meta| meta.trim() == "non_exhaustive")
 }
 
 fn has_orm_derive(attrs: &[String]) -> bool {
@@ -499,6 +524,67 @@ mod tests {
         assert!(
             run_on(source).is_empty(),
             "FP: unit struct flagged despite deny_unknown_fields being inert"
+        );
+    }
+
+    #[test]
+    fn allows_non_exhaustive_struct() {
+        // `#[non_exhaustive]` is the explicit forward-compat opt-in: the
+        // struct may gain fields in future versions. `deny_unknown_fields`
+        // has the opposite semantics, so the two are contradictory. (hyperium
+        // /tonic BootstrapConfig — closes #4445)
+        let source = "#[derive(Debug, Clone, Deserialize)]\n\
+                      #[non_exhaustive]\n\
+                      pub struct BootstrapConfig { pub a: Vec<u8>, pub b: u32 }";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: #[non_exhaustive] struct flagged despite being forward-compat opt-in"
+        );
+    }
+
+    #[test]
+    fn allows_non_exhaustive_struct_attr_order_swapped() {
+        // Same exemption when `#[non_exhaustive]` precedes the derive.
+        let source = "#[non_exhaustive]\n\
+                      #[derive(Debug, Clone, Deserialize)]\n\
+                      pub struct BootstrapConfig { pub a: Vec<u8>, pub b: u32 }";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: #[non_exhaustive] struct flagged despite being forward-compat opt-in"
+        );
+    }
+
+    #[test]
+    fn allows_non_exhaustive_struct_with_field_serde_attrs() {
+        // Verbatim issue shape: pub(crate) fields carrying `#[serde(default)]`.
+        // The struct-level `#[non_exhaustive]` exemption must hold regardless of
+        // field-level serde attributes. (hyperium/tonic BootstrapConfig)
+        let source = "#[derive(Debug, Clone, Deserialize)]\n\
+                      #[non_exhaustive]\n\
+                      pub struct BootstrapConfig {\n\
+                          pub(crate) xds_servers: Vec<XdsServerConfig>,\n\
+                          #[serde(default)]\n\
+                          pub(crate) node: NodeConfig,\n\
+                      }";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: #[non_exhaustive] struct flagged despite being forward-compat opt-in"
+        );
+    }
+
+    #[test]
+    fn flags_despite_unrelated_non_exhaustive_mention() {
+        // A serde rename to the literal string "non_exhaustive" is NOT the
+        // bare `#[non_exhaustive]` attribute and must NOT trigger the exemption.
+        let source = "#[derive(Deserialize)]\n\
+                      struct Config {\n\
+                          #[serde(rename = \"non_exhaustive\")]\n\
+                          rate: u32,\n\
+                      }";
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "should still flag: a serde rename to \"non_exhaustive\" is not the attribute"
         );
     }
 
