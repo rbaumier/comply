@@ -1,4 +1,5 @@
-//! zod-transform-requires-pipe oxc backend — flag `.transform()` without `.pipe()`.
+//! zod-transform-requires-pipe oxc backend — flag a single-argument
+//! `.transform(fn)` schema modifier that is not chained with `.pipe(z.*)`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -173,6 +174,15 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Zod's schema `.transform(fn)` takes exactly ONE argument: the transform
+        // callback. A call with a different argument count is the parse engine
+        // invoking a stored transform *function* with the runtime value and parse
+        // context (`def.transform(value, ctx)` / `effect.transform(data, ctx)`),
+        // not a user-land schema modifier — there is no `.pipe()` to add.
+        if call.arguments.len() != 1 {
+            return;
+        }
+
         // Check if the parent is a member expression with property `pipe`
         // (i.e. `.transform(fn).pipe(...)`)
         let parent = semantic.nodes().parent_node(node.id());
@@ -290,6 +300,32 @@ mod tests {
         // The left operand is an outer binding, not the validated param, so the
         // output is not guaranteed and must still be flagged.
         let src = "const s = z.string().transform(v => outer ?? fallback);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_internal_def_transform_invocation() {
+        // Regression for rbaumier/comply#4449: the Zod parse engine invoking a
+        // stored transform function with the runtime value AND the parse context
+        // (two args) is not a user-land schema modifier.
+        let src = "const _out = def.transform(payload.value, payload);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_internal_effect_transform_invocation() {
+        // Regression for rbaumier/comply#4449: `ZodEffects` parse logic invoking
+        // the stored transform with the data and check context (two args).
+        let src = "const processed = effect.transform(ctx.data, checkCtx);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_transform_with_named_callback_reference() {
+        // A single function-reference argument is still a real schema transform
+        // (one arg), so it must stay flagged — the fix keys on argument COUNT,
+        // not on the argument being an inline arrow.
+        let src = "const s = schema.transform(namedFn);";
         assert_eq!(run(src).len(), 1);
     }
 }
