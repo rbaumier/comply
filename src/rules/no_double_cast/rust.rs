@@ -7,6 +7,13 @@
 //! "misaligned type" double cast. Rust forbids the single-step form in those
 //! cases, so the two-step chain is mandatory and has no `From`/`Into`
 //! alternative.
+//!
+//! An `<expr> as <int> as <float>` chain is exempt unless the operand is
+//! provably numeric (a numeric literal or an arithmetic expression). `bool`
+//! (E0606) and `char` (E0604) can only reach a float type *through* an integer,
+//! so the integer step there is a compiler-mandated bridge, not a redundant
+//! cast. The operand's source type is invisible in the cast syntax for a
+//! field/variable/method/index access, so a non-numeric operand is not flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -46,6 +53,63 @@ fn int_truncate_then_widen(inner_ty: tree_sitter::Node, outer_ty: tree_sitter::N
     inner_w < outer_w
 }
 
+/// True when `ty` is an integer `primitive_type` (`i8`..`i128`, `u8`..`u128`,
+/// `usize`, `isize`). Reuses `int_width`, which already maps the integer names.
+fn is_int_primitive(ty: tree_sitter::Node, source: &[u8]) -> bool {
+    ty.kind() == "primitive_type" && ty.utf8_text(source).ok().and_then(int_width).is_some()
+}
+
+/// True when `ty` is a floating `primitive_type` (`f32` / `f64`).
+fn is_float_primitive(ty: tree_sitter::Node, source: &[u8]) -> bool {
+    ty.kind() == "primitive_type" && matches!(ty.utf8_text(source), Ok("f32") | Ok("f64"))
+}
+
+/// Strip `parenthesized_expression` wrappers, returning the inner expression.
+fn peel_parens(node: tree_sitter::Node) -> tree_sitter::Node {
+    if node.kind() == "parenthesized_expression"
+        && let Some(inner) = node.named_child(0)
+    {
+        return peel_parens(inner);
+    }
+    node
+}
+
+/// True when the `unary_expression`'s operator is arithmetic negation (`-`),
+/// which yields a number. `!` (logical not) yields `bool`; `*`/`&`
+/// (deref/ref) yield an unknown type.
+fn unary_is_arithmetic(unary: tree_sitter::Node, source: &[u8]) -> bool {
+    matches!(unary.child(0).and_then(|op| op.utf8_text(source).ok()), Some("-"))
+}
+
+/// True when the `binary_expression`'s operator is arithmetic/bitwise (yields a
+/// number), not a comparison (`==`/`!=`/`<`/`>`/`<=`/`>=`) or logical
+/// (`&&`/`||`) operator (those yield `bool`).
+fn binary_is_arithmetic(binary: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(op) = binary.child_by_field_name("operator").and_then(|op| op.utf8_text(source).ok())
+    else {
+        return false;
+    };
+    matches!(op, "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^" | "<<" | ">>")
+}
+
+/// True when the inner cast's operand (`inner_cast.value`) is provably numeric —
+/// a numeric literal, or an arithmetic expression (so it compiles as a single
+/// `as`). A comparison / logical / `!` expression produces `bool`, and a
+/// field/variable/method/index access has an unknown type that could be
+/// `bool`/`char` — those are NOT provably numeric.
+fn operand_is_provably_numeric(inner_cast: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(operand) = inner_cast.child_by_field_name("value") else {
+        return false;
+    };
+    let op = peel_parens(operand);
+    match op.kind() {
+        "integer_literal" | "float_literal" => true,
+        "unary_expression" => unary_is_arithmetic(op, source),
+        "binary_expression" => binary_is_arithmetic(op, source),
+        _ => false,
+    }
+}
+
 crate::ast_check! { on ["type_cast_expression"] => |node, source, ctx, diagnostics|
     // The inner expression (left side of `as`) is the first named child.
     let Some(inner) = node.child_by_field_name("value") else { return };
@@ -68,6 +132,21 @@ crate::ast_check! { on ["type_cast_expression"] => |node, source, ctx, diagnosti
     // chain is not collapsible to a single `as`.
     if let Some(outer_ty) = node.child_by_field_name("type")
         && int_truncate_then_widen(inner_ty, outer_ty, source)
+    {
+        return;
+    }
+
+    // A `<expr> as <int> as <float>` chain may be a compiler-mandated bridge:
+    // `bool` (E0606) and `char` (E0604) can only reach a float type THROUGH an
+    // integer. When the operand's source type is not visible in the cast syntax
+    // (a field/variable/method/index access) we can't distinguish a mandatory
+    // bridge from a redundant numeric chain, so suppress. A numeric-literal or
+    // arithmetic operand is provably numeric (the int step IS redundant — `5 as
+    // f32`, `(a + b) as f32` compile directly), so it still fires.
+    if let Some(outer_ty) = node.child_by_field_name("type")
+        && is_int_primitive(inner_ty, source)
+        && is_float_primitive(outer_ty, source)
+        && !operand_is_provably_numeric(inner, source)
     {
         return;
     }
@@ -240,5 +319,47 @@ mod tests {
         let d = run_on("fn f(x: i8) { let _ = x as u32 as u32 as u16; }");
         // The outer cast and the middle cast are both flagged.
         assert!(!d.is_empty());
+    }
+
+    #[test]
+    fn allows_field_int_to_float_bridge() {
+        // #3974, egui Vec2b -> Vec2: `v.x` is a `bool`, and `bool as f32` is
+        // E0606 — the `as i32` step is the mandatory integer bridge. The field's
+        // type is invisible in the cast syntax, so do not flag.
+        assert!(run_on("fn f(v: Vec2b) { let _ = v.x as i32 as f32; }").is_empty());
+    }
+
+    #[test]
+    fn allows_bool_var_int_to_float_bridge() {
+        // `bool as f32` is E0606; the `as i32` bridge is compiler-mandated.
+        assert!(run_on("fn f(b: bool) { let _ = b as i32 as f32; }").is_empty());
+    }
+
+    #[test]
+    fn allows_char_int_to_float_bridge() {
+        // `char as f64` is E0604; `char` only casts to an integer, so the `as
+        // u32` bridge is compiler-mandated.
+        assert!(run_on("fn f(c: char) { let _ = c as u32 as f64; }").is_empty());
+    }
+
+    #[test]
+    fn allows_comparison_int_to_float_bridge() {
+        // A comparison produces `bool`; `bool as f32` is E0606, so the `as i32`
+        // bridge is mandatory.
+        assert!(run_on("fn f(a: i32, b: i32) { let _ = (a == b) as i32 as f32; }").is_empty());
+    }
+
+    #[test]
+    fn flags_numeric_literal_int_to_float_chain() {
+        // A numeric literal is provably numeric: `5 as f32` compiles directly,
+        // so the `as i32` step is genuinely redundant — still fires.
+        assert_eq!(run_on("fn f() { let _ = 5 as i32 as f32; }").len(), 1);
+    }
+
+    #[test]
+    fn flags_arithmetic_int_to_float_chain() {
+        // An arithmetic operand is provably numeric: `(a + b) as f32` compiles
+        // directly, so the `as i32` step is redundant — still fires.
+        assert_eq!(run_on("fn f(a: u8, b: u8) { let _ = (a + b) as i32 as f32; }").len(), 1);
     }
 }
