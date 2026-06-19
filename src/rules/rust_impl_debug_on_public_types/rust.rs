@@ -10,7 +10,10 @@
 //! items gated on `#[cfg(doctest)]` (the README-doctest harness — compiled only
 //! when rustdoc collects doctests, never reachable by consumers),
 //! items in a `proc-macro = true` crate (whose `pub` types are unreachable by
-//! consumers), items with `#[doc(hidden)]`, items carrying
+//! consumers), items in a binary-only crate (no `[lib]` target and no
+//! `src/lib.rs`, so `pub` is merely crate-internal module visibility and no
+//! external consumer can import the type), items with `#[doc(hidden)]`, items
+//! carrying
 //! `#[allow(missing_debug_implementations)]` or
 //! `#[expect(missing_debug_implementations)]` (the rustc lint this rule
 //! mirrors — the author has explicitly opted out), types with
@@ -68,6 +71,15 @@ impl AstCheck for Check {
             .project
             .nearest_cargo_manifest(ctx.path)
             .is_some_and(|m| m.is_proc_macro())
+        {
+            return;
+        }
+        // A binary-only crate (no `[lib]` target, no `src/lib.rs`) has no external
+        // consumers, so "consumers can't debug it" is structurally inapplicable.
+        if ctx
+            .project
+            .nearest_cargo_manifest(ctx.path)
+            .is_some_and(|m| m.is_binary_only())
         {
             return;
         }
@@ -609,7 +621,10 @@ mod tests {
     use super::*;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
+        // Use an absolute path with no Cargo.toml ancestor so the binary-only and
+        // proc-macro manifest guards don't accidentally pick up comply's own
+        // (binary-only) Cargo.toml.
+        crate::rules::test_helpers::run_rule(&Check, source, "/nonexistent_cargo_project/src/t.rs")
     }
 
     fn run_with_path(source: &str, fake_path: &str) -> Vec<Diagnostic> {
@@ -819,6 +834,13 @@ edition = "2021"
 name = "normal_lib"
 "#;
 
+    const BINARY_ONLY_CARGO_TOML: &str = r#"
+[package]
+name = "c"
+version = "0.1.0"
+edition = "2021"
+"#;
+
     /// Closes #3960: a `pub` type in a `proc-macro = true` crate is unreachable
     /// by any consumer (prost-derive `field/scalar.rs:585` etc.), so it must
     /// not be flagged.
@@ -844,6 +866,23 @@ name = "normal_lib"
             run_on_with_cargo(LIB_CARGO_TOML, "pub struct Api { name: String }").len(),
             1,
             "a normal lib crate's pub type with no Debug must still flag"
+        );
+    }
+
+    /// Closes #4375: a `pub` type in a binary-only crate (no `[lib]` target, no
+    /// `src/lib.rs`, as in ducaale/xh's `Session`) is unreachable by any external
+    /// consumer, so it must not be flagged.
+    #[test]
+    fn suppresses_pub_type_in_binary_only_crate() {
+        assert!(
+            run_on_with_cargo(BINARY_ONLY_CARGO_TOML, "pub struct Session { url: u32 }")
+                .is_empty(),
+            "must not flag pub types in a binary-only crate"
+        );
+        assert!(
+            run_on_with_cargo(BINARY_ONLY_CARGO_TOML, "pub enum Buffer { Stdout, Stderr }")
+                .is_empty(),
+            "must not flag pub enums in a binary-only crate"
         );
     }
 
