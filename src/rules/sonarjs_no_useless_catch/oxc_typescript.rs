@@ -1,4 +1,10 @@
 //! sonarjs-no-useless-catch oxc backend.
+//!
+//! Flags `catch (e) { throw e; }`, a catch clause that only rethrows. When the
+//! enclosing `try` has a `finally`, the catch is still flagged but the advice is
+//! to drop only the catch clause and keep the surrounding try/finally (the
+//! `finally` is load-bearing); otherwise the advice is to remove the try/catch
+//! entirely.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -17,7 +23,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CatchClause(clause) = node.kind() else {
@@ -44,16 +50,32 @@ impl OxcCheck for Check {
         if thrown.name.as_str() != err_name {
             return;
         }
+        // A `finally` on the enclosing `try` is load-bearing: removing the whole
+        // try/catch would delete it. The catch is still useless, but the fix is
+        // to drop only the catch clause and keep the surrounding try/finally.
+        let parent = semantic.nodes().parent_node(node.id());
+        let has_finalizer = match parent.kind() {
+            AstKind::TryStatement(try_stmt) => try_stmt.finalizer.is_some(),
+            _ => false,
+        };
+        let message = if has_finalizer {
+            format!(
+                "`catch ({err_name}) {{ throw {err_name}; }}` adds nothing — remove \
+                 the redundant catch clause (keep the surrounding try/finally)."
+            )
+        } else {
+            format!(
+                "`catch ({err_name}) {{ throw {err_name}; }}` adds nothing — remove \
+                 the try/catch entirely."
+            )
+        };
         let (line, column) = byte_offset_to_line_col(ctx.source, clause.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
             line,
             column,
             rule_id: super::META.id.into(),
-            message: format!(
-                "`catch ({err_name}) {{ throw {err_name}; }}` adds nothing — remove \
-                 the try/catch entirely."
-            ),
+            message,
             severity: Severity::Warning,
             span: None,
         });
@@ -86,7 +108,20 @@ mod tests {
     #[test]
     fn flags_useless_catch() {
         let src = "try { f(); } catch (e) { throw e; }";
-        assert_eq!(run(src).len(), 1);
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("try/catch entirely"));
+    }
+
+    #[test]
+    fn flags_useless_catch_with_finally_but_keeps_finally() {
+        // #3892: a load-bearing `finally` means the fix is to drop only the
+        // catch clause, not the whole try/catch (that would delete the finally).
+        let src = "try { f(); } catch (e) { throw e; } finally { g(); }";
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("catch clause"));
+        assert!(!d[0].message.contains("try/catch entirely"));
     }
 
     #[test]
