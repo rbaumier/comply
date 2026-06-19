@@ -184,6 +184,16 @@ pub(super) fn is_existing_source_import(importer: &Path, specifier: &str) -> boo
     if SOURCE_EXTS.iter().any(|ext| raw.with_extension(ext).is_file()) {
         return true;
     }
+    // A specifier whose last dot-segment is not a source extension
+    // (`kafka.interface`) resolves by APPENDING the extension, not replacing it —
+    // `with_extension` above would wrongly produce `kafka.ts`.
+    if let Some(raw_str) = raw.to_str()
+        && SOURCE_EXTS
+            .iter()
+            .any(|ext| Path::new(&format!("{raw_str}.{ext}")).is_file())
+    {
+        return true;
+    }
     // TypeScript `nodeNext`/`node16`: a `.js` specifier whose only on-disk
     // counterpart is a declaration file (`logger.d.ts`, no `.ts` source)
     // resolves there. Replace the JS extension with each `.d.*` form.
@@ -1062,6 +1072,67 @@ mod framework_generated_route_types_tests {
         );
         assert_eq!(diags.len(), 1, "expected one diagnostic: {diags:?}");
         assert!(diags[0].message.contains("does-not-exist.ts"));
+    }
+}
+
+#[cfg(test)]
+mod non_source_dot_stem_tests {
+    use super::is_existing_source_import;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Build a temp tree with the listed `(rel, contents)` files, then resolve
+    /// `specifier` from `importer_rel` against the filesystem. Mirrors the
+    /// scan-excluded-dir scenario: the target lives under `external/` (absent
+    /// from the import index), so only the on-disk `is_file()` fallback can
+    /// resolve it.
+    fn resolve(importer_rel: &str, specifier: &str, files: &[&str]) -> bool {
+        let dir = TempDir::new().unwrap();
+        for rel in files {
+            let p = dir.path().join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, "export const x = 1;\n").unwrap();
+        }
+        let importer = dir.path().join(importer_rel);
+        fs::create_dir_all(importer.parent().unwrap()).unwrap();
+        is_existing_source_import(&importer, specifier)
+    }
+
+    #[test]
+    fn resolves_non_source_dot_stem_specifier_issue_3256() {
+        // nestjs/nest reproducer: `kafka.context.ts` imports
+        // `../external/kafka.interface`, whose target `kafka.interface.ts` lives
+        // in the scan-excluded `external/` dir. The stem `kafka.interface` has a
+        // non-source dot-segment, so the extension must be APPENDED
+        // (`kafka.interface.ts`), not replace `.interface` (`kafka.ts`).
+        assert!(resolve(
+            "packages/microservices/ctx-host/kafka.context.ts",
+            "../external/kafka.interface",
+            &["packages/microservices/external/kafka.interface.ts"],
+        ));
+    }
+
+    #[test]
+    fn does_not_resolve_missing_non_source_dot_stem_specifier_issue_3256() {
+        // Negative space: no file on disk at the appended path — the import is
+        // genuinely missing and must still be flagged (returns false). The
+        // `is_file()` gate cannot over-resolve.
+        assert!(!resolve(
+            "packages/microservices/ctx-host/kafka.context.ts",
+            "../external/nonexistent.interface",
+            &["packages/microservices/external/kafka.interface.ts"],
+        ));
+    }
+
+    #[test]
+    fn still_resolves_plain_specifier_via_with_extension_issue_3256() {
+        // Existing behavior guard: a plain (dot-free) stem resolves through the
+        // `with_extension` path when only `external/redis.ts` exists on disk.
+        assert!(resolve(
+            "packages/microservices/ctx-host/redis.context.ts",
+            "../external/redis",
+            &["packages/microservices/external/redis.ts"],
+        ));
     }
 }
 
