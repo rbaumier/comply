@@ -1,10 +1,12 @@
-//! OxcCheck backend for no-done-callback — flag `test`/`it` callbacks
-//! that take a `done`-style parameter.
+//! OxcCheck backend for no-done-callback — flag a `test`/`it` callback whose
+//! first parameter is a bare binding identifier (`(done) =>`), the legacy
+//! completion-callback protocol. A destructured fixture parameter
+//! (`({ page }) =>`) is a fixture bag, not a done callback, so it is not flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Argument, Expression};
+use oxc_ast::ast::{Argument, BindingPattern, Expression, FormalParameters};
 use std::sync::Arc;
 
 pub struct Check;
@@ -36,18 +38,18 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Second argument should be a function/arrow with at least one param.
+        // Second argument is the test callback (function or arrow).
         let Some(callback) = call.arguments.get(1) else {
             return;
         };
 
-        let has_param = match callback {
-            Argument::ArrowFunctionExpression(arrow) => !arrow.params.items.is_empty(),
-            Argument::FunctionExpression(func) => !func.params.items.is_empty(),
+        let is_done_style = match callback {
+            Argument::ArrowFunctionExpression(arrow) => first_param_is_done_identifier(&arrow.params),
+            Argument::FunctionExpression(func) => first_param_is_done_identifier(&func.params),
             _ => false,
         };
 
-        if !has_param {
+        if !is_done_style {
             return;
         }
 
@@ -63,6 +65,16 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// A `done`-style callback parameter is a bare binding identifier (`(done) =>`).
+/// A Playwright/fixture parameter is an object/array destructuring pattern
+/// (`({ page }) =>`), which is a fixture bag, not a completion callback.
+fn first_param_is_done_identifier(params: &FormalParameters) -> bool {
+    params
+        .items
+        .first()
+        .is_some_and(|p| matches!(p.pattern, BindingPattern::BindingIdentifier(_)))
 }
 
 fn is_test_callee(expr: &Expression) -> bool {
@@ -129,8 +141,33 @@ mod tests {
     }
 
     #[test]
+    fn flags_test_with_bare_identifier_not_named_done() {
+        assert_eq!(run_on("test('x', (cb) => { cb(); });").len(), 1);
+    }
+
+    #[test]
     fn allows_async_test() {
         assert!(run_on("test('x', async () => { await doThing(); });").is_empty());
+    }
+
+    #[test]
+    fn allows_playwright_fixture_destructuring() {
+        assert!(run_on("test('x', async ({ page }) => {});").is_empty());
+    }
+
+    #[test]
+    fn allows_playwright_multi_fixture_destructuring() {
+        assert!(run_on("test('x', async ({ page, baseURL }) => {});").is_empty());
+    }
+
+    #[test]
+    fn allows_it_fixture_destructuring() {
+        assert!(run_on("it('x', async ({ page }) => {});").is_empty());
+    }
+
+    #[test]
+    fn allows_array_destructuring_param() {
+        assert!(run_on("test('x', ([a]) => {});").is_empty());
     }
 
     #[test]
