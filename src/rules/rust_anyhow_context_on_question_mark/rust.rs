@@ -6,7 +6,9 @@
 //! Walks every `try_expression` and flags the `?` only when the enclosing
 //! function/closure returns an `anyhow`/`eyre` error type (where
 //! `.context()` actually applies) and is not `fn main`, and the receiver
-//! expression doesn't already chain `.context(` or `.with_context(`.
+//! expression doesn't already chain `.context(`, `.with_context(`, or
+//! `.map_err(` — each of which has already replaced the error with one
+//! carrying actionable context, so a `.context()` suggestion is redundant.
 //! A typed-error-enum return (`Result<_, CliDiagnostic>`) is never flagged:
 //! adding `.context()` there changes the error type and wouldn't compile.
 
@@ -41,7 +43,10 @@ crate::ast_check! { on ["try_expression"] => |node, source, ctx, diagnostics|
         None => return,
     };
     let inner_text = inner.utf8_text(source).unwrap_or("");
-    if inner_text.contains(".context(") || inner_text.contains(".with_context(") {
+    if inner_text.contains(".context(")
+        || inner_text.contains(".with_context(")
+        || inner_text.contains(".map_err(")
+    {
         return;
     }
 
@@ -180,6 +185,20 @@ mod tests {
     #[test]
     fn no_diagnostic_for_typed_enum_return() {
         let src = r#"fn f() -> Result<(), MyError> { do_it()?; Ok(()) }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_map_err_before_question_mark() {
+        // `.map_err(|e| anyhow!(...))` already replaced the error with one
+        // carrying full context (issue #4401 repro), so `?` must not be flagged.
+        let src = r#"fn f() -> anyhow::Result<()> { let _ = reqwest::Url::try_from(url).map_err(|e| anyhow!("Invalid proxy URL: {}", e))?; Ok(()) }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_multiline_map_err_block_closure_before_question_mark() {
+        let src = "fn f() -> anyhow::Result<()> {\n    let _ = reqwest::Url::try_from(url).map_err(|e| {\n        anyhow!(\"Invalid proxy URL '{}' for protocol '{}': {}\", url, protocol, e)\n    })?;\n    Ok(())\n}";
         assert!(run(src).is_empty());
     }
 
