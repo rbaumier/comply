@@ -1,6 +1,15 @@
 //! vue-no-watch-reactive-property AST backend.
+//!
+//! Member-access args ending in a `REACTIVE_REF_SUFFIXES` entry (e.g.
+//! `router.currentRoute`) are exempt: they yield a reactive `Ref`/`ComputedRef`,
+//! not a snapshot, so passing them directly to `watch()` is correct.
 
 use crate::diagnostic::{Diagnostic, Severity};
+
+/// Member-access suffixes that yield a reactive `Ref`/`ComputedRef`, not a
+/// snapshot — passing them directly to `watch()` is correct. `.value` is an
+/// unwrapped ref; `.currentRoute` is vue-router's `ComputedRef` route accessor.
+const REACTIVE_REF_SUFFIXES: &[&str] = &[".value", ".currentRoute"];
 
 crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
     let _ = source;
@@ -32,7 +41,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
         if arg.starts_with("()") || arg.starts_with("(") && arg.contains("=>") {
             continue;
         }
-        if arg.contains('.') && !arg.ends_with(".value") {
+        if arg.contains('.') && !REACTIVE_REF_SUFFIXES.iter().any(|s| arg.ends_with(s)) {
             if arg.starts_with('[') || arg.starts_with('{') {
                 continue;
             }
@@ -87,5 +96,26 @@ mod tests {
     #[test]
     fn allows_dot_value() {
         assert!(run("<script setup>\nwatch(x.value, () => {})\n</script>").is_empty());
+    }
+
+    #[test]
+    fn allows_router_current_route() {
+        assert!(
+            run("<script setup>\nwatch(router.currentRoute, focusSearch, { immediate: true })\n</script>")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_current_route_any_receiver() {
+        assert!(run("<script setup>\nwatch($router.currentRoute, cb)\n</script>").is_empty());
+    }
+
+    #[test]
+    fn flags_route_params_snapshot() {
+        assert_eq!(
+            run("<script setup>\nwatch(route.params, cb)\n</script>").len(),
+            1
+        );
     }
 }
