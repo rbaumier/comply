@@ -10,9 +10,15 @@
 //! which is in the restriction group and off by default. Running it
 //! via comply means consuming crates don't have to opt in — every
 //! `unsafe` block in the project must carry its safety justification.
+//!
+//! Test code is exempt: both by a `tests/` directory (`skip_in_test_dir`)
+//! and by an inline `#[test]` / `#[cfg(test)]` context detected via
+//! `is_in_test_context`, so unit tests written next to the code they
+//! exercise are treated the same as tests under `tests/`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::is_in_test_context;
 
 const KINDS: &[&str] = &["unsafe_block"];
 
@@ -32,6 +38,9 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         if inside_unsafe_fn(node, ctx.source.as_bytes()) {
+            return;
+        }
+        if is_in_test_context(node, ctx.source.as_bytes()) {
             return;
         }
         if has_safety_comment_above(node, ctx.source) {
@@ -194,5 +203,48 @@ mod tests {
                       unsafe { let _ = *p; }\n\
                       }";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn exempt_inline_test_fn_issue_3890() {
+        // Issue #3890: an inline `#[test] fn` in a src/ file with a bare
+        // unsafe block (no SAFETY comment) must not be flagged.
+        let source = "#[test]\n\
+                      fn test_value_eq_value() {\n\
+                      unsafe {\n\
+                      let _ = from_shared_unchecked(b\"..{}\");\n\
+                      }\n\
+                      }";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, source, "src/metadata/value.rs").is_empty()
+        );
+    }
+
+    #[test]
+    fn exempt_inline_cfg_test_mod_issue_3890() {
+        // The other `is_in_test_context` form: a `#[cfg(test)] mod tests`
+        // in a src/ file. A bare unsafe block inside it is exempt.
+        let source = "#[cfg(test)]\n\
+                      mod tests {\n\
+                      fn helper(p: *const u8) {\n\
+                      unsafe { let _ = *p; }\n\
+                      }\n\
+                      }";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, source, "src/metadata/value.rs").is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_bare_unsafe_in_non_test_fn() {
+        // Production guard: an undocumented unsafe block in an ordinary
+        // (non-test) fn at a src/ path still fires.
+        let source = "fn f(p: *const u8) {\n\
+                      unsafe { let _ = *p; }\n\
+                      }";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, source, "src/metadata/value.rs").len(),
+            1
+        );
     }
 }
