@@ -76,6 +76,17 @@ fn is_intrinsic(name: &str) -> bool {
     first.is_ascii_lowercase()
 }
 
+/// `Provider`/`Consumer`/`displayName` are the canonical accessors on a
+/// React/SolidJS context object (`<counterContext.Provider>`,
+/// `<authContext.Consumer>`). The object a context is created into is
+/// conventionally camelCase (`counterContext`, `authContext`, `themeContext`),
+/// not a component, so a camelCase root paired with one of these properties is
+/// the context-provider idiom rather than a naming violation. Non-context
+/// properties on a camelCase root (`table.Foo`) stay flagged.
+fn is_context_accessor(prop: &str) -> bool {
+    matches!(prop, "Provider" | "Consumer" | "displayName")
+}
+
 /// The leftmost identifier of a JSX member expression (`Table` in `Table.td`,
 /// `Foo` in `Foo.Bar.Baz`). A `this` root (`<this.Orange />`) has no identifier
 /// name and yields `None`.
@@ -131,6 +142,12 @@ impl OxcCheck for Check {
                 // valid compound-component / styled-components namespace and is
                 // never flagged on its sub-name.
                 if is_intrinsic(member.property.name.as_str()) {
+                    return;
+                }
+                // `<counterContext.Provider>` / `<authContext.Consumer>` — a
+                // context accessor sits on a camelCase context object, not a
+                // component, so the camelCase root is the idiom, not a violation.
+                if is_context_accessor(member.property.name.as_str()) {
                     return;
                 }
                 // A `this`-rooted member (`<this.Orange />`) has no component
@@ -298,6 +315,40 @@ mod tests {
     #[test]
     fn flags_camel_root_member_expression() {
         assert_eq!(run("const x = <myObj.Bar>x</myObj.Bar>;").len(), 1);
+    }
+
+    // Issue #3209: `<counterContext.Provider>` is the canonical context-provider
+    // idiom in React and SolidJS — the camelCase root is a context object, not a
+    // component, so `.Provider`/`.Consumer`/`.displayName` accessors on a
+    // camelCase root must not be flagged. A non-context property on a camelCase
+    // root (`table.Foo`) stays flagged (covered above).
+    #[test]
+    fn allows_camel_root_context_provider() {
+        assert!(
+            run("const x = <counterContext.Provider value={x}>{c}</counterContext.Provider>;")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_camel_root_context_consumer() {
+        assert!(run("const x = <authContext.Consumer>{c}</authContext.Consumer>;").is_empty());
+    }
+
+    #[test]
+    fn allows_pascal_root_context_provider() {
+        // A PascalCase root with a context accessor was already valid — must not
+        // regress now that the accessor is explicitly exempt.
+        assert!(run("const x = <Tabs.Provider>x</Tabs.Provider>;").is_empty());
+    }
+
+    #[test]
+    fn flags_camel_root_non_context_property() {
+        // `table.Foo` — camelCase root, property `Foo` is not a context accessor,
+        // so this is a real naming violation and must still fire. This proves the
+        // context exemption is narrow (property-scoped), not a blanket camelCase
+        // root pass.
+        assert_eq!(run("const x = <table.Foo />;").len(), 1);
     }
 
     // Issue #1352: the shadcn-ui re-export convention appends an
