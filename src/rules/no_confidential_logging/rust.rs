@@ -55,6 +55,18 @@ fn is_boolean_name(name: &str) -> bool {
     BOOLEAN_PREFIXES.iter().any(|p| lower.starts_with(p))
 }
 
+/// Returns true when `name` follows Rust's SCREAMING_SNAKE_CASE const
+/// convention (at least one uppercase letter, no lowercase letter, len >= 2).
+/// Any such name is treated as a compile-time constant and exempted: a runtime
+/// secret is bound to a `snake_case`/`camelCase` variable or field by Rust
+/// convention, while an all-uppercase name is a literal limit or flag — e.g.
+/// `MAX_TOKEN_LEN`, which holds a token's length bound, not its value.
+fn is_const_name(name: &str) -> bool {
+    name.len() >= 2
+        && name.bytes().any(|b| b.is_ascii_uppercase())
+        && !name.bytes().any(|b| b.is_ascii_lowercase())
+}
+
 /// Returns true when `name` contains a sensitive word only because it is a
 /// metadata identifier (e.g. `token_path` where `token` is followed by a
 /// metadata suffix). Such identifiers hold filesystem paths or containers,
@@ -92,6 +104,9 @@ fn has_sensitive_identifier(node: tree_sitter::Node, source: &[u8]) -> bool {
             return false;
         };
         if is_boolean_name(text) {
+            return false;
+        }
+        if is_const_name(text) {
             return false;
         }
         if is_metadata_only(text) {
@@ -324,5 +339,38 @@ mod tests {
             }
         "#)
         .is_empty());
+    }
+
+    // Regression for issue #4773: the trigger was `MAX_TOKEN_LEN`, a
+    // SCREAMING_SNAKE const whose name contains "token" — a compile-time length
+    // bound, not a runtime secret.
+    #[test]
+    fn allows_logging_token_constant_with_len() {
+        assert!(run_on(r#"
+            fn f(token: &Token) {
+                if token.text.len() > MAX_TOKEN_LEN {
+                    warn!(
+                        "A token exceeding MAX_TOKEN_LEN ({}>{}) was dropped.",
+                        token.text.len(),
+                        MAX_TOKEN_LEN
+                    );
+                }
+            }
+        "#).is_empty());
+    }
+
+    #[test]
+    fn allows_screaming_snake_const_with_sensitive_word() {
+        assert!(run_on(r#"fn f() { warn!("limit: {}", MAX_TOKEN_LEN); }"#).is_empty());
+    }
+
+    // A lowercase secret variable is still flagged — the const exemption keys
+    // strictly on SCREAMING_SNAKE casing.
+    #[test]
+    fn still_flags_lowercase_secret_const_name() {
+        assert_eq!(
+            run_on(r#"fn f() { warn!("limit: {}", max_token_len_secret); }"#).len(),
+            1
+        );
     }
 }
