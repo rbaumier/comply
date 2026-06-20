@@ -29,8 +29,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cast_operand_is_bool, cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
-    find_identifier_type, is_in_enum_discriminant, is_in_test_context,
+    cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
+    cast_operand_is_enum_discriminant, find_identifier_type, is_in_enum_discriminant,
+    is_in_test_context,
 };
 
 const KINDS: &[&str] = &["type_cast_expression"];
@@ -129,6 +130,9 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
     if cast_operand_is_bool(node, source_bytes) {
         return false;
     }
+    if cast_operand_is_char(node, source_bytes) && char_fits(target_type) {
+        return false;
+    }
     if cast_operand_is_enum_discriminant(node, source_bytes) {
         return false;
     }
@@ -190,6 +194,13 @@ fn is_dangerous_cast(source: NumericType, target: NumericType) -> bool {
         (k, k2) if k == k2 => target.bits < source.bits,
         _ => source.bits >= target.bits,
     }
+}
+
+/// A `char` is a Unicode scalar value in `0..=0x10FFFF` (21 bits), so a cast to
+/// any signed/unsigned integer of at least 21 bits is lossless. Floats are
+/// excluded — `char as f32`/`f64` falls through to the float-target handling.
+fn char_fits(target: NumericType) -> bool {
+    target.kind != NumericKind::Float && target.bits >= 21
 }
 
 fn source_numeric_type(node: tree_sitter::Node, source: &[u8]) -> Option<NumericType> {
@@ -553,5 +564,29 @@ mod tests {
         // must not override the in-file truth.
         let src = "enum E { A(u32), B } fn f() -> u8 { E::B as u8 }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_4804_char_literal_as_u32_not_flagged() {
+        // `'=' as u32` reads a char's code point; a `char` is ≤ 0x10FFFF (21
+        // bits), so the cast to u32 is always lossless.
+        assert!(run_on("const CHAR_ASSIGN: u32 = '=' as u32;").is_empty());
+    }
+
+    #[test]
+    fn repro_4804_char_binding_as_u32_not_flagged() {
+        assert!(run_on("fn f(c: char) -> u32 { c as u32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_4804_char_literal_as_u8_still_flagged() {
+        // u8 is only 8 bits — a `char` can exceed it, so the cast can truncate.
+        assert_eq!(run_on("fn f() -> u8 { 'a' as u8 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_4804_char_literal_as_i32_not_flagged() {
+        // i32 holds the full 21-bit code-point range losslessly.
+        assert!(run_on("fn f() -> i32 { 'a' as i32 }").is_empty());
     }
 }
