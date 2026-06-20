@@ -23,6 +23,7 @@ impl AstCheck for Check {
         if ctx.file.path_segments.in_test_dir
             || crate::rules::rust_helpers::is_under_tests_dir(ctx.path)
             || crate::rules::rust_helpers::is_in_test_context(node, source_bytes)
+            || crate::rules::rust_helpers::is_in_doc_attribute(node, source_bytes)
         {
             return;
         }
@@ -159,6 +160,45 @@ mod tests {
         assert!(diags.is_empty(), "guard sanity: example.test is exempt");
         let src = r#"fn f() { let u = "http://api.acme.io"; let _ = u; }"#;
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/client.rs");
+        assert_eq!(diags.len(), 1);
+    }
+
+    // #4775 — an `http://` URL inside the crate-root `#![doc(html_logo_url = ...)]`
+    // attribute is rustdoc metadata, not a network call. tantivy's `src/lib.rs:1`.
+    #[test]
+    fn does_not_flag_http_in_crate_root_doc_attribute() {
+        let src =
+            r#"#![doc(html_logo_url = "http://fulmicoton.com/tantivy-logo/tantivy-logo.png")]"#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/lib.rs");
+        assert!(diags.is_empty());
+    }
+
+    // #4775 — `html_favicon_url` is the same kind of rustdoc metadata.
+    #[test]
+    fn does_not_flag_http_in_doc_favicon_attribute() {
+        let src = r#"#[doc(html_favicon_url = "http://api.acme.io/favicon.ico")] mod m {}"#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/lib.rs");
+        assert!(diags.is_empty());
+    }
+
+    // #4775 — the `#[doc = "..."]` form (a doc string) is also documentation
+    // text, never a network call.
+    #[test]
+    fn does_not_flag_http_in_doc_equals_attribute() {
+        let src = r#"#[doc = "see http://api.acme.io for details"] fn f() {}"#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/lib.rs");
+        assert!(diags.is_empty());
+    }
+
+    // #4775 negative space — a genuine `http://` endpoint in an ordinary string
+    // literal still fires, proving the exemption is scoped to doc attributes.
+    #[test]
+    fn still_flags_http_endpoint_outside_doc_attribute() {
+        let src = r#"
+            #![doc(html_logo_url = "http://fulmicoton.com/logo.png")]
+            fn connect() { let _ = "http://api.acme.io".to_string(); }
+        "#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/lib.rs");
         assert_eq!(diags.len(), 1);
     }
 }
