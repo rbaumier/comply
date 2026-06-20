@@ -15,6 +15,16 @@
 //! `impl FromStr for Regex` or `impl TryFrom<_> for Regex` (Self matching the
 //! constructor's type), forwarding the trait's input to `Regex::new` is the
 //! impl's entire contract, so there is no separate construction to flag.
+//!
+//! Linear-time engines are exempted: the `regex` and `regex-lite` crates and
+//! `tantivy_fst` are finite-automaton engines with a documented worst-case
+//! `O(m * n)` bound and no backtracking — they lack the look-around and
+//! backreferences that make exponential backtracking possible, so a crafted
+//! pattern cannot trigger ReDoS. The constructor is recognized as one of these
+//! engines either by a crate-qualified call (`regex::Regex::new`) or, for a
+//! bare `Regex::new`, by a `use` importing it from such a crate. A backtracking
+//! engine (`fancy_regex`, `onig`, `pcre2`) still flags; an unresolved bare
+//! `Regex::new` stays flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -62,6 +72,12 @@ impl AstCheck for Check {
         }
         let ctor_type = fn_text.strip_suffix("::new").map(base_segment).unwrap_or("");
         if is_conversion_impl_for_ctor_type(node, source_bytes, ctor_type) {
+            return;
+        }
+        // A finite-automaton engine (regex / regex-lite / tantivy_fst) cannot
+        // backtrack, so a crafted pattern can't trigger the exponential blow-up
+        // this rule guards against.
+        if is_linear_time_engine(fn_text, ctx.source) {
             return;
         }
         let pos = node.start_position();
@@ -157,6 +173,51 @@ fn is_conversion_impl_for_ctor_type(
         current = ancestor.parent();
     }
     false
+}
+
+/// Linear-time, non-backtracking Rust regex engines. Their constructors share
+/// the `Regex::new` / `RegexBuilder::new` shape this rule keys on, but they are
+/// immune to ReDoS by design, so flagging them is a false positive.
+const LINEAR_TIME_CRATES: [&str; 3] = ["regex", "regex_lite", "tantivy_fst"];
+
+/// `true` when the constructor is provably one of the linear-time engines.
+///
+/// A crate-qualified call (`regex::Regex::new`) is conclusive on its own. A
+/// bare `Regex::new` is resolved through the file's `use` imports: it counts as
+/// linear-time only when the type is imported from a linear-time crate and the
+/// file imports no backtracking engine (`fancy_regex`, `onig`, `pcre2`) that
+/// could also bind a bare `Regex`. An unresolved bare call stays flagged.
+fn is_linear_time_engine(fn_text: &str, source: &str) -> bool {
+    let crate_prefix = fn_text.split("::").next().unwrap_or("");
+    if LINEAR_TIME_CRATES.contains(&crate_prefix) {
+        return true;
+    }
+    // A crate-qualified call to some other engine (`fancy_regex::Regex::new`)
+    // is conclusive on its own — no import can make it linear-time.
+    if crate_prefix != "Regex" && crate_prefix != "RegexBuilder" {
+        return false;
+    }
+    if imports_backtracking_engine(source) {
+        return false;
+    }
+    LINEAR_TIME_CRATES
+        .iter()
+        .any(|krate| source_imports_regex_from(source, krate))
+}
+
+/// `true` when the file `use`s a backtracking regex engine. Such an engine can
+/// bind a bare `Regex`, so its presence forbids the linear-time exemption.
+fn imports_backtracking_engine(source: &str) -> bool {
+    ["fancy_regex", "onig", "pcre2"]
+        .iter()
+        .any(|krate| crate::oxc_helpers::source_contains(source, &format!("use {krate}::")))
+}
+
+/// `true` when the file imports `Regex` (or `RegexBuilder`) from `krate`, e.g.
+/// `use regex::Regex;` or `use tantivy_fst::Regex;`.
+fn source_imports_regex_from(source: &str, krate: &str) -> bool {
+    crate::oxc_helpers::source_contains(source, &format!("use {krate}::Regex"))
+        || crate::oxc_helpers::source_contains(source, &format!("use {krate}::RegexBuilder"))
 }
 
 #[cfg(test)]
@@ -300,5 +361,51 @@ mod tests {
             .len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_qualified_linear_time_regex_crate() {
+        // The `regex` crate is a linear-time engine, immune to ReDoS.
+        assert!(run_on("fn f() { let r = regex::Regex::new(pattern); }").is_empty());
+    }
+
+    #[test]
+    fn allows_bare_regex_imported_from_regex_crate() {
+        // Issue #4783: tantivy `regex_tokenizer.rs` — `use regex::Regex;`.
+        let source = "use regex::Regex;\npub fn new(regex_pattern: &str) -> Result<R, E> { Regex::new(regex_pattern).map(|regex| R { regex }) }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_regex_imported_from_tantivy_fst() {
+        // Issue #4783: tantivy `regex_query.rs` — `use tantivy_fst::Regex;`.
+        let source = "use tantivy_fst::Regex;\npub fn from_pattern(regex_pattern: &str) -> Result<R, E> { let regex = Regex::new(regex_pattern)?; Ok(R { regex }) }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_regex_imported_from_regex_lite() {
+        let source = "use regex_lite::Regex;\nfn f() { let r = Regex::new(pattern); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_qualified_fancy_regex() {
+        // fancy_regex backtracks — a crafted pattern can ReDoS.
+        assert_eq!(run_on("fn f() { let r = fancy_regex::Regex::new(pattern); }").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_bare_regex_with_fancy_regex_import() {
+        // A backtracking engine in scope can bind a bare `Regex`, so the
+        // linear-time exemption must not apply even if `regex` is also imported.
+        let source = "use fancy_regex::Regex;\nfn f() { let r = Regex::new(pattern); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_unresolved_bare_regex() {
+        // No import disambiguates the engine: stay conservative and flag.
+        assert_eq!(run_on("fn f() { let r = Regex::new(user_input); }").len(), 1);
     }
 }
