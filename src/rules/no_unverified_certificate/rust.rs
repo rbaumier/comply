@@ -6,6 +6,14 @@
 //! - `dangerous().set_certificate_verifier(...)` (rustls)
 //!
 //! Disabling TLS certificate verification enables MITM attacks.
+//!
+//! The `danger_accept_invalid_certs` / `danger_accept_invalid_hostnames`
+//! toggles are flagged only when they disable verification *by default*:
+//! a hardcoded `true` argument on an unconditional path. Passing a
+//! runtime-controlled value (a variable, field, or parameter), or gating a
+//! hardcoded `true` behind an `if` that tests such a value, exposes an
+//! opt-in escape hatch the caller must explicitly request — that is a
+//! capability, not a vulnerable default — so it is not flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -48,12 +56,87 @@ fn arg_text_matches(call: tree_sitter::Node, source: &[u8], markers: &[&str]) ->
     false
 }
 
+/// True if the call's sole argument is a hardcoded `true` boolean literal.
+///
+/// A runtime-controlled argument (variable, field, parameter, or any other
+/// expression) is *not* a hardcoded insecure default — the caller decides at
+/// runtime whether to disable verification — so only the literal `true`
+/// disables verification unconditionally. A `const`-bound `true` passed by
+/// name reads as an identifier and is treated as runtime-controlled (not
+/// flagged); covering that compile-time case would require constant resolution
+/// and is out of scope.
+fn arg_is_hardcoded_true(call: tree_sitter::Node, source: &[u8]) -> bool {
+    let args = argument_nodes(call);
+    let [arg] = args.as_slice() else {
+        return false;
+    };
+    arg.kind() == "boolean_literal" && arg.utf8_text(source) == Ok("true")
+}
+
+/// True if `node` is nested inside the consequence of an `if` whose condition
+/// references a runtime value (an identifier or a field access).
+///
+/// This recognises the opt-in escape-hatch pattern where a hardcoded
+/// `danger_accept_invalid_certs(true)` lives inside `if config.insecure { … }`:
+/// the disable is reachable only when the caller's runtime flag is set, so it
+/// is a gated capability rather than a vulnerable default. An `if` whose
+/// condition is itself a constant (`if true`, `if cfg!(...)`) is not a runtime
+/// gate and does not exempt the call.
+fn is_gated_by_runtime_condition(node: tree_sitter::Node) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        match parent.kind() {
+            "if_expression" => {
+                // Only the consequence is gated; the `else` branch runs when
+                // the flag is *off* and must not be exempted.
+                let in_consequence = parent
+                    .child_by_field_name("consequence")
+                    .is_some_and(|c| c == cur);
+                if in_consequence
+                    && let Some(condition) = parent.child_by_field_name("condition")
+                    && condition_references_runtime_value(condition)
+                {
+                    return true;
+                }
+            }
+            // Stop at a function/closure boundary: a gate must enclose the
+            // call within the same body.
+            "function_item" | "closure_expression" => return false,
+            _ => {}
+        }
+        cur = parent;
+    }
+    false
+}
+
+/// True if the `if` condition tree contains an `identifier` or `field_expression`
+/// — i.e. it depends on a runtime value rather than only compile-time constants.
+fn condition_references_runtime_value(condition: tree_sitter::Node) -> bool {
+    let mut stack = vec![condition];
+    while let Some(current) = stack.pop() {
+        match current.kind() {
+            "field_expression" | "identifier" => return true,
+            // A macro condition like `cfg!(...)` is compile-time, not runtime.
+            "macro_invocation" => continue,
+            _ => {}
+        }
+        let mut cursor = current.walk();
+        for child in current.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(name) = method_name(node, source) else { return };
 
     let is_violation = match name {
         "danger_accept_invalid_certs" | "danger_accept_invalid_hostnames" => {
-            arg_text_matches(node, source, &["true"])
+            // Flag only a hardcoded `true` that disables verification by
+            // default. A runtime-controlled argument, or a hardcoded `true`
+            // gated behind a runtime `if`, is an opt-in escape hatch.
+            arg_is_hardcoded_true(node, source) && !is_gated_by_runtime_condition(node)
         }
         "set_verify" => arg_text_matches(
             node,
@@ -130,5 +213,59 @@ mod tests {
     #[test]
     fn allows_normal_client() {
         assert!(run_on("fn f() { let client = Client::new(); }").is_empty());
+    }
+
+    #[test]
+    fn allows_runtime_controlled_field_argument() {
+        // Issue #5028: the argument is a runtime config field, so the caller
+        // opts in at runtime — not a hardcoded insecure default.
+        assert!(
+            run_on(
+                "fn f() { builder.danger_accept_invalid_certs(self.disable_verification); }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_runtime_controlled_variable_argument() {
+        assert!(
+            run_on("fn f(insecure: bool) { builder.danger_accept_invalid_certs(insecure); }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_hardcoded_true_gated_by_runtime_if() {
+        // Issue #5028 (ureq native_tls.rs): hardcoded `true` reachable only
+        // when the caller's runtime flag is set.
+        let src = "fn f(tls_config: &TlsConfig) {
+            if tls_config.disable_verification {
+                builder.danger_accept_invalid_certs(true);
+                builder.danger_accept_invalid_hostnames(true);
+            }
+        }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_hardcoded_true_in_else_of_runtime_if() {
+        // The disable runs when the flag is *off* — a vulnerable default.
+        let src = "fn f(tls_config: &TlsConfig) {
+            if tls_config.secure {
+                let _ = 1;
+            } else {
+                builder.danger_accept_invalid_certs(true);
+            }
+        }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_hardcoded_hostnames_true() {
+        assert_eq!(
+            run_on("fn f() { builder.danger_accept_invalid_hostnames(true); }").len(),
+            1,
+        );
     }
 }
