@@ -1331,31 +1331,38 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
     ))
 }
 
-/// Extract the top-of-file ESM `import` statements from a Markdown / MDX file.
+/// Extract the cross-file references a Markdown / MDX file makes.
 ///
-/// MDX (and MDX-flavored Markdown processed by Docusaurus / Nextra / Astro) uses
-/// standard ESM `import … from '…'` statements, so a component consumed only
-/// from a docs page is a real cross-file usage. Markdown is not valid JS, so the
-/// whole file is never handed to the parser: import-statement line spans are
-/// isolated (skipping fenced code blocks and prose), every other line is blanked
-/// to a newline to preserve line numbers, and the resulting import-only program
-/// is parsed by oxc — reusing the exact import-clause logic as TS/JS imports.
+/// Two reference kinds are collected:
+/// - ESM `import … from '…'` statements. MDX (and MDX-flavored Markdown
+///   processed by Docusaurus / Nextra / Astro) uses standard ESM imports, so a
+///   component consumed only from a docs page is a real cross-file usage.
+///   Markdown is not valid JS, so the whole file is never handed to the parser:
+///   import-statement line spans are isolated (skipping fenced code blocks and
+///   prose), every other line is blanked to a newline to preserve line numbers,
+///   and the resulting import-only program is parsed by oxc — reusing the exact
+///   import-clause logic as TS/JS imports.
+/// - Doc-framework source includes: `<code src="…">` (Rspress/Dumi demo embeds)
+///   and VitePress `<<< @/…` snippet includes. These dynamically load a source
+///   file at build time without any TS `import`, so the referenced file is
+///   consumed as a whole module. Each is emitted as a namespace-import edge so
+///   every export of the referenced file is treated as live.
 ///
 /// Only import edges are produced; a Markdown file declares no exports.
 fn extract_markdown(source: &str, path: &Path) -> Option<(PathBuf, FileExtract)> {
+    let mut imports = Vec::new();
+
     let import_only = blank_non_import_lines(source);
-    if !import_only.contains("import") {
-        // No ESM imports — index the file as a participant with no edges so it
-        // still counts toward the file set, mirroring an import-free TS module.
-        let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        return Some((canon, FileExtract::default()));
+    if import_only.contains("import") {
+        let esm = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            extract_imports_from_module(&import_only)
+        }))
+        .ok()
+        .unwrap_or_default();
+        imports.extend(esm);
     }
 
-    let imports = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        extract_imports_from_module(&import_only)
-    }))
-    .ok()
-    .unwrap_or_default();
+    imports.extend(extract_doc_includes(source));
 
     let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     Some((
@@ -1365,6 +1372,159 @@ fn extract_markdown(source: &str, path: &Path) -> Option<(PathBuf, FileExtract)>
             ..FileExtract::default()
         },
     ))
+}
+
+/// Collect doc-framework source includes from a Markdown / MDX file as
+/// namespace-import edges.
+///
+/// Documentation frameworks load a demo/snippet source file at build time
+/// through a directive instead of a TS `import`, so the referenced file is
+/// consumed as a whole module even though no `import` statement names it. Two
+/// directives are recognised:
+/// - `<code src="…">` (and `<demo src="…">`) — Rspress/Dumi-style demo embeds.
+///   The `src` value may be a directory (resolved to its `index.*`), so the path
+///   resolver's `index` probing handles the directory form.
+/// - `<<< @/path/to/file` — VitePress region/snippet includes (the path may
+///   carry a `#region` / `{ts}` suffix, dropped here).
+///
+/// Each include becomes a `Namespace` import edge: the framework renders the
+/// whole module, so every export is live (matching `dead-export`'s treatment of
+/// `import * as ns`). The specifier is resolved against the importer during the
+/// build's resolve pass like any other import.
+fn extract_doc_includes(source: &str) -> Vec<ImportedSymbol> {
+    let mut out = Vec::new();
+    let mut push = |specifier: String, line: usize| {
+        if specifier.is_empty() {
+            return;
+        }
+        out.push(ImportedSymbol {
+            local_name: String::new(),
+            imported_name: String::new(),
+            kind: ImportKind::Namespace,
+            specifier,
+            source_path: None,
+            line,
+            is_type_only: false,
+            is_runtime_value: true,
+        });
+    };
+
+    // Skip fenced code blocks: framework docs frequently show these very
+    // directives as examples inside a ``` fence, and those are illustrations,
+    // not real includes — mirroring the ESM import path's fence handling.
+    let mut in_fence = false;
+    for (idx, line) in source.lines().enumerate() {
+        let line_no = idx + 1;
+        if is_code_fence(line.trim_start()) {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        for spec in code_src_specifiers(line) {
+            push(spec, line_no);
+        }
+        if let Some(spec) = vitepress_snippet_specifier(line) {
+            push(spec, line_no);
+        }
+    }
+    out
+}
+
+/// Extract every `src="…"` / `src='…'` value from a `<code …>` / `<demo …>` tag
+/// on `line`. A line may carry several tags, so all matches are returned.
+fn code_src_specifiers(line: &str) -> Vec<String> {
+    let mut specs = Vec::new();
+    let mut rest = line;
+    while let Some(tag_at) = next_doc_include_tag(rest) {
+        let after_tag = &rest[tag_at..];
+        if let Some(spec) = first_src_attr(after_tag) {
+            specs.push(spec);
+        }
+        // Advance past this tag's `<` so the scan continues at any later tag and
+        // a tag without a usable `src` does not loop forever.
+        rest = &after_tag[1..];
+    }
+    specs
+}
+
+/// Byte offset in `s` of the next `<code` / `<demo` opening tag, if any.
+fn next_doc_include_tag(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'<' {
+            let after = &s[i + 1..];
+            if after.starts_with("code") || after.starts_with("demo") {
+                // Require the tag name to be followed by whitespace or `>` so
+                // `<codeblock>` / `<demoboard>` do not match.
+                let name_len = 4; // "code" / "demo"
+                if after[name_len..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| c.is_whitespace() || c == '>' || c == '/')
+                {
+                    return Some(i);
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Parse the first `src="…"` (or `src='…'`) attribute value out of a tag that
+/// starts at the beginning of `tag`. Returns the value, or `None` when the tag
+/// has no `src` attribute before its closing `>`. The `src` must be a standalone
+/// attribute name — the preceding character is `<` or whitespace — so
+/// `data-src` / `src-lang` / `foosrc` do not match.
+fn first_src_attr(tag: &str) -> Option<String> {
+    let end = tag.find('>').unwrap_or(tag.len());
+    let head = &tag[..end];
+
+    let mut search_from = 0;
+    while let Some(rel) = head[search_from..].find("src") {
+        let attr_at = search_from + rel;
+        search_from = attr_at + 3;
+        // Reject `src` embedded in a longer attribute name (`data-src`,
+        // `src-lang`): the char before it must be `<` or whitespace.
+        let preceded_ok = head[..attr_at]
+            .chars()
+            .next_back()
+            .is_none_or(|c| c == '<' || c.is_whitespace());
+        if !preceded_ok {
+            continue;
+        }
+        let Some(after) = head[attr_at + 3..].trim_start().strip_prefix('=') else {
+            continue;
+        };
+        let after = after.trim_start();
+        let Some(quote) = after.chars().next().filter(|&c| c == '"' || c == '\'') else {
+            continue;
+        };
+        let value_start = quote.len_utf8();
+        let Some(value_end_rel) = after[value_start..].find(quote) else {
+            continue;
+        };
+        return Some(after[value_start..value_start + value_end_rel].trim().to_string());
+    }
+    None
+}
+
+/// Extract the file specifier from a VitePress snippet include line
+/// (`<<< @/foo/bar.ts`). The path is the first whitespace-delimited token after
+/// the `<<<` marker, stripped of any `#region` / `{1,3}` highlight suffix.
+fn vitepress_snippet_specifier(line: &str) -> Option<String> {
+    let rest = line.trim_start().strip_prefix("<<<")?.trim_start();
+    let token = rest.split_whitespace().next()?;
+    // Drop a `#region` anchor and a `{lineRange}` highlight suffix.
+    let token = token.split(['#', '{']).next().unwrap_or(token);
+    if token.is_empty() {
+        None
+    } else {
+        Some(token.to_string())
+    }
 }
 
 /// Extract the ESM `import` statements from an Astro component's frontmatter.
