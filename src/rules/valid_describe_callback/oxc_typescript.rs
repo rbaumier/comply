@@ -23,6 +23,21 @@ fn is_describe_callee(callee: &Expression) -> bool {
     }
 }
 
+/// Walk a `describe` callee chain (`describe`, `describe.skip`,
+/// `describe.each(table)`, …) down to the base `describe` identifier reference,
+/// so its binding can be resolved. Returns `None` when the base is not a bare
+/// identifier (e.g. a computed access).
+fn describe_base_ident<'a>(
+    callee: &'a Expression,
+) -> Option<&'a oxc_ast::ast::IdentifierReference<'a>> {
+    match callee {
+        Expression::Identifier(id) => Some(id),
+        Expression::StaticMemberExpression(member) => describe_base_ident(&member.object),
+        Expression::CallExpression(call) => describe_base_ident(&call.callee),
+        _ => None,
+    }
+}
+
 /// Return true when the call is a parameterized describe form —
 /// `describe.each(table)(name, fn)` or `describe.for(table)(name, fn)` (and
 /// chained variants like `describe.concurrent.for(...)`). The `fn` callback
@@ -48,7 +63,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else {
@@ -56,6 +71,16 @@ impl OxcCheck for Check {
         };
 
         if !is_describe_callee(&call.callee) {
+            return;
+        }
+
+        // poku's `describe` is awaitable and its callback is idiomatically async
+        // (`await describe(name, async () => { await it(...) })`), so the Jest
+        // sync-callback constraint does not apply. Skip when `describe` resolves
+        // to an import from `poku`.
+        if let Some(id) = describe_base_ident(&call.callee)
+            && crate::oxc_helpers::resolves_to_import_from(id, semantic, &["poku"])
+        {
             return;
         }
 
@@ -305,6 +330,34 @@ mod tests {
     #[test]
     fn still_flags_async_describe_callback() {
         let d = crate::rules::test_helpers::run_rule(&Check, "describe('x', async () => {});", "t.ts");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("async"));
+    }
+
+    // Regression #4932 — poku's `describe` is awaited and its callback is
+    // idiomatically async; the Jest sync-callback constraint must not apply.
+    #[test]
+    fn allows_async_describe_callback_imported_from_poku() {
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "import { describe, it, strict } from 'poku'; \
+             await describe('Text Parser: typeCast with JSON fields', async () => { \
+                 await it('JSON without encoding options', async () => {}); \
+             });",
+            "test-text-parser.test.mts",
+        );
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+    }
+
+    // A same-named `describe` imported from Jest/Vitest is still the sync API.
+    #[test]
+    fn still_flags_async_describe_callback_imported_from_vitest() {
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "import { describe } from 'vitest'; \
+             describe('x', async () => {});",
+            "t.ts",
+        );
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("async"));
     }
