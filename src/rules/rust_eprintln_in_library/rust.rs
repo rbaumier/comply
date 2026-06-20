@@ -16,6 +16,8 @@
 //! - is **not** in a build-time codegen crate (the nearest `Cargo.toml`
 //!   `[package].name` ends with `-build`/`-codegen`/`-bindgen` or the
 //!   `_` variants), and
+//! - is **not** in an FFI bridge crate (the nearest `Cargo.toml`
+//!   `[lib] crate-type` declares `cdylib`/`staticlib` and no `rlib`/`lib`), and
 //! - is **not** in the `then` branch of an `if` gated by a
 //!   verbose/debug-style flag (`if self.verbose() { eprintln!(...) }`).
 //!
@@ -43,6 +45,13 @@
 //! script, where writing to Cargo's build-output stream via `eprintln!` /
 //! `println!` is the idiomatic diagnostic channel — tracing/log is
 //! unavailable there — so its `eprintln!` is exempt too.
+//!
+//! An FFI bridge crate (a `[lib] crate-type` of `cdylib`/`staticlib` with no
+//! `rlib`/`lib`, such as Python/Java/Swift bindings) is linked into a foreign
+//! runtime, not consumed as a Rust library. That runtime never initialises a
+//! Rust tracing subscriber, so there is no `tracing::warn!` alternative —
+//! `eprintln!` is the only practical way to surface errors at the FFI boundary,
+//! so it is exempt too.
 //!
 //! Output gated behind a runtime verbosity flag is opt-in diagnostics,
 //! not unconditional library noise: the consumer only sees it after
@@ -126,6 +135,13 @@ impl AstCheck for Check {
             .project
             .nearest_cargo_manifest(ctx.path)
             .is_some_and(|m| m.is_build_codegen_crate())
+        {
+            return;
+        }
+        if ctx
+            .project
+            .nearest_cargo_manifest(ctx.path)
+            .is_some_and(|m| m.is_ffi_bridge_crate())
         {
             return;
         }
@@ -404,6 +420,44 @@ name = "something_codegen"
 path = "src/lib.rs"
 "#;
 
+    /// An FFI bridge crate built as a C dynamic library (Python/Java bindings):
+    /// `[lib] crate-type = ["cdylib"]`. Linked by a foreign runtime, never a Rust
+    /// library consumer — `eprintln!` is the only error channel at the boundary.
+    const CDYLIB_FFI_CARGO_TOML: &str = r#"
+[package]
+name = "cozo-lib-python"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+"#;
+
+    /// An FFI bridge crate built as a static library (Swift bindings):
+    /// `[lib] crate-type = ["staticlib"]`.
+    const STATICLIB_FFI_CARGO_TOML: &str = r#"
+[package]
+name = "cozo-lib-swift"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib"]
+"#;
+
+    /// A crate-type that mixes a Rust library target (`rlib`) with `cdylib` is
+    /// still consumed as a Rust library, so it is NOT an FFI-only bridge and
+    /// stays flagged.
+    const CDYLIB_PLUS_RLIB_CARGO_TOML: &str = r#"
+[package]
+name = "mixed"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+"#;
+
     #[test]
     fn flags_eprintln_in_library_file() {
         let source = "fn f() { eprintln!(\"oops\"); }";
@@ -432,6 +486,35 @@ path = "src/lib.rs"
     fn flags_eprint_in_library_file() {
         let source = "fn f() { eprint!(\"oops\"); }";
         assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// Regression for #4749 (cozodb/cozo `cozo-lib-python`): a `cdylib` FFI
+    /// bridge crate is linked into a Python/Java runtime that never initialises
+    /// a Rust tracing subscriber. `eprintln!` is the only way to surface errors
+    /// at the FFI boundary, so it is exempt.
+    #[test]
+    fn allows_eprintln_in_cdylib_ffi_crate() {
+        let source = "fn f() { eprintln!(\"{}\", err); }";
+        assert!(run_in_crate(CDYLIB_FFI_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// Regression for #4749 (cozodb/cozo `cozo-lib-swift`): a `staticlib` FFI
+    /// bridge crate is the same case — exempt.
+    #[test]
+    fn allows_eprintln_in_staticlib_ffi_crate() {
+        let source = "fn f() { eprintln!(\"{err}\"); }";
+        assert!(run_in_crate(STATICLIB_FFI_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// A crate that declares both `cdylib` and `rlib` is still consumed as a
+    /// Rust library by other crates, so its `eprintln!` stays flagged.
+    #[test]
+    fn flags_eprintln_in_cdylib_plus_rlib_crate() {
+        let source = "fn f() { eprintln!(\"oops\"); }";
+        assert_eq!(
+            run_in_crate(CDYLIB_PLUS_RLIB_CARGO_TOML, "src/lib.rs", source).len(),
+            1
+        );
     }
 
     /// Regression for #981: a module of a binary-only crate (no `[lib]`,
