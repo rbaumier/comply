@@ -179,16 +179,18 @@ fn receiver_is_drizzle_query(mut expr: &Expression) -> bool {
     false
 }
 
-/// True when an argument object carries a `limit:` or `where:` property — either
-/// bounds the relational query, so it must not be flagged.
+/// True when an argument object is possibly bounded: it carries a literal
+/// `limit:`/`where:` property, or an object spread (`...paginationArgs`) that
+/// may inject a `limit`/`where` the AST cannot resolve. A spread is treated as
+/// possibly-bounded to avoid flagging the common
+/// `findMany({ ...paginationArgs })` shape.
 fn findmany_arg_is_bounded(expr: &Expression) -> bool {
     let Expression::ObjectExpression(obj) = expr else { return false };
-    obj.properties.iter().any(|prop| {
-        if let ObjectPropertyKind::ObjectProperty(p) = prop {
+    obj.properties.iter().any(|prop| match prop {
+        ObjectPropertyKind::ObjectProperty(p) => {
             p.key.name().is_some_and(|n| n == "limit" || n == "where")
-        } else {
-            false
         }
+        ObjectPropertyKind::SpreadProperty(_) => true,
     })
 }
 
@@ -397,6 +399,31 @@ const rows = await tx.with(insertedUser).select().from(usersTable);
     #[test]
     fn ignores_findmany_without_query_receiver() {
         assert!(run("repo.users.findMany();").is_empty());
+    }
+
+    // Issue #4572: a query bounded via an object spread (`...paginationArgs`)
+    // carries the `limit`/`offset` the AST cannot resolve. A spread element must
+    // be treated as possibly-bounded so the common paginated shape is not flagged.
+    #[test]
+    fn allows_findmany_with_spread_pagination_args() {
+        assert!(run("database.query.species.findMany({ orderBy: { name: 'asc' }, ...paginationArgs });").is_empty());
+    }
+
+    #[test]
+    fn allows_findmany_with_spread_only() {
+        assert!(run("db.query.species.findMany({ ...paginationArgs });").is_empty());
+    }
+
+    #[test]
+    fn allows_findmany_with_spread_and_where() {
+        assert!(run("db.query.species.findMany({ ...paginationArgs, where: eq(t.id, 1) });").is_empty());
+    }
+
+    // The spread suppression must not leak to bare empty/orderBy-only objects:
+    // an object with no spread and no `limit`/`where` is still unbounded.
+    #[test]
+    fn flags_findmany_with_empty_object() {
+        assert_eq!(run("db.query.users.findMany({});").len(), 1);
     }
 
     // Prefilter coverage: the SIMD prefilter prunes files that contain none of
