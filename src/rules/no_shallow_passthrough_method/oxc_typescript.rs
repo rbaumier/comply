@@ -1,5 +1,10 @@
 //! no-shallow-passthrough-method oxc backend — flag methods whose body is a
 //! single `return` forwarding the exact parameters to another callee.
+//!
+//! Methods that are the implementation of a TypeScript overload set (the class
+//! has a bodyless sibling `MethodDefinition` with the same name) are exempt:
+//! inlining or removing the implementation would erase the overload signatures
+//! and the type-level discrimination they provide.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, node_has_preceding_deprecated_tag};
@@ -17,6 +22,32 @@ fn param_names<'a>(params: &'a FormalParameters<'a>) -> Vec<&'a str> {
         }
     }
     out
+}
+
+/// The static key name of a method (`Identifier` or `StringLiteral` key), or
+/// `None` for computed/other keys.
+fn method_key_name<'a>(method: &'a oxc_ast::ast::MethodDefinition<'a>) -> Option<&'a str> {
+    match &method.key {
+        oxc_ast::ast::PropertyKey::StaticIdentifier(id) => Some(id.name.as_str()),
+        oxc_ast::ast::PropertyKey::StringLiteral(s) => Some(s.value.as_str()),
+        _ => None,
+    }
+}
+
+/// True when `class` has a `MethodDefinition` with the same key as `method` but
+/// NO body — i.e. a TypeScript overload signature, making `method` the
+/// implementation of an overload set.
+fn class_has_overload_signature_for<'a>(
+    class: &'a oxc_ast::ast::Class<'a>,
+    method: &'a oxc_ast::ast::MethodDefinition<'a>,
+) -> bool {
+    let Some(name) = method_key_name(method) else {
+        return false;
+    };
+    class.body.body.iter().any(|element| {
+        matches!(element, oxc_ast::ast::ClassElement::MethodDefinition(other)
+            if other.value.body.is_none() && method_key_name(other) == Some(name))
+    })
 }
 
 fn argument_names<'a>(args: &'a oxc_allocator::Vec<'a, oxc_ast::ast::Argument<'a>>) -> Option<Vec<&'a str>> {
@@ -55,6 +86,14 @@ impl OxcCheck for Check {
         for ancestor in semantic.nodes().ancestors(node.id()) {
             if let AstKind::Class(class) = ancestor.kind() {
                 if class.super_class.is_some() || !class.implements.is_empty() {
+                    return;
+                }
+                // TypeScript overload implementation: a sibling `MethodDefinition`
+                // with the same key and no body is a type-only overload signature.
+                // The body here is the single callable implementation; inlining or
+                // removing it would erase the overload signatures and the type
+                // discrimination they provide.
+                if class_has_overload_signature_for(class, method) {
                     return;
                 }
                 break;
@@ -239,6 +278,26 @@ mod tests {
         // pass-through `foo` below it. Only the method's OWN immediately-
         // preceding comment exempts it, so `foo` must still flag.
         let src = "class A { /** @deprecated */ other() { return 1; } foo(a, b) { return this.bar(a, b); } }";
+        assert_eq!(run(src).len(), 1, "expected one diagnostic, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_overload_implementation() {
+        // Regression for #4415: the implementation of a TypeScript overload set
+        // (here `refine`) forwards to a private helper that accepts the widest
+        // type. The bodyless sibling signatures provide type-level
+        // discrimination — inlining or removing the implementation would erase
+        // them, so it cannot be flagged as a shallow pass-through.
+        let src = "class Schema { refine<R>(fn: (x: unknown) => x is R): A; refine(fn: (x: unknown) => void): B; refine(fn: (x: unknown) => unknown): A | B { return this._refine(fn); } }";
+        assert!(run(src).is_empty(), "expected no diagnostics, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_passthrough_when_bodyless_sibling_has_different_name() {
+        // A bodyless sibling with a DIFFERENT name (`baz`) is not an overload
+        // signature for `bar`, so `bar` is still a deletable shallow
+        // pass-through and must flag. Proves the name match is required.
+        let src = "class Foo { baz(x): void; bar(x) { return this._bar(x); } }";
         assert_eq!(run(src).len(), 1, "expected one diagnostic, got: {:?}", run(src));
     }
 
