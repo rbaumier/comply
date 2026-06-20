@@ -7,6 +7,9 @@
 //!   `tests/` integration directory), and
 //! - is **not** in a Cargo build script (`build.rs`), and
 //! - is **not** in a binary file (`main.rs`, `src/bin/*.rs`), and
+//! - is **not** in a file declared as an explicit-path executable target
+//!   in the nearest `Cargo.toml` (a `[[bin]]`/`[[example]]`/`[[bench]]`/
+//!   `[[test]]` table with `path = "utils/foo.rs"`), and
 //! - is **not** in a crate that declares a binary (the nearest
 //!   `Cargo.toml` declares a `[[bin]]` target or a `src/main.rs`
 //!   exists next to it), and
@@ -22,6 +25,13 @@
 //! one of its source files is exempt, not just the entry points —
 //! even when it also carries a `[lib]` purely to expose internals to
 //! its own integration tests (the `lib.rs` + `main.rs` split).
+//!
+//! A file declared as an explicit-path executable target — a `[[bin]]`,
+//! `[[example]]`, `[[bench]]`, or `[[test]]` table with `path = "utils/foo.rs"`
+//! — is itself a standalone binary with its own `fn main()` that Cargo compiles
+//! and runs directly. It is application code even when it lives outside the
+//! conventional `src/main.rs` / `src/bin/` locations, so its `eprintln!` is
+//! exempt regardless of whether the surrounding crate also ships a library.
 //!
 //! A Cargo build script (`build.rs`) is a separate binary that Cargo
 //! compiles and runs at build time, not the crate's runtime library code.
@@ -108,7 +118,7 @@ impl AstCheck for Check {
         if ctx
             .project
             .nearest_cargo_manifest(ctx.path)
-            .is_some_and(|m| m.declares_binary())
+            .is_some_and(|m| m.declares_binary() || m.declares_executable_at(ctx.path))
         {
             return;
         }
@@ -320,8 +330,10 @@ mod tests {
     fn run_in_crate(cargo_toml_contents: &str, rel_path: &str, source: &str) -> Vec<Diagnostic> {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("Cargo.toml"), cargo_toml_contents).unwrap();
-        fs::create_dir_all(dir.path().join("src")).unwrap();
         let src_path = dir.path().join(rel_path);
+        if let Some(parent) = src_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
         fs::write(&src_path, source).unwrap();
         crate::rules::test_helpers::run_rule(&Check, source, &src_path)
     }
@@ -435,6 +447,55 @@ path = "src/lib.rs"
     fn flags_eprintln_in_library_crate_module() {
         let source = "fn f() { eprintln!(\"oops\"); }";
         assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/util.rs", source).len(), 1);
+    }
+
+    /// A library crate (it has `src/lib.rs`) that also declares an executable
+    /// target by explicit `path` in a non-standard directory. The `path` field
+    /// can name a `[[bin]]`, `[[example]]`, `[[bench]]`, or `[[test]]` target —
+    /// all standalone executables with their own `fn main()`.
+    const LIB_WITH_EXPLICIT_TARGET_CARGO_TOML: &str = r#"
+[package]
+name = "smoltcp"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "smoltcp"
+path = "src/lib.rs"
+
+[[example]]
+name = "packet2pcap"
+path = "utils/packet2pcap.rs"
+required-features = ["std"]
+"#;
+
+    /// Regression for #4728 (smoltcp `utils/packet2pcap.rs:47`): the file is a
+    /// standalone executable declared via an explicit `path` in a target table
+    /// (`[[example]]`/`[[bin]]`), with its own `fn main()`. It is application
+    /// code even though it lives in `utils/` (not `src/main.rs` / `src/bin/`)
+    /// and the crate also ships a library — `eprintln!` belongs there.
+    #[test]
+    fn allows_eprintln_in_explicit_path_executable_target() {
+        let source = "fn main() { eprintln!(\"{e}\"); }";
+        assert!(
+            run_in_crate(
+                LIB_WITH_EXPLICIT_TARGET_CARGO_TOML,
+                "utils/packet2pcap.rs",
+                source,
+            )
+            .is_empty()
+        );
+    }
+
+    /// The explicit-target exemption is path-scoped: a genuine library module
+    /// in the same crate — not named by any target `path` — stays flagged.
+    #[test]
+    fn flags_eprintln_in_library_module_of_crate_with_explicit_target() {
+        let source = "fn f() { eprintln!(\"oops\"); }";
+        assert_eq!(
+            run_in_crate(LIB_WITH_EXPLICIT_TARGET_CARGO_TOML, "src/wire.rs", source).len(),
+            1
+        );
     }
 
     /// Regression for #1312: starship declares a `[[bin]]` target (the

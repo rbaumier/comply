@@ -1797,11 +1797,27 @@ pub struct CargoManifest {
     proc_macro: bool,
     /// One or more `[[bin]]` tables are present.
     has_bin_table: bool,
+    /// Explicit `path` fields of executable target tables (`[[bin]]`,
+    /// `[[example]]`, `[[bench]]`, `[[test]]`), relative to `manifest_dir`.
+    /// Each names a standalone executable with its own `fn main()`.
+    explicit_target_paths: Vec<PathBuf>,
     /// An async runtime (`tokio`, `async-std`, `futures`) is declared in any
     /// dependency section.
     async_runtime: bool,
     /// `[package].categories` lists `"no-std"`.
     no_std_category: bool,
+}
+
+/// Split a relative path into its normalized segments, treating `\` as a
+/// separator (Windows-authored `Cargo.toml` `path` fields) and dropping `.`
+/// (`CurDir`) segments. Lets a manifest `path = "./utils/foo.rs"` match a
+/// stripped `utils/foo.rs`.
+fn path_segments(path: &Path) -> Vec<&str> {
+    path.to_str()
+        .unwrap_or_default()
+        .split(['/', '\\'])
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .collect()
 }
 
 impl CargoManifest {
@@ -1832,6 +1848,14 @@ impl CargoManifest {
 
         let has_bin_table = value.get("bin").is_some();
 
+        let explicit_target_paths = ["bin", "example", "bench", "test"]
+            .iter()
+            .filter_map(|table| value.get(*table).and_then(toml::Value::as_array))
+            .flatten()
+            .filter_map(|target| target.get("path").and_then(toml::Value::as_str))
+            .map(PathBuf::from)
+            .collect();
+
         let async_runtime = ["dependencies", "dev-dependencies", "build-dependencies"]
             .iter()
             .filter_map(|section| value.get(section).and_then(toml::Value::as_table))
@@ -1853,6 +1877,7 @@ impl CargoManifest {
             has_lib_table,
             proc_macro,
             has_bin_table,
+            explicit_target_paths,
             async_runtime,
             no_std_category,
         })
@@ -1873,6 +1898,29 @@ impl CargoManifest {
     /// [`is_binary_only`]: CargoManifest::is_binary_only
     pub fn declares_binary(&self) -> bool {
         self.has_bin_table || self.manifest_dir.join("src/main.rs").is_file()
+    }
+
+    /// True when `file_path` is the explicit `path` of an executable target
+    /// table (`[[bin]]`, `[[example]]`, `[[bench]]`, `[[test]]`). Such a file
+    /// is a standalone executable with its own `fn main()` — Cargo compiles
+    /// and runs it directly — so it is application code, not library code, even
+    /// when it sits in a non-standard directory (e.g. `utils/foo.rs`) rather
+    /// than `src/main.rs` or `src/bin/`. `file_path` is matched after making it
+    /// relative to the manifest directory, mirroring how Cargo resolves the
+    /// `path` field. Comparison tolerates the `./` prefix and backslash
+    /// separators that a `path` field may carry.
+    #[must_use]
+    pub fn declares_executable_at(&self, file_path: &Path) -> bool {
+        if self.explicit_target_paths.is_empty() {
+            return false;
+        }
+        let relative = file_path
+            .strip_prefix(&self.manifest_dir)
+            .unwrap_or(file_path);
+        let relative_segments = path_segments(relative);
+        self.explicit_target_paths
+            .iter()
+            .any(|target| path_segments(target) == relative_segments)
     }
 
     /// True when the crate builds a library target: a `[lib]` table is declared,
@@ -6191,6 +6239,66 @@ tokio = "1"
         );
         assert!(first.has_async_runtime(), "tokio is declared");
         assert!(first.is_no_std(), "categories lists no-std");
+    }
+
+    #[test]
+    fn cargo_manifest_declares_executable_at_explicit_target_path() {
+        let dir = PathBuf::from("/crate");
+        let manifest = CargoManifest::parse(
+            r#"
+[package]
+name = "smoltcp"
+version = "0.1.0"
+
+[lib]
+path = "src/lib.rs"
+
+[[example]]
+name = "packet2pcap"
+path = "utils/packet2pcap.rs"
+
+[[bin]]
+name = "tool"
+path = "tools/tool.rs"
+"#,
+            dir.clone(),
+        )
+        .unwrap();
+
+        assert!(
+            manifest.declares_executable_at(&dir.join("utils/packet2pcap.rs")),
+            "file matching an [[example]] path => executable target"
+        );
+        assert!(
+            manifest.declares_executable_at(&dir.join("tools/tool.rs")),
+            "file matching a [[bin]] path => executable target"
+        );
+        assert!(
+            !manifest.declares_executable_at(&dir.join("src/wire.rs")),
+            "library module not named by any target path => not an executable target"
+        );
+
+        let normalized = CargoManifest::parse(
+            "[[bin]]\nname = \"dotted\"\npath = \"./utils/dotted.rs\"\n[[bin]]\nname = \"win\"\npath = \"tools\\\\win.rs\"\n",
+            dir.clone(),
+        )
+        .unwrap();
+        assert!(
+            normalized.declares_executable_at(&dir.join("utils/dotted.rs")),
+            "a `./`-prefixed target path still matches the stripped file path"
+        );
+        assert!(
+            normalized.declares_executable_at(&dir.join("tools/win.rs")),
+            "a backslash-separated target path still matches the stripped file path"
+        );
+
+        let no_targets =
+            CargoManifest::parse("[package]\nname = \"lib\"\n[lib]\npath = \"src/lib.rs\"\n", dir)
+                .unwrap();
+        assert!(
+            !no_targets.declares_executable_at(Path::new("src/lib.rs")),
+            "no explicit target tables => no executable targets"
+        );
     }
 
     #[test]
