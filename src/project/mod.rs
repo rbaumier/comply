@@ -2753,7 +2753,8 @@ impl ProjectCtx {
     /// `+page`/`+layout`/`+server` route files and `match` in `src/params/*`;
     /// Vue Router reserves `parser` in `src/params/*`; Remix reserves
     /// `loader`/`action`/`meta`/… in `app/routes/*` modules; Nuxt reserves
-    /// `default` in `server/api/*` and `server/routes/*` Nitro route modules. The
+    /// `default` in `server/api/*`/`server/routes/*` Nitro route modules and in
+    /// `plugins/*` plugin modules. The
     /// router calls each by exact name, so they have no importer but are live.
     /// Each framework's `route_files` apply only when `path` matches that
     /// framework's own route-file convention, keeping a same-named export in an
@@ -2767,6 +2768,7 @@ impl ProjectCtx {
         let is_rr_config = crate::rules::path_utils::is_react_router_routes_config(path);
         let is_astro_page = crate::rules::path_utils::is_astro_routed_page(path);
         let is_nuxt_server_route = crate::rules::path_utils::is_nuxt_server_route_file(path);
+        let is_nuxt_plugin = crate::rules::path_utils::is_nuxt_plugin_file(path);
         if !is_sveltekit_route
             && !is_param_matcher
             && !is_remix_route
@@ -2774,6 +2776,7 @@ impl ProjectCtx {
             && !is_rr_config
             && !is_astro_page
             && !is_nuxt_server_route
+            && !is_nuxt_plugin
         {
             return;
         }
@@ -2792,7 +2795,7 @@ impl ProjectCtx {
                 "svelte" => is_sveltekit_route,
                 "remix" => is_remix_route || is_rr_root,
                 "astro" => is_astro_page,
-                "nuxt" => is_nuxt_server_route,
+                "nuxt" => is_nuxt_server_route || is_nuxt_plugin,
                 _ => false,
             };
             if route_file_match {

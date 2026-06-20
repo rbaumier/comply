@@ -1068,6 +1068,21 @@ pub fn is_nuxt_server_route_file(path: &Path) -> bool {
     false
 }
 
+/// True when `path` is a Nuxt plugin module: a file directly inside a `plugins/`
+/// directory (e.g. `plugins/wagmi.ts`, or Nuxt 4's `app/plugins/wagmi.ts`). Nuxt
+/// auto-discovers every file in `plugins/` and loads its `export default
+/// defineNuxtPlugin(...)` by directory convention at build time, never through a
+/// static import, so the `default` export has no importer yet is live. Only files
+/// whose immediate parent is `plugins/` qualify, so a nested helper
+/// (`plugins/utils/format.ts`) — not itself a registered plugin — stays
+/// flaggable. Detection-gated by the caller (Nuxt framework owning the path).
+pub fn is_nuxt_plugin_file(path: &Path) -> bool {
+    path.parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        == Some("plugins")
+}
+
 /// True when `path` is a Nuxt auto-imported file: a file under a `composables/`
 /// or `utils/` directory (client-side auto-import) or under a `server/utils/`
 /// directory (Nitro server-side auto-import). Nuxt auto-imports every export of
@@ -1501,6 +1516,23 @@ mod aux_path_tests {
         assert!(!is_nuxt_server_route_file(Path::new(
             "src/server/handler.ts"
         )));
+    }
+
+    #[test]
+    fn nuxt_plugin_file_segments() {
+        // Issue #4820: Nuxt auto-loads files directly in `plugins/` (Nuxt 3) or
+        // `app/plugins/` (Nuxt 4) and calls their `export default
+        // defineNuxtPlugin(...)` by directory convention.
+        assert!(is_nuxt_plugin_file(Path::new("plugins/wagmi.ts")));
+        assert!(is_nuxt_plugin_file(Path::new("app/plugins/wagmi.ts")));
+        assert!(is_nuxt_plugin_file(Path::new(
+            "playgrounds/nuxt/plugins/wagmi.ts"
+        )));
+        // A nested helper under `plugins/` is not itself a registered plugin.
+        assert!(!is_nuxt_plugin_file(Path::new("plugins/utils/format.ts")));
+        // An unrelated directory whose name merely contains `plugins` does not
+        // qualify; only the exact `plugins/` parent segment matches.
+        assert!(!is_nuxt_plugin_file(Path::new("src/myplugins/wagmi.ts")));
     }
 
     #[test]
