@@ -545,15 +545,23 @@ fn entry_with_filter(
 // ── no-console post-filter ─────────────────────────────────────────────────
 //
 // `console` is the wrong tool on the server (a structured logger should be
-// used) but the correct, standard logging primitive in the browser, where no
-// server logger exists. This filter drops the diagnostic when the file is
-// browser-targeted and keeps it everywhere else.
+// used) but the correct, standard output primitive in two cases this filter
+// drops the diagnostic for:
 //
-// A file is treated as browser-targeted when any of these hold:
-// 1. Its extension is `tsx`/`jsx` (JSX renders into the DOM).
-// 2. It carries a `"use client"` / `'use client'` directive.
-// 3. It imports a browser-only frontend package (see `BROWSER_PACKAGES`).
-//    `react-dom/server` is server-side rendering and is not a browser signal.
+// 1. The file is browser-targeted, where no server logger exists. A file is
+//    browser-targeted when any of these hold:
+//    a. Its extension is `tsx`/`jsx` (JSX renders into the DOM).
+//    b. It carries a `"use client"` / `'use client'` directive.
+//    c. It imports a browser-only frontend package (see `BROWSER_PACKAGES`).
+//       `react-dom/server` is server-side rendering and is not a browser signal.
+//
+// 2. The nearest `package.json` declares a `bin` entry — the file belongs to a
+//    CLI-tool package whose product *is* terminal output, so `console.log` /
+//    `console.error` are the deliberate stdout/stderr API, not stray debug
+//    logging. This matches how teams disable `no-console` for CLI packages.
+//
+// Stray `console.*` is still flagged everywhere stdout is not the product
+// (web bundles, libraries, server code without a `bin`).
 
 struct NoConsoleFilter;
 
@@ -561,6 +569,27 @@ impl PostFilter for NoConsoleFilter {
     fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
         !is_browser_targeted(&diag.path, source)
     }
+
+    fn keep_with_project(
+        &self,
+        diag: &crate::diagnostic::Diagnostic,
+        source: Option<&str>,
+        project: &crate::project::ProjectCtx,
+    ) -> bool {
+        if is_cli_tool_package(&diag.path, project) {
+            return false;
+        }
+        self.keep(diag, source)
+    }
+}
+
+/// True when the nearest `package.json` to `path` declares a `bin` field — the
+/// file is part of a CLI-tool package whose stdout/stderr is its product, so
+/// `console.*` is the intended output API.
+fn is_cli_tool_package(path: &std::path::Path, project: &crate::project::ProjectCtx) -> bool {
+    project
+        .nearest_package_json(path)
+        .is_some_and(|pkg| pkg.has_bin)
 }
 
 /// Browser-only frontend packages: importing one means the file runs in a
@@ -788,6 +817,60 @@ mod tests {
         let src = "import process from \"node:process\";\nimport * as Sentry from \"@sentry/bun\";\nimport { z } from \"zod\";\nconsole.warn(\"[ErrorReporter] No Sentry DSN configured\");\n";
         let d = diag("src/api/sentry.ts");
         assert!(FILTER.keep(&d, Some(src)));
+    }
+
+    // ── CLI output abstraction (dropped) — issue #5013 (oclif/core) ──────────
+
+    /// Write a `package.json` at `dir` and a source file under `dir/src`, then
+    /// run the project-aware filter so `nearest_package_json` resolves the real
+    /// manifest. Returns whether the diagnostic is kept.
+    fn keep_in_project(pkg_json: &str, rel_file: &str, source: &str) -> bool {
+        use std::fs;
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), pkg_json).unwrap();
+        let file = dir.path().join(rel_file);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, source).unwrap();
+        crate::oxc_helpers::reset_file_caches();
+        let project = crate::project::ProjectCtx::empty();
+        let d = Diagnostic {
+            path: Arc::from(file.as_path()),
+            line: 1,
+            column: 1,
+            rule_id: Cow::Borrowed("no-console"),
+            message: "Unexpected console statement.".into(),
+            severity: Severity::Error,
+            span: None,
+        };
+        FILTER.keep_with_project(&d, Some(source), &project)
+    }
+
+    #[test]
+    fn drops_console_in_cli_output_abstraction_with_bin() {
+        // Issue #5013 — oclif/core's `src/ux/write.ts` wraps `console.log` as the
+        // CLI's stdout primitive. The package declares `bin`, so it's a CLI tool
+        // whose terminal output is the product.
+        let pkg = r#"{"name":"@oclif/core","bin":{"oclif":"./bin/run.js"}}"#;
+        let source = "export const stdout = (str) => {\n  console.log(str)\n}\n";
+        assert!(!keep_in_project(pkg, "src/ux/write.ts", source));
+    }
+
+    #[test]
+    fn drops_console_error_in_cli_error_handler_with_bin() {
+        // Issue #5013 — `src/errors/handle.ts` prints the error to stderr before
+        // exiting, the standard CLI error-output path.
+        let pkg = r#"{"name":"@oclif/core","bin":"./bin/run.js"}"#;
+        let source = "if (shouldPrint) {\n  console.error(pretty ?? stack)\n}\n";
+        assert!(!keep_in_project(pkg, "src/errors/handle.ts", source));
+    }
+
+    #[test]
+    fn keeps_console_in_library_without_bin() {
+        // Negative space: the SAME `console.log` in a published library (no `bin`)
+        // is still flagged — stdout is not the product there.
+        let pkg = r#"{"name":"some-lib","main":"./dist/index.js"}"#;
+        let source = "export function helper() {\n  console.log(\"debug\")\n}\n";
+        assert!(keep_in_project(pkg, "src/helper.ts", source));
     }
 
     // ── focused unit tests ───────────────────────────────────────────────────

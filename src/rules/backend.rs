@@ -34,13 +34,30 @@ use std::sync::Arc;
 ///
 /// Implemented by rule-specific structs and attached to `Backend::Oxlint` /
 /// `Backend::Tsgolint` variants. The dispatcher in `crate::oxlint` calls
-/// `keep()` once per diagnostic; returning `false` drops the diagnostic.
+/// `keep_with_project()` once per diagnostic; returning `false` drops the
+/// diagnostic.
 ///
 /// `source` is the full text of the file the diagnostic points to, loaded at
 /// most once per file per `lint_files()` call. Rules that only need the path
 /// or the diagnostic message can ignore `source`.
 pub trait PostFilter: Send + Sync {
     fn keep(&self, diag: &Diagnostic, source: Option<&str>) -> bool;
+
+    /// Project-aware variant. The default delegates to [`keep`], so filters
+    /// that only need the path/source override nothing. Filters that need
+    /// parsed-manifest context (e.g. the nearest `package.json`'s `bin` field)
+    /// override this instead and read it from `project`.
+    ///
+    /// [`keep`]: PostFilter::keep
+    fn keep_with_project(
+        &self,
+        diag: &Diagnostic,
+        source: Option<&str>,
+        project: &ProjectCtx,
+    ) -> bool {
+        let _ = project;
+        self.keep(diag, source)
+    }
 }
 
 /// Read-only context handed to in-process check implementations.

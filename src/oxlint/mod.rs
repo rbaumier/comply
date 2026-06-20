@@ -181,7 +181,7 @@ pub fn lint_files(
                 .entry(d.path.to_path_buf())
                 .or_insert_with(|| std::fs::read_to_string(d.path.as_ref()).ok())
                 .as_deref();
-            filter_vec.iter().all(|f| f.keep(d, source))
+            filter_vec.iter().all(|f| f.keep_with_project(d, source, project))
         });
     }
 
