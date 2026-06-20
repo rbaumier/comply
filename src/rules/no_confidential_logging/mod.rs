@@ -17,7 +17,11 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["security"],
 
-    skip_in_test_dir: false,
+    // Tests that verify secret-redaction behavior legitimately pass sentinel
+    // secrets to a logger (then assert they are redacted in the output). Those
+    // sentinel values are not production data, so the rule is skipped in test
+    // files; it still fires on production logging/throwing.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: true,
 };
 

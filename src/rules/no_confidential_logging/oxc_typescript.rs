@@ -405,4 +405,38 @@ mod tests {
         let src = "function f() { throw new Error(`db: ${connectionString}`); }";
         assert_eq!(run_on(src).len(), 1);
     }
+
+    // #4733 — a `*.spec.ts` test that passes sentinel secrets to a logger to
+    // verify the logger redacts them is not a leak. The sentinel values are
+    // test data, not production secrets, so the rule is skipped in test files.
+    #[test]
+    fn allows_redaction_test_in_spec_file() {
+        let src = r#"
+            logger.info(
+              { user: "testuser", password: "secretpassword123", token: "bearer-token-xyz" },
+              "User authentication attempt"
+            );
+            expect(logEntry.password).toBe("[Redacted]");
+            expect(logEntry.token).toBe("[Redacted]");
+        "#;
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "packages/logger/test/logger.spec.ts"
+            )
+            .is_empty()
+        );
+    }
+
+    // Control: the same sensitive logging in production code still fires
+    // through the production gate.
+    #[test]
+    fn still_flags_in_production_file_through_gate() {
+        let src = "logger.info(`auth: ${accessToken}`);";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "src/auth.ts").len(),
+            1
+        );
+    }
 }
