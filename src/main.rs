@@ -154,6 +154,63 @@ mod tests {
         // Cross-file detectors need at least two files.
         assert!(run_cross_file_rules(&requested, &[&a], &cfg).is_empty());
     }
+
+    fn barrel_diagnostic(path: &std::path::Path) -> Diagnostic {
+        Diagnostic {
+            path: std::sync::Arc::from(path),
+            line: 1,
+            column: 1,
+            rule_id: "oxc/no-barrel-file".into(),
+            message: "Barrel file detected".into(),
+            severity: crate::diagnostic::Severity::Error,
+            span: None,
+        }
+    }
+
+    #[test]
+    fn no_barrel_file_exempts_component_library_index_entry_issue_4727() {
+        // Regression for issue #4727 (element-plus): a component package's
+        // `index.ts` is its intentional public-API barrel — consumers import
+        // `{ ElTabs } from 'element-plus/components/tabs'` — not an accidental
+        // re-export hub. The delegated oxlint diagnostic must be dropped.
+        let project = crate::project::ProjectCtx::empty();
+        let path = std::path::Path::new("packages/components/tabs/index.ts");
+        assert!(is_exempt_barrel_entry_point(&barrel_diagnostic(path), &project));
+    }
+
+    #[test]
+    fn no_barrel_file_still_flags_non_index_accidental_barrel() {
+        // Negative space: a non-`index` re-export hub with no declared exports
+        // entry remains an internal indirection and stays flagged.
+        let project = crate::project::ProjectCtx::empty();
+        let path = std::path::Path::new("src/utils/all.ts");
+        assert!(!is_exempt_barrel_entry_point(&barrel_diagnostic(path), &project));
+    }
+
+    #[test]
+    fn no_barrel_file_exempts_declared_exports_entry_issue_4727() {
+        // A non-`index` file declared as a package `exports` subpath is a
+        // published entry point, so the delegated diagnostic is dropped too.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"el","exports":{".":"./dist/index.js","./components":"./dist/components.js"}}"#,
+        )
+        .unwrap();
+        let project = crate::project::ProjectCtx::empty();
+        let path = dir.path().join("src/components.ts");
+        assert!(is_exempt_barrel_entry_point(&barrel_diagnostic(&path), &project));
+    }
+
+    #[test]
+    fn barrel_exemption_ignores_other_rule_ids() {
+        // The exemption is scoped to `oxc/no-barrel-file`; an unrelated rule on
+        // an `index.ts` is untouched.
+        let project = crate::project::ProjectCtx::empty();
+        let mut d = barrel_diagnostic(std::path::Path::new("packages/x/index.ts"));
+        d.rule_id = "oxc/no-accumulating-spread".into();
+        assert!(!is_exempt_barrel_entry_point(&d, &project));
+    }
 }
 
 /// Dispatch on the top-level subcommand. Default = lint.
@@ -563,6 +620,24 @@ fn lint_project(cli: &Cli) -> Result<bool> {
     Ok(has_violations)
 }
 
+/// True when an `oxc/no-barrel-file` diagnostic targets a legitimate public-API
+/// entry point that should not be flagged. The delegated oxlint rule scores a
+/// re-export hub by its transitive module count, but an `index.*` file or a
+/// declared package `exports` entry is the intentional surface consumers import
+/// — the barrel is the contract, not an accidental performance hazard. This
+/// mirrors the native `avoid-barrel-files` exemption so the two barrel rules
+/// agree; accidental deep re-export barrels in non-entry modules stay flagged.
+fn is_exempt_barrel_entry_point(
+    diagnostic: &Diagnostic,
+    project: &crate::project::ProjectCtx,
+) -> bool {
+    if diagnostic.rule_id.as_ref() != "oxc/no-barrel-file" {
+        return false;
+    }
+    diagnostic.path.file_stem().and_then(|s| s.to_str()) == Some("index")
+        || project.is_declared_entry_barrel(diagnostic.path.as_ref())
+}
+
 /// Apply every linter (oxlint + custom rules) and collect diagnostics.
 fn collect_all_diagnostics(
     discovered: &[SourceFile],
@@ -716,6 +791,8 @@ fn collect_all_diagnostics(
                 && d.path.file_name().is_some_and(|n| n == "schema.ts"))
         });
     }
+
+    diagnostics.retain(|d| !is_exempt_barrel_entry_point(d, &project));
 
     let clean_files = project.clean_files_snapshot();
     Ok((diagnostics, clean_files))
