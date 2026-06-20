@@ -35,8 +35,8 @@ pub fn register_all() -> Vec<RuleDef> {
         entry(
             "ts-no-typeof-operator",
             Severity::Warning,
-            "The `typeof` operator stands in for validating an unvalidated `unknown`/`any` boundary value.",
-            "Parse the external `unknown` with a schema (e.g. Zod) to obtain a typed value. `typeof` is fine on an already-typed value, in an environment guard (`typeof window`), a caught error, a `z.preprocess` normaliser, or inside a user-defined type predicate (`x is T`).",
+            "`typeof` on an `any` value sniffs at runtime in place of typing it — the `any` means the type was lost.",
+            "Give the value a real type, or narrow it from `unknown` (typeof-narrowing an honest `unknown` is fine — `any` is the smell). Also fine: an environment guard (`typeof window`), a caught error, a `z.preprocess` normaliser, or inside a user-defined type predicate (`x is T`).",
         ),
     ]
 }
