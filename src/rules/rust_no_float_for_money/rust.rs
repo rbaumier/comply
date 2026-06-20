@@ -2,9 +2,9 @@
 //!
 //! Walks struct fields, function parameters, and let bindings.
 //! Flags any binding whose name matches an unambiguously monetary
-//! word (`price`, `balance`, `fee`, `total`, `subtotal`,
-//! `tax`, `discount`, `revenue`, `salary`, `wage`, `fare`, `charge`)
-//! AND whose declared type is `f32` or `f64`.
+//! word (`price`, `balance`, `fee`, `tax`, `discount`, `revenue`,
+//! `salary`, `wage`, `fare`, `charge`) AND whose declared type is
+//! `f32` or `f64`.
 //!
 //! The name list excludes polysemous words like `amount` and `cost`.
 //! `amount`, in non-monetary domains (color-channel/lightness adjustments,
@@ -12,6 +12,16 @@
 //! an `f32`/`f64`. `cost`, in algorithmic domains (query planners,
 //! pathfinding/A*, optimization, ML loss), is a heuristic weight rather
 //! than currency. Both carry no AST signal distinguishing them from money.
+//!
+//! `total`/`subtotal` are monetary only as the bare word, a suffix
+//! (`order_total`, `cart_subtotal`), or a `_total_` infix — never as a
+//! `total_<noun>` prefix, where the trailing noun decides the domain
+//! (`total_weight`, `total_edges` are graph/statistics quantities).
+//! A `total_<money-word>` compound stays flagged because the money word
+//! carries the signal: `total_price` matches `price`, and `total_amount`
+//! matches because `amount` is monetary once disambiguated by `total`.
+//! `total_cost` is excluded — like bare `cost`, a summed planner/A*
+//! heuristic weight as often as money.
 //!
 //! False positives are possible (`average_score`, `tax_rate`) but
 //! the failure mode of using a float for money is bad enough that
@@ -22,10 +32,20 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 
 const KINDS: &[&str] = &["field_declaration", "parameter"];
 
+/// Unambiguously monetary words. Matched as the bare word or as any
+/// snake_case token (prefix, suffix, or infix).
 const MONEY_NAMES: &[&str] = &[
-    "price", "balance", "fee", "total", "subtotal", "tax", "discount", "revenue", "salary", "wage",
-    "fare", "charge",
+    "price", "balance", "fee", "tax", "discount", "revenue", "salary", "wage", "fare", "charge",
 ];
+
+/// Aggregate words that are monetary on their own or as a suffix but
+/// polysemous as a `<word>_<noun>` prefix (`total_weight`, `total_edges`
+/// are graph quantities). Matched bare, as a `_<word>` suffix, or a
+/// `_<word>_` infix. As a `<word>_…` prefix they only count when the
+/// rest of the name carries a monetary token (a `MONEY_NAMES` word or
+/// `amount`), which an aggregate prefix disambiguates from its otherwise
+/// polysemous standalone use.
+const AGGREGATE_NAMES: &[&str] = &["total", "subtotal"];
 
 #[derive(Debug)]
 pub struct Check;
@@ -71,13 +91,34 @@ impl AstCheck for Check {
 
 fn is_money_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    MONEY_NAMES.iter().any(|m| {
-        // Match the exact word OR a snake_case word containing it as a token.
-        lower == *m
-            || lower.starts_with(&format!("{m}_"))
-            || lower.ends_with(&format!("_{m}"))
-            || lower.contains(&format!("_{m}_"))
-    })
+    has_money_token(&lower) || AGGREGATE_NAMES.iter().any(|w| matches_aggregate(&lower, w))
+}
+
+/// True when `lower` contains a `MONEY_NAMES` word as a snake_case token.
+fn has_money_token(lower: &str) -> bool {
+    MONEY_NAMES.iter().any(|word| has_token(lower, word))
+}
+
+fn has_token(lower: &str, word: &str) -> bool {
+    lower == word
+        || lower.starts_with(&format!("{word}_"))
+        || lower.ends_with(&format!("_{word}"))
+        || lower.contains(&format!("_{word}_"))
+}
+
+/// An aggregate word (`total`/`subtotal`) is monetary as the bare word,
+/// a `_<word>` suffix, or a `_<word>_` infix. As a `<word>_…` prefix it
+/// counts only when the rest of the name carries a monetary token
+/// (`total_amount`, `total_price`) — never `total_weight`/`total_cost`.
+fn matches_aggregate(lower: &str, word: &str) -> bool {
+    if lower == word || lower.ends_with(&format!("_{word}")) || lower.contains(&format!("_{word}_"))
+    {
+        return true;
+    }
+    if let Some(rest) = lower.strip_prefix(&format!("{word}_")) {
+        return rest == "amount" || rest.starts_with("amount_") || has_money_token(rest);
+    }
+    false
 }
 
 fn is_float_type(text: &str) -> bool {
@@ -206,5 +247,54 @@ mod tests {
     #[test]
     fn does_not_flag_score_field() {
         assert!(run_on("struct Game { score: f64 }").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_total_weight_graph_param() {
+        // Louvain community detection: `total_weight` is the sum of edge
+        // weights, a graph quantity, not currency. #4748.
+        let src = "fn calculate_delta(node: u32, total_weight: f32) -> f32 { 0.0 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_total_edges_field() {
+        // `total_<domain-noun>` prefix is domain-specific, not money. #4748.
+        assert!(run_on("struct G { total_edges: f64 }").is_empty());
+    }
+
+    #[test]
+    fn flags_order_total_suffix_field() {
+        // `total` as a suffix stays monetary. #4748.
+        assert_eq!(run_on("struct Order { order_total: f64 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_bare_total_field() {
+        assert_eq!(run_on("struct Order { total: f64 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_total_amount_field() {
+        // `total_<money-noun>` compound stays monetary. #4748.
+        assert_eq!(run_on("struct Cart { total_amount: f64 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_total_price_field() {
+        assert_eq!(run_on("struct Cart { total_price: f64 }").len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_total_cost_field() {
+        // `total_cost` is a summed planner/pathfinding heuristic weight as
+        // often as money — same polysemy as bare `cost`. #3776, #4748.
+        assert!(run_on("struct Plan { total_cost: f64 }").is_empty());
+    }
+
+    #[test]
+    fn flags_total_amount_due_field() {
+        // Multi-token money compound stays flagged. #4748.
+        assert_eq!(run_on("struct Invoice { total_amount_due: f64 }").len(), 1);
     }
 }
