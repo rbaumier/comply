@@ -2,6 +2,8 @@
 //!
 //! Component names in Vue templates should be PascalCase.
 
+use rustc_hash::FxHashSet;
+
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::vue_template_helpers::{extract_elements, is_vue_file};
@@ -220,12 +222,136 @@ fn is_pascal_case(name: &str) -> bool {
     name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
+/// Convert a kebab-case or lowercase template tag to its PascalCase form.
+/// `disabled` → `Disabled`, `basic-usage` → `BasicUsage`. Vue's template
+/// compiler treats both spellings as the same component, so this is the name
+/// to look up against the script's in-scope component identifiers.
+fn tag_to_pascal_case(tag: &str) -> String {
+    let mut out = String::with_capacity(tag.len());
+    let mut capitalize_next = true;
+    for c in tag.chars() {
+        if c == '-' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            out.push(c.to_ascii_uppercase());
+            capitalize_next = false;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Collect the PascalCase component names registered in the SFC's `<script>`
+/// blocks. These are the values a template can use as components: value
+/// imports (`import Disabled from './Disabled.vue'`, `import { Foo } from
+/// './x'`) and Options-API `components: { Bar }` registrations. A kebab-case
+/// template tag that maps to one of these is the documented kebab-case
+/// spelling of a PascalCase-registered component and must not be flagged.
+/// Type-only imports (`import type { User }`) are excluded: a type is never a
+/// component, so a lowercase tag colliding with a type name still fires.
+fn script_pascal_case_identifiers(source: &str) -> FxHashSet<String> {
+    let mut tree_sitter_parser = tree_sitter::Parser::new();
+    let mut idents = FxHashSet::default();
+    if tree_sitter_parser
+        .set_language(&tree_sitter_vue_updated::language())
+        .is_err()
+    {
+        return idents;
+    }
+    let Some(tree) = tree_sitter_parser.parse(source, None) else {
+        return idents;
+    };
+    for block in crate::rules::vue_sfc::extract_scripts(&tree, source) {
+        collect_import_bindings(block.text, &mut idents);
+        collect_component_registrations(block.text, &mut idents);
+    }
+    idents
+}
+
+/// Add the PascalCase value-import bindings from each `import ... from '...'`
+/// statement. Default, named, and namespace bindings all count; `import type`
+/// statements are skipped because their bindings are types, not components.
+fn collect_import_bindings(text: &str, idents: &mut FxHashSet<String>) {
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        let Some(after_import) = trimmed.strip_prefix("import ") else {
+            continue;
+        };
+        let after_import = after_import.trim_start();
+        // `import type { ... }` / `import type X` bind types, never components.
+        if after_import.starts_with("type ") || after_import.starts_with("type{") {
+            continue;
+        }
+        // The clause is everything before the `from` keyword (side-effect
+        // imports like `import './x'` have no clause and contribute nothing).
+        let clause = after_import.split(" from ").next().unwrap_or(after_import);
+        for ident in scan_identifiers(clause) {
+            if ident != "type" && is_pascal_case(ident) {
+                idents.insert(ident.to_string());
+            }
+        }
+    }
+}
+
+/// Add PascalCase keys from an Options-API `components: { Foo, Bar }` block.
+/// Only the identifiers inside the braces immediately following `components:`
+/// are collected, so unrelated PascalCase names elsewhere in script are not.
+fn collect_component_registrations(text: &str, idents: &mut FxHashSet<String>) {
+    let mut rest = text;
+    while let Some(pos) = rest.find("components") {
+        let after = rest[pos + "components".len()..].trim_start();
+        let Some(after_colon) = after.strip_prefix(':') else {
+            rest = &rest[pos + "components".len()..];
+            continue;
+        };
+        let after_colon = after_colon.trim_start();
+        let Some(body) = after_colon.strip_prefix('{') else {
+            rest = &rest[pos + "components".len()..];
+            continue;
+        };
+        let end = body.find('}').unwrap_or(body.len());
+        for ident in scan_identifiers(&body[..end]) {
+            if is_pascal_case(ident) {
+                idents.insert(ident.to_string());
+            }
+        }
+        rest = &body[end..];
+    }
+}
+
+/// Extract JS/TS identifier tokens (`[A-Za-z_$][A-Za-z0-9_$]*`) from a slice
+/// of script text. Used on import clauses and registration bodies, not on
+/// whole scripts, so only names in those constructs are returned.
+fn scan_identifiers(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut out = Vec::new();
+    let mut i = 0;
+    let is_start = |b: u8| b.is_ascii_alphabetic() || b == b'_' || b == b'$';
+    let is_part = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
+    while i < len {
+        if is_start(bytes[i]) {
+            let start = i;
+            i += 1;
+            while i < len && is_part(bytes[i]) {
+                i += 1;
+            }
+            out.push(&text[start..i]);
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !is_vue_file(ctx.path) {
             return Vec::new();
         }
         let mut diagnostics = Vec::new();
+        let script_components = script_pascal_case_identifiers(ctx.source);
         for elem in extract_elements(ctx.source) {
             // Skip HTML built-in tags, web components, and Vue built-ins.
             if is_html_builtin(elem.tag) || is_vue_builtin(elem.tag) {
@@ -233,6 +359,13 @@ impl TextCheck for Check {
             }
             // Non-HTML, non-PascalCase component name.
             if !is_pascal_case(elem.tag) {
+                // Vue resolves a kebab-case/lowercase tag to its PascalCase
+                // equivalent. When that PascalCase name is a component in
+                // script scope (imported or registered), the spelling is the
+                // documented kebab-case form, not a naming violation.
+                if script_components.contains(&tag_to_pascal_case(elem.tag)) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
                     line: elem.line,
@@ -317,6 +450,52 @@ mod tests {
         // elements (camelCase per spec), not Vue components.
         let src = "<template>\n  <svg><filter id=\"f\">\n    <feFlood flood-opacity=\"0\" />\n    <feColorMatrix type=\"matrix\" values=\"0 0 0 0 0\" />\n    <feGaussianBlur stdDeviation=\"2.7\" />\n    <feBlend mode=\"normal\" />\n  </filter></svg>\n</template>";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_kebab_alias_of_pascal_case_import() {
+        // Issue #4709: a lowercase template tag whose PascalCase form is
+        // imported in `<script setup>` is the documented kebab-case spelling
+        // of that component, not a naming violation. (`<basic-usage>` is
+        // already exempt via the hyphenated web-component branch, so this
+        // test drives the new path through the single-word lowercase tags.)
+        let src = "<script setup lang=\"ts\">\nimport Disabled from './Disabled.vue';\nimport Required from './Required.vue';\nimport Autosize from './Autosize.vue';\n</script>\n\n<template>\n  <disabled />\n  <required />\n  <autosize />\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_kebab_alias_of_named_import() {
+        // A named value import also registers a component in template scope.
+        let src = "<script setup lang=\"ts\">\nimport { MyWidget } from './widgets';\n</script>\n\n<template>\n  <my-widget />\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_kebab_alias_of_options_api_registration() {
+        // Options-API `components: { Foo }` registration also exempts the
+        // kebab-case spelling of the registered component.
+        let src = "<script>\nexport default {\n  components: { FooBar },\n};\n</script>\n\n<template>\n  <foo-bar />\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_lowercase_component_without_matching_import() {
+        // Negative-space guard: a lowercase tag with no corresponding
+        // PascalCase import or registration must still fire.
+        let src = "<script setup lang=\"ts\">\nimport Disabled from './Disabled.vue';\n</script>\n\n<template>\n  <disabled />\n  <required />\n</template>";
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("required"));
+    }
+
+    #[test]
+    fn flags_lowercase_tag_matching_type_only_import() {
+        // Boundary: a type-only import is not a component, so a lowercase tag
+        // colliding with the type name is still a genuine violation.
+        let src = "<script setup lang=\"ts\">\nimport type { User } from './types';\n</script>\n\n<template>\n  <user />\n</template>";
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("user"));
     }
 
     #[test]
