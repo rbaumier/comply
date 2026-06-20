@@ -8,6 +8,14 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// True when the leading `./` of a `new URL()` first argument is redundant and
+/// can be stripped without changing resolution: there must be a non-empty path
+/// segment after `./`. A bare `"./"` is exempt — it resolves to the base's
+/// directory (not the base itself), so removing the prefix changes the result.
+fn is_redundant_dot_slash(value: &str) -> bool {
+    matches!(value.strip_prefix("./"), Some(rest) if !rest.is_empty())
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::NewExpression]
@@ -40,7 +48,7 @@ impl OxcCheck for Check {
             if let oxc_ast::ast::Argument::TemplateLiteral(tpl) = first_arg
                 && tpl.quasis.len() == 1 {
                     let raw = tpl.quasis[0].value.raw.as_str();
-                    if raw.starts_with("./") {
+                    if is_redundant_dot_slash(raw) {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, new_expr.span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -58,7 +66,7 @@ impl OxcCheck for Check {
             return;
         };
 
-        if !lit.value.as_str().starts_with("./") {
+        if !is_redundant_dot_slash(lit.value.as_str()) {
             return;
         }
 
@@ -72,5 +80,63 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    // #4845: bare `./` resolves to the base's directory; stripping it would
+    // change the URL to the file itself, so it must NOT be flagged.
+    #[test]
+    fn allows_bare_dot_slash_string() {
+        assert!(run_on("const u = new URL('./', import.meta.url);").is_empty());
+    }
+
+    // #4845: same exemption for the template-literal form.
+    #[test]
+    fn allows_bare_dot_slash_template() {
+        assert!(run_on("const u = new URL(`./`, jsonUrl);").is_empty());
+    }
+
+    // A genuinely redundant `./` before a real path segment stays flagged.
+    #[test]
+    fn flags_dot_slash_with_segment() {
+        let d = run_on("const u = new URL('./file.js', import.meta.url);");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Remove the `./` prefix"));
+    }
+
+    // The redundant `./` is also flagged in the template-literal form.
+    #[test]
+    fn flags_dot_slash_with_segment_template() {
+        assert_eq!(run_on("const u = new URL(`./file.js`, base);").len(), 1);
+    }
+
+    // A relative URL without the `./` prefix is already correct.
+    #[test]
+    fn allows_bare_segment() {
+        assert!(run_on("const u = new URL('file.js', import.meta.url);").is_empty());
     }
 }
