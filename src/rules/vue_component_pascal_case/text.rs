@@ -167,11 +167,25 @@ const VUE_BUILTIN_COMPONENTS: &[&str] = &[
     "router-link",
 ];
 
+/// Custom-renderer built-in components that are intentionally lowercase
+/// framework escape hatches, not user-defined components. `primitive` is the
+/// TresJS built-in that mounts a raw Three.js `Object3D` into the scene graph
+/// (analogous to React Three Fiber's `<primitive>`); its name is fixed by the
+/// renderer API, so requiring PascalCase would break it. Matched
+/// case-sensitively because these names are reserved only in their lowercase
+/// spelling.
+const RENDERER_BUILTIN_COMPONENTS: &[&str] = &["primitive"];
+
 /// Returns `true` for Vue framework built-in components (case-insensitive).
 fn is_vue_builtin(tag: &str) -> bool {
     VUE_BUILTIN_COMPONENTS
         .iter()
         .any(|builtin| builtin.eq_ignore_ascii_case(tag))
+}
+
+/// Returns `true` for custom-renderer built-in components (case-sensitive).
+fn is_renderer_builtin(tag: &str) -> bool {
+    RENDERER_BUILTIN_COMPONENTS.contains(&tag)
 }
 
 /// Returns `true` for HTML/SVG built-in elements and hyphenated web components.
@@ -356,8 +370,10 @@ impl TextCheck for Check {
         let mut diagnostics = Vec::new();
         let script_components = script_pascal_case_identifiers(ctx.source);
         for elem in extract_elements(ctx.source) {
-            // Skip HTML built-in tags, web components, and Vue built-ins.
-            if is_html_builtin(elem.tag) || is_vue_builtin(elem.tag) {
+            // Skip HTML built-in tags, web components, Vue built-ins, and
+            // custom-renderer built-ins (e.g. TresJS `<primitive>`).
+            if is_html_builtin(elem.tag) || is_vue_builtin(elem.tag) || is_renderer_builtin(elem.tag)
+            {
                 continue;
             }
             // Non-HTML, non-PascalCase component name.
@@ -516,6 +532,25 @@ mod tests {
         // elements, not Vue components.
         let src = "<template>\n  <svg>\n    <animateMotion dur=\"2s\" />\n    <glyphRef />\n  </svg>\n</template>";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_tresjs_primitive_builtin() {
+        // Issue #4829: TresJS `<primitive>` is a built-in renderer escape hatch
+        // (mounts a raw Three.js Object3D); its lowercase name is fixed by the
+        // API and must not be flagged.
+        let src = "<template>\n  <primitive :object=\"pool.shadowGroup\" />\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_lowercase_custom_component_alongside_primitive() {
+        // Negative-space guard: a genuine lowercase custom component must still
+        // fire even when a renderer built-in is present.
+        let src = "<template>\n  <primitive :object=\"obj\" />\n  <myWidget />\n</template>";
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("myWidget"));
     }
 
     #[test]
