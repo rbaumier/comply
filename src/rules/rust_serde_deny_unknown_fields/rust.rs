@@ -5,6 +5,10 @@
 //! attribute siblings for `#[serde(deny_unknown_fields)]`. If absent,
 //! flag the struct.
 //!
+//! A `Deserialize` derive whose derive list also contains `Archive` is
+//! rkyv's, not serde's (`Archive` is rkyv-exclusive; rkyv re-exports a
+//! `Deserialize` derive under the same bare name), so it is not flagged.
+//!
 //! Only named-field structs (`field_declaration_list` body) are checked.
 //! Tuple / newtype structs (`ordered_field_declaration_list`) and unit
 //! structs (no body) deserialize via the inner type's deserializer with
@@ -178,7 +182,19 @@ fn derives_deserialize(attr_text: &str) -> bool {
     // counts). A custom derive that merely *contains* the substring, such
     // as `ConfigDeserialize`, is a different trait and must not trigger
     // the requirement.
-    derive_paths(attr_text).any(|path| final_segment(path) == "Deserialize")
+    //
+    // A derive list that also derives `Archive` is rkyv's, not serde's:
+    // `Archive` is rkyv-exclusive, and rkyv re-exports a `Deserialize`
+    // derive under that same bare name (`use rkyv::{Archive, Deserialize}`).
+    // Its `Deserialize` is a zero-copy framework trait unrelated to serde
+    // field parsing, so `deny_unknown_fields` is meaningless there. Scope
+    // the check to the *same* derive list so a separate
+    // `#[derive(serde::Deserialize)]` still fires.
+    let paths: Vec<&str> = derive_paths(attr_text).collect();
+    if paths.iter().any(|p| final_segment(p) == "Archive") {
+        return false;
+    }
+    paths.iter().any(|path| final_segment(path) == "Deserialize")
 }
 
 /// Yield each derive entry inside `#[derive(...)]` as a trimmed path
@@ -639,5 +655,61 @@ mod tests {
         // "external api" alone does NOT trigger the exemption — must be "external api response"
         let source = "// fetches data from external api of payment provider\n#[derive(Deserialize)]\nstruct PaymentData { amount: u64 }";
         assert_eq!(run_on(source).len(), 1, "should still flag: comment mentions external api but not 'external api response'");
+    }
+
+    #[test]
+    fn allows_rkyv_deserialize_via_cfg_attr_bare_name() {
+        // chrono `use rkyv::{Archive, Deserialize, Serialize}` then a
+        // feature-gated `derive(Archive, Deserialize, Serialize)` — the bare
+        // `Deserialize` is rkyv's, not serde's. `Archive` in the same derive
+        // list is the rkyv signal. (Closes #4995)
+        let source = "#[derive(Clone)]\n\
+                      #[cfg_attr(\n\
+                          any(feature = \"rkyv\", feature = \"rkyv-16\", feature = \"rkyv-32\", feature = \"rkyv-64\"),\n\
+                          derive(Archive, Deserialize, Serialize),\n\
+                          archive(compare(PartialEq, PartialOrd))\n\
+                      )]\n\
+                      pub struct DateTime { datetime: NaiveDateTime, offset: i32 }";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: rkyv `Deserialize` (co-derived with `Archive`) flagged as serde"
+        );
+    }
+
+    #[test]
+    fn allows_rkyv_deserialize_plain_derive() {
+        // Even without cfg_attr, a `derive(Archive, Deserialize)` is rkyv's.
+        let source = "#[derive(Archive, Deserialize, Serialize)]\nstruct Pos { x: i32, y: i32 }";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: rkyv `Deserialize` co-derived with `Archive` flagged as serde"
+        );
+    }
+
+    #[test]
+    fn still_flags_serde_deserialize_without_archive() {
+        // Negative space: a genuine serde `Deserialize` (no `Archive` in the
+        // derive list) missing `deny_unknown_fields` is still flagged.
+        let source = "use serde::Deserialize;\n#[derive(Deserialize)]\nstruct Config { rate: u32 }";
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "should still flag: serde Deserialize without Archive is the real target"
+        );
+    }
+
+    #[test]
+    fn does_not_flag_combined_rkyv_and_serde_in_one_derive_list() {
+        // Boundary: a single derive list carrying both `Archive` (rkyv) and a
+        // disambiguated serde `Deserialize` is deliberately NOT flagged — the
+        // `Archive` signal wins to keep the common rkyv FP suppressed. This
+        // (rare) co-derive form is an accepted trade-off; a separate serde
+        // derive attribute still fires (see flags_fully_qualified_serde_deserialize).
+        let source =
+            "#[derive(rkyv::Archive, serde::Deserialize)]\nstruct Pos { x: i32, y: i32 }";
+        assert!(
+            run_on(source).is_empty(),
+            "accepted trade-off: Archive co-derive suppresses the serde warning in one list"
+        );
     }
 }
