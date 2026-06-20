@@ -20,10 +20,19 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 
 const KINDS: &[&str] = &["string_literal", "raw_string_literal"];
 
+/// Matches a genuine `CREATE INDEX` DDL statement, not the bare words
+/// "create index" appearing in prose. A real statement always names the
+/// index and the table it indexes, so we require the full
+/// `CREATE [UNIQUE] INDEX [CONCURRENTLY] [IF NOT EXISTS] <name> ON <table>`
+/// shape — the trailing `ON <table>` clause is what separates DDL from an
+/// English sentence like "failed to create index for X".
 fn create_index_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"(?i)\bCREATE\s+(?:UNIQUE\s+)?INDEX\b").expect("static regex compiles")
+        Regex::new(
+            r#"(?i)\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?[`"\[]?[A-Za-z_][\w.$]*[`"\]]?\s+ON\s+[`"\[]?[A-Za-z_]"#,
+        )
+        .expect("static regex compiles")
     })
 }
 
@@ -245,6 +254,29 @@ mod tests {
     #[test]
     fn flags_rust_create_unique_index() {
         let src = r#"fn f() { let q = "CREATE UNIQUE INDEX idx_x ON t(c);"; }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Regression for #4771: the words "create index" in an English error
+    // message (search-engine index, not SQL DDL) must not fire. The
+    // discriminator is the missing `ON <table>` clause.
+    #[test]
+    fn ignores_english_create_index_error_message() {
+        let src = r#"fn f() -> &'static str { "Missing required index builder argument when open/create index: 'x'" }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_create_index_expect_description() {
+        let src = r#"fn f() { let _ = make_index().expect("create index"); }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // A genuine embedded DDL statement still gets flagged when it has no
+    // rationale comment.
+    #[test]
+    fn flags_create_index_if_not_exists() {
+        let src = r#"fn f() { let q = "CREATE INDEX IF NOT EXISTS idx_x ON t(c);"; }"#;
         assert_eq!(run_on(src).len(), 1);
     }
 }
