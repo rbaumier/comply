@@ -21,6 +21,9 @@
 //! content, not executed code. A computed that builds a string of code (an
 //! exporter) is pure even though its output contains `.value =`. `${...}`
 //! interpolation spans inside template literals are code and stay checked.
+//! Regex literals (`/.../`) are not recognized as strings — a backtick inside
+//! one would mis-open a template literal; this is consistent with not
+//! re-parsing TS and is vanishingly rare inside a computed body.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -223,10 +226,14 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
         let set_range = set_block_range(body);
         let mask = non_code_mask(body);
         let mut line_start = 0usize;
-        for (line_off, line) in body.lines().enumerate() {
+        // Split on '\n' (not `.lines()`) so a trailing '\r' stays inside the
+        // segment and `seg.len() + 1` advances the byte cursor exactly — the
+        // cursor must stay aligned with `mask`'s byte offsets. `\r` only ever
+        // trails a line, so it never shifts a marker/assignment match offset.
+        for (line_off, line) in body.split('\n').enumerate() {
             let cur_start = line_start;
             let cur_end = cur_start + line.len();
-            line_start += line.len() + 1; // +1 for the stripped '\n'
+            line_start += line.len() + 1; // +1 for the consumed '\n'
             if let Some((set_open, set_close)) = set_range {
                 // Skip a line whose span overlaps the `set` block range — covers
                 // both a single-line `set(v) { ... }` and a multi-line body.
@@ -254,9 +261,12 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
                     break;
                 }
             }
-            let assigns = line
-                .match_indices(".value =")
-                .any(|(off, _)| is_code(off) && line[off..].get(8..9) != Some("="));
+            const VALUE_ASSIGN: &str = ".value =";
+            let line_bytes = line.as_bytes();
+            let assigns = line.match_indices(VALUE_ASSIGN).any(|(off, _)| {
+                // Reject `.value ==` / `.value ===` (comparison, not assignment).
+                is_code(off) && line_bytes.get(off + VALUE_ASSIGN.len()) != Some(&b'=')
+            });
             if assigns {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
@@ -411,5 +421,18 @@ mod tests {
     fn allows_value_assign_in_comment() {
         let sfc = "<script setup>\nconst c = computed(() => {\n  // other.value = 2\n  return 1\n})\n</script>";
         assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn crlf_keeps_mask_aligned_with_real_assignment() {
+        // CRLF terminators must not desync the byte cursor from the mask. Two
+        // template-literal marker lines precede the real one: if the cursor
+        // miscounts `\r\n` as one byte, the accumulated drift unmasks a
+        // templated `emit(` and produces extra false positives. Only the
+        // executed `emit(z)` on line 5 must be flagged.
+        let sfc = "<script setup>\r\nconst c = computed(() => {\r\n  const a = `emit(x)`\r\n  const b = `emit(y)`\r\n  emit(z)\r\n  return a + b\r\n})\r\n</script>";
+        let diags = run(sfc);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 5);
     }
 }
