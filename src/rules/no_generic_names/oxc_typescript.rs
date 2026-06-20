@@ -23,7 +23,7 @@ const BANNED_WORDS: &[&str] = &[
     "anything", "whatever", "dict", "vec", "tup", "bool", "int", "float", "char", "byte", "ptr",
     "ret", "out", "vars", "response", "responses", "request", "requests", "entity", "entities",
     "dto", "resource", "resources", "entry", "entries", "chunk", "chunks", "blob", "elem", "comp",
-    "func", "widget", "record", "records", "body", "doc", "idx", "curr", "opts", "cfg", "found",
+    "func", "widget", "record", "records", "body", "doc", "idx", "curr", "cfg", "found",
 ];
 
 const PARAM_ALLOWED_WORDS: &[&str] = &["value", "item"];
@@ -2083,7 +2083,7 @@ mod tests {
         // A sample across the new whole-name additions — placeholders,
         // type-stub abbreviations, and backend fillers all fire as bare names.
         for name in [
-            "stub", "response", "entity", "dict", "idx", "opts", "cfg", "body", "doc", "record",
+            "stub", "response", "entity", "dict", "idx", "cfg", "body", "doc", "record",
             "vec", "blob", "comp",
         ] {
             let src = format!("function f() {{ const {name} = compute(); return {name}; }}");
@@ -2185,5 +2185,23 @@ mod tests {
         assert!(run(src).is_empty(), "`el` element abbreviation must NOT be flagged");
         assert!(run(r#"function teardown(el: Element) { return el; }"#).is_empty());
         assert!(run(r#"const el = document.querySelector(".x");"#).is_empty());
+    }
+
+    #[test]
+    fn allows_opts_options_abbreviation_issue_4944() {
+        // Regression for #4944 — `opts` is the universally-recognized short form
+        // of "options" across the JS/TS ecosystem (Webpack, Babel, Node core,
+        // plugin/config APIs), not a vague placeholder.
+        let src = r#"const opts = getOptions(); const fixedItemSize = getFixedItemSize(opts.itemSize);"#;
+        assert!(run(src).is_empty(), "`opts` options abbreviation must NOT be flagged");
+        assert!(run(r#"function configure(opts: Options) { return opts; }"#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_data_and_temp_after_opts_exemption_issue_4944() {
+        // Negative space: removing `opts` from the banned list must not weaken
+        // genuinely generic names — `data` and `temp` keep firing.
+        assert_eq!(run(r#"const data = fetchData();"#).len(), 1);
+        assert_eq!(run(r#"function f() { const temp = compute(); return temp; }"#).len(), 1);
     }
 }
