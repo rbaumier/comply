@@ -71,6 +71,9 @@ fn has_name(body: &str) -> bool {
     };
     let cleaned = first.trim_start_matches('[').trim_end_matches(']');
     let name = cleaned.split('=').next().unwrap_or("");
+    // Some projects mark required params with a trailing `*` (e.g. `@param {T} name*`);
+    // strip a single trailing marker so the name before it is still recognized.
+    let name = name.strip_suffix('*').unwrap_or(name);
     is_valid_ident(name)
 }
 
@@ -155,5 +158,17 @@ mod tests {
     fn allows_optional_param_name() {
         let src = "/**\n * @param {string} [id] - optional\n */\nfunction f(id) {}";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_trailing_asterisk_required_marker() {
+        let src = "/**\n * @param {string} dataPath* the dataPath\n * @param {any} val* value\n */\nfunction f(dataPath, val) {}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_missing_name_with_only_asterisk() {
+        let src = "/**\n * @param {string} *\n */\nfunction f(x) {}";
+        assert_eq!(run(src).len(), 1);
     }
 }
