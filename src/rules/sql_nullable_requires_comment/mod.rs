@@ -2,6 +2,7 @@
 
 mod text;
 mod oxc_typescript;
+mod vue;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -37,7 +38,7 @@ pub fn register() -> RuleDef {
                 Language::Tsx,
                 Backend::Oxc(Box::new(oxc_typescript::Check)),
             ),
-            (Language::Vue, Backend::Text(Box::new(text::Check))),
+            (Language::Vue, Backend::TreeSitter(Box::new(vue::Check))),
             (Language::Sql, Backend::Text(Box::new(text::Check))),
         ],
     }
