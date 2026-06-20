@@ -177,6 +177,21 @@ mod tests {
     }
 
     #[test]
+    fn allows_border_bool_prop_on_element_plus_table() {
+        // Element Plus: `border` is a documented Boolean prop of `<el-table>`,
+        // not the obsolete HTML attribute — it enables cell borders in the
+        // component's rendering. (#4803)
+        let source = "<template>\n  <el-table :data=\"tableData\" border>\n  </el-table>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_border_bool_prop_on_element_plus_descriptions() {
+        let source = "<template>\n  <el-descriptions :column=\"2\" border>\n  </el-descriptions>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
     fn allows_unocss_border_multi_token() {
         let source = "<template>\n  <div border=\"r base\">hi</div>\n</template>";
         assert!(run(source).is_empty());
