@@ -2699,6 +2699,17 @@ impl ProjectCtx {
         {
             names.insert("default");
         }
+        // `vite-plugin-fake-server` glob-discovers every module under `mock/`/
+        // `mocks/` and consumes its `export default defineFakeRoute(...)` as mock
+        // API endpoints by directory convention, never through a static import.
+        // Gated on the plugin dependency so a plain `mock/` directory in a project
+        // without it stays subject to the rule; scoped to `default` so an ordinary
+        // named export in a mock file is still flaggable.
+        if crate::rules::path_utils::is_vite_fake_server_mock_file(path)
+            && self.uses_vite_plugin_fake_server(path)
+        {
+            names.insert("default");
+        }
         names
     }
 
@@ -2735,6 +2746,20 @@ impl ProjectCtx {
         self.effective_package_jsons(path)
             .iter()
             .any(|pkg| pkg.has_dep_or_engine("unplugin-auto-import"))
+    }
+
+    /// True when the effective `package.json` chain for `path` declares the
+    /// `vite-plugin-fake-server` dependency (any section). The plugin
+    /// glob-discovers every module under its configured `include` directory
+    /// (`mock/`/`mocks/`) at build/dev time and registers its `export default
+    /// defineFakeRoute(...)` as mock API endpoints, never through a static
+    /// import, so this gates the mock-file `default` exemption to projects
+    /// actually using the plugin.
+    #[must_use]
+    pub fn uses_vite_plugin_fake_server(&self, path: &Path) -> bool {
+        self.effective_package_jsons(path)
+            .iter()
+            .any(|pkg| pkg.has_dep_or_engine("vite-plugin-fake-server"))
     }
 
     /// True when the effective `package.json` chain for `path` declares the

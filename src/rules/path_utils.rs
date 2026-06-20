@@ -1083,6 +1083,19 @@ pub fn is_nuxt_plugin_file(path: &Path) -> bool {
         == Some("plugins")
 }
 
+/// True when `path` is a `vite-plugin-fake-server` mock module: any file under a
+/// `mock/` or `mocks/` directory (the plugin's default `include` target, matched
+/// as a path segment so the whole subtree counts). The plugin glob-discovers
+/// every file in that directory at build/dev time and registers its `export
+/// default defineFakeRoute(...)` as mock API endpoints by directory convention,
+/// never through a static import, so the `default` export has no importer yet is
+/// live. Matched on the directory segment alone; the caller's
+/// `vite-plugin-fake-server` dependency gate keeps a plain `mock/` directory in a
+/// project without the plugin subject to the rule.
+pub fn is_vite_fake_server_mock_file(path: &Path) -> bool {
+    has_path_segment(path, &["mock", "mocks"])
+}
+
 /// True when `path` is a Nuxt auto-imported file: a file under a `composables/`
 /// or `utils/` directory (client-side auto-import) or under a `server/utils/`
 /// directory (Nitro server-side auto-import). Nuxt auto-imports every export of
@@ -1533,6 +1546,30 @@ mod aux_path_tests {
         // An unrelated directory whose name merely contains `plugins` does not
         // qualify; only the exact `plugins/` parent segment matches.
         assert!(!is_nuxt_plugin_file(Path::new("src/myplugins/wagmi.ts")));
+    }
+
+    #[test]
+    fn vite_fake_server_mock_file_segments() {
+        // Issue #4798: `vite-plugin-fake-server` glob-discovers every file under
+        // its `include` directory (`mock/`/`mocks/`) and consumes the `export
+        // default defineFakeRoute(...)` by directory convention.
+        assert!(is_vite_fake_server_mock_file(Path::new("mock/login.ts")));
+        assert!(is_vite_fake_server_mock_file(Path::new("mocks/user.ts")));
+        // The plugin scans the whole subtree, so nested mock files qualify too.
+        assert!(is_vite_fake_server_mock_file(Path::new(
+            "mock/system/user.ts"
+        )));
+        assert!(is_vite_fake_server_mock_file(Path::new(
+            "src/mock/login.ts"
+        )));
+        // A directory whose name merely contains `mock` does not qualify; only
+        // the exact `mock`/`mocks` path segment matches.
+        assert!(!is_vite_fake_server_mock_file(Path::new(
+            "src/mockups/login.ts"
+        )));
+        assert!(!is_vite_fake_server_mock_file(Path::new(
+            "src/api/login.ts"
+        )));
     }
 
     #[test]
