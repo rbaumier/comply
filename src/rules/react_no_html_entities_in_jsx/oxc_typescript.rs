@@ -44,6 +44,14 @@ impl OxcCheck for Check {
     ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
 
+        // HTML entities in JSX are useless only because React decodes raw
+        // characters automatically. Vue `defineComponent`/TSX, Solid, Preact, …
+        // process their JSX with a different runtime where entities like `&gt;`
+        // are idiomatic, so this React-specific advice does not apply there.
+        if crate::oxc_helpers::is_non_react_jsx_file(ctx.source, ctx.project, ctx.path) {
+            return diagnostics;
+        }
+
         // JSXText.value and StringLiteral.value are the *parsed* values
         // (entities already decoded). Scan the raw source slice instead.
         for node in semantic.nodes().iter() {
@@ -332,5 +340,23 @@ mod tests {
         // `&#39;` does. Keep it.
         let src = r#"const c = <p>&#169; 2026</p>;"#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_vue_tsx_definecomponent_file() {
+        // Vue 3 TSX: `&gt;` is idiomatic in Vue JSX text, not React advice.
+        // Regression for #5014.
+        let src = r#"import { defineComponent } from 'vue';
+import { mount } from '@vue/test-utils';
+const c = <span class="my-sep">&gt;</span>;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_react_tsx_with_same_entity() {
+        // A genuine React file with the same entity is still flagged.
+        let src = r#"import React from 'react';
+const c = <span>&gt;</span>;"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
