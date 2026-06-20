@@ -49,6 +49,14 @@ crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, 
 
     if sibling_method_named(node, &name[4..], source) { return; }
 
+    // A `get_$X` method paired with a `set_$X` method in the same impl block is
+    // an accessor pair, not an infallible C-GETTER. The pair follows the
+    // get/set convention (mandated verbatim by scripting-engine property
+    // registration APIs such as Rhai's `register_get_set`/`with_get_set`, which
+    // bind `Type::get_x`/`Type::set_x` by name), so the `get_` prefix is part of
+    // the contract and renaming would desync the pair.
+    if sibling_method_named(node, &format!("set_{}", &name[4..]), source) { return; }
+
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &name_node,
@@ -373,6 +381,31 @@ mod tests {
         // `get_name` strips to `name`, not a primitive type name — the author
         // owns the name and can rename to `name()`.
         let src = "impl Foo {\n    fn get_name(&self) -> String { String::new() }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_get_set_accessor_pair_issue_4816() {
+        // `get_x` paired with `set_x` is a get/set accessor pair, the naming
+        // mandated by Rhai's `with_get_set("x", Self::get_x, Self::set_x)`
+        // property registration — renaming `get_x` to `x` would desync the pair.
+        let src = "impl Vec3 {\n\
+            fn get_x(&mut self) -> INT { self.x }\n\
+            fn set_x(&mut self, x: INT) { self.x = x }\n\
+            fn get_y(&mut self) -> INT { self.y }\n\
+            fn set_y(&mut self, y: INT) { self.y = y }\n\
+        }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_get_prefix_without_set_sibling_issue_4816() {
+        // A `get_x` with no `set_x` counterpart is an ordinary getter, not an
+        // accessor pair — still flagged.
+        let src = "impl Vec3 {\n\
+            fn get_x(&mut self) -> INT { self.x }\n\
+            fn set_y(&mut self, y: INT) { self.y = y }\n\
+        }";
         assert_eq!(run(src).len(), 1);
     }
 
