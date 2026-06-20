@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
-use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Argument, Expression};
 use oxc_span::GetSpan;
 use std::sync::Arc;
@@ -70,6 +70,19 @@ fn has_version_prefix(path: &str) -> bool {
     digit_end == rest.len() || rest.as_bytes()[digit_end] == b'/'
 }
 
+/// True when any `/`-delimited segment of `path` is a version token (`v1`,
+/// `v2`, …). Unlike [`has_version_prefix`], the version may appear anywhere in
+/// the path, not only as the leading segment — a sub-router is mounted at a
+/// prefix such as `/-/npm/v1/security`, where the version sits mid-path.
+fn contains_version_segment(path: &str) -> bool {
+    path.split('/').any(|seg| {
+        let Some(digits) = seg.strip_prefix('v') else {
+            return false;
+        };
+        !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
 fn extract_route_path<'a>(expr: &'a Expression<'a>, source: &'a str) -> Option<&'a str> {
     match expr {
         Expression::StringLiteral(lit) => {
@@ -117,26 +130,48 @@ fn receiver_is_http_client(member: &oxc_ast::ast::StaticMemberExpression) -> boo
     HTTP_CLIENT_RECEIVERS.contains(&obj.name.as_str())
 }
 
+/// When `call` is a router-mount of the form `<recv>.use(<versionedPath>, <ident>)`
+/// (Express `app.use('/v1', router)`), returns the mounted router identifier name.
+/// The version segment may sit anywhere in the mount path (e.g. `/-/npm/v1/x`).
+fn versioned_mounted_router<'a>(call: &'a oxc_ast::ast::CallExpression<'a>) -> Option<&'a str> {
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return None;
+    };
+    if member.property.name.as_str() != "use" {
+        return None;
+    }
+    let mount_path = call.arguments.first()?.as_expression()?;
+    let Expression::StringLiteral(lit) = mount_path else {
+        return None;
+    };
+    if !contains_version_segment(lit.value.as_str()) {
+        return None;
+    }
+    call.arguments[1..].iter().find_map(|arg| match arg {
+        Argument::Identifier(id) => Some(id.name.as_str()),
+        _ => None,
+    })
+}
+
+/// Identifier name of a route registration's receiver (`router` in
+/// `router.get(...)`), when the receiver is a bare identifier.
+fn receiver_ident<'a>(member: &'a oxc_ast::ast::StaticMemberExpression<'a>) -> Option<&'a str> {
+    match &member.object {
+        Expression::Identifier(id) => Some(id.name.as_str()),
+        _ => None,
+    }
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
-    fn interested_kinds(&self) -> &'static [AstType] {
-        &[AstType::CallExpression]
-    }
-
-    fn run<'a>(
+    fn run_on_semantic<'a>(
         &self,
-        node: &oxc_semantic::AstNode<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
-        diagnostics: &mut Vec<Diagnostic>,
-    ) {
-        let AstKind::CallExpression(call) = node.kind() else {
-            return;
-        };
-
+    ) -> Vec<Diagnostic> {
         if is_test_file(ctx.path) {
-            return;
+            return Vec::new();
         }
 
         // Benchmark / example / demo / scaffold scripts register dummy routes
@@ -144,60 +179,84 @@ impl OxcCheck for Check {
         // concern. Reuses the central aux-dir classifier (`benchmarks/`,
         // `bench/`, `perf/`, `examples/`, …) shared across rules.
         if ctx.file.path_segments.in_aux_dir {
-            return;
+            return Vec::new();
         }
 
-        let Expression::StaticMemberExpression(member) = &call.callee else {
-            return;
-        };
-        let name = member.property.name.as_str();
-        if !ROUTE_METHODS.contains(&name) {
-            return;
-        }
-        if receiver_is_http_client(member) {
-            return;
-        }
-
-        let Some(first_arg) = call.arguments.first() else {
-            return;
-        };
-        let Some(first_expr) = first_arg.as_expression() else {
-            return;
-        };
-        let Some(route_path) = extract_route_path(first_expr, ctx.source) else {
-            return;
-        };
-
-        // Distinguish a server route registration from a client HTTP call.
-        // Verb methods (`get`, `post`, …) are overloaded: a framework router
-        // registers `app.get("/users", handler)` (handler after the path) while
-        // an HTTP client requests `client.get("/users")` (path only). The
-        // router-specific `route` method has no client counterpart, so it stays
-        // a route regardless of its arguments.
-        if name != "route" && !call.arguments[1..].iter().any(is_handler_arg) {
-            return;
-        }
-        if has_version_prefix(route_path)
-            || is_infra_path(route_path)
-            || is_oauth_oidc_path(route_path)
-            || is_well_known_path(route_path)
-        {
-            return;
+        // First pass: collect router identifiers mounted at a versioned path
+        // (`app.use('/v1', router)`). Routes registered on such a sub-router
+        // already carry the version at the mount point, so their relative paths
+        // (`router.get('/users')`) must not be flagged. Matching is by
+        // identifier name across the whole file, not lexical scope.
+        let mut versioned_routers: Vec<&str> = Vec::new();
+        for node in semantic.nodes().iter() {
+            if let AstKind::CallExpression(call) = node.kind()
+                && let Some(router) = versioned_mounted_router(call)
+            {
+                versioned_routers.push(router);
+            }
         }
 
-        let span = first_expr.span();
-        let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
-        diagnostics.push(Diagnostic {
-            path: Arc::clone(&ctx.path_arc),
-            line,
-            column,
-            rule_id: super::META.id.into(),
-            message: format!(
-                "Route `{route_path}` does not start with a version prefix (e.g. /v1/\u{2026})."
-            ),
-            severity: Severity::Warning,
-            span: None,
-        });
+        let mut diagnostics = Vec::new();
+        for node in semantic.nodes().iter() {
+            let AstKind::CallExpression(call) = node.kind() else {
+                continue;
+            };
+            let Expression::StaticMemberExpression(member) = &call.callee else {
+                continue;
+            };
+            let name = member.property.name.as_str();
+            if !ROUTE_METHODS.contains(&name) {
+                continue;
+            }
+            if receiver_is_http_client(member) {
+                continue;
+            }
+            if receiver_ident(member).is_some_and(|recv| versioned_routers.contains(&recv)) {
+                continue;
+            }
+
+            let Some(first_arg) = call.arguments.first() else {
+                continue;
+            };
+            let Some(first_expr) = first_arg.as_expression() else {
+                continue;
+            };
+            let Some(route_path) = extract_route_path(first_expr, ctx.source) else {
+                continue;
+            };
+
+            // Distinguish a server route registration from a client HTTP call.
+            // Verb methods (`get`, `post`, …) are overloaded: a framework router
+            // registers `app.get("/users", handler)` (handler after the path)
+            // while an HTTP client requests `client.get("/users")` (path only).
+            // The router-specific `route` method has no client counterpart, so
+            // it stays a route regardless of its arguments.
+            if name != "route" && !call.arguments[1..].iter().any(is_handler_arg) {
+                continue;
+            }
+            if has_version_prefix(route_path)
+                || is_infra_path(route_path)
+                || is_oauth_oidc_path(route_path)
+                || is_well_known_path(route_path)
+            {
+                continue;
+            }
+
+            let span = first_expr.span();
+            let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
+            diagnostics.push(Diagnostic {
+                path: Arc::clone(&ctx.path_arc),
+                line,
+                column,
+                rule_id: super::META.id.into(),
+                message: format!(
+                    "Route `{route_path}` does not start with a version prefix (e.g. /v1/\u{2026})."
+                ),
+                severity: Severity::Warning,
+                span: None,
+            });
+        }
+        diagnostics
     }
 }
 
@@ -463,5 +522,58 @@ mod tests {
         let d = run_at("app.get('/user', () => {})", "src/routes.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("/user"));
+    }
+
+    #[test]
+    fn allows_subrouter_routes_mounted_at_versioned_path() {
+        // Issue #4730 — routes registered on a sub-router are relative paths; the
+        // version lives at the mount point. When the router is mounted at a
+        // versioned path the relative routes must not be flagged.
+        let src = "const router = express.Router();\n\
+            router.post('/audits', express.json({ limit: '10mb' }), handleAudit);\n\
+            router.post('/audits/quick', express.json({ limit: '10mb' }), handleAudit);\n\
+            router.post('/advisories/bulk', express.json({ limit: '10mb' }), handleAudit);\n\
+            app.use('/-/npm/v1/security', router);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_subrouter_mounted_at_leading_version() {
+        // The version may also be the leading mount segment.
+        let src = "const router = express.Router();\n\
+            router.get('/users', handler);\n\
+            app.use('/v1', router);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_subrouter_mounted_at_unversioned_path() {
+        // Negative space: a sub-router mounted at an unversioned path gains no
+        // version, so its relative routes still require a prefix.
+        let src = "const router = express.Router();\n\
+            router.get('/users', handler);\n\
+            app.use('/-/npm/security', router);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_unmounted_router_routes() {
+        // Negative space: a router with no versioned mount in the file is
+        // treated as a top-level route source and still flags.
+        let src = "const router = express.Router();\n\
+            router.get('/users', handler);";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_app_level_route_despite_versioned_mount_of_other_router() {
+        // The mount exemption is per-router: a versioned mount of `router` does
+        // not exempt unversioned routes registered directly on `app`.
+        let src = "const router = express.Router();\n\
+            app.use('/v1', router);\n\
+            app.get('/users', handler);";
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("/users"));
     }
 }
