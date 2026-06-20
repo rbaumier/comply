@@ -11,6 +11,28 @@ use std::sync::Arc;
 
 pub struct Check;
 
+/// Identifiers that introduce a type-level assertion (Vitest / expect-type /
+/// tsd): `expectTypeOf<…>()`, `assertType<…>(value)`. A file using them exercises
+/// the type-space of its declarations through the type checker rather than at
+/// runtime, so an enum declared as the full set of valid values is "used" by the
+/// assertions even when individual members are never referenced as runtime
+/// values.
+const TYPE_ASSERTION_ROOTS: &[&str] = &["expectTypeOf", "assertType"];
+
+/// True when this file is a TypeScript type-test: either by path (tsd/dtslint
+/// `.test-d.ts` / type-test dirs, via [`crate::rules::path_utils::is_type_test_file`])
+/// or by carrying a type-level assertion call (`expectTypeOf` / `assertType`).
+/// In such files enums are type fixtures whose members deliberately span the
+/// type under test, so unreferenced members are intentional — not dead code.
+/// Ordinary runtime `.test.ts`/`.spec.ts` files without type assertions are not
+/// exempt, so genuinely dead enum members in unit tests are still flagged.
+fn is_type_test_context(ctx: &CheckCtx) -> bool {
+    ctx.file.is_type_test_file()
+        || TYPE_ASSERTION_ROOTS
+            .iter()
+            .any(|root| crate::oxc_helpers::source_contains(ctx.source, root))
+}
+
 impl OxcCheck for Check {
     fn prefilter(&self) -> Option<&'static [&'static str]> {
         Some(&["enum"])
@@ -21,6 +43,10 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        if is_type_test_context(ctx) {
+            return Vec::new();
+        }
+
         let mut diagnostics = Vec::new();
         // Map enum_name -> Vec<(member_name, line)>
         let mut enums: FxHashMap<String, Vec<(String, u32)>> = FxHashMap::default();
@@ -183,6 +209,10 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
+    fn run_at(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_gated(&Check, source, path)
+    }
+
     #[test]
     fn flags_unused_member() {
         let source = r#"
@@ -235,5 +265,70 @@ const k = "A" in Looked;
         let diags = run(source);
         assert_eq!(diags.len(), 2);
         assert!(diags.iter().all(|d| d.message.contains("Other")));
+    }
+
+    // Regression for #4986 — a `.test.ts` file driving its enum through
+    // `expectTypeOf` type assertions exercises the full type-space; unreferenced
+    // members are intentional fixtures, not dead code.
+    #[test]
+    fn type_test_file_with_expect_type_of_is_not_flagged() {
+        let source = r#"
+enum DessertMissingValue {
+    COOKIE = 'cookie',
+    CAKE = 'cake',
+    MUFFIN = 'muffin',
+    ANOTHER = 'another',
+}
+const ctxMissingValue = DessertMissingValue.ANOTHER;
+expectTypeOf(t('dessert', { context: ctxMissingValue })).toMatchTypeOf<string>();
+"#;
+        assert!(run_at(source, "test/typescript/custom-types/t.test.ts").is_empty());
+    }
+
+    // `assertType` (tsd / @vitest/expect-type) is also a type-assertion root.
+    #[test]
+    fn assert_type_call_is_not_flagged() {
+        let source = r#"
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+assertType<Color>(Color.Red);
+"#;
+        assert!(run_at(source, "src/widget.test.ts").is_empty());
+    }
+
+    // A tsd/dtslint type-test file (path-based signal) is exempt even without a
+    // type-assertion call in the snippet.
+    #[test]
+    fn type_test_path_is_not_flagged() {
+        let source = r#"
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+const x: Color = Color.Red;
+"#;
+        assert!(run_at(source, "src/schema.test-d.ts").is_empty());
+    }
+
+    // An ordinary runtime unit test without type assertions still flags a
+    // genuinely dead enum member.
+    #[test]
+    fn ordinary_unit_test_still_flags_unused() {
+        let source = r#"
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+const x = Color.Red;
+const y = Color.Green;
+"#;
+        let diags = run_at(source, "src/widget.test.ts");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Blue"));
     }
 }
