@@ -22,9 +22,8 @@ const BANNED_WORDS: &[&str] = &[
     "bleh", "asdf", "qwerty", "zzz", "xxx", "aaa", "bbb", "scratch", "junk", "garbage", "something",
     "anything", "whatever", "dict", "vec", "tup", "bool", "int", "float", "char", "byte", "ptr",
     "ret", "out", "vars", "response", "responses", "request", "requests", "entity", "entities",
-    "dto", "resource", "resources", "entry", "entries", "chunk", "chunks", "blob", "el",
-    "elem", "comp", "func", "widget", "record", "records", "body", "doc", "idx", "curr", "opts",
-    "cfg", "found",
+    "dto", "resource", "resources", "entry", "entries", "chunk", "chunks", "blob", "elem", "comp",
+    "func", "widget", "record", "records", "body", "doc", "idx", "curr", "opts", "cfg", "found",
 ];
 
 const PARAM_ALLOWED_WORDS: &[&str] = &["value", "item"];
@@ -2174,5 +2173,17 @@ mod tests {
         // (`value`/`item` are param-exempt, but `temp` is not).
         let src = r#"const names = list.map(temp => `on${temp}`);"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_el_element_abbreviation_issue_4943() {
+        // Regression for #4943 — `el` is the canonical short form of "element",
+        // the API-mandated first parameter name of Vue custom directive hooks
+        // (`(el, binding, vnode) => …`) and a ubiquitous DOM abbreviation, not a
+        // vague placeholder.
+        let src = r#"function updateState(el: Element, binding: DirectiveBinding) { teardown(el); }"#;
+        assert!(run(src).is_empty(), "`el` element abbreviation must NOT be flagged");
+        assert!(run(r#"function teardown(el: Element) { return el; }"#).is_empty());
+        assert!(run(r#"const el = document.querySelector(".x");"#).is_empty());
     }
 }
