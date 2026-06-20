@@ -9,6 +9,12 @@ pub struct Check;
 
 const SHUTDOWN_SIGNALS: &[&str] = &["SIGTERM", "SIGINT"];
 
+/// Termination-relay events on an event emitter other than `process`. A
+/// `process.exit()` inside a `<emitter>.on("exit"|"close", cb)` callback is
+/// relaying that emitter's outcome to the caller — overwhelmingly a spawned
+/// child process whose status a CI/build runner propagates.
+const EXIT_RELAY_EVENTS: &[&str] = &["exit", "close"];
+
 /// Import specifiers of CLI-argument-parsing frameworks. A file importing one of
 /// these is treated as a CLI entry point, where `process.exit()` is intentional.
 const CLI_FRAMEWORK_SPECIFIERS: &[&str] = &[
@@ -90,7 +96,33 @@ impl OxcCheck for Check {
             }
         }
 
-        // Phase 2: flag process.exit() calls not inside a signal handler.
+        // Phase 1c: find termination-relay handlers, i.e. `<emitter>.on("exit"|
+        // "close", cb)` on a receiver that is NOT `process`. A `process.exit()`
+        // inside such a callback relays the emitter's outcome (typically a spawned
+        // child's exit code). Only inline callbacks are recorded — a handler
+        // passed by name (`emitter.on("exit", onExit)`) is not resolved, which is
+        // the dominant inline-callback form for `.on(...)`.
+        let mut exit_relay_callback_spans: Vec<(u32, u32)> = Vec::new();
+        for node in nodes.iter() {
+            let AstKind::CallExpression(call) = node.kind() else {
+                continue;
+            };
+            if !is_exit_relay_handler(call) {
+                continue;
+            }
+            match call.arguments.get(1) {
+                Some(Argument::ArrowFunctionExpression(arrow)) => {
+                    exit_relay_callback_spans.push((arrow.span.start, arrow.span.end));
+                }
+                Some(Argument::FunctionExpression(func)) => {
+                    exit_relay_callback_spans.push((func.span.start, func.span.end));
+                }
+                _ => {}
+            }
+        }
+
+        // Phase 2: flag process.exit() calls not inside a signal handler or a
+        // termination-relay callback.
         let mut diagnostics = Vec::new();
         for node in nodes.iter() {
             let AstKind::CallExpression(call) = node.kind() else {
@@ -100,6 +132,9 @@ impl OxcCheck for Check {
                 continue;
             }
             if is_in_signal_handler(node, semantic, &signal_callback_spans, &signal_callee_names) {
+                continue;
+            }
+            if is_within_any_span(call.span.start, &exit_relay_callback_spans) {
                 continue;
             }
             let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
@@ -148,6 +183,32 @@ fn is_process_on_signal(call: &oxc_ast::ast::CallExpression) -> bool {
         Argument::StringLiteral(lit) => SHUTDOWN_SIGNALS.contains(&lit.value.as_str()),
         _ => false,
     }
+}
+
+/// True for `<emitter>.on("exit"|"close", cb)` where the receiver is any
+/// expression other than the global `process` (overwhelmingly a spawned
+/// child-process handle). This is the exit-relay idiom: the callback reads the
+/// emitter's outcome and calls `process.exit(code)` to propagate it.
+/// `process.on(...)` is excluded so genuine `process.on("exit", () =>
+/// process.exit())` self-termination stays flagged.
+fn is_exit_relay_handler(call: &oxc_ast::ast::CallExpression) -> bool {
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    if member.property.name.as_str() != "on" {
+        return false;
+    }
+    // Exclude `process.on(...)` — that is handled by the signal-handler path and
+    // self-termination there should remain flagged.
+    if let Expression::Identifier(obj) = &member.object
+        && obj.name.as_str() == "process"
+    {
+        return false;
+    }
+    let Some(Argument::StringLiteral(event)) = call.arguments.first() else {
+        return false;
+    };
+    EXIT_RELAY_EVENTS.contains(&event.value.as_str())
 }
 
 fn is_process_exit(call: &oxc_ast::ast::CallExpression) -> bool {
@@ -370,6 +431,59 @@ yargs(hideBin(process.argv)).parse();
 process.exit(0);
 "#;
         assert!(run(src).is_empty());
+    }
+
+    // Regression: issue #4760 — a CI runner script spawns child processes and
+    // relays their exit code via `process.exit()` inside a `proc.on("exit", ...)`
+    // callback. This is the idiomatic exit-relay pattern, not a code smell.
+    #[test]
+    fn allows_process_exit_in_child_exit_handler() {
+        let src = r#"
+const proc = spawn("cargo test", { cwd: folder, shell: true });
+await new Promise((resolve, _) => {
+  proc.on("exit", () => {
+    if (proc.exitCode > 0) {
+      console.error("FAILED");
+      process.exit(1);
+    } else {
+      resolve();
+    }
+  });
+});
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_process_exit_in_child_close_handler() {
+        let src = r#"
+child.on("close", (code) => {
+  process.exit(code);
+});
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_process_exit_in_child_close_function_handler() {
+        let src = r#"
+child.on("close", function (code) {
+  process.exit(code);
+});
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    // Negative-space guard: `process.on("exit", ...)` is process self-termination,
+    // not relaying a child's status, so a `process.exit()` there stays flagged.
+    #[test]
+    fn still_flags_process_exit_in_process_on_exit_handler() {
+        let src = r#"
+process.on("exit", () => {
+  process.exit(1);
+});
+"#;
+        assert_eq!(run(src).len(), 1);
     }
 
     // Negative-space guard: a regular library/app file (no shebang, no
