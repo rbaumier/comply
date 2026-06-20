@@ -36,6 +36,16 @@ impl OxcCheck for Check {
                         continue;
                     };
                     if id.name.as_str() == "EventEmitter" {
+                        // `new EventEmitter()` typed as a Node.js stream
+                        // (`as Readable`, `: NodeJS.WriteStream`, …) is the
+                        // canonical lightweight stream mock: Node streams extend
+                        // `EventEmitter`, and `EventTarget` lacks the stream
+                        // methods (`write`/`setRawMode`/…), so it cannot satisfy
+                        // that contract. The stream type annotation is the
+                        // author's signal that `EventEmitter` is mandatory here.
+                        if typed_as_node_stream(node.id(), nodes) {
+                            continue;
+                        }
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, new_expr.span.start as usize);
                         diagnostics.push(Diagnostic {
@@ -98,6 +108,72 @@ fn class_emits(class_span: Span, nodes: &oxc_semantic::AstNodes) -> bool {
             && matches!(member.object, Expression::ThisExpression(_))
             && class_span.contains_inclusive(call.span)
     })
+}
+
+/// Node.js stream types whose contract extends `EventEmitter`. The match is on
+/// the rightmost name segment, so both bare (`Readable`) and namespaced
+/// (`NodeJS.WriteStream`) forms are covered. The WHATWG `ReadableStream` /
+/// `WritableStream` are deliberately excluded: those are Web Streams that do not
+/// extend `EventEmitter`.
+const NODE_STREAM_TYPES: &[&str] = &[
+    "Readable",
+    "Writable",
+    "Duplex",
+    "Transform",
+    "PassThrough",
+    "Stream",
+    "ReadStream",
+    "WriteStream",
+];
+
+/// `true` when the node at `node_id` is given a Node.js stream type via a cast
+/// (`as`/`satisfies`/`<T>`) or a variable/parameter annotation. Walks the
+/// enclosing cast chain (`as unknown as NodeJS.WriteStream`), transparently
+/// crossing parentheses, plus the immediate declarator/parameter; stops at the
+/// first ancestor that is neither a paren, a cast, nor a typed binding.
+fn typed_as_node_stream(node_id: oxc_semantic::NodeId, nodes: &oxc_semantic::AstNodes) -> bool {
+    for kind in nodes.ancestor_kinds(node_id) {
+        let annotation = match kind {
+            // Parentheses around the expression are transparent: keep walking.
+            AstKind::ParenthesizedExpression(_) => continue,
+            AstKind::TSAsExpression(e) => Some(&e.type_annotation),
+            AstKind::TSSatisfiesExpression(e) => Some(&e.type_annotation),
+            AstKind::TSTypeAssertion(e) => Some(&e.type_annotation),
+            AstKind::VariableDeclarator(decl) => {
+                return decl
+                    .type_annotation
+                    .as_ref()
+                    .is_some_and(|a| is_node_stream_type(&a.type_annotation));
+            }
+            AstKind::FormalParameter(param) => {
+                return param
+                    .type_annotation
+                    .as_ref()
+                    .is_some_and(|a| is_node_stream_type(&a.type_annotation));
+            }
+            _ => return false,
+        };
+        if let Some(ty) = annotation
+            && is_node_stream_type(ty)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// `true` when `ty` names a Node.js stream type (matching the rightmost segment
+/// of a possibly-qualified name like `NodeJS.WriteStream`).
+fn is_node_stream_type(ty: &TSType) -> bool {
+    let TSType::TSTypeReference(type_ref) = ty else {
+        return false;
+    };
+    let name = match &type_ref.type_name {
+        TSTypeName::IdentifierReference(id) => id.name.as_str(),
+        TSTypeName::QualifiedName(qualified) => qualified.right.name.as_str(),
+        _ => return false,
+    };
+    NODE_STREAM_TYPES.contains(&name)
 }
 
 fn imports_event_emitter_from_ignored(program: &oxc_ast::ast::Program) -> bool {
@@ -194,5 +270,57 @@ mod tests {
             run("class Bus extends EventEmitter {\n  add(fn) {\n    this.on('x', fn);\n  }\n}").len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_new_event_emitter_cast_to_node_stream() {
+        // From the issue: vadimdemedes/ink — `new EventEmitter()` cast to a
+        // Node.js stream type is the canonical lightweight stream mock.
+        assert!(run("const stdin = new EventEmitter() as NodeJS.WriteStream;").is_empty());
+    }
+
+    #[test]
+    fn allows_new_event_emitter_double_cast_to_node_stream() {
+        assert!(
+            run("const stdout = new EventEmitter() as unknown as NodeJS.WriteStream;").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_new_event_emitter_cast_to_bare_stream_type() {
+        assert!(run("const r = new EventEmitter() as Readable;").is_empty());
+    }
+
+    #[test]
+    fn allows_new_event_emitter_with_stream_annotation() {
+        assert!(run("const w: Writable = new EventEmitter();").is_empty());
+    }
+
+    #[test]
+    fn still_flags_plain_new_event_emitter_event_bus() {
+        // A generic event bus with no stream contract: EventTarget is viable.
+        assert_eq!(run("const bus = new EventEmitter();").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_new_event_emitter_cast_to_non_stream_type() {
+        assert_eq!(run("const bus = new EventEmitter() as MyEmitter;").len(), 1);
+    }
+
+    #[test]
+    fn allows_new_event_emitter_parenthesized_cast_to_node_stream() {
+        // Author-written parentheses must not interrupt the cast-chain walk.
+        assert!(run("const s = (new EventEmitter() as unknown) as NodeJS.WriteStream;").is_empty());
+    }
+
+    #[test]
+    fn allows_new_event_emitter_angle_bracket_assertion_to_node_stream() {
+        assert!(run("const r = <Readable>new EventEmitter();").is_empty());
+    }
+
+    #[test]
+    fn still_flags_new_event_emitter_cast_to_web_readable_stream() {
+        // WHATWG `ReadableStream` is a Web Stream, not an EventEmitter.
+        assert_eq!(run("const s = new EventEmitter() as ReadableStream;").len(), 1);
     }
 }
