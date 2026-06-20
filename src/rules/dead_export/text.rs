@@ -100,6 +100,11 @@
 //!     route `default` exports under
 //!     `server/api/**` / `server/routes/**` are handled per-export by the
 //!     framework route-magic-export table, gated the same way.)
+//!   - Quasar SSR server entry — a `server.{js,ts,mjs,mts}` file directly inside
+//!     a `src-ssr/` directory. The Quasar CLI reads its named exports (`create`,
+//!     `listen`, `close`, …) by convention to drive the SSR server lifecycle at
+//!     runtime, never through a static import, so the whole file is exempt. Gated
+//!     on the `quasar` dependency (root or nearest `package.json`).
 //!   - Framework file-system-routing entry points (`is_framework_route_export`) —
 //!     a file matching a well-known routing convention exposes reserved exports
 //!     that the framework's router consumes by name, never through a static
@@ -640,6 +645,17 @@ impl TextCheck for Check {
         if crate::rules::path_utils::is_nuxt_auto_imported_file(&canon)
             && (ctx.project.is_nuxt_for_path(&canon)
                 || ctx.project.uses_unplugin_auto_import(&canon))
+        {
+            return Vec::new();
+        }
+        // Quasar SSR server entry (`src-ssr/server.{js,ts}`) — the Quasar CLI
+        // reads its named exports (`create`, `listen`, `close`, …) by convention
+        // to drive the SSR server lifecycle at runtime, never through a static
+        // import, so every export has no importer yet is live. Gated on the
+        // `quasar` dependency so a same-named file in a non-Quasar project stays
+        // subject to the rule.
+        if crate::rules::path_utils::is_quasar_ssr_entry_file(&canon)
+            && ctx.project.is_quasar_for_path(&canon)
         {
             return Vec::new();
         }
@@ -2243,6 +2259,56 @@ mod tests {
             "a composable export without an auto-import dep must still be flagged: {diags:?}"
         );
         assert!(diags[0].message.contains("toggleDark"));
+    }
+
+    #[test]
+    fn ignores_quasar_ssr_server_entry_exports_issue_4711() {
+        // Regression for #4711 (quasarframework/quasar) — the Quasar CLI reads
+        // `src-ssr/server.js`'s named exports (`create`, `listen`, `close`, …) by
+        // convention to drive the SSR server lifecycle at runtime, never through a
+        // static import, so every export has no importer yet is live.
+        let pkg = r#"{ "dependencies": { "quasar": "^2.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src-ssr/server.js",
+                "export const create = () => {};\n\
+                 export const listen = () => {};\n\
+                 export const close = () => {};\n\
+                 export const serveStaticContent = () => {};\n\
+                 export const injectDevMiddleware = () => {};\n\
+                 export const renderPreloadTag = () => {};\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src-ssr/server.js");
+        assert!(
+            diags.is_empty(),
+            "Quasar SSR server entry exports are framework-consumed: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_server_entry_without_quasar_dep_issue_4711() {
+        // Negative-space guard for #4711 — the exemption is dep-gated. The same
+        // `src-ssr/server.js` named export in a project with no `quasar`
+        // dependency is an ordinary unused export and must still be flagged.
+        // `lodash` (not Express, whose own entry-file convention already covers
+        // `server.js`) isolates the gate to the Quasar dependency.
+        let pkg = r#"{ "dependencies": { "lodash": "^4.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src-ssr/server.js",
+                "export const create = () => {};\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src-ssr/server.js");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a server entry export without the Quasar dep must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("create"));
     }
 
     #[test]
