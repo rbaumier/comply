@@ -68,7 +68,10 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["database", "sql"],
 
-    skip_in_test_dir: false,
+    // Test files may reference `varchar` on purpose — e.g. a DB-driver
+    // integration test exercising the `varchar` type OID / field metadata,
+    // where switching to `text` would change the OID and invalidate the test.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
