@@ -16,6 +16,17 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        // The rule's remedy ("validate and return a Result error") only applies
+        // at a backend request boundary. Syntactic detection can't distinguish a
+        // request input from a React prop or a helper arg, so the scope is
+        // configured by path. When `paths` is non-empty (the default points at
+        // the backend tree), files outside it are not boundaries — skip them.
+        let paths = ctx
+            .config
+            .string_list(super::META.id, "paths", ctx.lang);
+        if !paths.is_empty() && !path_matches_any(ctx.path, &paths) {
+            return Vec::new();
+        }
         let mut diagnostics = Vec::new();
         for node in semantic.nodes().iter() {
             if let AstKind::LogicalExpression(expr) = node.kind() {
@@ -24,6 +35,17 @@ impl OxcCheck for Check {
         }
         diagnostics
     }
+}
+
+/// True if `path` matches at least one glob pattern from `patterns`.
+fn path_matches_any(path: &std::path::Path, patterns: &[String]) -> bool {
+    let path_str = path.to_string_lossy();
+    patterns.iter().any(|pat| {
+        globset::Glob::new(pat)
+            .ok()
+            .map(|g| g.compile_matcher().is_match(path_str.as_ref()))
+            .unwrap_or(false)
+    })
 }
 
 /// True when `id` resolves to a non-optional formal parameter of a named
@@ -180,8 +202,11 @@ impl crate::rules::test_helpers::RunRule for Check {
 mod tests {
     use super::*;
 
+    /// Run under the default backend scope (`src/api/**`) so the rule's
+    /// boundary detection is exercised. Path-scoping is covered separately by
+    /// `skips_*` / `flags_*_under_*` tests.
     fn run_on(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+        crate::rules::test_helpers::run_rule(&Check, source, "src/api/t.ts")
     }
 
     #[test]
@@ -338,5 +363,33 @@ mod tests {
         assert!(run_on(
             "function useTitle() { watch(title, (newValue) => { document.title = newValue ?? \"\"; }); }"
         ).is_empty());
+    }
+
+    #[test]
+    fn skips_react_component_param_outside_backend_scope() {
+        // Issue #4568: a React component's parameter defaulted with `??` under
+        // `src/app/**` is a prop, not a request boundary. The default `paths`
+        // scope (backend only) means the rule does not fire here.
+        assert!(crate::rules::test_helpers::run_rule(
+            &Check,
+            "function Filter(currentValues: readonly string[] | null) { const set = new Set(currentValues ?? []); return set; }",
+            "src/app/components/data-table/filter-control.tsx",
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn flags_boundary_param_under_backend_scope() {
+        // Issue #4568 acceptance: the same `??`-defaulted parameter under
+        // `src/api/**` is a real request boundary and is still flagged.
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                "function handler(currentValues: readonly string[] | null) { const set = new Set(currentValues ?? []); return set; }",
+                "src/api/routes/filters.ts",
+            )
+            .len(),
+            1
+        );
     }
 }

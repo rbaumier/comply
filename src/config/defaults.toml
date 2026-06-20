@@ -134,6 +134,15 @@ overlap_threshold = 0.80
 [rules.jsdoc-missing-example]
 public_patterns = []
 
+# no-nullish-default-on-input flags `??`/`||` defaulting of a function parameter,
+# whose remedy ("validate and return a Result error") only applies at a backend
+# request boundary. Syntactic detection can't tell a request input from a React
+# prop or a helper arg, so the rule is scoped by path: it fires only on files
+# whose path matches at least one of these globs (default: the backend API tree).
+# Set to `[]` to fire everywhere, or point it at your own handler directories.
+[rules.no-nullish-default-on-input]
+paths = ["src/api/**", "**/src/api/**"]
+
 [rules.sql-index-needs-rationale-comment]
 min_rationale_words = 3
 lookback_lines = 3
