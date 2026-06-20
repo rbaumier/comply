@@ -41,6 +41,13 @@ impl OxcCheck for Check {
         if ctx.file.path_segments.in_test_dir {
             return;
         }
+        // Benchmark scripts (e.g. the V8 benchmark suite under `benches/`) are
+        // programs run to measure performance, not production code. Their
+        // numeric constants (lookup tables, algorithm constants, buffer sizes,
+        // iteration counts) cannot reasonably be named.
+        if ctx.file.in_benchmark_dir() {
+            return;
+        }
         if ctx.path.to_string_lossy().contains("/examples/") {
             return;
         }
@@ -245,5 +252,41 @@ mod tests {
     fn flags_genuine_magic_number() {
         let src = r#"function f(price) { return price * 86400; }"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for issue #4800: third-party JS benchmark programs (the V8
+    // benchmark suite: crypto.js, deltablue.js, …) live under `benches/` and are
+    // run by the engine to measure performance, not application code. Their
+    // numeric constants (trig tables, S-boxes) cannot be named, so the rule must
+    // skip them. The assigned RHS values (`99`/`124`/`119`) are the flag-worthy
+    // literals — they are plain expression values, not array indices, so they
+    // would fire absent the exemption. `in_benchmark_dir` is populated only by
+    // the real `FileCtx`, so this must go through `run_rule_gated` (a `run`
+    // against `t.ts` would not set it).
+    #[test]
+    fn allows_magic_numbers_in_benches_dir() {
+        let d = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            "var sBox = []; sBox[3] = 99; sBox[4] = 124; sBox[5] = 119;",
+            "benches/scripts/v8-benches/crypto.js",
+        );
+        assert!(
+            d.is_empty(),
+            "magic numbers in a benchmark script must not be flagged"
+        );
+    }
+
+    #[test]
+    fn flags_magic_number_in_ordinary_source_file() {
+        let d = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            "function f(price) { return price * 86400; }",
+            "src/checkout.ts",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "a magic number in ordinary source must still be flagged"
+        );
     }
 }
