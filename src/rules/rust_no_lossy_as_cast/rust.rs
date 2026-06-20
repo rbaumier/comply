@@ -25,6 +25,11 @@
 //! `// comply-ignore: rust-no-lossy-as-cast — <justification>` to
 //! suppress known-safe casts in that situation.
 //!
+//! A narrowing cast of an unsigned identifier guarded by an enclosing
+//! `if`/`else if` upper bound that proves the value fits the target type —
+//! `if val < 256 { val as u8 }` — is exempt: the branch is entered only when
+//! the value is in range, so the cast cannot overflow.
+//!
 //! Casts that `rust-no-as-numeric-cast` already flags are suppressed here so
 //! the pair emits one diagnostic per span; this rule keeps firing only where
 //! that one does not — notably int `as f32` (no `f32::From` for those sources).
@@ -33,7 +38,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
-    cast_operand_is_enum_discriminant, find_identifier_type, is_in_enum_discriminant,
+    cast_operand_is_enum_discriminant, cast_operand_is_range_guarded, find_identifier_type,
+    is_in_enum_discriminant,
 };
 use crate::rules::rust_no_as_numeric_cast::rust::fires_on_cast;
 
@@ -93,6 +99,9 @@ impl AstCheck for Check {
             return;
         }
         if cast_operand_is_enum_discriminant(node, source_bytes) {
+            return;
+        }
+        if cast_operand_is_range_guarded(node, source_bytes) {
             return;
         }
         let source_type = source_numeric_type(node, source_bytes);
@@ -560,5 +569,41 @@ mod tests {
     #[test]
     fn repro_4677_method_operand_as_f32_not_flagged() {
         assert!(run_on("fn f(s: S) -> f32 { s.value() as f32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_4922_range_guarded_narrowing_not_flagged() {
+        // The msgpack encoder pattern (rmp/src/encode/uint.rs): each `as`
+        // narrowing is guarded by an `if`/`else if` upper bound proving the
+        // value fits the target type. The final `else` widens to u64 (not
+        // flagged).
+        let src = "fn w(val: u64) -> u8 { \
+                   if val < 256 { val as u8 } \
+                   else if val < 65536 { val as u16 } \
+                   else if val < 4294967296 { val as u32 } \
+                   else { val } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_4922_inclusive_guard_not_flagged() {
+        assert!(
+            run_on("fn w(val: u64) -> u8 { if val <= 255 { val as u8 } else { 0 } }").is_empty()
+        );
+    }
+
+    #[test]
+    fn repro_4922_unguarded_narrowing_owned_by_numeric_cast() {
+        // No range guard — a real narrowing, but `rust-no-as-numeric-cast`
+        // owns the span, so this rule suppresses.
+        assert!(run_on("fn f(n: u64) -> u8 { n as u8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_4922_loose_guard_owned_by_numeric_cast() {
+        // The bound exceeds u8's range; the narrowing stays a finding but
+        // `rust-no-as-numeric-cast` owns the span.
+        let src = "fn w(val: u64) -> u8 { if val < 1000 { val as u8 } else { 0 } }";
+        assert!(run_on(src).is_empty());
     }
 }

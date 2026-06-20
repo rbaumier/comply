@@ -18,6 +18,11 @@
 //! e.g. `(x >> 8) as u8`, `(x & 0xFF) as u8`. The truncation is intentional,
 //! so `try_from` would be wrong; these are left alone.
 //!
+//! A narrowing cast of an unsigned identifier guarded by an enclosing
+//! `if`/`else if` upper bound that proves the value fits the target type —
+//! `if val < 256 { val as u8 }` — is exempt: the branch is entered only when
+//! the value is in range, so the cast cannot overflow.
+//!
 //! Float-target casts (`as f32` / `as f64`) are only flagged when the
 //! source type is statically known to have a matching `From` impl
 //! (`f64: From<{i8,i16,i32,u8,u16,u32,f32}>`, `f32: From<{i8,i16,u8,u16}>`).
@@ -30,8 +35,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
-    cast_operand_is_enum_discriminant, find_identifier_type, is_in_enum_discriminant,
-    is_in_test_context,
+    cast_operand_is_enum_discriminant, cast_operand_is_range_guarded, find_identifier_type,
+    is_in_enum_discriminant, is_in_test_context,
 };
 
 const KINDS: &[&str] = &["type_cast_expression"];
@@ -134,6 +139,9 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
         return false;
     }
     if cast_operand_is_enum_discriminant(node, source_bytes) {
+        return false;
+    }
+    if cast_operand_is_range_guarded(node, source_bytes) {
         return false;
     }
     let source_type = source_numeric_type(node, source_bytes);
@@ -588,5 +596,48 @@ mod tests {
     fn repro_4804_char_literal_as_i32_not_flagged() {
         // i32 holds the full 21-bit code-point range losslessly.
         assert!(run_on("fn f() -> i32 { 'a' as i32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_4922_range_guarded_narrowing_not_flagged() {
+        // The msgpack encoder pattern (rmp/src/encode/uint.rs): each `as`
+        // narrowing is guarded by an `if`/`else if` upper bound proving the
+        // value fits the target type. The final `else` widens to u64 (not
+        // flagged).
+        let src = "fn w(val: u64) -> u8 { \
+                   if val < 256 { val as u8 } \
+                   else if val < 65536 { val as u16 } \
+                   else if val < 4294967296 { val as u32 } \
+                   else { val } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_4922_inclusive_guard_not_flagged() {
+        // `val <= u8::MAX` proves the value fits u8.
+        assert!(
+            run_on("fn w(val: u64) -> u8 { if val <= 255 { val as u8 } else { 0 } }").is_empty()
+        );
+    }
+
+    #[test]
+    fn repro_4922_unguarded_narrowing_still_flagged() {
+        // No range guard — the narrowing stays a real finding.
+        assert_eq!(run_on("fn f(n: u64) -> u8 { n as u8 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_4922_loose_guard_still_flagged() {
+        // The bound exceeds u8's range, so the value can still overflow.
+        let src = "fn w(val: u64) -> u8 { if val < 1000 { val as u8 } else { 0 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_4922_signed_source_still_flagged() {
+        // A signed source can be negative; an upper-bound guard alone does not
+        // prove it fits the unsigned target.
+        let src = "fn w(val: i64) -> u8 { if val < 256 { val as u8 } else { 0 } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
