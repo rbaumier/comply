@@ -841,6 +841,41 @@ export function Fixture() {
     }
 
     #[test]
+    fn skips_all_rules_in_webpack_umd_bundle_issue4799() {
+        // Issue #4799: pre-compiled wasm/webpack glue shipped verbatim from a
+        // Vite `public/` static-assets dir heads its output with the named UMD
+        // wrapper. Every rule must skip it; here `no-magic-numbers` would
+        // otherwise fire dozens of times on a generated bundle.
+        let bundle = "(function webpackUniversalModuleDefinition(root, factory) {\n  if (typeof exports === \"object\" && typeof module === \"object\")\n    module.exports = factory();\n  else if (typeof define === \"function\" && define.amd) define([], factory);\n  else root[\"cheetahCapture\"] = factory();\n})(self, function () {\n  return { a: 42, b: 1337, c: 255, run() { return 42 + 1337 + 255; } };\n});\n";
+        let diagnostics = lint_in_memory(
+            Path::new("public/wasm/index.js"),
+            Language::JavaScript,
+            bundle,
+            default_static_config(),
+            None,
+        );
+        assert!(
+            diagnostics.is_empty(),
+            "a webpack UMD bundle must be exempt from all rules, got: {diagnostics:?}"
+        );
+
+        // Negative space: a hand-authored static asset in the SAME `public/` dir
+        // with magic numbers is still linted — the exemption is content-scoped to
+        // the bundle wrapper, not the `public/` path.
+        let hand = lint_in_memory(
+            Path::new("public/config.js"),
+            Language::JavaScript,
+            "export function score() { return 42 + 1337 + 255; }\n",
+            default_static_config(),
+            None,
+        );
+        assert!(
+            hand.iter().any(|d| d.rule_id == "no-magic-numbers"),
+            "hand-authored source in public/ must still be flagged, got: {hand:?}"
+        );
+    }
+
+    #[test]
     fn skips_relaxed_directory_rules_in_examples() {
         let source = r#"fn load() -> anyhow::Result<String> {
     let s = std::fs::read_to_string("x")?;
