@@ -19,7 +19,9 @@
 //! In `no_std` crates a manual `core::fmt::Display` impl is the correct
 //! pattern, so the rule is silenced when the file source mentions
 //! `no_std` (covering `#![no_std]` and `#![cfg_attr(not(feature =
-//! "std"), no_std)]`) or when the nearest `Cargo.toml` lists `"no-std"`
+//! "std"), no_std)]`), when the crate root (`src/lib.rs` / `src/main.rs`)
+//! declares `#![no_std]` — which exempts every file in the crate, not just
+//! the one declaring it — or when the nearest `Cargo.toml` lists `"no-std"`
 //! in `[package].categories`.
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -41,6 +43,7 @@ crate::ast_check! { on ["enum_item"] => |node, source, ctx, diagnostics|
     if name_text.ends_with("Kind") { return; }
 
     if ctx.project.nearest_cargo_manifest(ctx.path).is_some_and(|m| m.is_no_std()) { return; }
+    if ctx.project.crate_root_is_no_std(ctx.path) { return; }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -204,6 +207,57 @@ edition = "2021"
             run_on_with_cargo(STD_CARGO_TOML, "pub enum MyError { Fail }").len(),
             1,
             "must keep flagging pub error enums in std crates"
+        );
+    }
+
+    /// Run the rule on a submodule file `dir/src/util/error.rs` in a crate
+    /// whose root is `dir/src/lib.rs`, so `crate_root_is_no_std` resolves the
+    /// crate's `#![no_std]` declaration from a *different* file than the one
+    /// being flagged.
+    fn run_on_submodule_with_lib(
+        cargo_toml_contents: &str,
+        lib_rs: &str,
+        submodule_src: &str,
+    ) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("Cargo.toml"), cargo_toml_contents).unwrap();
+        fs::create_dir_all(dir.path().join("src/util")).unwrap();
+        fs::write(dir.path().join("src/lib.rs"), lib_rs).unwrap();
+        let submodule_path = dir.path().join("src/util/error.rs");
+        fs::write(&submodule_path, submodule_src).unwrap();
+        crate::rules::test_helpers::run_rule(&Check, submodule_src, &submodule_path)
+    }
+
+    const MATCH_ERROR_KIND_SRC: &str = "pub enum MatchErrorKind { InvalidInputAnchored, UnsupportedEmpty }\n\
+         impl core::fmt::Display for MatchErrorKind {\n\
+             fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { Ok(()) }\n\
+         }";
+
+    /// Regression for #4475 (aho-corasick): the crate root `src/lib.rs`
+    /// declares `#![no_std]` while the flagged enum lives in the submodule
+    /// `src/util/error.rs`. The categories list has no `"no-std"` entry, so
+    /// only the crate-root `#![no_std]` can exempt it. `MatchErrorKind` is
+    /// renamed here to drop the `*Kind` suffix to prove the exemption, not the
+    /// classifier rule, is what silences the diagnostic.
+    #[test]
+    fn allows_submodule_enum_when_crate_root_is_no_std() {
+        let src = MATCH_ERROR_KIND_SRC.replace("MatchErrorKind", "MatchError");
+        assert!(
+            run_on_submodule_with_lib(STD_CARGO_TOML, "#![no_std]\n", &src).is_empty(),
+            "must not flag a submodule enum when the crate root declares #![no_std]"
+        );
+    }
+
+    /// Negative counterpart of #4475: same submodule enum, but the crate root
+    /// is a plain `std` crate. The diagnostic must still fire — the crate-root
+    /// exemption only triggers on a real `#![no_std]` declaration.
+    #[test]
+    fn still_flags_submodule_enum_in_std_crate() {
+        let src = MATCH_ERROR_KIND_SRC.replace("MatchErrorKind", "MatchError");
+        assert_eq!(
+            run_on_submodule_with_lib(STD_CARGO_TOML, "", &src).len(),
+            1,
+            "must keep flagging a submodule enum when the crate root is std"
         );
     }
 }
