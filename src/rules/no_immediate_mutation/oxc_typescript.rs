@@ -260,8 +260,9 @@ fn is_method_call_on_text(stmt: &str, var_name: &str, methods: &[&str]) -> bool 
 /// access `.foo` / `[i]` closes back to depth 0 before the `=`. An `=` nested
 /// inside `(...)` belongs to a callback (`arr.forEach((x) => {...})` or
 /// `arr.forEach((x) => { m[x] = y })`), not an assignment to the receiver, so it
-/// is ignored. The arrow `=>` and the comparison operators `==`/`!=`/`<=`/`>=`
-/// are excluded as well.
+/// is ignored. The arrow `=>`, the comparison operators `==`/`!=`/`<=`/`>=`, and
+/// the logical assignments `&&=`/`||=`/`??=` (conditional, so not chainable onto
+/// the initialiser) are excluded as well.
 fn is_property_assignment_text(stmt: &str, var_name: &str) -> bool {
     if !stmt.starts_with(var_name) {
         return false;
@@ -281,7 +282,16 @@ fn is_property_assignment_text(stmt: &str, var_name: &str) -> bool {
                 let prev = if i > 0 { Some(bytes[i - 1]) } else { None };
                 if next != Some(b'>')
                     && next != Some(b'=')
-                    && !matches!(prev, Some(b'!') | Some(b'<') | Some(b'>') | Some(b'='))
+                    && !matches!(
+                        prev,
+                        Some(b'!')
+                            | Some(b'<')
+                            | Some(b'>')
+                            | Some(b'=')
+                            | Some(b'&')
+                            | Some(b'|')
+                            | Some(b'?')
+                    )
                 {
                     return true;
                 }
@@ -458,5 +468,35 @@ mod tests {
     fn allows_spread_copy_dynamic_index_in_function_body() {
         let src = "function f(currentValue, index, val) {\n  const values = [...currentValue];\n  values[index] = val;\n  return values;\n}";
         assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // --- Regressions for #4489: logical assignment operators (`&&=`/`||=`/`??=`)
+    // are conditional assignments — `x &&= y` is `x && (x = y)` — and the RHS
+    // usually references the object itself, so they can't be chained onto the
+    // initialiser and must not be flagged. ---
+
+    // The repro (nuxt-modules/i18n): spread copy + `&&=`.
+    #[test]
+    fn allows_object_logical_and_assignment() {
+        assert!(run_on("const u = { ...route }; u.name &&= f();").is_empty());
+    }
+
+    // `||=` after a spread copy.
+    #[test]
+    fn allows_object_logical_or_assignment() {
+        assert!(run_on("const u = { ...route }; u.value ||= getDefault();").is_empty());
+    }
+
+    // `??=` after a spread copy.
+    #[test]
+    fn allows_object_nullish_assignment() {
+        assert!(run_on("const u = { ...route }; u.opts ??= {};").is_empty());
+    }
+
+    // The unconditional simple `=` after a spread copy stays flagged — the core
+    // of the rule, unchanged by the logical-assignment exemption.
+    #[test]
+    fn flags_object_simple_assignment_after_spread() {
+        assert_eq!(run_on("const u = { ...route }; u.name = f();").len(), 1);
     }
 }
