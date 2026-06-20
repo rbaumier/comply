@@ -32,6 +32,13 @@ impl OxcCheck for Check {
     ) {
         let AstKind::CallExpression(call) = node.kind() else { return };
 
+        // Test files deliberately combine `.optional().default()` to exercise the
+        // interaction (e.g. `.required()` unwrapping) — the combination is intentional
+        // there, not a redundancy to fix.
+        if crate::rules::path_utils::is_extraneous_test_file(ctx.path) {
+            return;
+        }
+
         let Expression::StaticMemberExpression(member) = &call.callee else { return };
         let method = member.property.name.as_str();
         if method != "optional" && method != "default" {
@@ -84,6 +91,10 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, path)
+    }
+
     #[test]
     fn flags_optional_then_default() {
         assert_eq!(
@@ -113,5 +124,39 @@ mod tests {
     #[test]
     fn allows_optional_with_other_method_between() {
         assert!(run_on("const s = z.string().optional().nullable();").is_empty());
+    }
+
+    #[test]
+    fn allows_optional_then_default_in_test_file() {
+        assert!(
+            run_on_path(
+                "const s = z.string().optional().default('asdf');",
+                "tests/partial.test.ts",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_optional_then_default_in_spec_file() {
+        assert!(
+            run_on_path(
+                "const s = z.string().optional().default('asdf');",
+                "src/schema.spec.ts",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_optional_then_default_in_source_file() {
+        assert_eq!(
+            run_on_path(
+                "const s = z.string().optional().default('asdf');",
+                "src/schema.ts",
+            )
+            .len(),
+            1
+        );
     }
 }

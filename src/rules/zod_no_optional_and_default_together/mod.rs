@@ -1,5 +1,7 @@
 //! zod-no-optional-and-default-together — chaining `.optional()` after
-//! `.default()` (or vice versa) is redundant and hides intent.
+//! `.default()` (or vice versa) is redundant and hides intent. Test files are
+//! exempt: they deliberately combine the two to exercise the interaction (e.g.
+//! how `.required()` unwraps it).
 
 mod oxc_typescript;
 
