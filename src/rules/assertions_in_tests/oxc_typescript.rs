@@ -144,8 +144,24 @@ impl OxcCheck for Check {
                                 )
                         }
                         Expression::StaticMemberExpression(member) => {
+                            // `node:assert/strict` (also re-exported by poku as
+                            // the `strict` named export) exposes the same
+                            // assertion functions on a `strict` object:
+                            // `strict.strictEqual(a, b)`, `strict.equal(a, b)`,
+                            // `strict.deepEqual(…)`, … each throw `AssertionError`
+                            // on a failed check, so a call to one is an assertion.
+                            // Keyed on the `strict` receiver *and* a node:assert
+                            // method name so an unrelated `foo.equal()` is not
+                            // blanket-accepted.
+                            let strict_assert = matches!(
+                                &member.object,
+                                Expression::Identifier(obj) if obj.name.as_str() == "strict"
+                            ) && crate::rules::test_assertion_helpers::is_node_assert_function(
+                                member.property.name.as_str(),
+                            );
                             member.property.name.as_str() == "expect"
                                 || member.property.name.starts_with("expect")
+                                || strict_assert
                         }
                         _ => false,
                     };
@@ -879,6 +895,39 @@ mod tests {
     #[test]
     fn still_flags_assertionless_test_without_no_throw_name() {
         let src = r#"it("returns the status", () => { response().status = 403 });"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #4933 — poku re-exports node:assert/strict as the `strict`
+    // named export, so assertions read `strict.strictEqual(a, b, label)` /
+    // `strict.equal(a, b)` with the assertion function on a `strict` receiver.
+    // These throw `AssertionError` on a failed check, so the test does assert.
+    #[test]
+    fn allows_poku_strict_member_assertion() {
+        let src = r#"
+            import { describe, it, strict } from 'poku';
+            await describe("Text Parser", async () => {
+                await it("label", async () => {
+                    const [results] = await connection.query({ sql });
+                    strict.strictEqual(typeof results[0].total, "string", "label");
+                });
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_poku_strict_equal_assertion() {
+        let src = r#"it("x", () => { strict.equal(a, b); });"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative-space guard for #4933: a member call on an unrelated receiver
+    // whose method happens to share a node:assert name (`foo.equal(...)`) is not
+    // an assertion — the `strict` receiver is required.
+    #[test]
+    fn still_flags_equal_member_on_non_strict_receiver() {
+        let src = r#"it("x", () => { foo.equal(a, b); });"#;
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
