@@ -4,13 +4,25 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{PropertyKey, TSCallSignatureDeclaration, TSLiteral, TSSignature, TSType};
+use oxc_ast::ast::{
+    FormalParameters, PropertyKey, TSCallSignatureDeclaration, TSLiteral, TSSignature,
+    TSType, TSTypeAnnotation,
+};
 use oxc_span::GetSpan;
 use rustc_hash::FxHashSet;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 pub struct Check;
+
+/// The parameter list and declared return type of an overload signature, the only
+/// two facets that determine whether a group of overloads can be merged. Lets the
+/// unifiability heuristics treat call signatures and named method signatures
+/// uniformly.
+struct SigShape<'a> {
+    params: &'a FormalParameters<'a>,
+    return_type: Option<&'a TSTypeAnnotation<'a>>,
+}
 
 /// The single string-literal value typing a call signature's first parameter,
 /// e.g. `"/geocode"` for `(path: "/geocode"): T`. `None` when the signature does
@@ -47,63 +59,59 @@ fn call_signatures_are_path_discriminated<'a>(
     true
 }
 
-/// The source text of a call signature's declared return type, or `None` when it
-/// has no annotation (an inferred return is treated as a distinct return type).
-fn return_type_text<'a>(call: &TSCallSignatureDeclaration<'a>, source: &'a str) -> Option<&'a str> {
-    let annotation = call.return_type.as_ref()?;
+/// The source text of a signature's declared return type, or `None` when it has
+/// no annotation (an inferred return is treated as a distinct return type).
+fn return_type_text<'a>(shape: &SigShape<'a>, source: &'a str) -> Option<&'a str> {
+    let annotation = shape.return_type?;
     Some(&source[annotation.type_annotation.span().start as usize..annotation.type_annotation.span().end as usize])
 }
 
-/// The source text of a call signature's parameter list (including the
-/// parentheses), e.g. `(pinia: Pinia | undefined)`.
-fn params_text<'a>(call: &TSCallSignatureDeclaration<'a>, source: &'a str) -> &'a str {
-    &source[call.params.span.start as usize..call.params.span.end as usize]
+/// The source text of a signature's parameter list (including the parentheses),
+/// e.g. `(pinia: Pinia | undefined)`.
+fn params_text<'a>(shape: &SigShape<'a>, source: &'a str) -> &'a str {
+    &source[shape.params.span.start as usize..shape.params.span.end as usize]
 }
 
-/// Whether the call signatures form an "overloaded narrowing" group: every
-/// signature has a *distinct* parameter list *and* a *distinct* return type, so
-/// each parameter shape maps to its own narrowed return (the
+/// Whether the signatures form an "overloaded narrowing" group: every signature
+/// has a *distinct* parameter list *and* a *distinct* return type, so each
+/// parameter shape maps to its own narrowed return (the
 /// `(p: Pinia): Pinia` / `(p: undefined): undefined` / `(p: Pinia | undefined):
 /// Pinia | undefined` idiom). Unifying them into one union-parameter signature
 /// would collapse the per-variant return into the union and erase the
 /// narrowing, so such a group is not a smell.
-fn call_signatures_narrow_return_type<'a>(
-    calls: &[&'a TSCallSignatureDeclaration<'a>],
-    source: &'a str,
-) -> bool {
-    if calls.len() < 2 {
+fn signatures_narrow_return_type<'a>(shapes: &[SigShape<'a>], source: &'a str) -> bool {
+    if shapes.len() < 2 {
         return false;
     }
     let mut params = FxHashSet::default();
     let mut returns = FxHashSet::default();
-    for call in calls {
-        let Some(return_type) = return_type_text(call, source) else {
+    for shape in shapes {
+        let Some(return_type) = return_type_text(shape, source) else {
             return false;
         };
-        if !params.insert(params_text(call, source)) || !returns.insert(return_type) {
+        if !params.insert(params_text(shape, source)) || !returns.insert(return_type) {
             return false;
         }
     }
     true
 }
 
-/// Whether a group of call signatures could be merged into one with a union or
-/// optional trailing parameter.
+/// Whether a group of overload signatures could be merged into one with a union
+/// or optional trailing parameter.
 ///
 /// * Parameter counts may differ by at most one — a larger gap would need more
 ///   than one optional trailing parameter, which the overloads do not express.
 /// * When the counts *do* differ, the unified form has to add an optional
 ///   trailing parameter, so the declared return types must be identical;
 ///   otherwise the merge would erase the per-overload return-type distinction
-///   (the curried zero-arg vs one-arg overload idiom).
+///   (the curried zero-arg vs one-arg overload idiom, and the D3-style
+///   getter/setter idiom where the 0-arg getter returns the value and the 1-arg
+///   setter returns `this`).
 /// * When the counts are equal the merge unions a single parameter's type, which
 ///   is safe only when the signatures are not an overloaded-narrowing group
 ///   (distinct parameter lists each mapping to a distinct, narrower return).
-fn call_signatures_are_unifiable<'a>(
-    calls: &[&'a TSCallSignatureDeclaration<'a>],
-    source: &'a str,
-) -> bool {
-    let mut counts = calls.iter().map(|c| c.params.items.len());
+fn signatures_are_unifiable<'a>(shapes: &[SigShape<'a>], source: &'a str) -> bool {
+    let mut counts = shapes.iter().map(|s| s.params.items.len());
     let Some(first) = counts.next() else {
         return true;
     };
@@ -116,27 +124,38 @@ fn call_signatures_are_unifiable<'a>(
         return false;
     }
     if min == max {
-        return !call_signatures_narrow_return_type(calls, source);
+        return !signatures_narrow_return_type(shapes, source);
     }
 
-    let first_return = return_type_text(calls[0], source);
-    calls[1..].iter().all(|c| return_type_text(c, source) == first_return)
+    let first_return = return_type_text(&shapes[0], source);
+    shapes[1..].iter().all(|s| return_type_text(s, source) == first_return)
+}
+
+/// One overload group sharing a name: the source offsets where each signature
+/// starts (for diagnostics) and the parameter/return shapes (for unifiability).
+#[derive(Default)]
+struct SigGroup<'a> {
+    offsets: Vec<u32>,
+    shapes: Vec<SigShape<'a>>,
 }
 
 fn collect_signatures<'a>(
-    members: &[TSSignature<'a>],
+    members: &'a [TSSignature<'a>],
     ctx: &CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut seen: FxHashMap<String, Vec<u32>> = FxHashMap::default();
+    let mut seen: FxHashMap<String, SigGroup<'a>> = FxHashMap::default();
     let mut call_sigs: Vec<&TSCallSignatureDeclaration<'a>> = Vec::new();
 
     for sig in members {
         match sig {
             TSSignature::TSCallSignatureDeclaration(call) => {
-                seen.entry("[[call]]".to_string())
-                    .or_default()
-                    .push(call.span.start);
+                let group = seen.entry("[[call]]".to_string()).or_default();
+                group.offsets.push(call.span.start);
+                group.shapes.push(SigShape {
+                    params: &call.params,
+                    return_type: call.return_type.as_deref(),
+                });
                 call_sigs.push(call);
             }
             TSSignature::TSMethodSignature(method) => {
@@ -145,19 +164,25 @@ fn collect_signatures<'a>(
                     PropertyKey::StringLiteral(s) => s.value.to_string(),
                     _ => continue,
                 };
-                seen.entry(name).or_default().push(method.span.start);
+                let group = seen.entry(name).or_default();
+                group.offsets.push(method.span.start);
+                group.shapes.push(SigShape {
+                    params: &method.params,
+                    return_type: method.return_type.as_deref(),
+                });
             }
             _ => {}
         }
     }
 
-    if call_signatures_are_path_discriminated(&call_sigs)
-        || !call_signatures_are_unifiable(&call_sigs, ctx.source)
-    {
+    if call_signatures_are_path_discriminated(&call_sigs) {
         seen.remove("[[call]]");
     }
 
-    for (name, offsets) in &seen {
+    seen.retain(|_, group| signatures_are_unifiable(&group.shapes, ctx.source));
+
+    for (name, group) in &seen {
+        let offsets = &group.offsets;
         if offsets.len() < 2 {
             continue;
         }
@@ -337,5 +362,37 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    // Regression #4751: D3-style getter/setter method overloads — a 0-arg getter
+    // returning the current value and a 1-arg setter returning `this` for
+    // chaining. Different arity *and* different return types: no single signature
+    // expresses both without collapsing the per-arity returns into a union.
+    #[test]
+    fn allows_d3_getter_setter_method_overloads() {
+        assert!(
+            run_on(
+                "export interface Cloud<T extends CloudWord> {\n  \
+                 timeInterval(): number;\n  \
+                 timeInterval(interval: number): Cloud<T>;\n  \
+                 size(): [number, number];\n  \
+                 size(size: [number, number]): Cloud<T>;\n  \
+                 rotate(): (datum: T, index: number) => number;\n  \
+                 rotate(rotate: number | ((datum: T, index: number) => number)): Cloud<T>;\n}"
+            )
+            .is_empty()
+        );
+    }
+
+    // Guard: a method overload pair differing only by a single parameter and
+    // sharing the same return type is genuinely unifiable, so still fires.
+    #[test]
+    fn flags_unifiable_method_overloads() {
+        let diags = run_on(
+            "interface Foo {\n  \
+             bar(a: string): void;\n  \
+             bar(a: number): void;\n}",
+        );
+        assert_eq!(diags.len(), 1);
     }
 }
