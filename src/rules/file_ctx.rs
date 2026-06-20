@@ -261,6 +261,16 @@ pub(crate) fn is_generated_content(source: &str) -> bool {
             .trim_start_matches("//")
             .trim_end_matches("*/")
             .trim();
+        // ANTLR (and similar parser generators) head their output with a
+        // tool-attribution banner: "Generated from <grammar> by ANTLR
+        // <version>" — no `@generated` / `do not edit` marker. Anchoring to a
+        // leading "generated from " followed by " by " keeps this from matching
+        // prose like "Types are generated from the spec by openapi-typescript".
+        if let Some(rest) = inner.to_ascii_lowercase().strip_prefix("generated from ")
+            && rest.contains(" by ")
+        {
+            return true;
+        }
         if inner == "eslint-disable" {
             return true;
         }
@@ -1128,6 +1138,27 @@ mod tests {
         // generated without a `@generated` / `do not edit` marker.
         let src = "// Copyright (c) Microsoft Corporation.\n// Licensed under the MIT License.\n\n/**\n * This file contains only generated model types and their (de)serializers.\n * Disable the following rules for internal models with '_' prefix.\n */\n/* eslint-disable @typescript-eslint/naming-convention */\nexport interface LinkedResource { uniqueName: string; id: string; }\n";
         assert!(is_generated_content(src));
+    }
+
+    #[test]
+    fn antlr_generated_from_banner_is_generated_issue4678() {
+        // Issue #4678: ANTLR4-generated TS parsers head their output with a
+        // tool-attribution banner and no `@generated` / `do not edit` marker.
+        let src = "// Generated from src/grammar/TSQLParser.g4 by ANTLR 4.9.0-SNAPSHOT\n\nimport { ATN } from \"antlr4ts/atn/ATN\";\n";
+        assert!(is_generated_content(src));
+    }
+
+    #[test]
+    fn prose_generated_from_by_is_not_generated_issue4678() {
+        // A hand-written comment that says "generated from … by …" mid-sentence
+        // (not a leading tool-attribution banner) must stay non-generated —
+        // otherwise the whole ruleset would be silenced for that file.
+        assert!(!is_generated_content(
+            "// Types are generated from the OpenAPI spec by openapi-typescript.\nexport interface User { id: string; }\n"
+        ));
+        assert!(!is_generated_content(
+            "// This config is generated from the schema by the build step.\nexport const cfg = {};\n"
+        ));
     }
 
     #[test]
