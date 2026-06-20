@@ -1,11 +1,28 @@
+//! OXC backend for no-dynamic-template — flag dynamic HTML construction via
+//! innerHTML/outerHTML assignments, document.write/insertAdjacentHTML calls, and
+//! the dangerouslySetInnerHTML JSX attribute.
+//!
+//! A compile-time-constant string assigned to innerHTML/outerHTML (a
+//! StringLiteral or a TemplateLiteral with no expressions) is exempt: it carries
+//! no dynamic or user-controlled content, so it is neither a dynamic template nor
+//! an XSS sink.
+
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::AssignmentTarget;
+use oxc_ast::ast::{AssignmentTarget, Expression};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
+
+fn is_static_string(expr: &Expression) -> bool {
+    match expr {
+        Expression::StringLiteral(_) => true,
+        Expression::TemplateLiteral(tpl) => tpl.expressions.is_empty(),
+        _ => false,
+    }
+}
 
 const ASSIGNMENT_PROPS: &[&str] = &["innerHTML", "outerHTML"];
 const CALL_METHODS: &[&str] = &[
@@ -71,6 +88,13 @@ impl OxcCheck for Check {
                 };
                 for prop in ASSIGNMENT_PROPS {
                     if lhs_text.ends_with(prop) {
+                        // A compile-time-constant string (`el.innerHTML = '<div>Hello</div>'`)
+                        // carries no dynamic or user-controlled content, so it is neither a
+                        // dynamic template nor an XSS sink. Same exemption as
+                        // `no-unsanitized-property`'s `is_static_string`.
+                        if is_static_string(&assign.right) {
+                            return;
+                        }
                         emit(ctx, assign.span.start, prop, diagnostics);
                         return;
                     }
@@ -162,5 +186,36 @@ mod tests {
     #[test]
     fn flags_location_href() {
         assert_eq!(run_on("location.href = userInput;").len(), 1);
+    }
+
+    #[test]
+    fn allows_static_innerhtml_string() {
+        assert!(run_on("scratch.innerHTML = '<div>Hello</div>';").is_empty());
+        assert!(run_on("el.innerHTML = '<div></div>';").is_empty());
+    }
+
+    #[test]
+    fn allows_static_innerhtml_template() {
+        assert!(run_on("el.innerHTML = `<p>static</p>`;").is_empty());
+    }
+
+    #[test]
+    fn allows_static_outerhtml_string() {
+        assert!(run_on("el.outerHTML = '<span></span>';").is_empty());
+    }
+
+    #[test]
+    fn flags_dynamic_innerhtml_concat() {
+        assert_eq!(run_on("el.innerHTML = '<b>' + name + '</b>';").len(), 1);
+    }
+
+    #[test]
+    fn flags_dynamic_innerhtml_template() {
+        assert_eq!(run_on("el.innerHTML = `<p>${name}</p>`;").len(), 1);
+    }
+
+    #[test]
+    fn flags_innerhtml_variable() {
+        assert_eq!(run_on("el.innerHTML = userInput;").len(), 1);
     }
 }
