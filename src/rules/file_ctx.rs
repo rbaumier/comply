@@ -229,6 +229,9 @@ fn skip_ws_comments(bytes: &[u8], mut cursor: usize) -> usize {
 pub(crate) fn is_generated_content(source: &str) -> bool {
     let end = source.floor_char_boundary(2048);
     let head = &source[..end];
+    if is_bundled_artifact(head) {
+        return true;
+    }
     for line in head.lines().take(30) {
         let trimmed = line.trim();
         if !(trimmed.starts_with("//")
@@ -285,6 +288,42 @@ pub(crate) fn is_generated_content(source: &str) -> bool {
         }
     }
     false
+}
+
+/// True when the head of `source` is the wrapper of a pre-compiled / bundled
+/// JavaScript artifact rather than hand-written source: a webpack UMD wrapper
+/// or emscripten / wasm-bindgen WebAssembly glue. These build outputs (often
+/// shipped verbatim from a Vite `public/` static-assets directory) carry tool
+/// signatures no developer writes by hand, so they are treated as generated and
+/// exempt from every rule. `head` is the leading slice already bounded by the
+/// caller.
+fn is_bundled_artifact(head: &str) -> bool {
+    // Webpack's UMD output names its wrapper function literally; no hand-written
+    // module shim uses this identifier.
+    if head.contains("webpackUniversalModuleDefinition") {
+        return true;
+    }
+    // emscripten / wasm-bindgen WebAssembly glue: identifier-shaped markers that
+    // appear in the generated loader preamble and never in hand-written code.
+    // The bare `wasm-bindgen` product name is deliberately not matched — it can
+    // occur in a hand-written loader comment or artifact-path string, and real
+    // wasm-bindgen glue always also carries the `__wbindgen_` prefix.
+    if head.contains("__wbindgen_")
+        || head.contains("Module[\"asm\"]")
+        || head.contains("Module['asm']")
+    {
+        return true;
+    }
+    // Generic UMD wrapper (Rollup/Browserify and hand-rolled bundlers): the
+    // CommonJS, AMD, and global-assignment branches co-occur in the wrapper
+    // head. Requiring all three markers — not just one — keeps a file that
+    // merely references `module.exports` or `define` from matching.
+    let has_commonjs = head.contains("typeof exports === \"object\"")
+        || head.contains("typeof exports === 'object'");
+    let has_amd = head.contains("typeof define === \"function\"")
+        || head.contains("typeof define === 'function'");
+    let has_factory = head.contains("factory(");
+    has_commonjs && has_amd && has_factory
 }
 
 /// Filename suffixes used by codegen tools for generated source files
@@ -1188,6 +1227,61 @@ mod tests {
     #[test]
     fn plain_source_is_not_generated() {
         assert!(!is_generated_content("const x = 1;\n"));
+    }
+
+    #[test]
+    fn webpack_umd_wrapper_is_generated_issue4799() {
+        // Issue #4799: emscripten/webpack wasm glue shipped in a Vite `public/`
+        // static-assets dir heads its output with the named UMD wrapper.
+        let src = "(function webpackUniversalModuleDefinition(root, factory) {\n  if (typeof exports === \"object\" && typeof module === \"object\")\n    module.exports = factory();\n  else if (typeof define === \"function\" && define.amd) define([], factory);\n  else root[\"cheetahCapture\"] = factory();\n})(self, function () {\n  return 1;\n});\n";
+        assert!(is_generated_content(src));
+    }
+
+    #[test]
+    fn generic_umd_wrapper_is_generated_issue4799() {
+        // A Rollup/Browserify-style UMD wrapper without the webpack-specific name
+        // still co-occurs the CommonJS + AMD + factory branches.
+        let src = "(function (root, factory) {\n  if (typeof exports === 'object' && typeof module === 'object')\n    module.exports = factory();\n  else if (typeof define === 'function' && define.amd) define([], factory);\n  else root.lib = factory();\n})(this, function () { return {}; });\n";
+        assert!(is_generated_content(src));
+    }
+
+    #[test]
+    fn wasm_bindgen_glue_is_generated_issue4799() {
+        let src = "let wasm;\nexport function __wbindgen_throw(ptr, len) {\n  throw new Error('x');\n}\n";
+        assert!(is_generated_content(src));
+    }
+
+    #[test]
+    fn hand_written_commonjs_is_not_bundled_issue4799() {
+        // A hand-written module that uses `module.exports` and references
+        // `define` is not a UMD wrapper: it lacks the co-occurring branch
+        // signature, so normal source in `public/` is still linted.
+        assert!(!is_generated_content(
+            "const define = require('./define');\nmodule.exports = { run() { return 1; } };\n"
+        ));
+        assert!(!is_generated_content(
+            "// public/config.js — hand-authored static asset\nexport const apiBase = '/api';\n"
+        ));
+    }
+
+    #[test]
+    fn bundled_artifact_sets_is_generated_in_public_dir_issue4799() {
+        let project = ProjectCtx::empty();
+        let bundle = FileCtx::build(
+            Path::new("public/wasm/index.js"),
+            "(function webpackUniversalModuleDefinition(root, factory) {\n  module.exports = factory();\n})(self, function () { return 1; });\n",
+            Language::JavaScript,
+            &project,
+        );
+        assert!(bundle.is_generated);
+        // A hand-authored static asset in the same `public/` dir is still linted.
+        let hand = FileCtx::build(
+            Path::new("public/config.js"),
+            "export const apiBase = '/api';\nexport function init() { return apiBase; }\n",
+            Language::JavaScript,
+            &project,
+        );
+        assert!(!hand.is_generated);
     }
 
     #[test]
