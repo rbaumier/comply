@@ -13,7 +13,8 @@ pub struct Check;
 /// to React code: `.tsx`/`.jsx` files (JSX implies React) or a `.ts`/`.js`
 /// module that imports React. Vue Router (and other frameworks) use a `views/`
 /// convention too but split routes via `component: () => import(...)`, so they
-/// are out of scope.
+/// are out of scope. A `.tsx` file that is actually Vue/Solid/Preact/Qwik/Stencil
+/// JSX passes this coarse gate; the caller refines it with `is_non_react_jsx_file`.
 fn in_react_context(ctx: &CheckCtx) -> bool {
     matches!(ctx.lang, Language::Tsx) || imports_react(ctx.source)
 }
@@ -83,6 +84,15 @@ impl OxcCheck for Check {
         let AstKind::ImportDeclaration(import) = node.kind() else { return };
 
         if !in_react_context(ctx) {
+            return;
+        }
+
+        // A `.tsx` file satisfies `in_react_context` (JSX implies React), but Vue,
+        // Solid, Preact, Qwik, and Stencil author JSX/TSX too. Those frameworks
+        // split routes via their own loaders (`component: () => import(...)`), not
+        // `React.lazy`, so the advice does not apply when the file — or the project —
+        // is non-React JSX.
+        if crate::oxc_helpers::is_non_react_jsx_file(ctx.source, ctx.project, ctx.path) {
             return;
         }
 
@@ -216,6 +226,30 @@ mod tests {
                    import User from './views/User.vue'\n";
         let d = crate::rules::test_helpers::run_rule(&Check, src, "router.ts");
         assert!(d.is_empty());
+    }
+
+    #[test]
+    fn skips_vue_tsx_file_importing_vue() {
+        // vue-pure-admin hook.tsx: a Vue composable authored as `.tsx` (Vue render
+        // functions) that statically imports a `/views/` composable. The `.tsx`
+        // extension satisfies the coarse React gate, but the file imports from
+        // `vue`, so the React.lazy advice must not fire.
+        let src = "import dayjs from 'dayjs';\n\
+                   import { getOperationLogsList } from '@/api/system';\n\
+                   import { usePublicHooks } from '@/views/system/hooks';\n\
+                   import { type Ref, reactive, ref, onMounted } from 'vue';\n\
+                   export function useRole(tableRef: Ref) {}\n";
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "hook.tsx");
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn still_flags_react_tsx_route_import() {
+        // A genuine React route file (`.tsx`, imports `react`) must still be flagged.
+        let src = "import React from 'react';\n\
+                   import Home from './pages/Home';\n";
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "App.tsx");
+        assert_eq!(d.len(), 1);
     }
 
     #[test]
