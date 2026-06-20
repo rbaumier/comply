@@ -9,6 +9,12 @@ crate::ast_check! { on ["const_item", "static_item"] prefilter = ["const", "stat
 
     if super::is_screaming_snake(name) { return; }
 
+    // A `static`/`const` with no initializer is never free-standing Rust: it is a
+    // foreign declaration inside `extern "C" { … }` (ABI-mandated symbol names like
+    // `errno`, `__ImageBase`, which the author cannot rename) or a trait/associated
+    // declaration. Either way the name is not the author's free naming choice.
+    if node.child_by_field_name("value").is_none() { return; }
+
     if allows_non_upper_case_globals(node, source) { return; }
 
     if has_deprecated_attr(node, source) { return; }
@@ -219,6 +225,36 @@ mod tests {
         let diags = run("const en_US: &str = \"en-US\";");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("en_US"));
+    }
+
+    #[test]
+    fn allows_foreign_static_in_extern_block() {
+        // Foreign statics whose names are fixed by the C/PE ABI and cannot be
+        // renamed to SCREAMING_SNAKE_CASE.
+        let src = "extern \"C\" {\n\
+            static errno: c_int;\n\
+            static __ImageBase: IMAGE_DOS_HEADER;\n\
+            }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_unsafe_extern_block_foreign_static() {
+        // The winit case from the issue: a `unsafe extern "C"` (Rust 2024) block
+        // declaring an ABI-mandated PE linker symbol.
+        let src = "unsafe extern \"C\" {\n\
+            static __ImageBase: IMAGE_DOS_HEADER;\n\
+            }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_ordinary_static_outside_extern_block() {
+        // A plain Rust static (with an initializer) still violates the
+        // convention and must keep firing.
+        let diags = run("static foo: u32 = 1;");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("foo"));
     }
 
     #[test]
