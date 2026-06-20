@@ -1,4 +1,4 @@
-//! vue-v-memo-requires-v-for — `v-memo` must be on a `v-for` element (or `v-memo="[]"`).
+//! vue-v-memo-requires-v-for — standalone `v-memo="[]"` is redundant with `v-once`.
 
 mod text;
 
@@ -10,8 +10,8 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "vue-v-memo-requires-v-for",
-    description: "`v-memo` is meaningful on `v-for` loops; elsewhere it's a noise directive.",
-    remediation: "Apply `v-memo` to the element with `v-for`, or use `v-memo=\"[]\"` on a static subtree.",
+    description: "`v-memo=\"[]\"` without `v-for` never re-renders — that's exactly what `v-once` states directly.",
+    remediation: "Replace standalone `v-memo=\"[]\"` with `v-once`, or give `v-memo` a real dependency array.",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["vue"],

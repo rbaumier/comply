@@ -1,8 +1,11 @@
 //! vue-v-memo-requires-v-for AST backend.
 //!
-//! Walks `start_tag` / `self_closing_tag` nodes. For any tag that carries
-//! `v-memo`, require either a sibling `v-for` directive or `v-memo="[]"`
-//! (empty deps) for a static subtree.
+//! Walks `start_tag` / `self_closing_tag` nodes. A `v-memo` with a non-empty
+//! dependency array is a valid standalone subtree memoization (documented Vue
+//! behaviour, with or without `v-for`) and is never flagged. Only `v-memo="[]"`
+//! without a sibling `v-for` is flagged: an empty array never re-renders, which
+//! `v-once` expresses directly. `v-memo="[]"` on a `v-for` element is left
+//! alone (it force-freezes the rendered rows).
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -63,7 +66,7 @@ crate::ast_check! { on ["start_tag", "self_closing_tag"] prefilter = ["v-memo"] 
     if !info.has_vmemo {
         return;
     }
-    if info.has_vfor || info.vmemo_value_empty {
+    if info.has_vfor || !info.vmemo_value_empty {
         return;
     }
     let pos = node.start_position();
@@ -72,7 +75,7 @@ crate::ast_check! { on ["start_tag", "self_closing_tag"] prefilter = ["v-memo"] 
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: super::META.id.into(),
-        message: "`v-memo` without `v-for` only makes sense as `v-memo=\"[]\"` on a static subtree.".into(),
+        message: "`v-memo=\"[]\"` without `v-for` never re-renders; use `v-once` instead.".into(),
         severity: Severity::Warning,
         span: None,
     });
@@ -94,10 +97,17 @@ mod tests {
     }
 
     #[test]
-    fn flags_v_memo_without_v_for() {
-        assert_eq!(
-            run("<template><div v-memo=\"[dep]\">hi</div></template>").len(),
-            1
+    fn allows_standalone_v_memo_with_deps() {
+        // Documented Vue pattern: subtree memoization based on arbitrary
+        // conditions, no `v-for` required. See issue #4923.
+        assert!(run("<template><div v-memo=\"[dep]\">hi</div></template>").is_empty());
+    }
+
+    #[test]
+    fn allows_standalone_v_memo_with_multiple_deps() {
+        // radix-vue ListboxItem.vue:75 — the exact false positive from #4923.
+        assert!(
+            run("<template><Primitive v-memo=\"[isHighlighted, isSelected, disabled, rootContext.focusable.value]\" role=\"option\" /></template>").is_empty()
         );
     }
 
@@ -109,7 +119,26 @@ mod tests {
     }
 
     #[test]
-    fn allows_empty_static_memo() {
-        assert!(run("<template><div v-memo=\"[]\">static</div></template>").is_empty());
+    fn allows_empty_memo_on_v_for() {
+        // `v-memo="[]"` on a `v-for` element force-freezes the rendered rows.
+        assert!(
+            run("<template><div v-for=\"x in xs\" :key=\"x.id\" v-memo=\"[]\">hi</div></template>").is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_empty_standalone_memo() {
+        // `v-memo="[]"` without `v-for` never re-renders — redundant with `v-once`.
+        assert_eq!(
+            run("<template><div v-memo=\"[]\">static</div></template>").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn ignores_non_array_standalone_memo() {
+        // Only a literal empty array is the `v-once` smell; any other value is
+        // treated as a real dependency and left alone (never a false positive).
+        assert!(run("<template><div v-memo=\"foo\">hi</div></template>").is_empty());
     }
 }
