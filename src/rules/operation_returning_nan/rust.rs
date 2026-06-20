@@ -3,10 +3,20 @@
 //! Flags arithmetic with `f64::NAN` / `f32::NAN` or division by zero literal.
 //! Rust doesn't have `undefined` or implicit string coercion, but NaN
 //! propagation is still a footgun.
+//!
+//! Test code is exempt: deliberately producing NaN / dividing by zero is a
+//! valid way to exercise NaN-robustness.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
 
 crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
+    // Skip test code — deliberately constructing NaN / dividing by zero is a
+    // valid technique for exercising NaN-robustness (e.g. `#[should_panic]`).
+    if is_in_test_context(node, source) || is_under_tests_dir(ctx.path) {
+        return;
+    }
+
     let Some(op_node) = node.child_by_field_name("operator") else { return };
     let op = op_node.utf8_text(source).unwrap_or("");
 
@@ -108,5 +118,44 @@ mod tests {
             }
         "#;
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_deliberate_nan_in_test_fn() {
+        // amethyst/amethyst transform_system.rs — `#[should_panic]` tests feed
+        // NaN / inf to verify the transform system rejects them.
+        let source = r#"
+            #[test]
+            #[should_panic]
+            fn nan_transform() {
+                local.set_translation_xyz(0.0 / 0.0, 0.0 / 0.0, 0.0 / 0.0);
+            }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_div_by_zero_in_cfg_test_module() {
+        let source = r#"
+            #[cfg(test)]
+            mod tests {
+                fn build() {
+                    let x = 1.0 / 0.0;
+                    let y = f64::NAN + 1.0;
+                }
+            }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_nan_in_production_fn() {
+        // A NaN-producing operation in non-test code remains flagged.
+        let source = r#"
+            fn compute() {
+                let x = f64::NAN + 1.0;
+            }
+        "#;
+        assert_eq!(run_on(source).len(), 1);
     }
 }
