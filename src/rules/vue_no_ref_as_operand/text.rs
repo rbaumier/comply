@@ -297,11 +297,16 @@ impl TextCheck for Check {
         if bindings.is_empty() {
             return Vec::new();
         }
-        // Blank every `<!-- ... -->` HTML comment (offsets/newlines preserved) so
-        // a ref name in template prose, or the comment's own `-->` mistaken for a
-        // `--` decrement, can't be matched as an operand. All offset-based checks
-        // below stay valid because the mask is byte-length-preserving.
-        let scan_source = crate::rules::vue_template_helpers::mask_html_comments(ctx.source);
+        // Blank every `<!-- ... -->` HTML comment, then every `//` and
+        // `/* ... */` (incl. `/** ... */` JSDoc) JS/TS comment, so a ref name
+        // that appears only in prose — template comment or `<script>` doc
+        // comment — can't be matched as an operand. `mask_comments` skips string
+        // literals, so a comment marker inside a string is left intact. Both
+        // masks are byte-length-preserving, so all offset-based checks below
+        // stay valid.
+        let scan_source = crate::oxc_helpers::mask_comments(
+            &crate::rules::vue_template_helpers::mask_html_comments(ctx.source),
+        );
         let shadow_scopes = collect_shadow_scopes(ctx.source);
         // Vue 3 auto-unwraps top-level refs/computed inside `<template>` expressions,
         // so a bare ref name there is correct (`.value` would be wrong). Suppress any
@@ -511,6 +516,43 @@ mod tests {
         // A real `count + 1` misuse in `<script>` must still flag even when the
         // ref name also appears in a masked HTML comment whose `-->` is masked.
         let src = "<!-- count -->\n<script setup lang=\"ts\">\nconst count = ref(0)\nconst doubled = count + 1\n</script>";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_ref_name_in_jsdoc_block_comment() {
+        // radix-vue repro: `boundary` is a `computed`, but its only occurrence
+        // outside the declaration is English prose ending a `/** … */` JSDoc
+        // line. The next line's ` * ` continuation marker was misread as a `* `
+        // multiply operand. Masking the JS/TS comment removes the match.
+        let src = concat!(
+            "<script lang=\"ts\">\n",
+            "export interface PopperContentProps {\n",
+            "  /**\n",
+            "   * keep the content in the boundary\n",
+            "   * regardless of the trigger position.\n",
+            "   */\n",
+            "  sticky?: 'partial' | 'always'\n",
+            "}\n",
+            "const boundary = computed(() => 0)\n",
+            "</script>",
+        );
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_ref_name_in_line_comment() {
+        // A ref name in a `//` line comment, used in an operand-shaped phrase,
+        // must not be flagged.
+        let src = "<script setup lang=\"ts\">\nconst count = ref(0)\n// count + 1 is documented below\nconst doubled = count.value + 1\n</script>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_genuine_ref_misuse_alongside_jsdoc_comment() {
+        // A real `count + 1` misuse must still flag even when the ref name also
+        // appears as prose inside a `/** … */` JSDoc comment.
+        let src = "<script setup lang=\"ts\">\n/** count + 1 explained */\nconst count = ref(0)\nconst doubled = count + 1\n</script>";
         assert_eq!(run(src).len(), 1);
     }
 
