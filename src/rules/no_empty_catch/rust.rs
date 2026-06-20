@@ -21,6 +21,16 @@
 //! EINTR retry-on-interrupt idiom), and `match` exhaustiveness forces every
 //! other error into a sibling arm. The guard documents intent rather than
 //! silently swallowing the error.
+//!
+//! An empty `Err` arm is also exempt when it is one half of a *disjoint* error
+//! partition whose other half — a sibling `Err(...)` arm with a non-empty body —
+//! owns the error. The partition is disjoint when EITHER the capturing sibling
+//! is guarded (`Err(e) if cond => capture`, the First-combinator "keep first
+//! error" idiom, where the bare empty arm is the complementary remainder) OR
+//! this empty arm carries a structured discriminant (`Err((false, _))`,
+//! `Err(Variant(..))`, the fatal/non-fatal split). A bare `Err(_)`/`Err(e)` arm
+//! beside an unguarded capturing sibling still swallows every other error class
+//! and stays flagged; a lone empty `Err` arm likewise stays flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{arm_body_is_diverging, tuple_struct_pattern_binds_const};
@@ -59,6 +69,23 @@ match node.kind() {
             // result must be this exact error — the empty arm is the
             // success case, not silent error-swallowing.
             if has_diverging_sibling_arm(&node, source) {
+                return;
+            }
+            // A first-match / non-fatal partition: an empty `Err` arm whose
+            // error is provably owned by a *disjoint* sibling `Err(...)` arm
+            // that captures it (non-empty body). Two disjoint shapes qualify:
+            //   - The First combinator: a GUARDED capturing sibling
+            //     (`Err(err) if first_err.is_none() => first_err = Some(err)`)
+            //     keeps only the first error; the bare `Err(_) => {}` arm is
+            //     the complementary "already captured one, skip" remainder.
+            //   - The fatal/non-fatal split: a STRUCTURED discriminant on this
+            //     arm (`Err((false, _err)) => {}`) targets a specific non-fatal
+            //     subset while the sibling `Err((true, err)) => ret_error = err`
+            //     owns the fatal one.
+            // A bare `Err(_)`/`Err(e)` arm beside an UNGUARDED capturing sibling
+            // (`Err(Specific(e)) => handle(e)`) still swallows every other error
+            // and stays flagged — that partition is not disjoint.
+            if has_disjoint_capturing_sibling_err_arm(&node, &pattern, source) {
                 return;
             }
             // An explicit justification placed as a leading comment directly
@@ -129,6 +156,89 @@ fn has_diverging_sibling_arm(arm: &tree_sitter::Node, source: &[u8]) -> bool {
         }
     }
     false
+}
+
+/// True if the empty `Err` `arm` is one half of a *disjoint* error partition
+/// whose other half — a sibling `Err(...)` arm with a non-empty body — owns the
+/// error. The partition is disjoint (so this arm provably drops nothing the
+/// sibling needed to see) when EITHER:
+///
+/// - the capturing sibling is **guarded** (`Err(e) if cond => capture`): the
+///   bare empty arm is only reached once the guard has stopped capturing, so it
+///   is the complementary remainder (the First-combinator "keep first error"
+///   idiom); OR
+/// - this empty arm carries a **structured discriminant** (`Err((false, _))`,
+///   `Err(Variant(..))`, or a literal `Err(1)`/`Err("eof")`): it targets one
+///   specific error subset, leaving the sibling to own the rest (the
+///   fatal/non-fatal split).
+///
+/// A bare `Err(_)`/`Err(e)` arm beside an UNGUARDED capturing sibling is NOT a
+/// disjoint partition — it swallows every error class the sibling does not match
+/// — so this returns false and the arm stays flagged.
+fn has_disjoint_capturing_sibling_err_arm(
+    arm: &tree_sitter::Node,
+    arm_pattern: &tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    let Some(match_block) = arm.parent() else {
+        return false;
+    };
+    if match_block.kind() != "match_block" {
+        return false;
+    }
+    let this_arm_is_structured = err_pattern_is_structured(arm_pattern);
+    let mut cursor = match_block.walk();
+    for sibling in match_block.named_children(&mut cursor) {
+        if sibling.kind() != "match_arm" || sibling.id() == arm.id() {
+            continue;
+        }
+        let Some(pattern) = sibling.child_by_field_name("pattern") else {
+            continue;
+        };
+        if !pattern_is_err(&pattern, source) {
+            continue;
+        }
+        let Some(value) = sibling.child_by_field_name("value") else {
+            continue;
+        };
+        if is_empty_block(&value, source) {
+            continue;
+        }
+        // Non-empty `Err(...)` sibling that captures the error. Disjoint when
+        // the sibling is guarded or this arm is a structured discriminant.
+        let sibling_is_guarded = pattern.child_by_field_name("condition").is_some();
+        if sibling_is_guarded || this_arm_is_structured {
+            return true;
+        }
+    }
+    false
+}
+
+/// True if `pattern` (an `Err(...)` match pattern) destructures a *structured
+/// discriminant* — its payload is a tuple/struct/enum-variant shape or a
+/// literal, e.g. `Err((false, _err))` or `Err(Variant(..))`. A bare wildcard
+/// (`Err(_)`) or a bare binding (`Err(e)`) is NOT structured: it matches every
+/// error value, so it cannot be the disjoint half of a partition.
+fn err_pattern_is_structured(pattern: &tree_sitter::Node) -> bool {
+    let inner = unwrap_match_pattern(*pattern);
+    if inner.kind() != "tuple_struct_pattern" {
+        return false;
+    }
+    // The lone payload (skipping the `Err`/`Result::Err` constructor in the
+    // `type` field). A bare `_`/binding payload is not a discriminant.
+    let mut cursor = inner.walk();
+    let payloads: Vec<tree_sitter::Node> = inner
+        .children(&mut cursor)
+        .enumerate()
+        .filter(|(i, child)| {
+            child.is_named() && inner.field_name_for_child(*i as u32) != Some("type")
+        })
+        .map(|(_, child)| child)
+        .collect();
+    let [payload] = payloads.as_slice() else {
+        return false;
+    };
+    !matches!(payload.kind(), "_" | "identifier" | "mut_pattern" | "ref_pattern")
 }
 
 /// True if a `line_comment`/`block_comment` is the arm's immediate preceding
@@ -419,6 +529,117 @@ mod tests {
         // Narrowness guard: an UNGUARDED empty `Err(e)` arm still swallows.
         let src = "fn f(r: Result<u8, E>) { match r { Ok(v) => g(v), Err(e) => {} } }";
         assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_err_arm_in_first_match_combinator_issue_5000() {
+        // Issue #5000: the `First` combinator loop tries each candidate; a
+        // GUARDED sibling `Err(err) if first_err.is_none()` arm captures the
+        // first error, and the empty `Err(_) => {}` arm is the complementary
+        // remainder discarding redundant subsequent errors. The guard makes the
+        // partition disjoint — the empty arm provably drops nothing the sibling
+        // needed to see.
+        let src = "fn f(items: &[I]) -> Result<u8, E> { \
+                   let mut first_err = None; \
+                   for item in items.iter() { \
+                   match parse(item) { \
+                   Ok(remaining) => return Ok(remaining), \
+                   Err(err) if first_err.is_none() => first_err = Some(err), \
+                   Err(_) => {} \
+                   } \
+                   } \
+                   match first_err { Some(err) => Err(err), None => Ok(0) } \
+                   }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_err_arm_in_fatal_nonfatal_split_issue_5000() {
+        // Issue #5000: a structured tuple discriminant splits non-fatal from
+        // fatal: `Err((true, err)) => ret_error = err` captures the real
+        // error; `Err((false, _err)) => {}` falls through to the next strategy.
+        let src = "fn f(r: Result<u8, (bool, E)>) { \
+                   let mut ret_error = D; \
+                   match r { \
+                   Ok(v) => return go(v), \
+                   Err((false, _err)) => {} \
+                   Err((true, err)) => ret_error = err, \
+                   } \
+                   }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_lone_empty_err_arm_no_capturing_sibling_issue_5000() {
+        // Narrowness guard: a single empty `Err(_) => {}` with no sibling
+        // `Err(...)` arm capturing the error is still a blanket swallow and
+        // must fire — the partition exemption needs a capturing sibling.
+        let src = "fn f(r: Result<u8, E>) { match r { Ok(v) => go(v), Err(_) => {} } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_err_arm_with_empty_sibling_err_arm_issue_5000() {
+        // Narrowness guard: two empty `Err` arms do NOT exempt each other —
+        // neither captures the error, so both are swallows. Both must fire.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Ok(v) => go(v), \
+                   Err(a) => {} \
+                   Err(b) => {} \
+                   } }";
+        assert_eq!(run_on(src).len(), 2, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_bare_empty_err_arm_beside_unguarded_capturing_sibling_issue_5000() {
+        // Narrowness guard: a bare `Err(_) => {}` next to an UNGUARDED capturing
+        // sibling (`Err(Specific(e)) => handle(e)`) is NOT a disjoint partition —
+        // the wildcard arm swallows every other error class. It must still fire.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Ok(v) => go(v), \
+                   Err(Specific(e)) => handle(e), \
+                   Err(_) => {} \
+                   } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_bare_empty_err_arm_beside_guarded_empty_sibling_issue_5000() {
+        // Narrowness guard: a GUARDED but EMPTY sibling (`Err(x) if c => {}`)
+        // captures nothing, so it does not make the bare `Err(_) => {}` arm a
+        // disjoint partition. Both empty arms swallow; the unguarded one fires.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Ok(v) => go(v), \
+                   Err(x) if c(x) => {} \
+                   Err(_) => {} \
+                   } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_structured_empty_err_arm_beside_unguarded_capturing_sibling_issue_5000() {
+        // Issue #5000: the empty arm carries a STRUCTURED discriminant
+        // (`Err(NonFatal(_)) => {}`), so it targets one specific error subset
+        // while the unguarded sibling owns the rest — a disjoint partition.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Ok(v) => go(v), \
+                   Err(NonFatal(_)) => {} \
+                   Err(other) => handle(other), \
+                   } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_literal_empty_err_arm_beside_unguarded_capturing_sibling_issue_5000() {
+        // Issue #5000: a literal discriminant (`Err(NOT_FOUND_CODE) => {}` here
+        // a literal `Err(404)`) targets one specific error value, leaving the
+        // unguarded sibling to own the rest — a disjoint partition.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Ok(v) => go(v), \
+                   Err(404) => {} \
+                   Err(other) => handle(other), \
+                   } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
     }
 
     #[test]
