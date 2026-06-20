@@ -2620,6 +2620,83 @@ pub fn declaration_file_exports(path: &Path) -> Option<FxHashSet<String>> {
     Some(extract.exports.into_iter().map(|e| e.name).collect())
 }
 
+/// Bare npm package names a TypeScript declaration file (`.d.ts` and variants)
+/// references — through an `import`/`import type`, an `export … from`
+/// re-export, an inline `import('<pkg>')` type query, or a
+/// `declare module '<pkg>'` augmentation. Declaration files are
+/// excluded from the indexed set, so their package usage never reaches
+/// `bare_specifiers`; rules that diff `package.json` against observed imports
+/// (e.g. `unused-dependency`) call this to count a package whose only consumer
+/// is a declaration file.
+///
+/// Specifiers are normalized to their package-name form (`@scope/pkg/sub` →
+/// `@scope/pkg`, `lodash/fp` → `lodash`). Relative/absolute paths, URL imports,
+/// and Node/Cloudflare built-ins are dropped — they never name a dependency.
+/// Returns an empty set when the file is unreadable or fails to parse: a
+/// missing reference can only cause a dependency to look unused, the
+/// conservative direction for this rule.
+#[must_use]
+pub fn declaration_file_dependency_specifiers(path: &Path) -> FxHashSet<String> {
+    use oxc_allocator::Allocator;
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::TSModuleDeclarationName;
+    use oxc_parser::Parser as OxcParser;
+
+    let mut refs = FxHashSet::default();
+    let Ok(source) = std::fs::read_to_string(path) else {
+        return refs;
+    };
+
+    let collect = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let source_type = crate::oxc_helpers::source_type_for_path(path);
+        let allocator = Allocator::default();
+        let parse_ret = OxcParser::new(&allocator, &source, source_type).parse();
+        let semantic = oxc_semantic::SemanticBuilder::new()
+            .build(&parse_ret.program)
+            .semantic;
+
+        let mut found = FxHashSet::default();
+        let mut record = |specifier: &str| {
+            if !is_bare_specifier(specifier) {
+                return;
+            }
+            let pkg = extract_package_name(specifier);
+            if !pkg.is_empty() && !is_builtin_module(&pkg) {
+                found.insert(pkg);
+            }
+        };
+        for node in semantic.nodes().iter() {
+            match node.kind() {
+                AstKind::ImportDeclaration(import) => record(import.source.value.as_str()),
+                AstKind::ExportNamedDeclaration(export) => {
+                    if let Some(src) = &export.source {
+                        record(src.value.as_str());
+                    }
+                }
+                AstKind::ExportAllDeclaration(export) => record(export.source.value.as_str()),
+                // Inline import-type query: `type X = import('pkg').Foo`. Common
+                // in declaration files, which reference a dependency's types
+                // without a top-level `import`.
+                AstKind::TSImportType(import_type) => record(import_type.source.value.as_str()),
+                // `declare module '<pkg>' { … }` augments the named package's
+                // public types — a real use of that dependency.
+                AstKind::TSModuleDeclaration(decl) => {
+                    if let TSModuleDeclarationName::StringLiteral(name) = &decl.id {
+                        record(name.value.as_str());
+                    }
+                }
+                _ => {}
+            }
+        }
+        found
+    }));
+
+    if let Ok(found) = collect {
+        refs = found;
+    }
+    refs
+}
+
 fn oxc_extract_import(
     lines: &[usize],
     import: &oxc_ast::ast::ImportDeclaration,

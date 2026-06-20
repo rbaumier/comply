@@ -245,8 +245,11 @@ fn is_hidden_non_config(path: &Path) -> bool {
     })
 }
 
-fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
-    let mut files = Vec::new();
+/// Build the directory walker comply uses to scan a project: standard ignore
+/// files plus the project's own `.complyignore`/ESLint exclusions, with
+/// `EXCLUDED_DIRS` and non-config hidden paths pruned. Shared by every
+/// directory-scan entry point so they observe identical exclusion semantics.
+fn project_walker(path: &Path) -> ignore::Walk {
     // Honor the project's own ESLint exclusions (flat-config `ignores`,
     // `ignorePatterns`, package.json eslintConfig). The file-based
     // `.eslintignore` / `.eslint-ignore` are gitignore-syntax, so the walker
@@ -255,7 +258,7 @@ fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
     // The root itself may be a hidden/absolute path; only entries *below* it are
     // checked against the hidden filter, so strip the root prefix first.
     let root = path.to_path_buf();
-    let walker = WalkBuilder::new(path)
+    WalkBuilder::new(path)
         .standard_filters(true)
         // Disable the crate's blanket hidden filter so config dot-dirs are
         // reachable; `filter_entry` below re-prunes every other hidden path.
@@ -288,8 +291,12 @@ fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
             }
             true
         })
-        .build();
-    for entry in walker {
+        .build()
+}
+
+fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
+    let mut files = Vec::new();
+    for entry in project_walker(path) {
         let entry = entry.context("failed to read directory entry")?;
         if !entry.file_type().is_some_and(|ft| ft.is_file()) {
             continue;
@@ -299,6 +306,30 @@ fn walk_directory(path: &Path) -> Result<Vec<SourceFile>> {
         }
     }
     Ok(files)
+}
+
+/// TypeScript declaration files (`.d.ts`, `.d.mts`, `.d.cts`, `.d.tsx`) under
+/// `path`, using the same exclusion rules as the lint scan. Declaration files
+/// are dropped from the linted source set, but they carry real
+/// `import`/`export … from`/`declare module` references; cross-file rules that
+/// reason about dependency usage scan them through this function. Best-effort:
+/// unreadable directory entries are skipped rather than aborting the walk.
+#[must_use]
+pub fn discover_declaration_files(path: &Path) -> Vec<PathBuf> {
+    project_walker(path)
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                return None;
+            }
+            let name = entry.path().file_name()?.to_str()?;
+            (name.ends_with(".d.ts")
+                || name.ends_with(".d.mts")
+                || name.ends_with(".d.cts")
+                || name.ends_with(".d.tsx"))
+            .then(|| entry.path().to_path_buf())
+        })
+        .collect()
 }
 
 /// `git diff --name-only` with the given args. Used for working-tree, staged,

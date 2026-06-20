@@ -87,11 +87,26 @@ impl TextCheck for Check {
         let mut diagnostics = Vec::new();
         let extra_tooling: FxHashSet<&str> = ctx.project.framework_tooling_deps().collect();
         let config_refs = config_string_refs(index.indexed_paths());
+        let dts_refs = ctx
+            .project
+            .project_root
+            .as_deref()
+            .map(dts_dependency_refs)
+            .unwrap_or_default();
         for dep in pkg.dependencies.keys() {
             if is_skipped(dep, &extra_tooling) {
                 continue;
             }
             if bare.contains_key(dep) {
+                continue;
+            }
+            // A package consumed only from `.d.ts` declaration files (a
+            // `import type … from`, an `export type … from` re-export, or a
+            // `declare module '<pkg>'` augmentation) is a real type-surface
+            // dependency. Declaration files are excluded from the import index,
+            // so the bare-specifier scan never sees these references — the
+            // dedicated `.d.ts` scan does.
+            if dts_refs.contains(dep) {
                 continue;
             }
             // A CLI-runner package (`@changesets/cli`) is run via a `scripts`
@@ -131,6 +146,20 @@ fn is_skipped(dep: &str, extra_tooling: &FxHashSet<&str>) -> bool {
         return true;
     }
     extra_tooling.contains(dep)
+}
+
+/// Package names referenced by the project's `.d.ts` declaration files —
+/// through an `import`/`export … from` specifier or a `declare module '<pkg>'`
+/// augmentation. Declaration files are excluded from the import index, so a
+/// package whose only consumer is a `.d.ts` (a type-only re-export, a module
+/// augmentation) is absent from the bare-specifier set; this scan rescues it
+/// from a false "unused" flag. A package named in no `.d.ts` is still flagged.
+fn dts_dependency_refs(root: &std::path::Path) -> FxHashSet<String> {
+    let mut refs = FxHashSet::default();
+    for path in crate::files::discover_declaration_files(root) {
+        refs.extend(crate::project::import_index::declaration_file_dependency_specifiers(&path));
+    }
+    refs
 }
 
 /// Package names referenced by a string literal anywhere in the project's
@@ -647,6 +676,75 @@ mod tests {
         assert!(
             diags.is_empty(),
             "ESLint flat config plugins imported in eslint.config.js must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_dep_used_only_in_declaration_file() {
+        // Issue #4847: `micromark-util-types` is consumed exclusively from a
+        // `.d.ts` file — a type re-export and a `declare module` augmentation —
+        // and `unist-util-visit` only via an inline `import('pkg')` type query.
+        // Declaration files are excluded from the import index, so both packages
+        // must be rescued by the dedicated `.d.ts` scan. `left-pad`, imported
+        // nowhere, must still be flagged so the carve-out doesn't mask genuinely
+        // unused deps. Drives the real directory walker so the `.d.ts` discovery
+        // path is exercised end to end.
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("package.json"),
+            r#"{
+                "name": "demo",
+                "dependencies": {
+                    "micromark-util-types": "^2.0.0",
+                    "unist-util-visit": "^5.0.0",
+                    "left-pad": "^1.3.0"
+                }
+            }"#,
+        )
+        .unwrap();
+        fs::create_dir(root.join("dev")).unwrap();
+        fs::write(
+            root.join("dev/index.d.ts"),
+            "export type {Encoding, Token, Value} from 'micromark-util-types'\n\
+             export type Visitor = import('unist-util-visit').Visitor\n\
+             declare module 'micromark-util-types' {\n\
+             \x20 interface TokenTypeMap { listItem: 'listItem' }\n\
+             }\n",
+        )
+        .unwrap();
+        fs::write(root.join("a.ts"), "export const x = 1;").unwrap();
+
+        let source_files =
+            crate::files::discover(&crate::cli::ScanMode::All(root.to_path_buf())).unwrap();
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        let anchor = project.anchor_path().expect("anchor path");
+        let source = fs::read_to_string(&anchor).unwrap();
+        let file_ctx = FileCtx::build(&anchor, &source, Language::TypeScript, &project);
+        let ctx = CheckCtx {
+            path: &anchor,
+            path_arc: Arc::from(anchor.as_path()),
+            source: &source,
+            config: &config,
+            project: &project,
+            file: &file_ctx,
+            lang: Language::TypeScript,
+        };
+        let diags = Check.check(&ctx);
+
+        assert_eq!(
+            diags.len(),
+            1,
+            "micromark-util-types and unist-util-visit are used in a .d.ts; \
+             only left-pad is unused: {diags:?}"
+        );
+        assert!(
+            diags[0].message.contains("left-pad"),
+            "message should name the genuinely unused dep, got: {}",
+            diags[0].message
         );
     }
 }
