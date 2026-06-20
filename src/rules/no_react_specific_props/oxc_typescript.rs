@@ -196,4 +196,35 @@ mod tests {
                    const x = <div className=\"foo\" />;";
         assert_eq!(run_at(src, "src/app.tsx").len(), 1);
     }
+
+    // --- preact/compat: React-compatibility layer, `className` is correct (#4774) ---
+
+    #[test]
+    fn allows_class_name_in_preact_compat_file() {
+        // didi/LogicFlow's Text.tsx: createElement from preact/compat + `className`.
+        let src = "import { createElement as h } from 'preact/compat';\n\
+                   const x = <text className={textConfig.className} />;";
+        assert!(
+            run_at(src, "packages/core/src/view/shape/Text.tsx").is_empty(),
+            "got unexpected diagnostics: {:?}",
+            run_at(src, "packages/core/src/view/shape/Text.tsx")
+        );
+    }
+
+    #[test]
+    fn allows_class_name_in_preact_compat_double_quote_import() {
+        // Double-quote import: `preact/compat` contains the `preact/` substring, so
+        // the compat exemption must precede the non-React `preact/` check.
+        let src = "import { forwardRef } from \"preact/compat\";\n\
+                   const x = <text className=\"foo\" />;";
+        assert!(run_at(src, "src/widget.tsx").is_empty());
+    }
+
+    #[test]
+    fn still_flags_class_name_in_plain_preact_file() {
+        // Plain `preact` (not the compat layer) uses native `class`: must still flag.
+        let src = "import { h } from 'preact';\n\
+                   const x = <text className=\"foo\" />;";
+        assert_eq!(run_at(src, "src/widget.tsx").len(), 1);
+    }
 }

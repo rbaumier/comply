@@ -391,6 +391,20 @@ pub fn imports_react(source: &str) -> bool {
         || source_contains(source, "require('react-dom")
 }
 
+/// True if the file imports from `preact/compat`, Preact's React-compatibility
+/// layer — the canonical `preact/compat` entry or any subpath (`preact/compat/server`).
+/// Unlike plain Preact, `preact/compat` re-implements the React API surface —
+/// including `className`/`htmlFor` — so a file importing it uses the
+/// React-compatible conventions, not Preact's native HTML attributes. ESM
+/// `import ... from` or CommonJS `require(...)`. Memoized via [`source_contains`].
+#[must_use]
+pub fn imports_preact_compat(source: &str) -> bool {
+    source_contains(source, "from \"preact/compat")
+        || source_contains(source, "from 'preact/compat")
+        || source_contains(source, "require(\"preact/compat")
+        || source_contains(source, "require('preact/compat")
+}
+
 /// True if the file imports anything from SolidJS: `solid-js`, a `solid-js/*`
 /// subpath (`solid-js/web`, `solid-js/store`), or the `@solidjs/*` scope
 /// (`@solidjs/router`, `@solidjs/start`) — ESM `import ... from` or CommonJS
@@ -475,8 +489,18 @@ pub fn in_non_react_framework_package(
 /// fire on these files: React DevTools, Fast Refresh, and React's prop
 /// conventions are all React-only concerns. Source checks are memoized per file
 /// via [`source_contains`].
+///
+/// `preact/compat` is the exception among Preact entries: it re-implements the
+/// React API (including `className`/`htmlFor`), so a file importing it is treated
+/// as React-compatible, not as native-attribute JSX.
 #[must_use]
 pub fn is_non_react_jsx_file(source: &str, project: &crate::project::ProjectCtx, path: &Path) -> bool {
+    // `preact/compat` is Preact's React-compatibility layer — `className`/`htmlFor`
+    // are the supported props there, exactly as in React. It must win over the
+    // `preact/` non-React check below, which would otherwise match the subpath.
+    if imports_preact_compat(source) {
+        return false;
+    }
     // An explicit per-file non-React framework signal (import or pragma) wins
     // outright — the file's JSX is unambiguously processed by that runtime.
     if source_contains(source, "solid-js")
