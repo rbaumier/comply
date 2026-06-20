@@ -741,6 +741,47 @@ fn attribute_is_doc_hidden(attribute_item: Node, source: &[u8]) -> bool {
         .any(|tok| tok.kind() == "identifier" && tok.utf8_text(source) == Ok("hidden"))
 }
 
+/// True if `node` lives inside a `doc` attribute — `#[doc(...)]`, the crate-root
+/// inner form `#![doc(...)]`, or `#[doc = "..."]`.
+///
+/// Walks up from `node` via `parent()`; at each ancestor that is an
+/// `attribute_item` or `inner_attribute_item` it checks the `attribute` child's
+/// path is `doc`. Rustdoc metadata such as `#![doc(html_logo_url = "...")]` is
+/// generated-documentation configuration, not runtime code, so a string literal
+/// nested in its argument list is documentation text rather than a value the
+/// program acts on.
+///
+/// Matching on the AST path child — not raw text — means a `doc` identifier
+/// appearing elsewhere (a variable named `doc`, a comment) does not match.
+pub fn is_in_doc_attribute(node: Node, source: &[u8]) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if matches!(parent.kind(), "attribute_item" | "inner_attribute_item")
+            && attribute_path_is(parent, source, "doc")
+        {
+            return true;
+        }
+        cur = parent;
+    }
+    false
+}
+
+/// True if the `(inner_)attribute_item`'s `attribute` child names `attr_path` as
+/// its path (the identifier before any `(...)` arguments or `= value`).
+fn attribute_path_is(attribute_item: Node, source: &[u8], attr_path: &str) -> bool {
+    let mut item_cursor = attribute_item.walk();
+    let Some(attribute) = attribute_item
+        .children(&mut item_cursor)
+        .find(|child| child.kind() == "attribute")
+    else {
+        return false;
+    };
+    let Some(path) = attribute.named_child(0) else {
+        return false;
+    };
+    path.utf8_text(source) == Ok(attr_path)
+}
+
 /// True if `node` is covered by an `#[allow(<scope>::<lint>)]` or
 /// `#[expect(<scope>::<lint>)]` attribute naming `lint`, applied to an enclosing
 /// statement, expression, or item.
