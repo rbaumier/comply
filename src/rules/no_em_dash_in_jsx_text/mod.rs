@@ -7,8 +7,9 @@
 //! content and the string-literal values of copy-bearing JSX attributes
 //! (`title`, `label`, `placeholder`, `alt`, `aria-label`) only — never code,
 //! never arbitrary expressions, never non-copy attributes. A dash flanked by
-//! two digits (numeric range like `9–5`) and any dash inside `<code>` / `<pre>`
-//! children are left alone.
+//! two digits (numeric range like `9–5`), any dash inside `<code>` / `<pre>`
+//! children, and a JSXText node whose entire trimmed content is a single dash
+//! (an empty-value placeholder glyph like `<span>—</span>`) are left alone.
 
 mod oxc_typescript;
 
@@ -54,6 +55,14 @@ pub(crate) fn first_dash_offset(text: &str) -> Option<usize> {
         return Some(offset);
     }
     None
+}
+
+/// True when `text` trims down to exactly one flagged dash. Such a node is an
+/// empty-value placeholder glyph (`<span>—</span>`, `<td>–</td>`), not sentence
+/// punctuation, so the rule's "rephrase the sentence" remedy has nothing to act on.
+pub(crate) fn is_standalone_dash(text: &str) -> bool {
+    let mut chars = text.trim().chars();
+    chars.next().is_some_and(|ch| DASHES.contains(&ch)) && chars.next().is_none()
 }
 
 /// True when the dash at `offset` (spanning `dash_len` bytes) has an ASCII digit
@@ -124,5 +133,23 @@ mod tests {
         let text = "ab\u{2014}cd";
         let off = first_dash_offset(text).unwrap();
         assert_eq!(&text[off..off + 3], "\u{2014}");
+    }
+
+    #[test]
+    fn standalone_dash_is_a_placeholder() {
+        assert!(is_standalone_dash("\u{2014}"));
+        assert!(is_standalone_dash("\u{2013}"));
+        // JSXText carries surrounding whitespace from formatting.
+        assert!(is_standalone_dash("  \u{2014}  "));
+        assert!(is_standalone_dash("\n  \u{2013}\n"));
+    }
+
+    #[test]
+    fn dash_with_prose_is_not_standalone() {
+        assert!(!is_standalone_dash("\u{2014} Foo"));
+        assert!(!is_standalone_dash("Foo \u{2014} bar"));
+        assert!(!is_standalone_dash("\u{2014}\u{2014}"));
+        assert!(!is_standalone_dash("-"));
+        assert!(!is_standalone_dash(""));
     }
 }

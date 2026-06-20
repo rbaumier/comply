@@ -34,6 +34,9 @@ impl OxcCheck for Check {
                 if inside_technical_element(node.id(), semantic) {
                     return;
                 }
+                if super::is_standalone_dash(text.value.as_str()) {
+                    return;
+                }
                 let Some(rel) = super::first_dash_offset(text.value.as_str()) else {
                     return;
                 };
@@ -194,6 +197,20 @@ mod tests {
         // A string literal that is plain code (not a copy attribute) is invisible
         // to this rule: it only inspects JSXText and copy attributes.
         assert!(run("const s = \"a \u{2014} b\";").is_empty());
+    }
+
+    #[test]
+    fn ignores_standalone_em_dash_placeholder() {
+        // A JSXText node that is entirely a single dash is an empty-value
+        // placeholder glyph, not prose.
+        assert!(run("<span>\u{2014}</span>").is_empty());
+        assert!(run("<td>\u{2013}</td>").is_empty());
+        assert!(run("<span className=\"text-muted-foreground\">\u{2014}</span>").is_empty());
+    }
+
+    #[test]
+    fn still_flags_standalone_dash_followed_by_prose() {
+        assert_eq!(run("<span>\u{2014} Foo</span>").len(), 1);
     }
 
     #[test]
