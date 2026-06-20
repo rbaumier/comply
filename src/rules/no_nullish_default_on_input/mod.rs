@@ -6,6 +6,12 @@
 //! not poison the verdict. Optional parameters (which admit `undefined` by
 //! contract) and inline callback parameters (`map`/`watch`/event-handler arrows
 //! and function expressions, supplied by the runtime) are not flagged.
+//!
+//! The remedy ("validate and return a Result error") only applies at a backend
+//! request boundary, and syntactic detection can't tell a request input from a
+//! React prop or a helper arg. The rule is therefore path-scoped: it fires only
+//! on files matching `[rules.no-nullish-default-on-input] paths` (default: the
+//! backend API tree). An empty `paths` list fires everywhere.
 
 mod oxc_typescript;
 
