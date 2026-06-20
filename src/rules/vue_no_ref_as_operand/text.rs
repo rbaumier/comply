@@ -515,6 +515,25 @@ mod tests {
     }
 
     #[test]
+    fn allows_comparison_operand_in_fragment_template_with_nested_template() {
+        // vue-flow repro: `<script setup>` (no `lang`) precedes a multi-root
+        // (fragment) `<template>` whose first child wraps a nested
+        // `<template v-for>`. The `result > 0` comparison in a later sibling's
+        // `:style` binding is auto-unwrapped in the template and must not flag.
+        let src = "<script setup>\nconst result = computed(() => 0)\n</script>\n\n<template>\n  <div>\n    <template v-for=\"(v, i) in items\" :key=\"i\">\n      <span>{{ v }}</span>\n    </template>\n  </div>\n  <span :style=\"{ color: result > 0 ? 'a' : 'b' }\">{{ result }}</span>\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_comparison_operand_in_template_with_scoped_slot() {
+        // A nested scoped-slot `<template #name>` must not confuse the
+        // root-template detection: the `count < limit` comparison in the
+        // template stays exempt.
+        let src = "<script setup>\nconst count = ref(0)\nconst limit = ref(10)\n</script>\n<template>\n  <Foo>\n    <template #header>\n      <span>head</span>\n    </template>\n  </Foo>\n  <div v-if=\"count < limit\" />\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
     fn flags_ref_misuse_in_script_with_template_present() {
         // The misuse is in `<script>`, where `.value` IS required; the template
         // skip must not over-suppress script-context misuse.
