@@ -9,6 +9,9 @@
 //! Distinct from `html-no-duplicate-id`, which is a Vue/HTML text check for the
 //! *same* id appearing twice in one document; this rule flags a *single* static
 //! id literal on any JSX element regardless of duplication.
+//!
+//! Skipped in test directories (`skip_in_test_dir`): E2E/test fixture components
+//! intentionally use static ids as stable Playwright/Cypress selectors.
 
 mod oxc_typescript;
 
@@ -28,7 +31,10 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["react"],
 
-    skip_in_test_dir: false,
+    // E2E/test fixture components intentionally carry a static `id` as a stable
+    // Playwright/Cypress `locator()` selector; the duplicate-id-on-rerender
+    // rationale does not apply when a fixture mounts once per isolated test page.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 

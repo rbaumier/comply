@@ -448,4 +448,29 @@ mod tests {
         let src = "function Foo() { return <Widget id=\"foo\"/>; }";
         assert_eq!(run(src).len(), 1);
     }
+
+    // ---- issue #4680: E2E/test fixture components keep their static ids ----
+
+    /// An E2E fixture component (`test/lexical/components/CustomCell.tsx`) whose
+    /// static `id` is the Playwright `locator()` selector is exempt via the
+    /// central `skip_in_test_dir` gate, while the same code is flagged in `src/`.
+    #[test]
+    fn skips_static_id_in_e2e_fixture_component() {
+        let src = "export const CustomCell = (props) => \
+                   (<span id=\"custom-richtext-cell\">{props?.cellData}</span>);";
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "test/lexical/components/CustomCell.tsx",
+            )
+            .is_empty(),
+            "skip_in_test_dir must exempt E2E fixture components from #4680"
+        );
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "src/components/Cell.tsx").len(),
+            1,
+            "the same static id is still flagged outside test directories"
+        );
+    }
 }
