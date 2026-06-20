@@ -32,6 +32,35 @@ fn guarded_before(line: &str, abs: usize) -> bool {
         .any(|guard_at| guard_at < abs)
 }
 
+/// VueUse composables that accept a `window`/`document` target as a call argument
+/// and read it lazily inside an SSR-aware lifecycle hook. The composable internally
+/// guards the access (`isClient`/`useSupported`) and no-ops during server render, so
+/// passing a global directly is SSR-safe.
+const SSR_AWARE_COMPOSABLES: &[&str] = &[
+    "useEventListener",
+    "useMutationObserver",
+    "useResizeObserver",
+    "useIntersectionObserver",
+    "usePerformanceObserver",
+    "useScroll",
+];
+
+/// True when the identifier matched at byte offset `abs` is the first argument to
+/// a known SSR-aware composable call (`useEventListener(document, …)`). Such a
+/// global is read lazily inside the composable's SSR-guarded hook, so it does not
+/// crash during server render.
+fn is_ssr_aware_composable_arg(line: &str, abs: usize) -> bool {
+    let prefix = line[..abs].trim_end();
+    let Some(prefix) = prefix.strip_suffix('(') else {
+        return false;
+    };
+    let prefix = prefix.trim_end();
+    SSR_AWARE_COMPOSABLES.iter().any(|name| match prefix.strip_suffix(name) {
+        Some(rest) => rest.is_empty() || rest.ends_with(|c: char| !c.is_alphanumeric() && c != '_'),
+        None => false,
+    })
+}
+
 /// JS binding keywords that introduce a local variable.
 const DECL_KEYWORDS: &[&str] = &["const", "let", "var"];
 
@@ -140,7 +169,12 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
                         shadowed.push(g);
                         break;
                     }
-                    if !is_word && !is_word_after && !in_string[abs] && !guarded_before(line, abs) {
+                    if !is_word
+                        && !is_word_after
+                        && !in_string[abs]
+                        && !guarded_before(line, abs)
+                        && !is_ssr_aware_composable_arg(line, abs)
+                    {
                         diagnostics.push(Diagnostic {
                             path: std::sync::Arc::clone(&ctx.path_arc),
                             line: base_line + idx + 1,
@@ -361,6 +395,39 @@ mod tests {
         let diags = run(sfc);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("`window`"));
+    }
+
+    #[test]
+    fn allows_document_as_use_event_listener_arg() {
+        // Issue #4735: element-plus notification.vue. `useEventListener` from
+        // @vueuse/core is SSR-aware — it reads the `document` target lazily inside
+        // an isClient-guarded hook, so passing it at the top level is safe.
+        let sfc = "<script setup lang=\"ts\">\nuseEventListener(document, 'keydown', onKeydown)\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_window_as_use_event_listener_arg() {
+        let sfc = "<script setup>\nuseEventListener(window, 'resize', handler)\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_window_alongside_composable_arg() {
+        // The SSR-aware composable arg is suppressed, but a genuine bare
+        // `window.innerWidth` access on its own line is still flagged.
+        let sfc = "<script setup>\nuseEventListener(window, 'resize', handler)\nconst w = window.innerWidth\n</script>";
+        let diags = run(sfc);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`window`"));
+    }
+
+    #[test]
+    fn flags_window_arg_to_unknown_composable() {
+        // The allowlist is closed: a global passed to a composable not known to be
+        // SSR-aware is still flagged, since its SSR behavior is unverified.
+        let sfc = "<script setup>\nsomeOtherHook(window, 'resize', handler)\n</script>";
+        assert_eq!(run(sfc).len(), 1);
     }
 
     #[test]
