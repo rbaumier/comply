@@ -53,6 +53,14 @@ impl OxcCheck for Check {
         if crate::rules::path_utils::is_config_file(ctx.path) {
             return;
         }
+        // A Nuxt module definition (`defineNuxtModule` from `@nuxt/kit`) is evaluated
+        // only at build time in Node — never bundled for the browser — so reading
+        // `process.env` in module setup is the canonical way to read build-time env
+        // defaults, not a client-runtime mistake. (`src/module.ts` is not a `*.config.*`
+        // file, so the path-based config exemption above does not cover it.)
+        if source_contains(ctx.source, "defineNuxtModule") {
+            return;
+        }
         if !is_nuxt_source(ctx.source) {
             return;
         }
@@ -114,6 +122,26 @@ mod tests {
     fn still_flags_process_env_in_nuxt_plugin() {
         let src = "export default defineNuxtPlugin(() => {\n  const id = process.env.FOO;\n});";
         let d = run_on_path(src, "plugins/analytics.ts");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("process.env"));
+    }
+
+    // #4492 — `src/module.ts` defines a Nuxt module (`defineNuxtModule` from
+    // `@nuxt/kit`); it runs only at build time in Node and reading `process.env`
+    // in module setup is canonical. The file is not a `*.config.*`, so the
+    // path-based config exemption does not cover it.
+    #[test]
+    fn allows_process_env_in_nuxt_module() {
+        let src = "import type { CookieOptions } from 'nuxt/app'\nimport { defineNuxtModule } from '@nuxt/kit'\nexport default defineNuxtModule({\n  defaults: {\n    url: process.env.NUXT_PUBLIC_SUPABASE_URL || undefined,\n  },\n})";
+        assert!(run_on_path(src, "src/module.ts").is_empty());
+    }
+
+    // Load-bearing negative: runtime Nuxt source (no `defineNuxtModule`) must
+    // still be flagged so the exemption only suppresses module definitions.
+    #[test]
+    fn still_flags_process_env_in_nuxt_runtime() {
+        let src = "import { useNuxtApp } from 'nuxt/app'\nconst x = process.env.SECRET;";
+        let d = run_on_path(src, "components/Foo.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("process.env"));
     }
