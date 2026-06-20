@@ -2024,6 +2024,48 @@ mod tests {
     }
 
     #[test]
+    fn ignores_nuxt_server_utils_auto_imported_export_issue_4482() {
+        // Regression for #4482 (sidebase/nuxt-auth) — Nitro auto-imports every
+        // export of a file under a `server/utils/` directory into all server
+        // route handlers, so the named export has no static importer yet is live.
+        let pkg = r#"{ "dependencies": { "nuxt": "^3.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "server/utils/session.ts",
+                "export function getUser() { return {}; }\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "server/utils/session.ts");
+        assert!(
+            diags.is_empty(),
+            "Nuxt server/utils auto-imported export is framework-consumed: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_server_utils_export_without_nuxt_dep_issue_4482() {
+        // Negative-space guard for #4482 — the server/utils exemption is dep-gated.
+        // The same `server/utils/session.ts` named export in a project with no
+        // Nuxt dependency is an ordinary unused export and must still be flagged.
+        let pkg = r#"{ "dependencies": { "lodash": "^4.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "server/utils/session.ts",
+                "export function getUser() { return {}; }\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "server/utils/session.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a server/utils export without the Nuxt dep must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("getUser"));
+    }
+
+    #[test]
     fn still_flags_unused_export_outside_nuxt_conventions_issue_3314() {
         // Negative-space guard for #3314 — the Nuxt exemptions are scoped to the
         // `server/api`/`server/routes` and `composables/` conventions. A
