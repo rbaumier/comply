@@ -116,7 +116,7 @@ pub fn register_all() -> Vec<RuleDef> {
             "Don't assign to an imported binding or namespace. Imports are \
              immutable live bindings; assigning to them throws in modules.",
         ),
-        entry(
+        entry_with_filter(
             "no-template-curly-in-string",
             "no-template-curly-in-string",
             Severity::Error,
@@ -124,6 +124,7 @@ pub fn register_all() -> Vec<RuleDef> {
             "Switch the quotes to backticks to make it a template literal, \
              or remove the `${}` if it was meant literally. In a normal \
              string it stays verbatim text.",
+            Some(Arc::new(NoTemplateCurlyInStringFilter)),
         ),
         entry(
             "no-sequences",
@@ -646,6 +647,88 @@ fn quoted_specifier(s: &str) -> Option<&str> {
     Some(&s[1..1 + end])
 }
 
+// ── no-template-curly-in-string post-filter ────────────────────────────────
+//
+// The rule flags `${...}` inside a regular (non-template) string, where the
+// real bug is a single/double-quoted string that should have been a backtick
+// template literal: `"Hi ${name}"`.
+//
+// The false positive: component registries (e.g. shadcn-vue's
+// `registry-examples.ts`) store source code as JSON string data. That source
+// frequently contains a *backtick* template literal — `` `$ ${expr}` `` — and
+// the `${...}` there is intentional code-as-data, not a non-interpolated
+// placeholder. This filter drops the diagnostic when the flagged string value
+// holds a backtick before its `${`, i.e. the placeholder is bracketed by an
+// embedded template literal. A genuine `"Hi ${name}"` bug has no backtick and
+// is still flagged.
+//
+// Load-bearing oxlint contract: the diagnostic's `(line, column)` points at the
+// opening quote of the string literal, and `column` is a 1-based UTF-8 byte
+// offset. A wrong assumption fails safe — the position lands off the quote,
+// `string_literal_at` returns `None`, and the diagnostic is kept, never masked.
+
+struct NoTemplateCurlyInStringFilter;
+
+impl PostFilter for NoTemplateCurlyInStringFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        let Some(src) = source else {
+            return true;
+        };
+        let Some(content) = string_literal_at(src, diag.line, diag.column) else {
+            return true;
+        };
+        !has_backtick_before_placeholder(content)
+    }
+}
+
+/// Byte offset of the `(line, column)` position (both 1-based) into `src`.
+fn byte_offset(src: &str, line: usize, column: usize) -> Option<usize> {
+    if line == 0 || column == 0 {
+        return None;
+    }
+    let mut offset = 0usize;
+    for (idx, l) in src.lines().enumerate() {
+        if idx + 1 == line {
+            return Some(offset + (column - 1).min(l.len()));
+        }
+        offset += l.len() + 1;
+    }
+    None
+}
+
+/// Extracts the raw content of the string literal whose opening quote sits at
+/// `(line, column)` — the position oxlint reports for this rule. Scans forward
+/// from the opening quote to its matching close, honoring `\`-escapes (so an
+/// escaped quote inside the value does not end it). Returns `None` if the
+/// position is not on a `"`/`'` quote or the string is unterminated.
+fn string_literal_at(src: &str, line: usize, column: usize) -> Option<&str> {
+    let start = byte_offset(src, line, column)?;
+    let bytes = src.as_bytes();
+    let quote = *bytes.get(start)?;
+    if quote != b'"' && quote != b'\'' {
+        return None;
+    }
+    let mut i = start + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b if b == quote => return Some(&src[start + 1..i]),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// True when a backtick appears before the first `${` placeholder in `content`,
+/// i.e. the placeholder is inside an embedded template literal (code-as-data),
+/// not an accidentally non-interpolated regular string.
+fn has_backtick_before_placeholder(content: &str) -> bool {
+    let Some(placeholder) = content.find("${") else {
+        return false;
+    };
+    content[..placeholder].contains('`')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -746,5 +829,60 @@ mod tests {
         let src = "const msg = `migrated from \"vue\" to bun`;\nconsole.log(msg);\n";
         let d = diag("src/api/migrate.ts");
         assert!(FILTER.keep(&d, Some(src)));
+    }
+
+    // ── no-template-curly-in-string post-filter ──────────────────────────────
+
+    fn tcs_diag(path: &str, line: usize, column: usize) -> Diagnostic {
+        Diagnostic {
+            path: Arc::from(Path::new(path)),
+            line,
+            column,
+            rule_id: Cow::Borrowed("no-template-curly-in-string"),
+            message: "Template placeholders will not interpolate in regular strings".into(),
+            severity: Severity::Error,
+            span: None,
+        }
+    }
+
+    #[test]
+    fn tcs_drops_code_as_data_string_with_embedded_template_literal() {
+        // shadcn-vue registry: component source stored as a JSON string value;
+        // the `${...}` belongs to a backtick template literal inside that code.
+        // oxlint points at the opening quote of the `content` string (col 14).
+        let src = "    content: \"<script setup lang=\\\"ts\\\">\\n:y-formatter=\\\"(tick) => `$ ${new Intl.NumberFormat('us').format(tick)}`\\\"\\n</script>\",\n";
+        let d = tcs_diag("deprecated/www/src/registry/registry-examples.ts", 1, 14);
+        assert!(!NoTemplateCurlyInStringFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn tcs_keeps_genuine_meant_a_template_literal_bug() {
+        // The real bug: a double-quoted string that should be a backtick
+        // template literal. No backtick precedes the `${name}` placeholder.
+        let src = "const s = \"Hi ${name}\";\n";
+        let d = tcs_diag("src/greet.ts", 1, 11);
+        assert!(NoTemplateCurlyInStringFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn tcs_keeps_single_quoted_genuine_bug() {
+        let src = "const s = 'total ${count} items';\n";
+        let d = tcs_diag("src/cart.ts", 1, 11);
+        assert!(NoTemplateCurlyInStringFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn tcs_keeps_when_no_source_available() {
+        let d = tcs_diag("src/x.ts", 1, 1);
+        assert!(NoTemplateCurlyInStringFilter.keep(&d, None));
+    }
+
+    #[test]
+    fn tcs_keeps_backtick_after_placeholder_only() {
+        // A trailing backtick that does not bracket the placeholder is not the
+        // code-as-data shape — keep the diagnostic.
+        let src = "const s = \"x ${y} `\";\n";
+        let d = tcs_diag("src/x.ts", 1, 11);
+        assert!(NoTemplateCurlyInStringFilter.keep(&d, Some(src)));
     }
 }
