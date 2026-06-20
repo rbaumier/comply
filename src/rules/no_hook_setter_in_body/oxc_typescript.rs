@@ -56,6 +56,15 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Only flag callees proven to be `useState`/`useReducer` setters — the
+        // second slot of a `const [value, setValue] = useState(...)` destructure.
+        // A `set`-prefixed name alone does not imply a render-scheduling setter:
+        // utility/helper functions (`setNumberOrNumberAccessor`, `setTimeout`, an
+        // imported config helper) share the prefix but never trigger a re-render.
+        if !crate::oxc_helpers::is_use_state_setter_binding(id, semantic) {
+            return;
+        }
+
         // Walk ancestors to determine context.
         let mut in_safe_scope = false;
         let mut in_component = false;
@@ -394,6 +403,40 @@ function makeCounter() {
 }
 "#;
         assert!(run_on_path(src, "counter.ts").is_empty());
+    }
+
+    // --- #4758: only useState/useReducer setters are flagged ---
+
+    #[test]
+    fn allows_set_prefixed_utility_without_use_state() {
+        // Regression for #4758: `setNumberOrNumberAccessor` is a visx utility that
+        // configures a D3 layout, not a useState setter. It has no `useState`
+        // destructuring pair, so calling it in the component body is safe.
+        let src = r#"
+function setNumberOrNumberAccessor(func, value) {
+  func(typeof value === 'number' ? value : value(0));
+}
+export function Treemap({ padding, paddingInner }) {
+  const treemap = d3treemap();
+  if (padding) setNumberOrNumberAccessor(treemap.padding, padding);
+  if (paddingInner) setNumberOrNumberAccessor(treemap.paddingInner, paddingInner);
+  return <div />;
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_imported_set_helper_in_component_body() {
+        // An imported `set*` helper with no local useState pairing is not a setter.
+        let src = r#"
+import { setConfig } from './helpers';
+function Widget({ opts }) {
+  if (opts) setConfig(opts);
+  return <div />;
+}
+"#;
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
