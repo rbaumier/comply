@@ -12,8 +12,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 
 /// Prefixes whose values are unambiguously mutually exclusive — any two
 /// classes sharing one of these prefixes conflict. Ambiguous prefixes
-/// (`text-`, `font-`, `flex-`, `border-`) are handled by dedicated
-/// sub-categorisation functions that split by CSS property.
+/// (`text-`, `font-`, `flex-`, `border-`, `bg-`) are handled by dedicated
+/// sub-categorisation functions that split by CSS sub-property.
 const CONFLICT_PREFIXES: &[&str] = &[
     // spacing
     "p-",
@@ -38,7 +38,6 @@ const CONFLICT_PREFIXES: &[&str] = &[
     "max-w-",
     "max-h-",
     // visual
-    "bg-",
     "rounded-",
     "shadow-",
     "opacity-",
@@ -182,6 +181,38 @@ fn font_category(class: &str) -> Option<&'static str> {
     }
 }
 
+/// Subdivides `bg-*` utilities by the CSS sub-property they set, so utilities
+/// targeting different sub-properties (`bg-cover` size + `bg-center` position +
+/// `bg-no-repeat` repeat — the idiomatic full-cover-image combo) don't conflict.
+/// Only two `bg-*` setting the SAME sub-property conflict. The catch-all
+/// `bg-color` covers background-color/image/gradient utilities, which do conflict
+/// (`bg-red-500 bg-blue-500`).
+fn bg_category(class: &str) -> Option<&'static str> {
+    // background-repeat (`bg-repeat`, `bg-no-repeat`, `bg-repeat-x/y/round/space`)
+    if class == "bg-repeat" || class == "bg-no-repeat" || class.starts_with("bg-repeat-") {
+        return Some("bg-repeat");
+    }
+    if class.starts_with("bg-clip-") {
+        return Some("bg-clip"); // background-clip (e.g. `bg-clip-text` for gradient text)
+    }
+    if class.starts_with("bg-origin-") {
+        return Some("bg-origin"); // background-origin
+    }
+    if class.starts_with("bg-blend-") {
+        return Some("bg-blend"); // background-blend-mode
+    }
+    match class {
+        "bg-auto" | "bg-cover" | "bg-contain" => Some("bg-size"),
+        "bg-center" | "bg-top" | "bg-right" | "bg-bottom" | "bg-left"
+        | "bg-left-top" | "bg-left-bottom" | "bg-right-top" | "bg-right-bottom" => {
+            Some("bg-position")
+        }
+        "bg-fixed" | "bg-local" | "bg-scroll" => Some("bg-attachment"),
+        // background-color / image / gradient — catch-all paint group.
+        _ => Some("bg-color"),
+    }
+}
+
 fn conflict_key(class: &str) -> Option<&'static str> {
     if class.starts_with("text-") {
         return text_category(class);
@@ -194,6 +225,9 @@ fn conflict_key(class: &str) -> Option<&'static str> {
     }
     if class.starts_with("font-") {
         return font_category(class);
+    }
+    if class.starts_with("bg-") {
+        return bg_category(class);
     }
 
     let mut prefixes: Vec<&&str> = CONFLICT_PREFIXES.iter().collect();
@@ -295,6 +329,36 @@ mod tests {
 
     fn run(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
+    }
+
+    fn run_vue(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.vue")
+    }
+
+    #[test]
+    fn allows_bg_cover_center_no_repeat_in_vue() {
+        // Regression for rbaumier/comply#4487 — `bg-cover` (size),
+        // `bg-center` (position) and `bg-no-repeat` (repeat) set distinct
+        // CSS sub-properties; the idiomatic full-cover-image combo must not
+        // conflict. This is the real `.vue` reproduction from the issue.
+        let source = r#"<template>
+  <div class="h-[270px] border-b border-base bg-cover bg-center bg-no-repeat" />
+</template>"#;
+        assert!(run_vue(source).is_empty());
+    }
+
+    #[test]
+    fn flags_conflicting_bg_color_in_vue() {
+        // Two background-color utilities still conflict.
+        let source = r#"<template>
+  <div class="bg-red-500 bg-blue-500" />
+</template>"#;
+        assert_eq!(run_vue(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_bg_cover_center_no_repeat() {
+        assert!(run(r#"const x = <div className="bg-cover bg-center bg-no-repeat" />;"#).is_empty());
     }
 
     #[test]
