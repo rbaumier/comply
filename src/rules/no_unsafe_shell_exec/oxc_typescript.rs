@@ -71,12 +71,82 @@ fn is_regexp_receiver(expr: &Expression, semantic: &oxc_semantic::Semantic) -> b
     matches!(&decl.init, Some(init) if is_regexp_expression(init))
 }
 
+/// True when `expr` is a `require.resolve(...)` call. Its result is a
+/// statically-resolved, project-controlled module path — it cannot carry
+/// user input, so interpolating it into a shell command is not an injection
+/// vector. The argument is the module specifier, irrelevant to the call shape.
+fn is_require_resolve_call(expr: &Expression) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    member.property.name == "resolve"
+        && matches!(&member.object, Expression::Identifier(id) if id.name == "require")
+}
+
+/// True when `expr` is `process.execPath` — the absolute path to the Node.js
+/// executable, a runtime constant, not user input.
+fn is_process_exec_path(expr: &Expression) -> bool {
+    let Expression::StaticMemberExpression(member) = expr else {
+        return false;
+    };
+    member.property.name == "execPath"
+        && matches!(&member.object, Expression::Identifier(id) if id.name == "process")
+}
+
+/// True when `expr` is provably free of user input: a string literal,
+/// `require.resolve(...)`, `process.execPath`, or a `const`-bound identifier
+/// initialized from one of those. These values are deterministic,
+/// project-controlled paths, so interpolating them into a shell command cannot
+/// inject. Anything else (variables of unknown origin, concatenations, other
+/// calls) is treated as potentially user-controlled.
+fn is_injection_safe_expression(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bool {
+    if matches!(expr, Expression::StringLiteral(_))
+        || is_require_resolve_call(expr)
+        || is_process_exec_path(expr)
+    {
+        return true;
+    }
+    let Expression::Identifier(id) = expr else {
+        return false;
+    };
+    let Some(ref_id) = id.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let AstKind::VariableDeclarator(decl) =
+        semantic.nodes().kind(scoping.symbol_declaration(sym_id))
+    else {
+        return false;
+    };
+    // Only a `const` binding can be trusted; `let`/`var` could be reassigned to
+    // user input after initialization.
+    if !decl.kind.is_const() {
+        return false;
+    }
+    matches!(&decl.init, Some(init) if is_require_resolve_call(init) || is_process_exec_path(init))
+}
+
 /// Unsafe if the argument isn't a plain string literal. Template literals
-/// with substitutions are unsafe; those without are treated as plain.
-fn is_unsafe_arg(expr: &Expression) -> bool {
+/// with substitutions are unsafe unless every interpolation is provably free
+/// of user input (string literals, `require.resolve(...)`, `process.execPath`,
+/// or `const` bindings of those) — a deterministic, project-controlled command
+/// that cannot be an injection vector.
+fn is_unsafe_arg(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bool {
     match expr {
         Expression::StringLiteral(_) => false,
-        Expression::TemplateLiteral(tpl) => !tpl.expressions.is_empty(),
+        Expression::TemplateLiteral(tpl) => {
+            !tpl.expressions.is_empty()
+                && !tpl
+                    .expressions
+                    .iter()
+                    .all(|e| is_injection_safe_expression(e, semantic))
+        }
         _ => true,
     }
 }
@@ -151,7 +221,7 @@ impl OxcCheck for Check {
 
         let Some(first) = call.arguments.first() else { return };
         let Some(expr) = first.as_expression() else { return };
-        if !is_unsafe_arg(expr) {
+        if !is_unsafe_arg(expr, semantic) {
             return;
         }
 
@@ -333,6 +403,60 @@ exec(`rm -rf ${userInput}`);"#;
     #[test]
     fn still_flags_adb_exec_issue_4455() {
         let src = "adb.exec(cmd);";
+        assert_eq!(run(src).len(), 1, "got {:?}", run(src));
+    }
+
+    // Regression for #4998: a CLI integration test interpolates a
+    // `require.resolve(...)`-derived path — a statically-resolved,
+    // project-controlled module path that cannot carry user input.
+    #[test]
+    fn allows_exec_with_require_resolve_binding_issue_4998() {
+        let src = r#"const BIN_PATH = require.resolve('@formatjs/cli/bin/formatjs');
+const output = await exec(`${BIN_PATH} compile-folder --help`);"#;
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    // Regression for #4998: an inline `require.resolve(...)` interpolation is
+    // also safe.
+    #[test]
+    fn allows_exec_with_inline_require_resolve_issue_4998() {
+        let src = r#"exec(`${require.resolve('../bin/cli.js')} --version`);"#;
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    // Regression for #4998: `process.execPath` is a runtime constant, safe to
+    // interpolate alongside a `require.resolve(...)` path.
+    #[test]
+    fn allows_exec_with_process_exec_path_and_require_resolve_issue_4998() {
+        let src = r#"const bin = require.resolve('../bin/cli.js');
+exec(`${process.execPath} ${bin} --help`);"#;
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    // A template whose interpolations are NOT all provably safe must still flag:
+    // a `require.resolve(...)` path next to an unknown variable can carry
+    // injection through that variable.
+    #[test]
+    fn still_flags_exec_with_require_resolve_and_unknown_var_issue_4998() {
+        let src = r#"const bin = require.resolve('../bin/cli.js');
+exec(`${bin} ${userInput}`);"#;
+        assert_eq!(run(src).len(), 1, "got {:?}", run(src));
+    }
+
+    // A `let`-bound path (reassignable to user input after init) is not trusted.
+    #[test]
+    fn still_flags_exec_with_let_bound_require_resolve_issue_4998() {
+        let src = r#"let bin = require.resolve('../bin/cli.js');
+exec(`${bin} run`);"#;
+        assert_eq!(run(src).len(), 1, "got {:?}", run(src));
+    }
+
+    // The safe-path exemption only relaxes template literals whose every
+    // interpolation is provably safe. A bare dynamic command (not a template)
+    // is untouched and must still flag.
+    #[test]
+    fn still_flags_exec_with_plain_variable_issue_4998() {
+        let src = "exec(cmd);";
         assert_eq!(run(src).len(), 1, "got {:?}", run(src));
     }
 }
