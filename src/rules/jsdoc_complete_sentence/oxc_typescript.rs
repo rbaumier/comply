@@ -1,5 +1,9 @@
 //! jsdoc-complete-sentence OxcCheck backend — JSDoc descriptions must start
-//! with a capital letter and end with punctuation.
+//! with a capital letter and end with terminal punctuation. The capital-letter
+//! check fires only on a cased lowercase first letter, and the terminal-
+//! punctuation check accepts both ASCII (`.`/`!`/`?`) and CJK (`。`/`！`/`？`)
+//! terminators, so case-less scripts (Chinese, Japanese, Korean) are not
+//! flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -128,10 +132,13 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            // First line must start with a capital letter.
+            // First line must start with a capital letter. Only a cased
+            // lowercase letter (Latin/Cyrillic/Greek `a`-`z`, etc.) is wrong:
+            // scripts without letter case (CJK ideographs, Hiragana, Hangul,
+            // …) return `false` for `is_lowercase`, so they are not flagged.
             let (first_text, first_offset) = &description_lines[0];
             if let Some(ch) = first_text.chars().next()
-                && ch.is_alphabetic() && !ch.is_uppercase() {
+                && ch.is_lowercase() {
                     let line_byte_offset =
                         find_line_byte_offset(raw, *first_offset);
                     let (line, column) = byte_offset_to_line_col(
@@ -149,10 +156,14 @@ impl OxcCheck for Check {
                     });
                 }
 
-            // Last line must end with punctuation.
+            // Last line must end with punctuation. A description written in a
+            // case-less script (CJK ideographs, kana, hangul) is exempt: such
+            // text does not use ASCII terminators, and short phrases routinely
+            // carry no closing mark at all, so requiring one is meaningless.
             let (last_text, last_offset) = &description_lines[description_lines.len() - 1];
             if let Some(ch) = last_text.trim_end().chars().last()
-                && ch != '.' && ch != '!' && ch != '?' {
+                && !is_terminal_punctuation(ch)
+                && !is_caseless_script_letter(ch) {
                     let line_byte_offset =
                         find_line_byte_offset(raw, *last_offset);
                     let (line, column) = byte_offset_to_line_col(
@@ -173,6 +184,23 @@ impl OxcCheck for Check {
 
         diagnostics
     }
+}
+
+/// Whether a character terminates a sentence. Accepts the ASCII `.`, `!`,
+/// `?` and their CJK fullwidth equivalents — the ideographic full stop `。`
+/// (U+3002), fullwidth `！` (U+FF01), and fullwidth `？` (U+FF1F) — so a
+/// well-formed Chinese/Japanese description is not flagged. The ideographic
+/// comma `、` is deliberately excluded: it is a separator, not a terminator.
+fn is_terminal_punctuation(ch: char) -> bool {
+    matches!(ch, '.' | '!' | '?' | '。' | '！' | '？')
+}
+
+/// Whether a character is a letter from a script with no upper/lower case
+/// distinction (CJK ideographs, Japanese kana, Korean hangul, Thai, …). Such
+/// a character is alphabetic but neither uppercase nor lowercase. Used to
+/// exempt non-Latin descriptions from the ASCII terminal-punctuation rule.
+fn is_caseless_script_letter(ch: char) -> bool {
+    ch.is_alphabetic() && !ch.is_uppercase() && !ch.is_lowercase()
 }
 
 /// Find the byte offset of a given line number (0-based) within text.
@@ -332,6 +360,41 @@ export function useThemeColor(): void {}
 function add(a: number, b: number) {}
 "#;
         let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("end with")));
+    }
+
+    #[test]
+    fn allows_cjk_description() {
+        // Regression for rbaumier/comply#4808 — a Chinese JSDoc description
+        // has no Latin capitalization and ends with a phrase (no `.`). CJK
+        // ideographs are neither uppercase nor lowercase, so the capital check
+        // must not fire; the missing-ASCII-period must not fire either.
+        let source = r#"
+/** 根据角色动态生成路由 */
+function generateRoutes(): void {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_cjk_terminal_punctuation() {
+        // An ideographic full stop `。` is a valid sentence terminator.
+        let source = "/** 根据角色动态生成路由。 */\nfunction generateRoutes(): void {}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_lowercase_latin_with_cjk_fix() {
+        // A genuinely incomplete English description (lowercase start, no
+        // terminal punctuation) must still be flagged after the CJK fix.
+        let source = r#"
+/**
+ * adds two numbers
+ */
+function add(a: number, b: number) {}
+"#;
+        let d = run_on(source);
+        assert!(d.iter().any(|d| d.message.contains("capital")));
         assert!(d.iter().any(|d| d.message.contains("end with")));
     }
 
