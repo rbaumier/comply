@@ -1605,6 +1605,26 @@ mod tests {
     }
 
     #[test]
+    fn ignores_storybook_config_default_export_issue_4466() {
+        // Regression for #4466 — `.storybook/main.ts` is a Storybook framework
+        // configuration file whose default export is consumed by the Storybook
+        // CLI by convention, not via a static `import`, so the import graph
+        // shows no importer. The default export must not be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                ".storybook/main.ts",
+                "const config = { stories: [] };\nexport default config;\n",
+            ),
+            ("src/app.ts", "export const z = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(&files, ".storybook/main.ts");
+        assert!(
+            diags.is_empty(),
+            "Storybook config default export must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
     fn still_flags_dead_export_in_ordinary_file_alongside_stories() {
         // Negative-space guard for #1666 — the Storybook skip is gated on the
         // `.stories.` filename, so a genuinely unused export in an ordinary
