@@ -498,6 +498,18 @@ mod tests {
     }
 
     #[test]
+    fn allows_kebab_alias_of_define_component_registration() {
+        // Issue #4895: a `components: {}` registration inside `defineComponent()`
+        // exempts the lowercase spelling of the component, the same as a bare
+        // `export default { components: {} }`. No matching imports are present,
+        // so the exemption is driven solely by the registration scan; a renamed
+        // entry (`Showline: Line`) is exempted by its key, which is what the
+        // template tag resolves against.
+        let src = "<template>\n  <basic />\n  <showline />\n</template>\n<script lang=\"ts\">\nexport default defineComponent({\n  components: {\n    Basic,\n    Showline: Line,\n  },\n});\n</script>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
     fn flags_lowercase_component_without_matching_import() {
         // Negative-space guard: a lowercase tag with no corresponding
         // PascalCase import or registration must still fire.
