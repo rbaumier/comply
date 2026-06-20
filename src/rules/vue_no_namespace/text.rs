@@ -9,6 +9,30 @@ use crate::rules::vue_template_helpers::{extract_template, is_vue_file};
 #[derive(Debug)]
 pub struct Check;
 
+/// Advance past an opening tag's body, returning the index just after its
+/// closing `>` (or `len` if unterminated). Attribute values delimited by `"`
+/// or `'` are skipped wholesale so that a `<` appearing inside one is never
+/// scanned as a tag opener.
+fn skip_tag_body(bytes: &[u8], from: usize) -> usize {
+    let len = bytes.len();
+    let mut i = from;
+    while i < len {
+        match bytes[i] {
+            b'"' | b'\'' => {
+                let quote = bytes[i];
+                i += 1;
+                while i < len && bytes[i] != quote {
+                    i += 1;
+                }
+                i += 1; // consume closing quote (or step past `len`)
+            }
+            b'>' => return i + 1,
+            _ => i += 1,
+        }
+    }
+    len
+}
+
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !is_vue_file(ctx.path) {
@@ -53,7 +77,10 @@ impl TextCheck for Check {
                         });
                     }
                 }
-                i = j;
+                // Skip to the end of the tag, tracking attribute-value quotes so
+                // that a `<` inside a quoted value (e.g. UnoCSS variants like
+                // `class="<md:(...)"`) is not mistaken for a tag opener.
+                i = skip_tag_body(bytes, j);
             } else {
                 i += 1;
             }
@@ -87,5 +114,23 @@ mod tests {
     fn skips_non_vue() {
         let d = Check.check(&CheckCtx::for_test(Path::new("f.ts"), "<foo:bar />"));
         assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_unocss_responsive_variants_in_class() {
+        let src = "<template>\n  <div class=\"max-w-full md:max-w-11/12 <md:(dark:border-t-1 border-white)\">\n    <div class=\"grid md:grid-cols-3 <md:divide-y md:divide-x dark:divide-white\" />\n  </div>\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_variant_prefixes_in_class_binding() {
+        let src = "<template>\n  <span :class=\"{ 'hover:underline dark:text-white': active }\" />\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_genuine_namespaced_element() {
+        let src = "<template>\n  <svg:rect width=\"10\" />\n</template>";
+        assert_eq!(run(src).len(), 1);
     }
 }
