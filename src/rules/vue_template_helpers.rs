@@ -261,6 +261,17 @@ pub fn has_text_content(source: &str, line_idx_0based: usize, tag: &str) -> bool
     !element_text_content(source, line_idx_0based, tag).is_empty()
 }
 
+/// True when `tag` names a Vue component or custom element rather than a native
+/// HTML/SVG element. Vue components are written in PascalCase (`<MyButton>`,
+/// `<UPageSection>`); custom elements are hyphenated (`<my-button>`). Native
+/// HTML/SVG element names contain no hyphen and start with a lowercase letter
+/// (`div`, `img`, `linearGradient`). Legacy/presentational HTML semantics
+/// (obsolete attributes, etc.) apply only to native elements, so rules use this
+/// to skip custom components.
+pub fn is_custom_component_tag(tag: &str) -> bool {
+    tag.contains('-') || tag.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+}
+
 /// Collect all attribute names from an attributes string.
 pub fn collect_attr_names(attrs: &str) -> Vec<&str> {
     let mut names = Vec::new();
@@ -448,6 +459,16 @@ mod tests {
         assert_eq!(attr_value("role=\"button\"", "role"), Some("button"));
         assert_eq!(attr_value("class='x' role='nav'", "role"), Some("nav"));
         assert_eq!(attr_value("class=\"x\"", "role"), None);
+    }
+
+    #[test]
+    fn is_custom_component_tag_works() {
+        assert!(is_custom_component_tag("UPageSection"));
+        assert!(is_custom_component_tag("MyButton"));
+        assert!(is_custom_component_tag("my-card"));
+        assert!(!is_custom_component_tag("div"));
+        assert!(!is_custom_component_tag("img"));
+        assert!(!is_custom_component_tag(""));
     }
 
     #[test]
