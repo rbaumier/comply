@@ -1590,12 +1590,15 @@ fn ep_is_ident_byte(b: u8) -> bool {
 
 // ── strict-void-return post-filter ────────────────────────────────────────
 //
-// Three FP shapes are dropped:
+// Four FP shapes are dropped:
 // 1. `vi.fn()` mocks — inline or aliased via const/let/var. (Closes #…)
 // 2. `renderHook(() => …)` callbacks — the callback must return the hook
 //    value. A 2-line window is used to avoid bleeding into adjacent calls.
 // 3. `new Promise(r => setTimeout(r, ms))` executors — the executor's `void`
 //    return type discards the timer handle (the canonical sleep idiom).
+// 4. Concise arrows whose body is a side-effecting collection mutation
+//    (`x => acc.push(x)`, `() => set.add(x)`) in a void-callback slot — the
+//    mutator's return value is incidental and discarded.
 
 struct StrictVoidReturnFilter;
 
@@ -1607,7 +1610,108 @@ impl PostFilter for StrictVoidReturnFilter {
         !svr_is_vi_fn_fp(src, diag.line, diag.column)
             && !svr_is_render_hook_fp(src, diag.line)
             && !svr_is_promise_executor_timer_fp(src, diag.line)
+            && !svr_is_concise_mutator_fp(src, diag.line, diag.column)
     }
+}
+
+/// Collection-mutation methods whose return value is incidental — the call is
+/// made for its side effect, the returned length / set / boolean is discarded.
+const SVR_MUTATOR_METHODS: &[&str] = &[
+    "push", "unshift", "splice", "add", "set", "delete", "clear",
+];
+
+/// True when the diagnostic sits on a concise-body arrow (`=>` not opening a
+/// block) whose body *is* a method call to a known collection mutator
+/// (`(x) => acc.push(x)`, `() => set.add(x)`). TypeScript permits a `() => void`
+/// callback to return any type — the mutator's result is discarded, only its
+/// side effect matters, so the incidental return is not a real value leak.
+///
+/// The body must be the bare mutator call: `a.push(x) + 1` or `cond ? a.push(x)
+/// : f()` still return a real value and stay flagged.
+fn svr_is_concise_mutator_fp(src: &str, line_1based: usize, column_1based: usize) -> bool {
+    let Some(line) = src.lines().nth(line_1based.saturating_sub(1)) else {
+        return false;
+    };
+    // Anchor to the offending arrow: slice from the diagnostic column so a line
+    // with multiple callbacks resolves to the right one.
+    let from = column_1based.saturating_sub(1).min(line.len());
+    if !line.is_char_boundary(from) {
+        return false;
+    }
+    let Some(rel_arrow) = line[from..].find("=>") else {
+        return false;
+    };
+    let body = line[from + rel_arrow + 2..].trim_start();
+    // Concise body only: a block body `=> { … }` is never flagged by the rule.
+    if body.starts_with('{') {
+        return false;
+    }
+    svr_body_is_mutator_call(body)
+}
+
+/// True when `body` *is* a method call `<receiver-chain>.<mutator>(…)` for one
+/// of the known collection mutators: the receiver chain starts at the body head
+/// and only enclosing-context closers (`,`/`;`/`)`/`}`) follow the closing paren
+/// — so the call is the whole body, not a sub-expression of a larger value.
+fn svr_body_is_mutator_call(body: &str) -> bool {
+    let bytes = body.as_bytes();
+    // Consume the receiver member-access chain from the head; it must end at the
+    // call's opening paren (`acc.push` → stops at `(`, `this.items.add` → `(`).
+    let mut open = 0;
+    while open < bytes.len() && svr_is_receiver_byte(bytes[open]) {
+        open += 1;
+    }
+    // The chain must be followed by `(` and contain a `.` (a method call, not a
+    // bare identifier like `(push) => push`).
+    if bytes.get(open) != Some(&b'(') {
+        return false;
+    }
+    let chain = &body[..open];
+    let Some(dot) = chain.rfind('.') else {
+        return false;
+    };
+    let receiver = &chain[..dot];
+    let method = &chain[dot + 1..];
+    // Receiver must be a non-empty member-access chain; method a known mutator.
+    if receiver.is_empty() || !SVR_MUTATOR_METHODS.contains(&method) {
+        return false;
+    }
+    let Some(close) = svr_matching_paren(body, open) else {
+        return false;
+    };
+    // After the call, only closers of the enclosing context may remain —
+    // `,`/`;`/`)`/`}` (the wrapping call, object, or block). Anything else
+    // (`+ 1`, `|| f()`) means the call is a sub-expression of a larger value.
+    body[close + 1..]
+        .trim()
+        .trim_matches([',', ';', ')', '}', ' ', '\t'])
+        .is_empty()
+}
+
+/// A byte that may appear in a receiver member-access chain head:
+/// `acc`, `this.items`, `a?.b`, `obj!.set` → idents plus `.`/`?`/`!`.
+fn svr_is_receiver_byte(b: u8) -> bool {
+    svr_is_ident_byte(b) || b == b'.' || b == b'?' || b == b'!'
+}
+
+/// Index of the `)` matching the `(` at `open`, accounting for nesting. Returns
+/// `None` if unbalanced (e.g. the call spills onto the next line).
+fn svr_matching_paren(s: &str, open: usize) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut depth = 0i32;
+    for (idx, &b) in bytes.iter().enumerate().skip(open) {
+        match b {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(idx);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Timer / scheduling APIs whose return value is idiomatically discarded.
@@ -2483,5 +2587,109 @@ test('a', () => {
         let f = StrictVoidReturnFilter;
         let d = svr_diag(Path::new("src/foo.ts"), 1, 1);
         assert!(f.keep(&d, None));
+    }
+
+    // Regression for #4821: a concise arrow whose body is a collection mutator
+    // (`(data) => blocks.push(data)`) in a void-callback slot is a discarded
+    // side effect, not a leaked value. Must not fire. The diagnostic column
+    // points at the arrow-function start.
+    #[test]
+    fn svr_drops_concise_arrow_push() {
+        let src = "transport.subscribe({\n  onData: (data) => blocks.push(data),\n})\n";
+        let path = write_temp("svr_concise_push.ts", src);
+        let (line, col) = line_col_of(src, "(data) => blocks.push(data)");
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(!f.keep(&svr_diag(&path, line, col), Some(&src_content)));
+    }
+
+    #[test]
+    fn svr_drops_concise_arrow_error_push() {
+        let src = "transport.subscribe({\n  onError: (err) => errors.push(err),\n})\n";
+        let path = write_temp("svr_concise_error_push.ts", src);
+        let (line, col) = line_col_of(src, "(err) => errors.push(err)");
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(!f.keep(&svr_diag(&path, line, col), Some(&src_content)));
+    }
+
+    #[test]
+    fn svr_drops_concise_arrow_set_add() {
+        let src = "items.forEach((x) => set.add(x))\n";
+        let path = write_temp("svr_concise_set_add.ts", src);
+        let (line, col) = line_col_of(src, "(x) => set.add(x)");
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(!f.keep(&svr_diag(&path, line, col), Some(&src_content)));
+    }
+
+    // Member-chain receiver with optional chaining: `this.items?.push(x)`.
+    #[test]
+    fn svr_drops_concise_arrow_optional_chain_push() {
+        let src = "list.forEach((x) => this.items.push(x))\n";
+        let path = write_temp("svr_concise_member_push.ts", src);
+        let (line, col) = line_col_of(src, "(x) => this.items.push(x)");
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(!f.keep(&svr_diag(&path, line, col), Some(&src_content)));
+    }
+
+    // A block body returning a real value is still a genuine misuse.
+    #[test]
+    fn svr_keeps_block_body_returning_value() {
+        let src = "setup((data) => { return computeValue(data); })\n";
+        let path = write_temp("svr_block_return.ts", src);
+        let (line, col) = line_col_of(src, "(data) =>");
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(f.keep(&svr_diag(&path, line, col), Some(&src_content)));
+    }
+
+    // A concise arrow returning a real value (non-mutator call) still fires.
+    #[test]
+    fn svr_keeps_concise_arrow_returning_value() {
+        let src = "setup((data) => transform(data))\n";
+        let path = write_temp("svr_concise_value.ts", src);
+        let (line, col) = line_col_of(src, "(data) =>");
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(f.keep(&svr_diag(&path, line, col), Some(&src_content)));
+    }
+
+    // A mutator call that is only part of a larger value expression still fires:
+    // `a.push(x) + 1` returns the new length, a genuine value leak.
+    #[test]
+    fn svr_keeps_mutator_call_in_larger_expression() {
+        let src = "setup((x) => arr.push(x) + 1)\n";
+        let path = write_temp("svr_mutator_plus.ts", src);
+        let (line, col) = line_col_of(src, "(x) =>");
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(f.keep(&svr_diag(&path, line, col), Some(&src_content)));
+    }
+
+    // `push` as a bare identifier (not a method call) must not trigger the exemption.
+    #[test]
+    fn svr_keeps_bare_push_identifier() {
+        let src = "setup((push) => push)\n";
+        let path = write_temp("svr_bare_push.ts", src);
+        let (line, col) = line_col_of(src, "(push) =>");
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(f.keep(&svr_diag(&path, line, col), Some(&src_content)));
+    }
+
+    // Multi-callback line: a genuine value-returning arrow before a mutator arrow
+    // must still fire (column anchors to the offending arrow, no bleed).
+    #[test]
+    fn svr_multi_arrow_no_bleed_from_mutator() {
+        let src = "obj({ onA: () => compute(), onB: (x) => acc.push(x) })\n";
+        let path = write_temp("svr_multi_arrow.ts", src);
+        let (line, col_a) = line_col_of(src, "() => compute()");
+        let (_, col_b) = line_col_of(src, "(x) => acc.push(x)");
+        let src_content = source_for(&path);
+        let f = StrictVoidReturnFilter;
+        assert!(f.keep(&svr_diag(&path, line, col_a), Some(&src_content)));
+        assert!(!f.keep(&svr_diag(&path, line, col_b), Some(&src_content)));
     }
 }
