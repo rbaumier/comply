@@ -4,7 +4,11 @@
 //! `unreachable!` outside of test code. These macros all abort at
 //! runtime — the opposite of what a production service should do.
 //!
-//! - `panic!` — turn it into a typed `Result` error.
+//! - `panic!` — turn it into a typed `Result` error. Exception: a `panic!`
+//!   that is the *entire* body of a trait-impl method whose return type forces
+//!   a value (not `Result`/`Option`/`()`) is the null-object pattern — the
+//!   trait signature makes any non-panicking implementation impossible, so the
+//!   panic is the only correct response to a documented invariant violation.
 //! - `todo!` / `unimplemented!` — placeholders that must not ship.
 //! - `unreachable!` — asserts an invariant the compiler can't prove. A
 //!   documented `unreachable!("reason")` carrying an explanatory string
@@ -19,7 +23,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    is_in_test_context, is_under_tests_dir, macro_body, split_top_level_args, string_literal_content,
+    enclosing_fn, is_in_test_context, is_in_trait_impl, is_under_tests_dir, macro_body,
+    split_top_level_args, string_literal_content,
 };
 
 const KINDS: &[&str] = &["macro_invocation"];
@@ -70,6 +75,20 @@ impl AstCheck for Check {
         if macro_name == "unreachable" && has_documented_message(node, ctx.source) {
             return;
         }
+        // Null-object pattern: a `panic!` that is the *entire* body of a
+        // trait-impl method returning a bare value type. The implementor
+        // can't change the signature (it's the trait contract), the return
+        // type isn't `Result`/`Option`/`()` so `?`/`Err`/`None`/early-return
+        // are impossible, and the method does nothing but panic — calling it
+        // is a documented invariant violation (e.g. `get_val` on an empty
+        // column sentinel). Same justification as documented `unreachable!`:
+        // the arm has no value to return. A `panic!` buried in real logic, or
+        // in a method whose signature admits a non-panicking result, still
+        // flags. Restricted to `panic!`: `todo!`/`unimplemented!` are
+        // placeholders that must not ship even as a sole-body stub.
+        if macro_name == "panic" && is_sole_body_null_object_panic(node, source_bytes) {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -105,6 +124,87 @@ fn has_documented_message(node: tree_sitter::Node, source: &str) -> bool {
         return false;
     };
     string_literal_content(first_arg.trim()).is_some()
+}
+
+/// True when `panic_node` is the sole body of a trait-impl method whose return
+/// type forces a value — the structural "null object" shape where `panic!` is
+/// the only correct implementation.
+///
+/// All three must hold:
+/// 1. The panic sits inside an `impl Trait for Type` method ([`is_in_trait_impl`]):
+///    the implementor can't widen the signature to `Result`/`Option`.
+/// 2. The method's `return_type` is an infallible value type — not `Result<…>`,
+///    not `Option<…>`, not unit `()`. Those three admit a non-panicking answer
+///    (`Err`/`None`/do-nothing), so a panic there is a real choice, not forced.
+/// 3. The panic *is* the method body — the block's single statement/tail
+///    expression is the `panic!` itself (modulo an `expression_statement`
+///    wrapper). A `panic!` in one arm of a compound sole expression
+///    (`if`/`match`/`let-else`) is not exempt: the other arm is a real
+///    non-panicking path, so the panic is a choice, not forced. Likewise a
+///    `panic!` following other statements flags.
+fn is_sole_body_null_object_panic(panic_node: tree_sitter::Node, source: &[u8]) -> bool {
+    if !is_in_trait_impl(panic_node) {
+        return false;
+    }
+    let Some(func) = enclosing_fn(panic_node) else {
+        return false;
+    };
+    if !returns_infallible_value(func, source) {
+        return false;
+    }
+    body_sole_expression(func).is_some_and(|expr| unwrap_expr_stmt(expr).id() == panic_node.id())
+}
+
+/// Unwraps a single `expression_statement` wrapper to its inner expression. A
+/// tail `panic!()` with no trailing `;` is the `macro_invocation` directly; one
+/// with a `;` is wrapped in an `expression_statement`. Returns `node` unchanged
+/// when it is not such a wrapper.
+fn unwrap_expr_stmt(node: tree_sitter::Node) -> tree_sitter::Node {
+    if node.kind() == "expression_statement" {
+        node.named_child(0).unwrap_or(node)
+    } else {
+        node
+    }
+}
+
+/// True if `func`'s `return_type` is a bare value type — anything other than
+/// `Result<…>`, `Option<…>`, or unit `()`. A method with no `return_type` (an
+/// implicit `()` return) returns false: it could simply do nothing. The match
+/// is on the type's last path segment, so qualified forms like
+/// `std::result::Result` and `anyhow::Result` are recognized too.
+fn returns_infallible_value(func: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(ret) = func.child_by_field_name("return_type") else {
+        return false;
+    };
+    let Ok(text) = ret.utf8_text(source) else {
+        return false;
+    };
+    let text = text.trim();
+    if text == "()" {
+        return false;
+    }
+    let head = text.split(['<', ' ']).next().unwrap_or(text);
+    let last_segment = head.rsplit("::").next().unwrap_or(head);
+    !matches!(last_segment, "Result" | "Option")
+}
+
+/// The single meaningful expression of `func`'s body block, or `None` when the
+/// block is empty or holds more than one statement/expression. Used to confirm
+/// the method does nothing but its one expression.
+fn body_sole_expression(func: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let body = func.child_by_field_name("body")?;
+    let mut cursor = body.walk();
+    let mut sole = None;
+    for child in body.named_children(&mut cursor) {
+        if child.kind() == "line_comment" || child.kind() == "block_comment" {
+            continue;
+        }
+        if sole.is_some() {
+            return None;
+        }
+        sole = Some(child);
+    }
+    sole
 }
 
 #[cfg(test)]
@@ -183,6 +283,134 @@ mod tests {
         // Whitespace between the delimiter and the message must not defeat the
         // exemption — the argument is trimmed before the literal check.
         assert!(run_on(r#"fn f() { unreachable!( "padded reason" ); }"#).is_empty());
+    }
+
+    #[test]
+    fn allows_null_object_panic_in_infallible_trait_method() {
+        // tantivy columnar/src/column_values/mod.rs:192 — the FP from #4781.
+        // `get_val` returns `T` (infallible), the impl is for the empty-column
+        // sentinel, and the panic is the method's entire body.
+        let source = r#"
+            impl<T: PartialOrd + Default> ColumnValues<T> for EmptyColumnValues {
+                fn get_val(&self, _idx: u32) -> T {
+                    panic!("Internal Error: Called get_val of empty column.")
+                }
+            }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_panic_in_trait_method_returning_result() {
+        // The signature admits `Err` — the panic is a real choice, not forced.
+        let source = r#"
+            impl Reader for EmptyReader {
+                fn read(&self) -> Result<T, E> {
+                    panic!("nothing to read")
+                }
+            }
+        "#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_panic_in_trait_method_returning_option() {
+        // `Option` admits `None` — a non-panicking answer exists.
+        let source = r#"
+            impl Lookup for EmptyMap {
+                fn find(&self, _k: u32) -> Option<T> {
+                    panic!("nothing to find")
+                }
+            }
+        "#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_conditional_panic_in_infallible_trait_method() {
+        // The panic is buried in real logic, not the sole body — normal code.
+        let source = r#"
+            impl ColumnValues<T> for SparseColumn {
+                fn get_val(&self, idx: u32) -> T {
+                    if idx >= self.len {
+                        panic!("out of bounds");
+                    }
+                    self.data[idx as usize]
+                }
+            }
+        "#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_sole_body_panic_in_inherent_impl() {
+        // No trait contract forces the signature — the author could return a
+        // `Result` instead, so the panic still flags.
+        let source = r#"
+            impl EmptyColumn {
+                fn get_val(&self, _idx: u32) -> T {
+                    panic!("Called get_val of empty column.")
+                }
+            }
+        "#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_panic_in_compound_sole_expression_branch() {
+        // The body is one `if/else` — the `else` returns a real value, so the
+        // panic is a choice, not forced. Not the null-object shape.
+        let source = r#"
+            impl ColumnValues<T> for MaybeColumn {
+                fn get_val(&self, idx: u32) -> T {
+                    if let Some(v) = self.data.get(idx) { v } else { panic!("missing") }
+                }
+            }
+        "#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_panic_in_match_sole_expression_arm() {
+        // A `match` whose other arm yields a value — the panic is not forced.
+        let source = r#"
+            impl Reader for StateReader {
+                fn read(&self) -> T {
+                    match self.state {
+                        State::Ready(v) => v,
+                        _ => panic!("not ready"),
+                    }
+                }
+            }
+        "#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_sole_body_panic_in_trait_method_returning_qualified_result() {
+        // `std::result::Result` admits `Err` just like bare `Result` — the
+        // last path segment is matched, so the panic still flags.
+        let source = r#"
+            impl Reader for EmptyReader {
+                fn read(&self) -> std::result::Result<T, E> {
+                    panic!("nothing to read")
+                }
+            }
+        "#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_sole_body_panic_in_unit_returning_trait_method() {
+        // A `()` return could simply do nothing — the panic is a choice.
+        let source = r#"
+            impl Sink for NullSink {
+                fn write(&self, _data: &[u8]) {
+                    panic!("null sink cannot write")
+                }
+            }
+        "#;
+        assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
