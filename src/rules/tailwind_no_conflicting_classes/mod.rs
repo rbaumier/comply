@@ -21,12 +21,15 @@ pub const META: RuleMeta = RuleMeta {
     skip_in_relaxed_dir: false,
 };
 
-/// Prefixes whose values are unambiguously mutually exclusive.
+/// Prefixes whose values are unambiguously mutually exclusive — any two
+/// classes sharing one of these prefixes conflict. Ambiguous prefixes
+/// (`text-`, `font-`, `flex-`, `border-`, `bg-`) are handled by dedicated
+/// sub-categorisation functions that split by CSS sub-property.
 pub(crate) const CONFLICT_PREFIXES: &[&str] = &[
     "p-", "px-", "py-", "pt-", "pr-", "pb-", "pl-",
     "m-", "mx-", "my-", "mt-", "mr-", "mb-", "ml-",
     "w-", "h-", "min-w-", "min-h-", "max-w-", "max-h-",
-    "bg-", "rounded-", "shadow-", "opacity-", "z-",
+    "rounded-", "shadow-", "opacity-", "z-",
     "gap-", "gap-x-", "gap-y-", "grid-cols-", "grid-rows-", "justify-", "items-", "self-", "order-", "overflow-",
 ];
 
@@ -137,11 +140,44 @@ pub(crate) fn font_category(class: &str) -> Option<&'static str> {
     }
 }
 
+/// Subdivides `bg-*` utilities by the CSS sub-property they set, so utilities
+/// targeting different sub-properties (`bg-cover` size + `bg-center` position +
+/// `bg-no-repeat` repeat — the idiomatic full-cover-image combo) don't conflict.
+/// Only two `bg-*` setting the SAME sub-property conflict. The catch-all
+/// `bg-color` covers background-color/image/gradient utilities, which do conflict
+/// (`bg-red-500 bg-blue-500`).
+pub(crate) fn bg_category(class: &str) -> Option<&'static str> {
+    // background-repeat (`bg-repeat`, `bg-no-repeat`, `bg-repeat-x/y/round/space`)
+    if class == "bg-repeat" || class == "bg-no-repeat" || class.starts_with("bg-repeat-") {
+        return Some("bg-repeat");
+    }
+    if class.starts_with("bg-clip-") {
+        return Some("bg-clip"); // background-clip (e.g. `bg-clip-text` for gradient text)
+    }
+    if class.starts_with("bg-origin-") {
+        return Some("bg-origin"); // background-origin
+    }
+    if class.starts_with("bg-blend-") {
+        return Some("bg-blend"); // background-blend-mode
+    }
+    match class {
+        "bg-auto" | "bg-cover" | "bg-contain" => Some("bg-size"),
+        "bg-center" | "bg-top" | "bg-right" | "bg-bottom" | "bg-left"
+        | "bg-left-top" | "bg-left-bottom" | "bg-right-top" | "bg-right-bottom" => {
+            Some("bg-position")
+        }
+        "bg-fixed" | "bg-local" | "bg-scroll" => Some("bg-attachment"),
+        // background-color / image / gradient — catch-all paint group.
+        _ => Some("bg-color"),
+    }
+}
+
 pub(crate) fn conflict_key(class: &str) -> Option<&'static str> {
     if class.starts_with("text-") { return text_category(class); }
     if class.starts_with("flex-") { return flex_category(class); }
     if class.starts_with("border-") { return border_category(class); }
     if class.starts_with("font-") { return font_category(class); }
+    if class.starts_with("bg-") { return bg_category(class); }
 
     let mut prefixes: Vec<&&str> = CONFLICT_PREFIXES.iter().collect();
     prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
@@ -198,6 +234,39 @@ mod text_category_tests {
         // not a color, so it must not share a key with `text-black`.
         assert_eq!(text_category("text-md"), Some("text-size"));
         assert_ne!(text_category("text-md"), text_category("text-black"));
+    }
+}
+
+#[cfg(test)]
+mod bg_category_tests {
+    use super::*;
+
+    #[test]
+    fn classifies_bg_sub_properties() {
+        // Regression for rbaumier/comply#4487 — `bg-*` utilities set distinct
+        // CSS sub-properties and must each get their own conflict key.
+        assert_eq!(conflict_key("bg-cover"), Some("bg-size"));
+        assert_eq!(conflict_key("bg-center"), Some("bg-position"));
+        assert_eq!(conflict_key("bg-no-repeat"), Some("bg-repeat"));
+        assert_eq!(conflict_key("bg-fixed"), Some("bg-attachment"));
+        assert_eq!(conflict_key("bg-clip-text"), Some("bg-clip"));
+        assert_eq!(conflict_key("bg-red-500"), Some("bg-color"));
+        assert_eq!(conflict_key("bg-gradient-to-r"), Some("bg-color"));
+    }
+
+    #[test]
+    fn cover_center_no_repeat_have_distinct_keys() {
+        // The idiomatic full-cover-image combo must not conflict.
+        assert_ne!(conflict_key("bg-cover"), conflict_key("bg-center"));
+        assert_ne!(conflict_key("bg-center"), conflict_key("bg-no-repeat"));
+        assert_ne!(conflict_key("bg-cover"), conflict_key("bg-no-repeat"));
+    }
+
+    #[test]
+    fn same_sub_property_shares_key() {
+        // Two utilities for the same sub-property still conflict.
+        assert_eq!(conflict_key("bg-cover"), conflict_key("bg-contain")); // bg-size
+        assert_eq!(conflict_key("bg-red-500"), conflict_key("bg-blue-500")); // bg-color
     }
 }
 

@@ -134,6 +134,23 @@ mod tests {
     }
 
     #[test]
+    fn allows_bg_cover_center_no_repeat() {
+        // Regression for rbaumier/comply#4487 — `bg-cover` (size),
+        // `bg-center` (position) and `bg-no-repeat` (repeat) set distinct
+        // CSS sub-properties; the idiomatic full-cover-image combo must not
+        // conflict.
+        assert!(
+            run(r#"const x = <div className="bg-cover bg-center bg-no-repeat" />;"#).is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_conflicting_bg_color() {
+        let diags = run(r#"const x = <div className="bg-red-500 bg-blue-500" />;"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
     fn allows_gap_x_with_gap_y() {
         // Regression for rbaumier/comply#4072 — `gap-x-*` (column-gap) and
         // `gap-y-*` (row-gap) control different axes and are designed to
