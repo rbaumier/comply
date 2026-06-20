@@ -3,7 +3,9 @@
 //!
 //! Only single-argument iterator calls are flagged; multi-argument calls
 //! (data-first functional APIs like fp-ts `Module.map(value, fn)`, or an
-//! explicit `thisArg`) are exempt.
+//! explicit `thisArg`) are exempt. Calls whose receiver is a namespace-import
+//! binding (`import * as O from 'fp-ts/Option'; O.some(n)`) are also exempt:
+//! those are data-library combinators, never `Array.prototype.<method>`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -57,6 +59,24 @@ fn is_low_arity_local<'a>(
         AstKind::Function(f) => callee_ignores_extra_args(&f.params),
         _ => false,
     }
+}
+
+/// Returns `true` when `ident` resolves to a namespace-import binding
+/// (`import * as X from '…'`). A `X.method(...)` call on such a binding is a
+/// data-library combinator (fp-ts `O.some(v)` / `O.map(v)`), never
+/// `Array.prototype.<method>`, so its argument is a value to wrap, not a
+/// per-element callback. Resolution mirrors [`is_low_arity_local`]:
+/// `reference_id` → symbol → declaration node, which for a namespace import is
+/// the `ImportNamespaceSpecifier` itself.
+fn is_namespace_import_binding(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(ref_id) = ident.reference_id.get() else { return false };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
+    let decl = scoping.symbol_declaration(sym_id);
+    matches!(semantic.nodes().kind(decl), AstKind::ImportNamespaceSpecifier(_))
 }
 
 /// Returns `true` when `name` follows the PascalCase convention reserved for
@@ -113,6 +133,16 @@ impl OxcCheck for Check {
         };
         let method_name = member.property.name.as_str();
         if !ITERATOR_METHODS.contains(&method_name) {
+            return;
+        }
+
+        // `import * as O from 'fp-ts/Option'; O.some(n)` is `Option.some` — a
+        // constructor wrapping `n`, not `Array.prototype.some`. A receiver that
+        // resolves to a namespace import is a data-library combinator, so its
+        // argument is a value, never a callback.
+        if let Expression::Identifier(obj) = &member.object
+            && is_namespace_import_binding(obj, semantic)
+        {
             return;
         }
 
@@ -369,5 +399,50 @@ mod tests {
     fn flags_camel_case_function_reference() {
         assert_eq!(run_on("const x = items.map(transform);").len(), 1);
         assert_eq!(run_on("const x = users.find(isActive);").len(), 1);
+    }
+
+    // Regression #4469: fp-ts `O.some(n)` is `Option.some`, wrapping `n` in a
+    // `Some` container — not `Array.prototype.some`. The receiver resolves to a
+    // namespace import, so the argument is a value, not a callback.
+    #[test]
+    fn no_fp_ts_namespace_some_constructor() {
+        assert!(run_on(
+            "import * as O from 'fp-ts/Option'; const f = (n: number) => O.some(n);"
+        )
+        .is_empty());
+    }
+
+    // #4469: `O.map(double)` on a namespace import is a combinator, not array map.
+    #[test]
+    fn no_fp_ts_namespace_map_combinator() {
+        assert!(
+            run_on("import * as O from 'fp-ts/Option'; const g = O.map(double);").is_empty()
+        );
+    }
+
+    // #4469: `A.filter(pred)` on a namespace import is a combinator, not array filter.
+    #[test]
+    fn no_fp_ts_namespace_filter_combinator() {
+        assert!(run_on("import * as A from 'fp-ts/Array'; A.filter(pred);").is_empty());
+    }
+
+    // #4469 negative space: a local array receiver is NOT a namespace import, so
+    // the real `arr.map(parseInt)` footgun must stay flagged.
+    #[test]
+    fn flags_local_array_map_parse_int() {
+        assert_eq!(run_on("const arr = [1, 2, 3]; arr.map(parseInt);").len(), 1);
+    }
+
+    // #4469 negative space: an array literal receiver must stay flagged.
+    #[test]
+    fn flags_array_literal_some() {
+        assert_eq!(run_on("[1, 2].some(isOdd);").len(), 1);
+    }
+
+    // #4469 negative space: a non-namespace local object receiver must stay
+    // flagged (`obj` is not an `import * as` binding).
+    #[test]
+    fn flags_non_namespace_local_object() {
+        assert_eq!(run_on("const obj = getThing(); obj.map(transform);").len(), 1);
     }
 }
