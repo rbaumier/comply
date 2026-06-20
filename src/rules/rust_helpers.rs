@@ -1504,6 +1504,231 @@ fn chars_iter_method<'a>(value: Node, source: &'a [u8]) -> Option<&'a str> {
         .and_then(|field| field.utf8_text(source).ok())
 }
 
+/// True if `cast` (a `type_cast_expression`) narrows an identifier whose value
+/// an enclosing `if`/`else if` guard proves fits the unsigned target type, so
+/// the `as`-cast cannot overflow — e.g. `if val < 256 { val as u8 }`.
+///
+/// This is the canonical "pick the smallest representation that fits" encoder
+/// pattern: each branch is entered only when the value is within the target
+/// type's range, so `try_from` there manufactures an unreachable error path.
+///
+/// The exemption is deliberately narrow to stay sound — every condition must
+/// hold:
+///
+/// - the operand is a bare `identifier` (`val`), not an expression;
+/// - the target is an **unsigned** integer (`u8`..`u128`/`usize`);
+/// - the operand's source type resolves from the AST to an **unsigned** integer,
+///   which proves the value is non-negative (lower bound 0). An unresolved or
+///   signed source is not exempted: an upper-bound guard alone cannot rule out a
+///   negative value wrapping on the cast;
+/// - an enclosing `if_expression`, reached through its `consequence` (the
+///   `then` block, never the `else` branch), has a condition that upper-bounds
+///   the SAME identifier against an integer literal `N` proving the value fits:
+///   `val < N` with `N <= 2^bits`, or `val <= N` with `N <= 2^bits - 1` (the
+///   symmetric `N > val` / `N >= val` forms count too);
+/// - the identifier is not re-bound (a shadowing `let val`) or reassigned
+///   (`val = …` / `val += …`) inside the branch before the cast, which would
+///   break the link between the guard's bound and the value the cast reads.
+///
+/// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`, which both
+/// otherwise flag the narrowing because the operand's bounded range is not
+/// visible from the cast in isolation.
+pub fn cast_operand_is_range_guarded(cast: Node, source: &[u8]) -> bool {
+    let Some(value) = cast.child_by_field_name("value") else {
+        return false;
+    };
+    if value.kind() != "identifier" {
+        return false;
+    }
+    let Ok(name) = value.utf8_text(source) else {
+        return false;
+    };
+    // Target must be an unsigned integer; capture its bit width.
+    let Some(target_bits) = cast
+        .child_by_field_name("type")
+        .and_then(|t| t.utf8_text(source).ok())
+        .and_then(unsigned_int_bits)
+    else {
+        return false;
+    };
+    // The source must resolve to an unsigned integer so the value is provably
+    // non-negative; an upper-bound guard cannot otherwise rule out underflow.
+    if find_identifier_type(cast, name, source)
+        .and_then(|t| unsigned_int_bits(&t))
+        .is_none()
+    {
+        return false;
+    }
+    enclosing_upper_bound_fits(cast, name, target_bits, source)
+}
+
+/// The bit width of an unsigned-integer type name (`u8` → 8, … `usize` → host
+/// width), or `None` for any signed, float, or non-numeric type.
+fn unsigned_int_bits(type_text: &str) -> Option<u16> {
+    match type_text.trim() {
+        "u8" => Some(8),
+        "u16" => Some(16),
+        "u32" => Some(32),
+        "u64" => Some(64),
+        "u128" => Some(128),
+        "usize" => Some(usize::BITS as u16),
+        _ => None,
+    }
+}
+
+/// True if some enclosing `if_expression`, entered via its `consequence`,
+/// upper-bounds `name` against an integer literal that proves a value fits an
+/// unsigned target of `target_bits` width.
+///
+/// Ascends via `parent()`. Each step records whether the child we came from is
+/// the `consequence` of an enclosing `if_expression`; only then is that `if`'s
+/// condition a guard that dominates the cast (the `else` branch is the negation
+/// of the condition, so a guard reached through `alternative` does not apply).
+/// The walk stops at the enclosing `function_item` / `closure_expression`
+/// boundary.
+fn enclosing_upper_bound_fits(cast: Node, name: &str, target_bits: u16, source: &[u8]) -> bool {
+    let mut child = cast;
+    while let Some(parent) = child.parent() {
+        match parent.kind() {
+            "function_item" | "closure_expression" => return false,
+            "if_expression" => {
+                if parent.child_by_field_name("consequence") == Some(child)
+                    && let Some(condition) = parent.child_by_field_name("condition")
+                    && condition_upper_bounds(condition, name, target_bits, source)
+                    // The guard proves the value of `name` only as long as it is
+                    // unchanged between the branch entry and the cast. A
+                    // re-binding (a shadowing `let name`) or a reassignment
+                    // (`name = …` / `name += …`) inside the branch before the
+                    // cast invalidates the bound.
+                    && !name_rebound_before_cast(child, cast, name, source)
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        child = parent;
+    }
+    false
+}
+
+/// True if `name` is re-bound or reassigned anywhere in `consequence` *before*
+/// `cast` (by source position) — a shadowing `let name`, an `assignment_expression`
+/// to `name`, or a `compound_assignment_expr` to `name`. Such a write breaks the
+/// link between the guard's bound and the value the cast reads.
+fn name_rebound_before_cast(consequence: Node, cast: Node, name: &str, source: &[u8]) -> bool {
+    let cast_start = cast.start_byte();
+    let mut cursor = consequence.walk();
+    let mut stack = vec![consequence];
+    while let Some(node) = stack.pop() {
+        if node.start_byte() >= cast_start {
+            continue;
+        }
+        let rebinds = match node.kind() {
+            "let_declaration" => node
+                .child_by_field_name("pattern")
+                .is_some_and(|p| pattern_contains_identifier(p, name, source)),
+            "assignment_expression" | "compound_assignment_expr" => node
+                .child_by_field_name("left")
+                .is_some_and(|l| l.kind() == "identifier" && l.utf8_text(source) == Ok(name)),
+            _ => false,
+        };
+        if rebinds {
+            return true;
+        }
+        for child in node.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
+/// True if `condition` is a comparison that upper-bounds the identifier `name`
+/// against an integer literal proving a value fits an unsigned target of
+/// `target_bits` width.
+///
+/// Recognized shapes (the literal is the *upper* bound on `name`):
+/// - `name < N` / `name <= N` (identifier on the left);
+/// - `N > name` / `N >= name` (identifier on the right).
+///
+/// `name < N` proves `name <= N - 1`, which fits when `N <= 2^bits`; `name <= N`
+/// proves `name <= N`, which fits when `N <= 2^bits - 1`. A literal that does not
+/// parse, or a bound too large for the target, returns false.
+fn condition_upper_bounds(condition: Node, name: &str, target_bits: u16, source: &[u8]) -> bool {
+    if condition.kind() != "binary_expression" {
+        return false;
+    }
+    let (Some(left), Some(op), Some(right)) = (
+        condition.child_by_field_name("left"),
+        condition
+            .child_by_field_name("operator")
+            .and_then(|o| o.utf8_text(source).ok()),
+        condition.child_by_field_name("right"),
+    ) else {
+        return false;
+    };
+
+    // Normalize to `<identifier> <op'> <literal>`, mapping `>`/`>=` (identifier
+    // on the right) onto the corresponding `<`/`<=`.
+    let (lit_node, inclusive) = match op {
+        "<" => (ident_then_literal(left, right, name, source), false),
+        "<=" => (ident_then_literal(left, right, name, source), true),
+        ">" => (ident_then_literal(right, left, name, source), false),
+        ">=" => (ident_then_literal(right, left, name, source), true),
+        _ => return false,
+    };
+    let Some(bound) = lit_node.and_then(|n| parse_int_literal(n, source)) else {
+        return false;
+    };
+    // Max value the target can hold (2^bits - 1), computed without overflowing
+    // the `1u128 << 128` shift for a u128 target.
+    let target_max: u128 = if target_bits >= 128 {
+        u128::MAX
+    } else {
+        (1u128 << target_bits) - 1
+    };
+    if inclusive {
+        // `name <= N` proves `name <= N`; safe when `N <= target_max`.
+        bound <= target_max
+    } else {
+        // `name < N` proves `name <= N - 1`; safe when `N - 1 <= target_max`.
+        // `checked_sub` rejects `name < 0` (an unsatisfiable guard) without
+        // adding `1` to `target_max`, which would overflow for a u128 target.
+        bound.checked_sub(1).is_some_and(|max_value| max_value <= target_max)
+    }
+}
+
+/// If `ident` is the identifier `name` and `lit` is an integer literal, return
+/// the literal node; otherwise `None`.
+fn ident_then_literal<'a>(
+    ident: Node<'a>,
+    lit: Node<'a>,
+    name: &str,
+    source: &[u8],
+) -> Option<Node<'a>> {
+    if ident.kind() == "identifier"
+        && ident.utf8_text(source).is_ok_and(|t| t == name)
+        && lit.kind() == "integer_literal"
+    {
+        Some(lit)
+    } else {
+        None
+    }
+}
+
+/// Parse an `integer_literal` node's value as `u128`, stripping a type suffix
+/// (`256u32`) and digit separators (`65_536`). Returns `None` if it does not
+/// parse (e.g. hex/binary forms or an out-of-range value).
+fn parse_int_literal(node: Node, source: &[u8]) -> Option<u128> {
+    let text = node.utf8_text(source).ok()?;
+    let digits: String = text
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '_')
+        .filter(|c| *c != '_')
+        .collect();
+    digits.parse().ok()
+}
+
 /// True if `cast` (a `type_cast_expression`) reads the discriminant of a
 /// fieldless (C-like) enum — `<enum value> as <integer>`. For such an enum the
 /// `as`-cast is the language-blessed way to obtain the discriminant: no
@@ -2761,6 +2986,60 @@ mod tests {
                 cast_operand_is_bool(cast, src.as_bytes()),
                 expected,
                 "cast_operand_is_bool mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn cast_operand_is_range_guarded_requires_dominating_upper_bound() {
+        let cases = [
+            // Canonical msgpack pattern: each arm is guarded.
+            ("fn w(val: u64) -> u8 { if val < 256 { val as u8 } else { 0 } }", true),
+            ("fn w(val: u64) -> u16 { if val < 65536 { val as u16 } else { 0 } }", true),
+            // Inclusive bound at exactly T::MAX.
+            ("fn w(val: u64) -> u8 { if val <= 255 { val as u8 } else { 0 } }", true),
+            // Symmetric `N > val` / `N >= val` forms.
+            ("fn w(val: u64) -> u8 { if 256 > val { val as u8 } else { 0 } }", true),
+            ("fn w(val: u64) -> u8 { if 255 >= val { val as u8 } else { 0 } }", true),
+            // Digit separators in the literal.
+            ("fn w(val: u64) -> u16 { if val < 65_536 { val as u16 } else { 0 } }", true),
+            // No guard at all.
+            ("fn f(n: u64) -> u8 { n as u8 }", false),
+            // Bound exceeds the target's range.
+            ("fn w(val: u64) -> u8 { if val < 1000 { val as u8 } else { 0 } }", false),
+            ("fn w(val: u64) -> u8 { if val <= 256 { val as u8 } else { 0 } }", false),
+            // Signed source: an upper bound does not rule out a negative value.
+            ("fn w(val: i64) -> u8 { if val < 256 { val as u8 } else { 0 } }", false),
+            // Unresolved source type: cannot prove non-negativity.
+            ("fn w(val: T) -> u8 { if val < 256 { val as u8 } else { 0 } }", false),
+            // Guard is on a different variable.
+            ("fn w(a: u64, b: u64) -> u8 { if a < 256 { b as u8 } else { 0 } }", false),
+            // Guard reached through the `else` branch is the condition's negation.
+            ("fn w(val: u64) -> u8 { if val < 256 { 0 } else { val as u8 } }", false),
+            // Signed target is out of scope (lower bound not provable here).
+            ("fn w(val: u64) -> i8 { if val < 128 { val as i8 } else { 0 } }", false),
+            // A lower-bound guard does not bound the cast from above.
+            ("fn w(val: u64) -> u8 { if val > 10 { val as u8 } else { 0 } }", false),
+            // u128 target: the bound fits, and `2^128 - 1` must not overflow.
+            ("fn w(val: u64) -> u128 { if val < 256 { val as u128 } else { 0 } }", true),
+            // Shadowing `let val` inside the branch: the guard bounds the OUTER
+            // `val`, not the inner one the cast reads.
+            ("fn w(val: u64) -> u8 { if val < 256 { let val: u64 = q(); val as u8 } else { 0 } }", false),
+            // Reassignment after the guard invalidates the proven bound.
+            ("fn w(mut val: u64) -> u8 { if val < 256 { val = 9999; val as u8 } else { 0 } }", false),
+            // Compound assignment likewise invalidates the bound.
+            ("fn w(mut val: u64) -> u8 { if val < 256 { val += 9999; val as u8 } else { 0 } }", false),
+            // A write AFTER the cast does not invalidate it.
+            ("fn w(mut val: u64) -> u8 { if val < 256 { let r = val as u8; val = 9999; r } else { 0 } }", true),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_of_kind(tree.root_node(), "type_cast_expression")
+                .expect("snippet should contain a type_cast_expression");
+            assert_eq!(
+                cast_operand_is_range_guarded(cast, src.as_bytes()),
+                expected,
+                "cast_operand_is_range_guarded mismatch for `{src}`"
             );
         }
     }
