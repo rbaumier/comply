@@ -3,6 +3,10 @@
 //! A scan (rather than `serde_json`) keeps the rule working on the `.json`
 //! files that carry comments or trailing commas (tsconfig, editor settings),
 //! which strict JSON parsing would reject outright.
+//!
+//! npm lockfiles are exempt: `package-lock.json`/`npm-shrinkwrap.json` key the
+//! root package under `""` by npm's lockfile v2/v3 spec, so that empty key is
+//! mandated format rather than a typo.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -20,6 +24,9 @@ struct StringToken {
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
+        if crate::rules::path_utils::is_npm_lockfile(ctx.path) {
+            return Vec::new();
+        }
         empty_key_offsets(ctx.source)
             .into_iter()
             .map(|(byte_offset, line)| Diagnostic {
@@ -161,7 +168,11 @@ mod tests {
     use std::path::Path;
 
     fn check(content: &str) -> Vec<Diagnostic> {
-        let ctx = CheckCtx::for_test(Path::new("/data.json"), content);
+        check_at("/data.json", content)
+    }
+
+    fn check_at(path: &str, content: &str) -> Vec<Diagnostic> {
+        let ctx = CheckCtx::for_test(Path::new(path), content);
         Check.check(&ctx)
     }
 
@@ -272,6 +283,47 @@ mod tests {
         let diags = check(json);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].line, 3);
+    }
+
+    // --- npm lockfile exemption (issue #4732) ---
+
+    #[test]
+    fn skips_empty_root_key_in_npm_lockfile_v2() {
+        // The `packages[""]` entry is npm's mandated lockfile v2/v3 format for
+        // the root package, not an authoring mistake.
+        let json = r#"{
+  "name": "package-1",
+  "version": "1.0.0",
+  "lockfileVersion": 2,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "package-1",
+      "version": "1.0.0"
+    },
+    "node_modules/tiny-tarball": {}
+  }
+}"#;
+        let diags = check_at(
+            "__fixtures__/lockfile-leaf-v2/packages/package-1/package-lock.json",
+            json,
+        );
+        assert!(diags.is_empty(), "got {diags:?}");
+    }
+
+    #[test]
+    fn skips_empty_root_key_in_npm_shrinkwrap() {
+        let json = r#"{"packages": {"": {"name": "x"}}}"#;
+        let diags = check_at("npm-shrinkwrap.json", json);
+        assert!(diags.is_empty(), "got {diags:?}");
+    }
+
+    #[test]
+    fn flags_empty_key_in_ordinary_json_named_like_lockfile_sibling() {
+        // True-positive guard: the exemption is name-scoped, so a genuine empty
+        // key in an ordinary JSON file is still flagged.
+        let diags = check_at("config/settings.json", r#"{"": "v"}"#);
+        assert_eq!(diags.len(), 1);
     }
 
     // --- Test-directory exemption (issue #4506) ---

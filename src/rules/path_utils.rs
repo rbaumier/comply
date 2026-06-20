@@ -61,6 +61,23 @@ pub fn is_config_file(path: &Path) -> bool {
     false
 }
 
+/// npm lockfile basenames. Both store the resolved dependency tree under a
+/// `packages` map whose root-project entry is keyed by the empty string `""` —
+/// a format mandated by the npm CLI for lockfile v2/v3, not an authoring
+/// mistake. `package-lock.json` is written by `npm install`; `npm-shrinkwrap.json`
+/// is the publishable variant produced by `npm shrinkwrap`.
+const NPM_LOCKFILE_NAMES: &[&str] = &["package-lock.json", "npm-shrinkwrap.json"];
+
+/// True when `path` is an npm lockfile (`package-lock.json` or
+/// `npm-shrinkwrap.json`). These machine-generated files key the root package
+/// under the empty string `""` in their `packages` map by npm's specification,
+/// so empty-object-key checks must skip them.
+pub fn is_npm_lockfile(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| NPM_LOCKFILE_NAMES.contains(&name))
+}
+
 /// True when `path` lives inside a jscodeshift codemod fixture directory: an
 /// ancestor directory whose name ends in `.test` (e.g.
 /// `menu-item-primary-text.test/actual.js`). These directories hold the
