@@ -3,6 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::path_utils::is_in_client_boundary_dir;
 use oxc_ast::ast::{
     BindingPattern, Expression, ImportDeclarationSpecifier, JSXAttributeName, JSXElementName,
     VariableDeclarationKind,
@@ -310,6 +311,18 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
+        // A module under a `client/` directory that renders no JSX literal uses
+        // `"use client"` as an RSC bundle-isolation guard (it keeps the
+        // client-only subtree out of the server bundle for importers), not
+        // because it renders a component. Rendering a JSX literal is the
+        // component signal, so a stray directive on such a module
+        // (`client/Button.tsx`) stays flagged. A component built purely by
+        // composition (e.g. `styled.button`) renders no JSX literal and is
+        // accepted as exempt here — the conservative FP-over-FN direction.
+        if is_in_client_boundary_dir(ctx.path) && !renders_jsx(semantic) {
+            return Vec::new();
+        }
+
         let (line, column) = byte_offset_to_line_col(source, 0);
         vec![Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -350,6 +363,15 @@ fn has_use_client_directive(source: &str) -> bool {
         }
     }
     false
+}
+
+/// True when the program renders any JSX (`JSXElement` or `JSXFragment`), the
+/// signal that a module is a component rather than a pure utility.
+fn renders_jsx(semantic: &oxc_semantic::Semantic<'_>) -> bool {
+    semantic
+        .nodes()
+        .iter()
+        .any(|node| matches!(node.kind(), AstKind::JSXElement(_) | AstKind::JSXFragment(_)))
 }
 
 /// True for a relative module specifier (`./accordion`, `../shared`), i.e. a
@@ -467,6 +489,67 @@ mod tests {
 
     fn run(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
+    }
+
+    fn run_at(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, path)
+    }
+
+    // Regression test for #4682 — a pure utility module in a `client/` directory
+    // uses `"use client"` as an RSC module-boundary guard (keeps the subtree out
+    // of the server bundle), not because it calls a hook.
+    #[test]
+    fn no_fp_for_client_boundary_util_dir_oxc() {
+        let src = r#"'use client'
+import type { ClientConfig } from 'payload'
+export function loadClientFeatures(config: ClientConfig): ClientConfig {
+  const map = new Map()
+  for (const feature of config.features) {
+    map.set(feature.key, feature)
+  }
+  return config
+}
+"#;
+        assert!(
+            run_at(src, "packages/richtext-lexical/src/lexical/config/client/loader.ts").is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_component_in_client_dir_oxc() {
+        // A module that renders a JSX literal under a `client/` directory with a
+        // stray `"use client"` and no client API is still flagged — the directory
+        // only exempts modules that render no JSX, not directives on components
+        // that render JSX literals.
+        let src = r#""use client";
+export function Title() { return <div>Hi</div>; }
+"#;
+        assert_eq!(run_at(src, "src/client/Title.tsx").len(), 1);
+    }
+
+    #[test]
+    fn accepts_jsx_free_styled_component_in_client_dir_oxc() {
+        // Characterizes the accepted limitation: a component built purely by
+        // composition (`styled.button`) renders no JSX literal, so under a
+        // `client/` directory it is exempted by the boundary gate even though it
+        // is a component. The conservative FP-over-FN direction.
+        let src = r#"'use client'
+import { styled } from "./styled"
+export const Button = styled.button({ color: "red" })
+"#;
+        assert!(run_at(src, "src/client/Button.tsx").is_empty());
+    }
+
+    #[test]
+    fn still_flags_jsx_free_module_outside_client_dir_oxc() {
+        // The exemption needs the `client/` directory: a JSX-free module with a
+        // stray `"use client"` elsewhere stays flagged. `client-utils/` is not a
+        // `client/` segment.
+        let src = r#"'use client'
+export const apiBase = "/api"
+"#;
+        assert_eq!(run_at(src, "src/lib/config.ts").len(), 1);
+        assert_eq!(run_at(src, "src/client-utils/config.ts").len(), 1);
     }
 
     // Regression tests for #458

@@ -491,6 +491,19 @@ pub fn is_test_infra_dir_path(path: &Path) -> bool {
     has_path_segment(path, &["testing"])
 }
 
+/// True when `path` lives under a `client/` directory — the RSC convention for a
+/// client-only module subtree. A `"use client"` directive on a JSX-literal-free
+/// module here is a bundle-isolation guard (it keeps the subtree out of the
+/// server bundle for importers), not a sign the module itself calls a hook, so
+/// [`react-no-use-client-without-client-api`](crate::rules::react_no_use_client_without_client_api)
+/// only relies on this to exempt modules that render no JSX — a stray directive
+/// on a module that renders a JSX literal (`client/Button.tsx`) is still
+/// flagged. Segment match keeps `src/client-utils/` and `src/myclient.ts` from
+/// matching.
+pub fn is_in_client_boundary_dir(path: &Path) -> bool {
+    has_path_segment(path, &["client"])
+}
+
 /// True for a test file that never ships in the published package: one under a
 /// `__tests__/`, `__testUtils__/`, `test/`, `tests/`, or `e2e/` directory, one
 /// carrying a `.test.`/`.spec.`/`.setup.`/`.tp.` infix, one whose whole stem is
@@ -1758,5 +1771,19 @@ mod aux_path_tests {
         assert!(!is_cargo_bin_target_path(&PathBuf::from("bin/tool.rs")));
         // Ordinary library source is not a binary target.
         assert!(!is_cargo_bin_target_path(&PathBuf::from("src/lib.rs")));
+    }
+
+    #[test]
+    fn client_boundary_dir_segment_match_issue4682() {
+        // The issue's exact reproducer path.
+        assert!(is_in_client_boundary_dir(&PathBuf::from(
+            "packages/richtext-lexical/src/lexical/config/client/loader.ts"
+        )));
+        assert!(is_in_client_boundary_dir(&PathBuf::from("src/client/loader.ts")));
+        // Segment match only: `client-utils/` and `myclient.ts` are not a
+        // `client/` directory segment.
+        assert!(!is_in_client_boundary_dir(&PathBuf::from("src/client-utils/loader.ts")));
+        assert!(!is_in_client_boundary_dir(&PathBuf::from("src/lib/myclient.ts")));
+        assert!(!is_in_client_boundary_dir(&PathBuf::from("src/lib/config.ts")));
     }
 }
