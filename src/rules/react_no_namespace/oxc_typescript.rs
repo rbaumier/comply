@@ -27,6 +27,13 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Vue 3 JSX uses namespaced attributes (`v-model:active`, `v-on:click`,
+        // `v-bind:foo`) as first-class directives via its JSX transform, valid in
+        // Vue but not React. Skip Vue files so this React-only rule does not fire.
+        if crate::oxc_helpers::imports_vue(ctx.source) {
+            return;
+        }
+
         let AstKind::JSXOpeningElement(opening) = node.kind() else {
             return;
         };
@@ -132,5 +139,32 @@ import { createSignal } from "solid-js";
 const x = <div prop:value={x} />;
 "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_vue_v_model_directive() {
+        let src = r#"
+import { defineComponent } from "vue";
+const x = <Tabs v-model:active={activeTab.value} class="tabs" />;
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_vue_scoped_import() {
+        let src = r#"
+import { defineComponent } from "@vue/runtime-core";
+const x = <input v-on:click={onClick} />;
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_namespace_in_non_vue_require_lookalike() {
+        let src = r#"
+const router = require("vue-router");
+const x = <ns:div />;
+"#;
+        assert_eq!(run(src).len(), 1);
     }
 }

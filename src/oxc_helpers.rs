@@ -411,6 +411,28 @@ pub fn imports_solid(source: &str) -> bool {
         || source_contains(source, "require('@solidjs/")
 }
 
+/// True if the file imports anything from Vue: `vue`, a `vue/*` subpath, or the
+/// `@vue/*` scope (`@vue/runtime-core`, `@vue/composition-api`) — ESM
+/// `import ... from` or CommonJS `require(...)`. React-specific rules use this to
+/// exclude Vue files, whose JSX transform treats `v-model:*` / `v-on:*` / `v-bind:*`
+/// namespaced attributes as first-class directives rather than React XML
+/// namespaces. Memoized per file via [`source_contains`].
+#[must_use]
+pub fn imports_vue(source: &str) -> bool {
+    source_contains(source, "from \"vue\"")
+        || source_contains(source, "from 'vue'")
+        || source_contains(source, "from \"vue/")
+        || source_contains(source, "from 'vue/")
+        || source_contains(source, "from \"@vue/")
+        || source_contains(source, "from '@vue/")
+        || source_contains(source, "require(\"vue\")")
+        || source_contains(source, "require('vue')")
+        || source_contains(source, "require(\"vue/")
+        || source_contains(source, "require('vue/")
+        || source_contains(source, "require(\"@vue/")
+        || source_contains(source, "require('@vue/")
+}
+
 /// True when `path`'s nearest `package.json` declares a non-React JSX framework
 /// (`vue` or `solid-js`) and does **not** declare `react`. React-only render-churn
 /// rules (`react-jsx-no-bind`, `jsx-no-new-function-as-prop`) use this to skip
