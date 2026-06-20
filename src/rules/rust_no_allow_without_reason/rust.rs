@@ -19,7 +19,9 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    if allow_list_contains(text, "unused") && is_in_test_context(node, source) {
+    if (allow_list_contains(text, "unused") || allow_list_contains(text, "deprecated"))
+        && is_in_test_context(node, source)
+    {
         return;
     }
 
@@ -205,6 +207,26 @@ mod tests {
     #[test]
     fn ignores_in_test_context() {
         assert!(run("#[cfg(test)]\nmod tests {\n#[allow(unused)]\nfn f() {}\n}").is_empty());
+    }
+
+    #[test]
+    fn ignores_deprecated_in_test_context() {
+        // #4679: test suites call deprecated APIs inside `#[cfg(test)]` to verify
+        // backward-compat behavior; the test context makes the reason self-evident.
+        assert!(
+            run("#[cfg(test)]\nmod test {\n#[test]\nfn north_bearing() {\n#[allow(deprecated)]\nlet bearing = p_1.geodesic_bearing(p_2);\n}\n}")
+                .is_empty()
+        );
+        assert!(
+            run("#[cfg(test)]\nmod test {\n#[allow(deprecated)]\nuse crate::RhumbDistance;\n}")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_deprecated_outside_test_context() {
+        // Load-bearing guard: the deprecated exemption is test-scoped only.
+        assert_eq!(run("#[allow(deprecated)]\nfn f() {}").len(), 1);
     }
 
     #[test]
