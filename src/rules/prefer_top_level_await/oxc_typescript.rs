@@ -1,4 +1,10 @@
 //! OXC backend for prefer-top-level-await.
+//!
+//! Only fires in an ES-module context (a `.mjs`/`.mts` extension, or a nearest
+//! `package.json` declaring `"type": "module"`), where top-level `await` is
+//! valid. In CommonJS (`.cjs`, or a `.ts`/`.js` file compiled to CJS without
+//! `"type": "module"`) the suggested rewrite would be a runtime SyntaxError, so
+//! the rule stays silent.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -24,9 +30,11 @@ impl OxcCheck for Check {
             return;
         };
 
-        // Skip CJS files
-        let path_str = ctx.path.to_string_lossy();
-        if path_str.ends_with(".cjs") {
+        // Top-level await is only valid in an ES-module context (a `.mjs`/`.mts`
+        // extension or a nearest `package.json` declaring `"type": "module"`). In
+        // CommonJS (`.cjs`, or a `.ts`/`.js` file compiled to CJS without `"type":
+        // "module"`) the suggested rewrite would be a runtime SyntaxError.
+        if !crate::rules::module_system::is_es_module_context_cached(ctx) {
             return;
         }
 
@@ -161,4 +169,68 @@ fn has_top_level_async_function(
         }
     }
     false
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_at(src: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, path)
+    }
+
+    // Regression for #4421: the canonical NestJS entrypoint at a `.ts` path with
+    // no ES-module context is CommonJS — top-level `await` would be a runtime
+    // SyntaxError there, so the rule must stay silent.
+    #[test]
+    fn does_not_flag_async_fn_call_in_commonjs_ts() {
+        let src = "async function bootstrap() { await x(); }\nbootstrap();";
+        assert!(
+            run_at(src, "examples/nest/src/main.ts").is_empty(),
+            "top-level await is invalid in a CommonJS `.ts` file"
+        );
+    }
+
+    // An async IIFE at a `.ts` path (no ESM context) is also CommonJS and must
+    // not be flagged.
+    #[test]
+    fn does_not_flag_async_iife_in_commonjs_ts() {
+        let src = "(async () => { await x(); })();";
+        assert!(run_at(src, "src/main.ts").is_empty());
+    }
+
+    // The same async-fn-call pattern at a `.mts` path is ESM by extension, so
+    // top-level await is valid and the rule still fires.
+    #[test]
+    fn flags_async_fn_call_in_esm_mts() {
+        let src = "async function bootstrap() { await x(); }\nbootstrap();";
+        let d = run_at(src, "src/main.mts");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("bootstrap()"));
+    }
+
+    // An async IIFE at a `.mjs` path is ESM by extension and is still flagged.
+    #[test]
+    fn flags_async_iife_in_esm_mjs() {
+        let src = "(async () => { await x(); })();";
+        let d = run_at(src, "src/main.mjs");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("async IIFE"));
+    }
 }
