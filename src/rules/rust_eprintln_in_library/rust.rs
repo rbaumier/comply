@@ -53,6 +53,18 @@
 //! `eprintln!` is the only practical way to surface errors at the FFI boundary,
 //! so it is exempt too.
 //!
+//! A logging/tracing infrastructure crate (the nearest `Cargo.toml`
+//! `[package].name` is a known logging crate such as `tracing` /
+//! `tracing-subscriber` / `env_logger`, or carries a `tracing` / `logger` /
+//! `logging` / `slog` segment) implements the
+//! `Subscriber` / `Log` machinery itself. It cannot route its own internal
+//! failures through `tracing::warn!` / `log::error!` — that is the very system
+//! that has failed (a log-file rotation error, a formatter bug, a
+//! `RUST_LOG` parse error) or would recurse — so `eprintln!` is its
+//! legitimate last-resort fallback output and is exempt. The match is on the
+//! crate's own identity, not on whether it depends on a logging crate, so an
+//! application that merely uses `tracing` stays flagged.
+//!
 //! Output gated behind a runtime verbosity flag is opt-in diagnostics,
 //! not unconditional library noise: the consumer only sees it after
 //! turning the flag on. The guard is recognised when the `if` condition
@@ -142,6 +154,13 @@ impl AstCheck for Check {
             .project
             .nearest_cargo_manifest(ctx.path)
             .is_some_and(|m| m.is_ffi_bridge_crate())
+        {
+            return;
+        }
+        if ctx
+            .project
+            .nearest_cargo_manifest(ctx.path)
+            .is_some_and(|m| m.is_logging_infra_crate())
         {
             return;
         }
@@ -458,6 +477,37 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 "#;
 
+    /// A logging/tracing infrastructure crate: `[package].name` carries a
+    /// `tracing` segment (`tracing-subscriber`). It implements the subscriber
+    /// machinery itself, so it cannot route its own failures through tracing.
+    const TRACING_SUBSCRIBER_CARGO_TOML: &str = r#"
+[package]
+name = "tracing-subscriber"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "tracing_subscriber"
+path = "src/lib.rs"
+"#;
+
+    /// An ordinary application/library that merely *depends on* `tracing` keeps
+    /// a normal package name — it is not logging infrastructure and stays
+    /// flagged.
+    const TRACING_DEPENDENT_CARGO_TOML: &str = r#"
+[package]
+name = "myapp"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "myapp"
+path = "src/lib.rs"
+
+[dependencies]
+tracing = "0.1"
+"#;
+
     #[test]
     fn flags_eprintln_in_library_file() {
         let source = "fn f() { eprintln!(\"oops\"); }";
@@ -513,6 +563,31 @@ crate-type = ["cdylib", "rlib"]
         let source = "fn f() { eprintln!(\"oops\"); }";
         assert_eq!(
             run_in_crate(CDYLIB_PLUS_RLIB_CARGO_TOML, "src/lib.rs", source).len(),
+            1
+        );
+    }
+
+    /// Regression for #4994 (tokio-rs/tracing `tracing-subscriber`): a
+    /// logging/tracing infrastructure crate implements the subscriber/formatter
+    /// machinery itself and cannot route its own internal failures through
+    /// `tracing` (that is what has failed or would recurse). `eprintln!` is its
+    /// last-resort fallback — e.g. when the formatter fails or `RUST_LOG`
+    /// can't be parsed — and is exempt.
+    #[test]
+    fn allows_eprintln_in_logging_infra_crate() {
+        let source =
+            "fn f() { eprintln!(\"[tracing-subscriber] Unable to format event: {:?}\", attrs); }";
+        assert!(run_in_crate(TRACING_SUBSCRIBER_CARGO_TOML, "src/fmt/fmt_layer.rs", source).is_empty());
+    }
+
+    /// The logging-infra exemption keys off the crate's *own* package name, not
+    /// on a `tracing` dependency: an ordinary crate that merely depends on
+    /// `tracing` is not logging infrastructure and stays flagged.
+    #[test]
+    fn flags_eprintln_in_crate_that_merely_depends_on_tracing() {
+        let source = "fn f() { eprintln!(\"oops\"); }";
+        assert_eq!(
+            run_in_crate(TRACING_DEPENDENT_CARGO_TOML, "src/lib.rs", source).len(),
             1
         );
     }

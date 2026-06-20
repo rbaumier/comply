@@ -2055,6 +2055,47 @@ impl CargoManifest {
         name_is_stream_sink || description_is_stream_exporter
     }
 
+    /// True when the crate *is* logging/tracing infrastructure — its
+    /// `[package].name` is a known logging crate (`log`, `tracing`,
+    /// `env_logger`, `fern`, `slog`, `flexi_logger`, …) or carries a logging
+    /// token (`tracing`, `logger`, `logging`, `slog`) as a whole
+    /// dash/underscore-delimited segment. Such crates implement the
+    /// `Subscriber`/`Log` machinery themselves; they cannot route their own
+    /// internal failures through `tracing`/`log` (that is the very system that
+    /// has failed or would recurse), so `eprintln!` is their only last-resort
+    /// fallback output.
+    ///
+    /// The match is on the crate's *own identity*, not on whether it depends on
+    /// a logging crate — an application that merely uses `tracing` keeps an
+    /// ordinary package name and stays flagged. The bare `log` / `logs`
+    /// segments are deliberately excluded: a `*-log` / `*-logs` crate is
+    /// usually a *data* log (a write-ahead / Raft / audit / event log library),
+    /// not a logging facade, so its stray `eprintln!` should still be flagged.
+    /// A genuine logging facade not caught by a segment is added by exact name
+    /// to `KNOWN_LOGGING_CRATES`.
+    #[must_use]
+    pub fn is_logging_infra_crate(&self) -> bool {
+        const KNOWN_LOGGING_CRATES: &[&str] = &[
+            "log",
+            "tracing",
+            "env_logger",
+            "env-logger",
+            "fern",
+            "slog",
+            "flexi_logger",
+            "flexi-logger",
+            "simplelog",
+            "log4rs",
+            "fastlog",
+        ];
+        const LOGGING_SEGMENTS: &[&str] = &["tracing", "logger", "logging", "slog"];
+        self.name.as_deref().is_some_and(|n| {
+            KNOWN_LOGGING_CRATES.contains(&n)
+                || n.split(['-', '_'])
+                    .any(|segment| LOGGING_SEGMENTS.contains(&segment))
+        })
+    }
+
     /// True when `root` is a sibling sub-crate of this package's Cargo family —
     /// its name starts with `<package_name>_` (e.g. package `salvo` → `salvo_core`,
     /// `salvo_extra`). Used to recognize an umbrella/facade crate's wholesale
@@ -6641,6 +6682,60 @@ path = "tools/tool.rs"
         assert!(
             !no_crate_type.is_ffi_bridge_crate(),
             "no [lib] crate-type => not an FFI bridge crate"
+        );
+    }
+
+    #[test]
+    fn cargo_manifest_classifies_logging_infra_crate() {
+        let dir = PathBuf::from("/crate");
+
+        let parse_name = |name: &str| {
+            CargoManifest::parse(
+                &format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n"),
+                dir.clone(),
+            )
+            .unwrap()
+        };
+
+        for name in [
+            "log",
+            "tracing",
+            "tracing-subscriber",
+            "tracing-appender",
+            "tracing-flame",
+            "env_logger",
+            "fern",
+            "slog",
+            "flexi_logger",
+            "log4rs",
+            "my-logger",
+            "app-logging",
+        ] {
+            assert!(
+                parse_name(name).is_logging_infra_crate(),
+                "name `{name}` is logging/tracing infrastructure"
+            );
+        }
+
+        // A logging-like word as a substring of an unrelated segment must not
+        // match; a `*-log` / `*-logs` crate is a *data* log (write-ahead /
+        // Raft / audit / event log library), not a logging facade, so it stays
+        // flagged; and a crate that merely depends on tracing is not itself
+        // logging infrastructure.
+        for name in [
+            "blog", "dialog", "catalog", "login", "audit-log", "raft-log", "wal-log",
+            "event-logs", "myapp", "tokio",
+        ] {
+            assert!(
+                !parse_name(name).is_logging_infra_crate(),
+                "name `{name}` is not logging infrastructure"
+            );
+        }
+
+        let no_name = CargoManifest::parse("[lib]\nname = \"anon\"\n", dir).unwrap();
+        assert!(
+            !no_name.is_logging_infra_crate(),
+            "no [package].name => not a logging-infra crate"
         );
     }
 
