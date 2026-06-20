@@ -218,6 +218,45 @@ fn is_test_context_path(path: &std::path::Path) -> bool {
         .any(|c| c.as_os_str() == std::ffi::OsStr::new("regression"))
 }
 
+/// Test-fixture directory names, matched as whole path segments. A file living
+/// under one of these is test scaffolding, not shipped production source, so it
+/// may mirror the exact camelCase/PascalCase symbol it exercises rather than the
+/// production filename convention.
+const FIXTURE_DIR_SEGMENTS: &[&str] = &[
+    "test",
+    "tests",
+    "__tests__",
+    "fixtures",
+    "__fixtures__",
+    "__mocks__",
+];
+
+/// Returns `true` when any whole path segment of `path` is a test-fixture
+/// directory ([`FIXTURE_DIR_SEGMENTS`]). Segment (not substring) matching keeps
+/// `src/contest/` and `src/latest/` from matching `test`.
+fn is_in_fixture_dir(path: &std::path::Path) -> bool {
+    path.components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::Normal(s)
+                if s.to_str().is_some_and(|seg| FIXTURE_DIR_SEGMENTS.contains(&seg))
+        )
+    })
+}
+
+/// Returns `true` for a test-fixture stem named after the API symbol it
+/// exercises: every dash-separated segment is independently camelCase or
+/// PascalCase (e.g. `shorthand-tickX`, `shorthand-binRectY`). Mirrors the
+/// per-segment casing freedom of [`is_test_subject_stem`], but gated by a
+/// fixture-directory ancestor (see [`is_in_fixture_dir`]) instead of a trailing
+/// `-test`/`-spec` suffix, so a fixture file can carry the exact mixed-case
+/// function name without the suffix. A name that is already plain kebab-case is
+/// allowed earlier, so this only widens acceptance to mixed-case segments.
+fn is_fixture_subject_stem(stem: &str) -> bool {
+    stem.split('-')
+        .all(|segment| is_camel_case(segment) || is_pascal_case(segment))
+}
+
 /// Returns `true` when any ancestor segment of `path` is a locale/i18n
 /// directory. Gates the lowercase-region locale-tag form: a stem like `en_gb`
 /// is a valid BCP 47 tag only when it lives in such a directory, otherwise it
@@ -321,6 +360,9 @@ impl TextCheck for Check {
             return Vec::new();
         }
         if is_test_context_path(ctx.path) && is_regression_test_name(convention_stem) {
+            return Vec::new();
+        }
+        if is_in_fixture_dir(ctx.path) && is_fixture_subject_stem(convention_stem) {
             return Vec::new();
         }
         vec![Diagnostic {
@@ -957,6 +999,46 @@ mod tests {
     #[test]
     fn flags_non_test_mixed_case_still_fires_issue_3310() {
         assert_eq!(run("src/My_Component.ts").len(), 1);
+    }
+
+    // Regression for #4757: Observable Plot test fixtures under `test/` are named
+    // `shorthand-{markName}.ts` where `markName` is the camelCase API function
+    // they exercise (`tickX`, `binRectY`). The mixed-case segment is intentional
+    // and the file lives under a `test/` ancestor, so it must not be flagged.
+    #[test]
+    fn allows_test_fixture_camel_subject_issue_4757() {
+        assert!(run("test/plots/shorthand-tickX.ts").is_empty());
+        assert!(run("test/plots/shorthand-binRectY.ts").is_empty());
+        assert!(run("test/plots/shorthand-areaY.ts").is_empty());
+    }
+
+    // Single-word camelCase fixtures under `test/` are already allowed by the
+    // camelCase rule; this pins that they stay clean.
+    #[test]
+    fn allows_test_fixture_single_word_camel_issue_4757() {
+        assert!(run("test/plots/aspectRatio.ts").is_empty());
+    }
+
+    // The fixture allowance also covers PascalCase subject segments under a
+    // fixtures/ ancestor.
+    #[test]
+    fn allows_fixture_dir_pascal_subject_issue_4757() {
+        assert!(run("__fixtures__/render-MyComponent.ts").is_empty());
+    }
+
+    // Guard (scope proof): the SAME mixed-case fixture name in production `src/`
+    // (no test/fixture ancestor) must still fire — the directory gate is what
+    // grants the freedom, not the stem shape.
+    #[test]
+    fn flags_mixed_case_fixture_stem_in_src_issue_4757() {
+        assert_eq!(run("src/plots/shorthand-tickX.ts").len(), 1);
+    }
+
+    // Guard: a substring directory like `contest/` must not be read as a `test/`
+    // ancestor, so a production mixed-case file there still fires.
+    #[test]
+    fn flags_mixed_case_stem_in_contest_dir_issue_4757() {
+        assert_eq!(run("src/contest/shorthand-tickX.ts").len(), 1);
     }
 
     // Regression for #3280: Nuxt's Nitro file-system router derives a server route
