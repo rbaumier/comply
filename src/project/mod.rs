@@ -2552,6 +2552,19 @@ impl ProjectCtx {
                 .any(|f| f.name == "nuxt")
     }
 
+    /// True when the effective `package.json` chain for `path` declares
+    /// `unplugin-auto-import` (any dependency section, including
+    /// `devDependencies`). That Vite/Rollup plugin auto-imports every export of
+    /// files under its configured `dirs` (e.g. `composables/`) app-wide at build
+    /// time, so such exports have no static importer — like Nuxt's built-in
+    /// auto-import.
+    #[must_use]
+    pub fn uses_unplugin_auto_import(&self, path: &Path) -> bool {
+        self.effective_package_jsons(path)
+            .iter()
+            .any(|pkg| pkg.has_dep_or_engine("unplugin-auto-import"))
+    }
+
     /// Add a framework's route-scoped magic exports when `path` matches the file
     /// convention that consumes them. SvelteKit reserves `load`/`ssr`/`csr`/… in
     /// `+page`/`+layout`/`+server` route files and `match` in `src/params/*`;
@@ -6518,6 +6531,32 @@ model User {
             !chain.iter().any(|p| p.has_dep_or_engine("parent-only")),
             "a private workspace root must not inherit parent deps"
         );
+    }
+
+    // Issue #4462: `unplugin-auto-import` is detected from any dependency
+    // section, including `devDependencies` (where it conventionally lives).
+    #[test]
+    fn uses_unplugin_auto_import_detects_dev_dependency() {
+        let (dir, ctx) = load_with_files(&[
+            (
+                "package.json",
+                r#"{"name":"app","devDependencies":{"unplugin-auto-import":"^0.17.0"}}"#,
+            ),
+            ("src/composables/dark.ts", "export const x = 1;"),
+        ]);
+        let path = dir.path().join("src/composables/dark.ts");
+        assert!(ctx.uses_unplugin_auto_import(&path));
+    }
+
+    // Negative space for #4462: a project without the plugin returns false.
+    #[test]
+    fn uses_unplugin_auto_import_absent_is_false() {
+        let (dir, ctx) = load_with_files(&[
+            ("package.json", r#"{"name":"app","devDependencies":{"vite":"^5.0.0"}}"#),
+            ("src/composables/dark.ts", "export const x = 1;"),
+        ]);
+        let path = dir.path().join("src/composables/dark.ts");
+        assert!(!ctx.uses_unplugin_auto_import(&path));
     }
 
     // Issue #4385: in a project whose `tsconfig.json` sets a non-React
