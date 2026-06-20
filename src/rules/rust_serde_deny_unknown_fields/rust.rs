@@ -30,6 +30,12 @@
 //! function, a path-qualified test fn like `#[tokio::test]` /
 //! `#[crate::test]`, or a `#[cfg(test)]` module) are skipped — they are
 //! throwaway fixtures that never deserialize untrusted input.
+//!
+//! **Exception:** structs in a cargo-fuzz target (a file under a
+//! `fuzz_targets/` directory) are skipped. These harnesses deliberately
+//! feed the deserializer random/malformed bytes; `deny_unknown_fields`
+//! would reject inputs before the fuzz target can exercise the serde
+//! code paths, defeating the fuzzer's purpose.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -53,6 +59,13 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         if ctx.file.path_segments.in_test_dir {
+            return;
+        }
+
+        // cargo-fuzz targets deliberately deserialize random/malformed bytes;
+        // `deny_unknown_fields` would reject inputs before the fuzz target can
+        // exercise the serde code paths.
+        if crate::rules::path_utils::is_fuzz_targets_path(ctx.path) {
             return;
         }
 
@@ -585,6 +598,39 @@ mod tests {
             run_on(source).len(),
             1,
             "should still flag: a serde rename to \"non_exhaustive\" is not the attribute"
+        );
+    }
+
+    #[test]
+    fn allows_fuzz_target_struct() {
+        // A struct in a cargo-fuzz target deriving `Arbitrary` deliberately
+        // deserializes random/malformed bytes — `deny_unknown_fields` would
+        // reject inputs before the fuzzer can exercise serde. (rhaiscript/rhai
+        // fuzz/fuzz_targets/fuzz_serde.rs — closes #4793)
+        let source = "#[derive(Arbitrary, Debug, Clone, PartialEq, Serialize, Deserialize)]\n\
+                      struct AllTypes { _bool: bool, _str: String }";
+        let diags = crate::rules::test_helpers::run_rule(
+            &Check,
+            source,
+            "fuzz/fuzz_targets/fuzz_serde.rs",
+        );
+        assert!(
+            diags.is_empty(),
+            "FP: fuzz-target struct flagged despite living under fuzz_targets/"
+        );
+    }
+
+    #[test]
+    fn still_flags_deserialize_struct_outside_fuzz_targets() {
+        // Negative space: the same struct shape outside a fuzz_targets/ path is
+        // still flagged — the exemption is scoped to the fuzz directory.
+        let source = "#[derive(Debug, Clone, Deserialize)]\n\
+                      struct AllTypes { _bool: bool, _str: String }";
+        let diags = crate::rules::test_helpers::run_rule(&Check, source, "src/config.rs");
+        assert_eq!(
+            diags.len(),
+            1,
+            "should still flag a non-fuzz Deserialize struct missing deny_unknown_fields"
         );
     }
 
