@@ -36,6 +36,12 @@
 //! grow the heap buffer), so the unwrap on `buf.write_all(…)`,
 //! `x.serialize(&mut buf)`, or `write!(&mut buf, …)` — where `buf` is a local
 //! `Vec`/`String` — cannot panic at runtime.
+//! A `.unwrap()` / `.expect()` whose receiver is `<recv>.downcast::<T>()`
+//! (or `downcast_ref`/`downcast_mut`) is also skipped when the call sits in the
+//! consequence of an enclosing `if <recv>.is::<T>()` guard with the same
+//! receiver and the same type `T`: `Any::downcast` succeeds exactly when
+//! `is::<T>()` is true, so the type check proves the downcast cannot fail. A
+//! mismatched type or receiver is still flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -122,6 +128,10 @@ fn collect_unwraps_in(
             // A write/serialize into an in-memory `Vec<u8>`/`String` buffer is
             // infallible (the std `io::Write`/`fmt::Write` impls never `Err`).
             && !is_infallible_buffer_write(function, source)
+            // A `<recv>.downcast::<T>().unwrap()` dominated by an enclosing
+            // `if <recv>.is::<T>()` guard (same receiver, same type) cannot
+            // fail — the type check proves the downcast succeeds.
+            && !is_guarded_downcast_unwrap(node, function, source)
         {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
@@ -482,6 +492,166 @@ fn pattern_discriminates(pattern: tree_sitter::Node, source: &[u8]) -> bool {
         pattern
     };
     !matches!(inner.kind(), "wildcard_pattern" | "identifier")
+}
+
+/// True when the `.unwrap()`/`.expect()` receiver is `<recv>.downcast::<T>()`
+/// (or `downcast_ref`/`downcast_mut`) and the call sits in the consequence of an
+/// enclosing `if <recv>.is::<T>()` whose receiver and type argument both match.
+/// `Any::downcast` returns `Ok`/`Some` exactly when `is::<T>()` is true, so the
+/// guard makes the unwrap provably infallible. The match is conservative: it
+/// requires identical receiver text AND identical type-argument text, so a
+/// mismatched type (`is::<A>()` then `downcast::<B>()`) or a different receiver
+/// is not exempted.
+///
+/// `call` is the `<receiver>.unwrap()` call_expression; `field_expr` is its
+/// `<receiver>.unwrap` field_expression.
+fn is_guarded_downcast_unwrap(
+    call: tree_sitter::Node,
+    field_expr: tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    let Some((receiver_text, type_text)) = downcast_receiver_and_type(field_expr, source) else {
+        return false;
+    };
+    // Walk up to each enclosing `if`; an `if <receiver>.is::<T>()` guard whose
+    // consequence contains this call proves the downcast cannot fail.
+    let mut cur = call;
+    while let Some(parent) = cur.parent() {
+        // Stop at the function boundary — an `if` further out is unrelated.
+        if matches!(
+            cur.kind(),
+            "function_item" | "closure_expression" | "source_file"
+        ) {
+            return false;
+        }
+        if parent.kind() == "if_expression"
+            && parent
+                .child_by_field_name("consequence")
+                .is_some_and(|c| c.id() == cur.id())
+            && let Some(condition) = parent.child_by_field_name("condition")
+            && condition_has_is_guard(condition, receiver_text, type_text, source)
+        {
+            return true;
+        }
+        cur = parent;
+    }
+    false
+}
+
+/// If `field_expr`'s receiver is a `<recv>.downcast::<T>()` /
+/// `.downcast_ref::<T>()` / `.downcast_mut::<T>()` call, return
+/// `(receiver_text, type_argument_text)`. `None` otherwise.
+fn downcast_receiver_and_type<'a>(
+    field_expr: tree_sitter::Node,
+    source: &'a [u8],
+) -> Option<(&'a str, &'a str)> {
+    let receiver = field_expr.child_by_field_name("value")?;
+    if receiver.kind() != "call_expression" {
+        return None;
+    }
+    let generic = receiver.child_by_field_name("function")?;
+    if generic.kind() != "generic_function" {
+        return None;
+    }
+    let func = generic.child_by_field_name("function")?;
+    if func.kind() != "field_expression" {
+        return None;
+    }
+    let method = func.child_by_field_name("field")?.utf8_text(source).ok()?;
+    if !matches!(method, "downcast" | "downcast_ref" | "downcast_mut") {
+        return None;
+    }
+    let recv_text = func.child_by_field_name("value")?.utf8_text(source).ok()?;
+    let type_text = sole_type_argument_text(generic, source)?;
+    Some((recv_text, type_text))
+}
+
+/// True when `condition` contains a `<receiver>.is::<type>()` call whose receiver
+/// text and sole type argument both equal the given downcast receiver and type.
+/// Descends through `&&` chains and parenthesized expressions so the guard may be
+/// one conjunct of a larger boolean condition.
+fn condition_has_is_guard(
+    condition: tree_sitter::Node,
+    receiver_text: &str,
+    type_text: &str,
+    source: &[u8],
+) -> bool {
+    match condition.kind() {
+        "parenthesized_expression" => condition
+            .named_child(0)
+            .is_some_and(|inner| condition_has_is_guard(inner, receiver_text, type_text, source)),
+        "binary_expression" => {
+            // Only `&&` distributes the guarantee to the consequence; `||` does not.
+            let is_and = condition
+                .child_by_field_name("operator")
+                .and_then(|op| op.utf8_text(source).ok())
+                == Some("&&");
+            if !is_and {
+                return false;
+            }
+            let left = condition.child_by_field_name("left");
+            let right = condition.child_by_field_name("right");
+            left.is_some_and(|n| condition_has_is_guard(n, receiver_text, type_text, source))
+                || right
+                    .is_some_and(|n| condition_has_is_guard(n, receiver_text, type_text, source))
+        }
+        "call_expression" => is_matching_is_call(condition, receiver_text, type_text, source),
+        _ => false,
+    }
+}
+
+/// True when `call` is `<receiver_text>.is::<type_text>()` — a `generic_function`
+/// whose method is `is`, whose receiver text matches, and whose sole type
+/// argument matches.
+fn is_matching_is_call(
+    call: tree_sitter::Node,
+    receiver_text: &str,
+    type_text: &str,
+    source: &[u8],
+) -> bool {
+    let Some(generic) = call.child_by_field_name("function") else {
+        return false;
+    };
+    if generic.kind() != "generic_function" {
+        return false;
+    }
+    let Some(func) = generic.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "field_expression" {
+        return false;
+    }
+    if func
+        .child_by_field_name("field")
+        .and_then(|n| n.utf8_text(source).ok())
+        != Some("is")
+    {
+        return false;
+    }
+    if func
+        .child_by_field_name("value")
+        .and_then(|n| n.utf8_text(source).ok())
+        != Some(receiver_text)
+    {
+        return false;
+    }
+    sole_type_argument_text(generic, source) == Some(type_text)
+}
+
+/// The single type argument's text of a `generic_function` `<f>::<T>`, or `None`
+/// when there is not exactly one type argument.
+fn sole_type_argument_text<'a>(
+    generic: tree_sitter::Node,
+    source: &'a [u8],
+) -> Option<&'a str> {
+    let args = generic.child_by_field_name("type_arguments")?;
+    let mut cursor = args.walk();
+    let mut named = args.named_children(&mut cursor);
+    let first = named.next()?;
+    if named.next().is_some() {
+        return None;
+    }
+    first.utf8_text(source).ok()
 }
 
 #[cfg(test)]
@@ -901,5 +1071,129 @@ mod tests {
             run_on(source).is_empty(),
             "variant-discriminated try_from is exempted by design; the rule cannot prove totality"
         );
+    }
+
+    /// Closes #5029: a `<recv>.downcast::<T>().unwrap()` inside an
+    /// `if <recv>.is::<T>()` branch is provably infallible — `Any::downcast`
+    /// succeeds whenever `is::<T>()` is true (same receiver, same type) — so it
+    /// must not be flagged.
+    #[test]
+    fn allows_is_guarded_downcast_unwrap() {
+        let source = r#"impl From<Box<dyn Any>> for Error {
+            fn from(value: Box<dyn Any>) -> Self {
+                if value.is::<Error>() {
+                    return Self::Wrapped(value.downcast::<Error>().unwrap());
+                }
+                Self::Other
+            }
+        }"#;
+        assert!(
+            run_on(source).is_empty(),
+            "an is::<T>()-guarded downcast::<T>().unwrap() cannot fail"
+        );
+    }
+
+    /// `downcast_ref::<T>()` / `downcast_mut::<T>()` are equally guarded by a
+    /// matching `is::<T>()` check and must not be flagged either.
+    #[test]
+    fn allows_is_guarded_downcast_ref_unwrap() {
+        let source = r#"impl From<&dyn Any> for B {
+            fn from(value: &dyn Any) -> Self {
+                if value.is::<Foo>() {
+                    return B(value.downcast_ref::<Foo>().unwrap().clone());
+                }
+                B::default()
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// The guard may be one conjunct of a larger `&&` condition; the downcast is
+    /// still dominated by the matching `is::<T>()` check.
+    #[test]
+    fn allows_is_guarded_downcast_in_and_condition() {
+        let source = r#"impl From<Box<dyn Any>> for Error {
+            fn from(value: Box<dyn Any>) -> Self {
+                if ready && value.is::<Error>() {
+                    return Self::Wrapped(value.downcast::<Error>().unwrap());
+                }
+                Self::Other
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// A bare `.unwrap()` with no enclosing `is::<T>()` guard is a real fallible
+    /// path and must still flag — the exemption is guard-specific.
+    #[test]
+    fn flags_unguarded_downcast_unwrap() {
+        let source = r#"impl From<Box<dyn Any>> for Error {
+            fn from(value: Box<dyn Any>) -> Self {
+                Self::Wrapped(value.downcast::<Error>().unwrap())
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// A mismatched type — `is::<A>()` guarding a `downcast::<B>()` — does NOT
+    /// prove the downcast succeeds, so it must still flag.
+    #[test]
+    fn flags_is_guarded_downcast_with_mismatched_type() {
+        let source = r#"impl From<Box<dyn Any>> for Error {
+            fn from(value: Box<dyn Any>) -> Self {
+                if value.is::<A>() {
+                    return Self::Wrapped(value.downcast::<B>().unwrap());
+                }
+                Self::Other
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// A mismatched receiver — `other.is::<T>()` guarding `value.downcast::<T>()`
+    /// — proves nothing about `value`, so it must still flag.
+    #[test]
+    fn flags_is_guarded_downcast_with_mismatched_receiver() {
+        let source = r#"impl From<Box<dyn Any>> for Error {
+            fn from(value: Box<dyn Any>) -> Self {
+                if other.is::<Error>() {
+                    return Self::Wrapped(value.downcast::<Error>().unwrap());
+                }
+                Self::Other
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// A guard reached only via `||` does not dominate the consequence (the
+    /// branch can execute when the `is::<T>()` conjunct is false), so the unwrap
+    /// must still flag.
+    #[test]
+    fn flags_is_guarded_downcast_in_or_condition() {
+        let source = r#"impl From<Box<dyn Any>> for Error {
+            fn from(value: Box<dyn Any>) -> Self {
+                if forced || value.is::<Error>() {
+                    return Self::Wrapped(value.downcast::<Error>().unwrap());
+                }
+                Self::Other
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// The exemption requires the unwrap to be in the `if`'s consequence, not its
+    /// `else` branch — there `is::<T>()` is false, so the downcast can fail.
+    #[test]
+    fn flags_downcast_unwrap_in_else_branch() {
+        let source = r#"impl From<Box<dyn Any>> for Error {
+            fn from(value: Box<dyn Any>) -> Self {
+                if value.is::<Other>() {
+                    Self::Other
+                } else {
+                    Self::Wrapped(value.downcast::<Error>().unwrap())
+                }
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
     }
 }
