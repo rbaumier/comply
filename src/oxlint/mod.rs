@@ -152,9 +152,27 @@ pub fn lint_files(
         }
     }
 
+    let mut source_cache: FxHashMap<PathBuf, Option<String>> = FxHashMap::default();
+
+    // Generated files are exempt from every rule, native and delegated alike
+    // (the native engine drops them at `dispatch_with_lang`). oxlint runs as an
+    // external subprocess that never sees that gate, so apply the same
+    // exemption to its diagnostics here. A path signal (e.g. `routeTree.gen.ts`,
+    // a `generated/` segment) is decisive on its own; otherwise scan the source
+    // for a codegen banner (e.g. ANTLR's `// Generated from … by …`).
+    all.retain(|d| {
+        if crate::rules::file_ctx::is_generated_path(d.path.as_ref()) {
+            return false;
+        }
+        let source = source_cache
+            .entry(d.path.to_path_buf())
+            .or_insert_with(|| std::fs::read_to_string(d.path.as_ref()).ok())
+            .as_deref();
+        !source.is_some_and(crate::rules::file_ctx::is_generated_content)
+    });
+
     let filters = crate::rules::collect_delegated_post_filters();
     if !filters.is_empty() {
-        let mut source_cache: FxHashMap<PathBuf, Option<String>> = FxHashMap::default();
         all.retain(|d| {
             let Some(filter_vec) = filters.get(d.rule_id.as_ref()) else {
                 return true;
