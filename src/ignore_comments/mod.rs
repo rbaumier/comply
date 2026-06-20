@@ -119,6 +119,27 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
     }
 }
 
+/// Rules that share a span's intent: a `comply-ignore` for the key rule also
+/// suppresses each listed sibling on the same line/file. `no-clones` and
+/// `no-duplicate-type-definition` both flag the exact same intentional
+/// structural duplication, so one acknowledgement of it covers both rather than
+/// forcing the author to stack two markers on the same construct.
+fn suppression_aliases(rule_id: &str) -> &'static [&'static str] {
+    match rule_id {
+        "no-duplicate-type-definition" => &["no-clones"],
+        _ => &[],
+    }
+}
+
+/// Whether `rule_id` is suppressed within `suppressed` — directly or because a
+/// sibling rule that covers it (see `suppression_aliases`) is present.
+fn is_suppressed(rule_id: &str, suppressed: &FxHashSet<String>) -> bool {
+    suppressed.contains(rule_id)
+        || suppression_aliases(rule_id)
+            .iter()
+            .any(|alias| suppressed.contains(*alias))
+}
+
 /// Filter diagnostics by removing suppressed ones, then append bad-ignore diagnostics.
 pub fn apply_suppressions(
     diagnostics: Vec<Diagnostic>,
@@ -133,10 +154,9 @@ pub fn apply_suppressions(
         let suppressed_at_line = ignore_result
             .suppressions
             .get(&diag.line)
-            .is_some_and(|rules| rules.contains(diag.rule_id.as_ref()));
-        let suppressed_for_file = ignore_result
-            .file_suppressions
-            .contains(diag.rule_id.as_ref());
+            .is_some_and(|rules| is_suppressed(diag.rule_id.as_ref(), rules));
+        let suppressed_for_file =
+            is_suppressed(diag.rule_id.as_ref(), &ignore_result.file_suppressions);
         if !suppressed_at_line && !suppressed_for_file {
             result.push(diag);
         }
@@ -400,6 +420,41 @@ mod tests {
             "single-line JSDoc must also be walked past; got {:?}",
             r.suppressions
         );
+    }
+
+    #[test]
+    fn no_clones_ignore_also_suppresses_duplicate_type_definition() {
+        // #4571 — a span the author deliberately keeps duplicated and documents
+        // with `comply-ignore: no-clones` must not be re-flagged by the sibling
+        // `no-duplicate-type-definition`, which reports the same duplication.
+        let s = "// comply-ignore: no-clones — per-route sort union differs\n\
+                 type MockSearch = { page: number };\n";
+        let kept = apply_suppressions(
+            vec![diag(2, "no-duplicate-type-definition")],
+            Path::new("t.ts"),
+            s,
+        );
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn no_clones_ignore_does_not_suppress_unrelated_rules() {
+        // The alias is one-directional and narrow: `no-clones` covers only its
+        // structural sibling, never arbitrary rules on the same line.
+        let s = "// comply-ignore: no-clones — intentional\nlet x = 1;\n";
+        let kept = apply_suppressions(vec![diag(2, "no-throw")], Path::new("t.ts"), s);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].rule_id.as_ref(), "no-throw");
+    }
+
+    #[test]
+    fn duplicate_type_definition_ignore_does_not_suppress_no_clones() {
+        // Aliasing does not run the other way: ignoring the type rule must not
+        // silence `no-clones`, which governs a broader set of duplications.
+        let s = "// comply-ignore: no-duplicate-type-definition — ok\ntype T = { a: number };\n";
+        let kept = apply_suppressions(vec![diag(2, "no-clones")], Path::new("t.ts"), s);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].rule_id.as_ref(), "no-clones");
     }
 
     #[test]

@@ -102,10 +102,19 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
         }
     }
     let rule_ids: Vec<&str> = enabled.iter().map(|m| m.id).collect();
+    // Thresholds the sidecar needs, resolved from the authoritative TOML so the
+    // single source of truth stays Rust-side. These rules are TS-family, so the
+    // language-keyed lookup uses TypeScript.
+    let min_dup_properties = config.threshold(
+        "no-duplicate-type-definition",
+        "min_properties",
+        crate::files::Language::TypeScript,
+    );
     let request = serde_json::json!({
         "tsconfig": tsconfig.to_string_lossy(),
         "files": abs_files,
         "rules": rule_ids,
+        "config": { "no-duplicate-type-definition": { "min_properties": min_dup_properties } },
     })
     .to_string();
 

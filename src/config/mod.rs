@@ -526,6 +526,16 @@ mod tests {
     }
 
     #[test]
+    fn no_duplicate_type_definition_min_properties_default_is_four() {
+        // Coincidental 3-field shapes collide too often; the floor sits above them.
+        let cfg = Config::default();
+        assert_eq!(
+            cfg.threshold("no-duplicate-type-definition", "min_properties", Language::TypeScript),
+            4
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "is missing")]
     fn threshold_panics_when_key_missing() {
         let cfg = Config::default();
