@@ -3,7 +3,9 @@
 //! Walks `directive_attribute` nodes that are `v-bind` bindings — either the
 //! longhand `v-bind` `directive_name` or the `:` shorthand. Reports a binding
 //! with no value, then (when a value is present) the first modifier outside the
-//! allowed set.
+//! allowed set. The Vue 3.4+ same-name shorthand — the `:` notation with an
+//! argument and no value (`:propName`, sugar for `:propName="propName"`) — is
+//! exempt from the missing-value check but still validated for modifiers.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -52,6 +54,21 @@ fn has_value(directive: tree_sitter::Node) -> bool {
         .any(|c| matches!(c.kind(), "attribute_value" | "quoted_attribute_value"))
 }
 
+/// Whether the binding has a static/dynamic directive argument (`:foo` / `:[foo]`).
+fn has_directive_argument(directive: tree_sitter::Node) -> bool {
+    let mut cursor = directive.walk();
+    directive
+        .children(&mut cursor)
+        .any(|c| matches!(c.kind(), "directive_argument" | "directive_dynamic_argument"))
+}
+
+/// Whether the binding is the Vue 3.4+ same-name shorthand: the `:` notation
+/// (`directive_name` is `:`) with a directive argument (`:propName`) and no
+/// value — sugar for `:propName="propName"`.
+fn is_same_name_shorthand(directive: tree_sitter::Node, source: &[u8]) -> bool {
+    directive_name(directive, source) == Some(":") && has_directive_argument(directive)
+}
+
 /// First modifier outside the allowed set, if any.
 fn has_invalid_modifier(directive: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cursor = directive.walk();
@@ -74,7 +91,7 @@ fn has_invalid_modifier(directive: tree_sitter::Node, source: &[u8]) -> bool {
 /// Classify a `v-bind` binding, returning the first violation in Biome's check
 /// order (missing value, then invalid modifier), or `None` when valid.
 fn classify(directive: tree_sitter::Node, source: &[u8]) -> Option<Violation> {
-    if !has_value(directive) {
+    if !has_value(directive) && !is_same_name_shorthand(directive, source) {
         Some(Violation::MissingValue)
     } else if has_invalid_modifier(directive, source) {
         Some(Violation::InvalidModifier)
@@ -131,13 +148,6 @@ mod tests {
     }
 
     #[test]
-    fn flags_missing_value_shorthand() {
-        let diags = run(&wrap("<Foo :foo />"));
-        assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("missing a value"));
-    }
-
-    #[test]
     fn flags_missing_value_with_modifier() {
         let diags = run(&wrap("<div v-bind.prop></div>"));
         assert_eq!(diags.len(), 1);
@@ -183,7 +193,6 @@ mod tests {
     fn flags_all_biome_invalid_fixtures() {
         let source = wrap(
             "<Foo v-bind:foo />\n\
-             <Foo :foo />\n\
              <div v-bind.prop></div>\n\
              <div v-bind:foo.invalid=\"bar\"></div>\n\
              <span :bar.badModifier=\"baz\"></span>\n\
@@ -192,7 +201,7 @@ mod tests {
              <button :disabled.once=\"true\"></button>\n\
              <MyComponent v-bind:propName.weird=\"someValue\"></MyComponent>",
         );
-        assert_eq!(run(&source).len(), 9);
+        assert_eq!(run(&source).len(), 8);
     }
 
     // --- Valid fixtures (Biome valid.vue) ---
@@ -284,5 +293,30 @@ mod tests {
     #[test]
     fn ignores_static_attribute() {
         assert!(run(&wrap("<div foo=\"bar\" id=\"x\" />")).is_empty());
+    }
+
+    // --- Vue 3.4+ same-name shorthand (`:propName`) — issue #4419 ---
+
+    #[test]
+    fn allows_same_name_shorthand() {
+        assert!(run(&wrap("<Foo :foo />")).is_empty());
+        assert!(run(&wrap("<Message :severity :icon size=\"small\" />")).is_empty());
+    }
+
+    #[test]
+    fn allows_same_name_shorthand_mixed_with_object_binding() {
+        assert!(run(&wrap("<slot :register :valid :reset v-bind=\"states\" />")).is_empty());
+    }
+
+    #[test]
+    fn allows_same_name_shorthand_mixed_with_valued_binding() {
+        assert!(run(&wrap("<slot name=\"button\" :value :class=\"{ disabled }\" />")).is_empty());
+    }
+
+    #[test]
+    fn flags_invalid_modifier_on_same_name_shorthand() {
+        let diags = run(&wrap("<Foo :foo.bogus />"));
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("invalid modifier"));
     }
 }
