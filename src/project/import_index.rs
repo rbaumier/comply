@@ -2493,6 +2493,42 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
         }
     }
 
+    // JSDoc `@import` tags (TypeScript 5.5+) are type-only imports that live in
+    // block-comment text, not in the AST, so the node loop above never sees
+    // them. `/** @import { Raw } from 'mdast-util-to-hast' */` is the type-only
+    // equivalent of `import type { Raw } from 'mdast-util-to-hast'`: the package
+    // is a real dependency. Scan comments for these tags so the specifier flows
+    // into the same import set the rest of the index consults.
+    for comment in semantic.comments() {
+        // Only JSDoc (`/** … */`) block comments — TypeScript honors `@import`
+        // there, not in plain `/* … */` blocks. `content_span` strips the `/*`
+        // and `*/`, so a JSDoc comment's content starts with the extra `*`.
+        if !comment.is_block() {
+            continue;
+        }
+        let body = &source[comment.content_span().start as usize..comment.content_span().end as usize];
+        if !body.starts_with('*') {
+            continue;
+        }
+        let line = oxc_line_at(&lines, comment.span.start as usize);
+        for spec in jsdoc_import_specifiers(body) {
+            // Only `specifier`/`source_path`/`is_type_only` matter for the
+            // bare-specifier collection this entry feeds; the binding fields are
+            // intentionally empty (a JSDoc `@import` names no module-level value).
+            imports.push(ImportedSymbol {
+                local_name: String::new(),
+                imported_name: String::new(),
+                kind: ImportKind::Named,
+                specifier: spec,
+                source_path: None,
+                line,
+                is_type_only: true,
+                // Erased at compile time — never a runtime-value edge.
+                is_runtime_value: false,
+            });
+        }
+    }
+
     Some(FileExtract {
         exports,
         imports,
@@ -2501,6 +2537,61 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
         mod_decls: Vec::new(),
         defines_remove_child,
     })
+}
+
+/// Module specifiers from every JSDoc `@import … from "<spec>"` tag in a block
+/// comment's text. Handles the three forms TypeScript 5.5+ accepts — named
+/// (`@import { A, B } from "pkg"`), default (`@import Default from "pkg"`), and
+/// namespace (`@import * as NS from "pkg"`) — all of which name the package in
+/// the `from` clause, so only the quoted specifier matters. A comment may carry
+/// several `@import` tags (one per line), so every match is yielded.
+fn jsdoc_import_specifiers(comment_body: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = comment_body;
+    while let Some(pos) = rest.find("@import") {
+        // Advance past this tag before searching the next, so the loop always
+        // makes progress even when no `from` clause follows.
+        let after_tag = &rest[pos + "@import".len()..];
+        rest = after_tag;
+        // Bound the search to this tag's text so a tag missing its `from` clause
+        // doesn't pull the specifier from the following `@import`.
+        let tag_text = match after_tag.find("@import") {
+            Some(next) => &after_tag[..next],
+            None => after_tag,
+        };
+        if let Some(spec) = from_clause_specifier(tag_text) {
+            out.push(spec.to_string());
+        }
+    }
+    out
+}
+
+/// The quoted specifier of the `from` clause in a single JSDoc `@import` tag's
+/// text, or `None` when there is none. The real `from` is the `from` keyword
+/// whose next non-space token is a quote — a binding or type name that merely
+/// *contains* the substring `from` (`{ fromPairs }`, `{ FromSchema }`) is not it,
+/// so the scan keeps looking past such matches.
+fn from_clause_specifier(tag_text: &str) -> Option<&str> {
+    let mut search_from = 0;
+    while let Some(rel) = tag_text[search_from..].find("from") {
+        let from_end = search_from + rel + "from".len();
+        search_from = from_end;
+        let after = tag_text[from_end..].trim_start();
+        let Some(quote) = after.chars().next() else {
+            continue;
+        };
+        if quote != '\'' && quote != '"' {
+            continue;
+        }
+        let inner = &after[quote.len_utf8()..];
+        if let Some(end) = inner.find(quote) {
+            let spec = inner[..end].trim();
+            if !spec.is_empty() {
+                return Some(spec);
+            }
+        }
+    }
+    None
 }
 
 /// Named export names declared in a TypeScript declaration file (`.d.ts` and
@@ -4352,6 +4443,55 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn jsdoc_import_specifiers_extracts_all_forms() {
+        let body = r#"
+         @import { Raw } from 'mdast-util-to-hast'
+         @import Default from "default-pkg"
+         @import * as NS from 'ns-pkg'
+        "#;
+        assert_eq!(
+            jsdoc_import_specifiers(body),
+            vec![
+                "mdast-util-to-hast".to_string(),
+                "default-pkg".to_string(),
+                "ns-pkg".to_string(),
+            ],
+        );
+    }
+
+    #[test]
+    fn jsdoc_import_without_from_clause_is_ignored() {
+        // A malformed `@import` (no `from`) must not steal the next tag's `from`.
+        let body = " @import { Broken }\n @import { Ok } from 'ok-pkg' ";
+        assert_eq!(jsdoc_import_specifiers(body), vec!["ok-pkg".to_string()]);
+    }
+
+    #[test]
+    fn jsdoc_import_binding_name_containing_from_does_not_break_extraction() {
+        // A binding whose name contains the substring `from` (`fromPairs`,
+        // `FromSchema`) must not be mistaken for the `from` keyword.
+        let body = " @import { fromPairs, FromSchema } from 'lodash-es' ";
+        assert_eq!(jsdoc_import_specifiers(body), vec!["lodash-es".to_string()]);
+    }
+
+    #[test]
+    fn jsdoc_import_records_bare_specifier_as_type_only() {
+        // Regression for #4854: a package referenced only via a JSDoc `@import`
+        // tag in a `.js` file is a real (type-only) dependency, so its bare
+        // specifier must appear in the index.
+        let src = "/**\n * @import { Raw } from 'mdast-util-to-hast'\n */\nexport const x = 1;\n";
+        let (_dir, index, _paths) = build_index(&[("raw.js", src)]);
+        let bare = index.bare_specifiers();
+        let info = bare
+            .get("mdast-util-to-hast")
+            .expect("JSDoc @import specifier must be indexed");
+        assert!(
+            info.type_only,
+            "a JSDoc @import is a type-only reference, got: {info:?}"
+        );
+    }
 
     /// Build a tiny multi-file project under a tempdir and index it.
     fn build_index(files: &[(&str, &str)]) -> (TempDir, ImportIndex, Vec<PathBuf>) {

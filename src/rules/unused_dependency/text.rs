@@ -296,6 +296,54 @@ mod tests {
     }
 
     #[test]
+    fn allows_dep_imported_only_via_jsdoc_import_tag() {
+        // Regression for #4854: a package referenced exclusively through a
+        // TypeScript 5.5+ JSDoc `@import` tag in a plain `.js` file is a real
+        // (type-only) dependency and must not be flagged unused. A second
+        // dependency imported in no form is still flagged.
+        let pkg = r#"{
+            "name": "demo",
+            "dependencies": {
+                "mdast-util-to-hast": "^13.0.0",
+                "never-used": "^1.0.0"
+            }
+        }"#;
+        let files: Vec<(&str, &str)> = vec![(
+            "lib/handle/raw.js",
+            "/**\n * @import {Raw} from 'mdast-util-to-hast'\n */\nexport function raw() {}\n",
+        )];
+        let (_dir, diags) = run_on_project(&files, pkg, "lib/handle/raw.js");
+        assert_eq!(
+            diags.len(),
+            1,
+            "mdast-util-to-hast is used via @import; only never-used is unused: {diags:?}"
+        );
+        assert!(
+            diags[0].message.contains("never-used"),
+            "message should name the genuinely unused dep, got: {}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn jsdoc_import_namespace_form_marks_dep_used() {
+        // The `* as NS` JSDoc form names the package in its `from` clause too.
+        let pkg = r#"{
+            "name": "demo",
+            "dependencies": { "hast": "^1.0.0" }
+        }"#;
+        let files: Vec<(&str, &str)> = vec![(
+            "lib/text.js",
+            "/**\n * @import * as Hast from 'hast'\n */\nexport function text() {}\n",
+        )];
+        let (_dir, diags) = run_on_project(&files, pkg, "lib/text.js");
+        assert!(
+            diags.is_empty(),
+            "hast is used via a namespace @import, no diagnostic expected, got: {diags:?}"
+        );
+    }
+
+    #[test]
     fn skips_at_types_packages() {
         let pkg = r#"{
             "name": "demo",
