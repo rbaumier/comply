@@ -598,16 +598,21 @@ fn extract_entries(
 
 /// Declaration node kinds (Rust + TS/JS) that carry a `name` field and can be
 /// the subject of a leading doc-comment. A comment whose next sibling is one of
-/// these documents that named item.
+/// these documents that named item. Trait-body items (`function_signature_item`,
+/// `associated_type`) count too: parallel sync/async crates (`embedded-hal` vs
+/// `embedded-hal-async`) mirror the same trait method docs, which is the same
+/// same-named-item exemption a freestanding `function_item` earns.
 fn is_named_declaration(kind: &str) -> bool {
     matches!(
         kind,
         // Rust
         "function_item"
+            | "function_signature_item"
             | "struct_item"
             | "enum_item"
             | "trait_item"
             | "type_item"
+            | "associated_type"
             | "const_item"
             | "static_item"
             | "mod_item"
@@ -1070,6 +1075,69 @@ pub fn aes128_decrypt(x: u8) -> u8 { x }
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "intra-file duplicate doc on same name is still a smell");
         assert!(diags[0].path.ends_with("a.rs"));
+    }
+
+    #[test]
+    fn ignores_mirror_trait_method_docs_across_sync_async_crates() {
+        // Regression (#4726): `embedded-hal` and `embedded-hal-async` mirror the
+        // same trait, so each carries the same-named trait method (a
+        // `function_signature_item`, not a `function_item`) with an identical doc
+        // describing the same API contract — intentional API mirroring, not a copy.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "\
+pub trait SpiDevice {
+    /// Perform a transaction against the device, locking the bus for its whole
+    /// duration so no other transaction can run concurrently against the same bus.
+    ///
+    /// The locking mechanism is implementation-defined and must keep two such
+    /// transactions from ever executing concurrently against one shared bus here.
+    fn transaction(&mut self, operations: u8) -> u8;
+}
+";
+        let a = write(&dir, "spi.rs", doc);
+        let b = write(&dir, "async_spi.rs", doc);
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "mirrored trait-method docs across parallel crates must not flag"
+        );
+    }
+
+    #[test]
+    fn ignores_mirror_associated_type_docs_across_crates() {
+        // An associated type in mirrored sync/async traits carries the same doc.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "\
+pub trait ErrorType {
+    /// Error type used by this trait, threaded through every operation so callers
+    /// can recover from a transport failure without losing the in-flight context.
+    type Error;
+}
+";
+        let a = write(&dir, "io.rs", doc);
+        let b = write(&dir, "async_io.rs", doc);
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "mirrored associated-type docs across parallel crates must not flag"
+        );
+    }
+
+    #[test]
+    fn still_flags_duplicate_doc_on_differently_named_trait_methods() {
+        // The exemption stays name-keyed for trait methods too: the same doc
+        // copy-pasted onto two *differently named* trait methods across files is
+        // real duplication and must still flag.
+        let dir = tempfile::tempdir().unwrap();
+        let head = "\
+    /// Perform a transaction against the device, locking the bus for its whole
+    /// duration so no other transaction can run concurrently against the same bus.
+    ///
+    /// The locking mechanism is implementation-defined and must keep two such
+    /// transactions from ever executing concurrently against one shared bus here.\n";
+        let a = write(&dir, "a.rs", &format!("pub trait A {{\n{head}    fn read(&mut self) -> u8;\n}}\n"));
+        let b = write(&dir, "b.rs", &format!("pub trait B {{\n{head}    fn write(&mut self) -> u8;\n}}\n"));
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "identical doc on differently-named trait methods is a smell");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
     #[test]
