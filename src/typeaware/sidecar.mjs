@@ -159,6 +159,15 @@ function typeIsUnknownOrAny(type) {
   return !!(type && type.flags & TypeFlags.AnyOrUnknown);
 }
 
+/** Whether a type is `any` specifically (not `unknown`). `any` means the type
+ *  was lost — using `typeof` on it sniffs at runtime instead of typing the
+ *  value. A deliberate `unknown` is the honest "I cannot know this statically"
+ *  (a caught error, `JSON.parse`, a lib that returns `unknown`); narrowing it
+ *  with `typeof` is correct TS discipline, so the typeof rule leaves it alone. */
+function typeIsAny(type) {
+  return !!(type && type.flags & TypeFlags.Any);
+}
+
 /** Whether `node` sits lexically inside a function whose return-type annotation
  *  is a type predicate (`x is T`). A `typeof`/`in` there is the cast-free
  *  narrowing primitive the rules steer toward, so flagging it is contradictory.
@@ -326,12 +335,14 @@ function ruleNoInOperator(sourceFile, checker, text, lineStarts, file) {
 }
 
 // ── Rule: ts-no-typeof-operator ──────────────────────────────────────────────
-// `typeof x` stands in for validating a boundary value. It fires only when the
-// operand is an unvalidated `unknown`/`any` value that should instead be parsed
-// with a schema (Zod). It is skipped as an environment guard (`typeof window`),
-// on a caught error, inside a `z.preprocess` normaliser, inside a user-defined
-// type-predicate function (`x is T`), and on any already-typed operand (narrowing
-// an owned value/union is idiomatic).
+// `typeof x` on an `any` operand means the type was lost — the author reaches for
+// a runtime sniff instead of typing the value. The rule fires ONLY on `any`. A
+// `typeof` on `unknown` is left alone on purpose: `unknown` is the honest "I
+// cannot know this type statically" (a caught error, `JSON.parse`, a lib that
+// returns `unknown`), and runtime-narrowing it with `typeof` — primitive or
+// object — is the TS-sanctioned discipline, not a boundary smell. Also skipped:
+// environment guards (`typeof window`), caught errors, a `z.preprocess`
+// normaliser, type-predicate functions (`x is T`), and already-typed operands.
 const ENV_GLOBALS = new Set([
   "window",
   "document",
@@ -394,7 +405,7 @@ function ruleNoTypeofOperator(sourceFile, checker, text, lineStarts, file) {
     if (inTypePredicateFunction(node)) return;
 
     const type = checker.getTypeAtLocation(operand);
-    if (!typeIsUnknownOrAny(type)) return;
+    if (!typeIsAny(type)) return;
 
     pushDiag(
       sourceFile,
@@ -402,7 +413,7 @@ function ruleNoTypeofOperator(sourceFile, checker, text, lineStarts, file) {
       file,
       node,
       "ts-no-typeof-operator",
-      "Avoid `typeof` here: parse external `unknown` with a schema (e.g. Zod), or discriminate an owned union with a tag + exhaustive switch.",
+      "Avoid `typeof` on an `any` value: give it a real type, or narrow from `unknown` instead. `any` here means the type was lost — typeof-narrowing an honest `unknown` is fine, reaching for it on `any` sniffs at runtime in place of typing.",
     );
   });
 }
@@ -410,7 +421,17 @@ function ruleNoTypeofOperator(sourceFile, checker, text, lineStarts, file) {
 const duplicateCandidates = [];
 
 for (const file of files) {
-  const project = snapshot.getDefaultProjectForFile(file);
+  // `getDefaultProjectForFile` throws (rather than returning null) when `file`
+  // belongs to no opened project — e.g. a repo with split tsconfigs (root +
+  // e2e + scripts) where the discovered project covers only a subset of the
+  // fed files. Treat a throw exactly like a missing project: skip type-aware
+  // for this file instead of crashing the whole run.
+  let project;
+  try {
+    project = snapshot.getDefaultProjectForFile(file);
+  } catch {
+    continue;
+  }
   if (!project) continue;
   const sourceFile = project.program.getSourceFile(file);
   if (!sourceFile) continue;
