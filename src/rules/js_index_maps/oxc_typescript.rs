@@ -1,8 +1,10 @@
 //! OxcCheck backend for js-index-maps — flag a bare-identifier
 //! `.find()`/`.findIndex()`/`.filter()`/`.includes()`/`.indexOf()` inside a loop
 //! as a possible O(n*m) array scan. EXCEPTIONS: `.includes()`/`.indexOf()` whose
-//! sole argument is a string literal is a `String.prototype` substring search,
-//! not array membership — there is no collection to index, so it is not flagged;
+//! sole argument is a string literal, or whose receiver is statically a string
+//! (a string literal/template, or a string-returning call like
+//! `s.toLowerCase()`), is a `String.prototype` substring search, not array
+//! membership — there is no collection to index, so it is not flagged;
 //! a two-argument `.indexOf(value, fromIndex)` is a forward-scan cursor (a
 //! positional string/array walk), never a membership lookup, so it is not flagged;
 //! a receiver that is an inline literal array (`["./", "/"].includes(x)`) has a
@@ -75,6 +77,15 @@ impl OxcCheck for Check {
         // `Array`/`String.prototype.indexOf` both take exactly
         // `(searchValue, fromIndex)`.
         if method == "indexOf" && call.arguments.len() == 2 {
+            return;
+        }
+
+        // `String.prototype.includes`/`indexOf` is a substring search, not array
+        // membership — `"abc".includes(x)` or `s.toLowerCase().includes(query)`
+        // has no collection to hash into a Map/Set, so the O(1)-lookup advice is a
+        // category error. Skip when the receiver is statically a string: a string
+        // literal/template, or a call to a string-returning method.
+        if matches!(method, "includes" | "indexOf") && receiver_is_string(&member.object) {
             return;
         }
 
@@ -194,6 +205,45 @@ fn is_set_or_map_constructor(new_expr: &NewExpression<'_>) -> bool {
         &new_expr.callee,
         Expression::Identifier(id) if matches!(id.name.as_str(), "Set" | "Map")
     )
+}
+
+/// Methods that exist ONLY on `String.prototype` and return a `string`. A call
+/// to one of these is statically a string-typed expression, so a chained
+/// `.includes()`/`.indexOf()` is a substring search rather than array membership.
+/// Array-shared names (`slice`, `concat`, `toString`) are deliberately excluded:
+/// matching on the method name alone can't tell `str.slice()` from `arr.slice()`,
+/// and exempting `arr.slice().includes(x)` would silently miss a real O(n*m) scan.
+const STRING_RETURNING_METHODS: &[&str] = &[
+    "toLowerCase",
+    "toUpperCase",
+    "trim",
+    "trimStart",
+    "trimEnd",
+    "substring",
+    "substr",
+    "replace",
+    "replaceAll",
+    "normalize",
+    "padStart",
+    "padEnd",
+    "repeat",
+    "charAt",
+];
+
+/// True when `expr` is statically a `string`: a string literal/template, or a
+/// call to a string-returning method (`.toLowerCase()`, `.trim()`, …). Used to
+/// skip `String.prototype.includes`/`indexOf` substring searches, which have no
+/// collection to replace with a Map/Set.
+fn receiver_is_string(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::StringLiteral(_) | Expression::TemplateLiteral(_) => true,
+        Expression::CallExpression(call) => matches!(
+            &call.callee,
+            Expression::StaticMemberExpression(member)
+                if STRING_RETURNING_METHODS.contains(&member.property.name.as_str())
+        ),
+        _ => false,
+    }
 }
 
 /// True when `call`'s callback is invoked once per element of the receiver
@@ -522,6 +572,69 @@ for (const s of strings) {
 "#)
             .is_empty()
         );
+    }
+
+    #[test]
+    fn no_fp_on_string_receiver_to_lower_case_includes_in_loop() {
+        // Regression for #4566: `team.name.toLowerCase().includes(query)` is a
+        // case-insensitive substring filter — the receiver is a string, not an
+        // array, so there is no collection to index into a Map/Set.
+        assert!(
+            run(r#"
+for (const team of teams) {
+    if (team.name.toLowerCase().includes(normalizedQuery)) {}
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_string_literal_receiver_includes_variable_arg_in_loop() {
+        // Regression for #4566: `"abc".includes(x)` is a substring search even
+        // when the argument is a variable.
+        assert!(
+            run(r#"
+for (const x of xs) {
+    if ("abc".includes(x)) {}
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_template_literal_receiver_includes_in_loop() {
+        assert!(
+            run(r#"
+for (const x of xs) {
+    if (`prefix-${x}`.includes(needle)) {}
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_array_slice_includes_in_loop() {
+        // `slice`/`concat` exist on `Array.prototype` too — matching the method
+        // name alone must not exempt a genuine array-membership scan.
+        let diags = run(r#"
+for (const r of rows) {
+    if (bigArray.slice(0, 100).includes(r.gtin)) {}
+}
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_array_concat_includes_in_loop() {
+        let diags = run(r#"
+for (const r of rows) {
+    if (bigArray.concat(extra).includes(r.gtin)) {}
+}
+"#);
+        assert_eq!(diags.len(), 1);
     }
 
     #[test]
