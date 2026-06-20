@@ -1,5 +1,10 @@
 //! OXC backend for no-unsanitized-property — flag unsafe assignments to
 //! innerHTML/outerHTML/srcdoc.
+//!
+//! A static string literal RHS and the `.__html` `dangerouslySetInnerHTML`
+//! idiom (`el.innerHTML = x.__html`) are exempt: the `.__html` member access is
+//! the React/Preact/Hono opt-in marker for raw HTML, so the caller — not this
+//! assignment — owns sanitization.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -13,6 +18,16 @@ fn is_static_string(expr: &Expression) -> bool {
         Expression::TemplateLiteral(tpl) => tpl.expressions.is_empty(),
         _ => false,
     }
+}
+
+/// True when the RHS is the `dangerouslySetInnerHTML` opt-in: `x.__html`. The
+/// `.__html` member access is the deliberate danger marker used by React-style
+/// renderers, so it is a controlled assignment, not an accidental XSS sink.
+fn rhs_is_dangerously_set_inner_html(expr: &Expression) -> bool {
+    matches!(
+        expr,
+        Expression::StaticMemberExpression(member) if member.property.name.as_str() == "__html"
+    )
 }
 
 pub struct Check;
@@ -51,6 +66,14 @@ impl OxcCheck for Check {
         }
 
         if is_static_string(&assign.right) {
+            return;
+        }
+
+        // The `dangerouslySetInnerHTML` idiom (`el.innerHTML = x.__html`): the `.__html`
+        // member access is React/Preact/Hono's explicit opt-in marker — the caller owns
+        // sanitization — so it is not an accidental unsanitized assignment. Same
+        // exemption as `no-inner-html`'s `rhs_is_non_dangerous`.
+        if rhs_is_dangerously_set_inner_html(&assign.right) {
             return;
         }
 
@@ -126,6 +149,20 @@ mod tests {
     fn allows_static_template() {
         let src = "el.innerHTML = `<p>static</p>`;";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_dangerously_set_inner_html_idiom() {
+        // The `.__html` opt-in marker: caller owns sanitization (preactjs/preact, #4481).
+        assert!(run_on("dom.innerHTML = newHtml.__html;").is_empty());
+        assert!(run_on("el.outerHTML = value.__html;").is_empty());
+    }
+
+    #[test]
+    fn flags_non_html_member_access() {
+        // Member access other than `.__html` is still an unsanitized sink.
+        assert_eq!(run_on("el.innerHTML = value.html;").len(), 1);
+        assert_eq!(run_on("el.innerHTML = value.innerHTML;").len(), 1);
     }
 
     #[test]
