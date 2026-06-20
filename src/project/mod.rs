@@ -1793,6 +1793,8 @@ pub struct CargoManifest {
     manifest_dir: PathBuf,
     /// `[package].name`, when present.
     name: Option<String>,
+    /// `[package].description`, when present.
+    description: Option<String>,
     /// `[lib]` table is present.
     has_lib_table: bool,
     /// `[lib] proc-macro = true` — the crate builds a procedural-macro target.
@@ -1839,6 +1841,12 @@ impl CargoManifest {
         let name = value
             .get("package")
             .and_then(|p| p.get("name"))
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned);
+
+        let description = value
+            .get("package")
+            .and_then(|p| p.get("description"))
             .and_then(toml::Value::as_str)
             .map(str::to_owned);
 
@@ -1891,6 +1899,7 @@ impl CargoManifest {
         Some(CargoManifest {
             manifest_dir,
             name,
+            description,
             has_lib_table,
             proc_macro,
             crate_types,
@@ -2017,6 +2026,33 @@ impl CargoManifest {
             .any(|t| t == "cdylib" || t == "staticlib");
         let has_rust_lib = self.crate_types.iter().any(|t| t == "rlib" || t == "lib");
         has_foreign && !has_rust_lib
+    }
+
+    /// True when this crate is a stdout/stderr telemetry exporter — a crate
+    /// whose deliberate product is writing telemetry (traces, metrics, logs) to
+    /// the standard streams, so `println!`/`eprintln!` is its output sink, not
+    /// stray logging. Recognised when either:
+    ///
+    /// - `[package].name` ends with a stream suffix (`-stdout`/`_stdout`/
+    ///   `-stderr`/`_stderr`, e.g. `opentelemetry-stdout`), or
+    /// - `[package].description` (lowercased) names a stdout/stderr *exporter* —
+    ///   it contains `exporter` together with `stdout` or `stderr` (e.g. "An
+    ///   OpenTelemetry exporter for stdout").
+    ///
+    /// Both signals key off the crate's *own* identity, never its dependencies,
+    /// so an application that merely depends on `opentelemetry` is not exempted.
+    #[must_use]
+    pub fn is_stdout_exporter_crate(&self) -> bool {
+        let name_is_stream_sink = self.name.as_deref().is_some_and(|n| {
+            ["-stdout", "_stdout", "-stderr", "_stderr"]
+                .iter()
+                .any(|suffix| n.ends_with(suffix))
+        });
+        let description_is_stream_exporter = self.description.as_deref().is_some_and(|d| {
+            let d = d.to_ascii_lowercase();
+            d.contains("exporter") && (d.contains("stdout") || d.contains("stderr"))
+        });
+        name_is_stream_sink || description_is_stream_exporter
     }
 
     /// True when `root` is a sibling sub-crate of this package's Cargo family —
@@ -6460,6 +6496,39 @@ path = "tools/tool.rs"
         assert!(
             !no_targets.declares_executable_at(Path::new("src/lib.rs")),
             "no explicit target tables => no executable targets"
+        );
+    }
+
+    #[test]
+    fn cargo_manifest_classifies_stdout_exporter_crate() {
+        let dir = PathBuf::from("/crate");
+        let parse = |toml: &str| CargoManifest::parse(toml, dir.clone()).unwrap();
+
+        assert!(
+            parse("[package]\nname = \"opentelemetry-stdout\"\n").is_stdout_exporter_crate(),
+            "`-stdout` name suffix => stream exporter"
+        );
+        assert!(
+            parse("[package]\nname = \"my_stderr\"\n").is_stdout_exporter_crate(),
+            "`_stderr` name suffix => stream exporter"
+        );
+        assert!(
+            parse(
+                "[package]\nname = \"telemetry\"\ndescription = \"An OpenTelemetry exporter for stdout\"\n"
+            )
+            .is_stdout_exporter_crate(),
+            "description naming a stdout exporter => stream exporter"
+        );
+        assert!(
+            !parse(
+                "[package]\nname = \"my-service\"\ndescription = \"A web service with OpenTelemetry tracing\"\n"
+            )
+            .is_stdout_exporter_crate(),
+            "an OpenTelemetry consumer is not itself a stream exporter"
+        );
+        assert!(
+            !parse("[package]\nname = \"csv-exporter\"\n").is_stdout_exporter_crate(),
+            "an `-exporter` name without a stdout/stderr signal is not exempt"
         );
     }
 

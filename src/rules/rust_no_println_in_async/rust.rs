@@ -9,6 +9,15 @@
 //! user-facing terminal output and interactive prompts via `print!` /
 //! `println!` are the feature there. The rule's concern is pure-library async
 //! code grabbing the application's stdout.
+//!
+//! Source files of a stdout/stderr telemetry exporter crate (the nearest
+//! `Cargo.toml` matches [`CargoManifest::is_stdout_exporter_crate`], e.g.
+//! `opentelemetry-stdout`) are exempt too: writing telemetry to the standard
+//! streams is the crate's deliberate product, so `println!` / `eprintln!` is
+//! the output sink, not stray logging. Such a crate cannot route its output
+//! through `tracing` — it is itself part of the telemetry pipeline.
+//!
+//! [`CargoManifest::is_stdout_exporter_crate`]: crate::project::CargoManifest::is_stdout_exporter_crate
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{is_in_test_context, is_inside_async_fn};
@@ -47,7 +56,11 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
 
     if !is_inside_async_fn(node, source) && !is_inside_async_block(node) { return; }
 
-    if ctx.project.nearest_cargo_manifest(ctx.path).is_some_and(|m| m.declares_binary()) { return; }
+    if ctx.project.nearest_cargo_manifest(ctx.path).is_some_and(|m| {
+        m.declares_binary() || m.is_stdout_exporter_crate()
+    }) {
+        return;
+    }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -140,6 +153,40 @@ name = "kanidm"
 path = "src/cli/main.rs"
 "#;
 
+    /// `opentelemetry-stdout` shape: a pure library crate whose deliberate
+    /// product is exporting telemetry to stdout. `println!` is the output sink,
+    /// not stray logging. Both the `-stdout` name suffix and the description
+    /// identify it as a stream exporter.
+    const STDOUT_EXPORTER_CARGO_TOML: &str = r#"
+[package]
+name = "opentelemetry-stdout"
+version = "0.1.0"
+edition = "2021"
+description = "An OpenTelemetry exporter for stdout"
+
+[lib]
+name = "opentelemetry_stdout"
+path = "src/lib.rs"
+"#;
+
+    /// An ordinary library that merely depends on `opentelemetry` — its own
+    /// identity is not that of a stream exporter, so `println!` in async code
+    /// stays flagged.
+    const OTEL_CONSUMER_LIB_CARGO_TOML: &str = r#"
+[package]
+name = "my-service"
+version = "0.1.0"
+edition = "2021"
+description = "A web service with OpenTelemetry tracing"
+
+[lib]
+name = "my_service"
+path = "src/lib.rs"
+
+[dependencies]
+opentelemetry = "0.1"
+"#;
+
     #[test]
     fn flags_println_in_async_fn() {
         let src = "async fn f() { println!(\"hi\"); }";
@@ -199,5 +246,27 @@ path = "src/cli/main.rs"
     fn allows_println_in_async_fn_cli_crate_with_internal_lib() {
         let src = "async fn client_search() { println!(\"{}\", result); }";
         assert!(run_in_crate(CLI_WITH_LIB_CARGO_TOML, "src/cli/person.rs", src).is_empty());
+    }
+
+    /// Regression for #5001: `opentelemetry-stdout` is a stdout telemetry
+    /// exporter — `println!` in its async `export` method IS the product
+    /// output, not stray logging, so it must not be flagged.
+    #[test]
+    fn allows_println_in_async_fn_stdout_exporter_crate() {
+        let src = "async fn export(&self) { println!(\"Metrics\"); }";
+        assert!(
+            run_in_crate(STDOUT_EXPORTER_CARGO_TOML, "src/metrics/exporter.rs", src).is_empty()
+        );
+    }
+
+    /// A library that merely depends on `opentelemetry` is not itself a stream
+    /// exporter — ordinary `println!` debugging in its async code stays flagged.
+    #[test]
+    fn flags_println_in_async_fn_otel_consumer_lib() {
+        let src = "async fn handle() { println!(\"debug\"); }";
+        assert_eq!(
+            run_in_crate(OTEL_CONSUMER_LIB_CARGO_TOML, "src/handler.rs", src).len(),
+            1
+        );
     }
 }
