@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Argument, CallExpression, Expression};
+use oxc_ast::ast::{Argument, Expression};
 use std::sync::Arc;
 
 pub struct Check;
@@ -74,7 +74,7 @@ fn template_skeleton(tpl: &oxc_ast::ast::TemplateLiteral) -> (String, bool) {
     (skeleton, has_literal_digit)
 }
 
-/// (a) `new Date(arg)` where `arg` is a date-only string literal or template.
+/// `new Date(arg)` where `arg` is a date-only string literal or template.
 fn flag_new_date(new_expr: &oxc_ast::ast::NewExpression) -> bool {
     let Expression::Identifier(callee) = &new_expr.callee else {
         return false;
@@ -95,76 +95,13 @@ fn flag_new_date(new_expr: &oxc_ast::ast::NewExpression) -> bool {
     }
 }
 
-/// `true` when `expr` is a `*.toISOString()` call.
-fn is_to_iso_string_call(expr: &Expression) -> bool {
-    let Expression::CallExpression(call) = expr else {
-        return false;
-    };
-    if !call.arguments.is_empty() {
-        return false;
-    }
-    let Expression::StaticMemberExpression(member) = &call.callee else {
-        return false;
-    };
-    member.property.name.as_str() == "toISOString"
-}
-
-/// `true` when `n` is the literal integer `value`.
-fn is_int_literal(arg: Option<&Argument>, value: f64) -> bool {
-    matches!(arg, Some(Argument::NumericLiteral(lit)) if lit.value == value)
-}
-
-/// (b1) `<toISOString()>.slice(0, 10)` / `.substring(0, 10)`.
-fn is_iso_slice_truncation(call: &CallExpression) -> bool {
-    let Expression::StaticMemberExpression(member) = &call.callee else {
-        return false;
-    };
-    if !matches!(member.property.name.as_str(), "slice" | "substring") {
-        return false;
-    }
-    if !is_to_iso_string_call(&member.object) {
-        return false;
-    }
-    call.arguments.len() == 2
-        && is_int_literal(call.arguments.first(), 0.0)
-        && is_int_literal(call.arguments.get(1), 10.0)
-}
-
-/// `true` when `call` is `<toISOString()>.split("T")`.
-fn is_iso_split_on_t(call: &CallExpression) -> bool {
-    let Expression::StaticMemberExpression(member) = &call.callee else {
-        return false;
-    };
-    if member.property.name.as_str() != "split" {
-        return false;
-    }
-    if !is_to_iso_string_call(&member.object) {
-        return false;
-    }
-    matches!(
-        call.arguments.first().and_then(Argument::as_expression),
-        Some(Expression::StringLiteral(lit)) if lit.value.as_str() == "T"
-    )
-}
-
-/// (b2) `<toISOString()>.split("T")[0]`.
-fn is_iso_split_truncation(member: &oxc_ast::ast::ComputedMemberExpression) -> bool {
-    let Expression::CallExpression(call) = &member.object else {
-        return false;
-    };
-    if !is_iso_split_on_t(call) {
-        return false;
-    }
-    matches!(&member.expression, Expression::NumericLiteral(lit) if lit.value == 0.0)
-}
-
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
-        &[AstType::NewExpression, AstType::CallExpression, AstType::ComputedMemberExpression]
+        &[AstType::NewExpression]
     }
 
     fn prefilter(&self) -> Option<&'static [&'static str]> {
-        Some(&["Date", "toISOString"])
+        Some(&["Date"])
     }
 
     fn run<'a>(
@@ -174,32 +111,22 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        let (offset, message) = match node.kind() {
-            AstKind::NewExpression(new_expr) if flag_new_date(new_expr) => (
-                new_expr.span.start as usize,
-                "`new Date(\"YYYY-MM-DD\")` parses the date-only string as UTC midnight, \
-                 shifting the calendar day in non-UTC zones.",
-            ),
-            AstKind::CallExpression(call) if is_iso_slice_truncation(call) => (
-                call.span.start as usize,
-                "Truncating a `toISOString()` result converts to UTC first, shifting the \
-                 calendar day in non-UTC zones.",
-            ),
-            AstKind::ComputedMemberExpression(member) if is_iso_split_truncation(member) => (
-                member.span.start as usize,
-                "Truncating a `toISOString()` result converts to UTC first, shifting the \
-                 calendar day in non-UTC zones.",
-            ),
-            _ => return,
+        let AstKind::NewExpression(new_expr) = node.kind() else {
+            return;
         };
+        if !flag_new_date(new_expr) {
+            return;
+        }
 
-        let (line, column) = byte_offset_to_line_col(ctx.source, offset);
+        let (line, column) = byte_offset_to_line_col(ctx.source, new_expr.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
             line,
             column,
             rule_id: super::META.id.into(),
-            message: message.into(),
+            message: "`new Date(\"YYYY-MM-DD\")` parses the date-only string as UTC midnight, \
+                      shifting the calendar day in non-UTC zones."
+                .into(),
             severity: Severity::Warning,
             span: None,
         });
@@ -230,7 +157,7 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
-    // (a) date-only `new Date(...)` — bad.
+    // date-only `new Date(...)` — bad.
     #[test]
     fn flags_date_only_string_literal() {
         let d = run_on(r#"new Date("2026-01-15");"#);
@@ -243,23 +170,39 @@ mod tests {
         assert_eq!(run_on("const y = 2026; new Date(`${y}-01-15`);").len(), 1);
     }
 
-    // (b) toISOString truncation — bad.
+    // `toISOString()` is always UTC, so truncating its date part is deterministic
+    // regardless of how the Date was built — it is the idiomatic, correct way to
+    // obtain a UTC date string and must never be flagged.
     #[test]
-    fn flags_to_iso_string_slice() {
-        assert_eq!(run_on("d.toISOString().slice(0, 10);").len(), 1);
+    fn allows_to_iso_string_slice() {
+        assert!(run_on("d.toISOString().slice(0, 10);").is_empty());
     }
 
     #[test]
-    fn flags_to_iso_string_substring() {
-        assert_eq!(run_on("d.toISOString().substring(0, 10);").len(), 1);
+    fn allows_to_iso_string_substring() {
+        assert!(run_on("d.toISOString().substring(0, 10);").is_empty());
     }
 
     #[test]
-    fn flags_to_iso_string_split() {
-        assert_eq!(run_on(r#"d.toISOString().split("T")[0];"#).len(), 1);
+    fn allows_to_iso_string_split() {
+        assert!(run_on(r#"d.toISOString().split("T")[0];"#).is_empty());
     }
 
-    // (a) guardrails — good.
+    // Issue #4567: a UTC-anchored Date round-tripped through
+    // `toISOString().slice(0, 10)` to validate a calendar date — drift-free.
+    #[test]
+    fn allows_utc_anchored_round_trip_reproducer() {
+        let src = r#"
+            schema.refine((isoDate) => {
+              const candidate = new Date(`${isoDate}T00:00:00Z`);
+              return !Number.isNaN(candidate.getTime())
+                && candidate.toISOString().slice(0, 10) === isoDate;
+            });
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // guardrails — good.
     #[test]
     fn allows_full_iso_datetime_string() {
         assert!(run_on(r#"new Date("2026-01-15T10:00:00Z");"#).is_empty());
@@ -290,26 +233,5 @@ mod tests {
     #[test]
     fn allows_fully_interpolated_composite_template() {
         assert!(run_on("new Date(`${order}-${item}-${qty}`);").is_empty());
-    }
-
-    // (b) guardrails — good.
-    #[test]
-    fn allows_bare_to_iso_string() {
-        assert!(run_on("const s = d.toISOString();").is_empty());
-    }
-
-    #[test]
-    fn allows_slice_on_non_iso_string() {
-        assert!(run_on(r#"someString.slice(0, 10);"#).is_empty());
-    }
-
-    #[test]
-    fn allows_split_on_non_iso_string() {
-        assert!(run_on(r#"someString.split("T")[0];"#).is_empty());
-    }
-
-    #[test]
-    fn allows_iso_slice_with_other_bounds() {
-        assert!(run_on("d.toISOString().slice(0, 19);").is_empty());
     }
 }
