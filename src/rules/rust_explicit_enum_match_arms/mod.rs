@@ -52,6 +52,15 @@
 //! carrying its own `#[cfg(...)]` / `#[cfg_attr(...)]` attribute is exempt for
 //! the same reason.
 //!
+//! cxx::bridge-enum exemption: when the scrutinee enum is declared inside a
+//! `#[cxx::bridge]` module in the same file, it is an FFI shared type bridged to
+//! a C++ enum. The C++ side may gain new values in a future upstream release
+//! without any Rust-side change, so the wildcard `_` arm is a required safety net
+//! for unknown discriminants; listing every variant explicitly would make each
+//! such upstream addition break the build. The enum name is read from the
+//! qualified arm patterns (`StatusCode::kOk` → `StatusCode`) and matched against
+//! this file's `enum_item` definitions nested under a `#[cxx::bridge]` module.
+//!
 //! Test contexts are exempted for consistency with `rust-no-unwrap`:
 //! test code routinely writes compact wildcard matches for setup
 //! without losing much safety if a variant is later added.

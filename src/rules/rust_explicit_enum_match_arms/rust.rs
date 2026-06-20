@@ -175,6 +175,16 @@ impl AstCheck for Check {
         if match_covers_same_file_cfg_gated_enum(node, &enum_like_arms, source_bytes) {
             return;
         }
+        // If the scrutinee enum is declared inside a `#[cxx::bridge]` module in
+        // this file, it is an FFI shared type bridged to a C++ enum. The C++
+        // side can gain new values in a future upstream release without any
+        // Rust-side change, so the `_` arm is a required safety net for unknown
+        // discriminants — listing every variant explicitly would turn each such
+        // upstream addition into a build break. Skip the whole match, like the
+        // other whole-match exemptions.
+        if match_covers_same_file_cxx_bridge_enum(node, &enum_like_arms, source_bytes) {
+            return;
+        }
         // Emit on each wildcard arm found (usually just one). A wildcard
         // arm whose body only diverges or returns an error
         // (`unreachable!()`, `panic!()`, `bail!(...)`, `return Err(...)`,
@@ -602,6 +612,115 @@ fn source_file_has_cfg_gated_enum(
         }
     }
     false
+}
+
+/// True if the match's scrutinee is an enum declared inside a `#[cxx::bridge]`
+/// module in the same file.
+///
+/// Reads the enum names from the qualified `enum_like_arms` patterns
+/// (`StatusCode::kOk` → `StatusCode`), then walks up to the enclosing
+/// `source_file` and checks whether any `enum_item` with one of those names sits
+/// inside a `mod_item` carrying a `#[cxx::bridge]` attribute. Such an enum is a
+/// C++ shared type whose variant set lives on the C++ side; the wildcard `_` arm
+/// is a required catch-all for discriminants a future upstream release may add.
+/// Bare unqualified variants (no `::`) carry no enum name to resolve and are
+/// ignored — the match then falls through to normal flagging.
+fn match_covers_same_file_cxx_bridge_enum(
+    match_node: tree_sitter::Node,
+    enum_like_arms: &[tree_sitter::Node],
+    source: &[u8],
+) -> bool {
+    let names: Vec<&str> = enum_like_arms
+        .iter()
+        .filter_map(|p| qualified_enum_name(*p, source))
+        .collect();
+    if names.is_empty() {
+        return false;
+    }
+    let mut current = match_node.parent();
+    while let Some(node) = current {
+        if node.kind() == "source_file" {
+            return source_file_has_cxx_bridge_enum(node, &names, source);
+        }
+        current = node.parent();
+    }
+    false
+}
+
+/// True if any `enum_item` in `source_file` whose name is in `names` is declared
+/// inside a `mod_item` carrying a `#[cxx::bridge]` attribute. Descends the whole
+/// subtree so an enum in a nested module is found.
+fn source_file_has_cxx_bridge_enum(
+    source_file: tree_sitter::Node,
+    names: &[&str],
+    source: &[u8],
+) -> bool {
+    let mut cursor = source_file.walk();
+    let mut stack = vec![source_file];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "enum_item"
+            && node
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok())
+                .is_some_and(|name| names.contains(&name))
+            && enum_is_in_cxx_bridge_mod(node, source)
+        {
+            return true;
+        }
+        for child in node.named_children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
+/// True if `enum_item` is nested within a `mod_item` whose preceding
+/// `attribute_item` siblings include a `#[cxx::bridge]` attribute. The attribute
+/// path is the `scoped_identifier` `cxx::bridge` (optionally followed by a
+/// `(namespace = ...)` argument list, which lives in a separate `token_tree`
+/// child and does not affect the path). Matching the path text exactly avoids
+/// firing on an unrelated attribute that merely mentions `cxx`.
+fn enum_is_in_cxx_bridge_mod(enum_item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut current = enum_item.parent();
+    while let Some(node) = current {
+        if node.kind() == "mod_item" && mod_has_cxx_bridge_attribute(node, source) {
+            return true;
+        }
+        current = node.parent();
+    }
+    false
+}
+
+/// True if `mod_item` carries a `#[cxx::bridge]` attribute. The attribute appears
+/// as an `attribute_item` sibling immediately preceding the `mod_item`, skipping
+/// interleaved comments.
+fn mod_has_cxx_bridge_attribute(mod_item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut sibling = mod_item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "line_comment" | "block_comment" => {}
+            "attribute_item" => {
+                if attribute_item_is_cxx_bridge(s, source) {
+                    return true;
+                }
+            }
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+/// True if an `attribute_item`'s inner `attribute` has a leading path of exactly
+/// `cxx::bridge` (a `scoped_identifier`).
+fn attribute_item_is_cxx_bridge(attr_item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = attr_item.walk();
+    attr_item
+        .named_children(&mut cursor)
+        .filter(|c| c.kind() == "attribute")
+        .filter_map(|attribute| attribute.named_child(0))
+        .filter(|path| path.kind() == "scoped_identifier")
+        .any(|path| matches!(path.utf8_text(source), Ok("cxx::bridge")))
 }
 
 #[cfg(test)]
@@ -1041,6 +1160,63 @@ mod tests {
                    } \
                    fn real_ip(a: Addr) -> i32 { match a { \
                    Addr::SocketAddr(addr) => 1, _ => 0 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_wildcard_on_cxx_bridge_enum() {
+        // Issue #4755: cozo `cozorocks` — `StatusCode` is a C++ enum exposed via
+        // a `#[cxx::bridge]` block. The C++ side can add discriminants in a
+        // future RocksDB release, so the `_` arm is a required safety net.
+        let src = "#[cxx::bridge]\n\
+                   mod ffi {\n\
+                   #[repr(i32)]\n\
+                   enum StatusCode { kOk, kNotFound }\n\
+                   }\n\
+                   fn check(status: Status) -> Result<bool, Status> { match status.code { \
+                   StatusCode::kOk => Ok(true), \
+                   StatusCode::kNotFound => Ok(false), \
+                   _ => Err(status), } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_wildcard_on_cxx_bridge_enum_with_namespace_arg() {
+        // Issue #4755: a `#[cxx::bridge(namespace = "rocksdb")]` attribute (with
+        // an argument list) is still a cxx bridge — the namespace token tree is a
+        // separate child and must not defeat path matching.
+        let src = "#[cxx::bridge(namespace = \"rocksdb\")]\n\
+                   mod ffi {\n\
+                   enum StatusSeverity { kNoError, kSoftError }\n\
+                   }\n\
+                   fn severity(s: StatusSeverity) -> Option<i32> { match s { \
+                   StatusSeverity::kNoError => None, _ => Some(1), } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_wildcard_on_non_cxx_bridge_same_file_enum() {
+        // Issue #4755 negative space: an ordinary same-file enum (no
+        // `#[cxx::bridge]` module) has a Rust-controlled variant set, so the
+        // wildcard is a real catch-all and must still flag.
+        let src = "#[repr(i32)]\n\
+                   enum StatusCode { kOk, kNotFound, kCorruption }\n\
+                   fn check(code: StatusCode) -> i32 { match code { \
+                   StatusCode::kOk => 1, StatusCode::kNotFound => 2, _ => 0, } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_wildcard_when_cxx_bridge_attribute_is_on_other_mod() {
+        // Issue #4755 negative space: the matched enum lives in a plain module;
+        // a `#[cxx::bridge]` attribute elsewhere in the file must not exempt it.
+        let src = "#[cxx::bridge]\n\
+                   mod ffi { enum Other { kA, kB } }\n\
+                   mod plain {\n\
+                   pub enum StatusCode { kOk, kNotFound, kCorruption }\n\
+                   }\n\
+                   fn check(code: plain::StatusCode) -> i32 { match code { \
+                   StatusCode::kOk => 1, StatusCode::kNotFound => 2, _ => 0, } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
