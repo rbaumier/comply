@@ -363,16 +363,24 @@ pub fn is_in_fn_main(node: Node, source: &[u8]) -> bool {
 ///
 /// A `test` predicate negated by `not(…)` (e.g. `#[cfg(not(test))]`) is
 /// production-only and is *not* treated as a test attribute.
+///
+/// Doc comments (`///`, `/** … */`) may interleave the attributes and the item
+/// in any order; they are skipped, not treated as the end of the attribute
+/// block.
 pub fn has_test_attribute(item: Node, source: &[u8]) -> bool {
     let mut sibling = item.prev_named_sibling();
     while let Some(s) = sibling {
-        if s.kind() != "attribute_item" {
-            break;
-        }
-        if let Ok(text) = s.utf8_text(source)
-            && attr_marks_test(text)
-        {
-            return true;
+        match s.kind() {
+            "attribute_item" => {
+                if let Ok(text) = s.utf8_text(source)
+                    && attr_marks_test(text)
+                {
+                    return true;
+                }
+            }
+            // Doc comments may interleave the attributes; skip them (see docblock).
+            "line_comment" | "block_comment" => {}
+            _ => break,
         }
         sibling = s.prev_named_sibling();
     }
@@ -2272,7 +2280,14 @@ mod tests {
             ("#[cfg(all(test, not(loom)))]\nmod m {}", true),
             ("#[cfg(any(test, fuzzing))]\nmod m {}", true),
             ("#[cfg(all(test, feature = \"std\"))]\nmod m {}", true),
+            // Doc comments may interleave the attribute and the item in any
+            // order; they must not terminate the attribute scan (issue #4496).
+            ("#[cfg(test)]\n/// Tests.\nmod m {}", true),
+            ("#[cfg(test)]\n/// a\n/// b\nmod m {}", true),
+            ("#[cfg(test)]\n/** doc */\nmod m {}", true),
+            ("#[test]\n/// doc\nfn f() {}", true),
             // Negative space.
+            ("/// docs\nmod m {}", false),
             ("#[cfg(not(test))]\nmod m {}", false),
             ("#[cfg(feature = \"std\")]\nfn f() {}", false),
             ("#[derive(Debug)]\nstruct S;", false),
