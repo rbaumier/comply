@@ -168,11 +168,19 @@ const DEMO_HOSTS: &[&str] = &["petstore.swagger.io", "echoapi.cloudapp.net"];
 
 // Frozen spec/namespace identifiers in `http://` form: immutable tokens that
 // match by exact value and are never dereferenced over the network. W3C XML
-// namespaces (`xmlns="http://www.w3.org/2000/svg"`) and JSON Schema draft
-// `$schema`/`$id` URIs (`http://json-schema.org/draft-07/schema#`) both live
-// here — upgrading them to https would break syntax-level identity matching.
-const SPEC_NAMESPACE_PREFIXES: &[&str] =
-    &["http://www.w3.org/", "http://json-schema.org/"];
+// namespaces (`xmlns="http://www.w3.org/2000/svg"`), OMG specification
+// namespaces (`http://www.omg.org/spec/BPMN/20100524/MODEL`), and JSON Schema
+// draft `$schema`/`$id` URIs (`http://json-schema.org/draft-07/schema#`) all
+// live here — upgrading them to https would break syntax-level identity
+// matching. This is a closed allowlist of standards-body namespace
+// authorities, not a blanket exemption for any `www.` host.
+const SPEC_NAMESPACE_PREFIXES: &[&str] = &[
+    "http://www.w3.org/",
+    "http://www.omg.org/spec/",
+    "http://json-schema.org/",
+    "http://purl.org/",
+    "http://docbook.org/ns/",
+];
 
 fn trim_string_quotes(s: &str) -> &str {
     // TS strings: leading `"`, `'`, or backtick.
@@ -268,6 +276,46 @@ mod helper_tests {
     #[test]
     fn does_not_flag_xml_schema_namespace_uri() {
         assert!(is_clear_text_url("\"http://www.w3.org/2001/XMLSchema\"").is_none());
+    }
+
+    // #4782 — OMG BPMN/DD spec namespace URIs are frozen opaque identifiers
+    // (`xmlns:bpmn`/`xmlns:dc`/`xmlns:di`), never dereferenced.
+    #[test]
+    fn does_not_flag_omg_bpmn_namespace_uri() {
+        assert!(
+            is_clear_text_url("\"http://www.omg.org/spec/BPMN/20100524/MODEL\"").is_none()
+        );
+        assert!(is_clear_text_url("\"http://www.omg.org/spec/BPMN/20100524/DI\"").is_none());
+        assert!(is_clear_text_url("\"http://www.omg.org/spec/DD/20100524/DC\"").is_none());
+        assert!(is_clear_text_url("\"http://www.omg.org/spec/DD/20100524/DI\"").is_none());
+    }
+
+    // #4782 — a genuine OMG-hosted network endpoint outside `/spec/` must still
+    // fire; only the frozen `/spec/` namespace authority is exempt.
+    #[test]
+    fn still_flags_omg_non_spec_endpoint() {
+        assert_eq!(
+            is_clear_text_url("\"http://www.omg.org/cgi-bin/doc\""),
+            Some("http://")
+        );
+    }
+
+    // #4782 — Dublin Core (purl.org) and DocBook namespace URIs are the same
+    // class of frozen RDF/XML identifier as the W3C/OMG entries.
+    #[test]
+    fn does_not_flag_purl_and_docbook_namespace_uri() {
+        assert!(is_clear_text_url("\"http://purl.org/dc/elements/1.1/\"").is_none());
+        assert!(is_clear_text_url("\"http://docbook.org/ns/docbook\"").is_none());
+    }
+
+    // #4782 — a real clear-text API endpoint is unaffected by the namespace
+    // allowlist and keeps firing.
+    #[test]
+    fn still_flags_real_api_endpoint() {
+        assert_eq!(
+            is_clear_text_url("\"http://api.acme.io/v1\""),
+            Some("http://")
+        );
     }
 
     #[test]
