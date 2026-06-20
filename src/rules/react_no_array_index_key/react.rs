@@ -12,6 +12,13 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { |node, source, ctx, diagnostics|
+    // Stable `key` props are a React-only concern. A Vue / Solid / Preact JSX
+    // file (e.g. a Vue TSX component importing `defineComponent` from `vue`)
+    // uses a different reconciliation model and must not be judged by this rule.
+    if crate::oxc_helpers::is_non_react_jsx_file(ctx.source, ctx.project, ctx.path) {
+        return;
+    }
+
     let Some(name) = crate::rules::jsx::jsx_attribute_name(node, source) else {
         return;
     };
@@ -150,5 +157,22 @@ mod tests {
     fn allows_stable_id_key() {
         let source = "const x = items.map(item => <div key={item.id}>{item.name}</div>);";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn skips_vue_tsx_define_component() {
+        // Vue 3 TSX component (issue #4802): imports `defineComponent` from `vue`,
+        // so `key={index}` is Vue JSX, not React.
+        let source = "import { defineComponent } from 'vue';\n\
+                      const x = items.map((item, i) => <div key={i}>{item}</div>);";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_react_tsx() {
+        // A genuine React file (explicit `react` import) keeps firing.
+        let source = "import React from 'react';\n\
+                      const x = items.map((item, i) => <div key={i}>{item}</div>);";
+        assert_eq!(run_on(source).len(), 1);
     }
 }

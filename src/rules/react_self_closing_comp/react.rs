@@ -11,6 +11,13 @@ const VOID_ELEMENTS: &[&str] = &[
 ];
 
 crate::ast_check! { on ["jsx_element"] => |node, source, ctx, diagnostics|
+    // Self-closing syntax is a React style convention. A Vue / Solid / Preact
+    // JSX file (e.g. a Vue TSX component importing `defineComponent` from `vue`)
+    // is processed by a different runtime and must not be judged by this rule.
+    if crate::oxc_helpers::is_non_react_jsx_file(ctx.source, ctx.project, ctx.path) {
+        return;
+    }
+
     // Must have opening + closing tag but no meaningful children.
     let child_count = node.child_count();
     if child_count < 2 {
@@ -113,5 +120,22 @@ mod tests {
     fn allows_element_with_children() {
         let src = "const x = <div>Hello</div>;";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_vue_tsx_define_component() {
+        // Vue 3 TSX component (issue #4802): imports `defineComponent` from `vue`,
+        // so the empty element is Vue JSX, not React.
+        let src = "import { defineComponent } from 'vue';\n\
+                   const x = <canvas ref={wrapRef}></canvas>;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_react_tsx() {
+        // A genuine React file (explicit `react` import) keeps firing.
+        let src = "import React from 'react';\n\
+                   const x = <MyComponent></MyComponent>;";
+        assert_eq!(run(src).len(), 1);
     }
 }
