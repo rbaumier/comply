@@ -93,7 +93,11 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if ctx.file.path_segments.in_test_dir {
+        // Storybook story files (`*.stories.*`, `stories/`, `.storybook/`)
+        // embed `http://` mock URLs as component props to showcase rendering
+        // states — fixture data, never a real connection — the same class as
+        // test-dir fixtures.
+        if ctx.file.path_segments.in_test_dir || ctx.file.path_segments.in_storybook {
             return;
         }
         let text = match node.kind() {
@@ -160,9 +164,24 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
 
     fn run(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    fn run_in_storybook_file(src: &str) -> Vec<Diagnostic> {
+        let file = FileCtx {
+            path_segments: PathSegments { in_storybook: true, ..PathSegments::default() },
+            ..FileCtx::default()
+        };
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            src,
+            "Repository.stories.tsx",
+            crate::project::default_static_project_ctx(),
+            &file,
+        )
     }
 
     #[test]
@@ -325,6 +344,36 @@ mod tests {
     #[test]
     fn still_flags_concatenated_endpoint() {
         let src = r#"const u = "http://api.real-site.com" + path;"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // #4738 — a Storybook story file embeds `http://` mock metadata as a
+    // component prop to demonstrate rendering; it is fixture data, never a real
+    // connection, so it must not flag.
+    #[test]
+    fn does_not_flag_http_mock_in_storybook_story() {
+        let src = r#"
+            export const WithRepository: Story = {
+              render: () => (
+                <Repository
+                  packageMeta={{
+                    repository: {
+                      type: "http",
+                      url: "http://github.com/verdaccio/ui.git",
+                    },
+                  }}
+                />
+              ),
+            };
+        "#;
+        assert!(run_in_storybook_file(src).is_empty());
+    }
+
+    // #4738 — the same `http://` host in a production (non-storybook) file is a
+    // real cleartext endpoint and must still fire.
+    #[test]
+    fn still_flags_http_endpoint_outside_storybook() {
+        let src = r#"const url = "http://github.com/verdaccio/ui.git";"#;
         assert_eq!(run(src).len(), 1);
     }
 }
