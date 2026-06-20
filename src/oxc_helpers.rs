@@ -1401,6 +1401,99 @@ fn test_references_state(
     })
 }
 
+/// The PostgreSQL/libpq `sslmode` value that means "establish TLS but skip
+/// certificate verification". A database driver honoring `?sslmode=no-verify`
+/// must translate it to `{ rejectUnauthorized: false }`; that mapping carries
+/// out the user's explicit, configurable opt-out, not a hardcoded insecure
+/// default, so the TLS rules must not flag it.
+const SSLMODE_NO_VERIFY: &str = "no-verify";
+
+/// True when the node sits inside the branch taken when `sslmode=no-verify`
+/// matched, i.e. a `switch`'s `case 'no-verify':` arm, or the consequent (the
+/// `=== 'no-verify'` is-true branch) of an `if`/ternary whose test compares
+/// (`===`/`==`) some value against the string literal `'no-verify'`.
+///
+/// This is the database-driver pattern from node-postgres: the disabling literal
+/// only runs when the caller explicitly requested `sslmode=no-verify`. A bare
+/// `{ rejectUnauthorized: false }` outside such a branch, or a branch keyed on
+/// any other string, is unaffected and stays flagged — the carve-out keys on the
+/// exact, specified sslmode value, not on the presence of any conditional.
+///
+/// Walks up the ancestor chain via the semantic node tree; the property/object is
+/// confirmed to live in the matching branch's body by span containment.
+#[must_use]
+pub fn is_in_sslmode_no_verify_branch(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+
+    let node_span = node.kind().span();
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::SwitchStatement(switch) => {
+                for case in &switch.cases {
+                    let Some(test) = &case.test else { continue };
+                    if !is_no_verify_string_literal(test) {
+                        continue;
+                    }
+                    if case
+                        .consequent
+                        .iter()
+                        .any(|stmt| span_contains(stmt.span(), node_span))
+                    {
+                        return true;
+                    }
+                }
+            }
+            AstKind::IfStatement(if_stmt) => {
+                if test_compares_no_verify(&if_stmt.test)
+                    && span_contains(if_stmt.consequent.span(), node_span)
+                {
+                    return true;
+                }
+            }
+            AstKind::ConditionalExpression(cond) => {
+                if test_compares_no_verify(&cond.test)
+                    && span_contains(cond.consequent.span(), node_span)
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// True when `span` fully encloses `inner`.
+fn span_contains(span: oxc_span::Span, inner: oxc_span::Span) -> bool {
+    span.start <= inner.start && inner.end <= span.end
+}
+
+/// True when `expr` is the string literal `'no-verify'`.
+fn is_no_verify_string_literal(expr: &oxc_ast::ast::Expression) -> bool {
+    matches!(expr, oxc_ast::ast::Expression::StringLiteral(s) if s.value.as_str() == SSLMODE_NO_VERIFY)
+}
+
+/// True when `test` is an equality comparison (`===`/`==`, either operand order)
+/// against the string literal `'no-verify'`.
+fn test_compares_no_verify(test: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::BinaryOperator;
+
+    let oxc_ast::ast::Expression::BinaryExpression(bin) = test else {
+        return false;
+    };
+    if !matches!(
+        bin.operator,
+        BinaryOperator::StrictEquality | BinaryOperator::Equality
+    ) {
+        return false;
+    }
+    is_no_verify_string_literal(&bin.left) || is_no_verify_string_literal(&bin.right)
+}
+
 /// True when `ident` resolves to the **accumulator** parameter of an
 /// `Array.prototype.reduce` callback — the first parameter of an arrow or
 /// function expression passed as the first argument to a `.reduce(...)` call.

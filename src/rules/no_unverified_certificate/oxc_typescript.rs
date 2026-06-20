@@ -1,5 +1,5 @@
 use crate::diagnostic::Diagnostic;
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_in_sslmode_no_verify_branch};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{AssignmentTarget, Expression, PropertyKey};
 use std::sync::Arc;
@@ -49,7 +49,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         match node.kind() {
@@ -63,6 +63,12 @@ impl OxcCheck for Check {
                     return;
                 }
                 if !is_false_literal(&prop.value) {
+                    return;
+                }
+                // A database driver translating the user's explicit
+                // `sslmode=no-verify` choice is honoring a configurable opt-out,
+                // not hardcoding an insecure default — don't flag it.
+                if is_in_sslmode_no_verify_branch(node, semantic) {
                     return;
                 }
                 emit(ctx, prop.span.start, diagnostics);
@@ -136,5 +142,50 @@ mod tests {
     #[test]
     fn allows_verify_true() {
         assert!(run_on("const x = { verify: true };").is_empty());
+    }
+
+    #[test]
+    fn allows_sslmode_no_verify_switch_case() {
+        let src = r#"
+            function toBoolean(value) {
+              switch (value) {
+                case 'disable': return false;
+                case 'no-verify': return { rejectUnauthorized: false };
+              }
+            }
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_sslmode_no_verify_if_branch() {
+        let src = r#"
+            if (this.ssl === 'no-verify') {
+              this.ssl = { rejectUnauthorized: false };
+            }
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_hardcoded_false_in_unrelated_switch_case() {
+        let src = r#"
+            switch (value) {
+              case 'whatever': return { rejectUnauthorized: false };
+            }
+        "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_sslmode_no_verify_ternary_consequent() {
+        let src = "const ssl = mode === 'no-verify' ? { rejectUnauthorized: false } : { rejectUnauthorized: true };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_false_in_ternary_alternate() {
+        let src = "const ssl = mode === 'no-verify' ? { rejectUnauthorized: true } : { rejectUnauthorized: false };";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
