@@ -1,6 +1,8 @@
 //! react-form-requires-novalidate oxc backend.
 //!
 //! Flags a native lowercase `<form>` that lacks a `noValidate` attribute.
+//! Non-React JSX files (Vue `defineComponent`/TSX, Solid, Preact, …) are exempt:
+//! the dual-validation hazard is React-specific to its controlled inputs.
 //! Storybook story files (`*.stories.tsx`) are exempt: they are component demos
 //! rendered in an isolated iframe where native HTML validation is expected, so
 //! `noValidate` would suppress the behavior the story demonstrates.
@@ -29,6 +31,14 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // The dual-validation hazard this rule targets is React-specific: React's
+        // controlled inputs bypass native HTML validation. A non-React JSX file
+        // (Vue `defineComponent`/TSX, Solid, Preact, …) has its own validation
+        // lifecycle and no such conflict, so `<form>` there must not be flagged.
+        if crate::oxc_helpers::is_non_react_jsx_file(ctx.source, ctx.project, ctx.path) {
+            return;
+        }
+
         // Storybook story files (`*.stories.tsx`) are component demos rendered in
         // an isolated iframe where native HTML validation is expected (often the
         // behavior being demonstrated), not production app routes — same
@@ -203,5 +213,41 @@ mod tests {
         // files — the same `<form>` in a regular `.tsx` is still flagged.
         let src = r#"const x = <form className="flex">body</form>;"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn skips_form_in_vue_tsx_define_component_issue5015() {
+        // Issue #5015 (Tencent/tdesign-vue-next): a Vue 3 `defineComponent`
+        // renders a native `<form>` in its `setup()` render function. The
+        // dual-validation hazard is React-specific (controlled inputs); Vue runs
+        // its own validation lifecycle, so the `vue` import marks this non-React
+        // JSX and the rule must not fire.
+        let src = r#"
+            import { defineComponent, ref } from 'vue';
+            export default defineComponent({
+              setup(props) {
+                const formRef = ref();
+                return () => (
+                  <form id={props.id} ref={formRef} onSubmit={(e) => onSubmit(e)}>
+                    {renderContent('default')}
+                  </form>
+                );
+              },
+            });
+        "#;
+        assert!(run_at(src, "packages/components/form/form.tsx").is_empty());
+    }
+
+    #[test]
+    fn still_flags_form_in_react_tsx_issue5015() {
+        // Negative space for #5015: a genuine React `.tsx` `<form>` (React import,
+        // no Vue markers) is still flagged.
+        let src = r#"
+            import React from 'react';
+            function EditForm() {
+              return <form onSubmit={handle}>body</form>;
+            }
+        "#;
+        assert_eq!(run_at(src, "src/EditForm.tsx").len(), 1);
     }
 }
