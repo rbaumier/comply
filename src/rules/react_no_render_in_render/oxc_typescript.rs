@@ -1,4 +1,9 @@
-//! react-no-render-in-render OxcCheck backend.
+//! react-no-render-in-render OxcCheck backend. Non-React JSX files (Vue
+//! `defineComponent`/TSX, Solid, Preact, Qwik, Stencil — detected via a
+//! framework import, a `@jsxImportSource` pragma, or the project's
+//! `jsxImportSource` default) are exempt: render-in-render is a React-only
+//! reconciliation concern, and local `renderXxx()` helpers in a Vue `setup()`
+//! render function are idiomatic, not inline components to extract.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -45,6 +50,14 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // Render-in-render is a React-reconciliation concern. A non-React JSX
+        // file (Vue `defineComponent`/TSX, Solid, Preact, …) has no React
+        // reconciliation, and local `renderXxx()` helpers in a Vue `setup()`
+        // render function are idiomatic — not inline components to extract.
+        if crate::oxc_helpers::is_non_react_jsx_file(ctx.source, ctx.project, ctx.path) {
+            return;
+        }
+
         let AstKind::CallExpression(call) = node.kind() else {
             return;
         };
@@ -198,5 +211,44 @@ function App() {
 }
 "#);
         assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_render_helper_in_vue_definecomponent_issue_4707() {
+        // Regression for issue #4707: a Vue 3 `.tsx` file imports from `'vue'`,
+        // so its `setup()` render function uses local `renderXxx()` helpers
+        // idiomatically — there is no React reconciliation to remount.
+        let diags = run(r#"
+import { defineComponent } from 'vue';
+export default defineComponent({
+    setup(props, { slots }) {
+        const renderCover = () => {
+            if (slots['preview-cover']) {
+                return <div class="preview-cover" />;
+            }
+        };
+        const renderPreview = () => {
+            return <div class="file">{renderCover()}</div>;
+        };
+        return () => <div class="preview">{renderPreview()}</div>;
+    },
+});
+"#);
+        assert!(diags.is_empty(), "vue defineComponent tsx should not flag: {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_react_render_call_with_react_import() {
+        // A genuine React file (explicit `react` import) keeps firing even when
+        // it is JSX/TSX — the React-signal override wins over Vue exemptions.
+        let diags = run(r#"
+import React from 'react';
+function App() {
+    const renderHeader = () => <header>Title</header>;
+    return <div>{renderHeader()}</div>;
+}
+"#);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("renderHeader"));
     }
 }
