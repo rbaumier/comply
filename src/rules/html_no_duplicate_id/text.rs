@@ -448,4 +448,26 @@ mod tests {
             </template>";
         assert_eq!(run(source).len(), 1);
     }
+
+    #[test]
+    fn flags_same_id_on_two_independent_v_ifs_same_depth() {
+        // Two unrelated `v-if` siblings (non-equality conditions) can both be
+        // true and render at once, so the shared id can duplicate — flagged.
+        let source = "<template>\n\
+            \x20 <div v-if=\"a\" id=\"x\" />\n\
+            \x20 <div v-if=\"b\" id=\"x\" />\n\
+            </template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_same_id_on_v_if_inequality_siblings() {
+        // `!==` is not an exclusive equality discriminant: `type !== 'a'` and
+        // `type !== 'b'` can both hold, so the id can duplicate — flagged.
+        let source = "<template>\n\
+            \x20 <div v-if=\"type !== 'a'\" id=\"x\" />\n\
+            \x20 <div v-if=\"type !== 'b'\" id=\"x\" />\n\
+            </template>";
+        assert_eq!(run(source).len(), 1);
+    }
 }
