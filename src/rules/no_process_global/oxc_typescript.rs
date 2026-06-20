@@ -8,6 +8,12 @@
 //! any other `process.<member>` access (the diagnostic always points at the
 //! `process` identifier itself).
 //!
+//! The single exception is `process.env.NODE_ENV`: bundlers (Vite/webpack/
+//! Rollup) statically replace it with a build-time string constant, so it never
+//! reaches the runtime as a real `process` object and is browser-safe. Genuine
+//! Node runtime accesses (`process.cwd()`, `process.argv`, dynamic
+//! `process.env[x]`, …) remain flagged.
+//!
 //! A file that declares its own binding named `process` — a local
 //! `const process = …`, a function parameter, or `import process from
 //! "node:process"` — is using a legitimate local binding and is not flagged.
@@ -22,6 +28,34 @@ use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 pub struct Check;
+
+/// True when `node` is the `process` identifier of a `process.env.NODE_ENV`
+/// member access. The identifier's parent must be `process.env` (a static
+/// member access with property `env`) and its grandparent `process.env.NODE_ENV`
+/// (property `NODE_ENV`).
+fn is_process_env_node_env(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::Expression;
+    let nodes = semantic.nodes();
+    let AstKind::StaticMemberExpression(env) = nodes.parent_node(node.id()).kind() else {
+        return false;
+    };
+    if env.property.name.as_str() != "env" {
+        return false;
+    }
+    let AstKind::StaticMemberExpression(node_env) =
+        nodes.parent_node(nodes.parent_id(node.id())).kind()
+    else {
+        return false;
+    };
+    // The grandparent's object is, by the AST parent invariant, the
+    // `process.env` access itself; the type guard just confirms the expected
+    // shape before reading the final property.
+    matches!(&node_env.object, Expression::StaticMemberExpression(_))
+        && node_env.property.name.as_str() == "NODE_ENV"
+}
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
@@ -49,6 +83,13 @@ impl OxcCheck for Check {
         // `process` binding (local `const`, parameter, or `import process from
         // "node:process"`) resolves to that binding and is left alone.
         if !semantic.is_reference_to_global_variable(ident) {
+            return;
+        }
+        // `process.env.NODE_ENV` is a build-time constant that bundlers
+        // (Vite/webpack/Rollup) statically replace; it never reaches the
+        // runtime as a real `process` object, so it is browser-safe and must
+        // not be flagged.
+        if is_process_env_node_env(node, semantic) {
             return;
         }
         let (line, column) =
@@ -129,6 +170,36 @@ mod tests {
     }
 
     // --- Valid cases (mirrors Biome's valid.js + declare_process.js) ---
+
+    #[test]
+    fn allows_process_env_node_env() {
+        // `process.env.NODE_ENV` is a build-time constant statically replaced by
+        // bundlers (Vite/webpack/Rollup) — browser-safe, not a runtime access.
+        let src = "if (process.env.NODE_ENV === 'development') {\n  console.debug('dev');\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_other_process_env_member() {
+        // Only NODE_ENV is exempt; `process.env.FOO` is still flagged.
+        let d = run_on("const x = process.env.FOO;");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_genuine_node_runtime_access() {
+        // `process.cwd()` and `process.argv` are real Node runtime APIs.
+        assert_eq!(run_on("const x = process.cwd();").len(), 1);
+        assert_eq!(run_on("const x = process.argv;").len(), 1);
+    }
+
+    #[test]
+    fn flags_dynamic_process_env_access() {
+        // Dynamic `process.env[x]` is a real runtime read, not a build-time
+        // constant — still flagged.
+        let d = run_on("const x = process.env[key];");
+        assert_eq!(d.len(), 1);
+    }
 
     #[test]
     fn allows_imported_process_default() {
