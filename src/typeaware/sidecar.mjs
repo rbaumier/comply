@@ -5,7 +5,8 @@
 // (@typescript/native-preview), runs the enabled type-aware rules against it,
 // and writes a single JSON response on stdout.
 //
-// Request:  { "tsconfig": string, "files": string[], "rules": string[] }
+// Request:  { "tsconfig": string, "files": string[], "rules": string[],
+//             "config"?: { [ruleId: string]: { [key: string]: number } } }
 // Response: { "diagnostics": Diag[], "error"?: string }
 //   Diag:   { "file": string, "line": number, "column": number,
 //             "rule": string, "message": string }
@@ -32,7 +33,7 @@ async function readStdin() {
 }
 
 const req = JSON.parse(await readStdin());
-const { tsconfig, files = [], rules = [] } = req;
+const { tsconfig, files = [], rules = [], config = {} } = req;
 const enabled = new Set(rules);
 
 // Resolve the typescript-go API from the project's node_modules.
@@ -239,13 +240,20 @@ function ruleRedundantNullishCoalescing(sourceFile, checker, text, lineStarts, f
 // Two or more named types (across the whole program) whose object shape is
 // structurally identical — a copy-paste smell. Conservative to avoid flagging
 // intentionally-distinct shapes (branded types, DTO vs domain): only object
-// shapes (`interface` or `type = { … }`), only when the shape has at least 3
-// properties, reported as a warning. The fingerprint is built from the
-// resolved property types, not the alias name, so different names with the
-// same shape collide.
-const MIN_DUP_PROPERTIES = 3;
+// shapes (`interface` or `type = { … }`), only when the shape has at least
+// `MIN_DUP_PROPERTIES` properties, reported as a warning. The fingerprint is
+// built from the resolved property types, not the alias name, so different
+// names with the same shape collide.
+//
+// The threshold is supplied by comply's Rust driver from the authoritative
+// config (`[rules.no-duplicate-type-definition] min_properties` in
+// defaults.toml) — there is no default duplicated here. If it is absent (the
+// rule wasn't enabled, or a standalone invocation omitted it), the rule simply
+// doesn't run, consistent with the sidecar never crashing the linter run.
+const MIN_DUP_PROPERTIES = config["no-duplicate-type-definition"]?.min_properties;
 
 function structuralFingerprint(checker, type) {
+  if (!Number.isInteger(MIN_DUP_PROPERTIES)) return null;
   const props = checker.getPropertiesOfType(type) || [];
   if (props.length < MIN_DUP_PROPERTIES) return null;
   const parts = props.map((p) => {

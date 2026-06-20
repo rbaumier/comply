@@ -187,6 +187,14 @@ prefix_pct = 0.25
 [rules.no-duplicate-function]
 min_body_tokens = 10
 
+# Cross-program structurally-identical named object types (a copy-paste smell).
+# `min_properties` is the minimum number of resolved properties a shape must have
+# before two identical shapes are called a consolidation target. Small shapes
+# (3 fields or fewer) collide coincidentally between unrelated domains and would
+# diverge as they evolve, so the floor is set above them.
+[rules.no-duplicate-type-definition]
+min_properties = 4
+
 # ---------------------------------------------------------------
 # Disabled by default — opt-in only.
 # ---------------------------------------------------------------
