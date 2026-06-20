@@ -4,7 +4,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    Argument, BindingPattern, Expression, ForStatementLeft, VariableDeclarationKind,
+    Argument, BindingPattern, Expression, ForStatementLeft, ObjectPropertyKind, PropertyKey,
+    VariableDeclarationKind,
 };
 use std::sync::Arc;
 
@@ -64,6 +65,28 @@ fn receiver_is_loop_element(
     false
 }
 
+/// True when the `addEventListener` options argument is an object literal that
+/// sets `once` to the literal `true`, making the listener self-removing after its
+/// first fire — so the missing stable reference is irrelevant. Only a literal
+/// `true` is proof: `{ once: false }`, `{ capture: true }`, a boolean `useCapture`
+/// argument, and an unprovable `{ once: someVar }` all stay flagged.
+fn options_set_once_true(options: &Argument) -> bool {
+    let Argument::ObjectExpression(obj) = options else {
+        return false;
+    };
+    obj.properties.iter().any(|prop| {
+        let ObjectPropertyKind::ObjectProperty(p) = prop else {
+            return false;
+        };
+        let key_name = match &p.key {
+            PropertyKey::StaticIdentifier(id) => id.name.as_str(),
+            PropertyKey::StringLiteral(s) => s.value.as_str(),
+            _ => return false,
+        };
+        key_name == "once" && matches!(&p.value, Expression::BooleanLiteral(b) if b.value)
+    })
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -109,6 +132,15 @@ impl OxcCheck for Check {
         if let Expression::Identifier(obj) = &member.object
             && receiver_is_loop_element(obj.name.as_str(), node.id(), semantic)
         {
+            return;
+        }
+
+        // Exempt a self-removing `{ once: true }` listener: the runtime removes it
+        // after its first fire, so the inability to `removeEventListener` an inline
+        // function is moot. Without a literal `once: true` (no options, `{ once:
+        // false }`, `{ capture: true }`, boolean `useCapture`, `{ once: someVar }`)
+        // the listener stays flagged.
+        if call.arguments.get(2).is_some_and(options_set_once_true) {
             return;
         }
 
@@ -225,5 +257,79 @@ mod tests {
             }
         "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_inline_arrow_with_once_true() {
+        // Issue #5019: `{ once: true }` makes the listener self-removing after its
+        // first fire, so the missing stable reference is irrelevant.
+        let src = r#"
+            signal.addEventListener(
+                'abort',
+                () => { debug('stdin aborted'); resolve(null); },
+                { once: true },
+            );
+        "#;
+        assert!(run(src).is_empty(), "expected no diagnostics, got {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_inline_function_with_once_true_string_key() {
+        assert!(
+            run(r#"el.addEventListener('click', function () { go(); }, { "once": true });"#)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_inline_arrow_with_once_false() {
+        assert_eq!(
+            run("el.addEventListener('click', () => go(), { once: false });").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_inline_arrow_with_capture_true() {
+        assert_eq!(
+            run("el.addEventListener('click', () => go(), { capture: true });").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_inline_arrow_with_once_variable() {
+        // Unprovable value: only a literal `true` proves the listener self-removes.
+        assert_eq!(
+            run("el.addEventListener('click', () => go(), { once: opts });").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_inline_arrow_with_boolean_use_capture() {
+        // A boolean `useCapture` argument is not the options object — still flagged.
+        assert_eq!(
+            run("el.addEventListener('click', () => go(), true);").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_inline_arrow_with_once_string_value() {
+        // The string `"true"` is not the boolean literal `true` — still flagged.
+        assert_eq!(
+            run(r#"el.addEventListener('click', () => go(), { once: "true" });"#).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_inline_arrow_with_once_shorthand() {
+        // Shorthand `{ once }` carries an identifier value, not a literal `true`.
+        assert_eq!(
+            run("el.addEventListener('click', () => go(), { once });").len(),
+            1
+        );
     }
 }
