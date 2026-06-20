@@ -5,8 +5,10 @@
 //! `v-model:` directives it checks the static `directive_argument`. An attribute
 //! whose name is neither kebab-case nor pure-lowercase is reported. Attributes on
 //! SVG-exclusive elements (`<svg>`, `<path>`, ...) are skipped, mirroring Biome's
-//! `useVueHyphenatedAttributes`. Bindings on a `<slot>` element are also skipped:
-//! they are slot props, not DOM attributes or component props.
+//! `useVueHyphenatedAttributes`. Attributes on TresJS elements (`Tres`-prefixed
+//! components and `<primitive>`) are skipped: their names carry camelCase Three.js
+//! property segments that must stay camelCase. Bindings on a `<slot>` element are
+//! also skipped: they are slot props, not DOM attributes or component props.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -152,6 +154,26 @@ fn is_slot_prop_binding(node: tree_sitter::Node, source: &[u8]) -> bool {
     node.kind() == "directive_attribute" && owning_tag_name(node, source) == Some("slot")
 }
 
+/// Whether the owning element is a TresJS component (attributes on it are skipped).
+///
+/// TresJS (a Three.js renderer for Vue) exposes Three.js object properties as
+/// component props, and many Three.js properties are inherently camelCase
+/// (`castShadow`, `toneMapping`, ...). Hyphens in TresJS attribute names are
+/// property-path delimiters (`uniforms-fresnelAmount-value` → `material.uniforms.
+/// fresnelAmount.value`), so the camelCase path segments must stay camelCase —
+/// hyphenating them breaks the prop→Three.js mapping. TresJS components are the
+/// `Tres`-prefixed family (`TresMesh`, `TresCanvas`, `TresHolographicMaterial`,
+/// ...) plus the `<primitive>` catch-all element that mounts arbitrary Three.js
+/// objects.
+fn is_on_tresjs_element(attribute: tree_sitter::Node, source: &[u8]) -> bool {
+    owning_tag_name(attribute, source).is_some_and(|tag| {
+        tag == "primitive"
+            || tag
+                .strip_prefix("Tres")
+                .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_uppercase()))
+    })
+}
+
 /// Read the text of the first child of `node` with the given kind.
 fn child_text<'a>(node: tree_sitter::Node, kind: &str, source: &'a [u8]) -> Option<&'a str> {
     let mut cursor = node.walk();
@@ -208,7 +230,11 @@ crate::ast_check! { on ["attribute", "directive_attribute"] => |node, source, ct
     let Some(name) = checked_name(node, source) else {
         return;
     };
-    if is_hyphenated(name) || is_on_svg_element(node, source) || is_slot_prop_binding(node, source) {
+    if is_hyphenated(name)
+        || is_on_svg_element(node, source)
+        || is_on_tresjs_element(node, source)
+        || is_slot_prop_binding(node, source)
+    {
         return;
     }
     let pos = node.start_position();
@@ -349,6 +375,41 @@ mod tests {
             "<div\n  :markerWidth=\"`${width}`\"\n  :markerHeight=\"`${height}`\"\n  :markerUnits=\"markerUnits\"\n>\n</div>",
         ));
         assert_eq!(diags.len(), 3, "unexpected diags: {diags:?}");
+    }
+
+    // --- TresJS exemption (element-level: `Tres`-prefixed components + `<primitive>`) ---
+
+    #[test]
+    fn allows_camelcase_property_path_bindings_on_tresjs_component() {
+        // Issue #4830: TresJS property-path attributes use hyphens as delimiters and
+        // carry camelCase Three.js property segments (`fresnelAmount`, `mapSize`)
+        // that must stay camelCase.
+        let diags = run(&wrap(
+            "<TresHolographicMaterial\n  :uniforms-fresnelAmount-value=\"props.fresnelAmount\"\n  :shadow-mapSize-width=\"1024\"\n  :shadow-mapSize-height=\"1024\"\n/>",
+        ));
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+    }
+
+    #[test]
+    fn allows_camelcase_attr_on_tresjs_component() {
+        // Plain camelCase Three.js props on a `Tres`-prefixed component.
+        assert!(run(&wrap("<TresMesh castShadow receiveShadow />")).is_empty());
+    }
+
+    #[test]
+    fn allows_camelcase_attr_on_primitive_element() {
+        // `<primitive>` mounts arbitrary Three.js objects via camelCase props.
+        assert!(run(&wrap("<primitive :rotation-order=\"`XYZ`\" :castShadow=\"true\" />")).is_empty());
+    }
+
+    #[test]
+    fn flags_camelcase_attr_on_non_tres_component() {
+        // The exemption is `Tres`-prefixed-only: `Tres` must be followed by an
+        // uppercase letter, so a user component like `<Trespasser>` is not TresJS
+        // and a genuine camelCase prop on it still flags.
+        let diags = run(&wrap("<Trespasser :fooBar=\"x\" />"));
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("fooBar"));
     }
 
     // --- Over-firing guards ---
