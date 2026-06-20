@@ -119,6 +119,31 @@ mod tests {
     }
 
     #[test]
+    fn allows_mod_tests_with_cfg_test_and_interleaved_doc_comment() {
+        // A doc comment between `#[cfg(test)]` and `mod tests` must not break
+        // attribute detection — attributes and doc comments may interleave in
+        // any order (issue #4496).
+        let cases = [
+            "#[cfg(test)]\n/// Tests for the parser.\nmod tests { use super::*; }",
+            "#[cfg(test)]\n/// line 1\n/// line 2\nmod tests { fn t() {} }",
+            "#[cfg(test)]\n/** doc */\nmod tests { fn t() {} }",
+        ];
+        for source in cases {
+            assert!(
+                run_on(source).is_empty(),
+                "should not flag cfg(test) split by a doc comment: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_doc_comment_without_cfg_test() {
+        // A doc comment on `mod tests` with no `#[cfg(test)]` at all must stay
+        // flagged — traversing comments must not invent a missing attribute.
+        assert_eq!(run_on("/// docs\nmod tests { #[test] fn t() {} }").len(), 1);
+    }
+
+    #[test]
     fn allows_mod_tests_with_compound_cfg_test() {
         let cases = [
             "#[cfg(all(test, not(loom)))]\nmod tests { #[test] fn t() {} }",
