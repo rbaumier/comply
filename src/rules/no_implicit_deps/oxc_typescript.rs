@@ -1,6 +1,11 @@
 //! no-implicit-deps oxc backend — flag bare `import` specifiers that are not
 //! declared in the nearest ancestor `package.json` and are not Node.js
 //! builtins.
+//!
+//! Implied Nuxt/Nitro peers (`h3`) are exempt in projects depending on `nuxt`
+//! or `@nuxt/kit`: the Nuxt server engine provides them transitively and Nuxt
+//! modules import them without re-declaring them. The exemption is gated on the
+//! Nuxt dependency, so the same specifiers still fire outside the Nuxt ecosystem.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -14,6 +19,11 @@ use super::{
     is_sveltekit_adapter_virtual_module, is_sveltekit_app_alias, is_virtual_module,
     jest_module_roots, matches_alias, module_federation, root_package_name, types_package_name,
 };
+
+/// Packages that the Nuxt/Nitro ecosystem provides transitively to every project
+/// depending on `nuxt`/`@nuxt/kit`. Nuxt modules import these in server runtime
+/// code without declaring them directly. Exact-match allowlist.
+const NUXT_NITRO_IMPLIED_PEERS: &[&str] = &["h3"];
 
 pub struct Check;
 
@@ -164,6 +174,21 @@ impl OxcCheck for Check {
         // `json-schema`). The aliased name is consulted alongside `root` at
         // every dependency-resolution layer below.
         let types_root = types_package_name(root);
+        // `h3` is the HTTP layer of Nitro (Nuxt's server engine) and is present
+        // transitively in any project that depends on `nuxt` or `@nuxt/kit`. Nuxt
+        // modules idiomatically `import { H3Event, getHeader } from "h3"` in server
+        // runtime code without re-declaring it, so treat it as an implied peer of the
+        // Nuxt ecosystem (gated on the Nuxt dependency, so a non-Nuxt project still
+        // reports it as implicit).
+        if NUXT_NITRO_IMPLIED_PEERS.contains(&root)
+            && ctx
+                .project
+                .effective_package_jsons(ctx.path)
+                .iter()
+                .any(|p| p.has_dep_or_engine("nuxt") || p.has_dep_or_engine("@nuxt/kit"))
+        {
+            return;
+        }
         // Consult the effective manifest chain: normally just the nearest
         // manifest, but when that manifest is a private test/harness overlay the
         // chain also includes the surrounding package, whose runtime deps the
@@ -2107,6 +2132,100 @@ export default {
             diags.len(),
             1,
             "a `templated/` substring dir is ordinary source and must still fire, got {diags:?}"
+        );
+    }
+
+    // Regression #4484: `h3` is the HTTP layer of Nitro (Nuxt's server engine)
+    // and is present transitively in any project depending on `nuxt`. Nuxt
+    // modules idiomatically `import { getHeader, type H3Event } from 'h3'` in
+    // server runtime code without declaring it, so it must not be flagged when
+    // the project depends on `nuxt`.
+    #[test]
+    fn allows_h3_import_in_nuxt_project_issue_4484() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"@nuxtjs/supabase","dependencies":{"nuxt":"^4"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src").join("runtime").join("server");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("serverSupabaseClient.ts");
+        let source = "import { getHeader, type H3Event } from 'h3';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "`h3` import in a `nuxt` project must not be flagged, got {diags:?}"
+        );
+    }
+
+    // `@nuxt/kit` likewise pulls in `h3` transitively, so the same exemption
+    // applies to a project depending on `@nuxt/kit` instead of `nuxt`.
+    #[test]
+    fn allows_h3_import_with_nuxt_kit_dep_issue_4484() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"@nuxtjs/supabase","dependencies":{"@nuxt/kit":"^4"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src").join("runtime").join("server");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("cookies.ts");
+        let source = "import { getHeader } from 'h3';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "`h3` import in a `@nuxt/kit` project must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Negative space for #4484: outside the Nuxt ecosystem (no `nuxt`/`@nuxt/kit`
+    // dependency) an undeclared `h3` import is still an implicit dependency and
+    // must fire — the exemption is gated on the Nuxt dependency.
+    #[test]
+    fn flags_h3_import_without_nuxt_dep_issue_4484() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","dependencies":{"lodash":"^4"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("t.ts");
+        let source = "import { getHeader } from 'h3';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "`h3` import without a Nuxt dependency must still fire, got {diags:?}"
+        );
+    }
+
+    // Negative space for #4484: the exemption is scoped to `h3` only — another
+    // undeclared package in a Nuxt project must still fire.
+    #[test]
+    fn flags_other_undeclared_dep_in_nuxt_project_issue_4484() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"@nuxtjs/supabase","dependencies":{"nuxt":"^4"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("t.ts");
+        let source = "import x from 'some-undeclared-pkg';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "an undeclared package other than `h3` in a Nuxt project must still fire, got {diags:?}"
         );
     }
 }
