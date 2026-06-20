@@ -1,5 +1,10 @@
 //! js-no-moment — moment.js is 300kB+; prefer `date-fns`, `dayjs`, or
 //! the native `Temporal` API.
+//!
+//! The harm is moment.js bloating the production bundle, so only runtime/source
+//! adoption is flagged. Test files (`skip_in_test_dir`) never ship to production
+//! — moment imported there (e.g. as a parity oracle in a date-library's own test
+//! suite) is out of scope and not flagged.
 
 mod oxc_typescript;
 
@@ -18,7 +23,7 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["bundle-size"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
