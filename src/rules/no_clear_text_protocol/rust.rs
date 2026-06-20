@@ -126,6 +126,29 @@ mod tests {
         assert!(diags.is_empty());
     }
 
+    // #5031 — ureq's `src/proxy.rs` builds a proxy URL from the Windows
+    // registry `ProxyServer` value via `format!("http://{proxy}")`. The host is
+    // the interpolated registry value, not a hardcoded clear-text endpoint.
+    #[test]
+    fn does_not_flag_format_string_proxy_url() {
+        let src = r#"
+            fn f(proxy: String) {
+                let _ = Self::new_with_flag(&format!("http://{proxy}"), no_proxy, true, None);
+            }
+        "#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/proxy.rs");
+        assert!(diags.is_empty());
+    }
+
+    // #5031 negative space — a hardcoded host with a trailing interpolated
+    // segment still names a concrete domain and must still fire.
+    #[test]
+    fn still_flags_literal_host_with_trailing_interpolation() {
+        let src = r#"fn f(env: &str) { let _ = format!("http://api.{env}.com"); }"#;
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/proxy.rs");
+        assert_eq!(diags.len(), 1);
+    }
+
     // #4398 — an `http://` test-fixture URL inside an inline `#[cfg(test)] mod`
     // block in a `src/` file makes no network call; HTTPS is meaningless there.
     #[test]

@@ -109,6 +109,16 @@ pub(super) fn is_clear_text_url(content: &str) -> Option<&'static str> {
             if hostname.len() <= 1 {
                 return None;
             }
+            // The whole authority is a format-string interpolation slot
+            // (`http://{proxy}`, `http://{}`, `http://{0}`). The scheme is a
+            // construction-template fragment whose target host is supplied at
+            // runtime (e.g. a registry-configured proxy server), not a hardcoded
+            // endpoint the code dials. A literal host followed by interpolation
+            // (`http://api.{env}.com`) names a concrete domain shape and still
+            // flags, since the hostname does not *begin* with the slot.
+            if hostname.starts_with('{') {
+                return None;
+            }
             // An empty IPv6 bracket host (`http://[]`) is the static skeleton of
             // a URL-parser validation template — `new URL(`http://[${addr}]`)` —
             // where the address comes from the interpolated slot. A hardcoded
@@ -385,6 +395,22 @@ mod helper_tests {
     #[test]
     fn still_flags_hardcoded_ipv6_endpoint() {
         assert_eq!(is_clear_text_url("\"http://[2001:db8::1]/api\""), Some("http://"));
+    }
+
+    // #5031 — `format!("http://{proxy}")` builds a proxy URL whose host is the
+    // interpolated registry value, not a hardcoded endpoint.
+    #[test]
+    fn does_not_flag_format_string_interpolated_host() {
+        assert!(is_clear_text_url("\"http://{proxy}\"").is_none());
+        assert!(is_clear_text_url("\"http://{}\"").is_none());
+        assert!(is_clear_text_url("\"http://{0}/api\"").is_none());
+    }
+
+    // #5031 negative space — a hardcoded host followed by an interpolated
+    // segment still names a concrete domain and must still fire.
+    #[test]
+    fn still_flags_literal_host_with_trailing_interpolation() {
+        assert_eq!(is_clear_text_url("\"http://api.{env}.com\""), Some("http://"));
     }
 
     // #3247 — `sveltekit-prerender` is SvelteKit's synthetic prerender-origin
