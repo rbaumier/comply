@@ -3,7 +3,8 @@
 //! A double cast whose inner cast target is a raw pointer type
 //! (`<expr> as *raw as <ptr|usize|...>`) is exempt: it is a pointer
 //! reinterpretation / address extraction (repr(transparent) reinterpret,
-//! byte-pointer, fn-pointer-to-address, FFI `c_void` erasure), not a numeric
+//! byte-pointer, fn-pointer-to-address, FFI `c_void` erasure,
+//! `&T as *const T as *mut T` const-to-mut promotion), not a numeric
 //! "misaligned type" double cast. Rust forbids the single-step form in those
 //! cases, so the two-step chain is mandatory and has no `From`/`Into`
 //! alternative.
@@ -361,5 +362,23 @@ mod tests {
         // An arithmetic operand is provably numeric: `(a + b) as f32` compiles
         // directly, so the `as i32` step is redundant — still fires.
         assert_eq!(run_on("fn f(a: u8, b: u8) { let _ = (a + b) as i32 as f32; }").len(), 1);
+    }
+
+    #[test]
+    fn allows_ref_to_const_ptr_to_mut_ptr_chain() {
+        // gluon gc.rs: `ptr as *const _ as *mut _` is the mandatory const->mut
+        // raw-pointer promotion (Rust forbids `&T as *mut T` directly). The inner
+        // cast target is a raw pointer, so it is exempt.
+        let src = "unsafe fn f(ptr: &T) { let _ = ptr as *const _ as *mut _; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_thin_to_fat_const_ptr_to_mut_ptr_chain() {
+        // gluon gc.rs: `self.as_ptr() as *const (dyn Trace + Send + Sync) as *mut _`
+        // promotes a thin pointer to a fat dyn pointer, then const->mut.
+        let src = "unsafe fn f(x: X) { \
+                   let _ = x.as_ptr() as *const (dyn Trace + Send + Sync) as *mut _; }";
+        assert!(run_on(src).is_empty());
     }
 }
