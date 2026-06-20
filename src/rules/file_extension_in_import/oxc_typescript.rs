@@ -55,7 +55,12 @@ const BUNDLER_CONFIG_FILES: &[&str] = &[
 ];
 
 fn has_known_extension(spec: &str) -> bool {
-    KNOWN_EXTENSIONS.iter().any(|ext| spec.ends_with(ext))
+    // Strip a bundler resource query (`./App.vue?raw`, `./img.png?url`,
+    // `./styles.css?inline`) before matching: the `?suffix` instructs Vite/
+    // webpack how to transform the module and does not change the underlying
+    // path, so the extension is still present and cannot be dropped.
+    let base = spec.split_once('?').map_or(spec, |(base, _)| base);
+    KNOWN_EXTENSIONS.iter().any(|ext| base.ends_with(ext))
 }
 
 fn is_directory_import(spec: &str) -> bool {
@@ -519,6 +524,42 @@ mod tests {
             diags.len(),
             1,
             "nested extensionless file import must still be flagged: {diags:?}"
+        );
+    }
+
+    // Regression for #4765: Vite resource-query imports (`?raw`, `?inline`,
+    // `?worker`, `?url`) already carry a file extension before the `?` suffix —
+    // the suffix is a bundler transform directive, not part of the path, so the
+    // extension cannot be dropped. These must not be flagged.
+    #[test]
+    fn skips_vite_resource_query_imports_issue_4765() {
+        let pkg = r#"{"type":"module","dependencies":{}}"#;
+        let diags = run_in_project(
+            &[("package.json", pkg)],
+            "import App from './App.vue?raw';\n\
+             import style from './style.css?inline';\n\
+             import worker from './worker.js?worker';\n\
+             import url from './img.png?url';\n",
+        );
+        assert!(
+            diags.is_empty(),
+            "Vite `?query` imports already carry an extension: {diags:?}"
+        );
+    }
+
+    // Negative space for #4765: a plain extensionless import with no `?query`
+    // suffix is still missing its extension and must stay flagged.
+    #[test]
+    fn still_flags_plain_extensionless_import_alongside_query_form() {
+        let pkg = r#"{"type":"module","dependencies":{}}"#;
+        let diags = run_in_project(
+            &[("package.json", pkg)],
+            "import foo from './foo';\n",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "plain extensionless import (no `?query`) must still be flagged: {diags:?}"
         );
     }
 }
