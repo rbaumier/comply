@@ -191,6 +191,20 @@ function pushDiag(sourceFile, lineStarts, file, node, rule, message) {
   diagnostics.push({ file, line, column, rule, message });
 }
 
+// Filename infixes marking an executable test *spec* (a file holding the test
+// cases themselves). Mirrors comply's Rust `is_test_spec_file`: shared test
+// *infrastructure* (`test-helpers/`, `__mocks__/`, fixtures) is deliberately
+// NOT a spec — duplication there is a genuine smell and extraction is right.
+const TEST_SPEC_INFIXES = [".test.", ".spec.", ".unit.", ".e2e.", ".cy.", "_test.", "_spec."];
+
+/** Whether `file` is an executable test spec, by filename convention: a
+ *  `.test.`/`.spec.`/… infix, or a file directly inside a `__tests__/` dir. */
+function isTestSpecFile(file) {
+  const name = path.basename(file).toLowerCase();
+  if (TEST_SPEC_INFIXES.some((infix) => name.includes(infix))) return true;
+  return path.basename(path.dirname(file)).toLowerCase() === "__tests__";
+}
+
 // ── Rule: no-redundant-nullish-coalescing-null ───────────────────────────────
 // `x ?? null` is a no-op when x's type already includes `null` and not
 // `undefined` (the coalesce can never change the value or the type). Symmetric
@@ -287,6 +301,13 @@ function emitDuplicateTypeDiagnostics(candidates) {
   }
   for (const members of groups.values()) {
     if (members.length < 2) continue;
+    // Test specs may declare intentionally-distinct-but-identical fixture types
+    // (a `UsersSearch` and a `LevelSearch` exercising the same generic hook with
+    // two named scenarios); specs stand alone, so consolidating would couple
+    // them and erase the named intent. Suppress only when EVERY member is a test
+    // spec — a group involving shared infra (`test-helpers/`, fixtures) stays
+    // flagged, since there extraction is the right fix.
+    if (members.every((m) => isTestSpecFile(m.file))) continue;
     for (const m of members) {
       const others = members
         .filter((o) => o !== m)
