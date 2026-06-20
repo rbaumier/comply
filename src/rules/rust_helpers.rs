@@ -1729,6 +1729,33 @@ fn parse_int_literal(node: Node, source: &[u8]) -> Option<u128> {
     digits.parse().ok()
 }
 
+/// True if the operand of `cast` (a `type_cast_expression`) is, at its
+/// outermost level, a bitwise operation — a shift (`>>`/`<<`) or a bit op
+/// (`&`/`|`/`^`). Such a cast is deliberate bit manipulation, where narrowing
+/// to the target width is the intent rather than an accidental truncation:
+/// `(x >> 24) as u8` extracts a byte, `(x & 0xFF) as u8` masks one. A fallible
+/// `try_into()` would be the wrong remediation for these shapes, so both
+/// numeric-cast rules treat them as lossless. Parentheses around the operand
+/// are transparent.
+pub fn cast_operand_is_bitwise(cast: Node, source: &[u8]) -> bool {
+    let Some(mut value) = cast.child_by_field_name("value") else {
+        return false;
+    };
+    while value.kind() == "parenthesized_expression" {
+        let Some(inner) = value.named_child(0) else {
+            return false;
+        };
+        value = inner;
+    }
+    if value.kind() != "binary_expression" {
+        return false;
+    }
+    value
+        .child_by_field_name("operator")
+        .and_then(|op| op.utf8_text(source).ok())
+        .is_some_and(|op| matches!(op, ">>" | "<<" | "&" | "|" | "^"))
+}
+
 /// True if `cast` (a `type_cast_expression`) reads the discriminant of a
 /// fieldless (C-like) enum — `<enum value> as <integer>`. For such an enum the
 /// `as`-cast is the language-blessed way to obtain the discriminant: no

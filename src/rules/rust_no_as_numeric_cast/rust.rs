@@ -34,9 +34,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
-    cast_operand_is_enum_discriminant, cast_operand_is_range_guarded, find_identifier_type,
-    is_in_enum_discriminant, is_in_test_context,
+    cast_operand_is_bitwise, cast_operand_is_bool, cast_operand_is_char,
+    cast_operand_is_collection_size, cast_operand_is_enum_discriminant, cast_operand_is_range_guarded,
+    find_identifier_type, is_in_enum_discriminant, is_in_test_context,
 };
 
 const KINDS: &[&str] = &["type_cast_expression"];
@@ -126,7 +126,7 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
     if is_literal_cast(node, source_bytes) {
         return false;
     }
-    if is_bitwise_operand(node, source_bytes) {
+    if cast_operand_is_bitwise(node, source_bytes) {
         return false;
     }
     if cast_operand_is_collection_size(node, source_bytes) {
@@ -219,30 +219,6 @@ fn source_numeric_type(node: tree_sitter::Node, source: &[u8]) -> Option<Numeric
     let name = value.utf8_text(source).ok()?;
     let type_text = find_identifier_type(node, name, source)?;
     numeric_type(&type_text)
-}
-
-/// Whether the cast operand's outermost expression is a bitwise operation
-/// (`>>`, `<<`, `&`, `|`, `^`). Such a cast is bit manipulation — the
-/// truncation to the target width is intentional (`(x >> 8) as u8`,
-/// `(x & 0xFF) as u8`), so `try_from` would be semantically wrong. Parens
-/// around the operand are transparent.
-fn is_bitwise_operand(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(mut value) = node.child_by_field_name("value") else {
-        return false;
-    };
-    while value.kind() == "parenthesized_expression" {
-        let Some(inner) = value.named_child(0) else {
-            return false;
-        };
-        value = inner;
-    }
-    if value.kind() != "binary_expression" {
-        return false;
-    }
-    value
-        .child_by_field_name("operator")
-        .and_then(|op| op.utf8_text(source).ok())
-        .is_some_and(|op| matches!(op, ">>" | "<<" | "&" | "|" | "^"))
 }
 
 fn is_literal_cast(node: tree_sitter::Node, _source: &[u8]) -> bool {
@@ -424,6 +400,14 @@ mod tests {
     #[test]
     fn repro_1289_xor_shift_not_flagged() {
         assert!(run_on("fn f(a: u32, b: u32) -> u8 { (a ^ b) as u8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5033_byte_extraction_shift_not_flagged() {
+        // `(bits >> 32) as u8` — high-bits-cleared byte extraction (HPACK
+        // Huffman encoder pattern); the shift makes the truncation intentional.
+        assert!(run_on("fn f(bits: u64) -> u8 { (bits >> 32) as u8 }").is_empty());
+        assert!(run_on("fn f(x: u32) -> u8 { (x >> 24) as u8 }").is_empty());
     }
 
     #[test]

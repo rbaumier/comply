@@ -37,9 +37,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
-    cast_operand_is_enum_discriminant, cast_operand_is_range_guarded, find_identifier_type,
-    is_in_enum_discriminant,
+    cast_operand_is_bitwise, cast_operand_is_bool, cast_operand_is_char,
+    cast_operand_is_collection_size, cast_operand_is_enum_discriminant, cast_operand_is_range_guarded,
+    find_identifier_type, is_in_enum_discriminant,
 };
 use crate::rules::rust_no_as_numeric_cast::rust::fires_on_cast;
 
@@ -102,6 +102,9 @@ impl AstCheck for Check {
             return;
         }
         if cast_operand_is_range_guarded(node, source_bytes) {
+            return;
+        }
+        if cast_operand_is_bitwise(node, source_bytes) {
             return;
         }
         let source_type = source_numeric_type(node, source_bytes);
@@ -605,5 +608,15 @@ mod tests {
         // `rust-no-as-numeric-cast` owns the span.
         let src = "fn w(val: u64) -> u8 { if val < 1000 { val as u8 } else { 0 } }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5033_byte_extraction_shift_not_flagged() {
+        // `(bits >> 32) as u8` — high-bits-cleared byte extraction (HPACK
+        // Huffman encoder pattern). The cast is deliberate bit manipulation;
+        // `rust-no-as-numeric-cast` no longer owns the span (it exempts
+        // bitwise operands), so this rule must not flag it either.
+        assert!(run_on("fn f(bits: u64) -> u8 { (bits >> 32) as u8 }").is_empty());
+        assert!(run_on("fn f(x: u32) -> u8 { (x >> 24) as u8 }").is_empty());
     }
 }
