@@ -116,17 +116,52 @@ fn conflicts_with_other_directive(directive: tree_sitter::Node, source: &[u8]) -
     })
 }
 
-/// The previous sibling `element` of `element`, skipping `text`, `comment`, and
-/// other non-element nodes.
+/// The previous sibling element of `element`, skipping `text`, `comment`, and
+/// other non-element nodes. Recognizes `element` and `template_element` plus
+/// `vue_component` and `ERROR`: the Vue grammar parses `<component>` (with an
+/// `:is`/`v-if`/`is` attribute) as a `vue_component` or, when self-closing, as an
+/// `ERROR` node, and the preceding `v-if` may live on such a node.
 fn previous_element_sibling(element: tree_sitter::Node) -> Option<tree_sitter::Node> {
     let mut sibling = element.prev_sibling();
     while let Some(node) = sibling {
-        if node.kind() == "element" || node.kind() == "template_element" {
+        if matches!(
+            node.kind(),
+            "element" | "template_element" | "vue_component" | "ERROR"
+        ) {
             return Some(node);
         }
         sibling = node.prev_sibling();
     }
     None
+}
+
+/// Whether the source text of a `<component>` node carries a `v-if`/`v-else-if`
+/// directive. The Vue grammar parses `<component>` as a `vue_component`/`ERROR`
+/// node and mangles its directives instead of emitting clean
+/// `directive_attribute` children, so the chain link is detected from the raw
+/// text rather than the AST.
+fn component_text_has_conditional(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Ok(text) = node.utf8_text(source) else {
+        return false;
+    };
+    text.match_indices("v-if")
+        .chain(text.match_indices("v-else-if"))
+        .any(|(start, pat)| {
+            let before_is_boundary = source_is_directive_boundary(text.as_bytes(), start);
+            let after = text.as_bytes().get(start + pat.len());
+            let after_is_boundary =
+                matches!(after, None | Some(b'=' | b' ' | b'\t' | b'\n' | b'\r' | b'/' | b'>'));
+            before_is_boundary && after_is_boundary
+        })
+}
+
+/// Whether the byte before `start` delimits the start of an attribute (so the
+/// match is a standalone directive, not a substring of another attribute name).
+fn source_is_directive_boundary(bytes: &[u8], start: usize) -> bool {
+    match start.checked_sub(1).map(|i| bytes[i]) {
+        None => true,
+        Some(b) => b.is_ascii_whitespace() || b == b'<',
+    }
 }
 
 /// Whether the previous sibling element carries a valid `v-if`/`v-else-if`
@@ -138,6 +173,9 @@ fn has_previous_conditional(directive: tree_sitter::Node, source: &[u8]) -> bool
     let Some(previous) = previous_element_sibling(element) else {
         return false;
     };
+    if matches!(previous.kind(), "vue_component" | "ERROR") {
+        return component_text_has_conditional(previous, source);
+    }
     start_tag_directives(previous).any(|dir| is_valid_chain_directive(dir, source))
 }
 
@@ -377,5 +415,31 @@ mod tests {
             diags.iter().any(|d| d.message.contains("must follow")),
             "expected dangling diagnostic, got {diags:?}"
         );
+    }
+
+    #[test]
+    fn allows_v_else_if_after_component_with_v_if() {
+        let diags = run(&wrap(
+            "<component v-if=\"c1\" :is=\"comp\" /><span v-else-if=\"c2\">x</span>",
+        ));
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn allows_v_else_if_value_after_component_with_v_if() {
+        let diags = run(&wrap(
+            "<component v-if=\"a\" :is=\"x\" /><div v-else-if=\"b\" />",
+        ));
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn flags_v_else_if_after_component_without_v_if() {
+        // The preceding `<component>` carries no `v-if`, so the chain is invalid.
+        let diags = run(&wrap(
+            "<component :is=\"x\" /><span v-else-if=\"c2\">y</span>",
+        ));
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("must follow"));
     }
 }
