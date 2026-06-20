@@ -128,6 +128,16 @@ fn is_skipped_context(nodes: &oxc_semantic::AstNodes, node_id: NodeId) -> bool {
                 .as_ref()
                 .is_some_and(|default| default.span() == node_span)
         }
+        // A default value inside a destructured parameter
+        // (`function f({ cb = () => {} }) {}`) is the value bound to that
+        // destructuring slot, not a hoistable nested helper — the same
+        // semantic as a direct default-parameter initializer. Match only when
+        // the arrow is the `right` (default) side of the `AssignmentPattern`
+        // and that pattern sits within a function's parameter list.
+        AstKind::AssignmentPattern(assign) => {
+            let node_span = nodes.kind(node_id).span();
+            assign.right.span() == node_span && is_in_formal_parameter(nodes, parent_id)
+        }
         // A function that is *returned* is the value its parent produces — a
         // useEffect cleanup (`return () => …`), a factory's closure, etc.
         // Hoisting it to module scope separates the produced value from its
@@ -163,6 +173,25 @@ fn is_skipped_context(nodes: &oxc_semantic::AstNodes, node_id: NodeId) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether `node_id` (an `AssignmentPattern`) is part of a function's
+/// parameter list rather than a destructuring default elsewhere (e.g. a
+/// variable declarator). Walks up through binding-pattern containers and
+/// stops at a `FormalParameter` (match) or at the enclosing function/program
+/// boundary (no match).
+fn is_in_formal_parameter(nodes: &oxc_semantic::AstNodes, node_id: NodeId) -> bool {
+    for kind in nodes.ancestor_kinds(node_id) {
+        match kind {
+            AstKind::FormalParameter(_) | AstKind::FormalParameters(_) => return true,
+            AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::VariableDeclarator(_)
+            | AstKind::Program(_) => return false,
+            _ => {}
+        }
+    }
+    false
 }
 
 fn references_this_directly(nodes: &oxc_semantic::AstNodes, func_span: Span) -> bool {
@@ -367,6 +396,37 @@ mod tests {
             }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_destructured_default_parameter_arrow() {
+        // Regression for rbaumier/comply#4770 — an arrow default value inside a
+        // destructured object parameter is the value bound to that slot, not a
+        // hoistable nested helper (airbnb/visx HeatmapCircle.tsx).
+        let src = r#"
+            export default function HeatmapCircle({
+              colorScale = () => undefined,
+              opacityScale = () => 1,
+              bins = (column) => column?.bins,
+              count = (cell) => cell?.count,
+            }) {
+              return colorScale();
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_destructured_default_arrow_in_variable_declarator() {
+        // Negative-space guard: a destructuring default in a variable
+        // declarator (not a parameter list) is still a hoistable helper.
+        let src = r#"
+            function outer(opts) {
+                const { cb = () => 1 } = opts;
+                return cb();
+            }
+        "#;
+        assert!(!run(src).is_empty());
     }
 
     #[test]
