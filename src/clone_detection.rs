@@ -486,18 +486,20 @@ fn locale_base_language(segment: &str) -> Option<String> {
 }
 
 /// Returns true when both paths are locale implementations for variants of the
-/// same base language at the same relative sub-path — e.g.
-/// `locale/ar-SA/_lib/localize/index.ts` and `locale/ar-EG/_lib/localize/index.ts`
-/// (both base `ar`), or `locale/be-tarask/…` and `locale/be/…` (both base `be`).
-/// Such files implement the same interface for an overlapping language and are
-/// expected to be structurally near-identical, so their shared block must not be
-/// flagged as a clone.
+/// same base language at the same relative sub-path. The locale code may be a
+/// directory segment — e.g. `locale/ar-SA/_lib/localize/index.ts` vs
+/// `locale/ar-EG/_lib/localize/index.ts` (both base `ar`) — or a filename, e.g.
+/// `locale/lang/ar-eg.ts` vs `locale/lang/ar.ts` (both base `ar`). Such files
+/// implement the same i18n interface for an overlapping language and are expected
+/// to be structurally near-identical, so their shared block must not be flagged
+/// as a clone.
 ///
 /// The match requires (a) an i18n context segment shared at the same position,
 /// (b) locale-shaped code segments immediately after it that share a base
-/// language, and (c) an identical remaining sub-path. The base-language
-/// requirement keeps genuine duplication between unrelated locales
-/// (`ar-SA` vs `fr-FR`) flagged.
+/// language, and (c) an identical remaining sub-path. When the code segment is
+/// the final path component (a filename), its extension is stripped before the
+/// base-language check. The base-language requirement keeps genuine duplication
+/// between unrelated locales (`ar-SA` vs `fr-FR`) flagged.
 fn are_locale_variant_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
     let segs_a: Vec<&str> = a
         .components()
@@ -535,10 +537,20 @@ fn are_locale_variant_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
     if segs_a[pos_a + 1..] != segs_b[pos_b + 1..] {
         return false;
     }
+    // When the locale-code segment is the final path component it is a filename
+    // (`ar-eg.ts`); strip its extension so the base-language check sees the code.
+    let code = |segs: &[&str], pos: usize| -> String {
+        let seg = segs[pos];
+        if pos + 1 == segs.len() {
+            seg.rsplit_once('.').map_or(seg, |(stem, _)| stem).to_string()
+        } else {
+            seg.to_string()
+        }
+    };
     // Locale-shaped code segments sharing a base language.
     match (
-        locale_base_language(segs_a[pos_a]),
-        locale_base_language(segs_b[pos_b]),
+        locale_base_language(&code(&segs_a, pos_a)),
+        locale_base_language(&code(&segs_b, pos_b)),
     ) {
         (Some(base_a), Some(base_b)) => base_a == base_b,
         _ => false,
@@ -1490,6 +1502,73 @@ mod tests {
         );
     }
 
+    /// Builds two filename-coded locale files at `<dir>/locale/lang/<code_a>.ts`
+    /// and `<dir>/locale/lang/<code_b>.ts` with near-identical content (shared
+    /// structure plus a locale-specific block), mirroring element-plus's
+    /// `packages/locale/lang/ar-eg.ts` vs `ar.ts`, and returns the pair.
+    fn write_filename_locale_pair(
+        dir: &tempfile::TempDir,
+        code_a: &str,
+        code_b: &str,
+    ) -> (SourceFile, SourceFile) {
+        let shared = large_ts_block(20);
+        let strings = |tag: &str| -> String {
+            (1..=20)
+                .map(|i| format!("export const word_{i} = \"{tag}_term_{i}\";"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let content_a = format!("{shared}\n{}", strings(code_a));
+        let content_b = format!("{shared}\n{}", strings(code_b));
+        let pa = dir.path().join(format!("packages/locale/lang/{code_a}.ts"));
+        let pb = dir.path().join(format!("packages/locale/lang/{code_b}.ts"));
+        std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
+        std::fs::write(&pa, &content_a).unwrap();
+        std::fs::write(&pb, &content_b).unwrap();
+        (
+            SourceFile { path: pa, language: Language::TypeScript },
+            SourceFile { path: pb, language: Language::TypeScript },
+        )
+    }
+
+    #[test]
+    fn no_false_positive_on_filename_coded_locale_variants() {
+        // Regression test for issue #4737.
+        // element-plus stores one translation catalog per locale as a filename
+        // under `packages/locale/lang/` (`ar-eg.ts`, `ar.ts`). Variants of the
+        // same base language (`ar`) share the same key structure and many
+        // identical English fallback strings by design, so the shared block must
+        // not be flagged as a clone.
+        let dir = tempfile::tempdir().unwrap();
+        let (fa, fb) = write_filename_locale_pair(&dir, "ar-eg", "ar");
+        assert!(
+            lint_files(&[&fa, &fb]).is_empty(),
+            "filename-coded locale variants (ar-eg.ts/ar.ts) must not be flagged as clones"
+        );
+    }
+
+    #[test]
+    fn filename_coded_locale_files_of_different_languages_still_flagged() {
+        // Negative guard for the filename-coded locale exemption: two catalogs
+        // for unrelated base languages (`ar.ts` vs `fr.ts`) that are genuine
+        // copy-paste duplicates must still be flagged — the exemption is scoped
+        // to a shared base language, not to the `lang/` directory wholesale.
+        let dir = tempfile::tempdir().unwrap();
+        let dup = large_ts_block(20);
+        let pa = dir.path().join("packages/locale/lang/ar.ts");
+        let pb = dir.path().join("packages/locale/lang/fr.ts");
+        std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
+        std::fs::write(&pa, &dup).unwrap();
+        std::fs::write(&pb, &dup).unwrap();
+        let fa = SourceFile { path: pa, language: Language::TypeScript };
+        let fb = SourceFile { path: pb, language: Language::TypeScript };
+        assert_eq!(
+            lint_files(&[&fa, &fb]).len(),
+            1,
+            "duplicated locale catalogs for unrelated languages must still be flagged"
+        );
+    }
+
     #[test]
     fn locale_files_of_different_languages_still_flagged() {
         // Negative guard for the locale-variant exemption: two locale files for
@@ -1866,6 +1945,16 @@ mod tests {
         assert!(are_locale_variant_pair(
             Path::new("pkgs/core/src/locale/be-tarask/_lib/localize/index.ts"),
             Path::new("pkgs/core/src/locale/be/_lib/localize/index.ts"),
+        ));
+        // Filename-coded locale variants under `lang/` share base `ar` (#4737).
+        assert!(are_locale_variant_pair(
+            Path::new("packages/locale/lang/ar-eg.ts"),
+            Path::new("packages/locale/lang/ar.ts"),
+        ));
+        // Filename-coded locales for unrelated base languages → not a pair.
+        assert!(!are_locale_variant_pair(
+            Path::new("packages/locale/lang/ar.ts"),
+            Path::new("packages/locale/lang/fr.ts"),
         ));
         // Different base language → not a variant pair.
         assert!(!are_locale_variant_pair(
