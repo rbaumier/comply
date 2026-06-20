@@ -5,6 +5,7 @@
 //!
 //! - is **not** in test context (`#[test]` / `#[cfg(test)]` /
 //!   `tests/` integration directory), and
+//! - is **not** in a Cargo build script (`build.rs`), and
 //! - is **not** in a binary file (`main.rs`, `src/bin/*.rs`), and
 //! - is **not** in a crate that declares a binary (the nearest
 //!   `Cargo.toml` declares a `[[bin]]` target or a `src/main.rs`
@@ -21,6 +22,11 @@
 //! one of its source files is exempt, not just the entry points —
 //! even when it also carries a `[lib]` purely to expose internals to
 //! its own integration tests (the `lib.rs` + `main.rs` split).
+//!
+//! A Cargo build script (`build.rs`) is a separate binary that Cargo
+//! compiles and runs at build time, not the crate's runtime library code.
+//! Cargo captures and displays its stderr, so `eprintln!` is the idiomatic
+//! build-script diagnostic channel — it is exempt.
 //!
 //! A build-time codegen crate (a `-build`/`-codegen`/`-bindgen` library
 //! such as `prost-build` or `tonic-build`) is consumed from a `build.rs`
@@ -91,6 +97,9 @@ impl AstCheck for Check {
             return;
         }
         if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
+            return;
+        }
+        if crate::rules::path_utils::is_rust_build_script(ctx.path) {
             return;
         }
         if is_binary_file(ctx.path) {
@@ -538,6 +547,17 @@ path = "src/lib.rs"
         let source =
             "fn f(&self) { if self.verbose() { let _ = 1; } else { eprintln!(\"oops\"); } }";
         assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// Regression for #4474 (anyhow `build.rs`): a Cargo build script is a
+    /// separate binary run at build time, not library code. `eprintln!` there
+    /// writes to Cargo's build-output stream — the idiomatic diagnostic channel.
+    /// Run inside a library-only crate so the build-script exemption (not a
+    /// `[[bin]]`/codegen manifest) is the only thing that can clear it.
+    #[test]
+    fn allows_eprintln_in_build_script() {
+        let source = "fn main() { eprintln!(\"Failed: {}\", err); }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "build.rs", source).is_empty());
     }
 
     #[test]
