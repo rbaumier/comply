@@ -2500,12 +2500,21 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
     // is a real dependency. Scan comments for these tags so the specifier flows
     // into the same import set the rest of the index consults.
     for comment in semantic.comments() {
+        // Only JSDoc (`/** … */`) block comments — TypeScript honors `@import`
+        // there, not in plain `/* … */` blocks. `content_span` strips the `/*`
+        // and `*/`, so a JSDoc comment's content starts with the extra `*`.
         if !comment.is_block() {
             continue;
         }
         let body = &source[comment.content_span().start as usize..comment.content_span().end as usize];
+        if !body.starts_with('*') {
+            continue;
+        }
+        let line = oxc_line_at(&lines, comment.span.start as usize);
         for spec in jsdoc_import_specifiers(body) {
-            let line = oxc_line_at(&lines, comment.span.start as usize);
+            // Only `specifier`/`source_path`/`is_type_only` matter for the
+            // bare-specifier collection this entry feeds; the binding fields are
+            // intentionally empty (a JSDoc `@import` names no module-level value).
             imports.push(ImportedSymbol {
                 local_name: String::new(),
                 imported_name: String::new(),
@@ -2544,31 +2553,45 @@ fn jsdoc_import_specifiers(comment_body: &str) -> Vec<String> {
         // makes progress even when no `from` clause follows.
         let after_tag = &rest[pos + "@import".len()..];
         rest = after_tag;
-        // Bound the `from` search to this tag's text so a tag missing its `from`
-        // clause doesn't steal the `from` of the following `@import`.
+        // Bound the search to this tag's text so a tag missing its `from` clause
+        // doesn't pull the specifier from the following `@import`.
         let tag_text = match after_tag.find("@import") {
             Some(next) => &after_tag[..next],
             None => after_tag,
         };
-        let Some(from_pos) = tag_text.find("from") else {
-            continue;
-        };
-        let after_from = tag_text[from_pos + "from".len()..].trim_start();
-        let Some(quote) = after_from.chars().next() else {
+        if let Some(spec) = from_clause_specifier(tag_text) {
+            out.push(spec.to_string());
+        }
+    }
+    out
+}
+
+/// The quoted specifier of the `from` clause in a single JSDoc `@import` tag's
+/// text, or `None` when there is none. The real `from` is the `from` keyword
+/// whose next non-space token is a quote — a binding or type name that merely
+/// *contains* the substring `from` (`{ fromPairs }`, `{ FromSchema }`) is not it,
+/// so the scan keeps looking past such matches.
+fn from_clause_specifier(tag_text: &str) -> Option<&str> {
+    let mut search_from = 0;
+    while let Some(rel) = tag_text[search_from..].find("from") {
+        let from_end = search_from + rel + "from".len();
+        search_from = from_end;
+        let after = tag_text[from_end..].trim_start();
+        let Some(quote) = after.chars().next() else {
             continue;
         };
         if quote != '\'' && quote != '"' {
             continue;
         }
-        let inner = &after_from[quote.len_utf8()..];
+        let inner = &after[quote.len_utf8()..];
         if let Some(end) = inner.find(quote) {
             let spec = inner[..end].trim();
             if !spec.is_empty() {
-                out.push(spec.to_string());
+                return Some(spec);
             }
         }
     }
-    out
+    None
 }
 
 /// Named export names declared in a TypeScript declaration file (`.d.ts` and
@@ -4443,6 +4466,14 @@ mod tests {
         // A malformed `@import` (no `from`) must not steal the next tag's `from`.
         let body = " @import { Broken }\n @import { Ok } from 'ok-pkg' ";
         assert_eq!(jsdoc_import_specifiers(body), vec!["ok-pkg".to_string()]);
+    }
+
+    #[test]
+    fn jsdoc_import_binding_name_containing_from_does_not_break_extraction() {
+        // A binding whose name contains the substring `from` (`fromPairs`,
+        // `FromSchema`) must not be mistaken for the `from` keyword.
+        let body = " @import { fromPairs, FromSchema } from 'lodash-es' ";
+        assert_eq!(jsdoc_import_specifiers(body), vec!["lodash-es".to_string()]);
     }
 
     #[test]

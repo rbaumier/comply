@@ -326,6 +326,24 @@ mod tests {
     }
 
     #[test]
+    fn jsdoc_import_namespace_form_marks_dep_used() {
+        // The `* as NS` JSDoc form names the package in its `from` clause too.
+        let pkg = r#"{
+            "name": "demo",
+            "dependencies": { "hast": "^1.0.0" }
+        }"#;
+        let files: Vec<(&str, &str)> = vec![(
+            "lib/text.js",
+            "/**\n * @import * as Hast from 'hast'\n */\nexport function text() {}\n",
+        )];
+        let (_dir, diags) = run_on_project(&files, pkg, "lib/text.js");
+        assert!(
+            diags.is_empty(),
+            "hast is used via a namespace @import, no diagnostic expected, got: {diags:?}"
+        );
+    }
+
+    #[test]
     fn skips_at_types_packages() {
         let pkg = r#"{
             "name": "demo",
