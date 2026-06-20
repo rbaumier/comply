@@ -9,6 +9,9 @@
 //! - is **not** in a crate that declares a binary (the nearest
 //!   `Cargo.toml` declares a `[[bin]]` target or a `src/main.rs`
 //!   exists next to it), and
+//! - is **not** in a build-time codegen crate (the nearest `Cargo.toml`
+//!   `[package].name` ends with `-build`/`-codegen`/`-bindgen` or the
+//!   `_` variants), and
 //! - is **not** in the `then` branch of an `if` gated by a
 //!   verbose/debug-style flag (`if self.verbose() { eprintln!(...) }`).
 //!
@@ -18,6 +21,12 @@
 //! one of its source files is exempt, not just the entry points —
 //! even when it also carries a `[lib]` purely to expose internals to
 //! its own integration tests (the `lib.rs` + `main.rs` split).
+//!
+//! A build-time codegen crate (a `-build`/`-codegen`/`-bindgen` library
+//! such as `prost-build` or `tonic-build`) is consumed from a `build.rs`
+//! script, where writing to Cargo's build-output stream via `eprintln!` /
+//! `println!` is the idiomatic diagnostic channel — tracing/log is
+//! unavailable there — so its `eprintln!` is exempt too.
 //!
 //! Output gated behind a runtime verbosity flag is opt-in diagnostics,
 //! not unconditional library noise: the consumer only sees it after
@@ -91,6 +100,13 @@ impl AstCheck for Check {
             .project
             .nearest_cargo_manifest(ctx.path)
             .is_some_and(|m| m.declares_binary())
+        {
+            return;
+        }
+        if ctx
+            .project
+            .nearest_cargo_manifest(ctx.path)
+            .is_some_and(|m| m.is_build_codegen_crate())
         {
             return;
         }
@@ -342,10 +358,53 @@ name = "starship"
 path = "src/main.rs"
 "#;
 
+    /// A build-time codegen library: its `[package].name` ends in `-build`, so
+    /// it is consumed from a consumer's `build.rs`, where `eprintln!` to Cargo's
+    /// build-output stream is the idiomatic diagnostic channel.
+    const BUILD_CODEGEN_CARGO_TOML: &str = r#"
+[package]
+name = "grpc-protobuf-build"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "grpc_protobuf_build"
+path = "src/lib.rs"
+"#;
+
+    const CODEGEN_CARGO_TOML: &str = r#"
+[package]
+name = "something-codegen"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "something_codegen"
+path = "src/lib.rs"
+"#;
+
     #[test]
     fn flags_eprintln_in_library_file() {
         let source = "fn f() { eprintln!(\"oops\"); }";
         assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// Regression for #4465: `grpc-protobuf-build` (like `prost-build` /
+    /// `tonic-build` / `bindgen`) is a build-time codegen library called from a
+    /// consumer's `build.rs`. Its `eprintln!` forwards `protoc`'s stderr to
+    /// Cargo's build output — the idiomatic build-script diagnostic channel.
+    #[test]
+    fn allows_eprintln_in_build_codegen_crate() {
+        let source = "fn f() { eprintln!(\"{}\", msg); }";
+        assert!(run_in_crate(BUILD_CODEGEN_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// A `-codegen`-suffixed crate is the same category of build-time codegen
+    /// library and is exempt as well.
+    #[test]
+    fn allows_eprintln_in_codegen_crate() {
+        let source = "fn f() { eprintln!(\"{}\", msg); }";
+        assert!(run_in_crate(CODEGEN_CARGO_TOML, "src/lib.rs", source).is_empty());
     }
 
     #[test]
