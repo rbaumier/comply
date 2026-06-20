@@ -1285,8 +1285,10 @@ fn nrtc_is_ident_byte(b: u8) -> bool {
 // Two FP shapes are dropped:
 // 1. The type-challenges `Equal<X, Y>` probe idiom: `<T>() => T extends X ? 1 : 2`.
 //    The `<T>` is load-bearing for the structural comparison.
-// 2. Multi-line function signatures where tsgolint only sees the first
-//    occurrence of a type parameter.
+// 2. Multi-line function/overload signatures where the type parameter is
+//    referenced in the parameter list on a line below its declaration (e.g.
+//    inside a union member of a callback parameter type). tsgolint misses
+//    these later references and wrongly reports the parameter as unused.
 
 struct EqualProbeFilter;
 
@@ -1344,32 +1346,36 @@ fn ep_is_multiline_param_fp(src: &str, line_1based: usize) -> bool {
             _ => {}
         }
     }
-    let mut lines_with_param: usize = 0;
     for next_line in lines.iter().skip(line_1based).take(15) {
-        if ep_contains_word(next_line, &param_name) {
-            lines_with_param += 1;
-            if lines_with_param >= 2 {
-                return true;
-            }
-        }
-        let mut hit_body = false;
-        for b in next_line.bytes() {
+        // The portion of this line that belongs to the parameter list, i.e. up to
+        // the byte that closes the signature's parens or opens its body. A type
+        // parameter referenced anywhere in that region is a genuine signature use
+        // that tsgolint missed because the reference sits on a later line.
+        let mut param_region_end = next_line.len();
+        let mut closed = false;
+        for (idx, b) in next_line.bytes().enumerate() {
             match b {
                 b'(' => paren_depth += 1,
                 b')' => {
                     paren_depth -= 1;
                     if paren_depth < 0 {
+                        param_region_end = idx;
+                        closed = true;
                         break;
                     }
                 }
                 b'{' if paren_depth <= 0 => {
-                    hit_body = true;
+                    param_region_end = idx;
+                    closed = true;
                     break;
                 }
                 _ => {}
             }
         }
-        if hit_body || paren_depth < 0 {
+        if ep_contains_word(&next_line[..param_region_end], &param_name) {
+            return true;
+        }
+        if closed {
             break;
         }
     }
@@ -2278,6 +2284,39 @@ export function loader() {
         let src_content = source_for(&path);
         let f = EqualProbeFilter;
         assert!(f.keep(&ep_diag(&path, 1), Some(&src_content)));
+    }
+
+    #[test]
+    fn ep_drops_overload_union_param_fp() {
+        let src = concat!(
+            "public on<T = JsonRpcResult>(\n",
+            "    type: 'message',\n",
+            "    listener:\n",
+            "        | Web3Eip1193ProviderEventCallback<ProviderMessage>\n",
+            "        | Web3ProviderMessageEventCallback<T>,\n",
+            "): void;\n",
+        );
+        let path = write_temp("ep_overload_union.ts", src);
+        let line = line_of(src, "public on<T");
+        let src_content = source_for(&path);
+        let f = EqualProbeFilter;
+        assert!(!f.keep(&ep_diag(&path, line), Some(&src_content)));
+    }
+
+    #[test]
+    fn ep_keeps_unused_param_when_only_body_uses_it() {
+        let src = concat!(
+            "function f<T>(\n",
+            "  x: number,\n",
+            "): string {\n",
+            "  return useT<T>();\n",
+            "}\n",
+        );
+        let path = write_temp("ep_body_only_use.ts", src);
+        let line = line_of(src, "function f<T>");
+        let src_content = source_for(&path);
+        let f = EqualProbeFilter;
+        assert!(f.keep(&ep_diag(&path, line), Some(&src_content)));
     }
 
     #[test]
