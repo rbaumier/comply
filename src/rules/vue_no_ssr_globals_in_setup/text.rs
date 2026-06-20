@@ -32,6 +32,28 @@ fn guarded_before(line: &str, abs: usize) -> bool {
         .any(|guard_at| guard_at < abs)
 }
 
+/// JS binding keywords that introduce a local variable.
+const DECL_KEYWORDS: &[&str] = &["const", "let", "var"];
+
+/// True when the identifier matched at byte offset `abs` is the name being bound
+/// by a local declaration (`const window = useWindow()`, `let document = …`),
+/// including a single destructured name (`const { window } = …`,
+/// `const [document] = …`). Such a name shadows the browser global, so subsequent
+/// references on later lines are the local binding, not the SSR-unsafe global.
+fn is_local_declaration(line: &str, abs: usize) -> bool {
+    let prefix = line[..abs].trim_end();
+    // Step past an opening destructuring delimiter, if any.
+    let prefix = prefix
+        .strip_suffix('{')
+        .or_else(|| prefix.strip_suffix('['))
+        .map(str::trim_end)
+        .unwrap_or(prefix);
+    DECL_KEYWORDS.iter().any(|kw| match prefix.strip_suffix(kw) {
+        Some(rest) => rest.is_empty() || rest.ends_with(|c: char| !c.is_alphanumeric() && c != '_'),
+        None => false,
+    })
+}
+
 /// Per-byte mask of `line` where `true` marks a byte inside a string literal
 /// (`'…'`, `"…"`, or `` `…` ``), respecting backslash escapes. Quote delimiters
 /// themselves are marked too, so a global word matched anywhere in the span is
@@ -92,6 +114,10 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
     let body = &ctx.source[start..end];
     let base_line = ctx.source[..start].matches('\n').count();
     let mut depth = 0i32;
+    // Globals re-bound to a local variable earlier in the block (e.g.
+    // `const window = useWindow()`). Subsequent uses reference the local, not the
+    // SSR-unsafe global, so they must not be flagged.
+    let mut shadowed: Vec<&str> = Vec::new();
     for (idx, line) in body.lines().enumerate() {
         let trimmed_line = line.trim();
         if trimmed_line.starts_with("//") {
@@ -100,6 +126,9 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
         if depth == 0 {
             let in_string = string_literal_mask(line);
             for g in SSR_GLOBALS {
+                if shadowed.contains(g) {
+                    continue;
+                }
                 let mut pos = 0;
                 while let Some(p) = line[pos..].find(g) {
                     let abs = pos + p;
@@ -107,6 +136,10 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
                     let after = line.as_bytes().get(abs + g.len()).map(|b| *b as char).unwrap_or(' ');
                     let is_word = before.is_alphanumeric() || before == '_' || before == '.';
                     let is_word_after = after.is_alphanumeric() || after == '_';
+                    if !is_word && !is_word_after && !in_string[abs] && is_local_declaration(line, abs) {
+                        shadowed.push(g);
+                        break;
+                    }
                     if !is_word && !is_word_after && !in_string[abs] && !guarded_before(line, abs) {
                         diagnostics.push(Diagnostic {
                             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -284,6 +317,50 @@ mod tests {
         // client-only build, so the rule must not fire there.
         let sfc = "<script lang=\"ts\" setup>\nconst demoAccount = window.KOEL.demo_account || {}\n</script>";
         assert!(run_with_pkg(SPA_PKG, sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_window_shadowed_by_local_composable() {
+        // Issue #4674: epicmaxco/vuestic-ui VaSlider.vue. `window` is re-bound to
+        // the SSR-safe `useWindow()` composable; later `useEvent(..., window)`
+        // calls reference the local, not the browser global.
+        let sfc = "<script setup lang=\"ts\">\nconst window = useWindow()\nuseEvent(['mousemove', 'touchmove'], moving, window)\nuseEvent(['mouseup', 'mouseleave'], moveEnd, window)\nuseEvent('keydown', moveWithKeys, window)\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_document_shadowed_by_local_declaration() {
+        let sfc = "<script setup>\nconst document = useDocument()\nconst el = document.body\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn flags_window_still_when_not_shadowed() {
+        // A later shadow of `document` must not suppress an earlier raw `window`.
+        let sfc = "<script setup>\nconst w = window.innerWidth\nconst document = useDocument()\n</script>";
+        let diags = run(sfc);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`window`"));
+    }
+
+    #[test]
+    fn flags_use_before_shadow_declaration() {
+        // A bare global access on a line before its local declaration is still the
+        // browser global at that point.
+        let sfc = "<script setup>\nconst w = window.innerWidth\nconst window = useWindow()\n</script>";
+        assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn shadow_detection_only_at_top_level() {
+        // A `const window` inside a nested block is not a top-level binding, so it
+        // must not suppress a sibling top-level `window` access. Top-level scanning
+        // only happens at brace-depth 0, so the nested declaration is ignored and
+        // the real top-level global is still flagged.
+        let sfc = "<script setup>\nfunction f() {\n  const window = useWindow()\n}\nconst w = window.innerWidth\n</script>";
+        let diags = run(sfc);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`window`"));
     }
 
     #[test]
