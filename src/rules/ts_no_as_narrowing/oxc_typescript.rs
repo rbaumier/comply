@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
     byte_offset_to_line_col, is_inside_type_predicate_fn, is_outer_as_unknown_double_cast,
-    name_is_generic_type_param_in_scope,
+    name_is_generic_type_param_in_scope, operand_is_typed_as_generic_param,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Expression, TSType, TSTypeName};
@@ -156,6 +156,17 @@ impl OxcCheck for Check {
             if name_is_generic_type_param_in_scope(name, node.id(), semantic) {
                 return;
             }
+        }
+
+        // Skip casts whose operand is statically typed as an enclosing
+        // function's generic type parameter (e.g. viem's `parseTransaction`
+        // casting `serializedTransaction: serialized` to a concrete branch type
+        // after a value-level discriminant check). TypeScript will not reduce
+        // the generic type parameter from a runtime check, and a type predicate
+        // narrows only the local type, not the generic — so the `as` is the only
+        // way to bridge the generic to the concrete type.
+        if operand_is_typed_as_generic_param(&as_expr.expression, node.id(), semantic) {
+            return;
         }
 
         // Skip the outer half of `x as unknown as T` — the canonical
@@ -443,6 +454,53 @@ mod tests {
         // Control for #3837: a regular variable identifier operand (not a
         // global object) is a genuine narrowing and must still fire.
         let diags = run_on("const y = x as SpecificType;");
+        assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_cast_of_generic_param_typed_argument() {
+        // Regression for #4822: viem's `parseTransaction` casts its
+        // `serializedTransaction: serialized` argument (typed as the function's
+        // own generic parameter) to a concrete branch type after a value-level
+        // discriminant check. TypeScript cannot reduce the generic from a
+        // runtime check, so the `as` is unavoidable — not a narrowing smell.
+        let src = "function parseTransaction<serialized extends CeloTransactionSerialized>(\n\
+                   serializedTransaction: serialized,\n\
+                   ): unknown {\n\
+                   const serializedType = sliceHex(serializedTransaction, 0, 1);\n\
+                   if (serializedType === '0x7c')\n\
+                   return parseTransactionCIP42(serializedTransaction as TransactionSerializedCIP42);\n\
+                   return parseTransaction_op(serializedTransaction as OpStackTransactionSerialized);\n}";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_cast_of_generic_param_typed_arg_in_class_method() {
+        // #4822: same pattern with the generic parameter on the enclosing class.
+        let src = "class Parser<T extends Base> {\n\
+                   parse(raw: T) { return decode(raw as Concrete); }\n}";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_cast_of_concretely_typed_argument() {
+        // Control for #4822: when the operand is typed as a concrete type
+        // (not a generic parameter), a type guard CAN narrow it, so the cast
+        // is a genuine narrowing and must still fire.
+        let src = "function f(x: unknown) { return x as Concrete; }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_cast_of_destructured_generic_param_element() {
+        // Control for #4822: a destructured element of a generic-typed binding
+        // (`{ a }: T`) has type `T["a"]`, not `T` — casting it is a genuine
+        // narrowing, so the bare-identifier guard must keep it flagged.
+        let src = "function f<T extends Base>({ a }: T) { return a as Concrete; }";
+        let diags = run_on(src);
         assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
     }
 }
