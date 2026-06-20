@@ -8,17 +8,28 @@ use std::sync::Arc;
 
 pub struct Check;
 
-/// True for `<expr>.current = undefined` — the React ref-clearing idiom.
+/// True for an assignment target with no applicable `undefined`-free remediation.
 ///
-/// A `MutableRefObject<T>` has `current: T | null` (never `T | undefined`), so
-/// `delete ref.current` is a TypeScript error and would break the ref contract.
-/// Assigning `undefined` is the intended way to mark the ref as holding no value.
-fn is_ref_current_target(target: &AssignmentTarget) -> bool {
-    matches!(
-        target,
-        AssignmentTarget::StaticMemberExpression(member)
-            if member.property.name.as_str() == "current"
-    )
+/// - `<expr>.current = undefined` — the React ref-clearing idiom. A
+///   `MutableRefObject<T>` has `current: T | null` (never `T | undefined`), so
+///   `delete ref.current` is a TypeScript error and would break the ref
+///   contract. Assigning `undefined` is the intended way to clear the ref.
+/// - `<ref>.value = undefined` — the Vue 3 ref-clearing idiom. `.value` is a
+///   required property of `Ref<T>`, so `delete ref.value` violates the ref
+///   contract; assigning `undefined` is the only way to release the held value
+///   (e.g. clearing a DOM-element ref in `onBeforeUnmount`). Recognised only
+///   when the base resolves to a Vue ref factory or a composable's `Ref<T>`, so
+///   a plain `obj.value = undefined` stays flagged.
+fn is_member_target_without_remediation(
+    target: &AssignmentTarget,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let AssignmentTarget::StaticMemberExpression(member) = target else {
+        return false;
+    };
+    member.property.name.as_str() == "current"
+        || crate::oxc_helpers::is_vue_ref_value_target(member, semantic)
+        || crate::oxc_helpers::is_destructured_call_ref_value_target(member, semantic)
 }
 
 impl OxcCheck for Check {
@@ -34,7 +45,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let (is_undefined, span_start) = match node.kind() {
@@ -53,13 +64,14 @@ impl OxcCheck for Check {
                 // to reset it: `let x;` applies to the declaration (already emitted)
                 // and `delete obj.prop` applies to properties, not locals. Private
                 // fields are exempt because `delete this.#x` is a SyntaxError. The
-                // `ref.current` member idiom is exempt for the same reason. Member
-                // assignments other than these keep flagging (`delete obj.prop`).
+                // `ref.current` (React) and `<ref>.value` (Vue) member idioms are
+                // exempt because `delete` would break the required ref property.
+                // Member assignments other than these keep flagging (`delete obj.prop`).
                 let target_has_no_remediation = matches!(
                     &assign.left,
                     AssignmentTarget::AssignmentTargetIdentifier(_)
                         | AssignmentTarget::PrivateFieldExpression(_)
-                ) || is_ref_current_target(&assign.left);
+                ) || is_member_target_without_remediation(&assign.left, semantic);
                 if assign.operator == AssignmentOperator::Assign && target_has_no_remediation {
                     return;
                 }
@@ -137,6 +149,34 @@ mod tests {
     #[test]
     fn flags_member_property_not_current() {
         assert_eq!(run_on("obj.value = undefined;").len(), 1);
+    }
+
+    #[test]
+    fn allows_vue_ref_value_undefined() {
+        // Issue #4731: clearing a Vue reactive ref in `onBeforeUnmount`. `.value`
+        // is a required property of `Ref<T>`, so `delete ref.value` is invalid;
+        // assigning `undefined` is the only way to release the held value.
+        let src = "import { ref, onBeforeUnmount } from 'vue';\n\
+                   const focusStartRef = ref<HTMLElement | undefined>(undefined);\n\
+                   onBeforeUnmount(() => { focusStartRef.value = undefined; });";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_destructured_composable_ref_value_undefined() {
+        // A `Ref<T>` returned by a composable, cleared via `.value = undefined`.
+        let src = "const { error } = useThing();\n\
+                   error.value = undefined;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_non_ref_value_undefined() {
+        // A plain object's `.value` (not a Vue ref) keeps flagging: `delete
+        // obj.value` is a valid remediation when `obj` is not a ref.
+        let src = "const obj = { value: 1 };\n\
+                   obj.value = undefined;";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
