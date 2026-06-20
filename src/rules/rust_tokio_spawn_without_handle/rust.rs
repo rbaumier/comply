@@ -6,6 +6,10 @@
 //! call sits at expression-statement level means its return value
 //! — the JoinHandle — is being dropped, which is the bug.
 //!
+//! A bare `spawn` is treated as tokio only when no `use std::thread::spawn`
+//! brings it into scope from `std::thread`; that API is fire-and-forget by
+//! design and dropping its `JoinHandle` is idiomatic.
+//!
 //! A spawn statement inside a loop body (`for`/`while`/`loop`) is exempt. The
 //! motivating case is the tokio accept-loop idiom — one task spawned per
 //! incoming connection, where retaining the handles would require an unbounded
@@ -48,7 +52,7 @@ impl AstCheck for Check {
         let Ok(text) = function.utf8_text(source_bytes) else {
             return;
         };
-        if !is_tokio_spawn(text) {
+        if !is_tokio_spawn(text, node, source_bytes) {
             return;
         }
         if is_in_test_context(node, source_bytes) {
@@ -79,14 +83,93 @@ impl AstCheck for Check {
     }
 }
 
-/// True if `text` looks like a `tokio::spawn` call by suffix match.
-/// Accepts `tokio::spawn`, `tokio::task::spawn`, and bare `spawn`
-/// (when paired with a `use tokio::spawn`).
-fn is_tokio_spawn(text: &str) -> bool {
-    text == "tokio::spawn"
-        || text == "tokio::task::spawn"
-        || text.ends_with("::tokio::spawn")
-        || text == "spawn"
+/// True if `text` is a `tokio::spawn` call. Qualified calls
+/// (`tokio::spawn`, `tokio::task::spawn`) match by suffix. A bare `spawn`
+/// is ambiguous — it could be `tokio::spawn` or `std::thread::spawn`,
+/// both imported as `use …::spawn` and called unqualified — so it only
+/// counts as tokio when the file's `use` declarations do not bring
+/// `spawn` in from `std::thread` (`std::thread::spawn` is fire-and-forget
+/// by design and discarding its `JoinHandle` is idiomatic).
+fn is_tokio_spawn(text: &str, node: tree_sitter::Node, source: &[u8]) -> bool {
+    if text == "tokio::spawn" || text == "tokio::task::spawn" || text.ends_with("::tokio::spawn") {
+        return true;
+    }
+    text == "spawn" && !spawn_imported_from_std_thread(node, source)
+}
+
+/// True when the file has a `use` declaration that brings the bare
+/// identifier `spawn` into scope from `std::thread` (e.g.
+/// `use std::thread::spawn;` or `use std::thread::{sleep, spawn};`).
+fn spawn_imported_from_std_thread(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut root = node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    find_std_thread_spawn_import(root, source)
+}
+
+fn find_std_thread_spawn_import(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() == "use_declaration"
+        && let Ok(text) = node.utf8_text(source)
+        && use_imports_spawn_from_std_thread(text)
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if find_std_thread_spawn_import(child, source) {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when a `use` declaration imports the bare `spawn` from a `thread`
+/// module (`std::thread::spawn`, or a re-export path ending in
+/// `thread::spawn`). Handles single (`use std::thread::spawn;`), grouped
+/// (`use std::thread::{sleep, spawn};`), and nested-group
+/// (`use std::{thread::spawn, sync::Arc};`) imports. An `as` alias rebinds
+/// `spawn` to another name, so it no longer matches.
+fn use_imports_spawn_from_std_thread(use_text: &str) -> bool {
+    let Some(path) = strip_use_prefix(use_text) else {
+        return false;
+    };
+    match path.split_once('{') {
+        Some((prefix, group)) => {
+            let prefix = prefix.trim();
+            group
+                .trim_end_matches(['}', ';'])
+                .split(',')
+                .any(|member| leaf_is_thread_spawn(prefix, member.trim()))
+        }
+        None => leaf_is_thread_spawn("", path),
+    }
+}
+
+/// True when joining `prefix` (the path up to a group, or empty for a single
+/// import) with `member` yields a `thread::spawn` import — i.e. the leaf is
+/// the bare `spawn` and the module path passes through `thread`. An `as`
+/// alias rebinds the name, so it never matches.
+fn leaf_is_thread_spawn(prefix: &str, member: &str) -> bool {
+    if member.contains(" as ") {
+        return false;
+    }
+    let full = format!("{}{}", prefix, member);
+    full == "std::thread::spawn" || full == "thread::spawn" || full.ends_with("::thread::spawn")
+}
+
+/// Strip a leading `pub`/`pub(...)` and `use`, plus a trailing `;`,
+/// returning the import path. `None` if the text is not a `use` item.
+fn strip_use_prefix(use_text: &str) -> Option<&str> {
+    let trimmed = use_text.trim_start();
+    let after_pub = trimmed
+        .strip_prefix("pub(crate)")
+        .or_else(|| trimmed.strip_prefix("pub(super)"))
+        .or_else(|| trimmed.strip_prefix("pub"))
+        .unwrap_or(trimmed)
+        .trim_start();
+    let rest = after_pub.strip_prefix("use")?;
+    Some(rest.trim().trim_end_matches(';').trim())
 }
 
 #[cfg(test)]
@@ -306,6 +389,92 @@ async fn handle_request(&self) {
     self.prepare().await;
     tokio::spawn(send_metrics());
     self.respond().await;
+}
+"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    // --- #4715: bare `spawn` imported from std::thread is not tokio ---
+
+    #[test]
+    fn allows_bare_spawn_imported_from_std_thread() {
+        // tungstenite-rs tests/connection_reset.rs:25 — `use std::thread::spawn`
+        // then a bare `spawn(|| { … })` watchdog thread. Detaching the
+        // JoinHandle is idiomatic for std::thread, not a tokio leak.
+        let source = r#"
+use std::thread::{sleep, spawn};
+
+fn do_test() {
+    spawn(|| {
+        sleep(Duration::from_secs(5));
+        exit(1);
+    });
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_spawn_from_single_std_thread_import() {
+        let source = r#"
+use std::thread::spawn;
+
+fn start() {
+    spawn(|| work());
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_spawn_imported_from_tokio() {
+        // `use tokio::spawn` then bare `spawn(...)` — still a dropped tokio
+        // JoinHandle, must keep firing.
+        let source = r#"
+use tokio::spawn;
+
+fn start_worker() {
+    spawn(async { process().await });
+}
+"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_bare_spawn_with_no_std_thread_import() {
+        // No `use std::thread::spawn` in scope: the bare `spawn` defaults to
+        // the tokio interpretation and fires.
+        let source = r#"
+fn start_worker() {
+    spawn(async { process().await });
+}
+"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_bare_spawn_from_nested_std_group_import() {
+        // `use std::{thread::spawn, sync::Arc};` — spawn comes from std::thread
+        // via a nested group; still not a tokio call.
+        let source = r#"
+use std::{thread::spawn, sync::Arc};
+
+fn start() {
+    spawn(|| work());
+}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_spawn_when_std_thread_spawn_is_aliased() {
+        // `use std::thread::spawn as thread_spawn;` rebinds the std import, so a
+        // bare `spawn` no longer refers to it and defaults to tokio.
+        let source = r#"
+use std::thread::spawn as thread_spawn;
+
+fn start_worker() {
+    spawn(async { process().await });
 }
 "#;
         assert_eq!(run_on(source).len(), 1);
