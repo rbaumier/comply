@@ -14,11 +14,12 @@ const VALID_PREFIXES: &[&str] = &[
 const NEGATIVE_SUBSTRINGS: &[&str] = &["Not", "Isnt", "Cannot", "Cant", "Shouldnt"];
 
 /// Standard HTML attributes and React controlled-component props whose names
-/// are dictated by the platform / component library API.
+/// are dictated by the platform / component library API, plus ECMA-402 Intl
+/// option keys (`hour12`) the developer cannot rename.
 const ALLOWED_NAMES: &[&str] = &[
     "open", "checked", "disabled", "enabled", "hidden", "required", "selected",
     "readOnly", "multiple", "autoFocus", "autoPlay", "defer", "async",
-    "noValidate", "value", "defaultOpen", "defaultChecked",
+    "noValidate", "value", "defaultOpen", "defaultChecked", "hour12",
 ];
 
 /// Return a short problem description if the name doesn't match the rule.
@@ -192,5 +193,19 @@ mod tests {
     fn still_flags_in_non_test_file() {
         assert_eq!(run("let initialized = false;").len(), 1);
         assert_eq!(run("let serveRenamed = false;").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_api_mandated_hour12() {
+        // `hour12` is the ECMA-402 Intl.DateTimeFormat option key; the developer
+        // cannot rename it to `isHour12`. (Closes #4997)
+        assert!(run("const hour12: boolean = true;").is_empty());
+        assert!(run("function f(hour12: boolean) {}").is_empty());
+    }
+
+    #[test]
+    fn still_flags_user_defined_unprefixed_boolean() {
+        // Strictness preserved: user-controlled names still require a prefix.
+        assert_eq!(run("const debug: boolean = true;").len(), 1);
     }
 }
