@@ -1916,6 +1916,21 @@ impl CargoManifest {
         })
     }
 
+    /// True when this crate is a build-time codegen library — its package name
+    /// ends with `-build`/`-codegen`/`-bindgen` (or the `_` separator variants).
+    /// Such crates (e.g. `prost-build`, `tonic-build`, `grpc-protobuf-build`,
+    /// `bindgen`) are invoked from consumers' `build.rs` scripts, where
+    /// `eprintln!`/`println!` to Cargo's build-output stream is the idiomatic
+    /// (and only) diagnostic mechanism — tracing/log is unavailable in `build.rs`.
+    #[must_use]
+    pub fn is_build_codegen_crate(&self) -> bool {
+        self.name.as_deref().is_some_and(|n| {
+            ["-build", "-codegen", "-bindgen", "_build", "_codegen", "_bindgen"]
+                .iter()
+                .any(|suffix| n.ends_with(suffix))
+        })
+    }
+
     /// True when `root` is a sibling sub-crate of this package's Cargo family —
     /// its name starts with `<package_name>_` (e.g. package `salvo` → `salvo_core`,
     /// `salvo_extra`). Used to recognize an umbrella/facade crate's wholesale
@@ -6090,6 +6105,46 @@ tokio = "1"
         assert!(
             !no_name.is_test_helper(),
             "no [package].name => not a test-helper crate"
+        );
+    }
+
+    #[test]
+    fn cargo_manifest_classifies_build_codegen_crate() {
+        let dir = PathBuf::from("/crate");
+
+        let parse_name = |name: &str| {
+            CargoManifest::parse(
+                &format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n"),
+                dir.clone(),
+            )
+            .unwrap()
+        };
+
+        for name in ["grpc-protobuf-build", "prost-build", "tonic-build"] {
+            assert!(
+                parse_name(name).is_build_codegen_crate(),
+                "name `{name}` ending in `-build` => build-codegen crate"
+            );
+        }
+        assert!(
+            parse_name("some-codegen").is_build_codegen_crate(),
+            "name ending in `-codegen` => build-codegen crate"
+        );
+        assert!(
+            parse_name("x-bindgen").is_build_codegen_crate(),
+            "name ending in `-bindgen` => build-codegen crate"
+        );
+        for name in ["mylib", "tokio", "my-runtime"] {
+            assert!(
+                !parse_name(name).is_build_codegen_crate(),
+                "name `{name}` without a build/codegen/bindgen suffix => not a build-codegen crate"
+            );
+        }
+
+        let no_name = CargoManifest::parse("[lib]\nname = \"anon\"\n", dir).unwrap();
+        assert!(
+            !no_name.is_build_codegen_crate(),
+            "no [package].name => not a build-codegen crate"
         );
     }
 
