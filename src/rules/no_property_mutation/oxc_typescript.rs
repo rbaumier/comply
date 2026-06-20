@@ -342,7 +342,11 @@ impl OxcCheck for Check {
                         let prop_text = m.property.name.as_str();
 
                         // Vue 3 reactive ref: `count.value = x` drives reactivity.
-                        if is_vue_ref_value_target(m, semantic) { return; }
+                        // Also covers a `Ref<T>` destructured from a composable call
+                        // (`const { error } = useThing(); error.value = x`).
+                        if is_vue_ref_value_target(m, semantic)
+                            || crate::oxc_helpers::is_destructured_call_ref_value_target(m, semantic)
+                        { return; }
                         // Vue 3 reactive() object: `state.n = x` is the idiomatic update.
                         if is_vue_reactive_object_target(m, semantic) { return; }
                         if obj_text == "module" || obj_text == "exports" { return; }
@@ -415,7 +419,10 @@ impl OxcCheck for Check {
                 match &update.argument {
                     SimpleAssignmentTarget::StaticMemberExpression(m) => {
                         // Vue 3 reactive ref: `count.value++` drives reactivity.
-                        if is_vue_ref_value_target(m, semantic) { return; }
+                        // Also covers a `Ref<T>` destructured from a composable call.
+                        if is_vue_ref_value_target(m, semantic)
+                            || crate::oxc_helpers::is_destructured_call_ref_value_target(m, semantic)
+                        { return; }
                         // Vue 3 reactive() object: `state.incrementedTimes++` is the idiomatic update.
                         if is_vue_reactive_object_target(m, semantic) { return; }
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
@@ -1193,6 +1200,78 @@ mod tests {
             import { ref } from 'vue'
             const r = ref(0);
             r.config = 5;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Vue ref destructured from a composable call — issue #4458
+
+    #[test]
+    fn allows_value_mutation_on_composable_destructured_ref_issue_4458() {
+        // Regression for rbaumier/comply#4458 — `error`/`isLoading` are `Ref<T>`
+        // returned by a composable; `.value` assignment is the only way to update
+        // a ref regardless of how it was produced.
+        let src = r#"
+            const { data: image, error, isLoading, isReady } = useCachedRequest(currentDate, getNASAPOD)
+            function fetchPOD(date) {
+                error.value = undefined
+                isLoading.value = true
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_value_mutation_on_renamed_composable_destructured_ref() {
+        // Renamed destructuring (`data: image`) still resolves to the call-
+        // destructured binding.
+        let src = r#"
+            const { data: image } = useThing();
+            function f() { image.value = 1; }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_value_mutation_on_awaited_composable_destructured_ref() {
+        // The composable call may be awaited: `const { x } = await useThing()`.
+        let src = r#"
+            const { x } = await useAsyncThing();
+            function f() { x.value = 1; }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_non_value_property_on_composable_destructured_binding() {
+        // Negative space: the exemption is `.value`-restricted, so a non-`.value`
+        // property write on a call-destructured binding stays flagged.
+        let src = r#"
+            const { cfg } = useThing();
+            function f() { cfg.enabled = true; }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_value_mutation_on_non_call_destructured_binding() {
+        // Negative space: the exemption is call-restricted, so a `.value` write on
+        // a binding destructured from a non-call initializer (here an identifier)
+        // stays flagged.
+        let src = r#"
+            const { x } = source;
+            function f() { x.value = 1; }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_value_mutation_on_non_destructured_composable_binding() {
+        // Negative space: the exemption requires destructuring, so a `.value`
+        // write on a plain non-destructured `const x = useThing()` stays flagged.
+        let src = r#"
+            const x = useThing();
+            function f() { x.value = 1; }
         "#;
         assert_eq!(run(src).len(), 1);
     }

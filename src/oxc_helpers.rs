@@ -1508,6 +1508,64 @@ pub fn is_vue_ref_value_target(
     is_vue_ref_binding(base, semantic)
 }
 
+/// True when `member` is a `<ident>.value` access where `<ident>` is destructured
+/// (object/array pattern) from a function CALL — the standard "composable returns
+/// a `Ref<T>`" pattern (`const { error } = useThing(); error.value = x`). A
+/// `Ref<T>` is mutated only via `.value` regardless of how it was produced; a
+/// binding destructured from a call result is conservatively treated as a
+/// potential ref. Restricted to the `value` property (so `x.config = y` stays
+/// flagged) and to call initializers (so destructuring a plain OBJECT LITERAL is
+/// NOT exempted).
+#[must_use]
+pub fn is_destructured_call_ref_value_target(
+    member: &oxc_ast::ast::StaticMemberExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{BindingPattern, Expression};
+
+    if member.property.name.as_str() != "value" {
+        return false;
+    }
+    let Expression::Identifier(base) = &member.object else {
+        return false;
+    };
+    let Some(ref_id) = base.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            // The binding must be destructured (object/array pattern), not a
+            // plain `const x = …` — a non-destructured call result is not
+            // recognized as a ref.
+            if !matches!(
+                decl.id,
+                BindingPattern::ObjectPattern(_) | BindingPattern::ArrayPattern(_)
+            ) {
+                return false;
+            }
+            let Some(init) = &decl.init else {
+                return false;
+            };
+            // Peel a leading `await`, e.g. `const { x } = await useThing()`.
+            let init = match init {
+                Expression::AwaitExpression(a) => &a.argument,
+                other => other,
+            };
+            return matches!(init, Expression::CallExpression(_));
+        }
+    }
+    false
+}
+
 /// True when `member` is a property access whose base is a direct identifier
 /// bound to a Vue reactive-object factory (`reactive`/`shallowReactive` imported
 /// from `vue`). Any property of a reactive proxy is a valid mutation target, so
