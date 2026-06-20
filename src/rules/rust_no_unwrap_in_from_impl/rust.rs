@@ -20,6 +20,16 @@
 //! integer literal>)` is also skipped: `NonZero*::new(n)` returns `None`
 //! only when `n == 0`, so a non-zero literal makes the result statically
 //! `Some` and the unwrap cannot panic.
+//! A `.unwrap()` / `.expect()` whose receiver is `<Type>::try_from(<ident>)`
+//! is also skipped when `<ident>` is the scrutinee of an enclosing `match`
+//! arm that has already matched a specific variant (the arm pattern is
+//! neither `_` nor a plain binding identifier). This is a pragmatic exemption,
+//! not a proof: the arm narrows the scrutinee to one variant, for which a
+//! variant-to-variant `try_from` is conventionally total (the common shape of
+//! converting between two representations of the same enum). The rule has no
+//! type resolution, so it cannot confirm the `TryFrom` impl is total — it
+//! accepts a lint false-negative for this idiom rather than the false-positive
+//! it produced before.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -99,6 +109,10 @@ fn collect_unwraps_in(
             // `NonZero*::new(<nonzero literal>)` is statically `Some`, so the
             // unwrap cannot panic — it is provably infallible.
             && !is_infallible_nonzero_new(function, source)
+            // `<Type>::try_from(<ident>)` where `<ident>` is the scrutinee of an
+            // enclosing match arm matching a specific variant: pragmatic exemption
+            // for the conventionally-total variant-to-variant conversion idiom.
+            && !is_variant_discriminated_try_from(node, function, source)
         {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
@@ -211,6 +225,127 @@ fn is_nonzero_int_literal(node: tree_sitter::Node, source: &[u8]) -> bool {
         .or_else(|| cleaned.strip_prefix("0B"))
         .unwrap_or(cleaned);
     !body.is_empty() && body.bytes().any(|b| b != b'0')
+}
+
+/// True when the `.unwrap()`/`.expect()` receiver is `<Type>::try_from(<ident>)`
+/// (or `TryFrom::try_from(<ident>)`) and `<ident>` is the scrutinee of an
+/// enclosing `match` arm whose pattern already matched a specific variant. Inside
+/// such an arm the scrutinee is that variant, for which a variant-to-variant
+/// `try_from` is conventionally total. This is a pragmatic exemption (the rule
+/// cannot resolve the `TryFrom` impl to prove totality), not a soundness claim.
+///
+/// `call` is the `<receiver>.unwrap()` call_expression; `field_expr` is its
+/// `<receiver>.unwrap` field_expression.
+fn is_variant_discriminated_try_from(
+    call: tree_sitter::Node,
+    field_expr: tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    let Some(arg_ident) = try_from_argument_identifier(field_expr, source) else {
+        return false;
+    };
+    // Walk up to each enclosing match arm; an arm whose match scrutinee is the
+    // same identifier and whose pattern is a specific variant proves totality.
+    let mut cur = call;
+    while let Some(parent) = cur.parent() {
+        // Stop at the function boundary — a match further out is unrelated.
+        if matches!(
+            cur.kind(),
+            "function_item" | "closure_expression" | "source_file"
+        ) {
+            return false;
+        }
+        if parent.kind() == "match_arm"
+            && arm_discriminates_scrutinee(parent, arg_ident, source)
+        {
+            return true;
+        }
+        cur = parent;
+    }
+    false
+}
+
+/// If `field_expr`'s receiver is a `<Type>::try_from(<ident>)` call (the function
+/// is a `scoped_identifier` whose final segment is `try_from`) with a single
+/// plain-identifier argument, return that argument's text. `None` otherwise.
+fn try_from_argument_identifier<'a>(
+    field_expr: tree_sitter::Node,
+    source: &'a [u8],
+) -> Option<&'a str> {
+    let receiver = field_expr.child_by_field_name("value")?;
+    if receiver.kind() != "call_expression" {
+        return None;
+    }
+    let func = receiver.child_by_field_name("function")?;
+    if func.kind() != "scoped_identifier" {
+        return None;
+    }
+    if func
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source).ok())
+        != Some("try_from")
+    {
+        return None;
+    }
+    let args = receiver.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let mut named = args.named_children(&mut cursor);
+    let arg = named.next()?;
+    if named.next().is_some() {
+        return None; // try_from takes exactly one argument
+    }
+    if arg.kind() != "identifier" {
+        return None;
+    }
+    arg.utf8_text(source).ok()
+}
+
+/// True when `arm` is a `match_arm` whose enclosing `match` scrutinee is the
+/// identifier `scrutinee` and whose pattern matches a *specific* variant — i.e.
+/// not a wildcard `_` and not a plain binding identifier (both of which match any
+/// value and so provide no discrimination).
+fn arm_discriminates_scrutinee(
+    arm: tree_sitter::Node,
+    scrutinee: &str,
+    source: &[u8],
+) -> bool {
+    // arm -> match_block -> match_expression; the scrutinee sits in `value`.
+    let Some(match_block) = arm.parent() else {
+        return false;
+    };
+    let Some(match_expr) = match_block.parent() else {
+        return false;
+    };
+    if match_expr.kind() != "match_expression" {
+        return false;
+    }
+    let Some(value) = match_expr.child_by_field_name("value") else {
+        return false;
+    };
+    if value.kind() != "identifier" || value.utf8_text(source).ok() != Some(scrutinee) {
+        return false;
+    }
+    let Some(pattern) = arm.child_by_field_name("pattern") else {
+        return false;
+    };
+    pattern_discriminates(pattern, source)
+}
+
+/// True when an arm `pattern` matches a specific variant rather than every value.
+/// `_` (wildcard) and a plain binding identifier match anything and so do not
+/// discriminate; a tuple-struct/struct/path/reference variant pattern does.
+fn pattern_discriminates(pattern: tree_sitter::Node, source: &[u8]) -> bool {
+    // Unwrap the `match_pattern` wrapper (seq(_pattern, optional("if" guard))).
+    // `_` surfaces as an unnamed token, so the wrapper has no named child.
+    let inner = if pattern.kind() == "match_pattern" {
+        match pattern.named_child(0) {
+            Some(n) => n,
+            None => return false, // bare `_`
+        }
+    } else {
+        pattern
+    };
+    !matches!(inner.kind(), "wildcard_pattern" | "identifier")
 }
 
 #[cfg(test)]
@@ -435,5 +570,120 @@ mod tests {
         let source =
             "impl From<A> for B { fn from(a: A) -> B { B::E(NonZeroI64::new(n).unwrap()) } }";
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// Closes #4681: each `<Type>::try_from(color).unwrap()` sits in a match arm
+    /// that already discriminated `color` to a specific variant
+    /// (`Color::Rgb(..)`, `Color::Indexed(..)`), so the `try_from` is total and
+    /// cannot fail. Those two unwraps must not be flagged. The trailing `_` arm
+    /// does not discriminate to a single variant, so its unwrap still flags.
+    #[test]
+    fn allows_variant_discriminated_try_from_unwrap() {
+        let source = r#"impl From<Color> for anstyle::Color {
+            fn from(color: Color) -> Self {
+                match color {
+                    Color::Reset => panic!("Color::Reset has no equivalent in anstyle"),
+                    Color::Rgb(_, _, _) => Self::Rgb(RgbColor::try_from(color).unwrap()),
+                    Color::Indexed(_) => Self::Ansi256(Ansi256Color::try_from(color).unwrap()),
+                    _ => Self::Ansi(AnsiColor::try_from(color).unwrap()),
+                }
+            }
+        }"#;
+        // Only the `_` arm's unwrap remains flagged.
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "variant-discriminated try_from unwraps are infallible; only the `_` arm flags"
+        );
+    }
+
+    /// A `try_from(x).unwrap()` with no enclosing match has no discrimination
+    /// invariant, so it is a real fallible path and must still flag.
+    #[test]
+    fn flags_try_from_unwrap_without_match() {
+        let source =
+            "impl From<A> for B { fn from(a: A) -> B { B(RgbColor::try_from(a).unwrap()) } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// A `_` wildcard arm does not constrain the scrutinee to a specific variant,
+    /// so a `try_from` inside it is not provably total — it must still flag.
+    #[test]
+    fn flags_try_from_unwrap_in_wildcard_arm() {
+        let source = r#"impl From<Color> for X {
+            fn from(color: Color) -> Self {
+                match color {
+                    _ => X(RgbColor::try_from(color).unwrap()),
+                }
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// A plain binding identifier arm (`other => ...`) binds any value without
+    /// discriminating a variant, so the `try_from` is not provably total and the
+    /// unwrap must still flag.
+    #[test]
+    fn flags_try_from_unwrap_in_binding_arm() {
+        let source = r#"impl From<Color> for X {
+            fn from(color: Color) -> Self {
+                match color {
+                    other => X(RgbColor::try_from(color).unwrap()),
+                }
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// The exemption requires the matched identifier to BE the `try_from`
+    /// argument. A variant arm matching `color` but unwrapping a `try_from(other)`
+    /// over a different value provides no invariant — it must still flag.
+    #[test]
+    fn flags_try_from_unwrap_on_unrelated_value() {
+        let source = r#"impl From<Color> for X {
+            fn from(color: Color) -> Self {
+                match color {
+                    Color::Rgb(_, _, _) => X(RgbColor::try_from(other).unwrap()),
+                    _ => X::default(),
+                }
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// An or-pattern of specific variants (`A | B`) still discriminates away from
+    /// `_` and plain bindings, so the exemption applies.
+    #[test]
+    fn allows_try_from_unwrap_in_or_pattern_arm() {
+        let source = r#"impl From<Color> for X {
+            fn from(color: Color) -> Self {
+                match color {
+                    Color::Rgb(_, _, _) | Color::Indexed(_) => X(C::try_from(color).unwrap()),
+                    _ => X::default(),
+                }
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// Characterization of the deliberate limit: a `TryFrom` impl could return
+    /// `Err` even for a discriminated variant, but the rule has no type
+    /// resolution and cannot tell. This case is intentionally exempted (lint
+    /// false-negative) to kill the false-positive on the total idiom — locking it
+    /// in so a later change does not silently reintroduce the FP.
+    #[test]
+    fn allows_variant_discriminated_try_from_even_if_impl_could_fail() {
+        let source = r#"impl From<Color> for X {
+            fn from(color: Color) -> Self {
+                match color {
+                    Color::Rgb(_, _, _) => X(Ansi256::try_from(color).unwrap()),
+                    _ => X::default(),
+                }
+            }
+        }"#;
+        assert!(
+            run_on(source).is_empty(),
+            "variant-discriminated try_from is exempted by design; the rule cannot prove totality"
+        );
     }
 }
