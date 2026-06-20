@@ -8,11 +8,14 @@
 //! Values that are UnoCSS / Windi CSS attributify-mode utility shorthands
 //! (e.g. `border="r base"`, `border="~ rounded"`) are exempt, since they are
 //! utility classes rather than the presentational HTML attribute.
+//! Obsolete attributes are checked only on native HTML elements; on a custom
+//! Vue component (`<UPageSection>`) or custom element (`<my-card>`) the same
+//! name is a modern component prop, so those elements are exempt.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
 use crate::rules::vue_template_helpers::{
-    attr_value, collect_attr_names, extract_elements, is_vue_file,
+    attr_value, collect_attr_names, extract_elements, is_custom_component_tag, is_vue_file,
 };
 
 const OBSOLETE_TAGS: &[&str] = &["center", "font", "marquee", "blink", "strike", "big", "tt"];
@@ -42,31 +45,39 @@ impl TextCheck for Check {
                 });
             }
 
-            for name in collect_attr_names(elem.attrs) {
-                let name_lower = name.to_ascii_lowercase();
-                if !OBSOLETE_ATTRS.contains(&name_lower.as_str()) {
-                    continue;
+            // Obsolete presentational attributes (`align`, `border`, `bgcolor`)
+            // carry their legacy HTML meaning only on native elements. On a
+            // custom Vue component (`<UPageSection>`) or custom element
+            // (`<my-card>`) the same name is a modern component prop, never the
+            // obsolete HTML attribute. Tested against `elem.tag` (not `tag_lower`)
+            // so the PascalCase / hyphen casing is preserved.
+            if !is_custom_component_tag(elem.tag) {
+                for name in collect_attr_names(elem.attrs) {
+                    let name_lower = name.to_ascii_lowercase();
+                    if !OBSOLETE_ATTRS.contains(&name_lower.as_str()) {
+                        continue;
+                    }
+                    // `border` on `<table>` is its traditional, still-understood use.
+                    if name_lower == "border" && tag_lower == "table" {
+                        continue;
+                    }
+                    if let Some(value) = attr_value(elem.attrs, name)
+                        && is_utility_shorthand_value(&name_lower, value)
+                    {
+                        continue;
+                    }
+                    diagnostics.push(Diagnostic {
+                        path: std::sync::Arc::clone(&ctx.path_arc),
+                        line: elem.line,
+                        column: 1,
+                        rule_id: super::META.id.into(),
+                        message: format!(
+                            "Obsolete HTML attribute `{name_lower}` on `<{tag_lower}>`. Use CSS instead."
+                        ),
+                        severity: Severity::Warning,
+                        span: None,
+                    });
                 }
-                // `border` on `<table>` is its traditional, still-understood use.
-                if name_lower == "border" && tag_lower == "table" {
-                    continue;
-                }
-                if let Some(value) = attr_value(elem.attrs, name)
-                    && is_utility_shorthand_value(&name_lower, value)
-                {
-                    continue;
-                }
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: super::META.id.into(),
-                    message: format!(
-                        "Obsolete HTML attribute `{name_lower}` on `<{tag_lower}>`. Use CSS instead."
-                    ),
-                    severity: Severity::Warning,
-                    span: None,
-                });
             }
         }
         diagnostics
@@ -145,6 +156,24 @@ mod tests {
     fn flags_border_on_non_table() {
         let source = "<template>\n  <img src=\"x\" border=\"1\" />\n</template>";
         assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_align_on_pascalcase_component() {
+        let source = "<template>\n  <UPageSection align=\"center\" />\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_border_integer_on_pascalcase_component() {
+        let source = "<template>\n  <MyCard border=\"1\" />\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_align_on_custom_element() {
+        let source = "<template>\n  <my-card align=\"center\" />\n</template>";
+        assert!(run(source).is_empty());
     }
 
     #[test]
