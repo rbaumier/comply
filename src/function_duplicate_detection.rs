@@ -10,11 +10,15 @@
 //! - Extract every named function with a body from each TS/JS file:
 //!   `function foo() {…}` declarations and `const foo = (…) => {…}` /
 //!   `const foo = function (…) {…}` bindings.
-//! - Tokenize the body (leaf tokens, comments excluded) into an exact
-//!   signature, so formatting and comments do not matter but renamed
-//!   identifiers do.
+//! - Tokenize the parameter list, the return-type annotation, and the body
+//!   (leaf tokens, comments excluded) into an exact signature, so formatting and
+//!   comments do not matter but renamed identifiers and divergent type
+//!   annotations do.
 //! - Bucket by `(name, signature)`; a bucket spanning two or more files whose
 //!   body clears `min_body_tokens` is reported, one diagnostic per extra file.
+//!   Two functions sharing a name and an identical body but differing in their
+//!   parameter types or return type are not interchangeable, so they bucket
+//!   apart and are not flagged.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -43,8 +47,9 @@ struct FnEntry {
     line: usize,
     column: usize,
     span: (usize, usize),
-    /// Exact body fingerprint: each leaf token's `(kind_id, text)`, in order.
-    /// Two bodies are duplicates iff their signatures are byte-equal.
+    /// Exact fingerprint of the parameter list, return-type annotation, and
+    /// body: each leaf token's `(kind_id, text)`, in order. Two functions are
+    /// duplicates iff their signatures are byte-equal.
     signature: Vec<u8>,
 }
 
@@ -161,9 +166,9 @@ fn extract_functions(
     let mut cursor = tree.walk();
     loop {
         let node = cursor.node();
-        if let Some((name, decl, body)) = named_function_parts(node) {
+        if let Some((name, decl, sig_node, body)) = named_function_parts(node) {
             if let Some(entry) =
-                build_entry(name, decl, body, bytes, file_idx, min_body_tokens)
+                build_entry(name, decl, sig_node, body, bytes, file_idx, min_body_tokens)
             {
                 entries.push(entry);
             }
@@ -182,16 +187,19 @@ fn extract_functions(
     }
 }
 
-/// The `(name, declaration, body)` of a named function at `node`, for the two
-/// forms in scope: a `function foo() {…}` declaration, and a `const foo = …`
-/// binding whose value is an arrow or function expression. Overload signatures
-/// and ambient declarations carry no `body` field and so are skipped.
-fn named_function_parts<'a>(node: Node<'a>) -> Option<(Node<'a>, Node<'a>, Node<'a>)> {
+/// The `(name, declaration, signature node, body)` of a named function at
+/// `node`, for the two forms in scope: a `function foo() {…}` declaration, and a
+/// `const foo = …` binding whose value is an arrow or function expression. The
+/// signature node carries the `parameters` and `return_type` fields (the
+/// declaration itself for a `function_declaration`, the value expression for a
+/// binding). Overload signatures and ambient declarations carry no `body` field
+/// and so are skipped.
+fn named_function_parts<'a>(node: Node<'a>) -> Option<(Node<'a>, Node<'a>, Node<'a>, Node<'a>)> {
     match node.kind() {
         "function_declaration" => {
             let name = node.child_by_field_name("name")?;
             let body = node.child_by_field_name("body")?;
-            Some((name, node, body))
+            Some((name, node, node, body))
         }
         "variable_declarator" => {
             let name = node.child_by_field_name("name")?;
@@ -203,7 +211,7 @@ fn named_function_parts<'a>(node: Node<'a>) -> Option<(Node<'a>, Node<'a>, Node<
                 return None;
             }
             let body = value.child_by_field_name("body")?;
-            Some((name, node, body))
+            Some((name, node, value, body))
         }
         _ => None,
     }
@@ -212,6 +220,7 @@ fn named_function_parts<'a>(node: Node<'a>) -> Option<(Node<'a>, Node<'a>, Node<
 fn build_entry(
     name: Node,
     decl: Node,
+    sig_node: Node,
     body: Node,
     source: &[u8],
     file_idx: usize,
@@ -220,7 +229,20 @@ fn build_entry(
     let name_text = source.get(name.start_byte()..name.end_byte())?;
     let name_str = std::str::from_utf8(name_text).ok()?.to_string();
 
+    // Head: parameter list + return-type annotation tokens. Two same-named,
+    // same-bodied functions with divergent parameter or return types differ
+    // here and bucket apart. A delimiter separates head from body so a token
+    // stream can never straddle the boundary.
     let mut signature = Vec::new();
+    let mut head_count = 0;
+    if let Some(params) = sig_node.child_by_field_name("parameters") {
+        collect_body_tokens(params, source, &mut signature, &mut head_count);
+    }
+    if let Some(return_type) = sig_node.child_by_field_name("return_type") {
+        collect_body_tokens(return_type, source, &mut signature, &mut head_count);
+    }
+    signature.extend_from_slice(b"\x00body\x00");
+
     let mut token_count = 0;
     collect_body_tokens(body, source, &mut signature, &mut token_count);
     if token_count < min_body_tokens {
@@ -420,6 +442,93 @@ function cellToString(cell: unknown): string {
         assert!(diags.iter().all(|d| d.message.contains("a.ts")));
         assert!(diags[0].path.ends_with("b.ts"));
         assert!(diags[1].path.ends_with("c.ts"));
+    }
+
+    #[test]
+    fn same_name_same_body_different_param_type_not_flagged() {
+        // Issue #4574 / recommended fix: two `toOption` map `{id,name}` to a
+        // labelled option with byte-identical bodies but different parameter and
+        // return types. Not interchangeable — different keys, no finding.
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(
+            &dir,
+            "a.ts",
+            "function toOption(e: ScopeEntity): Option {\n  return { value: e.id, label: e.name, extra: e.id };\n}\n",
+        );
+        let b = write(
+            &dir,
+            "b.ts",
+            "function toOption(e: DataTableFilterEntity): MultipleSelectorOption {\n  return { value: e.id, label: e.name, extra: e.id };\n}\n",
+        );
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "different param/return types are not duplicates"
+        );
+    }
+
+    #[test]
+    fn same_name_same_body_different_arity_not_flagged() {
+        // Issue #4574 shape 1: `wrap()` vs `wrap(queryClient)` — different arity,
+        // same JSX-returning body shape. Distinct signatures, no finding.
+        let dir = tempfile::tempdir().unwrap();
+        let with_param = "\
+function wrap(queryClient: QueryClient) {
+  const factory = queryClient;
+  return ({ children }: { children: ReactNode }) => factory;
+}
+";
+        let no_param = "\
+function wrap() {
+  const factory = new QueryClient();
+  return ({ children }: { children: ReactNode }) => factory;
+}
+";
+        let a = write(&dir, "a.tsx", with_param);
+        let b = write(&dir, "b.tsx", no_param);
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "different arity functions are not duplicates"
+        );
+    }
+
+    #[test]
+    fn same_name_same_body_different_return_type_not_flagged() {
+        // Issue #4574 shape 2 generalized: identical body and param name, but the
+        // return-type annotation diverges. Distinct keys, no finding.
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(
+            &dir,
+            "a.ts",
+            "function load(id: string): Promise<User> {\n  const url = `/api/v1/users/${id}`;\n  return fetch(url).then((r) => r.json());\n}\n",
+        );
+        let b = write(
+            &dir,
+            "b.ts",
+            "function load(id: string): Promise<Team> {\n  const url = `/api/v1/users/${id}`;\n  return fetch(url).then((r) => r.json());\n}\n",
+        );
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "different return-type annotations are not duplicates"
+        );
+    }
+
+    #[test]
+    fn same_name_same_signature_same_body_still_flagged() {
+        // Acceptance: identical name, signature, and body across files is a
+        // genuine copy-paste and is still flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let f = "\
+function toOption(e: ScopeEntity): Option {
+  const value = e.id;
+  const label = e.name;
+  return { value, label };
+}
+";
+        let a = write(&dir, "a.ts", f);
+        let b = write(&dir, "b.ts", f);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "identical signature + body is still a duplicate");
+        assert!(diags[0].message.contains("`toOption`"));
     }
 
     #[test]
