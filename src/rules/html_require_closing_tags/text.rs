@@ -10,11 +10,16 @@
 //!
 //! Self-closing tags (`<div />`) are also ignored — the author has
 //! explicitly indicated no close is needed.
+//!
+//! HTML comments (`<!-- ... -->`) are masked before scanning, so tags merely
+//! mentioned in comment prose are not counted as real elements.
 
 use rustc_hash::FxHashMap;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::vue_template_helpers::{extract_elements, extract_template, is_vue_file};
+use crate::rules::vue_template_helpers::{
+    extract_elements, extract_template, is_vue_file, mask_html_comments,
+};
 
 const VOID_ELEMENTS: &[&str] = &[
     "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
@@ -29,13 +34,18 @@ impl TextCheck for Check {
         if !is_vue_file(ctx.path) {
             return Vec::new();
         }
-        let Some(template) = extract_template(ctx.source) else {
+        // Mask HTML comments first: a tag named in comment prose (e.g.
+        // `<!-- renders a <label> -->`) is not a real element and must not
+        // count toward the open/close balance. Masking preserves byte offsets
+        // and line numbers, so reported lines stay accurate.
+        let source = mask_html_comments(ctx.source);
+        let Some(template) = extract_template(&source) else {
             return Vec::new();
         };
 
         // Collect every opening (non-self-closing, non-void) tag with its line.
         let mut openings: Vec<(String, usize)> = Vec::new();
-        for elem in extract_elements(ctx.source) {
+        for elem in extract_elements(&source) {
             if elem.self_closing {
                 continue;
             }
@@ -202,6 +212,49 @@ mod tests {
         // A nested `<template v-if>` with everything closed is clean.
         let source = "<template>\n  <template v-if=\"x\">\n    <span>a</span>\n  </template>\n  <div></div>\n</template>";
         assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_tag_mentioned_in_html_comment() {
+        // Regression for #4740: a `<label>` named in comment prose (the real
+        // element is rendered via `tag="label"`) must not be flagged.
+        let source = "<template>\n\
+            \x20 <q-list>\n\
+            \x20   <!--\n\
+            \x20     Rendering a <label> tag (notice tag=\"label\")\n\
+            \x20     so QRadios will respond to clicks on QItems...\n\
+            \x20   -->\n\
+            \x20   <q-item tag=\"label\" v-ripple></q-item>\n\
+            \x20 </q-list>\n\
+            </template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn ignores_tag_in_multiline_comment_before_self_closing_sibling() {
+        // Regression for #4740 (Basic.vue): a `<div>` named inside a multi-line
+        // comment must not be flagged.
+        let source = "<template>\n\
+            \x20 <!--\n\
+            \x20   we listen for size changes on this next\n\
+            \x20   <div>, so we place the observer as direct child:\n\
+            \x20 -->\n\
+            \x20 <q-resize-observer @resize=\"onResize\" />\n\
+            </template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn still_flags_unclosed_tag_alongside_commented_tag() {
+        // A genuine unclosed `<section>` is still flagged even when a comment
+        // mentions another tag, so the comment masking doesn't blind the rule.
+        let source = "<template>\n\
+            \x20 <!-- a <div> in prose -->\n\
+            \x20 <section>oops\n\
+            </template>";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("<section>"));
     }
 
     #[test]
