@@ -27,6 +27,14 @@
 //! shape across `RustCrypto/block-ciphers`. The arg must be a `&Key<…>`-typed
 //! parameter; `new_from_slice` on an arbitrary `&[u8]` still flags.
 //!
+//! Constant-bounds `try_into().unwrap()` is exempted — `slice[0..4].try_into()`
+//! converting a slice into a fixed-size array is infallible by construction when
+//! the index is a range with a constant length (`a[LIT..LIT]` or `a[..LIT]`), so
+//! the unwrap is unreachable. This is idiomatic for parsing byte slices into word
+//! arrays. The exemption keys on the constant range length alone, so a degenerate
+//! literal range (`a[5..2]`) is also suppressed; a dynamic-length receiver
+//! (`chunk`, `a[i..i+4]`, `a[4..]`) still flags.
+//!
 //! This rule is equivalent to `clippy::unwrap_used` + `clippy::expect_used`
 //! (both restriction-group lints, off by default in clippy). Running it
 //! via comply means you get the check without having to enable the lints
@@ -87,23 +95,27 @@ impl AstCheck for Check {
         if is_in_const_initializer(node) {
             return;
         }
-        // Skip lock operations — .read()/.write()/.lock()/.try_lock() unwrap is idiomatic.
-        if field_text == "unwrap" {
-            let receiver = function.child_by_field_name("value");
-            if let Some(recv) = receiver {
-                if recv.kind() == "call_expression" {
-                    if let Some(inner_func) = recv.child_by_field_name("function") {
-                        if inner_func.kind() == "field_expression" {
-                            if let Some(inner_field) = inner_func.child_by_field_name("field") {
-                                if let Ok(method) = inner_field.utf8_text(source_bytes) {
-                                    if matches!(method, "read" | "write" | "lock" | "try_lock" | "try_read" | "try_write") {
-                                        return;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+        // Skip lock operations and constant-bounds `try_into()` — both call the
+        // unwrap/expect on the result of an inner `recv.METHOD()` call.
+        if let Some((method, inner_func)) =
+            inner_method_call(function.child_by_field_name("value"), source_bytes)
+        {
+            // .read()/.write()/.lock()/.try_lock() unwrap is idiomatic.
+            if field_text == "unwrap"
+                && matches!(
+                    method,
+                    "read" | "write" | "lock" | "try_lock" | "try_read" | "try_write"
+                )
+            {
+                return;
+            }
+            // `slice[LIT..LIT].try_into().unwrap()` parsing a fixed-length byte
+            // slice into a same-sized array: the constant range length makes the
+            // conversion infallible by construction.
+            if method == "try_into"
+                && is_constant_bounds_slice_index(inner_func.child_by_field_name("value"))
+            {
+                return;
             }
         }
         // Skip RustCrypto `KeyInit::new` delegation — `new_from_slice(key).unwrap()`
@@ -247,6 +259,67 @@ fn is_reference_to_key_generic(ty: tree_sitter::Node, source: &[u8]) -> bool {
         .child_by_field_name("type")
         .and_then(|base| base.utf8_text(source).ok())
         == Some("Key")
+}
+
+/// For a `recv.METHOD(...)` receiver, returns `(METHOD, field_expression)` where
+/// the returned node is the `recv.METHOD` field access (its `value` field is
+/// `recv`). Returns `None` when the receiver is not a method call.
+fn inner_method_call<'a>(
+    receiver: Option<tree_sitter::Node<'a>>,
+    source_bytes: &'a [u8],
+) -> Option<(&'a str, tree_sitter::Node<'a>)> {
+    let recv = receiver?;
+    if recv.kind() != "call_expression" {
+        return None;
+    }
+    let inner_func = recv.child_by_field_name("function")?;
+    if inner_func.kind() != "field_expression" {
+        return None;
+    }
+    let method = inner_func.child_by_field_name("field")?.utf8_text(source_bytes).ok()?;
+    Some((method, inner_func))
+}
+
+/// True when `node` is `expr[RANGE]` whose range has a compile-time-constant
+/// length: `expr[LIT..LIT]` / `expr[LIT..=LIT]` (two literals) or `expr[..LIT]`
+/// (one literal, lower bound implicitly 0). Such an index yields a slice whose
+/// length is fixed, making a following `try_into()` into a same-sized array
+/// infallible. Open-ended (`expr[LIT..]`, `expr[..]`), variable-bound, or
+/// non-index receivers return false — their length is not known at compile time.
+fn is_constant_bounds_slice_index(node: Option<tree_sitter::Node>) -> bool {
+    let Some(node) = node else {
+        return false;
+    };
+    if node.kind() != "index_expression" {
+        return false;
+    }
+    // index_expression named children are [receiver, index]; the index is last.
+    let Some(index) = node.named_child(node.named_child_count().saturating_sub(1)) else {
+        return false;
+    };
+    if index.kind() != "range_expression" {
+        return false;
+    }
+    // The range must carry a constant length: `LIT..LIT` (two literals) or
+    // `..LIT` (one literal, lower bound implicitly 0). `LIT..` / `..` are
+    // open-ended and depend on the source length, so they are not constant.
+    let mut child = index.walk();
+    let bounds: Vec<tree_sitter::Node> = index.named_children(&mut child).collect();
+    let is_int_lit = |n: tree_sitter::Node| -> bool { n.kind() == "integer_literal" };
+    match bounds.len() {
+        // `LIT..LIT`
+        2 => is_int_lit(bounds[0]) && is_int_lit(bounds[1]),
+        // `..LIT` only — distinguish from `LIT..` by the leading `..` token.
+        1 => is_int_lit(bounds[0]) && starts_with_dotdot(index),
+        _ => false,
+    }
+}
+
+/// True when the range's first token is `..`, i.e. it has no lower bound
+/// (`..LIT`). Used to accept `..LIT` while rejecting `LIT..` (open upper bound),
+/// which share a single named child.
+fn starts_with_dotdot(range: tree_sitter::Node) -> bool {
+    range.child(0).is_some_and(|first| first.kind() == "..")
 }
 
 #[cfg(test)]
@@ -513,6 +586,64 @@ mod tests {
         Self::try_from(key).unwrap()
     }
 }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_try_into_unwrap_on_constant_range_index() {
+        // #4840: `key[0..4].try_into().unwrap()` converting a fixed-length slice
+        // into a same-sized array cannot fail — the unwrap is unreachable.
+        let source =
+            "fn f(key: &[u8]) -> u32 { u32::from_le_bytes(key[0..4].try_into().unwrap()) }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_try_into_expect_on_constant_range_index() {
+        let source = r#"fn f(b: &[u8]) -> u16 { u16::from_le_bytes(b[2..4].try_into().expect("4 bytes")) }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_try_into_unwrap_on_open_lower_bound_index() {
+        // `..4` has a constant length (lower bound is implicitly 0).
+        let source = "fn f(b: &[u8]) -> u32 { u32::from_le_bytes(b[..4].try_into().unwrap()) }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_try_into_unwrap_on_inclusive_range_index() {
+        // `0..=3` has a constant length (4), so the conversion is infallible.
+        let source = "fn f(b: &[u8]) -> u32 { u32::from_le_bytes(b[0..=3].try_into().unwrap()) }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_try_into_unwrap_on_open_upper_bound_index() {
+        // `b[4..]` is open-ended — its length depends on the source, so the
+        // conversion is fallible and the unwrap must still flag.
+        let source = "fn f(b: &[u8]) -> [u8; 2] { b[4..].try_into().unwrap() }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_try_into_unwrap_on_variable_bound_index() {
+        // `key[i..i+4]` has a dynamic bound — not constant, still flags.
+        let source = "fn f(key: &[u8], i: usize) -> u32 { u32::from_le_bytes(key[i..i+4].try_into().unwrap()) }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_try_into_unwrap_on_plain_slice() {
+        // No index expression at all — receiver is a bare identifier; fallible.
+        let source = "fn f(chunk: &[u8]) -> u32 { u32::from_le_bytes(chunk.try_into().unwrap()) }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_try_into_unwrap_on_full_range_index() {
+        // `b[..]` reborrows the whole slice — length unknown, still flags.
+        let source = "fn f(b: &[u8]) -> [u8; 2] { b[..].try_into().unwrap() }";
         assert_eq!(run_on(source).len(), 1);
     }
 
