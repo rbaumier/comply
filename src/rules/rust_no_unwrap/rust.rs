@@ -20,6 +20,13 @@
 //! Lock operations are exempted — `.read().unwrap()`, `.write().unwrap()`,
 //! `.lock().unwrap()` are idiomatic for std::sync::{Mutex,RwLock} poisoning.
 //!
+//! Fixed-size-key delegation is exempted — `Self::new_from_slice(key).unwrap()`
+//! where `key` is a parameter typed `&Key<…>` (a RustCrypto `GenericArray`
+//! whose length is fixed by the type) cannot fail the length check, so the
+//! unwrap is infallible. This is the prescribed `KeyInit::new` implementation
+//! shape across `RustCrypto/block-ciphers`. The arg must be a `&Key<…>`-typed
+//! parameter; `new_from_slice` on an arbitrary `&[u8]` still flags.
+//!
 //! This rule is equivalent to `clippy::unwrap_used` + `clippy::expect_used`
 //! (both restriction-group lints, off by default in clippy). Running it
 //! via comply means you get the check without having to enable the lints
@@ -99,6 +106,11 @@ impl AstCheck for Check {
                 }
             }
         }
+        // Skip RustCrypto `KeyInit::new` delegation — `new_from_slice(key).unwrap()`
+        // where `key` is a `&Key<…>`-typed parameter cannot fail the length check.
+        if field_text == "unwrap" && is_fixed_size_key_delegation(function, node, source_bytes) {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -114,6 +126,127 @@ impl AstCheck for Check {
             span: None,
         });
     }
+}
+
+/// True for the RustCrypto `KeyInit::new` shape:
+/// `<…>::new_from_slice(key).unwrap()` where `key` is a single identifier
+/// argument bound to an enclosing-`fn` parameter typed `&Key<…>`.
+///
+/// `Key<…>` (a `GenericArray` of fixed length) makes `new_from_slice`'s length
+/// check unreachable, so the unwrap is infallible. The argument must be such a
+/// parameter — `new_from_slice` on an arbitrary `&[u8]` still flags.
+///
+/// `function` is the `field_expression` (`<call>.unwrap`); `unwrap_call` is the
+/// enclosing `call_expression`.
+fn is_fixed_size_key_delegation(
+    function: tree_sitter::Node,
+    unwrap_call: tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    // Receiver must be `<…>::new_from_slice(<arg>)`.
+    let Some(receiver) = function.child_by_field_name("value") else {
+        return false;
+    };
+    if receiver.kind() != "call_expression" {
+        return false;
+    }
+    let Some(callee) = receiver.child_by_field_name("function") else {
+        return false;
+    };
+    if !callee_named_new_from_slice(callee, source) {
+        return false;
+    }
+    // Single identifier argument.
+    let Some(arg) = sole_identifier_argument(receiver) else {
+        return false;
+    };
+    // That identifier must be a parameter of the enclosing fn typed `&Key<…>`.
+    enclosing_fn_has_key_typed_param(unwrap_call, arg, source)
+}
+
+/// True if the call target's final path segment is `new_from_slice` —
+/// handles `Self::new_from_slice`, `Foo::new_from_slice`, and `x.new_from_slice`.
+fn callee_named_new_from_slice(callee: tree_sitter::Node, source: &[u8]) -> bool {
+    let name = match callee.kind() {
+        "scoped_identifier" => callee.child_by_field_name("name"),
+        "field_expression" => callee.child_by_field_name("field"),
+        "identifier" => Some(callee),
+        _ => None,
+    };
+    name.and_then(|n| n.utf8_text(source).ok()) == Some("new_from_slice")
+}
+
+/// Returns the sole argument of a `call_expression` when it is a bare
+/// `identifier`, else `None`.
+fn sole_identifier_argument(call: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let args = call.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let mut found: Option<tree_sitter::Node> = None;
+    for child in args.named_children(&mut cursor) {
+        if found.is_some() {
+            return None; // more than one argument
+        }
+        found = Some(child);
+    }
+    let arg = found?;
+    (arg.kind() == "identifier").then_some(arg)
+}
+
+/// True if the nearest enclosing `function_item` declares a parameter whose
+/// name matches `arg`'s text and whose type is `&Key<…>` (a `reference_type`
+/// wrapping a `generic_type` named `Key`).
+fn enclosing_fn_has_key_typed_param(
+    from: tree_sitter::Node,
+    arg: tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    let Ok(arg_name) = arg.utf8_text(source) else {
+        return false;
+    };
+    let mut cur = from;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "function_item" {
+            let Some(params) = parent.child_by_field_name("parameters") else {
+                return false;
+            };
+            let mut cursor = params.walk();
+            for param in params.named_children(&mut cursor) {
+                if param.kind() != "parameter" {
+                    continue;
+                }
+                let Some(pattern) = param.child_by_field_name("pattern") else {
+                    continue;
+                };
+                if pattern.utf8_text(source).ok() != Some(arg_name) {
+                    continue;
+                }
+                return param
+                    .child_by_field_name("type")
+                    .is_some_and(|ty| is_reference_to_key_generic(ty, source));
+            }
+            return false;
+        }
+        cur = parent;
+    }
+    false
+}
+
+/// True for a `reference_type` whose inner type is `Key<…>` (a `generic_type`
+/// with a `type_identifier` base of `Key`).
+fn is_reference_to_key_generic(ty: tree_sitter::Node, source: &[u8]) -> bool {
+    if ty.kind() != "reference_type" {
+        return false;
+    }
+    let Some(inner) = ty.child_by_field_name("type") else {
+        return false;
+    };
+    if inner.kind() != "generic_type" {
+        return false;
+    }
+    inner
+        .child_by_field_name("type")
+        .and_then(|base| base.utf8_text(source).ok())
+        == Some("Key")
 }
 
 #[cfg(test)]
@@ -336,6 +469,51 @@ mod tests {
     fn allows_unwrap_in_static_item_initializer() {
         let source = "static S: u32 = foo().unwrap();";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_unwrap_on_new_from_slice_with_key_param() {
+        // #4843: RustCrypto `KeyInit::new` delegates to `new_from_slice(key)`
+        // where `key: &Key<Self>` is a fixed-size GenericArray — the length
+        // check is unreachable, so the unwrap is infallible.
+        let source = r#"impl KeyInit for Xtea {
+    fn new(key: &Key<Self>) -> Self {
+        Self::new_from_slice(key).unwrap()
+    }
+}"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_unwrap_on_new_from_slice_with_byte_slice_param() {
+        // `new_from_slice` on an arbitrary `&[u8]` can fail the length check —
+        // the unwrap is a real panic risk and must still flag.
+        let source = r#"fn build(key: &[u8]) -> Self {
+    Self::new_from_slice(key).unwrap()
+}"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_unwrap_on_new_from_slice_with_non_param_arg() {
+        // The argument is a local, not a `&Key<…>` parameter — still flags.
+        let source = r#"fn build() -> Self {
+    let key = read_key();
+    Self::new_from_slice(&key).unwrap()
+}"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_unwrap_on_other_method_with_key_param() {
+        // Only `new_from_slice` carries the length guarantee; an unrelated
+        // fallible call on a `&Key<…>` param still flags.
+        let source = r#"impl KeyInit for Xtea {
+    fn new(key: &Key<Self>) -> Self {
+        Self::try_from(key).unwrap()
+    }
+}"#;
+        assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
