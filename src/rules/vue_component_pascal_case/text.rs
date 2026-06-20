@@ -178,10 +178,40 @@ fn is_html_builtin(tag: &str) -> bool {
     if tag.contains('-') {
         return true;
     }
-    // SVG elements that use camelCase (matched case-sensitively).
+    // SVG elements that use camelCase (matched case-sensitively), including
+    // the SVG filter primitive elements (`fe*`).
     matches!(
         tag,
-        "clipPath" | "linearGradient" | "radialGradient" | "animateTransform" | "foreignObject"
+        "clipPath"
+            | "linearGradient"
+            | "radialGradient"
+            | "animateTransform"
+            | "foreignObject"
+            | "feBlend"
+            | "feColorMatrix"
+            | "feComponentTransfer"
+            | "feComposite"
+            | "feConvolveMatrix"
+            | "feDiffuseLighting"
+            | "feDisplacementMap"
+            | "feDistantLight"
+            | "feDropShadow"
+            | "feFlood"
+            | "feFuncA"
+            | "feFuncB"
+            | "feFuncG"
+            | "feFuncR"
+            | "feGaussianBlur"
+            | "feImage"
+            | "feMerge"
+            | "feMergeNode"
+            | "feMorphology"
+            | "feOffset"
+            | "fePointLight"
+            | "feSpecularLighting"
+            | "feSpotLight"
+            | "feTile"
+            | "feTurbulence"
     ) || HTML_SVG_TAGS.contains(&tag)
 }
 
@@ -279,5 +309,23 @@ mod tests {
     fn skips_non_vue() {
         let d = Check.check(&CheckCtx::for_test(Path::new("f.ts"), "<myComponent />"));
         assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_svg_filter_primitives() {
+        // Issue #4477: SVG filter primitive elements are standard SVG 2.0
+        // elements (camelCase per spec), not Vue components.
+        let src = "<template>\n  <svg><filter id=\"f\">\n    <feFlood flood-opacity=\"0\" />\n    <feColorMatrix type=\"matrix\" values=\"0 0 0 0 0\" />\n    <feGaussianBlur stdDeviation=\"2.7\" />\n    <feBlend mode=\"normal\" />\n  </filter></svg>\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_camel_case_non_svg_component() {
+        // Negative-space guard: a genuine camelCase custom component (not an
+        // SVG element) must still fire.
+        let src = "<template>\n  <myComponent />\n</template>";
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("myComponent"));
     }
 }
