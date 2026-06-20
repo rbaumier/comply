@@ -269,7 +269,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use crate::rules::path_utils::{
     is_browser_asset_dir_path, is_config_file, is_framework_entry_point,
-    is_top_level_script_dir_path,
+    is_top_level_script_dir_path, is_type_compilation_test_path,
 };
 use oxc_ast::ast::{
     Argument, AssignmentTarget, BindingPattern, Declaration, ExportDefaultDeclarationKind,
@@ -2096,7 +2096,10 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        if ctx.file.path_segments.in_test_dir || is_test_file(ctx.path) {
+        if ctx.file.path_segments.in_test_dir
+            || is_test_file(ctx.path)
+            || is_type_compilation_test_path(ctx.path)
+        {
             return Vec::new();
         }
 
@@ -2234,6 +2237,33 @@ mod tests {
     fn skips_test_files() {
         let diags = crate::rules::test_helpers::run_rule(&Check, "expectType<string>(foo());", "main.test-d.ts");
         assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn skips_type_compilation_test_files_issue4940() {
+        // Issue #4940: `.typecheck.ts` files and `typecheck/` directories hold
+        // compile-time type assertions; the top-level expressions never run at
+        // runtime, so the tree-shaking concern does not apply.
+        let src = "const recycleScroller = useRecycleScroller();\n\
+                   recycleScroller.getViewStyle(recycleScroller.pool.value[0]);";
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                src,
+                "src/typecheck/generic-composables.typecheck.ts",
+            )
+            .is_empty()
+        );
+        // A `typecheck/` directory without the infix is also exempt.
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "src/typecheck/index.ts").is_empty()
+        );
+        // A genuine top-level side effect in a normal runtime module is STILL
+        // flagged — the exemption is scoped to type-compilation-test files.
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, src, "src/recycle-scroller.ts").len(),
+            1
+        );
     }
 
     #[test]
