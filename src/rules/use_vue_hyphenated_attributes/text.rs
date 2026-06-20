@@ -162,11 +162,14 @@ fn child_text<'a>(node: tree_sitter::Node, kind: &str, source: &'a [u8]) -> Opti
 
 /// The attribute name to validate, or `None` when the node is out of scope.
 ///
-/// - plain `attribute` → its `attribute_name`, unless the name contains a `:`. A
-///   colon-bearing plain attribute is a namespaced / variant-prefixed name (an
-///   XML/SVG namespace like `xlink:href`, or a UnoCSS/Windi attributify utility
-///   like `md:grid-cols-2`), not a component prop or DOM attribute subject to the
-///   kebab-case convention, so it is skipped.
+/// - plain `attribute` → its `attribute_name`, unless the name contains a `:` or
+///   begins with `.`. A colon-bearing plain attribute is a namespaced /
+///   variant-prefixed name (an XML/SVG namespace like `xlink:href`, or a
+///   UnoCSS/Windi attributify utility like `md:grid-cols-2`). A name beginning
+///   with `.` is the trailing segment of a member-expression element tag like
+///   `<motion.div>` (motion-v), which the grammar splits into a `motion`
+///   `tag_name` plus a spurious `.div` attribute — the dot is part of the
+///   component identifier, not an attribute name. Both are skipped.
 /// - `directive_attribute` with name `:`, `v-bind`, or `v-model` → its static
 ///   `directive_argument`. Dynamic arguments (`:[key]`), argument-less directives,
 ///   and any other directive (`v-on`, `@`, `v-if`, ...) are skipped.
@@ -179,6 +182,13 @@ fn checked_name<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str
             // utility like `md:grid-cols-2`), not a component prop or DOM attribute
             // subject to the kebab-case convention.
             if name.contains(':') {
+                return None;
+            }
+            // A name beginning with `.` is the segment after the dot in a
+            // member-expression element tag (`<motion.div>` → `tag_name` `motion`
+            // plus a spurious `.div` attribute). The whole `motion.div` is the
+            // component identifier; `.div` is not an attribute.
+            if name.starts_with('.') {
                 return None;
             }
             Some(name)
@@ -418,5 +428,34 @@ mod tests {
         // `:fooBar` flows through the directive arm (argument validation), which the
         // plain-attribute colon guard does not touch → still flagged.
         assert_eq!(run(&wrap("<div :fooBar=\"x\" />")).len(), 1);
+    }
+
+    // --- Member-expression element tags (`<Foo.bar>`, e.g. motion-v) ---
+
+    #[test]
+    fn allows_motion_v_dot_element_attributes() {
+        // Issue #4672: `<motion.div>` is the motion-v component identifier
+        // `motion.div`; the grammar splits it into a `motion` tag with a spurious
+        // `.div` attribute. The `.div` segment is part of the component name, not
+        // an attribute, so it must not be flagged.
+        assert!(
+            run(&wrap(
+                "<motion.div layout class=\"rounded-lg\">\
+                 <motion.legend id=\"feedback-legend\">Was this helpful?</motion.legend>\
+                 </motion.div>"
+            ))
+            .is_empty()
+        );
+        // Self-closing tags and deeper member chains (`<motion.svg.path>`) fold the
+        // whole tail into one `.`-prefixed attribute name → also skipped.
+        assert!(run(&wrap("<motion.div layout />")).is_empty());
+        assert!(run(&wrap("<motion.svg.path d=\"x\" />")).is_empty());
+    }
+
+    #[test]
+    fn flags_real_camelcase_attribute_on_dot_element() {
+        // The guard only skips the `.bar` member-segment artifact; a genuine
+        // camelCase attribute on the same element is still flagged.
+        assert_eq!(run(&wrap("<motion.div fooBar=\"x\"></motion.div>")).len(), 1);
     }
 }
