@@ -116,19 +116,29 @@ fn conflicts_with_other_directive(directive: tree_sitter::Node, source: &[u8]) -
     })
 }
 
-/// The previous sibling element of `element`, skipping `text`, `comment`, and
-/// other non-element nodes. Recognizes `element` and `template_element` plus
-/// `vue_component` and `ERROR`: the Vue grammar parses `<component>` (with an
-/// `:is`/`v-if`/`is` attribute) as a `vue_component` or, when self-closing, as an
-/// `ERROR` node, and the preceding `v-if` may live on such a node.
-fn previous_element_sibling(element: tree_sitter::Node) -> Option<tree_sitter::Node> {
+/// The previous sibling element of `element` whose conditional chain status can
+/// be evaluated, skipping `text`, `comment`, and other non-element nodes.
+///
+/// `element` and `template_element` are real elements and stop the walk: the one
+/// nearest before `element` is its definitive predecessor in the chain. The Vue
+/// grammar parses `<component>` (with an `:is`/`v-if`/`is` attribute) as a
+/// `vue_component` or, when self-closing, as an `ERROR` node, so such a node is
+/// returned only when it carries a `v-if`/`v-else-if` directive; otherwise it is
+/// a parse artifact (e.g. a complex `:is` ternary or an object spread) and the
+/// walk continues to the real preceding element rather than treating the artifact
+/// as the predecessor.
+fn previous_element_sibling<'a>(
+    element: tree_sitter::Node<'a>,
+    source: &[u8],
+) -> Option<tree_sitter::Node<'a>> {
     let mut sibling = element.prev_sibling();
     while let Some(node) = sibling {
-        if matches!(
-            node.kind(),
-            "element" | "template_element" | "vue_component" | "ERROR"
-        ) {
-            return Some(node);
+        match node.kind() {
+            "element" | "template_element" => return Some(node),
+            "vue_component" | "ERROR" if component_text_has_conditional(node, source) => {
+                return Some(node);
+            }
+            _ => {}
         }
         sibling = node.prev_sibling();
     }
@@ -170,11 +180,13 @@ fn has_previous_conditional(directive: tree_sitter::Node, source: &[u8]) -> bool
     let Some(element) = owning_element(directive) else {
         return false;
     };
-    let Some(previous) = previous_element_sibling(element) else {
+    let Some(previous) = previous_element_sibling(element, source) else {
         return false;
     };
     if matches!(previous.kind(), "vue_component" | "ERROR") {
-        return component_text_has_conditional(previous, source);
+        // Only conditional-carrying `vue_component`/`ERROR` nodes are returned, so
+        // reaching one here means the chain link is present.
+        return true;
     }
     start_tag_directives(previous).any(|dir| is_valid_chain_directive(dir, source))
 }
@@ -439,6 +451,49 @@ mod tests {
         let diags = run(&wrap(
             "<component :is=\"x\" /><span v-else-if=\"c2\">y</span>",
         ));
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("must follow"));
+    }
+
+    #[test]
+    fn allows_chain_when_v_else_has_object_spread_attribute() {
+        // Regression for #5032: the `<Panel v-else>` carries a bound object
+        // attribute containing a spread; the spread must not corrupt the
+        // `v-if -> v-else-if` sibling tracking.
+        let source = wrap(
+            "<slot v-if=\"loading\" name=\"loader\"><Spin /></slot>\n\
+             <slot v-else-if=\"isEmpty\" name=\"empty\">\n\
+             <component :is=\"TreeSelectEmpty ? TreeSelectEmpty : 'Empty'\" />\n\
+             </slot>\n\
+             <Panel v-else :tree-props=\"{ blockNode: true, ...treeProps, data }\" @change=\"onSelectChange\" />",
+        );
+        let diags = run(&source);
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn malformed_component_artifact_between_chain_links_does_not_break_chain() {
+        // A `<component :is="ternary" />` that the grammar emits as an ERROR
+        // node sits between a valid `v-if` and the `v-else-if`. The artifact
+        // must not be mistaken for the predecessor: the chain is still valid.
+        let source = wrap(
+            "<slot v-if=\"a\" />\n\
+             <component :is=\"x ? a : 'B'\" />\n\
+             <slot v-else-if=\"b\" />",
+        );
+        let diags = run(&source);
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn still_flags_orphan_v_else_if_after_only_a_malformed_component() {
+        // When the ONLY preceding sibling is a non-conditional component
+        // artifact and there is no real `v-if`, the `v-else-if` is orphaned.
+        let source = wrap(
+            "<component :is=\"x ? a : 'B'\" />\n\
+             <slot v-else-if=\"b\" />",
+        );
+        let diags = run(&source);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("must follow"));
     }
