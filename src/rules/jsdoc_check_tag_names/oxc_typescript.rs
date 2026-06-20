@@ -14,12 +14,18 @@ const KNOWN_TAGS: &[&str] = &[
     "abstract",
     "access",
     "alias",
+    // TSDoc release-stage modifier marking an API as alpha (earliest, may change
+    // without notice); recognized by TypeDoc and API Extractor.
+    "alpha",
     // JSDoc3/Closure visibility marker (`@api public`/`@api private`); used
     // pervasively across mature Node.js libraries (mongoose, express, koa).
     "api",
     "async",
     "augments",
     "author",
+    // TSDoc release-stage modifier marking an API as beta (usable but may change
+    // before stable); recognized by TypeDoc and API Extractor.
+    "beta",
     "borrows",
     "callback",
     "category",
@@ -323,6 +329,18 @@ mod tests {
         assert!(run(src).is_empty(), "{:?}", run(src));
         let src = "/**\n * meta-reducer. This returns all providers for an @angular/core\n * based application.\n */\n";
         assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_tsdoc_release_stage_modifiers_issue_4825() {
+        // `@alpha` and `@beta` are standard TSDoc release-stage modifier tags
+        // (thirdweb-dev/js uses `@beta` across the SDK; siblings `@experimental`,
+        // `@internal`, `@public` are already known).
+        let src = "/**\n * Sends a transaction using the provided wallet.\n * @beta\n */\n";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+        assert!(run("/**\n * @alpha\n */\n").is_empty());
+        // A genuine typo of the tag stays flagged.
+        assert_eq!(run("/**\n * @bta foo\n */\n").len(), 1);
     }
 
     #[test]
