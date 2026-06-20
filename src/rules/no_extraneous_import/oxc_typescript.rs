@@ -402,6 +402,31 @@ export default defineConfig({});"#;
     }
 
     #[test]
+    fn allows_dev_dep_in_vitest_dir_setup_file() {
+        // Issue #4736: verdaccio's `packages/plugins/ui-theme/vitest/setup.ts` is
+        // a Vitest setup file referenced via `setupFiles`. Files under a `vitest/`
+        // directory are test infrastructure loaded only by the runner, never
+        // bundled into the package, so importing devDependencies is correct.
+        let pkg = r#"{
+            "dependencies": {"react": "^19"},
+            "devDependencies": {
+                "vitest": "^1",
+                "@testing-library/jest-dom": "^6",
+                "mutationobserver-shim": "^0.3",
+                "whatwg-fetch": "^3"
+            }
+        }"#;
+        let src = r#"
+import "@testing-library/jest-dom";
+import "mutationobserver-shim";
+import { vi } from "vitest";
+import "whatwg-fetch";
+"#;
+        let d = run_with_pkg_at_path(pkg, "packages/plugins/ui-theme/vitest/setup.ts", src);
+        assert!(d.is_empty(), "vitest/ setup file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
     fn allows_dev_dep_in_hyphenated_config_variant_file() {
         // Issue #1861: recharts' `vitest.config-mutation.mts` is a Vitest
         // mutation-testing config variant. Its stem is `vitest.config-mutation`,
