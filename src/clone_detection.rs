@@ -280,7 +280,7 @@ fn merge_and_emit(
     }
 
     // Phase 2 — suppress symmetric sibling pairs.
-    // Five suppression criteria, any one is sufficient:
+    // Six suppression criteria, any one is sufficient:
     //
     // A) Small-gap: the tokens NOT covered by any matching window in the
     //    reporter file are few (> 0, ≤ SYMMETRIC_SIBLING_GAP_THRESHOLD).  A
@@ -313,6 +313,13 @@ fn merge_and_emit(
     //    which is the wrong trade in tests. Scoped to spec files: duplication in
     //    shared test infrastructure (`test-helpers/`, `fixtures/`, `__mocks__/`)
     //    is still flagged, because there extraction is the correct fix.
+    //
+    // F) Theme/palette variant: both files live in the same directory whose name
+    //    is a theme/palette collection (`themes/`, `palette/`, `colors/`, …) and
+    //    both are data files (`.yml`/`.yaml`/`.toml`/`.json`/`.ron`). Such files
+    //    are parallel color-theme variants (e.g. catppuccin Mocha vs Macchiato)
+    //    that share a key schema but hold distinct palette values — they ARE the
+    //    data, not an abstraction over it, so the shared structure is intentional.
     let mut suppressed = FxHashSet::<usize>::default();
     {
         let mut by_pair: FxHashMap<(usize, usize), Vec<usize>> = FxHashMap::default();
@@ -335,11 +342,14 @@ fn merge_and_emit(
                 are_scaffold_template_pair(&files[*rfi].path, &files[*cfi].path);
             let test_spec_siblings =
                 are_test_spec_siblings(&files[*rfi].path, &files[*cfi].path);
+            let theme_variants =
+                are_theme_palette_pair(&files[*rfi].path, &files[*cfi].path);
             if small_gap
                 || name_siblings
                 || locale_variants
                 || scaffold_variants
                 || test_spec_siblings
+                || theme_variants
             {
                 suppressed.extend(idxs);
             }
@@ -623,6 +633,45 @@ fn is_test_spec_file(path: &std::path::Path) -> bool {
 /// extraction is the correct fix.
 fn are_test_spec_siblings(a: &std::path::Path, b: &std::path::Path) -> bool {
     is_test_spec_file(a) && is_test_spec_file(b)
+}
+
+// --- Theme/palette-variant detection ---
+
+/// Directory names that hold a collection of parallel theme/palette variant files.
+const THEME_COLLECTION_DIRS: &[&str] =
+    &["theme", "themes", "palette", "palettes", "colorscheme", "colorschemes", "colors"];
+
+/// Data/config extensions a color-theme file uses.
+const THEME_DATA_EXTS: &[&str] = &["yml", "yaml", "toml", "json", "ron"];
+
+fn is_theme_data_file(p: &std::path::Path) -> bool {
+    p.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .is_some_and(|e| THEME_DATA_EXTS.contains(&e.as_str()))
+}
+
+/// True when `a` and `b` are intentional color-theme / palette VARIANTS: both
+/// live in the SAME directory whose name is a theme/palette collection
+/// (`themes/`, `palette/`, `colors/`, …) and both are data files. Such files
+/// share a key schema but hold distinct palette values — they ARE the data, not
+/// an abstraction over it, so the structural clone is intentional (cf. locale
+/// variants).
+fn are_theme_palette_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let (Some(da), Some(db)) = (a.parent(), b.parent()) else {
+        return false;
+    };
+    if da != db {
+        return false;
+    }
+    let Some(dir) = da.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let dir = dir.to_ascii_lowercase();
+    if !THEME_COLLECTION_DIRS.contains(&dir.as_str()) {
+        return false;
+    }
+    is_theme_data_file(a) && is_theme_data_file(b)
 }
 
 // --- Tokenization ---
@@ -1461,6 +1510,99 @@ mod tests {
             lint_files(&[&fa, &fb]).len(),
             1,
             "duplicated locale files for unrelated languages must still be flagged"
+        );
+    }
+
+    /// Builds two YAML palette files at `<dir>/<sub>/<stem_a>.yml` and
+    /// `<dir>/<sub>/<stem_b>.yml` sharing an identical key schema (a wide block of
+    /// `group_N.foreground` entries, mirroring a catppuccin theme's `core`
+    /// section) while a handful of leading color hex values differ between the two
+    /// files. The identical structural run is wide enough to trip the clone
+    /// detector; the differing values keep them from being byte-identical.
+    fn write_palette_pair(
+        dir: &tempfile::TempDir,
+        sub: &str,
+        stem_a: &str,
+        stem_b: &str,
+    ) -> (SourceFile, SourceFile) {
+        // A few color values that differ between variants (mocha vs macchiato).
+        let differing = |hex: &str| -> String {
+            (1..=8)
+                .map(|i| format!("  swatch_{i}: '{hex}{i:02}'"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        // The shared structural skeleton: identical key tokens across both files,
+        // forming a long matching run that the detector reports.
+        let skeleton: String = (1..=40)
+            .map(|i| format!("  group_{i}:\n    foreground: color_role_{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let palette = |hex: &str| -> String {
+            format!("colors:\n{}\ncore:\n{skeleton}\n", differing(hex))
+        };
+        let pa = dir.path().join(format!("{sub}/{stem_a}.yml"));
+        let pb = dir.path().join(format!("{sub}/{stem_b}.yml"));
+        std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
+        std::fs::write(&pa, palette("1e1e2e")).unwrap();
+        std::fs::write(&pb, palette("24273a")).unwrap();
+        (
+            SourceFile { path: pa, language: Language::Yaml },
+            SourceFile { path: pb, language: Language::Yaml },
+        )
+    }
+
+    #[test]
+    fn no_false_positive_on_theme_palette_variants() {
+        // Regression test for issue #4417.
+        // catppuccin palette variants (Mocha vs Macchiato) share an identical
+        // YAML key schema but hold distinct color hex values. Living in the same
+        // `themes/` directory, they are intentional parallel variants — the data
+        // itself, not an abstraction over it — so the structural clone must not be
+        // flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let (fa, fb) =
+            write_palette_pair(&dir, "themes", "catppuccin-mocha", "catppuccin-macchiato");
+        assert!(
+            lint_files(&[&fa, &fb]).is_empty(),
+            "color-theme palette variants in a themes/ directory must not be flagged"
+        );
+    }
+
+    #[test]
+    fn palette_variants_outside_theme_dir_still_flagged() {
+        // Negative guard for the theme/palette exemption: the same two
+        // structurally-cloned YAML files in a non-theme directory must still be
+        // flagged — the suppression is gated on a theme-collection directory name.
+        // This also proves the crafted YAML genuinely trips the detector, so the
+        // themes/ suppression test is not vacuous.
+        let dir = tempfile::tempdir().unwrap();
+        let (fa, fb) = write_palette_pair(&dir, "config", "a", "b");
+        assert_eq!(
+            lint_files(&[&fa, &fb]).len(),
+            1,
+            "structurally-cloned data files outside a theme dir must still be flagged"
+        );
+    }
+
+    #[test]
+    fn non_data_files_in_theme_dir_still_flagged() {
+        // Negative guard for the extension gate: two cloned non-data files (`.rs`)
+        // in a `themes/` directory must still be flagged — the exemption is scoped
+        // to data/config files, not to the directory wholesale.
+        let dir = tempfile::tempdir().unwrap();
+        let dup = format!("fn f() {{\n{}\n}}", large_rust_block(20));
+        let pa = dir.path().join("themes/a.rs");
+        let pb = dir.path().join("themes/b.rs");
+        std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
+        std::fs::write(&pa, &dup).unwrap();
+        std::fs::write(&pb, &dup).unwrap();
+        let fa = SourceFile { path: pa, language: Language::Rust };
+        let fb = SourceFile { path: pb, language: Language::Rust };
+        assert_eq!(
+            lint_files(&[&fa, &fb]).len(),
+            1,
+            "cloned non-data files in a themes/ directory must still be flagged"
         );
     }
 
