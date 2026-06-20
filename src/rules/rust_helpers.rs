@@ -966,6 +966,32 @@ fn attribute_is_cfg_debug_assertions(attribute_item: Node, source: &[u8]) -> boo
         .any(|tok| tok.kind() == "identifier" && tok.utf8_text(source) == Ok("debug_assertions"))
 }
 
+/// True if `item` carries a `#[cfg(...)]` or `#[cfg_attr(...)]` conditional-
+/// compilation attribute as a preceding `attribute_item` sibling. Such an item
+/// is a build variant: it is only compiled under a specific feature/target/test
+/// configuration. Walks preceding `attribute_item` siblings (skipping
+/// interleaved `line_comment`/`block_comment` siblings and traversing past
+/// unrelated attributes) and matches on the AST: the `attribute`'s path child
+/// must be exactly `cfg` or `cfg_attr`. Keying on the path child — rather than
+/// scanning raw text — means an attribute whose name merely ends in `cfg`, or a
+/// comment mentioning `cfg`, does not match.
+pub fn has_cfg_attribute(item: Node, source: &[u8]) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "line_comment" | "block_comment" => {}
+            "attribute_item" => {
+                if attribute_is_cfg(s, source) {
+                    return true;
+                }
+            }
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
 /// Collect the trait names from the top-level `#[derive(...)]` attributes
 /// applied to `item`, an item node (`struct_item` / `enum_item`).
 ///
@@ -2156,27 +2182,7 @@ pub fn enum_has_cfg_gated_variant(enum_item: Node, source: &[u8]) -> bool {
     let mut cursor = body.walk();
     body.named_children(&mut cursor)
         .filter(|child| child.kind() == "enum_variant")
-        .any(|variant| variant_is_cfg_gated(variant, source))
-}
-
-/// True if `enum_variant` carries a preceding `#[cfg(...)]` / `#[cfg_attr(...)]`
-/// attribute. Skips interleaved comment siblings and stops at the first
-/// non-attribute, non-comment sibling.
-fn variant_is_cfg_gated(variant: Node, source: &[u8]) -> bool {
-    let mut sibling = variant.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "line_comment" | "block_comment" => {}
-            "attribute_item" => {
-                if attribute_is_cfg(s, source) {
-                    return true;
-                }
-            }
-            _ => break,
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
+        .any(|variant| has_cfg_attribute(variant, source))
 }
 
 /// True if `attribute_item`'s `attribute` path child is exactly `cfg` or

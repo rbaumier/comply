@@ -18,9 +18,13 @@
 //! through different traits and borrows, so no single generic helper can serve
 //! both. Functions in different `mod` blocks are exempt as well: Rust's path
 //! system makes `a::f` and `b::f` distinct, and co-located test suites
-//! routinely repeat the same assertions in sibling modules. Free functions
-//! with identical signatures, and inherent methods on the same type with the
-//! same receiver and in the same module, are still flagged.
+//! routinely repeat the same assertions in sibling modules. Same-name pairs
+//! where at least one carries a `#[cfg(...)]`/`#[cfg_attr(...)]` gate are exempt
+//! too: two functions of the same name in one scope can only coexist via
+//! mutually-exclusive conditional compilation (per-feature/target/test
+//! backends), so they are distinct build variants, not copy-paste. Free
+//! functions with identical signatures, and inherent methods on the same type
+//! with the same receiver and in the same module, are still flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -68,6 +72,9 @@ struct CollectedFn {
     receiver: Receiver,
     inherent_type: Option<String>,
     module_key: usize,
+    /// True if the function carries a `#[cfg(...)]`/`#[cfg_attr(...)]` gate, i.e.
+    /// it is a conditional-compilation build variant rather than ordinary code.
+    cfg_gated: bool,
 }
 
 crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
@@ -87,6 +94,19 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
             // Functions in different `mod` scopes are distinct namespaces
             // (`a::f` vs `b::f`) and cannot be merged — skip cross-module pairs.
             if functions[i].module_key != functions[j].module_key {
+                continue;
+            }
+            // Same-name functions in the same scope can only legally coexist
+            // when conditional compilation selects between them — two bare
+            // `fn set_tls_config` in one impl is a duplicate-definition compile
+            // error. When such a pair carries a `#[cfg(...)]` gate it is a set
+            // of mutually-exclusive build variants (per-feature/target/test
+            // backends), only one of which compiles in any configuration. They
+            // commonly differ in parameter types, so no shared helper can serve
+            // them — skip the pair.
+            if functions[i].name == functions[j].name
+                && (functions[i].cfg_gated || functions[j].cfg_gated)
+            {
                 continue;
             }
             // Inherent methods on different types share a body by design
@@ -168,6 +188,7 @@ fn collect_functions(
                         receiver: extract_receiver(node, source),
                         inherent_type: inherent_type.map(str::to_string),
                         module_key,
+                        cfg_gated: crate::rules::rust_helpers::has_cfg_attribute(node, source),
                     });
                 }
             }
@@ -686,6 +707,88 @@ fn alpha(x: i32) -> i32 {
 }
 
 fn beta(x: i32) -> i32 {
+    let a = x + 1;
+    let b = a * 2;
+    println!("{}", b);
+    b
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_cfg_gated_same_name_methods() {
+        // Issue #5026: two `set_tls_config` methods in one impl, each gated by a
+        // mutually-exclusive `#[cfg(feature = ...)]`. Only one compiles per
+        // feature configuration and they take different parameter types, so they
+        // cannot be merged into a shared helper.
+        let src = r#"
+struct Config;
+
+impl Config {
+    #[cfg(feature = "h1-client-rustls")]
+    pub fn set_tls_config(
+        mut self,
+        tls_config: Option<std::sync::Arc<rustls_crate::ClientConfig>>,
+    ) -> Self {
+        self.http_config.tls_config = tls_config;
+        self
+    }
+
+    #[cfg(all(feature = "h1-client", not(feature = "h1-client-rustls")))]
+    pub fn set_tls_config(
+        mut self,
+        tls_config: Option<std::sync::Arc<async_native_tls::TlsConnector>>,
+    ) -> Self {
+        self.http_config.tls_config = tls_config;
+        self
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_cfg_gated_same_name_free_functions() {
+        // A free-function pair with the same name, one gated by `#[cfg(...)]`:
+        // distinct build variants, not copy-paste.
+        let src = r#"
+#[cfg(unix)]
+fn platform_init(x: i32) -> i32 {
+    let a = x + 1;
+    let b = a * 2;
+    println!("{}", b);
+    b
+}
+
+#[cfg(not(unix))]
+fn platform_init(x: i32) -> i32 {
+    let a = x + 1;
+    let b = a * 2;
+    println!("{}", b);
+    b
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_different_name_identical_cfg_test_functions() {
+        // Negative-space guard: two DIFFERENT-named functions, both `#[cfg(test)]`
+        // and identical, are genuine copy-paste — the cfg exemption is keyed on
+        // same-name conditional-compilation variants, so this stays flagged.
+        let src = r#"
+#[cfg(test)]
+fn check_alpha(x: i32) -> i32 {
+    let a = x + 1;
+    let b = a * 2;
+    println!("{}", b);
+    b
+}
+
+#[cfg(test)]
+fn check_beta(x: i32) -> i32 {
     let a = x + 1;
     let b = a * 2;
     println!("{}", b);
