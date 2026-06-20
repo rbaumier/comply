@@ -188,7 +188,10 @@ fn is_html_builtin(tag: &str) -> bool {
             | "linearGradient"
             | "radialGradient"
             | "animateTransform"
+            | "animateMotion"
             | "foreignObject"
+            | "textPath"
+            | "glyphRef"
             | "feBlend"
             | "feColorMatrix"
             | "feComponentTransfer"
@@ -496,6 +499,23 @@ mod tests {
         let d = run(src);
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("user"));
+    }
+
+    #[test]
+    fn allows_svg_text_path() {
+        // Issue #4762: `<textPath>` is a standard SVG element (camelCase per
+        // the SVG 1.1 spec), used inside `<text>` to render along a path; it is
+        // not a Vue component.
+        let src = "<template>\n  <text>\n    <textPath :href=\"`#${id}`\" startOffset=\"50%\" text-anchor=\"middle\">{{ data.text }}</textPath>\n  </text>\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_svg_camel_case_animation_elements() {
+        // The remaining standard camelCase SVG element names are native SVG
+        // elements, not Vue components.
+        let src = "<template>\n  <svg>\n    <animateMotion dur=\"2s\" />\n    <glyphRef />\n  </svg>\n</template>";
+        assert!(run(src).is_empty());
     }
 
     #[test]
