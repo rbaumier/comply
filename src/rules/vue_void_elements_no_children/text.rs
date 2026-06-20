@@ -26,18 +26,17 @@ impl TextCheck for Check {
             if !VOID_ELEMENTS.contains(&elem.tag) {
                 continue;
             }
-            // A void element has no children. Only text on the SAME line as its
-            // opening `>`, before the next `<`, can be misplaced inline content.
-            // Text on a following line is a sibling owned by the parent, a
-            // following element (`<div>`) is a sibling, and multi-line attributes
-            // are part of the opening tag — none of these is content.
+            // A void element auto-closes immediately, so anything after its `>`
+            // is sibling content owned by the parent, never the void element's
+            // child — text (`<br>Example:`), a template expression
+            // (`<br>{{ expr }}`), and a following element (`<div>`) are all
+            // siblings. The only genuine misuse is an explicit matching closing
+            // tag (`<br>...</br>`), which unambiguously asserts the author meant
+            // the void element to wrap children. Flag only that.
             let after_open = &masked[elem.open_end..];
             let same_line = after_open.split('\n').next().unwrap_or("");
-            let direct = match same_line.find('<') {
-                Some(lt) => &same_line[..lt],
-                None => same_line,
-            };
-            if !elem.self_closing && !direct.trim().is_empty() {
+            let has_explicit_close = has_closing_tag(same_line, elem.tag);
+            if !elem.self_closing && has_explicit_close {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
                     line: elem.line,
@@ -54,6 +53,23 @@ impl TextCheck for Check {
         }
         diagnostics
     }
+}
+
+/// Whether `text` contains an explicit closing tag `</tag>` (e.g. `</br>`),
+/// allowing optional whitespace before the `>`. `text.contains("</br")` alone
+/// would false-match `</break>`, so the character after the tag name must be
+/// `>` or whitespace.
+fn has_closing_tag(text: &str, tag: &str) -> bool {
+    let needle = format!("</{tag}");
+    let mut rest = text;
+    while let Some(pos) = rest.find(&needle) {
+        let after = &rest[pos + needle.len()..];
+        if after.starts_with('>') || after.starts_with(char::is_whitespace) {
+            return true;
+        }
+        rest = &rest[pos + needle.len()..];
+    }
+    false
 }
 
 #[cfg(test)]
@@ -94,10 +110,36 @@ mod tests {
     }
 
     #[test]
-    fn flags_direct_text_after_void() {
-        // Genuine misplaced content: text placed directly after a void `>`.
-        let source = "<template>\n  <input>some text\n</template>";
+    fn flags_input_with_explicit_close() {
+        // Genuine misuse: an explicit `</input>` closing tag asserts the author
+        // meant the void element to wrap children.
+        let source = "<template>\n  <input>some text</input>\n</template>";
         assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_text_directly_after_void_without_close() {
+        // #4989: text directly after a void `>` with no closing tag is a sibling
+        // text node owned by the parent, not a child of the void element.
+        let source = "<template>\n  <input>some text\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_br_with_same_line_trailing_text() {
+        // #4989: `<p>...<br>Example:</p>` — `Example:` is a text-node sibling in
+        // the parent `<p>`, not content of the void `<br>`.
+        let source =
+            "<template>\n  <p>A complete list of all the visible cells dates.<br>Example:</p>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_consecutive_br_with_same_line_expression() {
+        // #4989: `<p>{{ prefix }}<br><br>{{ expr }}</p>` — the `{{ expr }}` is a
+        // sibling template expression in the parent, not content of either `<br>`.
+        let source = "<template>\n  <p>{{ prefix }}<br><br>{{ tag }}</p>\n</template>";
+        assert!(run(source).is_empty());
     }
 
     #[test]
