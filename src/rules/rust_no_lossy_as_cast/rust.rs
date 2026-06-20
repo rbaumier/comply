@@ -6,7 +6,12 @@
 //!
 //! - integer narrowing (`u32 as u8`, `i64 as i32`, etc.)
 //! - float to integer (`f64 as u32`)
-//! - integer to float when precison can be lost (`u32 as f32`, etc.)
+//! - integer to `f32` when the source type is resolvable and exceeds the
+//!   mantissa (`u32 as f32`, `i32 as f32`). Small integers that fit exactly
+//!   — `{i8,u8,i16,u16} as f32` — are lossless and silenced, and a cast
+//!   whose source type can't be resolved from the AST (index/field/method
+//!   operands, e.g. `gx[(x, y)][0] as f32`) is left to
+//!   `rust-no-as-numeric-cast`, since precision loss is not provable there.
 //!
 //! Widening casts with the same signedness (e.g. `u8 as u32`) are
 //! silenced when the source type is locally visible.  When the source
@@ -85,9 +90,19 @@ impl AstCheck for Check {
         if cast_operand_is_enum_discriminant(node, source_bytes) {
             return;
         }
-        if let Some(source_type) = source_numeric_type(node, source_bytes)
+        let source_type = source_numeric_type(node, source_bytes);
+        if let Some(source_type) = source_type
             && !is_dangerous_cast(source_type, target_type)
         {
+            return;
+        }
+        // A float target only loses precision when the source is wide enough to
+        // overflow the mantissa. That can only be proven from a resolvable
+        // source type; for an unresolved operand (index/field/method, e.g.
+        // `gx[(x, y)][0] as f32`) the loss is not provable, so defer to
+        // `rust-no-as-numeric-cast`, which flags float casts only when a
+        // matching `From` impl makes `T::from(x)` a compiling suggestion.
+        if target_type.kind == NumericKind::Float && source_type.is_none() {
             return;
         }
         if is_in_enum_discriminant(node) {
@@ -138,9 +153,20 @@ fn numeric_type(type_text: &str) -> Option<NumericType> {
     Some(NumericType { kind, bits })
 }
 
+/// `f32` has a 24-bit mantissa, so integers up to 24 bits wide are exactly
+/// representable.
+const F32_MANTISSA_BITS: u16 = 24;
+
 fn is_dangerous_cast(source: NumericType, target: NumericType) -> bool {
     if source.kind == target.kind && source.kind != NumericKind::Float {
         return target.bits < source.bits;
+    }
+    if target.kind == NumericKind::Float
+        && matches!(source.kind, NumericKind::Unsigned | NumericKind::Signed)
+    {
+        // Integer -> `f32` is lossless when the source fits the mantissa:
+        // `{i8,u8,i16,u16} as f32`. `i32`/`u32` (32 bits) overflow it.
+        return source.bits > F32_MANTISSA_BITS;
     }
     true
 }
@@ -512,5 +538,52 @@ mod tests {
         // `y as f32` where `y: u32`: `rust-no-as-numeric-cast` skips int->f32
         // (no `f32::From<u32>` to suggest), so this rule still owns it.
         assert_eq!(run_on("fn f(y: u32) -> f32 { let x = y as f32; x }").len(), 1);
+    }
+
+    #[test]
+    fn repro_4677_i16_as_f32_not_flagged() {
+        // Issue #4677: `i16 as f32` is always lossless — i16's 16-bit range
+        // fits exactly in f32's 24-bit mantissa.
+        assert!(run_on("fn f(g: i16) -> f32 { g as f32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_4677_u16_as_f32_not_flagged() {
+        assert!(run_on("fn f(g: u16) -> f32 { g as f32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_4677_i8_as_f32_not_flagged() {
+        assert!(run_on("fn f(g: i8) -> f32 { g as f32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_4677_u8_as_f32_not_flagged() {
+        assert!(run_on("fn f(g: u8) -> f32 { g as f32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_4677_i32_as_f32_still_flagged() {
+        // i32 (32 bits) exceeds f32's 24-bit mantissa — genuinely lossy.
+        assert_eq!(run_on("fn f(g: i32) -> f32 { g as f32 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_4677_index_operand_as_f32_not_flagged() {
+        // The issue's exact shape: `gx[(x, y)][0] as f32`. The operand is an
+        // index expression — source type unresolvable from the AST, so the
+        // loss is not provable and the rule defers to `rust-no-as-numeric-cast`.
+        assert!(run_on("fn f(gx: G) -> f32 { gx[(0, 0)][0] as f32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_4677_field_operand_as_f32_not_flagged() {
+        // A field access is equally unresolvable.
+        assert!(run_on("fn f(s: S) -> f32 { s.gradient as f32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_4677_method_operand_as_f32_not_flagged() {
+        assert!(run_on("fn f(s: S) -> f32 { s.value() as f32 }").is_empty());
     }
 }
