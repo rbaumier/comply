@@ -677,6 +677,32 @@ pub fn is_type_test_file(path: &Path) -> bool {
         || has_path_segment(path, TYPE_TEST_DIR_SEGMENTS)
 }
 
+/// Directory-segment conventions for type-compilation tests — matched as exact
+/// path segments. A type-compilation test re-exports or annotates the public API
+/// purely to confirm it type-checks (`tsc --build`); it carries no runtime
+/// `test()`/`it()`/`expect()` calls by design, using type annotations
+/// (`const err: QueryError | null = _e`) as compile-time assertions instead.
+/// `tsc-build` is the node-mysql2 convention; `type-tests`/`types-tests`/
+/// `type-check` are the general names projects give such suites.
+const TYPE_COMPILATION_TEST_DIR_SEGMENTS: &[&str] =
+    &["tsc-build", "type-tests", "types-tests", "type-check"];
+
+/// True when `path` lives under a type-compilation-test directory
+/// ([`TYPE_COMPILATION_TEST_DIR_SEGMENTS`]). Files there verify the public API
+/// type-checks and have no runtime test cases, so checks that demand runtime
+/// assertions (e.g. `no-empty-test-file`) must not flag them. Segment match keeps
+/// an unrelated `src/type-checker/` from matching.
+///
+/// Deliberately separate from [`is_type_test_file`]: that predicate tells
+/// type-ban rules "the banned types named here are deliberate subjects of
+/// assertions", whereas this one tells `no-empty-test-file` "the absence of
+/// runtime tests is expected here". Folding these segments into
+/// `TYPE_TEST_DIR_SEGMENTS` would silently relax those unrelated type-ban rules
+/// for `tsc-build/` files, so the two sets stay distinct.
+pub fn is_type_compilation_test_path(path: &Path) -> bool {
+    has_path_segment(path, TYPE_COMPILATION_TEST_DIR_SEGMENTS)
+}
+
 /// True when the file name carries a `.actual.` or `.expected.` infix (e.g.
 /// `theme.actual.js`, `color-imports.expected.ts`), the jscodeshift/babel
 /// codemod snapshot convention. These files are input/output fixture snapshots
