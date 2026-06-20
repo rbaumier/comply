@@ -1,6 +1,10 @@
 //! jsdoc/check-tag-names OxcCheck backend — scan comments for unknown tags.
-//! Tags containing an uppercase letter (custom convention tags like `@publicApi`,
-//! decorator references like `@Module`) are not flagged.
+//! An unknown tag is only flagged when it is a likely typo of a standard JSDoc
+//! tag (small edit distance / an explicit known misspelling). Tags far from
+//! every standard tag are intentional custom vocabulary (`@zh`, `@en`, `@slot`,
+//! `@demo`) and are left alone, as are tags containing an uppercase letter
+//! (custom convention tags like `@publicApi`, decorator references like
+//! `@Module`).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -146,6 +150,65 @@ fn suggest(name: &str) -> Option<&'static str> {
     }
 }
 
+/// Damerau-Levenshtein distance between two ASCII tag names: substitution,
+/// insertion, deletion, and adjacent transposition each count as one edit.
+///
+/// Transposition is counted (unlike plain Levenshtein) so a swapped-letter
+/// typo of a short standard tag (`@tyep` → `@type`) registers as distance 1
+/// and is caught, without loosening the distance gate.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a_bytes = a.as_bytes();
+    let b_bytes = b.as_bytes();
+    let m = a_bytes.len();
+    let n = b_bytes.len();
+
+    if m == 0 {
+        return n;
+    }
+    if n == 0 {
+        return m;
+    }
+
+    // Three rolling rows: the row two back is needed for the transposition term.
+    let mut prev2 = vec![0usize; n + 1];
+    let mut prev1: Vec<usize> = (0..=n).collect();
+    let mut curr = vec![0usize; n + 1];
+
+    for i in 1..=m {
+        curr[0] = i;
+        for j in 1..=n {
+            let cost = usize::from(a_bytes[i - 1] != b_bytes[j - 1]);
+            let mut best = (prev1[j] + 1).min(curr[j - 1] + 1).min(prev1[j - 1] + cost);
+            if i > 1
+                && j > 1
+                && a_bytes[i - 1] == b_bytes[j - 2]
+                && a_bytes[i - 2] == b_bytes[j - 1]
+            {
+                best = best.min(prev2[j - 2] + 1);
+            }
+            curr[j] = best;
+        }
+        std::mem::swap(&mut prev2, &mut prev1);
+        std::mem::swap(&mut prev1, &mut curr);
+    }
+    prev1[n]
+}
+
+/// Returns the standard tag `name` most likely misspells, or `None`.
+///
+/// A near-miss is a single edit (substitution/insertion/deletion/adjacent
+/// transposition) of any standard tag, or a two-edit difference from a
+/// standard tag at least 6 characters long. The length gate keeps short
+/// standard tags (`@see`, `@api`, `@enum`) from claiming unrelated short
+/// custom tags (`@zh`, `@en`, `@demo`) as typos: a two-character custom tag
+/// is never a "typo" of a three-character one.
+fn nearest_typo(name: &str) -> Option<&'static str> {
+    KNOWN_TAGS.iter().copied().find(|&known| {
+        let dist = edit_distance(name, known);
+        dist == 1 || (dist == 2 && known.len() >= 6)
+    })
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [crate::rules::backend::AstType] {
         &[]
@@ -190,17 +253,19 @@ impl OxcCheck for Check {
                     if tag.name.chars().any(|c| c.is_ascii_uppercase()) {
                         continue;
                     }
-                    let suggestion = suggest(&tag.name);
-                    let message = match suggestion {
-                        Some(s) => format!(
-                            "Unknown JSDoc tag `@{}` — did you mean `@{}`?",
-                            tag.name, s
-                        ),
-                        None => format!(
-                            "Unknown JSDoc tag `@{}` — use a canonical tag name.",
-                            tag.name
-                        ),
+                    // Only flag a likely typo of a standard tag — either an
+                    // explicit known misspelling or a near-miss by edit
+                    // distance. A tag far from every standard tag is an
+                    // intentional custom tag (`@zh`/`@en` language codes,
+                    // `@slot`/`@demo` doc-generator vocabulary), not a mistake.
+                    let suggestion = suggest(&tag.name).or_else(|| nearest_typo(&tag.name));
+                    let Some(suggestion) = suggestion else {
+                        continue;
                     };
+                    let message = format!(
+                        "Unknown JSDoc tag `@{}` — did you mean `@{}`?",
+                        tag.name, suggestion
+                    );
                     diagnostics.push(Diagnostic {
                         path: Arc::clone(&ctx.path_arc),
                         line: tag.line + line_offset - 1,
@@ -316,8 +381,8 @@ mod tests {
         assert!(run(src).is_empty(), "{:?}", run(src));
         // The bare tag (no argument) is accepted too.
         assert!(run("/**\n * @api\n */\n").is_empty());
-        // A genuine typo of the tag stays flagged.
-        assert_eq!(run("/**\n * @nonsensetag foo\n */\n").len(), 1);
+        // A near-miss typo of the tag stays flagged (`apo` → `api`).
+        assert_eq!(run("/**\n * @apo foo\n */\n").len(), 1);
     }
 
     #[test]
@@ -345,9 +410,31 @@ mod tests {
 
     #[test]
     fn still_flags_lowercase_typos() {
-        // Genuine misspellings of standard tags are all lowercase.
+        // Genuine misspellings of standard tags are near-misses by edit distance.
         assert_eq!(run("/**\n * @retrun thing\n */\n").len(), 1);
         assert_eq!(run("/**\n * @arg x\n */\n").len(), 1);
-        assert_eq!(run("/**\n * @bogus foo\n */\n").len(), 1);
+        // Explicit and edit-distance typos of `@param`/`@returns`.
+        assert_eq!(run("/**\n * @poram x\n */\n").len(), 1);
+        assert_eq!(run("/**\n * @params x\n */\n").len(), 1);
+        assert_eq!(run("/**\n * @returnz thing\n */\n").len(), 1);
+        // Adjacent-transposition typo of the short tag `@type` (counted as one
+        // edit, so it stays flagged despite `type` being under the length gate).
+        assert_eq!(run("/**\n * @tyep {number}\n */\n").len(), 1);
+    }
+
+    #[test]
+    fn allows_far_from_standard_custom_tags_issue_5020() {
+        // Bilingual language-code tags (arco-design-vue documents props in both
+        // Chinese and English) are intentional custom vocabulary, not typos.
+        let src = "/**\n * @zh 当前选中的标签\n * @en The key of the selected label\n */\n";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+        // Vue doc-generator tags from the same project.
+        assert!(run("/**\n * @slot title\n */\n").is_empty());
+        assert!(run("/**\n * @binding click\n */\n").is_empty());
+        assert!(run("/**\n * @values small | large\n */\n").is_empty());
+        // Another far-from-standard custom tag.
+        assert!(run("/**\n * @demo basic\n */\n").is_empty());
+        // A tag that is not a near-miss of any standard tag is left alone.
+        assert!(run("/**\n * @bogus foo\n */\n").is_empty());
     }
 }
