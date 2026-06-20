@@ -4,7 +4,9 @@
 //! sole argument is a string literal is a `String.prototype` substring search,
 //! not array membership — there is no collection to index, so it is not flagged;
 //! a two-argument `.indexOf(value, fromIndex)` is a forward-scan cursor (a
-//! positional string/array walk), never a membership lookup, so it is not flagged.
+//! positional string/array walk), never a membership lookup, so it is not flagged;
+//! a receiver that is an inline literal array (`["./", "/"].includes(x)`) has a
+//! fixed, hardcoded size independent of input, so the scan is O(1), not flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -78,6 +80,14 @@ impl OxcCheck for Check {
             &member.object,
             Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_)
         ) {
+            return;
+        }
+
+        // Skip when the receiver is an inline literal array (`["./", "/"].includes(x)`).
+        // A literal array has a fixed, hardcoded size independent of input, so the
+        // membership/scan is O(constant) = O(1) regardless of the loop length; building
+        // a Set/Map from it would only add allocation overhead with no asymptotic gain.
+        if matches!(&member.object, Expression::ArrayExpression(_)) {
             return;
         }
 
@@ -641,6 +651,46 @@ for (const x of xs) {
 for (const item of list) {
     if (bigList.indexOf(item) !== -1) { found.push(item); }
 }
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_inline_literal_array_includes_in_loop() {
+        // Regression for #4490: `["./", "/"].includes(slug)` — the receiver is an
+        // inline literal array of fixed size 2, so the scan is O(constant) = O(1).
+        assert!(
+            run(r#"
+for (const o of outputs) { if (["./", "/"].includes(o.slug)) {} }
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_inline_literal_array_find_in_loop() {
+        // A literal array is fixed-size for every lookup method, not just includes.
+        assert!(
+            run(r#"
+for (const x of items) { const m = [1, 2, 3].find(v => v === x); }
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_variable_receiver_includes_in_loop() {
+        // A variable receiver is a collection that can grow with input — flagged.
+        let diags = run(r#"
+for (const o of outputs) { if (bigList.includes(o.slug)) {} }
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_variable_receiver_find_in_loop() {
+        let diags = run(r#"
+for (const x of items) { const m = collection.find(v => v === x); }
 "#);
         assert_eq!(diags.len(), 1);
     }
