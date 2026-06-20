@@ -643,7 +643,11 @@ fn is_test_spec_file(path: &std::path::Path) -> bool {
 /// Scoped to spec files only: duplication in shared test infrastructure
 /// (`test-helpers/`, `fixtures/`, `__mocks__/`) is still flagged because there
 /// extraction is the correct fix.
-fn are_test_spec_siblings(a: &std::path::Path, b: &std::path::Path) -> bool {
+///
+/// `pub(crate)` because `no-duplicate-function` reuses the exact same
+/// exemption: two specs may carry an identical named helper (`uniqueName`,
+/// per-spec render setup) without it being a smell.
+pub(crate) fn are_test_spec_siblings(a: &std::path::Path, b: &std::path::Path) -> bool {
     is_test_spec_file(a) && is_test_spec_file(b)
 }
 

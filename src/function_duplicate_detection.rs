@@ -123,6 +123,19 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
         let canonical = &entries[reps[0]];
         for &m in reps.iter().skip(1) {
             let entry = &entries[m];
+            // Two executable test specs may carry the same named helper
+            // (`uniqueName`, a per-spec render setup) without it being a smell:
+            // specs are meant to stand alone, so extracting shared state into a
+            // common module would couple them. Mirrors the clone detector's
+            // test-spec-sibling exemption. A duplicate involving shared test
+            // infrastructure (`test-helpers/`, `__mocks__/`) is still reported —
+            // there extraction is the right fix.
+            if crate::clone_detection::are_test_spec_siblings(
+                &files[entry.file_idx].path,
+                &files[canonical.file_idx].path,
+            ) {
+                continue;
+            }
             diags.push(Diagnostic {
                 path: std::sync::Arc::from(files[entry.file_idx].path.as_path()),
                 line: entry.line,
@@ -402,6 +415,31 @@ function cellToString(cell: unknown): string {
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "a duplicated arrow-const function is flagged");
         assert!(diags[0].message.contains("`cellToString`"));
+    }
+
+    #[test]
+    fn sibling_test_specs_not_flagged() {
+        // Two executable specs may carry the same named helper without it being a
+        // smell — specs stand alone. Mirrors the clone detector's exemption.
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "a.test.ts", CELL_TO_STRING);
+        let b = write(&dir, "b.test.ts", CELL_TO_STRING);
+        assert!(run(&[&a, &b]).is_empty(), "sibling test specs are exempt");
+    }
+
+    #[test]
+    fn helper_duplicated_in_spec_is_flagged() {
+        // Shared test infrastructure (`render.tsx`) is NOT a spec: a function
+        // pasted from it into a spec should be imported, so it stays flagged.
+        // (saurenya: `Wrapper` in `test-helpers/render.tsx` vs a `.test.tsx`.)
+        let dir = tempfile::tempdir().unwrap();
+        let helper = write(&dir, "render.tsx", CELL_TO_STRING);
+        let spec = write(&dir, "feature.test.tsx", CELL_TO_STRING);
+        let diags = run(&[&helper, &spec]);
+        assert_eq!(diags.len(), 1, "a helper duplicated into a spec is still flagged");
+        // Canonical is the lexicographically-first path (`feature.test.tsx`);
+        // the helper reports it.
+        assert!(diags[0].path.ends_with("render.tsx"));
     }
 
     #[test]
