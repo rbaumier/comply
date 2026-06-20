@@ -318,7 +318,14 @@ impl OxcCheck for Check {
         // Storybook CSF2 attaches story metadata (args, storyName, play,
         // parameters, decorators) by assigning named properties on the exported
         // story function — the designed API with no immutable alternative.
-        if ctx.file.path_segments.in_test_dir || ctx.file.path_segments.in_storybook {
+        //
+        // Benchmark scripts (`benches/`) are auxiliary evaluation inputs — often
+        // third-party real-world programs run to measure engine performance — not
+        // production application code subject to immutability conventions.
+        if ctx.file.path_segments.in_test_dir
+            || ctx.file.path_segments.in_storybook
+            || ctx.file.in_benchmark_dir()
+        {
             return;
         }
         match node.kind() {
@@ -541,6 +548,37 @@ mod tests {
             ..FileCtx::default()
         };
         crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.tsx", crate::project::default_static_project_ctx(), &file)
+    }
+
+    fn run_in_benchmark_file(src: &str) -> Vec<Diagnostic> {
+        let file = FileCtx {
+            path_segments: PathSegments { in_benchmark_dir: true, ..PathSegments::default() },
+            ..FileCtx::default()
+        };
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "crypto.js", crate::project::default_static_project_ctx(), &file)
+    }
+
+    #[test]
+    fn skips_in_benchmark_file_issue_4797() {
+        // Benchmark scripts (`benches/scripts/v8-benches/crypto.js`) are
+        // third-party real-world programs run to measure engine performance —
+        // auxiliary evaluation inputs, not production code.
+        let src = r#"
+            var s_box = new Array();
+            s_box[0] = 99;
+            obj.prop = value;
+        "#;
+        assert!(run_in_benchmark_file(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_property_mutation_in_src_file() {
+        // The same mutation in ordinary source is still flagged: the benchmark
+        // exemption is scoped to `benches/` files.
+        let src = r#"
+            obj.prop = value;
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
