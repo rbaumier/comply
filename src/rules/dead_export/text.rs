@@ -2003,6 +2003,51 @@ mod tests {
     }
 
     #[test]
+    fn ignores_nuxt_server_middleware_default_export_issue_4494() {
+        // Regression for #4494 (sidebase/nuxt-auth) — Nitro's file-system server
+        // router registers any `server/middleware/**` module with an
+        // `export default defineEventHandler(...)` by file path, never through a
+        // static import, so the `default` export has no importer yet is live.
+        let pkg = r#"{ "dependencies": { "nuxt": "^3.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "server/middleware/auth.ts",
+                "export default defineEventHandler(async (event) => { return {}; });\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) =
+            run_on_project_with_pkg(Some(pkg), &files, "server/middleware/auth.ts");
+        assert!(
+            diags.is_empty(),
+            "Nuxt server middleware `default` is framework-consumed: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_server_middleware_export_without_nuxt_dep_issue_4494() {
+        // Negative-space guard for #4494 — the server/middleware exemption is
+        // dep-gated. The same `server/middleware/auth.ts` default export in a
+        // project with no Nuxt dependency is an ordinary unused export and must
+        // still be flagged.
+        let pkg = r#"{ "dependencies": { "lodash": "^4.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "server/middleware/auth.ts",
+                "export default defineEventHandler(async (event) => { return {}; });\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) =
+            run_on_project_with_pkg(Some(pkg), &files, "server/middleware/auth.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a server/middleware default export without the Nuxt dep must still be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
     fn ignores_nuxt_auto_imported_composable_issue_3314() {
         // Regression for #3314 (nuxt/ui) — Nuxt auto-imports every export of a
         // file under a `composables/` directory across the app, so the named
