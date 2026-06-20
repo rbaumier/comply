@@ -5,10 +5,15 @@
 //! and for obsolete presentational attributes (`align`, `bgcolor`, `border`).
 //! `border` is only flagged when used on an element other than `<table>`,
 //! where it retains its historical meaning in HTML email and legacy markup.
+//! Values that are UnoCSS / Windi CSS attributify-mode utility shorthands
+//! (e.g. `border="r base"`, `border="~ rounded"`) are exempt, since they are
+//! utility classes rather than the presentational HTML attribute.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::vue_template_helpers::{collect_attr_names, extract_elements, is_vue_file};
+use crate::rules::vue_template_helpers::{
+    attr_value, collect_attr_names, extract_elements, is_vue_file,
+};
 
 const OBSOLETE_TAGS: &[&str] = &["center", "font", "marquee", "blink", "strike", "big", "tt"];
 
@@ -46,6 +51,11 @@ impl TextCheck for Check {
                 if name_lower == "border" && tag_lower == "table" {
                     continue;
                 }
+                if let Some(value) = attr_value(elem.attrs, name)
+                    && is_utility_shorthand_value(&name_lower, value)
+                {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
                     line: elem.line,
@@ -61,6 +71,28 @@ impl TextCheck for Check {
         }
         diagnostics
     }
+}
+
+/// A UnoCSS / Windi CSS attributify-mode value rather than a genuine
+/// presentational HTML attribute value.
+///
+/// Attributify mode writes utility classes as attribute values: `border="r base"`,
+/// `"b 2 solid red-500"`, or the bare group marker `"~"`. A genuine obsolete
+/// presentational value is a single atomic token — an integer pixel count for
+/// `border` (`border="1"`), or a keyword/color for `align`/`bgcolor`
+/// (`align="center"`, `bgcolor="#fff"`). So:
+///   - any multi-token (whitespace-separated) value is attributify, and
+///   - a single-token `border` value that is not a plain integer is a utility
+///     (`border` is the only obsolete attribute that collides with attributify).
+fn is_utility_shorthand_value(attr_lower: &str, value: &str) -> bool {
+    let v = value.trim();
+    if v.is_empty() {
+        return false;
+    }
+    if v.split_whitespace().count() > 1 {
+        return true;
+    }
+    attr_lower == "border" && !v.chars().all(|c| c.is_ascii_digit())
 }
 
 #[cfg(test)]
@@ -113,6 +145,24 @@ mod tests {
     fn flags_border_on_non_table() {
         let source = "<template>\n  <img src=\"x\" border=\"1\" />\n</template>";
         assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_unocss_border_multi_token() {
+        let source = "<template>\n  <div border=\"r base\">hi</div>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_unocss_border_group_marker() {
+        let source = "<template>\n  <div border=\"~ rounded\"></div>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn allows_unocss_border_single_non_integer() {
+        let source = "<template>\n  <div border=\"rounded\"></div>\n</template>";
+        assert!(run(source).is_empty());
     }
 
     #[test]
