@@ -93,4 +93,32 @@ mod tests {
     fn skips_comply_ignore_inline_directive() {
         assert!(run("// comply-ignore: various-rule — many cases handled here").is_empty());
     }
+
+    // Regression for #4852: a JSDoc `@param {Type} name` tag line followed by a
+    // description that begins with the capitalized param name is the JSDoc
+    // grammar (name → description), not a doubled-word typo.
+    #[test]
+    fn allows_jsdoc_param_name_echo() {
+        let src = "/**\n * Serialize an element node.\n *\n * @param {Element} node\n *   Node to handle.\n * @param {number | undefined} index\n *   Index of the node.\n * @param {Parents | undefined} parent\n *   Parent of the node.\n */\nfunction f() {}";
+        assert!(
+            !run(src)
+                .iter()
+                .any(|d| d.message.contains("Lexical illusion")),
+            "{:?}",
+            run(src)
+        );
+    }
+
+    // A genuine doubled word in a JSDoc description must still be flagged.
+    #[test]
+    fn flags_lexical_illusion_in_jsdoc_description() {
+        let src = "/**\n * @param {Element} node\n *   Node to handle the\n *   the processing step.\n */\nfunction f() {}";
+        assert!(
+            run(src)
+                .iter()
+                .any(|d| d.message.contains("Lexical illusion")),
+            "{:?}",
+            run(src)
+        );
+    }
 }

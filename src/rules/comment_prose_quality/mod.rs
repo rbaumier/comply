@@ -75,6 +75,21 @@ fn is_comply_directive(stripped_trimmed: &str) -> bool {
     stripped_trimmed.starts_with("comply-ignore")
 }
 
+/// True for a JSDoc `@param` / `@property` / `@typedef` tag line, whose last
+/// token is a structural parameter/property name (e.g. `@param {Element} node`).
+/// The convention across the unified/remark/hast ecosystem is to put the name on
+/// the tag line and start the following description with that same capitalized
+/// name (`@param {Element} node` / `Node to handle.`). That repeat is the JSDoc
+/// grammar, not a doubled-word typo, so the tag line's last token must not seed
+/// the cross-line lexical-illusion check.
+fn is_jsdoc_name_tag(stripped_trimmed: &str) -> bool {
+    let rest = stripped_trimmed
+        .strip_prefix("@param")
+        .or_else(|| stripped_trimmed.strip_prefix("@property"))
+        .or_else(|| stripped_trimmed.strip_prefix("@typedef"));
+    rest.is_some_and(|rest| rest.starts_with(char::is_whitespace) || rest.is_empty())
+}
+
 /// Word-boundary, case-insensitive substring match.
 fn contains_word(haystack: &str, needle: &str) -> bool {
     let lower = haystack.to_lowercase();
@@ -178,12 +193,11 @@ pub(crate) fn lint_comment_nodes(
             // word of this line. Only triggers when the previous line is
             // immediately adjacent (line_no - 1).
             let words: Vec<&str> = text.split_whitespace().collect();
+            let prev_line_trimmed = text_of_prev_line.as_deref().map(str::trim);
             let is_heading_echo = prev_last_word.as_ref().is_some_and(|(_, wc)| {
-                *wc == 2
-                    && text_of_prev_line
-                        .as_deref()
-                        .is_some_and(|pt| pt.trim().starts_with("# "))
+                *wc == 2 && prev_line_trimmed.is_some_and(|pt| pt.starts_with("# "))
             });
+            let is_jsdoc_name_echo = prev_line_trimmed.is_some_and(is_jsdoc_name_tag);
             if let Some((ref prev, prev_wc)) = prev_last_word
                 && let Some(prev_l) = prev_line
                 && prev_l + 1 == line_no
@@ -193,6 +207,7 @@ pub(crate) fn lint_comment_nodes(
                 && first.chars().any(|c| c.is_alphabetic())
                 && first.to_lowercase() == *prev
                 && !is_heading_echo
+                && !is_jsdoc_name_echo
             {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
@@ -286,12 +301,11 @@ pub(crate) fn lint_comment_spans(
             }
 
             let words: Vec<&str> = text.split_whitespace().collect();
+            let prev_line_trimmed = text_of_prev_line.as_deref().map(str::trim);
             let is_heading_echo = prev_last_word.as_ref().is_some_and(|(_, wc)| {
-                *wc == 2
-                    && text_of_prev_line
-                        .as_deref()
-                        .is_some_and(|pt| pt.trim().starts_with("# "))
+                *wc == 2 && prev_line_trimmed.is_some_and(|pt| pt.starts_with("# "))
             });
+            let is_jsdoc_name_echo = prev_line_trimmed.is_some_and(is_jsdoc_name_tag);
             if let Some((ref prev, prev_wc)) = prev_last_word
                 && let Some(prev_l) = prev_line
                 && prev_l + 1 == line_no
@@ -301,6 +315,7 @@ pub(crate) fn lint_comment_spans(
                 && first.chars().any(|c| c.is_alphabetic())
                 && first.to_lowercase() == *prev
                 && !is_heading_echo
+                && !is_jsdoc_name_echo
             {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
