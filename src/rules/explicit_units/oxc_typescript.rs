@@ -18,6 +18,11 @@ use std::sync::Arc;
 /// convention across DOM/CSS/canvas/image code is CSS pixels (`innerWidth`,
 /// `clientHeight`, `getBoundingClientRect().width`), so they are not
 /// genuinely unit-ambiguous and `widthMs`/`heightBytes` are nonsensical.
+///
+/// `offset` is excluded as a generic displacement/position term: a byte,
+/// array-index, scroll, file-pointer, or timezone offset all share the name
+/// but denote no single physical unit, so a unit suffix (`offsetMs`/
+/// `offsetBytes`) is not generally correct.
 const AMBIGUOUS_BASES: &[&str] = &[
     "delay",
     "timeout",
@@ -27,7 +32,6 @@ const AMBIGUOUS_BASES: &[&str] = &[
     "age",
     "wait",
     "distance",
-    "offset",
     "limit",
     "rate",
     "frequency",
@@ -38,7 +42,7 @@ const AMBIGUOUS_BASES: &[&str] = &[
 /// identifier as a handle/reference rather than a measured quantity.
 ///
 /// `timeoutId` is the numeric handle returned by `setTimeout`, not a
-/// duration; `offsetKey`/`heightIndex` are lookups, not measurements. A
+/// duration; `limitKey`/`intervalIndex` are lookups, not measurements. A
 /// unit suffix on these would be wrong, so they are exempt.
 const HANDLE_WORDS: &[&str] = &["Id", "Key", "Index", "Ref", "Handle", "Name"];
 
@@ -252,10 +256,21 @@ mod tests {
 
     #[test]
     fn allows_handle_words_after_bases() {
-        assert!(run_on("const offsetKey: number = 0;").is_empty());
+        assert!(run_on("const limitKey: number = 0;").is_empty());
         assert!(run_on("const intervalIndex: number = 0;").is_empty());
         assert!(run_on("const timeoutRef: number = 0;").is_empty());
         assert!(run_on("const delayHandle: number = 0;").is_empty());
+    }
+
+    #[test]
+    fn allows_bare_offset_generic_displacement() {
+        // `offset` is a generic displacement/position term (byte/array/scroll/
+        // file/timezone offset) denoting no single physical unit, so a unit
+        // suffix is not generally correct — it must not be flagged. Mirrors the
+        // date-fns timezone-offset-in-minutes false positive (#4983).
+        assert!(run_on("function formatTimezone(offset: number) {}").is_empty());
+        assert!(run_on("const scrollOffset: number = 0;").is_empty());
+        assert!(run_on("const offset: number = 769;").is_empty());
     }
 
     #[test]
