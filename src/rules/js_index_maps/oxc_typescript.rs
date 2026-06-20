@@ -6,7 +6,11 @@
 //! a two-argument `.indexOf(value, fromIndex)` is a forward-scan cursor (a
 //! positional string/array walk), never a membership lookup, so it is not flagged;
 //! a receiver that is an inline literal array (`["./", "/"].includes(x)`) has a
-//! fixed, hardcoded size independent of input, so the scan is O(1), not flagged.
+//! fixed, hardcoded size independent of input, so the scan is O(1), not flagged;
+//! a lookup in the iterable expression of a `for..of`/`for..in`
+//! (`for (const x of arr.filter(...))`) runs once before the loop, not per
+//! iteration, so it is not an O(n*m) site for that loop (an enclosing outer loop
+//! is still detected).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -215,10 +219,24 @@ fn is_inside_loop<'a>(
     for ancestor in nodes.ancestors(node.id()) {
         match ancestor.kind() {
             AstKind::ForStatement(_)
-            | AstKind::ForInStatement(_)
-            | AstKind::ForOfStatement(_)
             | AstKind::WhileStatement(_)
             | AstKind::DoWhileStatement(_) => return true,
+
+            // `for..of` / `for..in`: a call in the ITERABLE expression
+            // (`for (const x of <HERE>)`) runs once before the loop, not per
+            // iteration, so it is not an O(n*m) site for THIS loop — only the
+            // BODY repeats. When we ascended from the iterable subtree, keep
+            // walking to catch an OUTER loop that would repeat the whole `for..of`.
+            AstKind::ForOfStatement(for_of) => {
+                if child.kind().span() != for_of.right.span() {
+                    return true;
+                }
+            }
+            AstKind::ForInStatement(for_in) => {
+                if child.kind().span() != for_in.right.span() {
+                    return true;
+                }
+            }
 
             // Named function/class/method boundaries — hoisted definitions
             // don't necessarily execute per iteration.
@@ -691,6 +709,48 @@ for (const o of outputs) { if (bigList.includes(o.slug)) {} }
     fn still_flags_variable_receiver_find_in_loop() {
         let diags = run(r#"
 for (const x of items) { const m = collection.find(v => v === x); }
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_lookup_in_for_of_iterable() {
+        // Regression for #4491: `.filter()` in the ITERABLE of `for..of` runs once
+        // before the loop, not per iteration — not an O(n*m) site for this loop.
+        assert!(
+            run(r#"
+for (const output of outputs.filter((o) => !o.type)) { const x = output.file; }
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_lookup_in_for_of_iterable_find() {
+        // A lookup in the `for..of` iterable runs once for any lookup method.
+        assert!(
+            run(r#"
+for (const x of arr.find(p => p.ok)) { use(x); }
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_lookup_in_for_of_body() {
+        // A `.filter()` in the loop BODY runs per iteration — still flagged.
+        let diags = run(r#"
+for (const x of items) { const m = list.filter(v => v === x); }
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_for_of_iterable_lookup_inside_outer_loop() {
+        // The inner `for..of` iterable lookup runs once per OUTER-loop iteration —
+        // the ascent must still reach the outer loop and flag it.
+        let diags = run(r#"
+for (const o of outer) { for (const x of inner.filter(p => p.ok)) { use(x); } }
 "#);
         assert_eq!(diags.len(), 1);
     }
