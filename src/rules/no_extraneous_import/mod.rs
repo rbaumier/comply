@@ -31,7 +31,7 @@
 //! A file is considered a test file (and therefore allowed to consume
 //! `devDependencies`) when its path contains any of `__tests__/`,
 //! `__testUtils__/`, `__mocks__/`, `testing/`, `.test.`, `.spec.`, `.setup.`,
-//! `.stories.`, `/test/`, or `/tests/`, when its name (minus extension) is
+//! `.stories.`, `/test/`, `/tests/`, or `/vitest/`, when its name (minus extension) is
 //! exactly `test`/`spec` (e.g. `endOfWeek/test.ts`) or a test-runner setup-file
 //! name (`test-setup`, `setup-tests`, `setupTests`, e.g. a package-root
 //! `test-setup.ts` referenced by Vitest/Jest `setupFiles`), or when its name

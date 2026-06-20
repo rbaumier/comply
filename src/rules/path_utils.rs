@@ -505,9 +505,9 @@ pub fn is_in_client_boundary_dir(path: &Path) -> bool {
 }
 
 /// True for a test file that never ships in the published package: one under a
-/// `__tests__/`, `__testUtils__/`, `test/`, `tests/`, or `e2e/` directory, one
-/// carrying a `.test.`/`.spec.`/`.setup.`/`.tp.` infix, one whose whole stem is
-/// `test`/`spec` (a co-located `endOfWeek/test.ts`) or a test-runner setup-file
+/// `__tests__/`, `__testUtils__/`, `test/`, `tests/`, `vitest/`, or `e2e/`
+/// directory, one carrying a `.test.`/`.spec.`/`.setup.`/`.tp.` infix, one whose
+/// whole stem is `test`/`spec` (a co-located `endOfWeek/test.ts`) or a test-runner setup-file
 /// name (`test-setup`, `setup-tests`, `setupTests`, …), or one whose name starts
 /// with a test-runner tooling prefix (`vitest-`/`jest-`, e.g.
 /// `vitest-custom-reporter.ts`). Consumed by `no-extraneous-import` to allow
@@ -521,6 +521,7 @@ pub fn is_extraneous_test_file(path: &Path) -> bool {
         || path_str.contains(".setup.")
         || path_str.contains("/test/")
         || path_str.contains("/tests/")
+        || path_str.contains("/vitest/")
         || path_str.contains("/e2e/");
     is_marked
         || has_test_file_stem(path)
@@ -1521,7 +1522,15 @@ mod aux_path_tests {
         assert!(is_extraneous_test_file(&PathBuf::from("test-setup.mts")));
         assert!(is_extraneous_test_file(&PathBuf::from("setup-tests.js")));
         assert!(is_extraneous_test_file(&PathBuf::from("setupTests.ts")));
+        // Issue #4736: test infrastructure housed under a `vitest/` directory
+        // (setup files, custom environments) is loaded only by the test runner.
+        assert!(is_extraneous_test_file(&PathBuf::from(
+            "packages/plugins/ui-theme/vitest/setup.ts"
+        )));
         assert!(!is_extraneous_test_file(&PathBuf::from("src/app/login.ts")));
+        // Guard: `vitest` must be a `/vitest/` directory segment, not a substring
+        // of an unrelated production file or directory name.
+        assert!(!is_extraneous_test_file(&PathBuf::from("src/vitestHelper.ts")));
         // Guard: the prefix must be a real `vitest-`/`jest-` name boundary, not a
         // substring of an unrelated production file name.
         assert!(!is_extraneous_test_file(&PathBuf::from("src/jester.ts")));
