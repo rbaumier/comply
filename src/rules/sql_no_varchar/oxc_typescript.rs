@@ -81,4 +81,21 @@ mod tests {
         let src = r#"const m = "CREATE TABLE users (name TEXT)";"#;
         assert!(run_on(src).is_empty());
     }
+
+    /// Regression for #4936: a DB-driver integration test that deliberately
+    /// uses `varchar` to exercise the type OID / field metadata must not be
+    /// flagged. The same DDL in a production source file is still flagged.
+    #[test]
+    fn does_not_flag_varchar_in_integration_test_file() {
+        let src = r#"client.query('CREATE TEMP TABLE zugzug(name varchar(10))', cb)"#;
+        let in_test = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            src,
+            "packages/pg/test/integration/client/result-metadata-tests.js",
+        );
+        assert!(in_test.is_empty(), "varchar in an integration test must not be flagged");
+
+        let in_src = crate::rules::test_helpers::run_rule_gated(&Check, src, "packages/pg/src/schema.js");
+        assert_eq!(in_src.len(), 1, "varchar in production source is still flagged");
+    }
 }
