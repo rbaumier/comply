@@ -29,14 +29,14 @@ pub fn register_all() -> Vec<RuleDef> {
         entry(
             "ts-no-in-operator",
             Severity::Warning,
-            "The `in` operator probes an object's shape by hand instead of validating it.",
-            "Parse external input with a schema (e.g. Zod) to obtain a typed value, or discriminate an owned union with a `kind` tag + exhaustive `switch`. Reserve `in` for a caught error or a non-serializable runtime object (DOM dataset, Playwright Page/Locator).",
+            "The `in` operator probes the shape of an unvalidated `unknown`/`any` value by hand instead of parsing it.",
+            "Parse the external input with a schema (e.g. Zod) to obtain a typed value. `in` is fine on an already-typed value, a caught error, or inside a user-defined type predicate (`x is T`).",
         ),
         entry(
             "ts-no-typeof-operator",
             Severity::Warning,
-            "The `typeof` operator stands in for validating a boundary value or discriminating an owned union.",
-            "Parse external `unknown` with a schema (e.g. Zod), and discriminate an owned union with a `kind` tag + exhaustive `switch`. Reserve `typeof` for an environment guard (`typeof window`), a caught error, a `z.preprocess` normaliser, or discriminating a union whose variant is non-serializable (function/JSX).",
+            "The `typeof` operator stands in for validating an unvalidated `unknown`/`any` boundary value.",
+            "Parse the external `unknown` with a schema (e.g. Zod) to obtain a typed value. `typeof` is fine on an already-typed value, in an environment guard (`typeof window`), a caught error, a `z.preprocess` normaliser, or inside a user-defined type predicate (`x is T`).",
         ),
     ]
 }
