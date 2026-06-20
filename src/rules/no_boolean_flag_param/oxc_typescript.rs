@@ -4,10 +4,17 @@
 //! the function's declared return type is also `boolean`: a boolean-in /
 //! boolean-out signature is a transform over the boolean (e.g. a debounce
 //! hook), not a mode flag selecting between behaviors.
+//!
+//! A boolean parameter is also exempt when it is a pure forwarding passthrough:
+//! every reference to it is a direct positional argument of a call or `new`
+//! expression (`return parse(code, jsx)`). Such a wrapper mirrors the callee's
+//! API — the boolean is forwarded as-is, never dispatched on — so it cannot be
+//! split into two functions.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -85,6 +92,10 @@ impl OxcCheck for Check {
             return;
         }
 
+        if is_forwarded_passthrough_param(node, semantic) {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, param.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -147,6 +158,47 @@ fn is_boolean_transform_subject<'a>(
         AstKind::ArrowFunctionExpression(arrow) => returns_boolean(arrow.return_type.as_deref()),
         _ => false,
     }
+}
+
+/// True when the boolean param is a pure forwarding passthrough: it has at least
+/// one reference and EVERY reference is a direct positional argument of a call or
+/// `new` expression (`return wasmParse(code, flag, jsx)`). Such a wrapper mirrors
+/// the callee's API — the boolean is forwarded, never dispatched on in this
+/// function — so the "split into two functions" advice is inapplicable. A param
+/// used in any branch position (`if (flag)`, `flag ? :`, `flag && x`) or returned
+/// directly (`return flag`) or unused (empty body, zero references) is NOT a
+/// passthrough and stays flagged.
+fn is_forwarded_passthrough_param<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let AstKind::FormalParameter(param) = node.kind() else {
+        return false;
+    };
+    // Only a simple named binding (the destructured case is "<flag>", left flagged).
+    let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &param.pattern else {
+        return false;
+    };
+    let Some(symbol_id) = id.symbol_id.get() else {
+        return false;
+    };
+    let nodes = semantic.nodes();
+    let mut saw_reference = false;
+    for reference in semantic.scoping().get_resolved_references(symbol_id) {
+        saw_reference = true;
+        let ref_span = nodes.kind(reference.node_id()).span();
+        let parent = nodes.parent_node(reference.node_id());
+        let arguments = match parent.kind() {
+            AstKind::CallExpression(call) => &call.arguments,
+            AstKind::NewExpression(new_expr) => &new_expr.arguments,
+            _ => return false,
+        };
+        // The reference must be a positional ARGUMENT, not the callee.
+        if !arguments.iter().any(|arg| arg.span() == ref_span) {
+            return false;
+        }
+    }
+    saw_reference
 }
 
 fn returns_boolean(return_type: Option<&oxc_ast::ast::TSTypeAnnotation<'_>>) -> bool {
@@ -280,5 +332,51 @@ mod tests {
             run("const o = { render(html: string, pretty: boolean) {} };").len(),
             1
         );
+    }
+
+    // Regression for #4488: a passthrough wrapper forwards its boolean params
+    // verbatim to a WASM binding (`parse`). The booleans are never dispatched on
+    // here, so the "split into two functions" advice is inapplicable — the
+    // wrapper mirrors the binding's exact API. Exact reproducer from the issue.
+    #[test]
+    fn no_fp_forwarded_passthrough_params_issue_4488() {
+        let src = "export async function parseAsync(\
+                     code: string,\
+                     allowReturnOutsideFunction: boolean,\
+                     jsx: boolean,\
+                     _signal?: any,\
+                   ) { return parse(code, allowReturnOutsideFunction, jsx); }";
+        assert!(run(src).is_empty(), "got {:#?}", run(src));
+    }
+
+    // A boolean forwarded as-is to a plain call is a passthrough.
+    #[test]
+    fn allows_boolean_forwarded_to_call() {
+        assert!(run("function f(verbose: boolean) { return log(verbose); }").is_empty());
+    }
+
+    // A boolean forwarded as-is to a `new` expression is a passthrough.
+    #[test]
+    fn allows_boolean_forwarded_to_new() {
+        assert!(run("function f(strict: boolean) { return new Parser(strict); }").is_empty());
+    }
+
+    // A boolean used in an `if` branch is dispatched on, not forwarded — flagged.
+    #[test]
+    fn still_flags_boolean_branched_in_if() {
+        assert_eq!(run("function f(flag: boolean) { if (flag) doA(); else doB(); }").len(), 1);
+    }
+
+    // A boolean used as a ternary test is dispatched on — flagged.
+    #[test]
+    fn still_flags_boolean_in_ternary() {
+        assert_eq!(run("function f(flag: boolean) { return flag ? a() : b(); }").len(), 1);
+    }
+
+    // A boolean inside a `&&` short-circuit is not a direct argument — the
+    // reference is the operand of a logical expression, so it stays flagged.
+    #[test]
+    fn still_flags_boolean_in_short_circuit_arg() {
+        assert_eq!(run("function f(flag: boolean) { return run(flag && other); }").len(), 1);
     }
 }
