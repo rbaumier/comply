@@ -677,6 +677,60 @@ mod tests {
         );
     }
 
+    // Regression #4785 (didi/LogicFlow): a plain-JS project declares its
+    // `baseUrl` in `jsconfig.json` (the JavaScript equivalent of
+    // `tsconfig.json`) rather than `tsconfig.json`. With `baseUrl: "src"` a
+    // directory under the baseUrl root (`src/ui-component/`) is importable as a
+    // bare specifier (`import SubCard from 'ui-component/cards/SubCard'`) and
+    // must not be flagged as a missing dependency.
+    #[test]
+    fn allows_base_url_via_jsconfig_issue_4785() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"material-ui-demo"}"#).unwrap();
+        fs::write(
+            dir.path().join("jsconfig.json"),
+            r#"{"compilerOptions":{"baseUrl":"src"}}"#,
+        )
+        .unwrap();
+        let cards = dir.path().join("src").join("ui-component").join("cards");
+        fs::create_dir_all(&cards).unwrap();
+        fs::write(cards.join("SubCard.js"), "export default function SubCard() {}\n").unwrap();
+        let layout = dir.path().join("src").join("layout").join("Customization");
+        fs::create_dir_all(&layout).unwrap();
+        let file = layout.join("index.js");
+        let source = "import SubCard from 'ui-component/cards/SubCard';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "baseUrl import resolved via jsconfig.json must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Negative space for #4785: a genuinely-unlisted npm package that does NOT
+    // resolve under the `jsconfig.json` baseUrl root must still fire.
+    #[test]
+    fn flags_unlisted_dep_with_jsconfig_base_url_issue_4785() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"material-ui-demo"}"#).unwrap();
+        fs::write(
+            dir.path().join("jsconfig.json"),
+            r#"{"compilerOptions":{"baseUrl":"src"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("index.js");
+        let source = "import leftPad from 'left-pad';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "an unlisted package not resolvable under jsconfig baseUrl must still fire, got {diags:?}"
+        );
+    }
+
     // Negative space for #1375: a genuinely-unlisted npm package that does NOT
     // resolve under the baseUrl root must still fire even when `baseUrl` is set.
     #[test]
