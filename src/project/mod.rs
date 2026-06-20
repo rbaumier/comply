@@ -1649,13 +1649,15 @@ impl Tsconfig {
             .collect()
     }
 
-    /// Load `root/tsconfig.json` and recursively resolve any `extends` chain.
+    /// Load `root/tsconfig.json` (falling back to `root/jsconfig.json`, its
+    /// JavaScript equivalent) and recursively resolve any `extends` chain.
     /// Child `compilerOptions` win, but `paths` entries from parent tsconfigs
     /// are preserved when the child does not redeclare the same alias key —
     /// matches TypeScript's own merge semantics. Recursion is capped at 10
     /// levels to defend against pathological cycles.
     pub fn load(root: &Path) -> Option<Self> {
         load_tsconfig_file(&root.join("tsconfig.json"), 0)
+            .or_else(|| load_tsconfig_file(&root.join("jsconfig.json"), 0))
     }
 }
 
@@ -2063,6 +2065,11 @@ pub struct ProjectCtx {
     package_json_cache: Mutex<FxHashMap<PathBuf, Arc<PackageJson>>>,
     tsconfig_cache: Mutex<FxHashMap<PathBuf, Arc<Tsconfig>>>,
     cargo_manifest_cache: Mutex<FxHashMap<PathBuf, Arc<CargoManifest>>>,
+
+    // Memoizes the upward walk locating the nearest `tsconfig.json` /
+    // `jsconfig.json` config file, keyed by the start directory. Stores the full
+    // config-file path so the loader knows which of the two filenames to read.
+    ts_js_config_cache: Mutex<FxHashMap<PathBuf, Option<PathBuf>>>,
 
     // "Does this crate's root declare `#![no_std]`?", keyed by crate (manifest)
     // directory. The crate root (`src/lib.rs` / `src/main.rs`) is read once per
@@ -3561,21 +3568,39 @@ impl ProjectCtx {
         false
     }
 
-    /// Walk up from `path` to the nearest `tsconfig.json`, cache by manifest
-    /// directory. Follows the `extends` chain so that settings inherited from
-    /// a root `tsconfig.base.json` are visible to callers.
+    /// Path to the nearest `tsconfig.json` / `jsconfig.json` governing `path`,
+    /// resolved by walking up directories (closest directory holding either
+    /// wins; `tsconfig.json` beats `jsconfig.json` in the same directory).
+    /// Memoized per start directory.
+    fn nearest_ts_js_config_file(&self, start_dir: &Path) -> Option<PathBuf> {
+        if let Some(hit) = self.ts_js_config_cache.lock().ok()?.get(start_dir) {
+            return hit.clone();
+        }
+        let resolved = walk_up_finding_ts_js_config(start_dir);
+        if let Ok(mut map) = self.ts_js_config_cache.lock() {
+            map.entry(start_dir.to_path_buf())
+                .or_insert_with(|| resolved.clone());
+        }
+        resolved
+    }
+
+    /// Walk up from `path` to the nearest `tsconfig.json` (or `jsconfig.json`,
+    /// its JavaScript equivalent), cache by config directory. Follows the
+    /// `extends` chain so that settings inherited from a root
+    /// `tsconfig.base.json` are visible to callers.
     pub fn nearest_tsconfig(&self, path: &Path) -> Option<Arc<Tsconfig>> {
         let start_dir = path.parent()?;
-        let manifest_dir = walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "tsconfig.json")?;
+        let config_file = self.nearest_ts_js_config_file(start_dir)?;
+        let config_dir = config_file.parent()?.to_path_buf();
 
-        if let Some(hit) = self.tsconfig_cache.lock().ok()?.get(&manifest_dir) {
+        if let Some(hit) = self.tsconfig_cache.lock().ok()?.get(&config_dir) {
             return Some(Arc::clone(hit));
         }
 
-        let ts = load_tsconfig_file(&manifest_dir.join("tsconfig.json"), 0)?;
+        let ts = load_tsconfig_file(&config_file, 0)?;
         let arc = Arc::new(ts);
         if let Ok(mut map) = self.tsconfig_cache.lock() {
-            map.entry(manifest_dir).or_insert_with(|| Arc::clone(&arc));
+            map.entry(config_dir).or_insert_with(|| Arc::clone(&arc));
         }
         Some(arc)
     }
@@ -3659,12 +3684,13 @@ impl ProjectCtx {
         ts_dir != pkg_dir && ts_dir.starts_with(&pkg_dir)
     }
 
-    /// Walk up from `path` to the nearest `tsconfig.json` and return the
-    /// *directory* containing it. Shares the manifest-dir cache and walk
-    /// semantics with `nearest_tsconfig`.
+    /// Walk up from `path` to the nearest `tsconfig.json` / `jsconfig.json` and
+    /// return the *directory* containing it. Shares the resolution and cache
+    /// with `nearest_tsconfig`.
     pub fn nearest_tsconfig_dir(&self, path: &Path) -> Option<PathBuf> {
         let start_dir = path.parent()?;
-        walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "tsconfig.json")
+        let config_file = self.nearest_ts_js_config_file(start_dir)?;
+        config_file.parent().map(Path::to_path_buf)
     }
 
     /// Absolute path of the compiled-output directory declared by the nearest
@@ -4517,6 +4543,31 @@ pub(crate) fn walk_up_finding(start: &Path, target: &str) -> Option<PathBuf> {
     None
 }
 
+/// Names of the TypeScript/JavaScript compiler-config file, in precedence order.
+/// `jsconfig.json` is the JavaScript equivalent of `tsconfig.json` and shares the
+/// `compilerOptions` schema (`baseUrl`, `paths`, …). When both sit in the same
+/// directory the editor/`tsc` honours `tsconfig.json`, so it is checked first.
+const TS_JS_CONFIG_FILES: &[&str] = &["tsconfig.json", "jsconfig.json"];
+
+/// Walk up from `start` to the nearest directory holding a `tsconfig.json` or
+/// `jsconfig.json`, returning the full path of the config file found. The walk
+/// is per-directory: the closest directory containing *either* config wins, and
+/// within that directory `tsconfig.json` takes precedence over `jsconfig.json`
+/// (mirroring editor/`tsc` resolution). Returns `None` when neither is found.
+fn walk_up_finding_ts_js_config(start: &Path) -> Option<PathBuf> {
+    let mut cur = Some(start);
+    while let Some(dir) = cur {
+        for name in TS_JS_CONFIG_FILES {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        cur = dir.parent();
+    }
+    None
+}
+
 /// [`walk_up_finding`] memoized by the per-run `manifest_dir_cache`. The walk
 /// is deterministic for the duration of a run, so the memo is output-identical
 /// while collapsing thousands of duplicate stat-walks (one per file sharing a
@@ -4990,6 +5041,46 @@ mod tests {
         std::fs::write(dir.path().join("package.json"), r#"{"name":"app"}"#).unwrap();
         let ctx = ProjectCtx::empty();
         assert!(!ctx.react_supports_v18(&dir.path().join("t.tsx")));
+    }
+
+    // #4785: a `jsconfig.json` (no `tsconfig.json` present) supplies `baseUrl`
+    // for a plain-JS project, so a bare specifier resolving under it is a local
+    // file, not an npm package.
+    #[test]
+    fn base_url_resolves_via_jsconfig_when_no_tsconfig() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("jsconfig.json"),
+            r#"{"compilerOptions":{"baseUrl":"src"}}"#,
+        )
+        .unwrap();
+        let comp = dir.path().join("src").join("ui-component").join("cards");
+        std::fs::create_dir_all(&comp).unwrap();
+        std::fs::write(comp.join("SubCard.js"), "export default 1;").unwrap();
+        let importer = dir.path().join("src").join("layout").join("index.js");
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.resolves_via_tsconfig_base_url(&importer, "ui-component/cards/SubCard"));
+        assert!(!ctx.resolves_via_tsconfig_base_url(&importer, "left-pad"));
+    }
+
+    // `tsconfig.json` takes precedence over a sibling `jsconfig.json` in the
+    // same directory, mirroring editor/`tsc` resolution.
+    #[test]
+    fn tsconfig_wins_over_sibling_jsconfig() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{"baseUrl":"app"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("jsconfig.json"),
+            r#"{"compilerOptions":{"baseUrl":"src"}}"#,
+        )
+        .unwrap();
+        let ctx = ProjectCtx::empty();
+        let tsc = ctx.nearest_tsconfig(&dir.path().join("file.ts")).unwrap();
+        assert_eq!(tsc.base_url.as_deref(), Some(std::path::Path::new("app")));
     }
 
     #[test]
