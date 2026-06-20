@@ -1,4 +1,4 @@
-//! date-timezone-pitfall — flag date-only `new Date(...)` and `toISOString()` truncation.
+//! date-timezone-pitfall — flag date-only `new Date(...)`.
 
 mod oxc_typescript;
 
@@ -10,14 +10,13 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "date-timezone-pitfall",
-    description: "Flag timezone-shifting date handling: a date-only `new Date(\"YYYY-MM-DD\")` \
-                  string (parsed as UTC midnight) and a `toISOString()` result truncated to its \
-                  date part (converts to UTC first). Both silently shift the calendar day in \
-                  non-UTC zones.",
+    description: "Flag a date-only `new Date(\"YYYY-MM-DD\")` string, which the ECMAScript parser \
+                  reads as UTC midnight and thus silently shifts the calendar day in non-UTC \
+                  zones.",
     remediation: "Construct the date with explicit local components — `new Date(2026, 0, 15)` — \
                   or format with a timezone-aware API (`Intl.DateTimeFormat`, `date-fns-tz`). \
-                  To keep a calendar day in local time, read `getFullYear()`/`getMonth()`/\
-                  `getDate()` instead of slicing `toISOString()`.",
+                  To anchor a date-only string to UTC, append a time and zone (`new Date(\
+                  \"2026-01-15T00:00:00Z\")`).",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["correctness"],
