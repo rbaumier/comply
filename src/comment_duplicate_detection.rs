@@ -12,6 +12,9 @@
 //! - A bucket of two or more comments whose shared opening is distinctive
 //!   enough (entropy gate) and long enough relative to the comment
 //!   (`prefix_pct`) is reported.
+//! - A doc-comment documenting the same-named declaration in another file is a
+//!   parallel API implementation (e.g. a SIMD vs scalar backend), not a copy,
+//!   so it is exempt.
 
 use rustc_hash::FxHashSet;
 use std::path::Path;
@@ -319,6 +322,11 @@ struct CommentEntry {
     words: Vec<String>,
     /// The first `shared_prefix_words` words, joined — the bucket key.
     prefix_key: String,
+    /// Name of the declaration this doc-comment immediately documents, if any.
+    /// Two doc-comments on same-named declarations in different files are
+    /// parallel API implementations (e.g. a SIMD and a scalar backend exposing
+    /// the same `aes128_decrypt`), so their identical docs are not a smell.
+    decl_name: Option<String>,
 }
 
 /// A logical comment block: either one `/* */` node or a run of consecutive
@@ -329,6 +337,8 @@ struct CommentGroup {
     start_byte: usize,
     end_byte: usize,
     stripped: String,
+    /// Name of the declaration immediately documented by this block.
+    decl_name: Option<String>,
 }
 
 struct RawComment {
@@ -337,6 +347,10 @@ struct RawComment {
     row: usize,
     col: usize,
     is_line: bool,
+    /// Name of the declaration this comment immediately precedes, captured when
+    /// the comment is an outer doc-comment whose next sibling (skipping
+    /// attributes) is a named declaration.
+    decl_name: Option<String>,
 }
 
 #[must_use]
@@ -412,6 +426,19 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
             let partner = &entries[partner_idx];
             let shorter = partner.words.len().min(entry.words.len());
             if (shared as f64) < prefix_pct * (shorter as f64) {
+                continue;
+            }
+            // Parallel API implementations: a doc-comment documenting the same
+            // named declaration in another file (a SIMD vs scalar backend both
+            // exposing `aes128_decrypt`) carries the same description because it
+            // describes the same item, not because it was copy-pasted. Restricted
+            // to cross-file matches with matching declaration names so an
+            // intra-file duplicate, or a copy-pasted free-floating rationale,
+            // still flags.
+            if entry.file_idx != partner.file_idx
+                && entry.decl_name.is_some()
+                && entry.decl_name == partner.decl_name
+            {
                 continue;
             }
             // Tailor the remediation to reach: a copy in the same file is best
@@ -497,9 +524,71 @@ fn extract_entries(
             span: (group.start_byte, group.end_byte - group.start_byte),
             words,
             prefix_key,
+            decl_name: group.decl_name,
         });
     }
     entries
+}
+
+/// Declaration node kinds (Rust + TS/JS) that carry a `name` field and can be
+/// the subject of a leading doc-comment. A comment whose next sibling is one of
+/// these documents that named item.
+fn is_named_declaration(kind: &str) -> bool {
+    matches!(
+        kind,
+        // Rust
+        "function_item"
+            | "struct_item"
+            | "enum_item"
+            | "trait_item"
+            | "type_item"
+            | "const_item"
+            | "static_item"
+            | "mod_item"
+            | "union_item"
+            | "macro_definition"
+            // TS / JS
+            | "function_declaration"
+            | "generator_function_declaration"
+            | "class_declaration"
+            | "interface_declaration"
+            | "type_alias_declaration"
+            | "enum_declaration"
+            | "method_definition"
+            | "abstract_class_declaration"
+    )
+}
+
+/// True when the raw comment bytes carry a doc-comment marker (`///`, `//!`,
+/// `/**`, `/*!`). Only doc-comments describe the item they precede; a plain `//`
+/// / `/*` comment above a declaration is incidental prose, so a copy-pasted one
+/// is still a smell and must not earn the parallel-implementation exemption.
+fn is_doc_comment(raw: &[u8]) -> bool {
+    raw.starts_with(b"///")
+        || raw.starts_with(b"//!")
+        || raw.starts_with(b"/**")
+        || raw.starts_with(b"/*!")
+}
+
+/// The name of the declaration a doc-comment immediately documents: its next
+/// named sibling, skipping attributes/decorators, when that sibling is a named
+/// declaration. `None` for plain (non-doc) comments, free-floating comments (no
+/// following declaration), or declarations without a `name` field.
+fn documented_decl_name(comment: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    if !is_doc_comment(&source[comment.start_byte()..comment.end_byte()]) {
+        return None;
+    }
+    let mut sibling = comment.next_named_sibling()?;
+    while matches!(sibling.kind(), "attribute_item" | "decorator") {
+        sibling = sibling.next_named_sibling()?;
+    }
+    if !is_named_declaration(sibling.kind()) {
+        return None;
+    }
+    sibling
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source).ok())
+        .map(str::to_owned)
 }
 
 fn collect_raw_comments(tree: &tree_sitter::Tree, source: &[u8]) -> Vec<RawComment> {
@@ -517,6 +606,7 @@ fn collect_raw_comments(tree: &tree_sitter::Tree, source: &[u8]) -> Vec<RawComme
                 row: node.start_position().row,
                 col: node.start_position().column,
                 is_line,
+                decl_name: documented_decl_name(node, source),
             });
         }
         if cursor.goto_first_child() {
@@ -545,6 +635,9 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
             let group_is_marker = line_is_marker(first_text);
             let mut last_row = c.row;
             let mut end_byte = c.end_byte;
+            // The documented declaration is attached to the last line of the
+            // run (the one directly above the declaration).
+            let mut decl_name = c.decl_name.clone();
             let mut texts = vec![first_text.to_string()];
             let mut j = i + 1;
             while let Some(n) = raws.get(j) {
@@ -559,6 +652,7 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
                 texts.push(n_text.to_string());
                 last_row = n.row;
                 end_byte = n.end_byte;
+                decl_name = n.decl_name.clone();
                 j += 1;
             }
             groups.push(CommentGroup {
@@ -567,6 +661,7 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
                 start_byte: c.start_byte,
                 end_byte,
                 stripped: texts.join(" "),
+                decl_name,
             });
             i = j;
         } else {
@@ -576,6 +671,7 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
                 start_byte: c.start_byte,
                 end_byte: c.end_byte,
                 stripped: strip_block(&source[c.start_byte..c.end_byte]),
+                decl_name: c.decl_name.clone(),
             });
             i += 1;
         }
@@ -823,12 +919,86 @@ pub fn run() {}
 
     #[test]
     fn flags_rust_doc_comments() {
+        // A doc-comment copy-pasted onto two *differently named*, unrelated
+        // functions is genuine drift-prone duplication and must still flag.
         let dir = tempfile::tempdir().unwrap();
-        let doc = "/// Builds the canonical pagination defaults derived from the shared schema so every list stays consistent everywhere.\npub fn f() {}\n";
-        let a = write(&dir, "a.rs", doc);
-        let b = write(&dir, "b.rs", doc);
+        let head = "/// Builds the canonical pagination defaults derived from the shared schema so every list stays consistent everywhere.\n";
+        let a = write(&dir, "a.rs", &format!("{head}pub fn build_admin_list() {{}}\n"));
+        let b = write(&dir, "b.rs", &format!("{head}pub fn build_lab_section() {{}}\n"));
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn ignores_parallel_implementation_doc_comments() {
+        // Regression (#4842): two files are parallel backend implementations of
+        // the same API (RustCrypto's 64-bit and 32-bit fixsliced AES), so each
+        // exposes the same-named `aes128_decrypt` with the same doc-comment — it
+        // describes the same item, not a copy-paste smell.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "\
+/// Fully-fixsliced AES-128 decryption (the InvShiftRows is completely omitted).
+///
+/// Decrypts four blocks in-place and in parallel.
+pub(crate) fn aes128_decrypt(rkeys: u8, blocks: u8) -> u8 { rkeys ^ blocks }
+";
+        let a = write(&dir, "fixslice64.rs", doc);
+        let b = write(&dir, "fixslice32.rs", doc);
+        assert!(run(&[&a, &b]).is_empty(), "same-named parallel-impl docs must not flag");
+    }
+
+    #[test]
+    fn still_flags_duplicate_doc_on_differently_named_decls() {
+        // The exemption is name-keyed: an identical doc-comment over two
+        // *differently named* functions across files is real duplication. Mirrors
+        // the parallel-impl shape but with distinct names so it must still flag.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "\
+/// Fully-fixsliced AES-128 decryption (the InvShiftRows is completely omitted).
+///
+/// Decrypts four blocks in-place and in parallel.
+";
+        let a = write(&dir, "a.rs", &format!("{doc}pub fn decode_alpha(x: u8) -> u8 {{ x }}\n"));
+        let b = write(&dir, "b.rs", &format!("{doc}pub fn decode_beta(x: u8) -> u8 {{ x }}\n"));
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "identical doc on differently-named decls is a smell");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn ignores_parallel_implementation_ts_jsdoc() {
+        // The exemption is cross-language: two TS files exposing the same-named
+        // exported function with the same `/** */` JSDoc are parallel API
+        // implementations, not a copy-paste smell.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "\
+/**
+ * Encrypts four blocks in-place and in parallel using the fixsliced representation.
+ */
+export function aes128Encrypt(rkeys: number, blocks: number): number { return rkeys ^ blocks; }
+";
+        let a = write(&dir, "backend-wasm.ts", doc);
+        let b = write(&dir, "backend-node.ts", doc);
+        assert!(run(&[&a, &b]).is_empty(), "same-named TS parallel-impl JSDoc must not flag");
+    }
+
+    #[test]
+    fn still_flags_intra_file_duplicate_doc_on_same_decl_name() {
+        // The exemption is cross-file only: two same-named functions in one file
+        // (e.g. a botched copy-paste before renaming) with identical docs is still
+        // a smell. Distinct files filler keeps the run from being a single-file noop.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "\
+/// Fully-fixsliced AES-128 decryption (the InvShiftRows is completely omitted).
+///
+/// Decrypts four blocks in-place and in parallel.
+pub fn aes128_decrypt(x: u8) -> u8 { x }
+";
+        let a = write(&dir, "a.rs", &format!("{doc}\n{doc}"));
+        let b = write(&dir, "filler.rs", "pub fn z() {}\n");
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "intra-file duplicate doc on same name is still a smell");
+        assert!(diags[0].path.ends_with("a.rs"));
     }
 
     #[test]
