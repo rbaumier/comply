@@ -43,6 +43,15 @@ fn find_ipv4(s: &str, start: usize) -> Option<(usize, String)> {
     }
 
     if octets == 3 && octet_len > 0 {
+        // Left-boundary anchor: the octet must not be preceded by a digit or
+        // `.`, which would mean the quad is a four-segment sub-window of a longer
+        // dotted-decimal sequence (an ASN.1 OID like `1.2.840.10045.4.3.1`, or a
+        // multi-segment version), not a complete IPv4 token. A valid IPv4 has
+        // exactly four octets; the trailing `.digit` boundary is checked by the
+        // caller via `is_version_like`.
+        if ip_start > 0 && (bytes[ip_start - 1] == b'.' || bytes[ip_start - 1].is_ascii_digit()) {
+            return find_ipv4(s, ip_start + 1);
+        }
         let ip = &s[ip_start..i];
         Some((i, ip.to_string()))
     } else {
@@ -162,6 +171,37 @@ fn is_svg_path_data(line: &str) -> bool {
         || trimmed.contains(" d='")
 }
 
+/// True when the line constructs or declares an ASN.1 Object Identifier.
+///
+/// OIDs (`1.2.840.10045.4.3.1`, `1.3.101.113`) are dotted-decimal arc strings
+/// that identify cryptographic algorithms and PKI entities. Their syntax is
+/// indistinguishable from IPv4 by format alone — a 4-arc OID like `1.3.101.113`
+/// has four segments each <= 255 — so the dotted-quad matcher reports them as IP
+/// addresses. The `ObjectIdentifier` type or constructor, or an `OID`-named
+/// binding, marks the string as a registered identifier, not a network address.
+fn is_oid_context(line: &str) -> bool {
+    if line.contains("ObjectIdentifier") {
+        return true;
+    }
+    // `OID` bordered by non-alphanumerics (so `_` separates): matches the
+    // `ALGORITHM_OID` / `ECDSA_SHA224_OID` naming convention, `OID = `, and
+    // `oid!(...)` macros, but not `VOID` or `avoid` where a letter abuts it.
+    let upper = line.to_ascii_uppercase();
+    let bytes = upper.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = upper[from..].find("OID") {
+        let at = from + rel;
+        let before_ok = at == 0 || !bytes[at - 1].is_ascii_alphanumeric();
+        let after = at + 3;
+        let after_ok = after >= bytes.len() || !bytes[after].is_ascii_alphanumeric();
+        if before_ok && after_ok {
+            return true;
+        }
+        from = at + 3;
+    }
+    false
+}
+
 fn is_in_comment(line: &str) -> bool {
     let trimmed = line.trim_start();
     trimmed.starts_with("//")
@@ -179,6 +219,9 @@ impl TextCheck for Check {
                 continue;
             }
             if is_svg_path_data(line) {
+                continue;
+            }
+            if is_oid_context(line) {
                 continue;
             }
             let mut pos = 0;
@@ -377,6 +420,49 @@ mod tests {
         assert_eq!(run(r#"let addr = "192.168.1.1";"#).len(), 1);
         assert_eq!(run(r#"conn.connect("10.0.0.5").await?;"#).len(), 1);
         assert_eq!(run(r#"let s = "10.0.0.5".to_string();"#).len(), 1);
+    }
+
+    #[test]
+    fn allows_asn1_oid_strings_issue_4836() {
+        // Issue #4836: ASN.1 Object Identifiers are dotted-decimal arc strings
+        // that identify crypto algorithms, not network addresses. The
+        // `ObjectIdentifier` constructor/type marks the string as an OID.
+        assert!(run(
+            r#"pub const ECDSA_SHA224_OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.1");"#
+        )
+        .is_empty());
+        assert!(run(
+            r#"pub const ALGORITHM_OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.113");"#
+        )
+        .is_empty());
+        assert!(run(
+            r#"pub const ALGORITHM_OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.112");"#
+        )
+        .is_empty());
+        // `_OID`-suffixed binding alone (no `ObjectIdentifier` on the line) is
+        // still recognized as OID context via the `OID` token.
+        assert!(run(r#"const ALGORITHM_OID: &str = "1.3.101.113";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_quad_subwindow_of_longer_dotted_decimal_issue_4836() {
+        // Issue #4836: a four-octet window inside a longer dotted-decimal
+        // sequence (a 7-arc OID) is not a complete IPv4 token. The
+        // left-boundary anchor rejects the sub-window even without OID context.
+        assert!(run(r#"let s = "1.2.840.10045.4.3.1";"#).is_empty());
+        assert!(run(r#"let s = "9.10.11.12.13.14.15";"#).is_empty());
+    }
+
+    #[test]
+    fn flags_genuine_ipv4_despite_oid_fix_issue_4836() {
+        // Negative space: real IPv4 addresses must still flag. `1.2.3.4` is a
+        // valid four-octet IPv4 (all octets <= 255) with no OID context, so it
+        // is reported — only OID context or a longer sequence is exempt.
+        assert_eq!(run(r#"const host = "192.168.1.1";"#).len(), 1);
+        assert_eq!(run(r#"const host = "1.2.3.4";"#).len(), 1);
+        // An IP on a line whose binding merely contains `void`/`avoid` (not the
+        // `OID` token) is not exempt.
+        assert_eq!(run(r#"let avoid_this = "10.0.0.5";"#).len(), 1);
     }
 
     #[test]
