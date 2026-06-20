@@ -1,13 +1,16 @@
 //! no-ignored-exceptions Rust backend — flag `let _ = fallible()` that
 //! discards a Result/Option without handling it.
 //!
-//! Tests are exempted: a `let _ = fn_under_test()` pattern is the
-//! idiomatic way to assert "this call doesn't panic" without caring
-//! about the return value. Exempt when in a test context — a
-//! `#[test]`/`#[cfg(test)]` attribute walk via
-//! `rust_helpers::is_in_test_context` — or when the file lives under a
-//! `tests/` directory (`rust_helpers::is_under_tests_dir`), since plain
-//! helper fns there are integration-test infrastructure.
+//! Tests and benchmarks are exempted: a `let _ = fn_under_test()` pattern is
+//! the idiomatic way to assert "this call doesn't panic" without caring about
+//! the return value. Exempt when in a test context — a `#[test]`/`#[cfg(test)]`
+//! attribute walk via `rust_helpers::is_in_test_context` — or when the file
+//! lives under a `tests/` directory (`rust_helpers::is_under_tests_dir`), since
+//! plain helper fns there are integration-test infrastructure. Benchmark files
+//! (`FileCtx::in_benchmark_dir`) are exempt too: in a Criterion `b.iter(|| { let
+//! _ = f(black_box(..)) })` closure the discard is the idiomatic way to run a
+//! call for its timing without consuming the result, and benchmark code never
+//! ships to production.
 //!
 //! Four non-error idioms are also exempted:
 //! - `let _ = expr?`: the `?` operator already propagates any `Err`/`None` to
@@ -104,10 +107,15 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    // Skip inside tests — `let _ = …` there is "call and don't care". Covers
-    // both a `#[test]`/`#[cfg(test)]` attribute context and a file under a
-    // `tests/` directory, where plain helper fns are test infrastructure too.
-    if is_in_test_context(node, source) || is_under_tests_dir(ctx.path) {
+    // Skip inside tests and benchmarks — `let _ = …` there is "call and don't
+    // care". Covers a `#[test]`/`#[cfg(test)]` attribute context, a file under a
+    // `tests/` directory (plain helper fns there are test infrastructure), and
+    // benchmark files (`benches/`, `_bench.rs`): a Criterion `b.iter` closure
+    // discards the result to time the call without consuming it.
+    if is_in_test_context(node, source)
+        || is_under_tests_dir(ctx.path)
+        || ctx.file.in_benchmark_dir()
+    {
         return;
     }
 
@@ -978,6 +986,30 @@ mod tests {
         "#;
         let diagnostics = crate::rules::test_helpers::run_rule(&Check, src, "tests/util.rs");
         assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn allows_let_underscore_in_benchmark_file() {
+        // Regression for #4925: in a Criterion `b.iter(|| { let _ = f(..) })`
+        // closure the discard runs the call for its timing without consuming the
+        // result. Benchmark code never ships to production, so it is out of scope
+        // like test code. The issue's exact postcard `varint_bench.rs` example.
+        let src = r#"
+            fn bench_varint_usize_small(c: &mut Criterion) {
+                let mut out = [0u8; varint_max::<usize>()];
+                c.bench_function("varint_usize_small", |b| {
+                    b.iter(|| {
+                        let _ = varint_usize(black_box(42), black_box(&mut out));
+                    })
+                });
+            }
+        "#;
+        let bench_dir =
+            crate::rules::test_helpers::run_rule(&Check, src, "benches/varint_bench.rs");
+        let bench_marker =
+            crate::rules::test_helpers::run_rule(&Check, src, "src/varint_bench.rs");
+        assert!(bench_dir.is_empty());
+        assert!(bench_marker.is_empty());
     }
 
     #[test]
