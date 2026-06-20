@@ -15,12 +15,129 @@
 //! `set` function block are exempt from both the side-effect-marker and the
 //! `.value =` checks — assignments and reactive writes are a setter's purpose.
 //! The pure getter body stays checked.
+//!
+//! String/comment awareness: markers and `.value =` matches that land inside a
+//! string literal, a template literal, or a comment are skipped — they are text
+//! content, not executed code. A computed that builds a string of code (an
+//! exporter) is pure even though its output contains `.value =`. `${...}`
+//! interpolation spans inside template literals are code and stay checked.
+//! Regex literals (`/.../`) are not recognized as strings — a backtick inside
+//! one would mis-open a template literal; this is consistent with not
+//! re-parsing TS and is vanishingly rare inside a computed body.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
 const SIDE_EFFECT_MARKERS: &[&str] = &[
     "emit(", "console.", "fetch(", "axios.", ".post(", ".put(", ".delete(", ".patch(", "$emit(",
 ];
+
+/// A boolean mask over `body`'s bytes: `true` marks a byte that is *not*
+/// executable code — it is inside a string literal, a template literal, or a
+/// comment. Markers and `.value =` matches landing on a `true` byte are text
+/// content and must not be flagged.
+///
+/// Template-literal `${...}` interpolations are code (`false`), tracked with a
+/// brace-depth stack so nested template literals inside interpolations are
+/// handled. Escapes (`\`) inside `'`/`"`/`` ` `` strings are honored so an
+/// escaped quote does not end the string early.
+fn non_code_mask(body: &str) -> Vec<bool> {
+    let bytes = body.as_bytes();
+    let mut mask = vec![false; bytes.len()];
+    // Brace depth at which each open template literal started; the literal
+    // resumes (its content becomes string again) when depth returns to it.
+    let mut template_stack: Vec<u32> = Vec::new();
+    let mut brace_depth: u32 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        let in_template = template_stack.last() == Some(&brace_depth);
+        if in_template {
+            match c {
+                b'\\' => {
+                    mask[i] = true;
+                    if i + 1 < bytes.len() {
+                        mask[i + 1] = true;
+                    }
+                    i += 2;
+                    continue;
+                }
+                b'`' => {
+                    template_stack.pop();
+                    i += 1;
+                    continue;
+                }
+                b'$' if i + 1 < bytes.len() && bytes[i + 1] == b'{' => {
+                    // Enter an interpolation: the `${` and its contents are code.
+                    brace_depth += 1;
+                    i += 2;
+                    continue;
+                }
+                _ => {
+                    mask[i] = true;
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+        match c {
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    mask[i] = true;
+                    i += 1;
+                }
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
+                mask[i] = true;
+                mask[i + 1] = true;
+                i += 2;
+                while i < bytes.len() {
+                    if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                        mask[i] = true;
+                        mask[i + 1] = true;
+                        i += 2;
+                        break;
+                    }
+                    mask[i] = true;
+                    i += 1;
+                }
+            }
+            b'\'' | b'"' => {
+                let quote = c;
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\\' {
+                        mask[i] = true;
+                        if i + 1 < bytes.len() {
+                            mask[i + 1] = true;
+                        }
+                        i += 2;
+                        continue;
+                    }
+                    if bytes[i] == quote || bytes[i] == b'\n' {
+                        break;
+                    }
+                    mask[i] = true;
+                    i += 1;
+                }
+                i += 1;
+            }
+            b'`' => {
+                template_stack.push(brace_depth);
+                i += 1;
+            }
+            b'{' => {
+                brace_depth += 1;
+                i += 1;
+            }
+            b'}' => {
+                brace_depth = brace_depth.saturating_sub(1);
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    mask
+}
 
 /// Byte range `[key_start ..= end]` spanning the writable-computed `set`
 /// property within `body`, or `None` when there is no such property.
@@ -107,11 +224,16 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
         let body = &src[start..j.saturating_sub(1)];
         let base_line = src[..abs].matches('\n').count();
         let set_range = set_block_range(body);
+        let mask = non_code_mask(body);
         let mut line_start = 0usize;
-        for (line_off, line) in body.lines().enumerate() {
+        // Split on '\n' (not `.lines()`) so a trailing '\r' stays inside the
+        // segment and `seg.len() + 1` advances the byte cursor exactly — the
+        // cursor must stay aligned with `mask`'s byte offsets. `\r` only ever
+        // trails a line, so it never shifts a marker/assignment match offset.
+        for (line_off, line) in body.split('\n').enumerate() {
             let cur_start = line_start;
             let cur_end = cur_start + line.len();
-            line_start += line.len() + 1; // +1 for the stripped '\n'
+            line_start += line.len() + 1; // +1 for the consumed '\n'
             if let Some((set_open, set_close)) = set_range {
                 // Skip a line whose span overlaps the `set` block range — covers
                 // both a single-line `set(v) { ... }` and a multi-line body.
@@ -119,8 +241,12 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
                     continue;
                 }
             }
+            // A marker/assignment is real code only when it starts on a byte the
+            // mask marks as code (not inside a string, template literal, or
+            // comment).
+            let is_code = |off_in_line: usize| !mask[cur_start + off_in_line];
             for marker in SIDE_EFFECT_MARKERS {
-                if line.contains(marker) {
+                if line.match_indices(marker).any(|(off, _)| is_code(off)) {
                     diagnostics.push(Diagnostic {
                         path: std::sync::Arc::clone(&ctx.path_arc),
                         line: base_line + line_off + 1,
@@ -135,8 +261,13 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
                     break;
                 }
             }
-            let trimmed = line.trim_start();
-            if trimmed.contains(".value =") && !trimmed.contains("==") {
+            const VALUE_ASSIGN: &str = ".value =";
+            let line_bytes = line.as_bytes();
+            let assigns = line.match_indices(VALUE_ASSIGN).any(|(off, _)| {
+                // Reject `.value ==` / `.value ===` (comparison, not assignment).
+                is_code(off) && line_bytes.get(off + VALUE_ASSIGN.len()) != Some(&b'=')
+            });
+            if assigns {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
                     line: base_line + line_off + 1,
@@ -257,5 +388,51 @@ mod tests {
     fn flags_emit_in_readonly_computed() {
         let sfc = "<script setup>\nconst c = computed(() => emit('x'))\n</script>";
         assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn allows_value_assign_inside_template_literal() {
+        // The computed builds a string of Vue code for display; `.value =` is
+        // string content, not an executed assignment. (Issue #4741)
+        let sfc = "<script setup>\nconst layoutExport = computed(() => {\n  let code = `toggle () {\n    leftDrawerOpen.value = !leftDrawerOpen.value\n  }`\n  return code\n})\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_marker_inside_template_literal() {
+        let sfc = "<script setup>\nconst c = computed(() => {\n  return `call emit('x') here`\n})\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn flags_value_assign_inside_template_interpolation() {
+        // `${...}` is executed code, so a real assignment there is a side effect.
+        let sfc = "<script setup>\nconst c = computed(() => {\n  return `${(other.value = 2)}`\n})\n</script>";
+        assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn allows_value_assign_in_string_literal() {
+        let sfc = "<script setup>\nconst c = computed(() => 'x.value = 1')\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_value_assign_in_comment() {
+        let sfc = "<script setup>\nconst c = computed(() => {\n  // other.value = 2\n  return 1\n})\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn crlf_keeps_mask_aligned_with_real_assignment() {
+        // CRLF terminators must not desync the byte cursor from the mask. Two
+        // template-literal marker lines precede the real one: if the cursor
+        // miscounts `\r\n` as one byte, the accumulated drift unmasks a
+        // templated `emit(` and produces extra false positives. Only the
+        // executed `emit(z)` on line 5 must be flagged.
+        let sfc = "<script setup>\r\nconst c = computed(() => {\r\n  const a = `emit(x)`\r\n  const b = `emit(y)`\r\n  emit(z)\r\n  return a + b\r\n})\r\n</script>";
+        let diags = run(sfc);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 5);
     }
 }
