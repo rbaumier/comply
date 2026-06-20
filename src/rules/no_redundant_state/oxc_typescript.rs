@@ -1,3 +1,10 @@
+//! Flags `useState` destructures whose setter is never called — the state can
+//! never change, so a plain `const`/`useMemo` is enough.
+//!
+//! A setter named with a leading underscore (`_setId`) is exempt: that is the
+//! idiomatic "intentionally unused" marker (matching TS `noUnusedLocals`), so
+//! such a destructure is not treated as redundant state.
+
 use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
@@ -52,6 +59,13 @@ impl OxcCheck for Check {
                 let BindingPattern::BindingIdentifier(ident) = setter_pat else {
                     continue;
                 };
+                // An underscore-prefixed setter (`_setId`) is the idiomatic
+                // "intentionally unused" marker (matching TS `noUnusedLocals`); the
+                // author deliberately keeps the state without calling the setter, so
+                // it is not a redundant-state smell.
+                if ident.name.starts_with('_') {
+                    continue;
+                }
                 let Some(sym) = ident.symbol_id.get() else {
                     continue;
                 };
@@ -102,5 +116,55 @@ fn is_use_state_call(expr: &Expression) -> bool {
         Expression::Identifier(ident) => ident.name == "useState",
         Expression::StaticMemberExpression(member) => member.property.name == "useState",
         _ => false,
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
+    }
+
+    // #4416: an underscore-prefixed setter is the idiomatic "intentionally
+    // unused" marker, so keeping the state without calling `_setId` is fine.
+    #[test]
+    fn allows_underscore_prefixed_unused_setter() {
+        let src = r#"
+            function Chat({ idParam }) {
+                const [id, _setId] = React.useState(idParam);
+                return <div>{id}</div>;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    // A plain (non-underscore) setter that is never called is still redundant.
+    #[test]
+    fn flags_unused_setter() {
+        let src = r#"
+            function Counter() {
+                const [count, setCount] = useState(0);
+                return <div>{count}</div>;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 }
