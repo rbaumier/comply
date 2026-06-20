@@ -204,7 +204,31 @@ fn contains_private_key_header(line: &str) -> bool {
         "-----BEGIN OPENSSH PRIVATE KEY-----",
         "-----BEGIN PGP PRIVATE KEY BLOCK-----",
     ];
-    HEADERS.iter().any(|h| line.contains(h))
+    HEADERS.iter().any(|h| match line.find(h) {
+        Some(idx) => !pem_body_is_interpolated(line, idx + h.len()),
+        None => false,
+    })
+}
+
+/// A PEM header is only a hardcoded key when the key material between the
+/// markers is static. When the header sits inside a template literal whose
+/// body is built from a `${...}` substitution, the key is injected at runtime
+/// (e.g. `` `-----BEGIN PRIVATE KEY-----\n${key}\n-----END PRIVATE KEY-----` ``)
+/// — the header is a format frame, not a credential.
+///
+/// `header_end` is the byte offset just past the BEGIN marker. We confirm the
+/// marker lies inside a backtick template literal and that a `${` substitution
+/// follows it within that literal.
+fn pem_body_is_interpolated(line: &str, header_end: usize) -> bool {
+    let backticks_before = line[..header_end].bytes().filter(|b| *b == b'`').count();
+    // An odd number of backticks before the header means it opened a template
+    // literal that is still active at the marker.
+    if backticks_before % 2 == 0 {
+        return false;
+    }
+    let after = &line[header_end..];
+    let literal_end = after.find('`').unwrap_or(after.len());
+    after[..literal_end].contains("${")
 }
 
 fn contains_twilio_key(line: &str) -> bool {
@@ -452,6 +476,44 @@ mod tests {
     fn flags_private_key_header() {
         assert_eq!(run("const k = '-----BEGIN RSA PRIVATE KEY-----';").len(), 1);
         assert_eq!(run("-----BEGIN OPENSSH PRIVATE KEY-----").len(), 1);
+    }
+
+    // Regression tests for #4942 — a PEM template literal whose body is an
+    // interpolated variable is a format frame, not a hardcoded key.
+    #[test]
+    fn allows_pem_template_with_interpolated_body() {
+        assert!(
+            run(r#"const pem = `-----BEGIN PRIVATE KEY-----\n${privateKeyBase64}\n-----END PRIVATE KEY-----`;"#)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_rsa_pem_template_with_interpolated_body() {
+        assert!(
+            run(r#"const pem = `-----BEGIN RSA PRIVATE KEY-----\n${key}\n-----END RSA PRIVATE KEY-----`;"#)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_fully_literal_pem_template() {
+        // A template literal with a static key body is still a hardcoded key.
+        assert_eq!(
+            run(r#"const pem = `-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBg\n-----END PRIVATE KEY-----`;"#)
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn still_flags_double_quoted_pem_with_dollar_brace_text() {
+        // A `${` in a non-template (double-quoted) string is literal text, not a
+        // substitution: the PEM header is still hardcoded and must flag.
+        assert_eq!(
+            run(r#"const pem = "-----BEGIN PRIVATE KEY-----${notInterp}";"#).len(),
+            1
+        );
     }
 
     #[test]
