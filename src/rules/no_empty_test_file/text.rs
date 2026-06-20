@@ -405,6 +405,12 @@ impl TextCheck for Check {
         if has_test_content(ctx.source) {
             return Vec::new();
         }
+        // Type-compilation tests (e.g. node-mysql2's `test/tsc-build/`) re-export
+        // or annotate the public API to confirm it type-checks; they carry no
+        // runtime test cases by design, so an absent `test(`/`expect(` is correct.
+        if crate::rules::path_utils::is_type_compilation_test_path(ctx.path) {
+            return Vec::new();
+        }
         if is_test_infrastructure(ctx.path, ctx.source) {
             return Vec::new();
         }
@@ -718,5 +724,44 @@ mod tests {
                       \t}\n\
                       }\n";
         assert!(run("sdk/schemaregistry/perf-tests/src/serialize.spec.ts", source).is_empty());
+    }
+
+    #[test]
+    fn allows_tsc_build_reexport_test() {
+        // sidorares/node-mysql2 test/tsc-build/index.test.ts: a type-compilation
+        // test that only re-exports the public API so `tsc` confirms it compiles.
+        // No runtime test calls by design.
+        let source = "/**\n\
+                      \t* It only compiles all typings in the project.\n\
+                      \t*/\n\
+                      import mysql from '../../index.js';\n\
+                      import mysqlp from '../../promise.js';\n\
+                      \n\
+                      export { mysql, mysqlp };\n";
+        assert!(run("test/tsc-build/index.test.ts", source).is_empty());
+    }
+
+    #[test]
+    fn allows_tsc_build_type_annotation_assertions() {
+        // node-mysql2 test/tsc-build/strict-checks/query.test.ts: type annotations
+        // act as compile-time assertions; there is no runtime `expect(`.
+        let source = "{\n\
+                      \tconst conn = mysql.createConnection(access);\n\
+                      \tconn.query<mysql.RowDataPacket[]>(sql, (_e, _r, _f) => {\n\
+                      \t\tconst err: mysql.QueryError | null = _e;\n\
+                      \t\tconst result: mysql.RowDataPacket[] = _r;\n\
+                      \t});\n\
+                      }\n";
+        assert!(run("test/tsc-build/strict-checks/query.test.ts", source).is_empty());
+    }
+
+    #[test]
+    fn flags_genuinely_empty_runtime_test_outside_type_dir() {
+        // Core preserved: a test-named file with zero runtime tests and zero type
+        // assertions, not under a type-compilation-test directory, is still flagged.
+        assert_eq!(
+            run("src/utils.test.ts", "import { helper } from './helper';\n").len(),
+            1
+        );
     }
 }
