@@ -7,7 +7,7 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "vue-define-emits-typed",
-    description: "`defineEmits([...])` array form loses type safety — use the generic `defineEmits<{...}>()` form.",
+    description: "`defineEmits([...])` array form loses type safety — use the generic `defineEmits<{...}>()` form. `lang=\"ts\"` SFCs are handled by `vue-typed-define-props-emits`.",
     remediation: "Use `defineEmits<{ change: [value: string] }>()` for full type-checking on emits.",
     severity: Severity::Warning,
     doc_url: None,
