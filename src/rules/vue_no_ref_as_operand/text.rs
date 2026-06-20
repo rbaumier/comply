@@ -297,6 +297,11 @@ impl TextCheck for Check {
         if bindings.is_empty() {
             return Vec::new();
         }
+        // Blank every `<!-- ... -->` HTML comment (offsets/newlines preserved) so
+        // a ref name in template prose, or the comment's own `-->` mistaken for a
+        // `--` decrement, can't be matched as an operand. All offset-based checks
+        // below stay valid because the mask is byte-length-preserving.
+        let scan_source = crate::rules::vue_template_helpers::mask_html_comments(ctx.source);
         let shadow_scopes = collect_shadow_scopes(ctx.source);
         // Vue 3 auto-unwraps top-level refs/computed inside `<template>` expressions,
         // so a bare ref name there is correct (`.value` would be wrong). Suppress any
@@ -310,7 +315,7 @@ impl TextCheck for Check {
         // Look for `<name> + ` / `<name> ===` / `<name>++` / `<name>--`
         // patterns where the binding is used like a primitive.
         for name in &bindings {
-            for (i, _) in ctx.source.match_indices(name.as_str()) {
+            for (i, _) in scan_source.match_indices(name.as_str()) {
                 // A same-named function/arrow parameter, or a local
                 // `const`/`let`/`var` declared earlier in the body, shadows the
                 // outer ref inside that scope; the bare name there is the plain
@@ -328,19 +333,19 @@ impl TextCheck for Check {
                 }
                 // Word boundary on left.
                 let prev_ok = i == 0
-                    || ctx.source.as_bytes()[i - 1].is_ascii_whitespace()
+                    || scan_source.as_bytes()[i - 1].is_ascii_whitespace()
                     || matches!(
-                        ctx.source.as_bytes()[i - 1],
+                        scan_source.as_bytes()[i - 1],
                         b'(' | b'[' | b'{' | b',' | b';' | b'=' | b'+' | b'-' | b'!'
                     );
                 if !prev_ok {
                     continue;
                 }
                 let end = i + name.len();
-                if end >= ctx.source.len() {
+                if end >= scan_source.len() {
                     continue;
                 }
-                let after = &ctx.source[end..];
+                let after = &scan_source[end..];
                 let next_char = after.chars().next();
                 let after_trim = after.trim_start();
                 // Allow `.value`, `.something`, function-call, assignment.
@@ -488,6 +493,24 @@ mod tests {
         // A destructuring `const { count }` binds no bare `count` identifier the
         // scanner tracks, so the bare `count` operand stays the outer ref.
         let src = "const count = ref(0);\nfunction f() {\n  const { other } = obj;\n  return count + 1;\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_ref_name_before_html_comment_close() {
+        // vue-echarts repro shape: a ref name sits right before an `<!-- ... -->`
+        // comment's closing `-->`, which the scanner misread as a `--` decrement.
+        // No extractable root template here, so `template_range` suppression does
+        // not apply — only masking the comment prevents the false positive.
+        let src = "<!-- disable html -->\n<script setup lang=\"ts\">\nconst html = ref(\"\");\n</script>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_genuine_ref_misuse_alongside_comment() {
+        // A real `count + 1` misuse in `<script>` must still flag even when the
+        // ref name also appears in a masked HTML comment whose `-->` is masked.
+        let src = "<!-- count -->\n<script setup lang=\"ts\">\nconst count = ref(0)\nconst doubled = count + 1\n</script>";
         assert_eq!(run(src).len(), 1);
     }
 
