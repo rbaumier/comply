@@ -212,4 +212,27 @@ mod tests {
         let (_dir, diags) = run_in_package(pkg, "src/runtime/composables/usePrefix.ts", src);
         assert_eq!(diags.len(), 1, "got: {diags:?}");
     }
+
+    /// Regression for issue #4485: a Nuxt *module*'s `client/` directory (e.g.
+    /// Nuxt DevTools' injected client-side app) is a separately-built bundle
+    /// without auto-import, like `runtime/`. Its explicit `#imports` value import
+    /// is required, so the rule must not flag it.
+    #[test]
+    fn allows_value_import_in_nuxt_module_client_issue_4485() {
+        let pkg = r#"{"name":"@nuxt/devtools","dependencies":{"@nuxt/kit":"^3.0.0"}}"#;
+        let src = "import { defineNuxtPlugin } from '#imports';\nexport default defineNuxtPlugin(() => {});\n";
+        let (_dir, diags) = run_in_package(pkg, "client/plugins/floating-vue.ts", src);
+        assert!(diags.is_empty(), "unexpected: {diags:?}");
+    }
+
+    /// Guard for issue #4485: a `client/` directory in a Nuxt *application*
+    /// (no `@nuxt/kit`/`@nuxt/module-builder` dependency) is not module build
+    /// code, so an explicit `#imports` value import there must STILL fire.
+    #[test]
+    fn still_flags_client_value_import_in_nuxt_app_issue_4485() {
+        let pkg = r#"{"name":"my-app","dependencies":{"nuxt":"^3.0.0"}}"#;
+        let src = "import { defineNuxtPlugin } from '#imports';\nexport default defineNuxtPlugin(() => {});\n";
+        let (_dir, diags) = run_in_package(pkg, "client/plugins/floating-vue.ts", src);
+        assert_eq!(diags.len(), 1, "got: {diags:?}");
+    }
 }

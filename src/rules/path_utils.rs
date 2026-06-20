@@ -973,22 +973,23 @@ pub fn is_react_router_routes_config(path: &Path) -> bool {
 /// section identifies the package as a module.
 const NUXT_MODULE_DEPS: &[&str] = &["@nuxt/kit", "@nuxt/module-builder"];
 
-/// True when `path` is Nuxt-module runtime library code: a file under a
-/// `runtime/` directory of a package that depends on `@nuxt/kit` or
-/// `@nuxt/module-builder`. By the Nuxt module convention these files (e.g.
-/// `src/runtime/composables/usePrefix.ts`) are compiled by `@nuxt/module-builder`
-/// and shipped as library code with the module. Nuxt's auto-import is not
-/// available at the module's own build time, so they import composables
-/// explicitly from `#imports`/`#app`/`nuxt/app` — the Nuxt-blessed virtual
-/// modules — and removing those imports breaks compilation.
+/// True when `path` is Nuxt-module library code: a file under a `runtime/` or
+/// `client/` directory of a package that depends on `@nuxt/kit` or
+/// `@nuxt/module-builder`. Both are module build directories that the module
+/// ships separately from the consuming Nuxt application: `runtime/` (e.g.
+/// `src/runtime/composables/usePrefix.ts`) is compiled by `@nuxt/module-builder`,
+/// and `client/` (e.g. Nuxt DevTools' injected client-side app) is built as its
+/// own bundle. Nuxt's auto-import is not available in either build, so these
+/// files import composables explicitly from `#imports`/`#app`/`nuxt/app` — the
+/// Nuxt-blessed virtual modules — and removing those imports breaks compilation.
 ///
-/// Both signals are required: the `runtime/` segment alone would exempt every
-/// `runtime/` directory in any project, and the Nuxt-module dependency alone
-/// would exempt the module's application-shaped source. Together they scope the
-/// exemption to module runtime code, keeping a Nuxt *application* (which has no
+/// Both signals are required: the directory segment alone would exempt every
+/// `runtime/`/`client/` directory in any project, and the Nuxt-module dependency
+/// alone would exempt the module's application-shaped source. Together they scope
+/// the exemption to module build code, keeping a Nuxt *application* (which has no
 /// `@nuxt/kit`/`@nuxt/module-builder` dependency) subject to the rule.
 pub fn is_nuxt_module_runtime_file(path: &Path, project: &ProjectCtx) -> bool {
-    if !has_path_segment(path, &["runtime"]) {
+    if !has_path_segment(path, &["runtime", "client"]) {
         return false;
     }
     project
