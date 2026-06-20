@@ -1,6 +1,10 @@
 //! tailwind-no-conflicting-classes — flag mutually exclusive Tailwind
 //! utility classes (e.g. `p-4 p-6`).
 //!
+//! Runs only in projects that use Tailwind CSS; other CSS frameworks reuse
+//! prefixes like `text-` / `p-` for their own utilities, so firing without
+//! Tailwind produces false positives.
+//!
 //! Walks JSX `jsx_attribute` nodes (TS/TSX/JS) and Vue `attribute` nodes
 //! (Vue SFC `<template>`). Groups class tokens by their conflict prefix
 //! (`p-`, `px-`, `bg-`, …) or by membership in the `display` group; if a
@@ -281,6 +285,9 @@ fn vue_class_value<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a 
 }
 
 crate::ast_check! { |node, source, ctx, diagnostics|
+    if !ctx.project.uses_tailwind() {
+        return;
+    }
     let class_str = jsx_class_value(node, source)
         .or_else(|| vue_class_value(node, source));
     let Some(class_str) = class_str else { return; };
@@ -328,11 +335,27 @@ mod tests {
     use super::*;
 
     fn run(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
+        let project = crate::project::ProjectCtx::empty_with_tailwind();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, "t.tsx", &project, file)
     }
 
     fn run_vue(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, source, "t.vue")
+        let project = crate::project::ProjectCtx::empty_with_tailwind();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, "t.vue", &project, file)
+    }
+
+    #[test]
+    fn silent_on_quasar_classes_without_tailwind() {
+        // Regression for rbaumier/comply#4710 — `text-h6` (Quasar typography)
+        // and `text-weight-bold` (Quasar font weight) are Quasar CSS utilities,
+        // not Tailwind classes. The Quasar playground has no Tailwind dependency,
+        // so the rule must not fire on a non-Tailwind project.
+        let source = r#"<template>
+  <div class="text-h6 text-weight-bold" />
+</template>"#;
+        assert!(crate::rules::test_helpers::run_rule(&Check, source, "t.vue").is_empty());
     }
 
     #[test]
