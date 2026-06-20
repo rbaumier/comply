@@ -22,7 +22,7 @@ const BANNED_WORDS: &[&str] = &[
     "bleh", "asdf", "qwerty", "zzz", "xxx", "aaa", "bbb", "scratch", "junk", "garbage", "something",
     "anything", "whatever", "dict", "vec", "tup", "bool", "int", "float", "char", "byte", "ptr",
     "ret", "out", "vars", "response", "responses", "request", "requests", "entity", "entities",
-    "dto", "resource", "resources", "entry", "entries", "chunk", "chunks", "blob", "evt", "el",
+    "dto", "resource", "resources", "entry", "entries", "chunk", "chunks", "blob", "el",
     "elem", "comp", "func", "widget", "record", "records", "body", "doc", "idx", "curr", "opts",
     "cfg", "found",
 ];
@@ -2157,5 +2157,22 @@ mod tests {
             let src = format!("const {name} = 1;");
             assert!(run(&src).is_empty(), "'{name}' must NOT be flagged");
         }
+    }
+
+    #[test]
+    fn allows_evt_event_abbreviation_issue_4916() {
+        // Regression for #4916 — `evt` is the canonical short form of "event"
+        // across the DOM/Vue/Sortable ecosystems, not a vague placeholder.
+        let src = r#"const eventHandlerNames = [a, b, c].flatMap(events => events).map(evt => `on${evt}`);"#;
+        assert!(run(src).is_empty(), "`evt` event abbreviation must NOT be flagged");
+        assert!(run(r#"const evt = makeEvent();"#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_temp_in_iterator_callback() {
+        // Negative: a genuinely generic name stays flagged in the same shape
+        // (`value`/`item` are param-exempt, but `temp` is not).
+        let src = r#"const names = list.map(temp => `on${temp}`);"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
