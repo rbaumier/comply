@@ -385,7 +385,11 @@ fn scan_minified(path: &Path, source: &str) -> bool {
         return false;
     }
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if name.contains(".min.") {
+    // `.min.` is the canonical minified marker; `.min_` covers the
+    // `name.min_<version>.js` convention some packages use (e.g.
+    // `docsearch.min_2.6.3.js`). The `.` before `min` keeps ordinary source
+    // files that merely contain `min` (e.g. `mixin.js`, `admin.js`) from matching.
+    if name.contains(".min.") || name.contains(".min_") {
         return true;
     }
     // Heuristic: minified content is either a handful of lines, or a normal
@@ -715,6 +719,30 @@ mod tests {
         let long = "a".repeat(5000);
         let src = format!("const data = \"{long}\";\n");
         assert!(!scan_minified(&PathBuf::from("src/data.ts"), &src));
+    }
+
+    #[test]
+    fn minified_dot_min_filename() {
+        // Short, multi-line content so only the filename guard can match.
+        let src = "const a = 1;\nconst b = 2;\n";
+        assert!(scan_minified(&PathBuf::from("vendor/library.min.js"), src));
+    }
+
+    #[test]
+    fn minified_dot_min_underscore_version_filename() {
+        // `name.min_<version>.js` convention (e.g. `docsearch.min_2.6.3.js`).
+        let src = "const a = 1;\nconst b = 2;\n";
+        assert!(scan_minified(&PathBuf::from("site/public/docsearch.min_2.6.3.js"), src));
+    }
+
+    #[test]
+    fn mixin_filename_is_not_minified() {
+        // Ordinary source whose name merely contains `min` must stay linted.
+        // `min_max.js` has no `.` before `min`, so the `.min_` guard must not fire.
+        let src = "const a = 1;\nconst b = 2;\n";
+        assert!(!scan_minified(&PathBuf::from("src/mixin.js"), src));
+        assert!(!scan_minified(&PathBuf::from("src/admin.js"), src));
+        assert!(!scan_minified(&PathBuf::from("src/min_max.js"), src));
     }
 
     #[test]
@@ -1333,6 +1361,26 @@ mod tests {
             &project,
         );
         assert!(!hand.is_generated);
+    }
+
+    #[test]
+    fn min_underscore_version_bundle_sets_is_minified_issue4899() {
+        let project = ProjectCtx::empty();
+        let bundle = FileCtx::build(
+            Path::new("site/public/docsearch.min_2.6.3.js"),
+            "!function(t,e){\"object\"==typeof exports&&(module.exports=e())}();\n",
+            Language::JavaScript,
+            &project,
+        );
+        assert!(bundle.is_minified);
+        // A hand-authored sibling whose name merely contains `min` is still linted.
+        let hand = FileCtx::build(
+            Path::new("site/public/admin.js"),
+            "export const apiBase = '/api';\nexport function init() { return apiBase; }\n",
+            Language::JavaScript,
+            &project,
+        );
+        assert!(!hand.is_minified);
     }
 
     #[test]
