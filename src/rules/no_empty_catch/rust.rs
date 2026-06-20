@@ -15,6 +15,12 @@
 //! pins the arm to one specific known error value — the lock-free CAS
 //! "already in this exact state, nothing to do" no-op, not a swallow. A
 //! wildcard (`Err(_)`) or fresh binding (`Err(e)`) stays flagged.
+//!
+//! A *guarded* empty `Err` arm (`Err(ref e) if e.kind() == Interrupted => {}`)
+//! is also exempt: the guard isolates one specific condition to no-op (the
+//! EINTR retry-on-interrupt idiom), and `match` exhaustiveness forces every
+//! other error into a sibling arm. The guard documents intent rather than
+//! silently swallowing the error.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{arm_body_is_diverging, tuple_struct_pattern_binds_const};
@@ -35,6 +41,16 @@ match node.kind() {
             // value and binds nothing — the lock-free CAS "already in this
             // exact state, nothing to do" arm, not silent error-swallowing.
             if pattern_is_const_err(&pattern, source) {
+                return;
+            }
+            // A guarded empty arm (`Err(e) if <cond> => {}`) intentionally
+            // no-ops one specific condition — the EINTR retry idiom
+            // `Err(ref e) if e.kind() == ErrorKind::Interrupted => {}`. Match
+            // exhaustiveness forces every other error into a sibling arm, so the
+            // guard documents intent rather than silently swallowing the error.
+            // The `pattern` field is a `match_pattern` = seq(_pattern,
+            // optional("if" condition)); the guard is its `condition` child.
+            if pattern.child_by_field_name("condition").is_some() {
                 return;
             }
             // A controlled assertion: `Err(Foo) => {}` paired with a
@@ -370,6 +386,39 @@ mod tests {
                    Err(_) => {} \
                    } }";
         assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_guarded_empty_err_arm_eintr_retry_issue_4476() {
+        // Issue #4476: the EINTR retry idiom — a guarded empty `Err` arm
+        // (`Err(ref e) if e.kind() == io::ErrorKind::Interrupted => {}`) no-ops
+        // one specific condition (retry via the surrounding loop). Match
+        // exhaustiveness forces every other error into the sibling `Err(e)` arm.
+        let src = "fn f(writer: &mut W, buf: &[u8]) {\n\
+                   loop {\n\
+                   match writer.write(buf) {\n\
+                   Ok(n) => { let _ = n; }\n\
+                   Err(ref e) if e.kind() == io::ErrorKind::Interrupted => {}\n\
+                   Err(e) => { let _ = e; break; }\n\
+                   }\n\
+                   }\n\
+                   }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_unguarded_empty_err_arm_wildcard_issue_4476() {
+        // Narrowness guard: an UNGUARDED empty `Err(_)` catch-all still
+        // silently swallows the error and must fire — only the guard exempts.
+        let src = "fn f(r: Result<u8, E>) { match r { Ok(_) => {}, Err(_) => {} } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_unguarded_empty_err_arm_binding_issue_4476() {
+        // Narrowness guard: an UNGUARDED empty `Err(e)` arm still swallows.
+        let src = "fn f(r: Result<u8, E>) { match r { Ok(v) => g(v), Err(e) => {} } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 
     #[test]
