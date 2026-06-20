@@ -10,6 +10,11 @@
 //! Test code is exempted: in a `#[test]` context or under a `tests/`
 //! directory the developer controls both program and input, so there is no
 //! ReDoS attack surface.
+//!
+//! The regex type's own conversion impls are exempted too: inside an
+//! `impl FromStr for Regex` or `impl TryFrom<_> for Regex` (Self matching the
+//! constructor's type), forwarding the trait's input to `Regex::new` is the
+//! impl's entire contract, so there is no separate construction to flag.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -53,6 +58,10 @@ impl AstCheck for Check {
         // Test code has no external attack surface: the developer controls
         // both the program and the pattern, so ReDoS does not apply.
         if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
+            return;
+        }
+        let ctor_type = fn_text.strip_suffix("::new").map(base_segment).unwrap_or("");
+        if is_conversion_impl_for_ctor_type(node, source_bytes, ctor_type) {
             return;
         }
         let pos = node.start_position();
@@ -104,6 +113,50 @@ fn is_screaming_snake_case(name: &str) -> bool {
     };
     first.is_ascii_uppercase()
         && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Last path/segment name of a type or trait reference, with generic arguments
+/// stripped: `core::str::FromStr` → `FromStr`, `TryFrom<String>` → `TryFrom`,
+/// `regex::Regex` → `Regex`.
+fn base_segment(text: &str) -> &str {
+    text.split('<')
+        .next()
+        .unwrap_or(text)
+        .rsplit("::")
+        .next()
+        .unwrap_or(text)
+        .trim()
+}
+
+/// `true` when `node` sits inside an `impl FromStr for T` / `impl TryFrom<_>
+/// for T` whose Self type `T` matches the regex constructor's type
+/// (`ctor_type`). Such an impl is the regex type's own conversion constructor:
+/// forwarding the trait's input to `T::new` is the impl's entire contract, so
+/// there is no separate untrusted construction to flag. The Self == ctor_type
+/// restriction keeps `impl FromStr for UserFilter { Regex::new(s) }` flagged.
+fn is_conversion_impl_for_ctor_type(
+    node: tree_sitter::Node,
+    source: &[u8],
+    ctor_type: &str,
+) -> bool {
+    let mut current = node.parent();
+    while let Some(ancestor) = current {
+        if ancestor.kind() == "impl_item" {
+            let Some(trait_node) = ancestor.child_by_field_name("trait") else {
+                return false;
+            };
+            let trait_name = base_segment(trait_node.utf8_text(source).unwrap_or(""));
+            if trait_name != "FromStr" && trait_name != "TryFrom" {
+                return false;
+            }
+            let Some(self_node) = ancestor.child_by_field_name("type") else {
+                return false;
+            };
+            return base_segment(self_node.utf8_text(source).unwrap_or("")) == ctor_type;
+        }
+        current = ancestor.parent();
+    }
+    false
 }
 
 #[cfg(test)]
@@ -190,6 +243,61 @@ mod tests {
         let source = "pub fn f() { let r = Regex::new(user_input); }";
         assert_eq!(
             crate::rules::test_helpers::run_rule(&Check, source, "crates/foo/src/lib.rs").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_regex_in_from_str_for_regex() {
+        // Issue #4472: `impl FromStr for Regex` is the regex type's own
+        // conversion constructor; forwarding the pattern to `Regex::new` is its
+        // whole contract.
+        assert!(run_on(
+            "impl core::str::FromStr for Regex {\n    type Err = Error;\n    fn from_str(s: &str) -> Result<Regex, Error> { Regex::new(s) }\n}"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn allows_regex_in_try_from_str_for_regex() {
+        // Issue #4472.
+        assert!(run_on(
+            "impl TryFrom<&str> for Regex {\n    type Error = Error;\n    fn try_from(s: &str) -> Result<Regex, Error> { Regex::new(s) }\n}"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn allows_regex_in_try_from_string_for_regex() {
+        // Issue #4472.
+        assert!(run_on(
+            "impl TryFrom<String> for Regex {\n    type Error = Error;\n    fn try_from(s: String) -> Result<Regex, Error> { Regex::new(&s) }\n}"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn still_flags_from_str_for_non_regex_type() {
+        // The app parses an untrusted string into a regex inside another type's
+        // conversion impl — still a ReDoS surface.
+        assert_eq!(
+            run_on(
+                "impl FromStr for UserFilter {\n    type Err = Error;\n    fn from_str(s: &str) -> Result<Self, Error> { let r = Regex::new(s)?; Ok(UserFilter { r }) }\n}"
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn still_flags_non_conversion_trait_for_regex() {
+        // A non-conversion trait implemented for Regex is not the conversion
+        // constructor exemption.
+        assert_eq!(
+            run_on(
+                "impl SomeTrait for Regex {\n    fn build(s: &str) -> Regex { Regex::new(s) }\n}"
+            )
+            .len(),
             1
         );
     }
