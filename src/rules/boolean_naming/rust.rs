@@ -34,6 +34,11 @@ const IDIOMATIC_NAMES: &[&str] = &[
     "running", "finished", "completed", "started", "stopped",
     "pending", "stall", "eof",
 ];
+// Boolean field names mandated verbatim by an external platform API, which the
+// developer cannot rename. `hour12` is the ECMA-402 `Intl.DateTimeFormat`
+// option key; a faithful Rust port of the spec must mirror it exactly.
+const API_MANDATED_NAMES: &[&str] = &["hour12"];
+
 const NEGATIVE_SUBSTRINGS: &[&str] = &["_not_", "isnt_", "cannot_", "shouldnt_"];
 
 #[derive(Debug)]
@@ -125,6 +130,9 @@ fn classify_name(name: &str) -> Option<&'static str> {
         }
     }
     if IDIOMATIC_NAMES.contains(&name) {
+        return None;
+    }
+    if API_MANDATED_NAMES.contains(&name) {
         return None;
     }
     Some("is missing a predicate prefix")
@@ -228,6 +236,19 @@ mod tests {
     #[test]
     fn allows_idiomatic_polled() {
         assert!(run_on("fn f() { let polled: bool = false; }").is_empty());
+    }
+
+    #[test]
+    fn allows_api_mandated_hour12() {
+        // `hour12` is the ECMA-402 Intl.DateTimeFormat option key; a faithful
+        // Rust port cannot rename it. (Closes #4997)
+        assert!(run_on("fn with_hour12(hour12: bool) {}").is_empty());
+    }
+
+    #[test]
+    fn still_flags_user_defined_unprefixed_boolean() {
+        // Strictness preserved: user-controlled names still require a prefix.
+        assert_eq!(run_on("fn f() { let disabled: bool = true; }").len(), 1);
     }
 
     #[test]
