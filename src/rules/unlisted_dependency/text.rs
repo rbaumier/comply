@@ -24,6 +24,10 @@
 //!     installable from npm, like `node`/`node:*`. Only the exact `bun` is
 //!     exempt; `bunyan`, `bun-types` and other `bun`-prefixed packages still
 //!     fire. The `bun:` protocol siblings are covered by `is_virtual_module`.
+//!   - self-imports — a specifier equal to the owning package's own `name` (or a
+//!     subpath under it, reduced to the package head). A package resolves its own
+//!     name to its source and never lists itself as a dependency, so importing
+//!     itself (commonly from its own test files) is never an unlisted dependency.
 //!
 //! The rule produces project-wide diagnostics, not per-file ones, so it
 //! fires only on the first indexed path of the run. Every other invocation
@@ -114,6 +118,16 @@ impl TextCheck for Check {
             if pkg.has_dep_or_engine(spec) {
                 continue;
             }
+            // Node.js self-reference: a package may import from itself by its own
+            // published `name` (`import x from "my-pkg"`) or a subpath
+            // (`"my-pkg/sub"`, reduced to the package head `my-pkg` here), which
+            // the toolchain resolves to the package's own source. A package never
+            // lists itself as a dependency, so a self-import is never unlisted —
+            // it is the standard ESM pattern for a package's own test files to
+            // exercise the published entry point. Mirrors `no-implicit-deps`.
+            if pkg.is_self_name(spec) {
+                continue;
+            }
             // Node.js subpath imports: Node reserves the `#` prefix exclusively
             // for internal aliases — resolved either via a package.json `imports`
             // map or by a framework's module resolver (Nuxt's `#app`/`#imports`).
@@ -159,6 +173,7 @@ impl TextCheck for Check {
             if info.importers.iter().any(|imp| {
                 ctx.project.effective_package_jsons(imp).iter().any(|p| {
                     p.has_dep_or_engine(spec)
+                        || p.is_self_name(spec)
                         || types_pkg.as_deref().is_some_and(|t| p.has_dep_or_engine(t))
                 })
             }) {
@@ -1086,6 +1101,80 @@ mod tests {
         );
         assert_eq!(diags.len(), 1, "private workspace root must not inherit: {diags:?}");
         assert!(diags[0].message.contains("vscode-languageserver-protocol"));
+    }
+
+    #[test]
+    fn allows_self_name_import_issue_4848() {
+        // Regression #4848 — a package's own test file imports the package by its
+        // published `name` (`import {fromMarkdown} from 'mdast-util-from-markdown'`
+        // inside the mdast-util-from-markdown package). Node resolves this to the
+        // package's own source; npm forbids a package listing itself as a
+        // dependency, so it can never be declared, yet it is not an unlisted
+        // dependency. The specifier matching the root package's own `name` must
+        // not be flagged.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "test/index.js",
+                "import {fromMarkdown} from 'mdast-util-from-markdown';",
+            ),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(
+            &files,
+            Some(r#"{ "name": "mdast-util-from-markdown", "dependencies": {} }"#),
+            None,
+        );
+        assert!(
+            diags.is_empty(),
+            "a self-import by the package's own name must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn allows_self_name_subpath_import_issue_4848() {
+        // A subpath self-import (`my-pkg/lib`, reduced to the package head
+        // `my-pkg`) resolves to the package's own source via its `exports` map,
+        // so it must be exempt for the same reason as the bare self-name.
+        let files: Vec<(&str, &str)> = vec![
+            ("test/index.js", "import {x} from 'my-pkg/lib';"),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(
+            &files,
+            Some(r#"{ "name": "my-pkg", "dependencies": {} }"#),
+            None,
+        );
+        assert!(
+            diags.is_empty(),
+            "a subpath self-import must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn flags_unlisted_package_alongside_self_name_import_issue_4848() {
+        // Negative-space guard for #4848 — the self-name exemption must not
+        // suppress a genuinely unlisted third-party package imported in the same
+        // test file. `axios` is declared nowhere and is not the package's own
+        // name, so it must still fire.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "test/index.js",
+                "import {fromMarkdown} from 'mdast-util-from-markdown';\n\
+                 import axios from 'axios';",
+            ),
+            ("b.ts", "export const x = 1;"),
+        ];
+        let (_dir, diags) = run_on_project(
+            &files,
+            Some(r#"{ "name": "mdast-util-from-markdown", "dependencies": {} }"#),
+            None,
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "the undeclared third-party `axios` must still fire: {diags:?}"
+        );
+        assert!(diags[0].message.contains("axios"));
     }
 
     #[test]
