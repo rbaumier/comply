@@ -1795,6 +1795,8 @@ pub struct CargoManifest {
     has_lib_table: bool,
     /// `[lib] proc-macro = true` — the crate builds a procedural-macro target.
     proc_macro: bool,
+    /// `[lib] crate-type` entries, lowercased (e.g. `["cdylib"]`, `["staticlib"]`).
+    crate_types: Vec<String>,
     /// One or more `[[bin]]` tables are present.
     has_bin_table: bool,
     /// Explicit `path` fields of executable target tables (`[[bin]]`,
@@ -1846,6 +1848,19 @@ impl CargoManifest {
             .and_then(toml::Value::as_bool)
             .unwrap_or(false);
 
+        let crate_types = value
+            .get("lib")
+            .and_then(|lib| lib.get("crate-type"))
+            .and_then(toml::Value::as_array)
+            .map(|types| {
+                types
+                    .iter()
+                    .filter_map(toml::Value::as_str)
+                    .map(str::to_ascii_lowercase)
+                    .collect()
+            })
+            .unwrap_or_default();
+
         let has_bin_table = value.get("bin").is_some();
 
         let explicit_target_paths = ["bin", "example", "bench", "test"]
@@ -1876,6 +1891,7 @@ impl CargoManifest {
             name,
             has_lib_table,
             proc_macro,
+            crate_types,
             has_bin_table,
             explicit_target_paths,
             async_runtime,
@@ -1983,6 +1999,22 @@ impl CargoManifest {
                 .iter()
                 .any(|suffix| n.ends_with(suffix))
         })
+    }
+
+    /// True when the crate is an FFI bridge: its `[lib] crate-type` declares
+    /// `cdylib` and/or `staticlib` and no Rust-library target (`rlib`/`lib`).
+    /// Such crates (e.g. Python/Java/Swift bindings) are linked by a foreign
+    /// runtime, not depended on as a Rust library, so there is no Rust consumer
+    /// to configure tracing/logging — `eprintln!` is the only practical way to
+    /// surface errors at the FFI boundary.
+    #[must_use]
+    pub fn is_ffi_bridge_crate(&self) -> bool {
+        let has_foreign = self
+            .crate_types
+            .iter()
+            .any(|t| t == "cdylib" || t == "staticlib");
+        let has_rust_lib = self.crate_types.iter().any(|t| t == "rlib" || t == "lib");
+        has_foreign && !has_rust_lib
     }
 
     /// True when `root` is a sibling sub-crate of this package's Cargo family —
@@ -6385,6 +6417,42 @@ path = "tools/tool.rs"
         assert!(
             !no_name.is_build_codegen_crate(),
             "no [package].name => not a build-codegen crate"
+        );
+    }
+
+    #[test]
+    fn cargo_manifest_classifies_ffi_bridge_crate() {
+        let dir = PathBuf::from("/crate");
+
+        let parse_crate_type = |types: &str| {
+            CargoManifest::parse(
+                &format!("[package]\nname = \"x\"\n\n[lib]\ncrate-type = [{types}]\n"),
+                dir.clone(),
+            )
+            .unwrap()
+        };
+
+        assert!(
+            parse_crate_type("\"cdylib\"").is_ffi_bridge_crate(),
+            "crate-type cdylib only => FFI bridge crate"
+        );
+        assert!(
+            parse_crate_type("\"staticlib\"").is_ffi_bridge_crate(),
+            "crate-type staticlib only => FFI bridge crate"
+        );
+        assert!(
+            !parse_crate_type("\"cdylib\", \"rlib\"").is_ffi_bridge_crate(),
+            "cdylib + rlib still exposes a Rust library => not an FFI-only bridge"
+        );
+        assert!(
+            !parse_crate_type("\"lib\"").is_ffi_bridge_crate(),
+            "plain Rust library crate-type => not an FFI bridge"
+        );
+
+        let no_crate_type = CargoManifest::parse("[lib]\nname = \"x\"\n", dir).unwrap();
+        assert!(
+            !no_crate_type.is_ffi_bridge_crate(),
+            "no [lib] crate-type => not an FFI bridge crate"
         );
     }
 
