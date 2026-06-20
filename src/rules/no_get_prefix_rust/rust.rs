@@ -7,6 +7,14 @@ crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, 
 
     if !name.starts_with("get_") { return; }
 
+    // `get_and_<verb>` (e.g. `get_and_reset`, `get_and_clear`, `get_and_take`)
+    // is a compound read-modify-write operation — atomically read the value AND
+    // mutate it — mirroring the `fetch_and_*` atomics. Here `get` is the first
+    // half of the compound verb, not a dispensable accessor prefix; stripping it
+    // yields the nonsensical `and_reset`. Matched on the `and` segment, so
+    // `get_android` (bare name `android`) is still flagged.
+    if name[4..].starts_with("and_") { return; }
+
     // A method inside `impl Trait for Type` takes its name verbatim from the
     // trait declaration; the implementor cannot rename it. Inherent impls
     // (`impl Type`) and free functions keep being flagged — the author owns
@@ -415,6 +423,24 @@ mod tests {
         // (`usize`), matters for the primitive-name guard — `count` is not a
         // primitive type name, so this still flags.
         let src = "impl Foo {\n    fn get_count(&self) -> usize { 0 }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_get_and_reset_compound_operation_issue_5002() {
+        // `get_and_reset_*` is a compound read-modify-write op (read AND reset),
+        // not a pure accessor — `get` is part of the compound verb.
+        let src = "impl RawMetrics {\n\
+            fn get_and_reset_local_max_idle_duration(&self) -> Duration { todo!() }\n\
+        }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_get_android_substring_not_segment_issue_5002() {
+        // `get_android` strips to `android`, which does not start with the `and_`
+        // segment — it is a plain accessor and must still flag.
+        let src = "impl Phone {\n    fn get_android(&self) -> &Os { &self.android }\n}";
         assert_eq!(run(src).len(), 1);
     }
 }
