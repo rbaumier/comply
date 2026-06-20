@@ -5,7 +5,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, PropertyKey};
+use oxc_ast::ast::{BinaryOperator, Expression, PropertyKey};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -111,6 +111,14 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A literal participating in modular arithmetic (`n % 10`, `n % 100 === 11`)
+        // is self-documenting: the `%` operation gives the modulus and residue
+        // their meaning. This is the structural shape of CLDR/Unicode plural rules
+        // (`n % 10 === 1 && n % 100 !== 11 ? …`) and any cyclic/clock arithmetic.
+        if is_modular_arithmetic_constant(node.id(), semantic) {
+            return;
+        }
+
         if is_allowed_context(node.id(), semantic) {
             return;
         }
@@ -204,6 +212,69 @@ fn is_date_component_argument(
             };
             ident.name == "Date"
                 && new_expr.arguments.iter().any(|a| a.span() == arg_span)
+        }
+        _ => false,
+    }
+}
+
+/// True when this literal is a modular-arithmetic constant — either the right
+/// operand of a remainder expression (`n % 10`, where `10` is the modulus), or
+/// an operand of a comparison whose other side is a remainder expression
+/// (`n % 100 !== 11`, where `11` is the residue threshold). In both shapes the
+/// `%` operation supplies the constant's meaning, so it is not a magic number.
+/// The literal may be wrapped in a unary minus. This covers the CLDR/Unicode
+/// plural-form rules of Slavic and other languages as well as any cyclic
+/// (clock/calendar) arithmetic.
+fn is_modular_arithmetic_constant(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    // The operand expression is the literal itself, or a `-literal` unary.
+    let mut operand_id = node_id;
+    let parent_id = nodes.parent_id(operand_id);
+    if parent_id != operand_id
+        && let AstKind::UnaryExpression(unary) = nodes.get_node(parent_id).kind()
+        && unary.operator == oxc_ast::ast::UnaryOperator::UnaryNegation
+    {
+        operand_id = parent_id;
+    }
+    let operand_span = nodes.get_node(operand_id).kind().span();
+
+    let bin_id = nodes.parent_id(operand_id);
+    if bin_id == operand_id {
+        return false;
+    }
+    let AstKind::BinaryExpression(bin) = nodes.get_node(bin_id).kind() else {
+        return false;
+    };
+
+    let is_left = bin.left.span() == operand_span;
+    let is_right = bin.right.span() == operand_span;
+    if !is_left && !is_right {
+        return false;
+    }
+
+    match bin.operator {
+        // Modulus operand: `n % 10`. Only the right side is the modulus; the
+        // left is the dividend, which may legitimately be a magic number.
+        BinaryOperator::Remainder => is_right,
+        // Residue threshold: `n % 100 === 11`. Exempt the literal when the
+        // sibling operand is itself a remainder expression.
+        BinaryOperator::Equality
+        | BinaryOperator::Inequality
+        | BinaryOperator::StrictEquality
+        | BinaryOperator::StrictInequality
+        | BinaryOperator::LessThan
+        | BinaryOperator::LessEqualThan
+        | BinaryOperator::GreaterThan
+        | BinaryOperator::GreaterEqualThan => {
+            let sibling = if is_left { &bin.right } else { &bin.left };
+            matches!(
+                sibling,
+                Expression::BinaryExpression(s) if s.operator == BinaryOperator::Remainder
+            )
         }
         _ => false,
     }
@@ -391,6 +462,64 @@ mod tests {
         // The exemption requires the literal to be a *direct* argument; a literal
         // buried in a sub-expression is not a self-documenting boundary value.
         let src = r#"function f(d: Date, x: number) { d.setHours(x + 23); }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for issue #4984: Slavic plural-form rules (`ru.js`, `be.js`,
+    // `uk.js`, …) express CLDR/Unicode plural categories as modular arithmetic.
+    // Every literal here is either a modulus (`10`/`100`) or a residue threshold
+    // compared against a `% ` expression (`1`/`11`/`2`/`4`/`20`); the `%` gives
+    // them their meaning, so none should be flagged.
+    #[test]
+    fn allows_slavic_plural_form_modular_arithmetic() {
+        let src = r#"
+            function plural(n) {
+                return n % 10 === 1 && n % 100 !== 11
+                    ? 0
+                    : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20)
+                        ? 1
+                        : 2);
+            }
+        "#;
+        assert!(
+            run(src).is_empty(),
+            "modular-arithmetic plural-rule constants must not be flagged"
+        );
+    }
+
+    #[test]
+    fn allows_modulus_and_residue_with_loose_and_strict_comparisons() {
+        let src = r#"
+            function f(n) {
+                const a = n % 60;
+                const b = n % 24 == 0;
+                const c = n % 7 !== 6;
+                return a + (b ? 1 : 0) + (c ? 1 : 0);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_dividend_of_remainder() {
+        // Only the modulus (right operand) is self-documenting; a magic literal
+        // on the left of `%` is the dividend and is still flagged.
+        let src = r#"function f(n) { return 86400 % n; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_comparison_not_against_remainder() {
+        // The comparison exemption requires the sibling operand to be a `%`
+        // expression; comparing against a plain magic number is still flagged.
+        let src = r#"function f(n) { return n === 86400; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_multiplication_constant() {
+        // `x * 1000` is ordinary arithmetic, not modular — still a magic number.
+        let src = r#"function f(x) { return x * 1000; }"#;
         assert_eq!(run(src).len(), 1);
     }
 
