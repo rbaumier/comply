@@ -55,10 +55,22 @@ fn is_semantic_grouping_prefix(prefix: &str) -> bool {
 /// exclusion and no encoded state machine. Optional fields there may share
 /// a vocabulary prefix (`customResolveInfo`/`customResolverFn` → `cust`)
 /// without modeling a variant, so prefix-clustering carries no signal and
-/// the cluster heuristic is suppressed.
+/// the cluster heuristic is suppressed. `*Rules` is a per-field knob bag of
+/// the same shape (one independent `Rule` per protocol field, e.g. an
+/// EIP-4337 `UserOperationRules` mapping each spec field to a validation
+/// rule), so it joins the convention.
 fn is_configuration_type_name(type_name: &str) -> bool {
-    const CONFIG_SUFFIXES: [&str; 8] =
-        ["Config", "Configuration", "Options", "Opts", "Settings", "Props", "Params", "Args"];
+    const CONFIG_SUFFIXES: [&str; 9] = [
+        "Config",
+        "Configuration",
+        "Options",
+        "Opts",
+        "Settings",
+        "Props",
+        "Params",
+        "Args",
+        "Rules",
+    ];
     CONFIG_SUFFIXES.iter().any(|suffix| type_name.ends_with(suffix))
 }
 
@@ -443,6 +455,46 @@ mod tests {
   documentTransformTypeName?: string;
 };"#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_eip4337_user_operation_rules_type() {
+        // Regression for #4826: an EIP-4337 UserOperation `*Rules` type maps
+        // each spec-mandated protocol field to an independent validation
+        // `Rule`. `callData`/`callGasLimit` share the `call` bucket only
+        // because both name aspects of the same EVM call, not because they
+        // are mutually-exclusive variant states — every field can be present
+        // at once. `Rules` is a per-field knob bag, so the config-name
+        // convention suppresses the cluster.
+        let src = r#"export type UserOperationV06Rules = {
+  sender?: Rule;
+  nonce?: Rule;
+  initCode?: Rule;
+  callData?: Rule;
+  callGasLimit?: Rule;
+  verificationGasLimit?: Rule;
+  preVerificationGas?: Rule;
+  maxFeePerGas?: Rule;
+  maxPriorityFeePerGas?: Rule;
+  paymasterAndData?: Rule;
+  chainId?: Rule;
+  entrypoint?: Rule;
+};"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_state_cluster_in_non_rules_type() {
+        // Guardrail for #4826: the `Rules` suffix suppression must not leak
+        // into ordinary domain types. A genuine mutually-exclusive
+        // optional-flag cluster (bucket `load`) in a non-config interface
+        // stays flagged.
+        let src = r#"interface RequestStatus {
+  loadingPending?: boolean;
+  loadedAt?: boolean;
+  loadFailed?: boolean;
+}"#;
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
