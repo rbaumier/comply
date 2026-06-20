@@ -6,7 +6,7 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use crate::rules::jsdoc_helpers::scan_blocks;
 use oxc_ast::CommentKind;
-use oxc_ast::ast::{AssignmentTarget, Expression, TSType};
+use oxc_ast::ast::{AssignmentTarget, BindingPattern, Expression, TSType};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -510,6 +510,35 @@ fn is_constructor_function(
         .any(|reference| reference_binds_this(reference.node_id(), semantic))
 }
 
+/// True when `func_id` is a `function` expression that is the initializer of a
+/// `const`/`let`/`var` binding whose name is referenced somewhere in the module
+/// in a way that binds `this` at call time — `name.bind(this)`, `name.call(...)`,
+/// `name.apply(...)`, `new name(...)`, or assigned as a method value
+/// (`x.member = name`). This generalizes the named-function logic in
+/// `is_constructor_function` to anonymous function expressions held in a variable:
+/// `const localeData = function () { … this.$locale() … }` that is later invoked
+/// via `localeData.bind(this)()` (the dayjs plugin / bound-method idiom) has its
+/// `this` supplied at the binding site, so `this` in the body is intentional.
+fn is_var_bound_function_referenced_for_this(
+    func_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let AstKind::VariableDeclarator(declarator) = nodes.kind(nodes.parent_id(func_id)) else {
+        return false;
+    };
+    let BindingPattern::BindingIdentifier(ident) = &declarator.id else {
+        return false;
+    };
+    let Some(symbol_id) = ident.symbol_id.get() else {
+        return false;
+    };
+    semantic
+        .scoping()
+        .get_resolved_references(symbol_id)
+        .any(|reference| reference_binds_this(reference.node_id(), semantic))
+}
+
 fn is_valid_this_context(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -590,6 +619,15 @@ fn is_valid_this_context(
                 // referenced via `new`/`.call(this)`/`.apply`/`.bind` or
                 // assigned as a method value, gets the instance as `this`.
                 if is_constructor_function(func, semantic) {
+                    return true;
+                }
+                // Var-bound function referenced for `this`: an anonymous
+                // `function` expression held in a `const`/`let`/`var` whose
+                // binding is later invoked via `.bind(this)`/`.call`/`.apply`,
+                // with `new`, or assigned as a method value, has its `this`
+                // supplied at the binding site (`const localeData = function () {
+                // this.$locale() }` called as `localeData.bind(this)()`).
+                if is_var_bound_function_referenced_for_this(ancestor.id(), semantic) {
                     return true;
                 }
                 // JSDoc `@type {…}` / `@this {…}` annotation: the function has an
@@ -1171,6 +1209,47 @@ mod tests {
         // `this` in the callback stays unbound and must fire. The leading `this`
         // argument sits in a class method so only the callback's `this` is flagged.
         let src = "class Foo {\n  run() {\n    return foo(this, function () {\n      return this.x;\n    });\n  }\n}";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_var_bound_function_called_via_bind() {
+        // Regression for #4985: dayjs's localeData plugin holds an anonymous
+        // `function` in a `const` and invokes it via `localeData.bind(this)()` at
+        // its only call site, so `this` is supplied at the binding site. `proto`
+        // aliases the Dayjs prototype, so `proto.localeData = function () {}` is a
+        // prototype method whose own `this` is also bound.
+        let src = "const proto = Dayjs.prototype;\nconst localeData = function () {\n  return {\n    firstDayOfWeek: () => this.$locale().weekStart || 0,\n    meridiem: this.$locale().meridiem,\n  };\n};\nproto.localeData = function () {\n  return localeData.bind(this)();\n};";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_var_bound_function_called_via_call() {
+        // Regression for #4985: the `.call(this)` / `.apply(this)` binding forms
+        // on a var-held function expression supply `this` the same way `.bind`
+        // does.
+        let src = "const fn = function () {\n  return this.x;\n};\nfn.call(obj);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_var_bound_function_never_bound() {
+        // Negative-space guard for #4985: a `function` held in a `const` but never
+        // referenced via `.bind`/`.call`/`.apply`/`new`/method-value has no bound
+        // `this` and must still fire (this is the existing untyped-binding case).
+        let diags = run_on("const fn = function () {\n  return this.x;\n};\nfn();");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_this_in_plain_standalone_mixin_function() {
+        // Negative-space guard for #4985: i18next's `formatLanguageCode` is a
+        // plain standalone function with no explicit `this` parameter and no
+        // detectable binding (it is mixed onto the instance at runtime). The rule
+        // cannot distinguish it from a real bug, so it stays flagged — the fix is
+        // to add an explicit `this:` parameter.
+        let src = "export function formatLanguageCode(code) {\n  if (this.options.lowerCaseLng) {\n    return code.toLowerCase();\n  }\n  return code;\n}";
         let diags = run_on(src);
         assert_eq!(diags.len(), 1);
     }
