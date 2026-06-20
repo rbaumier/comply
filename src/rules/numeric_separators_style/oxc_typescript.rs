@@ -3,9 +3,25 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
+
+/// True when this numeric literal is the key of an object property
+/// (e.g. `{ 110000: '...' }`). Such keys are fixed-length opaque
+/// identifiers — area codes, postal codes, HTTP status maps — not
+/// quantities, so digit-grouping separators would corrupt their identity.
+fn is_object_property_key<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let parent = semantic.nodes().parent_node(node.id());
+    let AstKind::ObjectProperty(prop) = parent.kind() else {
+        return false;
+    };
+    prop.key.span() == node.kind().span()
+}
 
 /// Insert underscores every `group` digits from right to left.
 fn add_separators(digits: &str, group: usize) -> String {
@@ -94,7 +110,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         if ctx.file.path_segments.in_test_dir {
@@ -103,6 +119,9 @@ impl OxcCheck for Check {
         let AstKind::NumericLiteral(lit) = node.kind() else {
             return;
         };
+        if is_object_property_key(node, semantic) {
+            return;
+        }
         let raw = &ctx.source[lit.span.start as usize..lit.span.end as usize];
         if let Some(formatted) = expected_format(raw) {
             let (line, column) =
@@ -183,5 +202,34 @@ mod tests {
     fn still_groups_long_binary_literal() {
         let d = run_on("const flags = 0b101010101;");
         assert_eq!(d.len(), 1, "{:?}", d);
+    }
+
+    // Regression #4713: numeric object-property keys are fixed-length opaque
+    // identifiers (area codes, postal codes, HTTP status maps), not quantities —
+    // forcing separators corrupts their identity.
+    #[test]
+    fn allows_numeric_object_property_keys_issue_4713() {
+        assert!(
+            run_on("const areaList = { 110000: '北京市', 120000: '天津市', 130000: '河北省' };")
+                .is_empty()
+        );
+        assert!(run_on("const statusText = { 404: 'Not Found', 500000: 'x' };").is_empty());
+    }
+
+    // A numeric literal in value position is still a quantity and stays flagged.
+    #[test]
+    fn still_flags_numeric_property_value_issue_4713() {
+        let d = run_on("const cfg = { timeout: 100000 };");
+        assert_eq!(d.len(), 1, "{:?}", d);
+        assert!(d[0].message.contains("100_000"));
+    }
+
+    // When both key and value are numeric, only the value (a quantity) is
+    // flagged — the key (an identifier) is exempt.
+    #[test]
+    fn flags_only_value_when_key_and_value_numeric_issue_4713() {
+        let d = run_on("const m = { 100000: 200000 };");
+        assert_eq!(d.len(), 1, "{:?}", d);
+        assert!(d[0].message.contains("200_000"));
     }
 }
