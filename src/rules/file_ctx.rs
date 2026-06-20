@@ -358,8 +358,11 @@ fn has_vendored_segment(normalized: &str) -> bool {
 /// Storybook directory names — matched as exact path segments (between `/`
 /// delimiters) so that e.g. `mystories.ts` or `storybook-static/` is NOT
 /// considered a story-content directory. Catches helper/story files that live
-/// inside a `stories/` or `storybook/` directory without a `.stories.` name.
-const STORYBOOK_SEGMENTS: &[&str] = &["stories", "storybook"];
+/// inside a `stories/` or `storybook/` directory without a `.stories.` name,
+/// and the framework configuration files under the canonical `.storybook/`
+/// config directory (`main.ts`, `preview.ts`, `manager.ts`), whose default
+/// exports are consumed by the Storybook CLI rather than via TS `import`.
+const STORYBOOK_SEGMENTS: &[&str] = &["stories", "storybook", ".storybook"];
 
 fn has_storybook_segment(normalized: &str) -> bool {
     normalized.split('/').any(|seg| STORYBOOK_SEGMENTS.contains(&seg))
@@ -1056,6 +1059,10 @@ mod tests {
         assert!(scan_path(&PathBuf::from("src/stories/Header.tsx")).in_storybook);
         // A top-level `storybook/` package directory.
         assert!(scan_path(&PathBuf::from("storybook/preview.tsx")).in_storybook);
+        // Configuration files under the canonical `.storybook/` config
+        // directory (issue #4466).
+        assert!(scan_path(&PathBuf::from(".storybook/main.ts")).in_storybook);
+        assert!(scan_path(&PathBuf::from("packages/foo/.storybook/preview.ts")).in_storybook);
     }
 
     #[test]
@@ -1063,6 +1070,8 @@ mod tests {
         assert!(!scan_path(&PathBuf::from("src/mystories.ts")).in_storybook);
         assert!(!scan_path(&PathBuf::from("src/storybook-static/index.js")).in_storybook);
         assert!(!scan_path(&PathBuf::from("src/index.ts")).in_storybook);
+        // Exact-segment match: `storybook-utils` is not `.storybook`/`storybook`.
+        assert!(!scan_path(&PathBuf::from("src/storybook-utils/helper.ts")).in_storybook);
     }
 
     #[test]
