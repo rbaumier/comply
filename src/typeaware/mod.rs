@@ -102,10 +102,12 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
         }
     }
     let rule_ids: Vec<&str> = enabled.iter().map(|m| m.id).collect();
+    let min_properties = config.threshold("no-duplicate-type-definition", "min_properties", crate::files::Language::TypeScript);
     let request = serde_json::json!({
         "tsconfig": tsconfig.to_string_lossy(),
         "files": abs_files,
         "rules": rule_ids,
+        "min_properties": min_properties,
     })
     .to_string();
 

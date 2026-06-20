@@ -138,6 +138,9 @@ public_patterns = []
 min_rationale_words = 3
 lookback_lines = 3
 
+[rules.no-duplicate-type-definition]
+min_properties = 4
+
 [rules.no-duplicate-string]
 min_length = 10
 min_occurrences = 3

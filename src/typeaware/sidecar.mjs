@@ -32,7 +32,7 @@ async function readStdin() {
 }
 
 const req = JSON.parse(await readStdin());
-const { tsconfig, files = [], rules = [] } = req;
+const { tsconfig, files = [], rules = [], min_properties = 4 } = req;
 const enabled = new Set(rules);
 
 // Resolve the typescript-go API from the project's node_modules.
@@ -243,11 +243,10 @@ function ruleRedundantNullishCoalescing(sourceFile, checker, text, lineStarts, f
 // properties, reported as a warning. The fingerprint is built from the
 // resolved property types, not the alias name, so different names with the
 // same shape collide.
-const MIN_DUP_PROPERTIES = 3;
 
 function structuralFingerprint(checker, type) {
   const props = checker.getPropertiesOfType(type) || [];
-  if (props.length < MIN_DUP_PROPERTIES) return null;
+  if (props.length < min_properties) return null;
   const parts = props.map((p) => {
     const t = checker.getTypeOfSymbol(p);
     return `${p.name}:${t ? checker.typeToString(t) : "?"}`;
@@ -257,7 +256,27 @@ function structuralFingerprint(checker, type) {
 }
 
 /** Collect duplicate-type candidates from one file into `acc`. */
-function collectDuplicateTypeCandidates(sourceFile, checker, text, lineStarts, file, acc) {
+/** Check if `lineNum` has a `comply-ignore: no-clones` comment within the
+ *  preceding 3 lines. The comment can be above-line (marker on its own line)
+ *  or trailing (after code on the same line). */
+function isNoClonesSuppressed(lines, lineNum) {
+  // 0-based index
+  const idx = lineNum - 1;
+  // Check current line and 3 lines above for a no-clones suppress marker
+  for (let i = Math.max(0, idx - 3); i <= idx; i++) {
+    const ltext = lines[i];
+    // Trailing: `code; // comply-ignore: no-clones -- reason`
+    if (i === idx && /\/\/\s*comply-ignore:\s*no-clones[,\s]/.test(ltext)) return true;
+    // Above-line: the line itself is only the marker
+    if (i < idx) {
+      const stripped = ltext.trimStart();
+      if (/^\/\/\s*comply-ignore:\s*no-clones[,\s]/.test(stripped)) return true;
+    }
+  }
+  return false;
+}
+
+function collectDuplicateTypeCandidates(sourceFile, checker, text, lineStarts, file, lines, acc) {
   const slice = (n) => text.slice(getTokenPosOfNode(n, sourceFile), n.end);
   walk(sourceFile, (node) => {
     // Only object shapes: an interface, or a `type X = { … }` type literal.
@@ -273,6 +292,8 @@ function collectDuplicateTypeCandidates(sourceFile, checker, text, lineStarts, f
     if (!fingerprint) return;
     const start = getTokenPosOfNode(node.name, sourceFile);
     const { line, column } = lineColAt(lineStarts, start);
+    // Skip if the type declaration already carries a no-clones suppression
+    if (line && isNoClonesSuppressed(lines, line)) return;
     acc.push({ file, name: slice(node.name), line, column, fingerprint });
   });
 }
@@ -431,7 +452,8 @@ for (const file of files) {
     ruleRedundantNullishCoalescing(sourceFile, checker, text, lineStarts, file);
   }
   if (enabled.has("no-duplicate-type-definition")) {
-    collectDuplicateTypeCandidates(sourceFile, checker, text, lineStarts, file, duplicateCandidates);
+    const __lines = text.split('\n');
+    collectDuplicateTypeCandidates(sourceFile, checker, text, lineStarts, file, __lines, duplicateCandidates);
   }
   if (enabled.has("ts-no-in-operator")) {
     ruleNoInOperator(sourceFile, checker, text, lineStarts, file);
