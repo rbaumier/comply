@@ -12,9 +12,9 @@
 //! - A bucket of two or more comments whose shared opening is distinctive
 //!   enough (entropy gate) and long enough relative to the comment
 //!   (`prefix_pct`) is reported.
-//! - A doc-comment documenting the same-named declaration in another file is a
-//!   parallel API implementation (e.g. a SIMD vs scalar backend), not a copy,
-//!   so it is exempt.
+//! - A comment documenting the same-named declaration or object/type member in
+//!   another file is a parallel API surface (a SIMD vs scalar backend, or a
+//!   runtime props object mirrored by a TS type), not a copy, so it is exempt.
 
 use rustc_hash::FxHashSet;
 use std::path::Path;
@@ -322,10 +322,11 @@ struct CommentEntry {
     words: Vec<String>,
     /// The first `shared_prefix_words` words, joined — the bucket key.
     prefix_key: String,
-    /// Name of the declaration this doc-comment immediately documents, if any.
-    /// Two doc-comments on same-named declarations in different files are
-    /// parallel API implementations (e.g. a SIMD and a scalar backend exposing
-    /// the same `aes128_decrypt`), so their identical docs are not a smell.
+    /// Name of the declaration or object/type member this comment immediately
+    /// documents, if any. Two comments on same-named declarations in different
+    /// files are parallel API surfaces — a SIMD and a scalar backend exposing
+    /// the same `aes128_decrypt`, or a runtime props object and the TS type
+    /// declaring the same prop — so their identical docs are not a smell.
     decl_name: Option<String>,
 }
 
@@ -491,13 +492,14 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
             if (shared as f64) < prefix_pct * (shorter as f64) {
                 continue;
             }
-            // Parallel API implementations: a doc-comment documenting the same
-            // named declaration in another file (a SIMD vs scalar backend both
-            // exposing `aes128_decrypt`) carries the same description because it
-            // describes the same item, not because it was copy-pasted. Restricted
-            // to cross-file matches with matching declaration names so an
-            // intra-file duplicate, or a copy-pasted free-floating rationale,
-            // still flags.
+            // Parallel API surfaces: a comment documenting the same named
+            // declaration or member in another file (a SIMD vs scalar backend
+            // both exposing `aes128_decrypt`, or a runtime props object and the
+            // TS type declaring the same prop) carries the same description
+            // because it describes the same item, not because it was
+            // copy-pasted. Restricted to cross-file matches with matching
+            // declaration names so an intra-file duplicate, or a copy-pasted
+            // free-floating rationale, still flags.
             if entry.file_idx != partner.file_idx
                 && entry.decl_name.is_some()
                 && entry.decl_name == partner.decl_name
@@ -641,19 +643,51 @@ fn is_doc_comment(raw: &[u8]) -> bool {
         || raw.starts_with(b"/*!")
 }
 
-/// The name of the declaration a doc-comment immediately documents: its next
-/// named sibling, skipping attributes/decorators, when that sibling is a named
-/// declaration. `None` for plain (non-doc) comments, free-floating comments (no
-/// following declaration), or declarations without a `name` field.
-fn documented_decl_name(comment: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    if !is_doc_comment(&source[comment.start_byte()..comment.end_byte()]) {
+/// Object-literal / type-literal member kinds whose name is the key documented
+/// by a leading comment. A JS runtime props object (`{ /* doc */ foo: … }`) and
+/// the matching TS type field (`type Props = { /* doc */ foo?: … }`) mirror the
+/// same prop API, so their identical per-member docs are intentional parallel
+/// documentation, not a copy. Per-member docs are conventionally a plain `//`
+/// (not `///` / `/**`), so unlike top-level declarations these earn the
+/// same-named exemption from any comment — see `documented_decl_name`.
+fn is_named_member(kind: &str) -> bool {
+    matches!(kind, "pair" | "property_signature")
+}
+
+/// The name a member node exposes to a leading comment: the `key` of an
+/// object-literal `pair` or the `name` of a TS `property_signature`. Only an
+/// identifier/string key counts — a computed key (`[expr]: …`) names nothing
+/// stable to mirror across files.
+fn member_name(member: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let key = member
+        .child_by_field_name("key")
+        .or_else(|| member.child_by_field_name("name"))?;
+    if !matches!(key.kind(), "property_identifier" | "string" | "identifier") {
         return None;
     }
+    key.utf8_text(source).ok().map(str::to_owned)
+}
+
+/// The name of the declaration or member a comment immediately documents: its
+/// next named sibling, skipping attributes/decorators, when that sibling is a
+/// named declaration or object/type member. `None` for free-floating comments
+/// (no following declaration) or declarations without a recognizable name.
+///
+/// A top-level declaration is only documented by a *doc*-comment (`///`, `/**`,
+/// …) — a plain `//` above it is incidental prose, so a copy-pasted one is still
+/// a smell. Object/type members are an exception: their docs are conventionally
+/// a plain `//` above the field, so a plain `//` above a member still names it.
+fn documented_decl_name(comment: tree_sitter::Node, source: &[u8]) -> Option<String> {
     let mut sibling = comment.next_named_sibling()?;
     while matches!(sibling.kind(), "attribute_item" | "decorator") {
         sibling = sibling.next_named_sibling()?;
     }
-    if !is_named_declaration(sibling.kind()) {
+    if is_named_member(sibling.kind()) {
+        return member_name(sibling, source);
+    }
+    if !is_doc_comment(&source[comment.start_byte()..comment.end_byte()])
+        || !is_named_declaration(sibling.kind())
+    {
         return None;
     }
     sibling
@@ -1038,6 +1072,52 @@ pub(crate) fn aes128_decrypt(rkeys: u8, blocks: u8) -> u8 { rkeys ^ blocks }
         let b = write(&dir, "b.rs", &format!("{doc}pub fn decode_beta(x: u8) -> u8 {{ x }}\n"));
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "identical doc on differently-named decls is a smell");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn ignores_mirror_prop_doc_between_js_props_object_and_ts_type() {
+        // Regression (#4990): a Vue component ships a JS runtime props object and a
+        // TS type for the same prop API, so the same prop's `//` description appears
+        // above the runtime `pair` and above the matching `property_signature`. The
+        // mirrored docs document the same named prop, not a copy-paste smell. The
+        // comments are plain `//` (the per-member convention), so only the
+        // same-named-member exemption keeps them out.
+        let dir = tempfile::tempdir().unwrap();
+        let js = "\
+export const props = {
+  // The array of events to display in Vue Cal. Can hold just the view events and
+  // be updated, or the full array of all events available to the calendar here.
+  events: { type: Array, default: () => [] },
+};
+";
+        let ts = "\
+export type VueCalProps = {
+  // The array of events to display in Vue Cal. Can hold just the view events and
+  // be updated, or the full array of all events available to the calendar here.
+  events?: VueCalEvent[],
+};
+";
+        let a = write(&dir, "props-definitions.js", js);
+        let b = write(&dir, "vue-cal.ts", ts);
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "mirror prop docs across a runtime props object and a TS type must not flag"
+        );
+    }
+
+    #[test]
+    fn still_flags_duplicate_prop_doc_on_differently_named_members() {
+        // The member exemption is name-keyed too: the same `//` description copied
+        // above two *differently named* props across files is real duplication.
+        let dir = tempfile::tempdir().unwrap();
+        let head = "\
+  // The array of events to display in Vue Cal. Can hold just the view events and
+  // be updated, or the full array of all events available to the calendar here.\n";
+        let a = write(&dir, "a.ts", &format!("export type A = {{\n{head}  events?: number[],\n}};\n"));
+        let b = write(&dir, "b.ts", &format!("export type B = {{\n{head}  sessions?: number[],\n}};\n"));
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "identical doc on differently-named props is a smell");
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
