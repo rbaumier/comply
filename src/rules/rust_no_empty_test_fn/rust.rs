@@ -12,6 +12,11 @@
 //! verifying the feature-gated code/macros compile (the compile
 //! phase is the test).
 //!
+//! An empty test carrying an `#[ignore]` attribute is likewise exempt:
+//! Cargo never runs an ignored test (absent `--include-ignored`), so an
+//! empty body creates no false confidence — it is an intentional
+//! placeholder, just like a `#[cfg(...)]`-gated one.
+//!
 //! Empty test fns inside a trybuild/ui_test compile-fail fixture are
 //! also exempt. Those fixtures hold intentionally-malformed test
 //! attributes (e.g. `#[tokio::test(flavor = 123)]`) whose only job is
@@ -49,6 +54,9 @@ impl AstCheck for Check {
             return;
         }
         if has_cfg_attribute(node, source_bytes) {
+            return;
+        }
+        if has_ignore_attribute(node, source_bytes) {
             return;
         }
         if is_compile_fail_fixture(ctx.path) {
@@ -113,6 +121,29 @@ fn has_cfg_attribute(item: tree_sitter::Node, source: &[u8]) -> bool {
             && text.contains("cfg(")
         {
             return true;
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+/// True if the function carries an `#[ignore]` / `#[ignore = "..."]` attribute
+/// as a preceding `attribute_item` sibling. An ignored test is never executed by
+/// Cargo (absent `--include-ignored`), so an empty body cannot create false
+/// confidence — it is an intentional placeholder, like a `#[cfg(...)]`-gated one.
+fn has_ignore_attribute(item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        if s.kind() != "attribute_item" {
+            break;
+        }
+        if let Ok(text) = s.utf8_text(source) {
+            let t = text.trim();
+            // Match `#[ignore]` and `#[ignore = "reason"]` / `#[ignore="reason"]`,
+            // but NOT a lint named e.g. `#[ignored]`.
+            if t == "#[ignore]" || t.starts_with("#[ignore ") || t.starts_with("#[ignore=") {
+                return true;
+            }
         }
         sibling = s.prev_named_sibling();
     }
@@ -225,6 +256,45 @@ mod tests {
         // Negative-space guard: a plain empty `#[test]` with no cfg gate
         // must still fire — only the conditionally-compiled case is exempt.
         let src = "#[test]\nfn check_proposed_macro_definitions() {}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_empty_test_with_ignore_reason() {
+        // anyhow: an empty `#[test]` carrying `#[ignore = "..."]` is never
+        // executed by Cargo, so the empty body is an intentional placeholder
+        // (Closes #4480).
+        let src = "#[ignore = \"requires nightly\"]\n#[test]\nfn t() {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_empty_test_with_bare_ignore() {
+        let src = "#[ignore]\n#[test]\nfn t() {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_empty_test_with_ignore_amid_other_attrs() {
+        // The issue's realistic ordering: a cfg-like attribute, then ignore,
+        // then test.
+        let src = "#[rustversion::not(nightly)]\n#[ignore = \"requires nightly\"]\n#[test]\nfn t() {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_empty_test_without_ignore() {
+        // Negative-space guard: a plain empty `#[test]` with no ignore gate
+        // must still fire.
+        let src = "#[test]\nfn t() {}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn ignore_match_is_not_substring() {
+        // Precision guard: an attribute whose name merely starts with the
+        // characters of `ignore` (e.g. `#[ignore_me]`) must NOT exempt.
+        let src = "#[ignore_me]\n#[test]\nfn t() {}";
         assert_eq!(run_on(src).len(), 1);
     }
 
