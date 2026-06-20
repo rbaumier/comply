@@ -7,6 +7,10 @@
 //! tag is type-only (the type is the documentation) or a JSX compiler pragma
 //! (`@jsx`, `@jsxImportSource`, `@jsxRuntime`, `@jsxFrag`), where the whole
 //! comment is a compiler directive with no prose to add.
+//!
+//! A `@description`/`@desc` tag is itself the prose description, and a
+//! `@deprecated` tag carrying an inline reason supplies the prose, so blocks
+//! using either as the description are not flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -84,11 +88,17 @@ impl OxcCheck for Check {
                 }
 
                 if content.starts_with('@') {
-                    if let Some(tag) = content
-                        .trim_start_matches('@')
-                        .split_whitespace()
-                        .next()
-                    {
+                    let rest = content.trim_start_matches('@');
+                    if let Some(tag) = rest.split_whitespace().next() {
+                        // `@description`/`@desc` supply the prose description by
+                        // definition; `@deprecated <reason>` carries the prose
+                        // inline. Either counts as the block's description.
+                        let inline_text = rest[tag.len()..].trim();
+                        match tag {
+                            "description" | "desc" => has_description = true,
+                            "deprecated" if !inline_text.is_empty() => has_description = true,
+                            _ => {}
+                        }
                         tags.push(tag);
                     }
                 } else {
@@ -116,5 +126,106 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn allows_description_tag() {
+        // Regression for rbaumier/comply#4729 — `@description` IS the prose.
+        let source = r#"
+/**
+ * @description title of the tab
+ */
+const label = { type: String, default: '' };
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_desc_shorthand_tag() {
+        // Regression for rbaumier/comply#4729 — `@desc` is the older shorthand.
+        let source = r#"
+/**
+ * @desc Determine if target element is focusable
+ * @param element {HTMLElement}
+ * @returns {Boolean} true if it is focusable
+ */
+function isFocusable(element: HTMLElement) {}
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_deprecated_with_inline_reason() {
+        // Regression for rbaumier/comply#4729 — `@deprecated <reason>` carries
+        // the prose explanation inline.
+        let source = r#"
+/**
+ * @deprecated Removed after 3.0.0, Use `TabPaneProps` instead.
+ */
+export const tabPaneProps = {};
+"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_deprecated_without_reason() {
+        // A `@deprecated` with no inline reason supplies no prose.
+        let source = r#"
+/**
+ * @deprecated
+ * @returns {void}
+ */
+function legacy() {}
+"#;
+        assert!(!run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_tags_only_block() {
+        let source = r#"
+/**
+ * @see other
+ * @author someone
+ */
+function thing() {}
+"#;
+        assert!(!run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_prose() {
+        let source = r#"
+/**
+ * Does the thing.
+ * @see other
+ */
+function thing() {}
+"#;
+        assert!(run_on(source).is_empty());
     }
 }
