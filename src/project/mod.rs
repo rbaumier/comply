@@ -2657,6 +2657,17 @@ impl ProjectCtx {
             .any(|pkg| pkg.has_dep_or_engine("unplugin-auto-import"))
     }
 
+    /// True when the effective `package.json` chain for `path` declares the
+    /// `quasar` dependency (any section). The Quasar CLI reads the SSR server
+    /// entry module's named exports by convention at runtime, so this gates the
+    /// `src-ssr/server.{js,ts}` exemption to actual Quasar projects.
+    #[must_use]
+    pub fn is_quasar_for_path(&self, path: &Path) -> bool {
+        self.effective_package_jsons(path)
+            .iter()
+            .any(|pkg| pkg.has_dep_or_engine("quasar"))
+    }
+
     /// Add a framework's route-scoped magic exports when `path` matches the file
     /// convention that consumes them. SvelteKit reserves `load`/`ssr`/`csr`/… in
     /// `+page`/`+layout`/`+server` route files and `match` in `src/params/*`;

@@ -1052,6 +1052,24 @@ pub fn is_nuxt_auto_imported_file(path: &Path) -> bool {
     has_path_segment(path, &["composables", "utils"])
 }
 
+/// True when `path` is the Quasar SSR server entry module: a `server.{js,ts,mjs,mts}`
+/// file directly inside a `src-ssr/` directory (e.g. `src-ssr/server.js`). The
+/// Quasar CLI reads this module's named exports (`create`, `listen`, `close`,
+/// `serveStaticContent`, `injectDevMiddleware`, `renderPreloadTag`) by convention
+/// to drive the SSR server lifecycle at runtime, never through a static import, so
+/// every export has no importer yet is live. The `src-ssr/` parent and the
+/// `server` stem scope the exemption to this entry file, keeping an ordinary
+/// `server.ts` elsewhere flaggable. Detection-gated by the caller.
+pub fn is_quasar_ssr_entry_file(path: &Path) -> bool {
+    if !matches!(
+        path.file_name().and_then(|n| n.to_str()),
+        Some("server.js" | "server.ts" | "server.mjs" | "server.mts")
+    ) {
+        return false;
+    }
+    path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) == Some("src-ssr")
+}
+
 /// True when `path` is a Docusaurus theme swizzle component — a file under a
 /// `src/theme/` directory (consecutive `src` then `theme` segments, e.g.
 /// `src/theme/MDXComponents/index.tsx`). Docusaurus's theme system discovers
@@ -1283,6 +1301,19 @@ mod aux_path_tests {
         assert!(is_nuxt_auto_imported_file(Path::new("app/utils/url.ts")));
         // A `server/` segment without a following `utils/` is not auto-imported.
         assert!(!is_nuxt_auto_imported_file(Path::new("src/server/handler.ts")));
+    }
+
+    #[test]
+    fn quasar_ssr_entry_file_matches_src_ssr_server_only() {
+        // Issue #4711: the Quasar CLI reads `src-ssr/server.{js,ts}` named exports.
+        assert!(is_quasar_ssr_entry_file(Path::new("src-ssr/server.js")));
+        assert!(is_quasar_ssr_entry_file(Path::new("ui/playground/src-ssr/server.ts")));
+        assert!(is_quasar_ssr_entry_file(Path::new("src-ssr/server.mjs")));
+        // A `server.*` outside `src-ssr/` is an ordinary module.
+        assert!(!is_quasar_ssr_entry_file(Path::new("src/server.ts")));
+        // Other files inside `src-ssr/` are not the convention entry point.
+        assert!(!is_quasar_ssr_entry_file(Path::new("src-ssr/middlewares/render.ts")));
+        assert!(!is_quasar_ssr_entry_file(Path::new("src-ssr/server-config.ts")));
     }
 
     #[test]
