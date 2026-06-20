@@ -11,6 +11,8 @@ crate::ast_check! { on ["const_item", "static_item"] prefilter = ["const", "stat
 
     if allows_non_upper_case_globals(node, source) { return; }
 
+    if has_deprecated_attr(node, source) { return; }
+
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &name_node,
@@ -74,6 +76,51 @@ fn attr_allows_non_upper_case_globals(attr: Node, source: &[u8]) -> bool {
     let Ok(text) = attr.utf8_text(source) else { return false };
     text.contains("allow")
         && (text.contains("non_upper_case_globals") || text.contains("nonstandard_style"))
+}
+
+/// True if the const/static `item` carries a `#[deprecated]` attribute as a
+/// preceding outer-attribute sibling. A deprecated `const` named in
+/// `PascalCase` is a frozen backwards-compat alias for a renamed item (e.g. a
+/// former enum variant migrated to an associated `const` of the same name);
+/// renaming it to `SCREAMING_SNAKE_CASE` would defeat its compatibility purpose.
+///
+/// Interleaved comments are skipped and unrelated attributes (`#[cfg(...)]`) are
+/// traversed past, so `#[deprecated]` is found whether or not a doc comment or
+/// other attribute sits between it and the item.
+fn has_deprecated_attr(item: Node, source: &[u8]) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "line_comment" | "block_comment" => {}
+            "attribute_item" => {
+                if attr_is_deprecated(s, source) {
+                    return true;
+                }
+            }
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+/// True if the `attribute_item`'s `attribute` child names `deprecated` as its
+/// path (the identifier before any `(...)` arguments or `= value`). Matching on
+/// the AST path child — not raw text — means `#[deprecated]`,
+/// `#[deprecated(since = "...")]`, and `#[deprecated = "..."]` all match, while a
+/// `deprecated` token inside another attribute's note string does not.
+fn attr_is_deprecated(attribute_item: Node, source: &[u8]) -> bool {
+    let mut cursor = attribute_item.walk();
+    let Some(attribute) = attribute_item
+        .children(&mut cursor)
+        .find(|child| child.kind() == "attribute")
+    else {
+        return false;
+    };
+    let Some(path) = attribute.named_child(0) else {
+        return false;
+    };
+    path.utf8_text(source) == Ok("deprecated")
 }
 
 
@@ -184,5 +231,45 @@ mod tests {
         let diags = run(src);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("en_US"));
+    }
+
+    #[test]
+    fn allows_deprecated_pascal_case_const() {
+        // The rust-sdl2 case from the issue: a former enum variant migrated to a
+        // PascalCase deprecated `const` alias for the SCREAMING_SNAKE_CASE name.
+        let src = "#[deprecated(since = \"0.39.0\", note = \"use BLEND instead, this used to be an enum member\")]\n\
+            pub const Blend: Self = Self::BLEND;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_deprecated_pascal_case_const() {
+        let src = "#[deprecated]\npub const Backspace: Keycode = Keycode::BACKSPACE;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_non_deprecated_const() {
+        // A plain mis-cased const without `#[deprecated]` still fires.
+        let diags = run("const fooBar: u32 = 1;");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("fooBar"));
+    }
+
+    #[test]
+    fn allows_deprecated_const_with_interleaved_comment() {
+        // A comment between `#[deprecated]` and the const must not break the
+        // walk — deprecated items routinely carry an explanatory comment.
+        let src = "#[deprecated]\n// kept for 0.39 compat\npub const Blend: Self = Self::BLEND;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn deprecated_note_mentioning_deprecated_does_not_leak() {
+        // A different attribute whose note text contains "deprecated" must not
+        // exempt the const — only an actual `#[deprecated]` path does.
+        let diags = run("#[doc = \"deprecated\"]\nconst fooBar: u32 = 1;");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("fooBar"));
     }
 }
