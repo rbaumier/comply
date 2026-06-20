@@ -343,6 +343,35 @@ exec(`rm -rf ${userInput}`);"#;
         assert_eq!(run(src).len(), 1, "got {:?}", run(src));
     }
 
+    // Regression for #5024: the argv list may be a computed expression
+    // (`cmds.slice(1).concat(...)`), not just a literal `[...]`. Shell safety
+    // depends on the absence of `shell: true`, not on the array being a literal.
+    #[test]
+    fn allows_spawn_with_computed_argv_array_issue_5024() {
+        let src = r#"const cmds = cmd.split(' ');
+const bin = spawn(cmds[0], cmds.slice(1).concat(args.map(String)), { cwd });"#;
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    // Regression for #5024: `spawn(cmd, computedArgv, { shell: true })` re-enables
+    // the shell, so a dynamic command is still an injection vector and must flag
+    // even though the argv list is a computed expression, not a literal array.
+    #[test]
+    fn still_flags_spawn_computed_argv_with_shell_true_issue_5024() {
+        let src = r#"spawn(cmd, parts.slice(1), { shell: true });"#;
+        assert_eq!(run(src).len(), 1, "got {:?}", run(src));
+    }
+
+    // Regression for #5024: `spawn(cmd, { shell: true })` with the options object
+    // as the second argument (no argv array) still runs a shell, so the dynamic
+    // command must flag — the argv exemption only applies to a non-object second
+    // argument.
+    #[test]
+    fn still_flags_spawn_options_only_with_shell_true_issue_5024() {
+        let src = r#"spawn(cmd, { shell: true });"#;
+        assert_eq!(run(src).len(), 1, "got {:?}", run(src));
+    }
+
     // Regression for #3977 facet A: a static getter named `…RegExp` is a regex,
     // not a subprocess. The receiver prefix ends with `regexp` (case-insensitive).
     #[test]
