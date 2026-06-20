@@ -77,6 +77,28 @@ fn is_url_base_argument<'a>(
     base_arg.span() == node.kind().span()
 }
 
+/// True when `node` sits inside a `defineChain({ … })` call — viem's
+/// chain-definition API. Such files are static metadata describing external
+/// blockchain networks (RPC endpoints, block explorers): the `http://` URLs are
+/// public node addresses the library does not operate, so it cannot upgrade them
+/// to TLS — flagging them is not actionable. Matching the `defineChain` callee
+/// keeps the exemption to this one config shape rather than any `http`-keyed
+/// field, so real cleartext endpoints elsewhere still fire.
+fn is_in_chain_definition<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    semantic.nodes().ancestors(node.id()).any(|ancestor| {
+        let AstKind::CallExpression(call) = ancestor.kind() else {
+            return false;
+        };
+        matches!(
+            &call.callee,
+            Expression::Identifier(callee) if callee.name.as_str() == "defineChain"
+        )
+    })
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::StringLiteral, AstType::TemplateLiteral]
@@ -124,6 +146,9 @@ impl OxcCheck for Check {
             return;
         }
         if is_string_matching_context(node, semantic) {
+            return;
+        }
+        if is_in_chain_definition(node, semantic) {
             return;
         }
         let offset = match node.kind() {
@@ -374,6 +399,52 @@ mod tests {
     #[test]
     fn still_flags_http_endpoint_outside_storybook() {
         let src = r#"const url = "http://github.com/verdaccio/ui.git";"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // #4823 — viem chain definitions ship public RPC endpoint URLs as static
+    // metadata; testnet/devnet nodes commonly only expose HTTP and the library
+    // cannot reconfigure an external node's TLS, so these are not actionable.
+    #[test]
+    fn does_not_flag_rpc_url_in_define_chain() {
+        let src = r#"
+            export const otimDevnet = defineChain({
+              id: 41144114,
+              name: 'Otim Devnet',
+              rpcUrls: {
+                default: {
+                  http: ['http://devnet.otim.xyz'],
+                },
+              },
+            })
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    // #4823 — the same exemption covers `blockExplorers` `apiUrl`/`url` fields,
+    // which are likewise external addresses the library does not operate.
+    #[test]
+    fn does_not_flag_block_explorer_url_in_define_chain() {
+        let src = r#"
+            export const xone = defineChain({
+              id: 3721,
+              blockExplorers: {
+                default: {
+                  name: 'Xone Mainnet Explorer',
+                  url: 'https://xonescan.com',
+                  apiUrl: 'http://api.xonescan.com/api',
+                },
+              },
+            })
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    // #4823 — the exemption is scoped to the `defineChain` call. A `http://` URL
+    // in an ordinary object literal is a real cleartext endpoint and still fires.
+    #[test]
+    fn still_flags_http_url_outside_define_chain() {
+        let src = r#"const cfg = { rpcUrls: { default: { http: ['http://devnet.otim.xyz'] } } };"#;
         assert_eq!(run(src).len(), 1);
     }
 }
