@@ -515,4 +515,43 @@ mod tests {
         let src = "enum E { A(u32), B } impl E { fn bit(self) -> u8 { self as u8 } }";
         assert_eq!(run_on(src).len(), 1);
     }
+
+    #[test]
+    fn repro_4811_external_enum_variant_path_as_i32_not_flagged() {
+        // `lsp_server::ErrorCode::InvalidParams as i32` reads an imported
+        // fieldless enum's discriminant; `as` is the only conversion that
+        // compiles (no `From`/`TryFrom<ErrorCode> for i32`). The enum is not in
+        // this file, so the cast is exempted by the `<Type>::<Variant>` shape.
+        let src = "fn f() -> i32 { lsp_server::ErrorCode::InvalidParams as i32 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_4811_external_enum_two_segment_path_as_u8_not_flagged() {
+        let src = "fn f() -> u8 { Direction::North as u8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_4811_external_const_path_as_u8_still_flagged() {
+        // `mod::MAX_LEN` is a SCREAMING_SNAKE_CASE const, not an enum variant —
+        // keep flagging so the exemption stays scoped to discriminant reads.
+        let src = "fn f() -> u8 { limits::MAX_LEN as u8 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_4811_external_lowercase_path_as_u8_still_flagged() {
+        // A lowercase final segment is a function/module item, not a variant.
+        let src = "fn f() -> u8 { config::default_size as u8 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_4811_in_file_data_enum_variant_path_still_flagged() {
+        // The enum IS in this file and is data-carrying — the shape heuristic
+        // must not override the in-file truth.
+        let src = "enum E { A(u32), B } fn f() -> u8 { E::B as u8 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
 }

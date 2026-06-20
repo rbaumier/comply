@@ -1431,7 +1431,13 @@ fn call_method_returns_bool(call: Node, source: &[u8]) -> bool {
 ///   when `Self` is a fieldless enum (or a primitive), so the shape is
 ///   unambiguous; or
 /// - a `scoped_identifier` `EnumName::Variant` where `EnumName` is a fieldless
-///   `enum_item` in the file.
+///   `enum_item` in the file; or
+/// - a `scoped_identifier` `Path::EnumName::Variant` whose `EnumName` and
+///   `Variant` segments are both PascalCase, when the enum is not defined in the
+///   file (an imported/external enum such as `lsp_server::ErrorCode::InvalidParams`).
+///   The shape `<Type>::<Variant>` is an enum-variant discriminant read; a
+///   const reference (`mod::MAX_LEN`) or a function path (`mod::value`) has a
+///   non-PascalCase final segment and is excluded.
 ///
 /// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`, which both
 /// otherwise flag the cast because a fieldless-enum operand resolves to no
@@ -1442,14 +1448,57 @@ pub fn cast_operand_is_enum_discriminant(cast: Node, source: &[u8]) -> bool {
     };
     match value.kind() {
         "self" => self_enum_is_fieldless(cast, source),
-        "scoped_identifier" => value
-            .child_by_field_name("path")
-            .and_then(|path| path.utf8_text(source).ok())
-            .is_some_and(|enum_name| {
-                find_enum_item(cast, enum_name, source).is_some_and(enum_is_fieldless)
-            }),
+        "scoped_identifier" => scoped_operand_is_enum_discriminant(cast, value, source),
         _ => false,
     }
+}
+
+/// True if the `scoped_identifier` operand `value` of `cast` reads a fieldless
+/// enum's discriminant. Resolves the enum in-file when possible; otherwise falls
+/// back to the `<EnumType>::<Variant>` shape heuristic for imported enums.
+fn scoped_operand_is_enum_discriminant(cast: Node, value: Node, source: &[u8]) -> bool {
+    let Some(path) = value.child_by_field_name("path") else {
+        return false;
+    };
+    if let Ok(enum_name) = path.utf8_text(source)
+        && let Some(enum_item) = find_enum_item(cast, enum_name, source)
+    {
+        // The enum is defined in this file: trust its variants directly. A
+        // data-carrying enum has no discriminant-`as` semantics, so it must
+        // stay flagged rather than fall through to the shape heuristic.
+        return enum_is_fieldless(enum_item);
+    }
+    // Imported/external enum: no `enum_item` to inspect. `<Type>::<Variant> as int`
+    // is the discriminant-read idiom; require both the enum-type segment and the
+    // variant segment to be PascalCase to exclude const (`mod::MAX`) and function
+    // (`mod::value`) paths. Without type info this also exempts a PascalCase
+    // associated const (`Wrapper::Default as i32`) — an accepted blind spot, as
+    // avoiding the discriminant-read false positive outweighs that rare miss.
+    let variant_is_pascal = value
+        .child_by_field_name("name")
+        .and_then(|name| name.utf8_text(source).ok())
+        .is_some_and(is_pascal_case);
+    let enum_type_is_pascal = final_segment(path, source).is_some_and(is_pascal_case);
+    variant_is_pascal && enum_type_is_pascal
+}
+
+/// The text of a path node's final segment: the whole text of an `identifier`,
+/// or the `name` field of a `scoped_identifier`.
+fn final_segment<'a>(path: Node<'a>, source: &'a [u8]) -> Option<&'a str> {
+    match path.kind() {
+        "identifier" => path.utf8_text(source).ok(),
+        "scoped_identifier" => path.child_by_field_name("name")?.utf8_text(source).ok(),
+        _ => None,
+    }
+}
+
+/// True if `name` is PascalCase: starts with an ASCII uppercase letter and
+/// contains at least one ASCII lowercase letter. This distinguishes an enum
+/// type/variant (`ErrorCode`, `InvalidParams`) from a SCREAMING_SNAKE_CASE
+/// const (`MAX_LEN`) and a lowercase function/module name (`value`).
+fn is_pascal_case(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_uppercase())
+        && name.bytes().any(|b| b.is_ascii_lowercase())
 }
 
 /// True if `node`'s nearest enclosing `impl_item` targets a fieldless
@@ -2032,8 +2081,14 @@ mod tests {
             ("fn f(x: u32) -> u8 { x as u8 }", false),
             // `EnumName::Variant` of a data-carrying enum.
             ("enum E { A(u32), B } fn f() -> u8 { E::B as u8 }", false),
-            // A scoped path whose root is not an enum in this file.
-            ("fn f() -> u8 { Foo::Bar as u8 }", false),
+            // An external `<Type>::<Variant>` path (enum not in this file): the
+            // shape heuristic reads it as a discriminant access.
+            ("fn f() -> u8 { Foo::Bar as u8 }", true),
+            // External path with a lowercase final segment is a function/value,
+            // not a variant — not a discriminant read.
+            ("fn f() -> u8 { module::value as u8 }", false),
+            // External path with a SCREAMING_SNAKE final segment is a const.
+            ("fn f() -> u8 { limits::MAX_LEN as u8 }", false),
         ];
         for (src, expected) in cases {
             let tree = parse(src);
