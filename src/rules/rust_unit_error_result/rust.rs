@@ -29,6 +29,16 @@
 //! contract every impl must conform to, not a discarded error. `Result<Value,
 //! ()>` (a real value alongside a discarded error) stays flagged everywhere,
 //! and `Result<(), ()>` in a free or inherent function stays flagged too.
+//!
+//! Borrowed-narrowing-accessor exception: a `Result<&T, ()>` that is the return
+//! type of a `to_`/`as_`/`try_` function is a type-narrowing accessor — it
+//! answers "is `self` interpretable as this borrowed view, and if so what is
+//! it?". The `Err(())` means "wrong variant"; the failure is a closed
+//! single-element set with no error detail to carry, so `()` is correct. This
+//! is `Option<&T>` semantics expressed with `Result` for API consistency. The
+//! ok-type must be a reference (`&str`, `&[u8]`, `&T`) and the `Result` must sit
+//! in the function's return type — an owned ok-type or a non-accessor name
+//! stays flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
@@ -62,6 +72,9 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     if ok_type_is_unit && (is_in_trait_impl(node) || is_in_trait_definition(node)) {
         return;
     }
+    if is_borrowed_narrowing_accessor(node, source) {
+        return;
+    }
     let pos = node.start_position();
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -75,6 +88,49 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
         severity: Severity::Warning,
         span: None,
     });
+}
+
+/// True when this `Result<&T, ()>` is the return type of a `to_`/`as_`/`try_`
+/// accessor — a type-narrowing accessor returning a borrowed view of `self`.
+///
+/// The ok-type must be a `reference_type` (`&str`, `&[u8]`, `&T`), and the
+/// `Result` must sit inside the enclosing function's `return_type`, not its
+/// body, parameters, a struct field, a type alias, or a closure.
+fn is_borrowed_narrowing_accessor(node: Node, source: &[u8]) -> bool {
+    // OK type must be a reference (`&str`, `&[u8]`, `&T`) — a borrowed view.
+    if result_ok_type(node, source).map(|t| t.kind()) != Some("reference_type") {
+        return false;
+    }
+    // The Result must be the RETURN TYPE of a `to_`/`as_`/`try_` function.
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        match parent.kind() {
+            "function_item" => {
+                // node must sit inside the function's `return_type`, not its body/params
+                let Some(ret) = parent.child_by_field_name("return_type") else {
+                    return false;
+                };
+                if node.start_byte() < ret.start_byte() || node.end_byte() > ret.end_byte() {
+                    return false;
+                }
+                let Some(name) = parent
+                    .child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(source).ok())
+                else {
+                    return false;
+                };
+                return name.starts_with("to_")
+                    || name.starts_with("as_")
+                    || name.starts_with("try_");
+            }
+            // not inside a function return type (struct field, type alias, closure, etc.)
+            "struct_item" | "enum_item" | "type_item" | "closure_expression" | "impl_item"
+            | "trait_item" => return false,
+            _ => {}
+        }
+        cur = parent;
+    }
+    false
 }
 
 /// True when this `Result<_, ()>` is an idiomatic axum/tower use of the unit
@@ -479,6 +535,74 @@ mod tests {
         // even inside a trait contract.
         assert_eq!(
             run_on_src("pub trait T { fn f(&self) -> Result<i32, ()>; }").len(),
+            1
+        );
+    }
+
+    // --- borrowed narrowing accessor: `Result<&T, ()>` is `Option`-like (#4463) ---
+
+    #[test]
+    fn allows_to_str_borrowed_narrowing_accessor() {
+        // The warp repro: `to_str` returns a borrowed `&str` view, `Err(())`
+        // means "not a text message" — a closed single-element failure set.
+        assert!(
+            run_on_src(
+                "impl M {\n\
+                 \x20   pub fn to_str(&self) -> Result<&str, ()> {\n\
+                 \x20       match self.inner {\n\
+                 \x20           X::Text(ref s) => Ok(s),\n\
+                 \x20           _ => Err(()),\n\
+                 \x20       }\n\
+                 \x20   }\n\
+                 }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_as_bytes_borrowed_narrowing_accessor() {
+        // `as_` prefix with a `&[u8]` borrowed view.
+        assert!(
+            run_on_src("fn as_bytes(&self) -> Result<&[u8], ()> { Err(()) }").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_try_as_text_borrowed_narrowing_accessor() {
+        // `try_` prefix with a `&str` borrowed view.
+        assert!(
+            run_on_src("fn try_as_text(&self) -> Result<&str, ()> { Err(()) }").is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_borrowed_result_without_accessor_prefix() {
+        // Load-bearing negative: a reference ok-type but the name is not a
+        // `to_`/`as_`/`try_` accessor, so it stays flagged.
+        assert_eq!(
+            run_on_src("fn parse(&self) -> Result<&str, ()> { Err(()) }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_owned_return_with_accessor_prefix() {
+        // Load-bearing negative: a `to_` accessor whose ok-type is owned
+        // (`Config`, not a reference) — the reference requirement is what makes
+        // it a borrowed narrowing view, so it stays flagged.
+        assert_eq!(
+            run_on_src("fn to_config(&self) -> Result<Config, ()> { Err(()) }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_borrowed_result_in_struct_field() {
+        // Load-bearing negative: a `Result<&'static str, ()>` struct field is
+        // not inside a function return type, so it stays flagged.
+        assert_eq!(
+            run_on_src("struct S { x: Result<&'static str, ()> }").len(),
             1
         );
     }
