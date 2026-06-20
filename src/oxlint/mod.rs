@@ -401,24 +401,34 @@ fn parse_json_bytes(
     Ok(envelope
         .diagnostics
         .into_iter()
-        .map(|d| into_diagnostic(d, remap))
+        .filter_map(|d| into_diagnostic(d, remap))
         .collect())
 }
 
 /// Convert one oxlint diagnostic into our unified format, remapping the
 /// rule_id + severity through the registry when a match exists.
-fn into_diagnostic(d: OxlintDiag, remap: &FxHashMap<String, &'static RuleMeta>) -> Diagnostic {
+///
+/// Returns `None` for a diagnostic with no `code` — oxlint emits those for
+/// parser/syntax errors, not lint-rule violations, so they are dropped. comply
+/// routes `.js` files to oxlint's JavaScript parser; a `.js` file carrying
+/// TypeScript type annotations (type-stripped JS, common in Vite projects)
+/// fails that parse and yields a code-less error that is not a lint finding.
+fn into_diagnostic(
+    d: OxlintDiag,
+    remap: &FxHashMap<String, &'static RuleMeta>,
+) -> Option<Diagnostic> {
+    let oxlint_code = d.code?;
+
     let (line, column) = d
         .labels
         .first()
         .map(|l| (l.span.line.max(1), l.span.column.max(1)))
         .unwrap_or((1, 1));
 
-    let oxlint_code = d.code.clone().unwrap_or_default();
     let (rule_id, severity) = match remap.get(&oxlint_code) {
         Some(meta) => (std::borrow::Cow::Borrowed(meta.id), meta.severity),
         None => (
-            std::borrow::Cow::Owned(d.code.unwrap_or_else(|| "oxlint/unknown".into())),
+            std::borrow::Cow::Owned(oxlint_code),
             match d.severity {
                 OxlintSeverity::Warning | OxlintSeverity::Advice => Severity::Warning,
                 OxlintSeverity::Error => Severity::Error,
@@ -426,7 +436,7 @@ fn into_diagnostic(d: OxlintDiag, remap: &FxHashMap<String, &'static RuleMeta>) 
         ),
     };
 
-    Diagnostic {
+    Some(Diagnostic {
         path: std::sync::Arc::from(std::path::PathBuf::from(d.filename).as_path()),
         line,
         column,
@@ -434,7 +444,7 @@ fn into_diagnostic(d: OxlintDiag, remap: &FxHashMap<String, &'static RuleMeta>) 
         message: d.message,
         severity,
         span: None,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -501,10 +511,38 @@ mod tests {
     #[test]
     fn fallback_position_is_one_one_not_zero_zero() {
         let remap = FxHashMap::default();
-        let json = br#"{ "diagnostics": [{"message": "X", "severity": "error", "filename": "/tmp/x.ts", "labels": []}] }"#;
+        let json = br#"{ "diagnostics": [{"message": "X", "code": "eslint(no-debugger)", "severity": "error", "filename": "/tmp/x.ts", "labels": []}] }"#;
         let result = parse_json_bytes(json, b"", &remap).expect("must parse");
         assert_eq!(result[0].line, 1);
         assert_eq!(result[0].column, 1);
+    }
+
+    #[test]
+    fn parser_error_without_code_is_dropped() {
+        // oxlint emits a code-less diagnostic when a file fails to parse — e.g.
+        // a `.js` file carrying TypeScript type annotations routed to oxlint's
+        // JavaScript parser (issue #4930). It is not a lint finding, so it must
+        // not surface as a diagnostic.
+        let remap = FxHashMap::default();
+        let json = br#"{ "diagnostics": [{"message": "Expected a semicolon or an implicit semicolon after a statement, but found none", "severity": "error", "filename": "/tmp/DOM.js", "labels": [{"span": {"line": 1, "column": 15}}]}] }"#;
+        let result = parse_json_bytes(json, b"", &remap).expect("must parse");
+        assert!(
+            result.is_empty(),
+            "code-less parser error must be dropped, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn lint_finding_with_code_is_kept() {
+        // A genuine oxlint lint finding carries a rule `code` and must still be
+        // reported even when no remap entry matches (surfaced under its oxlint
+        // code), so dropping parser errors does not silence real diagnostics.
+        let remap = FxHashMap::default();
+        let json = br#"{ "diagnostics": [{"message": "`debugger` statement is not allowed", "code": "eslint(no-debugger)", "severity": "error", "filename": "/tmp/app.js", "labels": [{"span": {"line": 2, "column": 1}}]}] }"#;
+        let result = parse_json_bytes(json, b"", &remap).expect("must parse");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].rule_id.as_ref(), "eslint(no-debugger)");
+        assert_eq!(result[0].line, 2);
     }
 
     #[test]
