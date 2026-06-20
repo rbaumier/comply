@@ -121,18 +121,29 @@ const VIRTUAL_PREFIXES: &[&str] = &[
 /// specifier root.
 const NON_VIRTUAL_SCHEMES: &[&str] = &["node", "http", "https"];
 
+/// Bare specifiers that are virtual CSS modules injected by a build plugin
+/// (UnoCSS's `uno.css`, WindiCSS's `windi.css`), NOT npm packages. Matched
+/// EXACTLY — real packages named `normalize.css` / `animate.css` stay flagged.
+const VIRTUAL_CSS_MODULES: &[&str] = &["uno.css", "windi.css"];
+
 /// True if `spec` is a build-time virtual module rather than an npm package.
 ///
-/// Two forms are recognized:
+/// Three forms are recognized:
 ///   - a known framework virtual-namespace prefix (Docusaurus theme aliases
 ///     and the `@site/` project-root alias, Vite Pages), or
 ///   - a root package segment containing a `:`. npm package names cannot
 ///     contain `:`, so a colon marks a plugin-provided virtual namespace —
 ///     Vite's `virtual:` convention (`virtual:vitest-custom-virtual-file-1`)
 ///     or a custom separator (`vitest-custom-virtual:math`). `node:` builtins
-///     and `http`/`https` URLs are excluded.
+///     and `http`/`https` URLs are excluded, or
+///   - an exact virtual-CSS-module name (`uno.css`, `windi.css`) injected by
+///     the UnoCSS/WindiCSS Vite plugin. Matched exactly so real npm packages
+///     such as `normalize.css` stay subject to the rule.
 pub(crate) fn is_virtual_module(spec: &str) -> bool {
     if VIRTUAL_PREFIXES.iter().any(|p| spec.starts_with(p)) {
+        return true;
+    }
+    if VIRTUAL_CSS_MODULES.contains(&spec) {
         return true;
     }
     let root = spec.split('/').next().unwrap_or(spec);
@@ -258,4 +269,30 @@ pub(crate) fn matches_alias(spec: &str, alias_prefixes: &[String]) -> bool {
         }
         false
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_virtual_module;
+
+    // Regression #4467: UnoCSS's `uno.css` and WindiCSS's `windi.css` are
+    // virtual CSS modules injected by the plugin at build time, never npm
+    // packages, so they must be treated as virtual modules and not flagged.
+    #[test]
+    fn unocss_windicss_virtual_css_modules_are_virtual() {
+        assert!(is_virtual_module("uno.css"));
+        assert!(is_virtual_module("windi.css"));
+    }
+
+    // Negative space: the exemption is an exact-match allowlist, so real npm
+    // packages literally named `normalize.css` / `animate.css`, the lookalike
+    // `uno.cssfoo`, and the genuine `@unocss/core` package must stay subject
+    // to the rule.
+    #[test]
+    fn real_css_packages_and_lookalikes_are_not_virtual() {
+        assert!(!is_virtual_module("normalize.css"));
+        assert!(!is_virtual_module("animate.css"));
+        assert!(!is_virtual_module("uno.cssfoo"));
+        assert!(!is_virtual_module("@unocss/core"));
+    }
 }
