@@ -31,6 +31,14 @@ impl OxcCheck for Check {
                 if !is_arguments_object(&member.object) {
                     return;
                 }
+                // Exempt the `arguments.length` static read: it reports the real arity
+                // for getter/setter overload dispatch, which rest params can't express
+                // (`args.length` is 0 for both `f(x)` and `f(x, undefined)` because
+                // `undefined` is still captured). Other property reads and the computed
+                // `arguments["length"]` spelling stay flagged.
+                if member.property.name.as_str() == "length" {
+                    return;
+                }
                 member.object.span()
             }
             AstKind::ComputedMemberExpression(member) => {
@@ -84,9 +92,27 @@ mod tests {
     }
 
     #[test]
-    fn flags_arguments_length() {
+    fn allows_arguments_length_arity_check() {
+        // Getter/setter overload dispatch — issue #4846.
+        assert!(
+            run_on(
+                "function data(key, value) { if (arguments.length === 2) { return this; } return key; }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_arguments_length_assertion() {
+        assert!(run_on("function f(node, file) { assert.equal(arguments.length, 2); }").is_empty());
+    }
+
+    #[test]
+    fn flags_computed_length() {
+        // Only the static `.length` spelling is exempt; `arguments["length"]` indexing
+        // stays flagged.
         assert_eq!(
-            run_on("function f() { if (arguments.length > 0) {} }").len(),
+            run_on(r#"function f() { return arguments["length"]; }"#).len(),
             1
         );
     }
