@@ -1417,6 +1417,93 @@ fn call_method_returns_bool(call: Node, source: &[u8]) -> bool {
         })
 }
 
+/// True when the operand of `cast` (a `type_cast_expression`) is a `char`: a
+/// `char_literal` (`'A' as u32`), an identifier whose local binding is annotated
+/// `char` (`c as u32`), or an identifier bound by a `chars()`/`char_indices()`
+/// for-loop (`for c in s.chars()`).
+///
+/// A `char` is a Unicode scalar value in `0..=0x10FFFF` (21 bits), so casting it
+/// to any integer at least 21 bits wide is lossless and total. Shared by
+/// `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`, which both otherwise
+/// flag the cast because a `char` operand resolves to no numeric source type.
+pub fn cast_operand_is_char(cast: Node, source: &[u8]) -> bool {
+    let Some(value) = cast.child_by_field_name("value") else {
+        return false;
+    };
+    match value.kind() {
+        "char_literal" => true,
+        "identifier" => value.utf8_text(source).ok().is_some_and(|name| {
+            find_identifier_type(cast, name, source)
+                .is_some_and(|type_text| type_text == "char")
+                || binding_is_chars_iter(cast, name, source)
+        }),
+        _ => false,
+    }
+}
+
+/// True when `name` is the `char` binding of an enclosing `for <pat> in
+/// <expr>.chars()` or `for (<idx>, <name>) in <expr>.char_indices()` loop.
+///
+/// `<str>.chars()` yields `char`, and `<str>.char_indices()` yields `(usize,
+/// char)` — so the plain loop binding (or the tuple's second element) is a
+/// `char`. The match is on the iterator's method name, not the receiver, since
+/// any `&str`/`String` chain ending in those inherent methods yields a `char`.
+fn binding_is_chars_iter(node: Node, name: &str, source: &[u8]) -> bool {
+    let mut current = node.parent();
+    while let Some(n) = current {
+        if n.kind() == "for_expression"
+            && let Some(pattern) = n.child_by_field_name("pattern")
+            && for_pattern_binds_char(pattern, name, source)
+            && let Some(value) = n.child_by_field_name("value")
+            && let Some(method) = chars_iter_method(value, source)
+        {
+            return (method == "chars" && pattern.kind() == "identifier")
+                || (method == "char_indices" && pattern.kind() == "tuple_pattern");
+        }
+        current = n.parent();
+    }
+    false
+}
+
+/// True when `pattern` is the for-loop binding site for the `char` value of a
+/// `chars()`/`char_indices()` iterator: either the plain identifier `name`
+/// (`for name in ...chars()`), or the second element of a two-element tuple
+/// pattern (`for (_, name) in ...char_indices()`).
+fn for_pattern_binds_char(pattern: Node, name: &str, source: &[u8]) -> bool {
+    match pattern.kind() {
+        "identifier" => pattern.utf8_text(source).is_ok_and(|text| text == name),
+        "tuple_pattern" => {
+            pattern.named_child_count() == 2
+                && pattern.named_child(1).is_some_and(|second| {
+                    second.kind() == "identifier"
+                        && second.utf8_text(source).is_ok_and(|text| text == name)
+                })
+        }
+        _ => false,
+    }
+}
+
+/// The method name of a no-argument `<expr>.<method>()` call, or `None` if the
+/// node is not such a method call.
+fn chars_iter_method<'a>(value: Node, source: &'a [u8]) -> Option<&'a str> {
+    if value.kind() != "call_expression" {
+        return None;
+    }
+    if value
+        .child_by_field_name("arguments")
+        .is_some_and(|args| args.named_child_count() > 0)
+    {
+        return None;
+    }
+    let function = value.child_by_field_name("function")?;
+    if function.kind() != "field_expression" {
+        return None;
+    }
+    function
+        .child_by_field_name("field")
+        .and_then(|field| field.utf8_text(source).ok())
+}
+
 /// True if `cast` (a `type_cast_expression`) reads the discriminant of a
 /// fieldless (C-like) enum — `<enum value> as <integer>`. For such an enum the
 /// `as`-cast is the language-blessed way to obtain the discriminant: no
