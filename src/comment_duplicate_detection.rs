@@ -339,6 +339,9 @@ struct CommentGroup {
     stripped: String,
     /// Name of the declaration immediately documented by this block.
     decl_name: Option<String>,
+    /// Any line of the block documents a `#[cfg(...)]`-gated item or sits in a
+    /// `cfg_if!` arm (see `RawComment::cfg_conditional`).
+    cfg_conditional: bool,
 }
 
 struct RawComment {
@@ -351,6 +354,66 @@ struct RawComment {
     /// the comment is an outer doc-comment whose next sibling (skipping
     /// attributes) is a named declaration.
     decl_name: Option<String>,
+    /// The documented item compiles only under a `#[cfg(...)]` predicate — the
+    /// comment sits inside a `cfg_if!` macro arm or directly precedes a
+    /// `#[cfg(...)]`-gated item. Such doc-comments are necessarily identical
+    /// across the mutually-exclusive branches that define the same item, so the
+    /// repetition is conditional-compilation boilerplate, not copy-paste drift.
+    cfg_conditional: bool,
+}
+
+/// True when a comment node documents an item that only compiles under a
+/// `#[cfg(...)]` predicate. Two mutually-exclusive shapes:
+///
+/// 1. an ancestor is a `cfg_if!` macro invocation — every arm is gated and at
+///    most one compiles, so an item's doc is repeated verbatim across arms;
+/// 2. the next sibling is a `#[cfg(...)]` attribute item — the doc belongs to a
+///    standalone cfg-gated item, repeated across the parallel gated definitions.
+///
+/// Only `cfg`/`cfg_attr` attributes count; an ordinary attribute (`#[derive]`,
+/// `#[inline]`) after a comment is not a conditional-compilation signal.
+fn is_cfg_conditional_comment(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut ancestor = node.parent();
+    while let Some(n) = ancestor {
+        if n.kind() == "macro_invocation"
+            && n.child(0)
+                .filter(|c| c.kind() == "identifier")
+                .and_then(|c| c.utf8_text(source).ok())
+                == Some("cfg_if")
+        {
+            return true;
+        }
+        ancestor = n.parent();
+    }
+    next_named_sibling_is_cfg_attr(node, source)
+}
+
+/// The next named sibling, skipping further comments, is a `#[cfg(...)]` /
+/// `#[cfg_attr(...)]` attribute item. Walks past intervening comment lines so a
+/// multi-line doc run still sees the attribute that follows it.
+fn next_named_sibling_is_cfg_attr(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut sib = node.next_named_sibling();
+    while let Some(n) = sib {
+        if is_comment_kind(n.kind()) {
+            sib = n.next_named_sibling();
+            continue;
+        }
+        return n.kind() == "attribute_item" && attribute_item_is_cfg(n, source);
+    }
+    false
+}
+
+/// An `attribute_item` whose attribute path is `cfg` or `cfg_attr`.
+fn attribute_item_is_cfg(attr_item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = attr_item.walk();
+    attr_item.children(&mut cursor).any(|child| {
+        child.kind() == "attribute"
+            && child
+                .child(0)
+                .filter(|c| c.kind() == "identifier")
+                .and_then(|c| c.utf8_text(source).ok())
+                .is_some_and(|name| matches!(name, "cfg" | "cfg_attr"))
+    })
 }
 
 #[must_use]
@@ -501,6 +564,9 @@ fn extract_entries(
 
     let mut entries = Vec::new();
     for group in groups {
+        if group.cfg_conditional {
+            continue;
+        }
         let lower = group.stripped.to_lowercase();
         if is_excluded_comment(&lower)
             || is_citation_comment(&lower)
@@ -607,6 +673,7 @@ fn collect_raw_comments(tree: &tree_sitter::Tree, source: &[u8]) -> Vec<RawComme
                 col: node.start_position().column,
                 is_line,
                 decl_name: documented_decl_name(node, source),
+                cfg_conditional: is_cfg_conditional_comment(node, source),
             });
         }
         if cursor.goto_first_child() {
@@ -639,6 +706,7 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
             // run (the one directly above the declaration).
             let mut decl_name = c.decl_name.clone();
             let mut texts = vec![first_text.to_string()];
+            let mut cfg_conditional = c.cfg_conditional;
             let mut j = i + 1;
             while let Some(n) = raws.get(j) {
                 if !(n.is_line && n.col == col && n.row == last_row + 1) {
@@ -650,6 +718,7 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
                     break;
                 }
                 texts.push(n_text.to_string());
+                cfg_conditional |= n.cfg_conditional;
                 last_row = n.row;
                 end_byte = n.end_byte;
                 decl_name = n.decl_name.clone();
@@ -662,6 +731,7 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
                 end_byte,
                 stripped: texts.join(" "),
                 decl_name,
+                cfg_conditional,
             });
             i = j;
         } else {
@@ -672,6 +742,7 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
                 end_byte: c.end_byte,
                 stripped: strip_block(&source[c.start_byte..c.end_byte]),
                 decl_name: c.decl_name.clone(),
+                cfg_conditional: c.cfg_conditional,
             });
             i += 1;
         }
@@ -1196,6 +1267,83 @@ pub fn aes128_decrypt(x: u8) -> u8 { x }
         let b = write(&dir, "b.ts", line);
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "a comment trailing real code is not a pragma trailer");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn ignores_doc_comments_repeated_across_cfg_if_arms() {
+        // Regression (#4839): a `cfg_if!` macro defines the same private type alias
+        // for several mutually-exclusive backends; only one arm compiles, so the
+        // identical doc-comment across arms is conditional-compilation boilerplate,
+        // not copy-paste drift. The doc is long/distinctive enough to clear the
+        // word and entropy gates, so only the cfg-conditional guard keeps it out.
+        let dir = tempfile::tempdir().unwrap();
+        let content = "\
+cfg_if! {
+    if #[cfg(curve25519_dalek_backend = \"fiat\")] {
+        /// An `UnpackedScalar` represents an element of the field GF(l), optimized for speed.
+        ///
+        /// This is a type alias for one of the scalar types in the `backend` module.
+        #[cfg(curve25519_dalek_bits = \"32\")]
+        type UnpackedScalar = backend::serial::fiat_u32::scalar::Scalar29;
+
+        /// An `UnpackedScalar` represents an element of the field GF(l), optimized for speed.
+        ///
+        /// This is a type alias for one of the scalar types in the `backend` module.
+        #[cfg(curve25519_dalek_bits = \"64\")]
+        type UnpackedScalar = backend::serial::fiat_u64::scalar::Scalar52;
+    } else if #[cfg(curve25519_dalek_bits = \"64\")] {
+        /// An `UnpackedScalar` represents an element of the field GF(l), optimized for speed.
+        ///
+        /// This is a type alias for one of the scalar types in the `backend` module.
+        type UnpackedScalar = backend::serial::u64::scalar::Scalar52;
+    }
+}
+";
+        let a = write(&dir, "scalar.rs", content);
+        let b = write(&dir, "filler.rs", "pub fn x() {}\n");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "doc-comments repeated across cfg_if! arms must not be flagged"
+        );
+    }
+
+    #[test]
+    fn ignores_doc_comments_on_parallel_cfg_gated_items() {
+        // The standalone `#[cfg(...)]` shape: the same item is defined twice with
+        // mutually-exclusive `#[cfg]` predicates, each carrying the same doc. Only
+        // one compiles, so the repetition is structural, not a smell.
+        let dir = tempfile::tempdir().unwrap();
+        let content = "\
+/// The platform clock source selected at compile time for the timing subsystem.
+#[cfg(target_os = \"linux\")]
+type Clock = LinuxClock;
+
+/// The platform clock source selected at compile time for the timing subsystem.
+#[cfg(target_os = \"macos\")]
+type Clock = MacClock;
+";
+        let a = write(&dir, "clock.rs", content);
+        let b = write(&dir, "filler.rs", "pub fn x() {}\n");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "doc-comments on parallel #[cfg]-gated items must not be flagged"
+        );
+    }
+
+    #[test]
+    fn still_flags_duplicate_docs_on_unconditional_items() {
+        // Over-exclusion guard: an ordinary `#[derive]`/`#[inline]` attribute (not
+        // `#[cfg]`) is no conditional-compilation signal, so a genuinely duplicated
+        // doc-comment on such items in unconditional scope must still flag. The two
+        // declarations carry different names so the cross-file parallel-implementation
+        // exemption (same `decl_name`) does not apply — this isolates the cfg signal.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "/// Builds the canonical pagination defaults derived from the shared schema so every list stays consistent.\n";
+        let a = write(&dir, "a.rs", &format!("{doc}#[inline]\npub fn one() {{}}\n"));
+        let b = write(&dir, "b.rs", &format!("{doc}#[inline]\npub fn two() {{}}\n"));
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "duplicated docs on non-cfg items are still a smell");
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
