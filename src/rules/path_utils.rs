@@ -273,14 +273,27 @@ pub fn is_rust_trybuild_fixture(path: &Path) -> bool {
     })
 }
 
-/// True when `path` lives under a Cargo `examples/` directory: any `examples`
-/// path segment. Files there are compiled as individual Cargo example targets
-/// whose binary name is the file stem (`examples/search-stdin.rs` becomes
-/// `cargo run --example search-stdin`), so kebab-case stems are the standard
-/// Rust community convention and filename-convention checks exempt them. Segment
-/// match keeps an unrelated `src/examplesHelper.rs` from matching.
+/// True when `path` lives under a Cargo `examples/` directory or a disabled
+/// variant of one. Matches a path segment equal to `examples`, or an
+/// `examples`-prefixed/suffixed variant delimited by `_` — `examples_disabled`,
+/// `disabled_examples`, `examples_old` — which projects use to park reference
+/// examples outside the active Cargo build. Files there are illustrative example
+/// code (compiled as individual example targets when active), where kebab-case
+/// stems are the standard Rust convention and `.unwrap()` is idiomatic for
+/// brevity. The `_`-delimited token requirement keeps an unrelated
+/// `src/examplesHelper.rs` from matching.
 pub fn is_cargo_example_path(path: &Path) -> bool {
-    has_path_segment(path, &["examples"])
+    path.components().any(|c| {
+        matches!(c, std::path::Component::Normal(s)
+            if s.to_str().is_some_and(is_examples_segment))
+    })
+}
+
+/// True when a single path segment names a Cargo `examples` directory or a
+/// disabled variant: exactly `examples`, an `examples_`-prefixed segment, or an
+/// `_examples`-suffixed segment.
+fn is_examples_segment(seg: &str) -> bool {
+    seg == "examples" || seg.starts_with("examples_") || seg.ends_with("_examples")
 }
 
 /// True when `path` is a Cargo binary target file: a file sitting directly in a
@@ -1262,6 +1275,21 @@ mod aux_path_tests {
         assert!(!is_aux_dir_path(&PathBuf::from("src/mysamples/index.ts")));
         assert!(!is_aux_dir_path(&PathBuf::from("src/templated/index.ts")));
         assert!(!is_aux_dir_path(&PathBuf::from("src/app/login.ts")));
+    }
+
+    #[test]
+    fn cargo_example_path_matches_examples_and_disabled_variants() {
+        assert!(is_cargo_example_path(&PathBuf::from("examples/search-stdin.rs")));
+        assert!(is_cargo_example_path(&PathBuf::from("crates/foo/examples/demo.rs")));
+        // #4779: disabled-example variants delimited by `_`.
+        assert!(is_cargo_example_path(&PathBuf::from(
+            "examples_disabled/migration/src/main.rs"
+        )));
+        assert!(is_cargo_example_path(&PathBuf::from("examples_old/demo.rs")));
+        assert!(is_cargo_example_path(&PathBuf::from("disabled_examples/demo.rs")));
+        // Token (not substring) match — an unrelated source file stays checked.
+        assert!(!is_cargo_example_path(&PathBuf::from("src/examplesHelper.rs")));
+        assert!(!is_cargo_example_path(&PathBuf::from("src/lib.rs")));
     }
 
     #[test]
