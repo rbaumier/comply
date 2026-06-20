@@ -5,6 +5,11 @@
 //! `01`), and any decimal/float using an underscore separator (`1_0`,
 //! `0.1e1_2`). Computed keys (`{ [0x1]: 1 }`) are dynamic expressions, not
 //! literal member names, and are left alone.
+//!
+//! Hexadecimal keys are exempt when the enclosing object holds two or more of
+//! them: that shape is a byte/opcode constant table (e.g. a wire-protocol type
+//! map) where hex is the canonical, spec-matching representation and a decimal
+//! rewrite would be lossy. A lone hex key is still flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -46,7 +51,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::ObjectProperty(prop) = node.kind() else {
@@ -59,6 +64,14 @@ impl OxcCheck for Check {
         let Some(wrong) = classify_key(&prop.key, ctx.source) else {
             return;
         };
+        // A hex key inside an object that holds two or more hex keys is part of
+        // a byte/opcode constant table where hex is the canonical form; a
+        // decimal rewrite would be lossy, so leave the whole table alone.
+        if matches!(wrong, WrongNumberKey::Hexadecimal)
+            && in_hex_constant_table(node, semantic, ctx.source)
+        {
+            return;
+        }
         let span = prop.key.span();
         let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
         diagnostics.push(Diagnostic {
@@ -71,6 +84,29 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// True when the property's enclosing object literal contains two or more
+/// hexadecimal numeric keys — the shape of a byte/opcode constant table.
+fn in_hex_constant_table(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    source: &str,
+) -> bool {
+    let parent = semantic.nodes().parent_node(node.id());
+    let AstKind::ObjectExpression(obj) = parent.kind() else {
+        return false;
+    };
+    let hex_keys = obj
+        .properties
+        .iter()
+        .filter_map(|p| match p {
+            ObjectPropertyKind::ObjectProperty(p) if !p.computed => Some(&p.key),
+            _ => None,
+        })
+        .filter(|key| matches!(classify_key(key, source), Some(WrongNumberKey::Hexadecimal)))
+        .count();
+    hex_keys >= 2
 }
 
 /// Classify a numeric member key into its forbidden form, or `None` when the
@@ -311,5 +347,44 @@ mod tests {
     fn does_not_flag_numeric_value() {
         // The forbidden forms appear in the value position, not the key.
         assert!(run_on("({ a: 0x1, b: 1_000, c: 0o7, d: 1n });").is_empty());
+    }
+
+    // ── Wire-protocol constant-table guard (#4931) ────────────────────────
+
+    #[test]
+    fn allows_hex_keys_in_protocol_constant_table() {
+        // MySQL wire-protocol type codes: hex is the canonical, spec-matching
+        // form; a decimal rewrite would be lossy. A table of hex keys is exempt.
+        let src = r#"module.exports = {
+  0x00: 'DECIMAL',
+  0x01: 'TINY',
+  0x0f: 'VARCHAR',
+  0xf5: 'JSON',
+  0xfd: 'VAR_STRING',
+  0xfe: 'STRING',
+};"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_lone_hex_key_outside_a_table() {
+        // A single hex key is not a constant table — still flagged.
+        assert_eq!(
+            messages("({ 0x1: 1 });"),
+            vec!["Hexadecimal number literal is not allowed here."]
+        );
+    }
+
+    #[test]
+    fn table_guard_does_not_exempt_other_forms() {
+        // Only hex keys get the constant-table exemption; octal/binary/bigint/
+        // underscore keys remain flagged even alongside many hex keys.
+        assert_eq!(
+            messages("({ 0x01: 'a', 0x02: 'b', 0o7: 'c', 1_0: 'd' });"),
+            vec![
+                "Octal number literal is not allowed here.",
+                "Number literal with underscore is not allowed here.",
+            ]
+        );
     }
 }
