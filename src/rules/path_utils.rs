@@ -1025,33 +1025,18 @@ pub fn is_nuxt_server_route_file(path: &Path) -> bool {
 }
 
 /// True when `path` is a Nuxt auto-imported file: a file under a `composables/`
-/// directory (client-side auto-import) or under a `server/utils/` directory
-/// (Nitro server-side auto-import). Nuxt auto-imports every export of these
-/// files — composables across the app, `server/utils/` exports into every
-/// server route handler — so they are consumed by the auto-import mechanism,
-/// never through a static import: every named export is live despite having no
-/// importer. The `composables/` ancestor and the consecutive `server`/`utils`
-/// segment pair scope the exemption (a same-named export elsewhere, or an
-/// unrelated top-level `utils/`, stays flaggable) and the caller's
-/// Nuxt-detection gate keeps these directories subject to the rule in a
-/// non-Nuxt project.
+/// or `utils/` directory (client-side auto-import) or under a `server/utils/`
+/// directory (Nitro server-side auto-import). Nuxt auto-imports every export of
+/// these files — composables and utils across the app, `server/utils/` exports
+/// into every server route handler — so they are consumed by the auto-import
+/// mechanism, never through a static import: every named export is live despite
+/// having no importer. Both `composables/` and `utils/` are matched as path
+/// segments (covering Nuxt 3's root `utils/`/`composables/` and Nuxt 4's
+/// `app/utils/`/`app/composables/`); `server/utils/` files are covered by the
+/// same `utils/` segment match. The caller's Nuxt-detection gate keeps these
+/// directories subject to the rule in a non-Nuxt project.
 pub fn is_nuxt_auto_imported_file(path: &Path) -> bool {
-    if has_path_segment(path, &["composables"]) {
-        return true;
-    }
-    // Nitro auto-imports every export under `server/utils/` into all server
-    // route handlers (https://nuxt.com/docs/guide/directory-structure/server) —
-    // the server-side analogue of `composables/`. Require the consecutive
-    // `server`/`utils` segment pair so an unrelated top-level `utils/` stays
-    // subject to the rule.
-    let segs: Vec<&str> = path
-        .components()
-        .filter_map(|c| match c {
-            std::path::Component::Normal(s) => s.to_str(),
-            _ => None,
-        })
-        .collect();
-    segs.windows(2).any(|w| w == ["server", "utils"])
+    has_path_segment(path, &["composables", "utils"])
 }
 
 /// True when `path` is a Docusaurus theme swizzle component — a file under a
@@ -1274,14 +1259,16 @@ mod aux_path_tests {
     }
 
     #[test]
-    fn nuxt_auto_imported_file_matches_composables_and_server_utils() {
+    fn nuxt_auto_imported_file_matches_composables_and_utils() {
         // Issue #4482: Nitro auto-imports every export under `server/utils/`.
         assert!(is_nuxt_auto_imported_file(Path::new("playground/server/utils/session.ts")));
-        // Existing composables exemption stays true.
+        // Composables exemption (client-side auto-import).
         assert!(is_nuxt_auto_imported_file(Path::new("composables/useFoo.ts")));
-        // A bare `utils/` not under `server/` must NOT match (consecutive pair).
-        assert!(!is_nuxt_auto_imported_file(Path::new("utils/helpers.ts")));
-        // A bare `server/` segment without a following `utils/` must NOT match.
+        // Issue #4673: Nuxt auto-imports every named export under `utils/` —
+        // both Nuxt 3's root `utils/` and Nuxt 4's `app/utils/`.
+        assert!(is_nuxt_auto_imported_file(Path::new("utils/helpers.ts")));
+        assert!(is_nuxt_auto_imported_file(Path::new("app/utils/url.ts")));
+        // A `server/` segment without a following `utils/` is not auto-imported.
         assert!(!is_nuxt_auto_imported_file(Path::new("src/server/handler.ts")));
     }
 

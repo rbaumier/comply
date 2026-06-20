@@ -88,15 +88,16 @@
 //!     consumer's project; the repo's build step reads them as text, never
 //!     importing them as modules, so every export is consumed downstream and the
 //!     whole file is exempt. Detected via `ProjectCtx::is_in_distributed_registry_dir`.
-//!   - Auto-imported composables — a file under a `composables/` directory in a
-//!     project whose build step auto-imports every export of these files across
-//!     the app: a Nuxt project (`nuxt` in the root or nearest `package.json`), or
-//!     a plain Vite project using `unplugin-auto-import` (which scans configured
-//!     `dirs` such as `composables/`; its dependency in the root or nearest
-//!     `package.json`). Every export is then consumed by the auto-import
-//!     mechanism, never through a static import, and the whole file is exempt. The
-//!     dependency gate keeps a `composables/` directory in a project with neither
-//!     subject to the rule. (Nuxt server route `default` exports under
+//!   - Auto-imported composables/utils — a file under a `composables/` or
+//!     `utils/` directory in a project whose build step auto-imports every export
+//!     of these files across the app: a Nuxt project (`nuxt` in the root or
+//!     nearest `package.json`), or a plain Vite project using
+//!     `unplugin-auto-import` (which scans configured `dirs` such as
+//!     `composables/`; its dependency in the root or nearest `package.json`).
+//!     Every export is then consumed by the auto-import mechanism, never through a
+//!     static import, and the whole file is exempt. The dependency gate keeps such
+//!     a directory in a project with neither subject to the rule. (Nuxt server
+//!     route `default` exports under
 //!     `server/api/**` / `server/routes/**` are handled per-export by the
 //!     framework route-magic-export table, gated the same way.)
 //!   - Framework file-system-routing entry points (`is_framework_route_export`) —
@@ -627,15 +628,15 @@ impl TextCheck for Check {
         if ctx.project.is_in_distributed_registry_dir(&canon) {
             return Vec::new();
         }
-        // Auto-imported composable — a file under a `composables/` directory in a
-        // project whose build step auto-imports every export of these files
-        // across the app: Nuxt's built-in auto-import, or a plain Vite project
-        // using the `unplugin-auto-import` plugin (which scans configured `dirs`
-        // such as `composables/`). Such exports are consumed by the auto-import
-        // mechanism, never through a static import, and none is dead. Gated on the
-        // Nuxt dependency or the `unplugin-auto-import` dependency (root or nearest
-        // `package.json`) so a `composables/` directory in a project with neither
-        // stays subject to the rule.
+        // Auto-imported composable/util — a file under a `composables/` or
+        // `utils/` directory in a project whose build step auto-imports every
+        // export of these files across the app: Nuxt's built-in auto-import, or a
+        // plain Vite project using the `unplugin-auto-import` plugin (which scans
+        // configured `dirs` such as `composables/`). Such exports are consumed by
+        // the auto-import mechanism, never through a static import, and none is
+        // dead. Gated on the Nuxt dependency or the `unplugin-auto-import`
+        // dependency (root or nearest `package.json`) so such a directory in a
+        // project with neither stays subject to the rule.
         if crate::rules::path_utils::is_nuxt_auto_imported_file(&canon)
             && (ctx.project.is_nuxt_for_path(&canon)
                 || ctx.project.uses_unplugin_auto_import(&canon))
@@ -2108,6 +2109,50 @@ mod tests {
             "a server/utils export without the Nuxt dep must still be flagged: {diags:?}"
         );
         assert!(diags[0].message.contains("getUser"));
+    }
+
+    #[test]
+    fn ignores_nuxt_app_utils_auto_imported_export_issue_4673() {
+        // Regression for #4673 (nuxt/nuxt.com) — Nuxt auto-imports every named
+        // export of a file under a (client-side) `utils/` directory across the
+        // app, including Nuxt 4's `app/utils/`. The export is referenced in a
+        // `.vue` template without an `import`, so it has no static importer yet
+        // is live.
+        let pkg = r#"{ "dependencies": { "nuxt": "^3.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "app/utils/url.ts",
+                "export function getDomain(url: string): string { return url; }\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "app/utils/url.ts");
+        assert!(
+            diags.is_empty(),
+            "Nuxt app/utils auto-imported export is framework-consumed: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_utils_export_without_nuxt_dep_issue_4673() {
+        // Negative-space guard for #4673 — the utils exemption is dep-gated. The
+        // same `app/utils/url.ts` named export in a project with no Nuxt
+        // dependency is an ordinary unused export and must still be flagged.
+        let pkg = r#"{ "dependencies": { "lodash": "^4.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "app/utils/url.ts",
+                "export function getDomain(url: string): string { return url; }\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "app/utils/url.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a utils export without the Nuxt dep must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("getDomain"));
     }
 
     #[test]
