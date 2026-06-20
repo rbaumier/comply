@@ -17,9 +17,14 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 // in English: `in_string` ("currently inside a string literal?"),
 // `seen_private` ("has this branch been traversed?"), `found_return`
 // ("did the scan land on its target?"). Forcing `is_in_string` etc.
-// adds syllables without information.
+// adds syllables without information. The third row covers option/toggle
+// verb-modal prefixes idiomatic for boolean config parameters:
+// `allow_empty` ("allow empty?"), `use_tls` ("use TLS?"),
+// `always_quote` ("always quote?"), `with_header` ("with header?").
+// `is_allow_empty` would be grammatically wrong.
 const VALID_PREFIXES: &[&str] = &[
     "is_", "has_", "should_", "can_", "will_", "did_", "was_", "had_", "in_", "seen_", "found_",
+    "allow_", "use_", "always_", "with_",
 ];
 
 const IDIOMATIC_NAMES: &[&str] = &[
@@ -74,7 +79,7 @@ fn check_node(
         message: format!(
             "Boolean '{name}' {problem}. Use a predicate prefix: \
              `is_*`, `has_*`, `should_*`, `can_*`, `will_*`, `did_*`, `was_*`, \
-             `in_*`, `seen_*`, `found_*`."
+             `in_*`, `seen_*`, `found_*`, `allow_*`, `use_*`, `always_*`, `with_*`."
         ),
         severity: Severity::Warning,
         span: None,
@@ -192,6 +197,22 @@ mod tests {
     #[test]
     fn allows_had_prefix() {
         assert!(run_on("fn f() { let had_error: bool = false; }").is_empty());
+    }
+
+    #[test]
+    fn allows_semantic_toggle_prefixes_on_params() {
+        for name in ["allow_empty", "use_tls", "always_quote", "with_header"] {
+            let source = format!("fn f({name}: bool) {{}}");
+            assert!(run_on(&source).is_empty(), "'{name}' should be allowed");
+        }
+    }
+
+    #[test]
+    fn still_flags_bare_adjective_param() {
+        for name in ["disabled", "optional", "debug"] {
+            let source = format!("fn f({name}: bool) {{}}");
+            assert_eq!(run_on(&source).len(), 1, "'{name}' should be flagged");
+        }
     }
 
     #[test]
