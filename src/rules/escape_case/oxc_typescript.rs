@@ -49,6 +49,14 @@ fn check_escapes(text: &str, byte_start: usize, ctx: &CheckCtx, diagnostics: &mu
             continue;
         }
 
+        // The ESC control character (U+001B) is the ANSI CSI introducer, written
+        // `\u001b`/`\x1b`/`\u{1b}` in terminal-output strings and fixtures.
+        // Uppercasing its hex is cosmetic and breaks copy-paste fidelity with the
+        // captured terminal output, so leave it as written.
+        if escape_codepoint(body) == Some(0x1B) {
+            continue;
+        }
+
         let prefix = &text[..mat.start()];
         let trailing_bs = prefix.len() - prefix.trim_end_matches('\\').len();
         if trailing_bs % 2 == 1 {
@@ -77,6 +85,17 @@ fn check_escapes(text: &str, byte_start: usize, ctx: &CheckCtx, diagnostics: &mu
 fn has_lowercase_hex(s: &str) -> bool {
     s.chars()
         .any(|c| c.is_ascii_lowercase() && c.is_ascii_hexdigit())
+}
+
+/// Decode the codepoint of an escape body (`xHH`, `uHHHH`, or `u{H...}`).
+/// Returns `None` if the hex fails to parse as a u32 (malformed or overflowing).
+fn escape_codepoint(body: &str) -> Option<u32> {
+    let hex = if let Some(rest) = body.strip_prefix("u{") {
+        rest.strip_suffix('}')?
+    } else {
+        &body[1..]
+    };
+    u32::from_str_radix(hex, 16).ok()
 }
 
 fn uppercase_hex(body: &str) -> String {
@@ -149,5 +168,30 @@ mod tests {
     fn flags_multiple_on_one_line() {
         let d = run_on(r#"const a = "\xff\u00ab";"#);
         assert_eq!(d.len(), 2);
+    }
+
+    #[test]
+    fn allows_ansi_esc_unicode_escape() {
+        // ANSI terminal-output fixture: `\u001b` is the ESC/CSI introducer.
+        let d = run_on(r#"const a = "\u001b[37;40mnpm\u001b[0m";"#);
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_ansi_esc_hex_escape() {
+        assert!(run_on(r#"const a = "\x1b[0m";"#).is_empty());
+    }
+
+    #[test]
+    fn allows_ansi_esc_brace_escape() {
+        assert!(run_on(r#"const a = "\u{1b}[0m";"#).is_empty());
+    }
+
+    #[test]
+    fn flags_other_lowercase_escape_in_ansi_string() {
+        // ESC is exempt, but a genuine mixed-case escape next to it still fires.
+        let d = run_on(r#"const a = "\u001b[0m\xFf";"#);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains(r"\xFF"));
     }
 }
