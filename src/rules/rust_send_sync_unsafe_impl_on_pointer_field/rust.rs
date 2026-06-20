@@ -82,6 +82,18 @@ impl AstCheck for Check {
         if !struct_has_unsync_field(struct_node, source) {
             return;
         }
+        // A `Sync` impl conditioned on `<T: Send>` (rather than `<T: Sync>`)
+        // is the sound signature of a hand-rolled synchronization primitive:
+        // the struct guards its `UnsafeCell` with an atomic, so the wrapped
+        // value only needs to be `Send` to be shared. Recognise that shape —
+        // a `Sync` impl whose bounds forward `Send` over a struct that also
+        // carries an atomic field — and defer to the author.
+        if last_segment == "Sync"
+            && forwards_auto_trait_conditionally(node, "Send", source)
+            && struct_has_atomic_field(struct_node, source)
+        {
+            return;
+        }
         diagnostics.push(Diagnostic::at_node(
             ctx.path,
             &node,
@@ -163,6 +175,69 @@ fn struct_has_unsync_field(struct_node: tree_sitter::Node, source: &[u8]) -> boo
         }
     }
     false
+}
+
+/// True if the struct has a direct field whose own type is one of the standard
+/// atomics (`AtomicBool`, `AtomicUsize`, …) — the interior lock that lets a
+/// hand-rolled primitive be `Sync` while only requiring its payload to be
+/// `Send`. Only the field's own type counts: an atomic nested inside another
+/// field's payload (`UnsafeCell<AtomicUsize>`) is the guarded value, not a
+/// guard, and must not exempt the impl.
+fn struct_has_atomic_field(struct_node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = struct_node.walk();
+    for child in struct_node.named_children(&mut cursor) {
+        match child.kind() {
+            "field_declaration_list" => {
+                if list_has_atomic_field(child, source) {
+                    return true;
+                }
+            }
+            "ordered_field_declaration_list" => {
+                if ordered_has_atomic_field(child, source) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn list_has_atomic_field(list: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = list.walk();
+    for field in list.named_children(&mut cursor) {
+        if field.kind() != "field_declaration" {
+            continue;
+        }
+        let Some(ty) = field.child_by_field_name("type") else {
+            continue;
+        };
+        if is_atomic_type(ty, source) {
+            return true;
+        }
+    }
+    false
+}
+
+fn ordered_has_atomic_field(list: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = list.walk();
+    for ty in list.named_children(&mut cursor) {
+        if is_atomic_type(ty, source) {
+            return true;
+        }
+    }
+    false
+}
+
+/// True if `node` names a standard atomic type. The field is written as a plain
+/// `type_identifier` (`AtomicBool`) or a `scoped_type_identifier`
+/// (`atomic::AtomicBool`); in both cases the last path segment is the type name.
+fn is_atomic_type(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Ok(text) = node.utf8_text(source) else {
+        return false;
+    };
+    let last = text.rsplit("::").next().unwrap_or(text).trim();
+    last.starts_with("Atomic")
 }
 
 fn list_has_unsync_field(list: tree_sitter::Node, source: &[u8]) -> bool {
@@ -296,6 +371,34 @@ mod tests {
         // `<T>` has no `Send` bound, so the impl asserts `Send` for every `T`
         // including non-`Send` ones — unsound, must stay flagged.
         let src = "struct W<T> { c: UnsafeCell<T> }\nunsafe impl<T> Send for W<T> {}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_sync_impl_send_bound_on_atomic_guarded_primitive() {
+        // embedded-hal `AtomicCell`: the `AtomicBool` guards the `UnsafeCell`,
+        // so `unsafe impl<BUS: Send> Sync` is sound even though the bound is
+        // `Send`, not `Sync`.
+        let src = "struct AtomicCell<BUS> { bus: UnsafeCell<BUS>, busy: AtomicBool }\n\
+                   unsafe impl<BUS: Send> Sync for AtomicCell<BUS> {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_sync_send_bound_without_atomic_field() {
+        // No atomic guard — a `Sync` impl bounded only on `Send` is unsound
+        // here, so it must stay flagged.
+        let src = "struct W<T> { c: UnsafeCell<T> }\n\
+                   unsafe impl<T: Send> Sync for W<T> {}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_atomic_nested_in_cell_payload() {
+        // The `AtomicUsize` is the guarded payload, not a sibling guard field —
+        // there is no interior lock, so the impl is unsound and stays flagged.
+        let src = "struct W<T> { c: UnsafeCell<AtomicUsize> }\n\
+                   unsafe impl<T: Send> Sync for W<T> {}";
         assert_eq!(run_on(src).len(), 1);
     }
 
