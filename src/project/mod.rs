@@ -1903,6 +1903,12 @@ impl CargoManifest {
         self.no_std_category
     }
 
+    /// Directory containing this crate's `Cargo.toml` — the crate root used to
+    /// key cross-file, crate-scoped indexes.
+    pub fn manifest_dir(&self) -> &Path {
+        &self.manifest_dir
+    }
+
     /// True when the crate is a dedicated test-helper crate, identified by a
     /// `[package].name` ending in a conventional test-helper suffix
     /// (`-test`, `-testing`, `-testkit`, `-test-util`, `-test-utils`). Such crates
@@ -2148,6 +2154,13 @@ pub struct ProjectCtx {
     // rule for kebab-dominant projects.
     dominant_ts_js_filename_convention:
         OnceLock<Option<(crate::rules::filename_naming_convention::FilenameConvention, f64)>>,
+
+    // Cross-file map: crate root (Cargo manifest dir) → set of type names that
+    // have a hand-written `impl Debug for <Type>` somewhere in that crate. Built
+    // once on first access from the indexed `.rs` files (no extra fs walk).
+    // `rust-impl-debug-on-public-types` consults it so a manual Debug impl in a
+    // sibling file (anyhow's `Error` in `lib.rs` + impl in `error.rs`) counts.
+    rust_debug_impl_targets: OnceLock<FxHashMap<PathBuf, FxHashSet<String>>>,
 }
 
 impl ProjectCtx {
@@ -2317,6 +2330,70 @@ impl ProjectCtx {
             let (convention, count) = counts.into_iter().max_by_key(|&(_, count)| count)?;
             Some((convention, count as f64 / total as f64))
         })
+    }
+
+    /// True when a hand-written `impl Debug for <type_name>` exists anywhere in
+    /// the same crate as `path` (the crate identified by the nearest
+    /// `Cargo.toml`). Lets `rust-impl-debug-on-public-types` accept a manual
+    /// Debug impl split into a sibling file. Returns `false` when `path` has no
+    /// Cargo manifest (the crate boundary is unknown — same-file detection still
+    /// applies).
+    ///
+    /// The cross-file index is built once on first call and memoized, so it is
+    /// paid only when a `pub` type has neither a `Debug` derive nor a same-file
+    /// manual impl (the minority case that motivates the cross-file lookup).
+    pub fn crate_has_manual_debug_impl(&self, path: &Path, type_name: &str) -> bool {
+        // Resolve the manifest from the canonicalized path so the crate-root key
+        // matches the builder, which sees canonicalized `indexed_paths()`.
+        let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let Some(manifest) = self.nearest_cargo_manifest(&canon) else {
+            return false;
+        };
+        let index = self
+            .rust_debug_impl_targets
+            .get_or_init(|| self.build_rust_debug_impl_targets());
+        index
+            .get(manifest.manifest_dir())
+            .is_some_and(|names| names.contains(type_name))
+    }
+
+    /// Build the crate-root → manual-`Debug`-impl-target-names map by enumerating
+    /// the indexed `.rs` files (no new filesystem walk — `indexed_paths()` is the
+    /// per-run file set already retained in memory). Each file is pre-filtered on
+    /// a literal `"Debug"` substring before parsing, so files with no `Debug`
+    /// impl are skipped without paying tree-sitter; only files that survive are
+    /// parsed and walked for `impl <…::>Debug for <BaseType>` blocks.
+    fn build_rust_debug_impl_targets(&self) -> FxHashMap<PathBuf, FxHashSet<String>> {
+        let mut map: FxHashMap<PathBuf, FxHashSet<String>> = FxHashMap::default();
+        let mut parser = tree_sitter::Parser::new();
+        if parser.set_language(&tree_sitter_rust::LANGUAGE.into()).is_err() {
+            return map;
+        }
+        for path in self.import_index().indexed_paths() {
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let Ok(source) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            if !source.contains("Debug") {
+                continue; // fast prune: no `Debug` impl possible
+            }
+            let Some(manifest) = self.nearest_cargo_manifest(path) else {
+                continue;
+            };
+            let Some(tree) = parser.parse(&source, None) else {
+                continue;
+            };
+            let names = collect_debug_impl_target_names(tree.root_node(), source.as_bytes());
+            if names.is_empty() {
+                continue;
+            }
+            map.entry(manifest.manifest_dir().to_path_buf())
+                .or_default()
+                .extend(names);
+        }
+        map
     }
 
     /// Cross-file Kubernetes resource index. Always returns a handle:
@@ -4264,6 +4341,50 @@ fn find_file_backed_mod_visibility(
         }
     }
     None
+}
+
+/// Collect the base type names of every hand-written `impl Debug for <Type>` in
+/// a parsed Rust file. Walks every `impl_item`; an impl is a `Debug` trait impl
+/// when its `trait` field's final `::` segment is `Debug` (covering `Debug`,
+/// `fmt::Debug`, `std::fmt::Debug`, `core::fmt::Debug`). The target's base type
+/// name — stripped of generic arguments, lifetimes, and a leading path — is
+/// collected. This mirrors the same-file detection in
+/// `rust-impl-debug-on-public-types`, applied here across the crate's files.
+fn collect_debug_impl_target_names(root: tree_sitter::Node, source: &[u8]) -> FxHashSet<String> {
+    let mut names = FxHashSet::default();
+    let mut cursor = root.walk();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "impl_item"
+            && let Some(trait_node) = node.child_by_field_name("trait")
+            && let Ok(trait_text) = trait_node.utf8_text(source)
+            && trait_text.rsplit("::").next() == Some("Debug")
+            && let Some(target_node) = node.child_by_field_name("type")
+            && let Some(name) = debug_impl_base_type_name(target_node, source)
+        {
+            names.insert(name.to_owned());
+        }
+        for child in node.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    names
+}
+
+/// The base type identifier of an `impl` target, ignoring generic arguments,
+/// lifetimes, and a leading module path. `Wrapper<'_, T>` (`generic_type`) →
+/// `Wrapper`; `Closure` (`type_identifier`) → `Closure`; `crate::Span`
+/// (`scoped_type_identifier`) → `Span`. Returns `None` for shapes with no single
+/// base name (references, tuples, etc.).
+fn debug_impl_base_type_name<'a>(target: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    match target.kind() {
+        "generic_type" => debug_impl_base_type_name(target.child_by_field_name("type")?, source),
+        "type_identifier" => target.utf8_text(source).ok(),
+        "scoped_type_identifier" => {
+            target.utf8_text(source).ok().and_then(|t| t.rsplit("::").next())
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn walk_up_finding(start: &Path, target: &str) -> Option<PathBuf> {

@@ -24,10 +24,13 @@
 //!
 //! We accept manual impls because libraries with closure or PhantomData
 //! fields legitimately can't derive — they hand-roll the impl. The manual
-//! impl is matched on the AST trait/target of every `impl_item` in the file,
-//! so generic impls (`impl<T: Debug> Debug for Wrapper<'_, T>`) and any
-//! trait-path spelling (`Debug`, `fmt::Debug`, `std::fmt::Debug`,
-//! `core::fmt::Debug`) are recognized.
+//! impl is matched on the AST trait/target of every `impl_item`, so generic
+//! impls (`impl<T: Debug> Debug for Wrapper<'_, T>`) and any trait-path spelling
+//! (`Debug`, `fmt::Debug`, `std::fmt::Debug`, `core::fmt::Debug`) are
+//! recognized. The search spans every file of the type's crate (the crate
+//! identified by the nearest `Cargo.toml`), so an impl written in a sibling
+//! file (anyhow declares `pub struct Error` in `lib.rs` and `impl Debug for
+//! Error` in `error.rs`) counts.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -111,6 +114,12 @@ impl AstCheck for Check {
         }
         // A hand-written `Debug` impl for this type anywhere in the file.
         if has_manual_debug_impl(node, name, source_bytes) {
+            return;
+        }
+        // A hand-written `Debug` impl for this type in another file of the same
+        // crate (anyhow splits `pub struct Error` in lib.rs from `impl Debug for
+        // Error` in error.rs).
+        if ctx.project.crate_has_manual_debug_impl(ctx.path, name) {
             return;
         }
         let pos = node.start_position();
@@ -1026,6 +1035,104 @@ edition = "2021"
             run_on("pub struct Foo { x: i32 }").len(),
             1,
             "a plain non-generic struct must still be flagged"
+        );
+    }
+
+    /// Build a Rust crate on disk from `(relative_path, source)` files, index it
+    /// via `ProjectCtx::for_test_with_files`, and run the rule on `entry` (a path
+    /// relative to the crate root) with that cross-file project. Lets a manual
+    /// `Debug` impl in a sibling file be recognized.
+    fn run_cross_file(files: &[(&str, &str)], entry: &str) -> Vec<Diagnostic> {
+        use crate::files::{Language, SourceFile};
+        use std::fs;
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let mut source_files = Vec::new();
+        let mut entry_source = String::new();
+        let mut entry_path = dir.path().to_path_buf();
+        for (rel, source) in files {
+            let path = dir.path().join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, source).unwrap();
+            if *rel == entry {
+                entry_source = (*source).to_owned();
+                entry_path = path.clone();
+            }
+            let language = if rel.ends_with(".rs") {
+                Language::Rust
+            } else {
+                Language::Toml
+            };
+            source_files.push(SourceFile { path, language });
+        }
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let project = crate::project::ProjectCtx::for_test_with_files(&refs);
+        crate::rules::test_helpers::run_ast_check(
+            &Check,
+            &entry_source,
+            &entry_path,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
+    }
+
+    const SIBLING_LIB_CARGO_TOML: &str = r#"
+[package]
+name = "anyhow-like"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "anyhow_like"
+"#;
+
+    /// Closes #4473: anyhow declares `pub struct Error` in `src/lib.rs` but
+    /// hand-writes its `Debug` impl in `src/error.rs`. The cross-file crate scan
+    /// must recognize the sibling-file impl, so `Error` is not flagged.
+    #[test]
+    fn allows_manual_debug_impl_in_sibling_file_of_same_crate() {
+        let lib = "pub struct Error { inner: u32 }";
+        let error = "use std::fmt;\n\
+                     impl fmt::Debug for Error {\n\
+                         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { Ok(()) }\n\
+                     }";
+        let diags = run_cross_file(
+            &[
+                ("Cargo.toml", SIBLING_LIB_CARGO_TOML),
+                ("src/lib.rs", lib),
+                ("src/error.rs", error),
+            ],
+            "src/lib.rs",
+        );
+        assert!(
+            diags.is_empty(),
+            "a manual Debug impl in a sibling file of the same crate must be recognized"
+        );
+    }
+
+    /// Load-bearing keying check: a `Debug` impl for `Error` in a *different*
+    /// crate must not exempt the `Error` of this crate. The two structs live
+    /// under separate `Cargo.toml`s, so the cross-file index keys them apart.
+    #[test]
+    fn still_flags_when_debug_impl_is_in_a_different_crate() {
+        let a_lib = "pub struct Error { inner: u32 }";
+        let b_lib = "use std::fmt;\n\
+                     impl fmt::Debug for Error {\n\
+                         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { Ok(()) }\n\
+                     }";
+        let diags = run_cross_file(
+            &[
+                ("a/Cargo.toml", SIBLING_LIB_CARGO_TOML),
+                ("a/src/lib.rs", a_lib),
+                ("b/Cargo.toml", SIBLING_LIB_CARGO_TOML),
+                ("b/src/lib.rs", b_lib),
+            ],
+            "a/src/lib.rs",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "an impl Debug for Error in crate B must not exempt crate A's Error"
         );
     }
 
