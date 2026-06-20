@@ -1,3 +1,12 @@
+//! Flags `.locator()` calls passing a raw CSS selector in Playwright test
+//! files, steering toward semantic locators (`getByRole`/`getByText`/etc.).
+//!
+//! Exempted, because no semantic Playwright locator can target the element:
+//! - `label[for="..."]` selectors (the label element has no semantic getter);
+//! - selectors referencing an SVG chart-library internal class
+//!   (`.recharts-*`, `.apexcharts-*`) — those elements expose no ARIA role,
+//!   accessible text, or `data-testid`.
+
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
@@ -25,6 +34,16 @@ fn is_label_for_selector(selector: &str) -> bool {
         None => return false,
     };
     rest.ends_with(']') && !rest.contains('[')
+}
+
+/// SVG chart/dataviz libraries whose internal elements carry NO ARIA role,
+/// accessible text, or `data-testid`, so their `.<prefix>-*` CSS classes are the
+/// only reliable Playwright targeting mechanism. A selector referencing one is
+/// not a "lazy CSS instead of semantics" smell — there is no semantic API.
+const CHART_LIBRARY_CLASS_PREFIXES: &[&str] = &[".recharts-", ".apexcharts-"];
+
+fn references_chart_library_internal(selector: &str) -> bool {
+    CHART_LIBRARY_CLASS_PREFIXES.iter().any(|p| selector.contains(p))
 }
 
 impl OxcCheck for Check {
@@ -75,6 +94,10 @@ impl OxcCheck for Check {
         }
 
         if is_label_for_selector(inner) {
+            return;
+        }
+
+        if references_chart_library_internal(inner) {
             return;
         }
 
@@ -142,5 +165,46 @@ mod tests {
     fn flags_other_attribute_selector() {
         let d = run_on("page.locator('input[name=\"email\"]');");
         assert_eq!(d.len(), 1, "non-label attribute selectors still flag");
+    }
+
+    #[test]
+    fn allows_recharts_internal_selector() {
+        assert!(
+            run_on(
+                "getStoryFrame(page).locator('.recharts-legend-wrapper .flex.h-full.flex-wrap li');"
+            )
+            .is_empty(),
+            "recharts internals have no semantic locator"
+        );
+        assert!(
+            run_on("page.locator('.recharts-xAxis .recharts-cartesian-axis-tick');").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_apexcharts_internal_selector() {
+        assert!(run_on("page.locator('.apexcharts-series path');").is_empty());
+    }
+
+    #[test]
+    fn flags_ordinary_class_not_chart_library() {
+        let d = run_on("page.locator('.my-custom-button');");
+        assert_eq!(d.len(), 1, "ordinary raw CSS classes still flag");
+    }
+
+    #[test]
+    fn flags_combinator_selector() {
+        let d = run_on("page.locator('div > .header');");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn flags_chart_substring_without_class_anchor() {
+        let d = run_on("page.locator('[data-recharts-x]');");
+        assert_eq!(
+            d.len(),
+            1,
+            "substring without the `.`-anchored class is not exempt"
+        );
     }
 }
