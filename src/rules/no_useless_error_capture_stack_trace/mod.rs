@@ -11,9 +11,11 @@ use crate::rules::meta::RuleMeta;
 pub const META: RuleMeta = RuleMeta {
     id: "no-useless-error-capture-stack-trace",
     description: "Unnecessary `Error.captureStackTrace()` in Error subclass constructor.",
-    remediation: "Remove the `Error.captureStackTrace(this, ClassName)` call. \
+    remediation: "Remove the `Error.captureStackTrace(this)` call. \
                   Built-in Error subclasses already capture the stack trace \
-                  automatically via `super()`.",
+                  automatically via `super()`. (Keep the two-argument \
+                  `Error.captureStackTrace(this, constructorOpt)` form — it \
+                  trims constructor frames from the trace.)",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["unicorn"],

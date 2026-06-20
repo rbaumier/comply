@@ -1,11 +1,12 @@
-//! no-useless-error-capture-stack-trace OXC backend — flag unnecessary
-//! `Error.captureStackTrace(this, ClassName)` in Error subclass constructors.
+//! no-useless-error-capture-stack-trace OXC backend — flag the redundant
+//! single-argument `Error.captureStackTrace(this)` in Error subclass
+//! constructors. The two-argument `constructorOpt` form trims stack frames and
+//! is left alone.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
-use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -47,13 +48,6 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Get class name.
-        let class_name = class
-            .id
-            .as_ref()
-            .map(|id| id.name.as_str())
-            .unwrap_or("");
-
         // Find the constructor.
         for element in &class.body.body {
             let ClassElement::MethodDefinition(method) = element else {
@@ -66,7 +60,7 @@ impl OxcCheck for Check {
                 continue;
             };
 
-            // Walk constructor body for `Error.captureStackTrace(this, ClassName)`.
+            // Walk constructor body for `Error.captureStackTrace(this)`.
             for stmt in &func_body.statements {
                 let Statement::ExpressionStatement(expr_stmt) = stmt else {
                     continue;
@@ -89,23 +83,17 @@ impl OxcCheck for Check {
                     continue;
                 }
 
-                // Check arguments: (this, ClassName) or (this, new.target) or (this, this.constructor).
-                if call.arguments.len() != 2 {
+                // Only the single-argument form `Error.captureStackTrace(this)`
+                // is useless: V8 already captures the stack via `super()`. A
+                // second `constructorOpt` argument trims frames above that
+                // constructor from the trace, which `super()` does not do — that
+                // form is a meaningful customization and is left alone.
+                if call.arguments.len() != 1 {
                     continue;
                 }
 
                 let first_is_this = matches!(&call.arguments[0], Argument::ThisExpression(_));
                 if !first_is_this {
-                    continue;
-                }
-
-                let second_text = &ctx.source
-                    [call.arguments[1].span().start as usize..call.arguments[1].span().end as usize];
-                let is_class_ref = second_text == class_name
-                    || second_text == "new.target"
-                    || second_text == "this.constructor";
-
-                if !is_class_ref {
                     continue;
                 }
 
@@ -116,14 +104,114 @@ impl OxcCheck for Check {
                     line,
                     column,
                     rule_id: "no-useless-error-capture-stack-trace".into(),
-                    message: "Unnecessary `Error.captureStackTrace()` call. \
-                              Built-in Error subclasses capture the stack \
-                              trace automatically via `super()`."
+                    message: "Unnecessary single-argument \
+                              `Error.captureStackTrace(this)` call. Built-in \
+                              Error subclasses capture the stack trace \
+                              automatically via `super()`."
                         .into(),
                     severity: Severity::Warning,
                     span: None,
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn flags_single_argument_form() {
+        let d = run_on(
+            "class MyError extends Error {\n\
+               constructor(m) { super(m); Error.captureStackTrace(this); }\n\
+             }",
+        );
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "no-useless-error-capture-stack-trace");
+    }
+
+    #[test]
+    fn allows_constructor_opt_class_name() {
+        // #5022: the two-argument form trims the constructor frame — meaningful.
+        assert!(
+            run_on(
+                "class MyError extends Error {\n\
+                   constructor(m) { super(m); Error.captureStackTrace(this, MyError); }\n\
+                 }",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_constructor_opt_this_constructor() {
+        // #5022: `Error.captureStackTrace(this, this.constructor)` (commander.js).
+        assert!(
+            run_on(
+                "class CommanderError extends Error {\n\
+                   constructor(m) { super(m); Error.captureStackTrace(this, this.constructor); }\n\
+                 }",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_constructor_opt_new_target() {
+        assert!(
+            run_on(
+                "class MyError extends Error {\n\
+                   constructor(m) { super(m); Error.captureStackTrace(this, new.target); }\n\
+                 }",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn ignores_spread_arguments() {
+        // A spread call can carry a constructorOpt — argument count is unknown.
+        assert!(
+            run_on(
+                "class MyError extends Error {\n\
+                   constructor(m) { super(m); Error.captureStackTrace(...args); }\n\
+                 }",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn ignores_non_this_first_argument() {
+        assert!(
+            run_on(
+                "class MyError extends Error {\n\
+                   constructor(m) { super(m); Error.captureStackTrace(obj); }\n\
+                 }",
+            )
+            .is_empty()
+        );
     }
 }
