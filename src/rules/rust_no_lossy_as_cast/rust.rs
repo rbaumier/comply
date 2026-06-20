@@ -13,6 +13,11 @@
 //!   operands, e.g. `gx[(x, y)][0] as f32`) is left to
 //!   `rust-no-as-numeric-cast`, since precision loss is not provable there.
 //!
+//! Same-width signed/unsigned reinterpretations (`u8 as i8`, `i32 as u32`,
+//! …) preserve every bit — only the sign bit's interpretation changes via
+//! two's complement — so they are not lossy and are silenced when the
+//! source type is locally visible.
+//!
 //! Widening casts with the same signedness (e.g. `u8 as u32`) are
 //! silenced when the source type is locally visible.  When the source
 //! type is not locally annotated (e.g. a method return or a custom
@@ -160,6 +165,17 @@ const F32_MANTISSA_BITS: u16 = 24;
 fn is_dangerous_cast(source: NumericType, target: NumericType) -> bool {
     if source.kind == target.kind && source.kind != NumericKind::Float {
         return target.bits < source.bits;
+    }
+    // Same-width signed/unsigned reinterpretation (`u8 as i8`, `i32 as u32`, …)
+    // preserves every bit — it only reinterprets the sign bit via two's
+    // complement, so it is not a lossy cast. `try_into()` would be wrong here:
+    // `200_u8.try_into::<i8>()` errors, but the intended result is the bit
+    // pattern `-56_i8`.
+    if matches!(source.kind, NumericKind::Unsigned | NumericKind::Signed)
+        && matches!(target.kind, NumericKind::Unsigned | NumericKind::Signed)
+        && source.bits == target.bits
+    {
+        return false;
     }
     if target.kind == NumericKind::Float
         && matches!(source.kind, NumericKind::Unsigned | NumericKind::Signed)
@@ -332,6 +348,47 @@ mod tests {
     #[test]
     fn allows_widening_i16_to_i32() {
         assert!(run_on("fn f(x: i16) -> i32 { x as i32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_4807_u8_as_i8_not_flagged() {
+        // Issue #4807: `u8 as i8` is a same-width two's-complement bit
+        // reinterpretation (gluon's `(b as i8) >= -0x40` parser bit magic) —
+        // no bits are lost, only the sign interpretation changes.
+        assert!(run_on("fn is_boundary(b: u8) -> bool { (b as i8) >= -0x40 }").is_empty());
+    }
+
+    #[test]
+    fn repro_4807_i8_as_u8_not_flagged() {
+        assert!(run_on("fn f(b: i8) -> u8 { b as u8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_4807_u16_as_i16_not_flagged() {
+        assert!(run_on("fn f(b: u16) -> i16 { b as i16 }").is_empty());
+    }
+
+    #[test]
+    fn repro_4807_u32_as_i32_not_flagged() {
+        assert!(run_on("fn f(b: u32) -> i32 { b as i32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_4807_i64_as_u64_not_flagged() {
+        assert!(run_on("fn f(b: i64) -> u64 { b as u64 }").is_empty());
+    }
+
+    #[test]
+    fn repro_4807_usize_as_isize_not_flagged() {
+        assert!(run_on("fn f(b: usize) -> isize { b as isize }").is_empty());
+    }
+
+    #[test]
+    fn cross_signed_narrowing_u32_as_i8_owned_by_numeric_cast() {
+        // Different widths: `u32 as i8` discards 24 bits — genuinely lossy and
+        // not exempted by the same-width carve-out. `rust-no-as-numeric-cast`
+        // owns the span, so this rule suppresses its diagnostic.
+        assert!(run_on("fn f(x: u32) -> i8 { x as i8 }").is_empty());
     }
 
     #[test]
