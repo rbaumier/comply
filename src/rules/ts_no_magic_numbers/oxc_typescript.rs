@@ -5,7 +5,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::PropertyKey;
+use oxc_ast::ast::{Expression, PropertyKey};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -17,6 +17,30 @@ const ALLOWED: &[&str] = &["-1", "0", "1", "2", "0.0", "1.0"];
 const HTTP_STATUS_CODES: &[f64] = &[
     200.0, 201.0, 204.0, 301.0, 302.0, 304.0, 400.0, 401.0, 403.0, 404.0,
     405.0, 409.0, 422.0, 429.0, 500.0, 502.0, 503.0,
+];
+
+/// `Date.prototype` time-component setters. A numeric argument to one of these
+/// names its calendar/clock component from the call itself (`setHours(23, 59,
+/// 59, 999)` is end-of-day, `setMonth(11)` is December): the values are
+/// Gregorian boundary constants, not magic numbers. Keyed on the method name
+/// alone, so a user-defined `setHours` on a non-Date object is also exempted —
+/// an acceptable trade for not flagging every date library, since these names
+/// are near-exclusive to the Date API.
+const DATE_SETTER_METHODS: &[&str] = &[
+    "setHours",
+    "setMinutes",
+    "setSeconds",
+    "setMilliseconds",
+    "setMonth",
+    "setDate",
+    "setFullYear",
+    "setUTCHours",
+    "setUTCMinutes",
+    "setUTCSeconds",
+    "setUTCMilliseconds",
+    "setUTCMonth",
+    "setUTCDate",
+    "setUTCFullYear",
 ];
 
 #[derive(Debug)]
@@ -81,6 +105,12 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A numeric argument to a `Date` time-component setter or the `Date`
+        // constructor is a calendar/clock boundary value named by the call.
+        if is_date_component_argument(node.id(), semantic) {
+            return;
+        }
+
         if is_allowed_context(node.id(), semantic) {
             return;
         }
@@ -134,6 +164,49 @@ fn is_color_key(name: &str) -> bool {
     const EXACT: &[&str] = &["color", "fill", "stroke", "background", "foreground"];
     let lower = name.to_ascii_lowercase();
     lower.ends_with("color") || EXACT.contains(&lower.as_str())
+}
+
+/// True when this literal is a direct argument to a `Date` time-component
+/// setter (`d.setHours(23, 59, 59, 999)`) or to the `Date` constructor
+/// (`new Date(2024, 11, 31)`). The literal may be wrapped in a unary minus.
+fn is_date_component_argument(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    // The argument expression is the literal itself, or a `-literal` unary.
+    let mut arg_id = node_id;
+    let parent_id = nodes.parent_id(arg_id);
+    if parent_id != arg_id
+        && let AstKind::UnaryExpression(unary) = nodes.get_node(parent_id).kind()
+        && unary.operator == oxc_ast::ast::UnaryOperator::UnaryNegation
+    {
+        arg_id = parent_id;
+    }
+    let arg_span = nodes.get_node(arg_id).kind().span();
+
+    let call_id = nodes.parent_id(arg_id);
+    if call_id == arg_id {
+        return false;
+    }
+    match nodes.get_node(call_id).kind() {
+        AstKind::CallExpression(call) => {
+            let Expression::StaticMemberExpression(member) = &call.callee else {
+                return false;
+            };
+            DATE_SETTER_METHODS.contains(&member.property.name.as_str())
+                && call.arguments.iter().any(|a| a.span() == arg_span)
+        }
+        AstKind::NewExpression(new_expr) => {
+            let Expression::Identifier(ident) = &new_expr.callee else {
+                return false;
+            };
+            ident.name == "Date"
+                && new_expr.arguments.iter().any(|a| a.span() == arg_span)
+        }
+        _ => false,
+    }
 }
 
 fn is_allowed_context(
@@ -274,6 +347,51 @@ mod tests {
             d.is_empty(),
             "magic numbers in a benchmark script must not be flagged"
         );
+    }
+
+    // Regression for issue #4999: in date arithmetic, calendar/clock boundary
+    // values (`23`/`59`/`999` max hour/minute/second/ms, `11` = December) are
+    // named by the `Date` setter they are passed to — flagging them is noise.
+    #[test]
+    fn allows_end_of_day_date_setter() {
+        let src = r#"function endOfDay(d: Date) { d.setHours(23, 59, 59, 999); return d; }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_date_component_setters() {
+        let src = r#"
+            function f(d: Date) {
+                d.setMonth(11);
+                d.setDate(31);
+                d.setFullYear(1999);
+                d.setUTCHours(23);
+                d.setUTCMinutes(59);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_date_constructor_components() {
+        let src = r#"const d = new Date(2024, 11, 31, 23, 59, 59, 999);"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_magic_number_passed_to_non_date_setter() {
+        // The exemption is scoped to `Date` setter method names; an unrelated
+        // method call with a magic argument is still flagged.
+        let src = r#"function f(svc) { svc.configure(86400); }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_magic_number_nested_in_date_setter_argument() {
+        // The exemption requires the literal to be a *direct* argument; a literal
+        // buried in a sub-expression is not a self-documenting boundary value.
+        let src = r#"function f(d: Date, x: number) { d.setHours(x + 23); }"#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
