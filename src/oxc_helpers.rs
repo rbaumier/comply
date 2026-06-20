@@ -1019,6 +1019,89 @@ pub fn is_local_object_builder_binding(
     false
 }
 
+/// True when `ident` resolves to a local `const`/`let` binding whose initializer
+/// is a freshly allocated array — a `CallExpression` (`rollups(...)`,
+/// `nodes.leaves().map(...)`) or an `ArrayExpression` (`[...]`) — and that array
+/// never escapes as a bare value before being read here.
+///
+/// This is the `let arr = fn(); arr.sort()` builder pattern: `arr` holds the same
+/// fresh call result as the exempted direct chain `fn().sort()`, just bound to a
+/// name for readability. No caller holds a reference to it, so an in-place `.sort()`
+/// mutation is unobservable, exactly as in the inline case.
+///
+/// The escape guard requires every resolved reference of the binding to be the
+/// **object of a member access** (`arr.map(...)`, `arr.length`, `arr[i]`). A
+/// reference used as a bare value — a call argument (`use(arr)`), a return
+/// (`return arr`), an assignment source (`x = arr`), a spread (`[...arr]`), an
+/// object-property value (`{ k: arr }`) — could hand the array to code that later
+/// observes the reorder, so the binding is rejected and the `.sort()` stays flagged.
+///
+/// A function parameter, imported binding, or `this` resolves to a
+/// non-`VariableDeclarator` declaration; a `var` binding or a non-array
+/// initializer is rejected, so a shared reference is still flagged.
+#[must_use]
+pub fn is_local_fresh_array_binding(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{Expression, VariableDeclarationKind};
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+
+    let mut is_fresh_local = false;
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            is_fresh_local = matches!(
+                decl.kind,
+                VariableDeclarationKind::Const | VariableDeclarationKind::Let
+            ) && matches!(
+                decl.init,
+                Some(Expression::CallExpression(_) | Expression::ArrayExpression(_))
+            );
+            break;
+        }
+    }
+    if !is_fresh_local {
+        return false;
+    }
+
+    // The array must not escape: every reference is the object of a member access.
+    scoping
+        .get_resolved_references(sym_id)
+        .all(|reference| reference_is_member_object(reference.node_id(), semantic))
+}
+
+/// True when the reference at `ref_node_id` is the *object* of a member access
+/// (`arr.foo`, `arr[i]`) — a read through the binding that does not leak the value
+/// itself. Any other parent (call argument, return, assignment source, spread,
+/// property value, …) lets the value escape and returns `false`.
+fn reference_is_member_object(
+    ref_node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+
+    let nodes = semantic.nodes();
+    let ref_span = nodes.get_node(ref_node_id).kind().span();
+    match nodes.kind(nodes.parent_id(ref_node_id)) {
+        AstKind::StaticMemberExpression(member) => member.object.span() == ref_span,
+        AstKind::ComputedMemberExpression(member) => member.object.span() == ref_span,
+        _ => false,
+    }
+}
+
 /// True when `id` resolves (via its binding) to an import whose source module
 /// is one of `modules`. Returns `false` for an unresolved reference or a binding
 /// that is not an import (e.g. a local function/param shadowing the name), so a
