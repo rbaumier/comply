@@ -4,6 +4,15 @@
 //! (`ParserConfig`, `EventReader`, `XmlReader`) and other external-entity-capable
 //! deserializers in an XML context. quick_xml is exempt: it is a streaming parser
 //! with no external-entity expansion, so XXE is impossible by construction.
+//!
+//! The XXE risk lives in an *application* that hands untrusted XML to a parser
+//! as a production sink. Two exemptions:
+//! - test and cargo-fuzz files (any crate): a parser fed XML in a `#[test]` or a
+//!   fuzz target is exercising the parser on fixtures, not a production sink;
+//! - the source of a known XML-parsing crate (`quick-xml`, `xml-rs`,
+//!   `roxmltree`, …): the library implementing XML parsing is never the
+//!   downstream consumer mis-using it — see
+//!   [`crate::project::CargoManifest::is_xml_parser_crate`].
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -38,6 +47,31 @@ const XML_PARSER_PATTERNS: &[&str] = &[
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
+
+    // Test code and cargo-fuzz targets (any crate) feed XML to a parser to
+    // exercise it on fixtures, not as a production sink — XXE in a fixture is
+    // not a runtime vulnerability.
+    // Dual-read: the unit-test harness injects an empty default FileCtx, so the
+    // `path_segments` flags are false in tests — fall back to the pure path
+    // predicates, which read `ctx.path` directly.
+    if crate::rules::rust_helpers::is_in_test_context(node, source)
+        || crate::rules::rust_helpers::is_under_tests_dir(ctx.path)
+        || ctx.file.path_segments.in_test_dir
+        || ctx.file.path_segments.in_fuzz_targets
+        || crate::rules::path_utils::is_fuzz_targets_path(ctx.path)
+    {
+        return;
+    }
+    // The crate under analysis IS an XML-parsing library: its source implements
+    // `from_str`/`*Reader::new` rather than consuming them, so it is never the
+    // downstream application that could mis-use a parser.
+    if ctx
+        .project
+        .nearest_cargo_manifest(ctx.path)
+        .is_some_and(|m| m.is_xml_parser_crate())
+    {
+        return;
+    }
 
     // A chained outer call (`inner(...).map_err(...)`) has a callee subtree that
     // contains the inner call, so a substring pattern match would re-flag the same
@@ -105,9 +139,29 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
+    }
+
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, path)
+    }
+
+    /// Run on `rel_path` inside a temp crate with the given `Cargo.toml`, so the
+    /// `is_xml_parser_crate` check resolves against a controlled manifest instead
+    /// of comply's own.
+    fn run_in_crate(cargo_toml_contents: &str, rel_path: &str, source: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("Cargo.toml"), cargo_toml_contents).unwrap();
+        let src_path = dir.path().join(rel_path);
+        if let Some(parent) = src_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&src_path, source).unwrap();
+        crate::rules::test_helpers::run_rule(&Check, source, &src_path)
     }
 
     #[test]
@@ -168,6 +222,83 @@ mod tests {
         // exemption must not extend to other XML deserializers.
         assert_eq!(
             run_on("fn f() { let v: T = serde_xml_rs::from_str(xml_input).unwrap(); }").len(),
+            1,
+        );
+    }
+
+    const QUICK_XML_CARGO_TOML: &str = r#"
+[package]
+name = "quick-xml"
+version = "0.31.0"
+edition = "2021"
+
+[lib]
+name = "quick_xml"
+path = "src/lib.rs"
+"#;
+
+    #[test]
+    fn allows_quick_xml_own_source_issue4928() {
+        // Issue #4928: quick-xml's own Deserializer constructor wires its own
+        // `XmlReader::new` — the library implementing XML parsing is never the
+        // downstream consumer that could mis-use it.
+        assert!(
+            run_in_crate(
+                QUICK_XML_CARGO_TOML,
+                "src/de/mod.rs",
+                "fn new(reader: R) -> Self { Self { reader: XmlReader::new(reader) } }",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_xml_library_tests_issue4928() {
+        // Issue #4928: quick-xml's own namespace test exercises `NsReader::from_str`
+        // on a fixture by design. A `tests/` integration file is test code.
+        assert!(
+            run_on_path(
+                "fn namespace() { let mut r = NsReader::from_str(\"<a xmlns:myns='www1'></a>\"); }",
+                "tests/reader-namespaces.rs",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_xml_library_fuzz_target_issue4928() {
+        // Issue #4928: a cargo-fuzz target feeds the parser fuzzed XML by design.
+        assert!(
+            run_on_path(
+                "fn fuzz(data: &[u8]) { let _ = Reader::from_str(s); }",
+                "fuzz/fuzz_targets/structured_roundtrip.rs",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_xxe_in_application_consuming_xml_parser_issue4928() {
+        // The library-self exemption must not leak to a downstream application:
+        // an ordinary (non-XML-library, non-test) crate that hands untrusted XML
+        // to xml-rs is still flagged.
+        const APP_CARGO_TOML: &str = r#"
+[package]
+name = "myapp"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "myapp"
+path = "src/main.rs"
+"#;
+        assert_eq!(
+            run_in_crate(
+                APP_CARGO_TOML,
+                "src/handler.rs",
+                "fn parse(input: &str) { let p = xml::EventReader::new(input); }",
+            )
+            .len(),
             1,
         );
     }
