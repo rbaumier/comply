@@ -12,6 +12,11 @@
 //! build.rs is exempted — panics in Cargo build scripts are an acceptable
 //! error mode during compilation (e.g. env::var("FOO").unwrap()).
 //!
+//! Example code is exempted — files under a Cargo `examples/` directory (or a
+//! disabled variant like `examples_disabled/`) are illustrative, so `.unwrap()`
+//! keeps them concise instead of obscuring the demonstrated feature with error
+//! plumbing.
+//!
 //! Lock operations are exempted — `.read().unwrap()`, `.write().unwrap()`,
 //! `.lock().unwrap()` are idiomatic for std::sync::{Mutex,RwLock} poisoning.
 //!
@@ -22,6 +27,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::path_utils::is_cargo_example_path;
 use crate::rules::rust_helpers::{is_in_const_initializer, is_in_test_context, is_under_tests_dir};
 
 const KINDS: &[&str] = &["call_expression"];
@@ -63,6 +69,10 @@ impl AstCheck for Check {
         }
         // Skip test code — `.unwrap()` is fine there.
         if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
+            return;
+        }
+        // Skip example code — `.unwrap()` keeps examples concise.
+        if is_cargo_example_path(ctx.path) {
             return;
         }
         // Skip const/static item initializers — `unwrap`/`expect` is const-evaluated
@@ -276,6 +286,40 @@ mod tests {
                 "crates/foo/src/testingground/k.rs"
             )
             .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_unwrap_in_examples_dir() {
+        let source = "fn main() { let x = y.unwrap(); }";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, source, "examples/migration/src/main.rs")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_unwrap_in_examples_disabled_dir() {
+        // #4779: fjall keeps disabled examples in `examples_disabled/` — still
+        // illustrative example code where `.unwrap()` is idiomatic.
+        let source = "fn main() { let val = tree.get(b\"user#0\").unwrap().unwrap(); }";
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                source,
+                "examples_disabled/migration/src/main.rs"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_unwrap_in_production_src() {
+        // A genuine production `src/` file still flags.
+        let source = "pub fn run() { let x = y.unwrap(); }";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, source, "src/lib.rs").len(),
             1
         );
     }
