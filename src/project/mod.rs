@@ -2012,6 +2012,19 @@ impl CargoManifest {
         })
     }
 
+    /// True when this crate IS an XML-parsing library, identified by a
+    /// `[package].name` that matches a known XML parser/deserializer
+    /// (`quick-xml`, `xml-rs`, `roxmltree`, `serde-xml-rs`, `xmlparser`,
+    /// `minidom`, `sxd-document`). Both the `-` and `_` separator spellings
+    /// match. A crate that implements XML parsing is never the *consumer*
+    /// mis-using an XML parser, so the XXE rule (which targets applications that
+    /// hand untrusted XML to a parser) must not flag the library's own
+    /// `from_str`/`from_reader`/`*Reader::new` self-references.
+    #[must_use]
+    pub fn is_xml_parser_crate(&self) -> bool {
+        self.name.as_deref().is_some_and(is_xml_parser_crate_name)
+    }
+
     /// True when the crate is an FFI bridge: its `[lib] crate-type` declares
     /// `cdylib` and/or `staticlib` and no Rust-library target (`rlib`/`lib`).
     /// Such crates (e.g. Python/Java/Swift bindings) are linked by a foreign
@@ -2065,6 +2078,26 @@ impl CargoManifest {
             .as_deref()
             .is_some_and(|n| root.strip_prefix(n).is_some_and(|rest| rest.starts_with('_')))
     }
+}
+
+/// Crate names of well-known Rust XML parsing/deserialization libraries,
+/// normalized to the `-` spelling. [`is_xml_parser_crate_name`] also accepts
+/// the `_` separator spelling crates.io publishes the same package under.
+const XML_PARSER_CRATE_NAMES: &[&str] = &[
+    "quick-xml",
+    "xml-rs",
+    "roxmltree",
+    "serde-xml-rs",
+    "xmlparser",
+    "minidom",
+    "sxd-document",
+];
+
+/// True when `name` is a known XML parser/deserializer crate, comparing against
+/// both the `-` and `_` separator spellings (`quick-xml` / `quick_xml`).
+fn is_xml_parser_crate_name(name: &str) -> bool {
+    let normalized = name.replace('_', "-");
+    XML_PARSER_CRATE_NAMES.contains(&normalized.as_str())
 }
 
 /// Parsed Tailwind theme. Populated statically from `@theme` CSS blocks (v4)
@@ -6605,6 +6638,40 @@ path = "tools/tool.rs"
         assert!(
             !no_name.is_build_codegen_crate(),
             "no [package].name => not a build-codegen crate"
+        );
+    }
+
+    #[test]
+    fn cargo_manifest_classifies_xml_parser_crate() {
+        let dir = PathBuf::from("/crate");
+
+        let parse_name = |name: &str| {
+            CargoManifest::parse(
+                &format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n"),
+                dir.clone(),
+            )
+            .unwrap()
+        };
+
+        // Both the `-` and `_` separator spellings are recognized.
+        for name in ["quick-xml", "quick_xml", "xml-rs", "roxmltree", "serde-xml-rs", "xmlparser"] {
+            assert!(
+                parse_name(name).is_xml_parser_crate(),
+                "name `{name}` is a known XML parser crate"
+            );
+        }
+        // A downstream application that merely consumes an XML parser is not one.
+        for name in ["myapp", "serde", "tokio", "xml-config"] {
+            assert!(
+                !parse_name(name).is_xml_parser_crate(),
+                "name `{name}` is not an XML parser library"
+            );
+        }
+
+        let no_name = CargoManifest::parse("[lib]\nname = \"anon\"\n", dir).unwrap();
+        assert!(
+            !no_name.is_xml_parser_crate(),
+            "no [package].name => not an XML parser crate"
         );
     }
 
