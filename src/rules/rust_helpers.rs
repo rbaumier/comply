@@ -1820,6 +1820,52 @@ fn let_binds_vec(let_node: Node, var: &str, source: &[u8]) -> bool {
     false
 }
 
+/// Whether a local `let` binding for `var`, declared before `node` in an
+/// enclosing scope, is an in-memory buffer — a `Vec` or a `String`. Used to
+/// recognize the infallible `io::Write`-into-`Vec<u8>` / `fmt::Write`-into-
+/// `String` idiom (those impls never return `Err`).
+pub fn local_let_binds_buffer(node: Node, var: &str, source: &[u8]) -> bool {
+    let mut child = node;
+    while let Some(parent) = child.parent() {
+        let mut cursor = parent.walk();
+        for sib in parent.children(&mut cursor) {
+            if sib.id() == child.id() {
+                break;
+            }
+            if sib.kind() == "let_declaration"
+                && (let_binds_vec(sib, var, source) || let_binds_string(sib, var, source))
+            {
+                return true;
+            }
+        }
+        child = parent;
+    }
+    false
+}
+
+/// Whether `let_node` declares `var` with a `String`-shaped initializer or an
+/// explicit `String` type annotation.
+fn let_binds_string(let_node: Node, var: &str, source: &[u8]) -> bool {
+    let Some(pattern) = let_node.child_by_field_name("pattern") else {
+        return false;
+    };
+    if !let_pattern_binds(pattern, var, source) {
+        return false;
+    }
+    if let Some(ty) = let_node.child_by_field_name("type")
+        && ty.utf8_text(source).unwrap_or("").trim() == "String"
+    {
+        return true;
+    }
+    if let Some(value) = let_node.child_by_field_name("value") {
+        let text = value.utf8_text(source).unwrap_or("");
+        if text.starts_with("String::") {
+            return true;
+        }
+    }
+    false
+}
+
 /// Whether a `let` pattern (`x` or `mut x`) binds the name `var`.
 fn let_pattern_binds(pattern: Node, var: &str, source: &[u8]) -> bool {
     let name = match pattern.kind() {
