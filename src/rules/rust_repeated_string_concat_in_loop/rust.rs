@@ -145,7 +145,14 @@ fn is_string_producing_method_call(node: tree_sitter::Node, source: &[u8]) -> bo
         .is_some_and(|method| matches!(method, "to_string" | "to_owned"))
 }
 
-/// True if `node` is `s = s + …` for the same identifier `s`.
+/// True if `node` is `s = s + …` for the same identifier `s`, where the `+`
+/// is string concatenation rather than numeric accumulation.
+///
+/// Without type information the AST cannot prove `s` is a `String`, so the
+/// check only fires when one operand of the binary right-hand side is
+/// string-valued (string literal, `format!`, `.to_string()`/`.to_owned()`).
+/// This avoids flagging numeric accumulation such as `length = length + x`
+/// over float coordinates or `sum = sum + cell` over matrix cells.
 fn is_self_concat_assign(node: tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "assignment_expression" {
         return false;
@@ -174,7 +181,10 @@ fn is_self_concat_assign(node: tree_sitter::Node, source: &[u8]) -> bool {
     let Ok(rhs_left_text) = rhs_left.utf8_text(source) else {
         return false;
     };
-    lhs_text == rhs_left_text
+    if lhs_text != rhs_left_text {
+        return false;
+    }
+    is_string_valued(rhs, source)
 }
 
 #[cfg(test)]
@@ -228,6 +238,30 @@ mod tests {
     fn flags_plus_eq_to_string_in_loop() {
         let src = r#"fn f() { let mut s = String::new(); for x in v { s += &x.to_string(); } }"#;
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_self_concat_format_in_loop() {
+        let src = r#"fn f() { let mut s = String::new(); for x in v { s = s + &format!("{}", x); } }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_numeric_self_accumulation() {
+        let src = r#"fn f() -> T { let mut length = T::zero(); for line in self.lines() { length = length + line.vincenty_length()?; } length }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_numeric_self_accumulation_simple_ident() {
+        let src = r#"fn f() { let mut sum_x = 0.0; for Point(Coord { x, y }) in node_points() { sum_x = sum_x + x; } }"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_numeric_self_accumulation_method_rhs() {
+        let src = r#"fn f() { let mut sum = T::zero(); for point in &points[2..] { sum = sum + line.determinant(); } }"#;
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
