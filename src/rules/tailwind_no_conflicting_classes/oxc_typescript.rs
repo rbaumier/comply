@@ -25,6 +25,9 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if !ctx.project.uses_tailwind() {
+            return;
+        }
         let AstKind::JSXAttribute(attr) = node.kind() else {
             return;
         };
@@ -86,7 +89,19 @@ mod tests {
     use super::*;
 
     fn run(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
+        let project = crate::project::ProjectCtx::empty_with_tailwind();
+        let file = crate::rules::file_ctx::default_static_file_ctx();
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, "t.tsx", &project, file)
+    }
+
+    #[test]
+    fn silent_when_project_has_no_tailwind() {
+        // The rule only runs in Tailwind projects; conflicting prefixes in a
+        // non-Tailwind project belong to another CSS framework and must not fire.
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, r#"const x = <div className="p-4 p-6" />;"#, "t.tsx")
+                .is_empty()
+        );
     }
 
     #[test]
