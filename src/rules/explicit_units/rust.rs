@@ -8,10 +8,14 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 
+// `interval` is excluded: it is polysemous. Beyond polling/retry durations it
+// names dimensionless bucket widths in histogram/aggregation algorithms
+// (measured in the same units as the bucketed data, not a fixed physical unit)
+// as well as confidence/sampling intervals, so it cannot demand a single unit
+// suffix like `_ms`.
 const AMBIGUOUS_BASES: &[&str] = &[
     "delay",
     "timeout",
-    "interval",
     "duration",
     "elapsed",
     "age",
@@ -184,5 +188,18 @@ mod tests {
     #[test]
     fn allows_size_and_height() {
         assert!(run_on("fn f(size: usize, height: u64) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_histogram_bucket_interval() {
+        assert!(
+            run_on("fn get_bucket_pos_f64(val: f64, interval: f64, offset: f64) -> f64 { 0.0 }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_bare_duration_param() {
+        assert_eq!(run_on("fn f(duration: u64) {}").len(), 1);
     }
 }
