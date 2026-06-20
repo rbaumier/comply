@@ -86,11 +86,17 @@ impl OxcCheck for Check {
         let AstKind::CallExpression(call) = node.kind() else {
             return;
         };
-        let callee_name = match &call.callee {
-            Expression::Identifier(id) => id.name.as_str(),
-            Expression::StaticMemberExpression(m) => m.property.name.as_str(),
-            _ => return,
+        // Vitest/Jest's `test`/`it`/`beforeEach`/… are invoked as bare globals
+        // (auto-injected or imported from `vitest`/`@jest/globals`), never as a
+        // method on a user object. A member-expression callee such as
+        // `suite.test(name, fn)` is a hand-rolled test framework's API, where a
+        // `done` parameter is a normal completion callback, not Vitest's legacy
+        // shape. Restricting to bare identifiers keeps the rule on the genuine
+        // Vitest/Jest API and off custom runners.
+        let Expression::Identifier(id) = &call.callee else {
+            return;
         };
+        let callee_name = id.name.as_str();
         if !TEST_FUNCTIONS.contains(&callee_name) {
             return;
         }
@@ -225,6 +231,40 @@ mod tests {
     fn flags_done_as_sole_param() {
         let src = r#"it("does a thing", (done) => { setTimeout(done, 10); });"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression #4935: node-postgres declares `vitest` in devDependencies (for
+    // its Cloudflare Workers test variant) yet most test files use a hand-rolled
+    // runner where `suite.test(name, fn)` takes a Node-style `done` completion
+    // callback. The member-expression callee is not Vitest's global `test`/`it`
+    // API, so the legacy-`done` deprecation must not fire.
+    #[test]
+    fn allows_done_in_hand_rolled_suite_test_issue_4935() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), VITEST_PKG).unwrap();
+        let test_dir = dir.path().join("test").join("unit").join("connection");
+        std::fs::create_dir_all(&test_dir).unwrap();
+        let file = test_dir.join("error-tests.js");
+        let source = r#"
+const helper = require('./test-helper');
+const suite = new helper.Suite();
+
+suite.test('connection emits stream errors', function (done) {
+  const con = new Connection({ stream: new MemoryStream() })
+  assert.emits(con, 'error', function (err) {
+    assert.equal(err.message, 'OMG!')
+    done()
+  })
+  con.connect()
+  con.stream.emit('error', new Error('OMG!'))
+})
+"#;
+        std::fs::write(&file, source).unwrap();
+        let diags = run_on_disk(&file, source);
+        assert!(
+            diags.is_empty(),
+            "hand-rolled `suite.test(name, fn)` `done` callback must not be flagged, got {diags:?}"
+        );
     }
 
     // Regression #1747: a test file under a directory configured to run with
