@@ -998,19 +998,24 @@ pub fn is_nuxt_module_runtime_file(path: &Path, project: &ProjectCtx) -> bool {
 }
 
 /// True when `path` is a Nuxt Nitro server route module: a file directly or
-/// transitively under a `server/api/` or `server/routes/` directory. Nitro's
-/// file-system server router consumes the module's `export default`
-/// (`defineEventHandler(...)`) by path at build time, never through a static
-/// import, so it has no importer but is live. The consecutive `server/api` /
-/// `server/routes` ancestor scopes the exemption to server route modules,
-/// keeping a same-named `default` export in an ordinary module flaggable.
-/// Detection-gated by the caller.
+/// transitively under a `server/api/`, `server/routes/`, or `server/middleware/`
+/// directory. Nitro's file-system server router consumes the module's
+/// `export default` (`defineEventHandler(...)`) by path at build time, never
+/// through a static import, so it has no importer but is live — `server/api/`
+/// and `server/routes/` register route handlers, `server/middleware/` registers
+/// server middleware that runs on every request. The consecutive
+/// `server/api` / `server/routes` / `server/middleware` ancestor scopes the
+/// exemption to these modules, keeping a same-named `default` export in an
+/// ordinary module flaggable. Detection-gated by the caller.
 pub fn is_nuxt_server_route_file(path: &Path) -> bool {
     let mut components = path.components();
     while let Some(component) = components.next() {
         if component.as_os_str() == std::ffi::OsStr::new("server")
             && components.clone().next().is_some_and(|next| {
-                matches!(next.as_os_str().to_str(), Some("api" | "routes"))
+                matches!(
+                    next.as_os_str().to_str(),
+                    Some("api" | "routes" | "middleware")
+                )
             })
         {
             return true;
@@ -1399,6 +1404,26 @@ mod aux_path_tests {
         // Segment (not substring) match.
         assert!(!is_test_infra_dir_path(&PathBuf::from("src/testingLibraryWrapper.ts")));
         assert!(!is_test_infra_dir_path(&PathBuf::from("src/app/login.ts")));
+    }
+
+    #[test]
+    fn nuxt_server_route_file_segments() {
+        // Issue #4494: Nitro consumes `server/middleware/` default exports by
+        // path, the same convention as `server/api/`/`server/routes/`.
+        assert!(is_nuxt_server_route_file(Path::new(
+            "playground/server/middleware/auth.ts"
+        )));
+        assert!(is_nuxt_server_route_file(Path::new("server/api/users.ts")));
+        assert!(is_nuxt_server_route_file(Path::new(
+            "server/routes/health.ts"
+        )));
+        // `middleware/` alone (Nuxt route middleware, not under `server/`) is not
+        // a Nitro server module and stays subject to the rule.
+        assert!(!is_nuxt_server_route_file(Path::new("middleware/auth.ts")));
+        // `server/` followed by an unrelated segment is not a Nitro route module.
+        assert!(!is_nuxt_server_route_file(Path::new(
+            "src/server/handler.ts"
+        )));
     }
 
     #[test]
