@@ -329,6 +329,28 @@ mod tests {
         assert_eq!(run(&wrap("<div viewBox=\"x\" />")).len(), 1);
     }
 
+    #[test]
+    fn allows_svg_camelcase_bindings_on_marker_multiline() {
+        // Issue #4850: vue-flow's `<marker>` with `:markerWidth`/`:markerHeight`/
+        // `:markerUnits` shorthand bindings (SVG case-sensitive attributes).
+        let diags = run(&wrap(
+            "<marker\n  refY=\"0\"\n  :markerWidth=\"`${width}`\"\n  :markerHeight=\"`${height}`\"\n  :markerUnits=\"markerUnits\"\n  :orient=\"orient\"\n>\n</marker>",
+        ));
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+    }
+
+    #[test]
+    fn flags_camelcase_bindings_on_non_svg_element_multiline() {
+        // Negative control for the multiline parse: the same shorthand bindings on
+        // a non-SVG-exclusive element are genuine violations and must still flag,
+        // proving the empty result above comes from the SVG exemption, not a
+        // degenerate multiline parse.
+        let diags = run(&wrap(
+            "<div\n  :markerWidth=\"`${width}`\"\n  :markerHeight=\"`${height}`\"\n  :markerUnits=\"markerUnits\"\n>\n</div>",
+        ));
+        assert_eq!(diags.len(), 3, "unexpected diags: {diags:?}");
+    }
+
     // --- Over-firing guards ---
 
     #[test]
