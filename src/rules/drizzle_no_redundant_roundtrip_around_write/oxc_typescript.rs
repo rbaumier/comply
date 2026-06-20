@@ -19,7 +19,8 @@
 //! same table and the same key column(s). A `where` with more than one
 //! `eq(T.col, …)` filter (a composite key) is not paired — the column set
 //! cannot be proven equal cheaply, so the rule stays silent. Re-reads that pull
-//! extra `with:` relations a write cannot return are not reported.
+//! extra `with:` relations or `JOIN` another table — both returning more than
+//! the written row, which `.returning()` cannot supply — are not reported.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -52,6 +53,10 @@ struct DbOp {
     binding: Option<String>,
     /// A read that pulls `with:` relations cannot be replaced by `.returning()`.
     has_with: bool,
+    /// A read that joins another table returns more than the written row (an
+    /// enriching read-back), so `.returning()` on the written table cannot
+    /// supply its projection.
+    has_join: bool,
     /// A write that already reads its row back via `.returning()`.
     has_returning: bool,
     /// A write that already folds the existence check via `.onConflict…()`.
@@ -129,7 +134,11 @@ fn scan_block(
         }
         let upper = (i + 1 + max_gap).min(ops.len());
         for read in ops[i + 1..upper].iter().filter_map(read_op) {
-            if read.table == write.table && !read.has_with && reread_keys_written(read, write) {
+            if read.table == write.table
+                && !read.has_with
+                && !read.has_join
+                && reread_keys_written(read, write)
+            {
                 push_diag(diagnostics, path_arc, source, read.offset, Pattern::PostReread, &write.table);
                 break;
             }
@@ -308,15 +317,16 @@ fn extract_op(stmt: &Statement, source: &str) -> Option<DbOp> {
     let text = stmt_text(stmt, source);
     let offset = stmt.span().start as usize;
 
-    if let Some((table, key_col, has_with)) = extract_read(text) {
+    if let Some(read) = extract_read(text) {
         return Some(DbOp {
             kind: OpKind::Read,
-            table,
-            key_col,
+            table: read.table,
+            key_col: read.key_col,
             value_cols: Vec::new(),
             is_insert: false,
             binding: declared_binding(stmt, source),
-            has_with,
+            has_with: read.has_with,
+            has_join: read.has_join,
             has_returning: false,
             has_on_conflict: false,
             offset,
@@ -331,6 +341,7 @@ fn extract_op(stmt: &Statement, source: &str) -> Option<DbOp> {
             is_insert: write.is_insert,
             binding: None,
             has_with: false,
+            has_join: false,
             has_returning: text.contains(".returning("),
             has_on_conflict: text.contains(".onConflict"),
             offset,
@@ -356,26 +367,47 @@ fn declared_binding(stmt: &Statement, source: &str) -> Option<String> {
     Some(ident.to_string())
 }
 
-/// Recognise a read-probe and return `(table, key_col, has_with)`.
+/// The table-targeting shape of a read-probe statement.
+struct ReadShape {
+    table: String,
+    key_col: Option<String>,
+    has_with: bool,
+    has_join: bool,
+}
+
+/// Recognise a read-probe.
 ///
 /// Two shapes are recognised:
 ///   - `<db>.query.<table>.findFirst({ where: eq(<table>.<col>, …), with?: … })`
 ///   - `<db>.select(…).from(<table>).where(eq(<table>.<col>, …))`
-fn extract_read(text: &str) -> Option<(String, Option<String>, bool)> {
+fn extract_read(text: &str) -> Option<ReadShape> {
     if text.contains(".findFirst(") {
         let table = table_after(text, ".query.")?;
         let key_col = single_eq_column(text, &table);
         let has_with = text.contains("with:") || text.contains("with :");
-        return Some((table, key_col, has_with));
+        // The relational query API never carries SQL-builder joins.
+        return Some(ReadShape { table, key_col, has_with, has_join: false });
     }
     if text.contains(".select(") && text.contains(".from(") {
         let table = call_arg_table(text, ".from(")?;
         let key_col = single_eq_column(text, &table);
         // `.select()` cannot carry `with:` relations; only the relational query
-        // API does. Shape-wise always replaceable by `.returning()`.
-        return Some((table, key_col, false));
+        // API does.
+        Some(ReadShape { table, key_col, has_with: false, has_join: has_sql_join(text) })
+    } else {
+        None
     }
-    None
+}
+
+/// True when a `.select()` read joins another table
+/// (`.innerJoin`/`.leftJoin`/`.rightJoin`/`.fullJoin`). The join returns more
+/// than the written row, so the read enriches rather than re-reads — the same
+/// reason a `with:` relation is exempt.
+fn has_sql_join(text: &str) -> bool {
+    text.contains(".innerJoin(")
+        || text.contains(".leftJoin(")
+        || text.contains(".rightJoin(")
+        || text.contains(".fullJoin(")
 }
 
 /// The table-targeting shape of a write statement.
@@ -590,12 +622,64 @@ mod tests {
         assert_eq!(run(src).len(), 1);
     }
 
+    // A plain join-free `.select()` re-read of the written row is still a
+    // redundant round-trip — the join carve-out must not over-suppress.
+    #[test]
+    fn flags_reread_select_without_join() {
+        let src = r#"
+            async function create(db, id, name) {
+              await db.insert(users).values({ id, name });
+              const created = await db.select().from(users).where(eq(users.id, id));
+              return created;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
     #[test]
     fn allows_returning_instead_of_reread() {
         let src = r#"
             async function create(db, id, name) {
               const [created] = await db.insert(users).values({ id, name }).returning();
               return created;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    // Enriched read-back of a junction replace-and-return: the post-write
+    // `select().from(written).innerJoin(other, …)` projects the joined table's
+    // columns, which `.returning()` on the junction cannot supply.
+    #[test]
+    fn no_fp_reread_with_inner_join() {
+        let src = r#"
+            async function setTeamNetworks(tx, teamId, networkIds) {
+              await tx.delete(teamNetwork).where(eq(teamNetwork.teamId, teamId));
+              if (networkIds.length > 0) {
+                await tx.insert(teamNetwork).values(rows).onConflictDoNothing();
+              }
+              return tx
+                .select({ ...getColumns(network) })
+                .from(teamNetwork)
+                .innerJoin(network, eq(network.id, teamNetwork.networkId))
+                .where(eq(teamNetwork.teamId, teamId))
+                .orderBy(network.name);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    // The other join flavours are exempt for the same reason.
+    #[test]
+    fn no_fp_reread_with_left_join() {
+        let src = r#"
+            async function f(tx, teamId) {
+              await tx.delete(teamSpecies).where(eq(teamSpecies.teamId, teamId));
+              return tx
+                .select({ ...getColumns(species) })
+                .from(teamSpecies)
+                .leftJoin(species, eq(species.id, teamSpecies.speciesId))
+                .where(eq(teamSpecies.teamId, teamId));
             }
         "#;
         assert!(run(src).is_empty());
