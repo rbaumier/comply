@@ -359,4 +359,106 @@ mod tests {
             "a non-shadcn registry.json must not exempt sibling files, got: {diags:?}"
         );
     }
+
+    // Regression for #4777 (didi/LogicFlow) — documentation demo components are
+    // loaded by the docs framework (Rspress/Dumi) via a `<code src="…">`
+    // directive that points at a directory, resolving to its `index.tsx`. No TS
+    // `import` names the file, but the markdown include is a real cross-file
+    // consumption, so the demo's `default` export must not be flagged dead.
+    #[test]
+    fn no_fp_for_demo_referenced_via_code_src_in_markdown_issue_4777() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/tutorial/advanced/edge/animation/index.tsx",
+                "export default function App() {\n  return null;\n}\n",
+            ),
+            (
+                "docs/tutorial/edge.md",
+                "# Edge animation\n\n<code id=\"edge-animation\" src=\"../../src/tutorial/advanced/edge/animation\"></code>\n",
+            ),
+        ];
+        let (_dir, diags) =
+            run_on_project(&files, "src/tutorial/advanced/edge/animation/index.tsx");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("default")),
+            "a demo referenced via <code src> in markdown must not be flagged dead, got: {diags:?}"
+        );
+    }
+
+    // Regression for #4777 — VitePress `<<< @/path` snippet includes consume a
+    // source file at build time with no TS `import`. A file referenced only via
+    // such a snippet must not be flagged dead.
+    #[test]
+    fn no_fp_for_demo_referenced_via_vitepress_snippet_issue_4777() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "examples/snippet.ts",
+                "export const helper = () => 1;\n",
+            ),
+            (
+                "docs/guide.md",
+                "# Guide\n\n<<< @/examples/snippet.ts\n",
+            ),
+            // Make `@/` resolve to the project root via tsconfig paths.
+            (
+                "tsconfig.json",
+                r#"{ "compilerOptions": { "baseUrl": ".", "paths": { "@/*": ["./*"] } } }"#,
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "examples/snippet.ts");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("helper")),
+            "a file referenced via a VitePress <<< snippet must not be flagged dead, got: {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #4777 — a demo-style file referenced by no TS
+    // import and no markdown include (the markdown merely mentions the word
+    // `src` in prose) is genuinely dead and must still be flagged.
+    #[test]
+    fn still_flags_export_with_no_markdown_include_issue_4777() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/widgets/orphan/index.tsx",
+                "export default function Orphan() {\n  return null;\n}\n",
+            ),
+            (
+                "docs/notes.md",
+                "# Notes\n\nThis page talks about the src directory but includes nothing.\n",
+            ),
+            ("src/app.ts", "export const used = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/widgets/orphan/index.tsx");
+        assert!(
+            diags.iter().any(|d| d.message.contains("default")),
+            "an export referenced by no import and no include must still be flagged, got: {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #4777 — a `<code src="…">` shown only as an
+    // example inside a fenced code block (framework docs documenting the
+    // directive itself) is an illustration, not a real include, so it must NOT
+    // exempt the referenced file.
+    #[test]
+    fn still_flags_when_code_src_is_inside_a_code_fence_issue_4777() {
+        // The relative path WOULD resolve to `src/widgets/panel/index.tsx` if the
+        // include were honoured; it is fenced, so it must be ignored and the
+        // export stays flagged.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/widgets/panel/index.tsx",
+                "export default function Panel() {\n  return null;\n}\n",
+            ),
+            (
+                "docs/howto.md",
+                "# How to embed a demo\n\n```md\n<code src=\"../src/widgets/panel\"></code>\n```\n",
+            ),
+            ("src/app.ts", "export const used = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/widgets/panel/index.tsx");
+        assert!(
+            diags.iter().any(|d| d.message.contains("default")),
+            "a <code src> inside a code fence is an example, not an include, so it must still be flagged, got: {diags:?}"
+        );
+    }
 }
