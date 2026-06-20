@@ -32,6 +32,96 @@ fn guarded_before(line: &str, abs: usize) -> bool {
         .any(|guard_at| guard_at < abs)
 }
 
+/// Client/SSR-environment words that, leading a runtime boolean identifier
+/// (case-insensitive), mark it as a guard (`clientOnly`, `browserOnly`, `ssrSafe`).
+/// Such a variable is conventionally initialised from `typeof window !== "undefined"`,
+/// so a branch it guards never runs server-side.
+const RUNTIME_GUARD_WORDS: &[&str] = &["client", "browser", "ssr"];
+
+/// Boolean/composable prefixes that, followed by a guard word, name a guard
+/// (`isClient`, `isBrowser`, `isSSR`, `useBrowser`, `shouldRenderClient`).
+const RUNTIME_GUARD_PREFIXES: &[&str] = &["is", "use", "can", "has", "should"];
+
+/// True when `ident` reads as a runtime client/SSR guard variable by name: it leads
+/// with a guard word (`clientOnly`), or with a boolean/composable prefix that is
+/// followed somewhere by a guard word (`isClient`, `useBrowser`). Names that merely
+/// *end* with a guard word (`apolloClient`, `httpClient`) are objects, not guards,
+/// and are not matched.
+fn is_runtime_guard_ident(ident: &str) -> bool {
+    let lower = ident.to_ascii_lowercase();
+    let leads_with_word = RUNTIME_GUARD_WORDS.iter().any(|w| lower.starts_with(w));
+    let prefixed_guard = RUNTIME_GUARD_PREFIXES.iter().any(|p| {
+        lower
+            .strip_prefix(p)
+            .is_some_and(|rest| RUNTIME_GUARD_WORDS.iter().any(|w| rest.contains(w)))
+    });
+    leads_with_word || prefixed_guard
+}
+
+/// True when the SSR global at byte offset `abs` is protected by a runtime
+/// client/SSR guard earlier on the same line — a `isClient`/`isBrowser`-style
+/// boolean used as a ternary condition or left-hand `&&` operand
+/// (`isClient ? document… : null`, `isClient && window…`). The guarded branch is
+/// only evaluated in the browser, so it never crashes during server render.
+///
+/// The guarding operator must directly follow the guard identifier (`isClient ?…`,
+/// `isClient &&…`) and live in the same statement as the access — so an unrelated
+/// mention, a `?`/`&&` from a separate `;`-terminated statement, or `?.`/`??` does
+/// not suppress a real bare access.
+fn runtime_guarded_before(line: &str, abs: usize) -> bool {
+    // Only the access's own statement can guard it; a guard in an earlier
+    // `;`-separated statement is unrelated.
+    let stmt_start = line[..abs].rfind(';').map_or(0, |i| i + 1);
+    let prefix = &line[stmt_start..abs];
+    let bytes = prefix.as_bytes();
+    let mut start = 0;
+    while start < bytes.len() {
+        // Skip past non-identifier-start bytes.
+        if !(bytes[start].is_ascii_alphabetic() || bytes[start] == b'_' || bytes[start] == b'$') {
+            start += 1;
+            continue;
+        }
+        let mut endp = start + 1;
+        while endp < bytes.len()
+            && (bytes[endp].is_ascii_alphanumeric() || bytes[endp] == b'_' || bytes[endp] == b'$')
+        {
+            endp += 1;
+        }
+        let ident = &prefix[start..endp];
+        // A property access (`foo.isClient`) is not a standalone guard token.
+        let preceded_by_dot = start > 0 && bytes[start - 1] == b'.';
+        if is_runtime_guard_ident(ident) && !preceded_by_dot && guards_access(&prefix[endp..]) {
+            return true;
+        }
+        start = endp;
+    }
+    false
+}
+
+/// True when `after` (the text immediately following the guard identifier) opens a
+/// guarding operator: a logical `&&`, or a ternary `?` — excluding `?.` optional
+/// chaining and `??` nullish coalescing, neither of which short-circuits the access.
+fn guards_access(after: &str) -> bool {
+    let rest = after.trim_start();
+    if rest.starts_with("&&") {
+        return true;
+    }
+    match rest.strip_prefix('?') {
+        Some(tail) => !tail.starts_with('.') && !tail.starts_with('?'),
+        None => false,
+    }
+}
+
+/// True when the SSR global at byte offset `abs` is the operand of `typeof`
+/// (`typeof window !== "undefined"`). `typeof` never throws on an undeclared
+/// global, so this guard expression is itself SSR-safe.
+fn is_typeof_operand(line: &str, abs: usize) -> bool {
+    line[..abs]
+        .trim_end()
+        .strip_suffix("typeof")
+        .is_some_and(|rest| rest.is_empty() || rest.ends_with(|c: char| !c.is_alphanumeric() && c != '_'))
+}
+
 /// VueUse composables that accept a `window`/`document` target as a call argument
 /// and read it lazily inside an SSR-aware lifecycle hook. The composable internally
 /// guards the access (`isClient`/`useSupported`) and no-ops during server render, so
@@ -173,6 +263,8 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
                         && !is_word_after
                         && !in_string[abs]
                         && !guarded_before(line, abs)
+                        && !runtime_guarded_before(line, abs)
+                        && !is_typeof_operand(line, abs)
                         && !is_ssr_aware_composable_arg(line, abs)
                     {
                         diagnostics.push(Diagnostic {
@@ -427,6 +519,85 @@ mod tests {
         // The allowlist is closed: a global passed to a composable not known to be
         // SSR-aware is still flagged, since its SSR behavior is unverified.
         let sfc = "<script setup>\nsomeOtherHook(window, 'resize', handler)\n</script>";
+        assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn allows_isclient_ternary_guard() {
+        // Issue #4769: ecomfe/vue-echarts demo/Demo.vue. `isClient` is a runtime
+        // SSR guard (`typeof window !== "undefined"`); the `document` branch only
+        // runs in the browser.
+        let sfc = "<script setup lang=\"ts\">\nconst docRoot = isClient ? document.documentElement : null\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_isclient_logical_and_guard() {
+        // Issue #4769: `isClient && window.location.hash` short-circuits, so
+        // `window` is never evaluated during server render.
+        let sfc = "<script setup lang=\"ts\">\nconst initialCodegenOpen = isClient && window.location.hash === \"#codegen\"\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_isbrowser_guard() {
+        let sfc = "<script setup>\nconst t = isBrowser ? document.title : ''\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_typeof_window_check() {
+        // `typeof window` never throws on an undeclared global, so the SSR guard
+        // expression itself is safe.
+        let sfc = "<script setup>\nconst isClient = typeof window !== \"undefined\"\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn flags_unrelated_identifier_before_window() {
+        // A non-guard identifier preceding the access (even with `&&`) must not
+        // suppress a real bare `window` access.
+        let sfc = "<script setup>\nconst w = ready && window.innerWidth\n</script>";
+        assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn flags_isclient_without_guard_operator() {
+        // `isClient` mentioned without a ternary/`&&` does not guard the access on
+        // the same line.
+        let sfc = "<script setup>\nconst x = isClient; const w = window.innerWidth\n</script>";
+        assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn flags_nullish_coalescing_is_not_a_guard() {
+        // `??` is nullish coalescing, not a ternary; it does not short-circuit the
+        // `window` access, so a guard-named left operand must not suppress it.
+        let sfc = "<script setup>\nconst origin = browserUrl ?? window.location.origin\n</script>";
+        assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn flags_optional_chaining_is_not_a_guard() {
+        // `clientRef?.x` is optional chaining, not a ternary; the `?` directly after
+        // the guard-named identifier must not be read as a guard.
+        let sfc = "<script setup>\nconst w = clientRef?.x; const z = window.innerWidth\n</script>";
+        assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn flags_object_named_client_is_not_a_guard() {
+        // An identifier that merely ends with `Client` (`apolloClient`) is an
+        // object, not an SSR guard, so it must not suppress a real access.
+        let sfc = "<script setup>\nconst el = apolloClient ? document.body : null\n</script>";
+        assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn flags_guard_operator_from_separate_statement() {
+        // A ternary in an earlier `;`-separated statement does not guard a later
+        // bare `window` access.
+        let sfc = "<script setup>\nconst a = isClient ? 1 : 0; const w = window.innerWidth\n</script>";
         assert_eq!(run(sfc).len(), 1);
     }
 
