@@ -1,8 +1,38 @@
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::files::Language;
 use crate::rules::backend::{CheckCtx, TextCheck};
+use crate::rules::rust_helpers::is_in_test_context;
 
 #[derive(Debug)]
 pub struct Check;
+
+/// Byte offsets, one per line, of the start of each line in `source`.
+/// `line_starts[i]` is the offset of line `i` (0-based), matching
+/// `str::lines()` enumeration order.
+fn line_start_offsets(source: &str) -> Vec<usize> {
+    let mut offsets = Vec::with_capacity(source.len() / 32 + 1);
+    offsets.push(0);
+    for (idx, b) in source.bytes().enumerate() {
+        if b == b'\n' {
+            offsets.push(idx + 1);
+        }
+    }
+    offsets
+}
+
+/// True when the IPv4 literal at byte offset `ip_offset` in a Rust `source`
+/// sits inside a `#[cfg(test)]` context (an inline `#[cfg(test)] mod tests`,
+/// a `#[test]` function, a `#![cfg(test)]` file, etc.). Such IPs are test
+/// fixtures, not deployment config, so they must not flag — the same way
+/// `skip_in_test_dir` exempts IPs under `tests/` directories.
+///
+/// Resolves the AST node at the literal's offset and defers to the shared
+/// `is_in_test_context` predicate, which walks the enclosing item ancestry.
+fn rust_offset_in_test_context(tree: &tree_sitter::Tree, source: &str, ip_offset: usize) -> bool {
+    tree.root_node()
+        .descendant_for_byte_range(ip_offset, ip_offset)
+        .is_some_and(|node| is_in_test_context(node, source.as_bytes()))
+}
 
 /// Match a dotted-quad IPv4 pattern starting at `start` in `s`.
 /// Returns the full IP string if found.
@@ -214,6 +244,15 @@ fn is_in_comment(line: &str) -> bool {
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
+        // For Rust files, parse once so IPs inside an inline `#[cfg(test)]`
+        // module or a `#[test]` function are recognized as test fixtures and
+        // skipped — the AST counterpart to the `tests/`-directory skip. Other
+        // languages keep the pure text path.
+        let rust_tree = (ctx.lang == Language::Rust).then(|| {
+            let mut parser = tree_sitter::Parser::new();
+            crate::parsing::parse_with_grammar(&mut parser, Language::Rust, ctx.source.as_bytes())
+        });
+        let line_starts = rust_tree.is_some().then(|| line_start_offsets(ctx.source));
         for (idx, line) in ctx.source.lines().enumerate() {
             if !(line.contains('"') || line.contains('\'') || line.contains('`')) {
                 continue;
@@ -247,6 +286,13 @@ impl TextCheck for Check {
                 }
                 if is_in_comment(line) {
                     continue;
+                }
+                if let (Some(Some(tree)), Some(starts)) = (rust_tree.as_ref(), line_starts.as_ref())
+                {
+                    let ip_offset = starts[idx] + (next - ip.len());
+                    if rust_offset_in_test_context(tree, ctx.source, ip_offset) {
+                        continue;
+                    }
                 }
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
@@ -285,6 +331,10 @@ mod tests {
     use std::path::Path;
     fn run(source: &str) -> Vec<Diagnostic> {
         Check.check(&CheckCtx::for_test(Path::new("t.ts"), source))
+    }
+
+    fn run_rust(source: &str) -> Vec<Diagnostic> {
+        Check.check(&CheckCtx::for_test(Path::new("src/value.rs"), source))
     }
 
     #[test]
@@ -482,5 +532,53 @@ mod tests {
         use crate::rules::test_helpers::run_rule_gated;
         let src = r#"let host = IpAddr::from_str("192.168.1.1").unwrap();"#;
         assert_eq!(run_rule_gated(&Check, src, "src/server.rs").len(), 1);
+    }
+
+    #[test]
+    fn allows_ip_in_inline_cfg_test_module_issue_5004() {
+        // Issue #5004 (rust-lang/log src/kv/value.rs): an IP fixture inside an
+        // inline `#[cfg(test)] mod tests` within a `src/` file is test data,
+        // not deployment config, and must not flag.
+        let src = r#"
+pub fn serve() {
+    connect("10.0.0.5");
+    connect("8.8.8.8");
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    #[test]
+    fn test_net_to_value_display() {
+        assert_eq!(
+            std::net::Ipv4Addr::from_str("192.168.10.100").unwrap().to_string(),
+            "192.168.10.100"
+        );
+        let host = "172.16.0.9";
+    }
+}
+"#;
+        let diags = run_rust(src);
+        // Both quoted IPs inside `mod tests` are skipped; both quoted IPs in
+        // `serve()` (production code) still flag.
+        let ips: Vec<&str> = diags
+            .iter()
+            .map(|d| d.message.split('`').nth(1).unwrap())
+            .collect();
+        assert_eq!(ips, ["10.0.0.5", "8.8.8.8"], "production IPs only: {diags:?}");
+    }
+
+    #[test]
+    fn flags_ip_in_cfg_not_test_module_issue_5004() {
+        // Negative space: `#[cfg(not(test))]` is production-only, so an IP
+        // inside it must still flag — the test-context skip must not over-match.
+        let src = r#"
+#[cfg(not(test))]
+mod prod {
+    fn endpoint() -> &'static str {
+        "10.0.0.5"
+    }
+}
+"#;
+        assert_eq!(run_rust(src).len(), 1, "{:?}", run_rust(src));
     }
 }
