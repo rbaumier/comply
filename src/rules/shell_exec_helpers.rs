@@ -47,10 +47,21 @@ fn is_shell_enabled(options: &Expression) -> bool {
     })
 }
 
+/// True when the second argument is the argv list rather than an options
+/// object. For `fn(file, args[], options)` APIs the second positional argument
+/// is the args array; an options object (`spawn(cmd, { shell: true })`) is the
+/// only non-argv shape. The array may be a literal (`[a, b]`) or a computed
+/// expression (`parts.slice(1).concat(args)`, a spread, an identifier) — what
+/// matters for shell safety is that it is not the options object, since the
+/// command is then handed to `execve` directly with no shell to interpolate it.
+fn is_argv_array_arg(second: &Expression) -> bool {
+    !matches!(second, Expression::ObjectExpression(_))
+}
+
 /// True when a `spawn` / `spawnSync` / `execFile` / `execFileSync` call uses the
-/// shell-bypassing argv form: a separate args **array** as the second argument
-/// and no `shell: true` in the options. The command (first argument) may be a
-/// variable — without a shell there is nothing to interpolate it into.
+/// shell-bypassing argv form: a separate args list as the second argument and no
+/// `shell: true` in the options. The command (first argument) may be a variable —
+/// without a shell there is nothing to interpolate it into.
 fn uses_argv_array(call_name: &str, call: &CallExpression) -> bool {
     if !ARGV_SPAWN_FNS.contains(&call_name) {
         return false;
@@ -58,7 +69,7 @@ fn uses_argv_array(call_name: &str, call: &CallExpression) -> bool {
     let Some(second) = call.arguments.get(1).and_then(Argument::as_expression) else {
         return false;
     };
-    if !matches!(second, Expression::ArrayExpression(_)) {
+    if !is_argv_array_arg(second) {
         return false;
     }
     !call
