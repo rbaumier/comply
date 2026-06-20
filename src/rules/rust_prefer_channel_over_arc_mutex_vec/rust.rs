@@ -3,10 +3,14 @@
 //! Flags a `let`-bound `Arc::new(Mutex::new(Vec::new()))` construction — the
 //! transient fan-in collector shape: a local Vec cloned into spawned tasks that
 //! each `.push(` a result, drained once by the parent. Gated on the file also
-//! containing `.lock()` and `.push(`. Only the local `let` initializer matches;
-//! a `Arc<Mutex<Vec<_>>>` type annotation or a construction used elsewhere
-//! (struct-field initializer, closure body, return, argument) declares
-//! persistent shared state, not the fan-in local, so it is left alone.
+//! containing `.lock()` and `.push(`, and on the enclosing function containing a
+//! `spawn(` call (`thread::spawn`, `tokio::spawn`, …) — the actual concurrency
+//! signal. Only the local `let` initializer matches; a `Arc<Mutex<Vec<_>>>` type
+//! annotation or a construction used elsewhere (struct-field initializer,
+//! closure body, return, argument) declares persistent shared state, not the
+//! fan-in local, so it is left alone. Without any spawn the accumulator is
+//! single-threaded (e.g. captured in a synchronously-invoked callback) and a
+//! channel is not the right replacement, so it is left alone.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -15,6 +19,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
 
     if !is_arc_mutex_vec_call(node, source) { return; }
     if !is_local_let_initializer(node) { return; }
+    if !enclosing_fn_spawns(node, source) { return; }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -93,6 +98,43 @@ fn is_local_let_initializer(node: tree_sitter::Node) -> bool {
     parent.child_by_field_name("value").map(|v| v.id()) == Some(node.id())
 }
 
+/// True when the `function_item` enclosing `node` contains a `spawn(` call
+/// (`thread::spawn`, `tokio::spawn`, `task::spawn`, `scope.spawn`, …). A
+/// fan-in collector across spawned tasks needs `Arc<Mutex<Vec>>`; without any
+/// spawn the accumulator is single-threaded (e.g. captured in a synchronously-
+/// invoked callback) and a channel is not the right replacement.
+fn enclosing_fn_spawns(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "function_item" {
+            let Ok(text) = parent.utf8_text(source) else {
+                return false;
+            };
+            return text_contains_spawn_call(text);
+        }
+        cur = parent;
+    }
+    false
+}
+
+/// True when `text` contains a `spawn(` call as a whole word (the char before
+/// `spawn` is start-of-text or a non-identifier byte, excluding `respawn(` /
+/// `despawn(`).
+fn text_contains_spawn_call(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = text[from..].find("spawn(") {
+        let pos = from + rel;
+        let boundary = pos == 0
+            || !matches!(bytes[pos - 1], b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_');
+        if boundary {
+            return true;
+        }
+        from = pos + "spawn(".len();
+    }
+    false
+}
+
 
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
@@ -156,6 +198,24 @@ mod tests {
     #[test]
     fn allows_once_lock_get_or_init_closure() {
         let src = "static E: OnceLock<Arc<Mutex<Vec<u8>>>> = OnceLock::new(); fn get() -> Arc<Mutex<Vec<u8>>> { E.get_or_init(|| Arc::new(Mutex::new(Vec::new()))).clone() } fn use_it(x: &Mutex<Vec<u8>>) { x.lock().unwrap().push(1); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_single_threaded_callback_accumulator() {
+        let src = "fn f() { let acc = Arc::new(Mutex::new(Vec::new())); let acc_c = acc.clone(); let cb = Box::new(move |s| { acc_c.lock().unwrap().push(s); }); call_sync(cb); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_tokio_spawn_fan_in() {
+        let src = "fn go() { let results = Arc::new(Mutex::new(Vec::new())); let r = results.clone(); tokio::spawn(async move { r.lock().unwrap().push(compute()); }); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_respawn_only_accumulator() {
+        let src = "fn f() { let acc = Arc::new(Mutex::new(Vec::new())); let a = acc.clone(); let cb = move || { a.lock().unwrap().push(1); }; respawn(cb); }";
         assert!(run(src).is_empty());
     }
 }
