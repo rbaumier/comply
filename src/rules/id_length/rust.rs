@@ -1,8 +1,13 @@
-//! id-length Rust backend — flags `let`, function-parameter, and
-//! struct-field bindings whose name is shorter than `min`.
+//! id-length Rust backend — flags `let`, function-parameter, function-item,
+//! and struct-field bindings whose name is shorter than `min`.
 //!
 //! Usages and references are left alone — we only care about the
 //! positions where the developer picked the name.
+//!
+//! Inside cryptographic files (path segment or `use`d crate names a known
+//! primitive), a closed set of single-letter names mandated by RFC/FIPS/SEC
+//! specs (`r`, `s`, `q`, `p`, `g`, `h`, `f`, …) is exempt — see
+//! [`CRYPTO_SINGLE_LETTER_NAMES`] and [`detect_crypto_context`].
 
 use regex::Regex;
 
@@ -17,11 +22,17 @@ impl AstCheck for Check {
         Some(&["identifier", "type_identifier", "field_identifier"])
     }
 
+    fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
+        // Per-file crypto-context memo; the path/source scan runs at most once
+        // per file (lazily, on the first short crypto-name candidate).
+        Some(Box::new(CryptoContext::default()))
+    }
+
     fn visit_node(
         &self,
         node: tree_sitter::Node,
         ctx: &CheckCtx,
-        _state: Option<&mut dyn std::any::Any>,
+        state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let min = ctx.config.threshold("id-length", "min", ctx.lang);
@@ -54,6 +65,12 @@ impl AstCheck for Check {
             return;
         }
         if is_conventional_short_binding(node, name) {
+            return;
+        }
+        if CRYPTO_SINGLE_LETTER_NAMES.contains(&name)
+            && is_crypto_binding_position(node)
+            && in_crypto_context(state, ctx)
+        {
             return;
         }
         let pos = node.start_position();
@@ -189,6 +206,78 @@ fn is_conventional_short_binding(node: tree_sitter::Node, name: &str) -> bool {
     )
 }
 
+/// Single-letter names mandated verbatim by published cryptographic standards
+/// (IETF RFCs, FIPS, SEC 1): ECDSA signature parts `r`/`s`, group order `q`,
+/// DSA/DH parameters `p`/`g`/`h`, the MD4/MD5/SHA-1 round functions `f`/`g`/`h`,
+/// and state variables `k`/`x`/`z`/`d`/`e`/`n`. Renaming them de-syncs the code
+/// from the spec it implements, so they are exempt — but only inside a
+/// cryptographic file (see [`detect_crypto_context`]).
+const CRYPTO_SINGLE_LETTER_NAMES: &[&str] =
+    &["r", "s", "q", "p", "g", "h", "f", "k", "x", "y", "z", "d", "e", "n"];
+
+/// Binding positions where a crypto single-letter name is exempt: function
+/// items (`pub fn r()`, `fn f()`), parameters (`q: &Array<…>`), let bindings,
+/// and struct fields — the positions the developer transcribes from the spec.
+fn is_crypto_binding_position(node: tree_sitter::Node) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    matches!(
+        parent.kind(),
+        "function_item" | "parameter" | "let_declaration" | "field_declaration"
+    )
+}
+
+/// Per-file memo for [`detect_crypto_context`]: the path/source scan runs once
+/// per file. `None` = not yet computed.
+#[derive(Default)]
+struct CryptoContext(Option<bool>);
+
+/// Is this file cryptographic code? Memoized through the engine-provided per-file
+/// `state` (production); recomputed inline when absent (the scan is cheap and
+/// only reached for an in-set name at a binding position).
+fn in_crypto_context(state: Option<&mut dyn std::any::Any>, ctx: &CheckCtx) -> bool {
+    match state.and_then(|s| s.downcast_mut::<CryptoContext>()) {
+        Some(memo) => *memo.0.get_or_insert_with(|| detect_crypto_context(ctx)),
+        None => detect_crypto_context(ctx),
+    }
+}
+
+/// A path segment or source token unambiguously naming a cryptographic
+/// algorithm/primitive. Kept tight: generic words like `key` or `hash` are
+/// excluded to avoid matching ordinary code.
+const CRYPTO_MARKERS: &[&str] = &[
+    "crypto", "ecdsa", "ed25519", "curve25519", "secp256k1", "secp256r1",
+    "schnorr", "ristretto", "bls12", "rsa", "dsa", "ecdh", "x25519", "rfc6979", "hmac",
+    "blake2", "blake3", "sha1", "sha2", "sha3", "keccak", "md4", "md5", "ripemd", "poly1305",
+    "chacha20", "salsa20", "aes-gcm", "elliptic", "montgomery",
+];
+
+/// True when the file is cryptographic code. Two independent signals:
+///   1. a `/`/`_`/`-`/`.`-delimited path segment equals a crypto marker, or
+///   2. the source `use`-imports a crypto crate (`use <marker>::…`,
+///      `use <marker>;`, `use <marker> as …`).
+fn detect_crypto_context(ctx: &CheckCtx) -> bool {
+    let path = ctx.path.to_string_lossy().to_ascii_lowercase();
+    if CRYPTO_MARKERS.iter().any(|m| path_has_marker(&path, m)) {
+        return true;
+    }
+    let source = ctx.source;
+    CRYPTO_MARKERS.iter().any(|m| {
+        source.contains(&format!("use {m}::"))
+            || source.contains(&format!("use {m};"))
+            || source.contains(&format!("use {m} as "))
+    })
+}
+
+/// Match `marker` as a whole word inside a `/`- or `_`- or `-`-delimited path,
+/// so `crypto/` matches but `cryptographically_unrelated_word` substring noise
+/// is bounded to recognizable segments.
+fn path_has_marker(path: &str, marker: &str) -> bool {
+    path.split(['/', '\\', '_', '-', '.'])
+        .any(|segment| segment == marker)
+}
+
 fn field_matches(parent: tree_sitter::Node, field: &str, node: tree_sitter::Node) -> bool {
     parent
         .child_by_field_name(field)
@@ -220,6 +309,10 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
+    }
+
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, path)
     }
 
     #[test]
@@ -371,5 +464,64 @@ mod tests {
         let diags = run_on("fn main() { let u = 0; }");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("`u`"));
+    }
+
+    // Regression for #4838: ECDSA signature accessors `r`/`s` are function names
+    // (function_item position, not covered by is_conventional_short_binding) and
+    // must not fire in a crypto file.
+    #[test]
+    fn allows_crypto_signature_accessor_fns_by_path() {
+        let src = "impl Sig { pub fn r(&self) -> u8 { 0 } pub fn s(&self) -> u8 { 0 } }";
+        assert!(run_on_path(src, "ecdsa/src/lib.rs").is_empty());
+    }
+
+    // Regression for #4838: RFC 6979 `generate_k` parameters `q` (group order)
+    // and `h` (hash output); `q` is not in CONVENTIONAL_RUST_NAMES.
+    #[test]
+    fn allows_crypto_params_q_and_h_by_path() {
+        let src = "fn generate_k(x: u8, q: u8, h: u8) -> u8 { x ^ q ^ h }";
+        assert!(run_on_path(src, "rfc6979/src/lib.rs").is_empty());
+    }
+
+    // Regression for #4838: MD4 round functions `f`/`g`/`h` are function names.
+    #[test]
+    fn allows_crypto_round_function_names_by_path() {
+        let src = "fn f(x: u8) -> u8 { x } fn g(x: u8) -> u8 { x } fn h(x: u8) -> u8 { x }";
+        assert!(run_on_path(src, "md4/src/compress.rs").is_empty());
+    }
+
+    // Regression for #4838: crypto context detected from a crate dependency in
+    // the source, not just the path.
+    #[test]
+    fn allows_crypto_names_by_source_dependency() {
+        let src = "use ecdsa::Signature;\nfn generate_k(q: u8) -> u8 { q }";
+        assert!(run_on_path(src, "src/sign.rs").is_empty());
+    }
+
+    // Load-bearing: outside crypto context, the crypto-only name `q` is still
+    // flagged as a function name and as a parameter.
+    #[test]
+    fn flags_crypto_only_name_q_outside_crypto_context() {
+        let diags = run_on_path("fn q(p: u8) -> u8 { p }", "src/widget/render.rs");
+        // `q` (fn name) flagged; `p` is in CONVENTIONAL_RUST_NAMES (param) so not.
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`q`"));
+    }
+
+    // Load-bearing: a crypto file does NOT exempt a non-crypto short name.
+    #[test]
+    fn flags_non_crypto_name_in_crypto_file() {
+        let diags = run_on_path("fn main() { let u = 0; }", "ecdsa/src/lib.rs");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`u`"));
+    }
+
+    // Load-bearing: a short function name in an ordinary file is still flagged
+    // even when its letter is in the crypto set.
+    #[test]
+    fn flags_short_fn_name_r_in_ordinary_file() {
+        let diags = run_on_path("fn r() -> u8 { 0 }", "src/app/router.rs");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`r`"));
     }
 }
