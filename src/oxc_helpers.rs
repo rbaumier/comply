@@ -1817,6 +1817,72 @@ pub fn name_is_generic_type_param_in_scope(
     false
 }
 
+/// True when `operand` is an identifier whose binding is declared with a type
+/// annotation that is a bare reference to a generic type parameter in scope at
+/// `cast_node_id` (e.g. a parameter `serializedTransaction: serialized` where
+/// `<serialized>` is the enclosing function's type parameter).
+///
+/// Casting such a value to a concrete type (`serializedTransaction as
+/// TransactionSerializedCIP42`) cannot be replaced by a type guard: a predicate
+/// `x is Concrete` narrows the *local* type, but TypeScript will not reduce the
+/// generic type parameter itself, so the `as` is the only way to bridge the
+/// generic to the concrete branch type. Parentheses are peeled.
+#[must_use]
+pub fn operand_is_typed_as_generic_param(
+    operand: &oxc_ast::ast::Expression,
+    cast_node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{BindingPattern, Expression, TSType, TSTypeName};
+
+    let Expression::Identifier(ident) = operand.without_parentheses() else {
+        return false;
+    };
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+
+    // Only trust the declaration's annotation when the binding is a bare
+    // identifier (`x: T`). For a destructured binding (`{a}: T`, `[a]: T`) the
+    // element's real type is `T["a"]`, not `T`, so casting it remains a genuine
+    // narrowing.
+    fn pattern_is_bare_identifier(pattern: &BindingPattern) -> bool {
+        matches!(pattern, BindingPattern::BindingIdentifier(_))
+    }
+
+    let annotation = std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+        .find_map(|kind| match kind {
+            AstKind::FormalParameter(param) if pattern_is_bare_identifier(&param.pattern) => {
+                Some(param.type_annotation.as_ref())
+            }
+            AstKind::VariableDeclarator(decl) if pattern_is_bare_identifier(&decl.id) => {
+                Some(decl.type_annotation.as_ref())
+            }
+            _ => None,
+        });
+    let Some(Some(annotation)) = annotation else {
+        return false;
+    };
+    let TSType::TSTypeReference(r) = &annotation.type_annotation else {
+        return false;
+    };
+    if r.type_arguments.is_some() {
+        return false;
+    }
+    let TSTypeName::IdentifierReference(type_id) = &r.type_name else {
+        return false;
+    };
+    name_is_generic_type_param_in_scope(type_id.name.as_str(), cast_node_id, semantic)
+}
+
 /// True when the `.then()` `call` node is the direct expression body of a
 /// non-async arrow function that is passed as an argument to `lazy()` or
 /// `React.lazy()`.
