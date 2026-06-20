@@ -492,17 +492,18 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
             if (shared as f64) < prefix_pct * (shorter as f64) {
                 continue;
             }
-            // Parallel API surfaces: a comment documenting the same named
-            // declaration or member in another file (a SIMD vs scalar backend
-            // both exposing `aes128_decrypt`, or a runtime props object and the
-            // TS type declaring the same prop) carries the same description
-            // because it describes the same item, not because it was
-            // copy-pasted. Restricted to cross-file matches with matching
+            // Parallel API surfaces: a comment documenting the same — or an
+            // analogous variant of the same — named declaration or member in
+            // another file (a SIMD vs scalar backend both exposing
+            // `aes128_decrypt`, a runtime props object and the TS type declaring
+            // the same prop, or a server `ignore_invalid_headers` and its client
+            // `ignore_invalid_headers_in_responses` builder twin) carries the
+            // same description because it describes the same item, not because
+            // it was copy-pasted. Restricted to cross-file matches between
             // declaration names so an intra-file duplicate, or a copy-pasted
             // free-floating rationale, still flags.
             if entry.file_idx != partner.file_idx
-                && entry.decl_name.is_some()
-                && entry.decl_name == partner.decl_name
+                && are_parallel_decl_names(entry.decl_name.as_deref(), partner.decl_name.as_deref())
             {
                 continue;
             }
@@ -538,6 +539,38 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
 
 fn common_prefix_len(a: &[String], b: &[String]) -> usize {
     a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count()
+}
+
+/// Minimum `_`-separated segments the shorter name must carry for a prefix
+/// relationship to count as a parallel-API variant pair. A multi-segment root
+/// (`ignore_invalid_headers`) shared between `ignore_invalid_headers` and
+/// `ignore_invalid_headers_in_responses` is a strong signal of mirrored builder
+/// methods; a one- or two-segment root (`init` ⊂ `init_db`) is too generic and
+/// could just be two unrelated functions sharing a copy-pasted doc.
+const MIN_VARIANT_ROOT_SEGMENTS: usize = 3;
+
+/// Two doc-comments document parallel API surfaces when both name a declaration
+/// and the names are either identical or analogous variants: one a clean
+/// `_`-boundary prefix of the other (`ignore_invalid_headers` ⊂
+/// `ignore_invalid_headers_in_responses`, the server/client builder twins that
+/// differ only by a `_in_responses` suffix). The shared root must span at least
+/// `MIN_VARIANT_ROOT_SEGMENTS` segments so a short generic prefix never collapses
+/// two unrelated copy-pasted docs into one exempt pair.
+fn are_parallel_decl_names(a: Option<&str>, b: Option<&str>) -> bool {
+    let (Some(a), Some(b)) = (a, b) else {
+        return false;
+    };
+    if a == b {
+        return true;
+    }
+    is_variant_suffix_of(a, b) || is_variant_suffix_of(b, a)
+}
+
+/// `root` is `name` with a trailing `_<suffix>` appended at a `_` boundary, and
+/// `root` itself spans enough segments to be a distinctive shared root.
+fn is_variant_suffix_of(root: &str, name: &str) -> bool {
+    name.strip_prefix(root).is_some_and(|rest| rest.starts_with('_'))
+        && root.split('_').filter(|s| !s.is_empty()).count() >= MIN_VARIANT_ROOT_SEGMENTS
 }
 
 fn extract_entries(
@@ -1055,6 +1088,67 @@ pub(crate) fn aes128_decrypt(rkeys: u8, blocks: u8) -> u8 { rkeys ^ blocks }
         let a = write(&dir, "fixslice64.rs", doc);
         let b = write(&dir, "fixslice32.rs", doc);
         assert!(run(&[&a, &b]).is_empty(), "same-named parallel-impl docs must not flag");
+    }
+
+    #[test]
+    fn ignores_parallel_builder_methods_with_variant_names() {
+        // Regression (#5027): hyper's server and client HTTP/1 builders expose
+        // the same parser knob under analogous-but-not-identical method names —
+        // `ignore_invalid_headers` (server) and its `_in_responses` client twin.
+        // The identical doc-comment describes the same behavior on both, so it is
+        // intentional parallel documentation, not copy-paste drift.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "\
+/// Set whether HTTP/1 connections will silently ignore malformed header lines.
+///
+/// If this is enabled and a header line does not start with a valid header
+/// name, or does not include a colon at all, the line will be silently ignored.
+";
+        let server = format!(
+            "impl Builder {{\n{doc}    pub fn ignore_invalid_headers(&mut self, e: bool) -> &mut Self {{ self }}\n}}\n"
+        );
+        let client = format!(
+            "impl Builder {{\n{doc}    pub fn ignore_invalid_headers_in_responses(&mut self, e: bool) -> &mut Self {{ self }}\n}}\n"
+        );
+        let a = write(&dir, "server.rs", &server);
+        let b = write(&dir, "client.rs", &client);
+        assert!(run(&[&a, &b]).is_empty(), "parallel builder variant docs must not flag");
+    }
+
+    #[test]
+    fn still_flags_duplicate_non_doc_comment_without_named_decl() {
+        // Over-exclusion guard for #5027: a plain `//` rationale copy-pasted
+        // across files with no distinct named declaration below it is real
+        // copy-paste cruft and must still flag — the variant-name exemption only
+        // covers doc-comments on parallel named declarations.
+        let dir = tempfile::tempdir().unwrap();
+        let note = "\
+// Our defaults are chosen for the majority case, which usually are not resource
+// constrained, and so the spec default of sixty-four kilobytes can be too small.
+let x = 1;
+";
+        let a = write(&dir, "server.rs", note);
+        let b = write(&dir, "client.rs", note);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "duplicated free-floating note is still a smell");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn still_flags_duplicate_doc_on_unrelated_short_named_decls() {
+        // The variant exemption must stay surgical: two functions whose names
+        // share only a short generic root (`init` ⊂ `init_db`) carrying the same
+        // doc-comment are unrelated copy-paste, not a parallel API pair.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "\
+/// Builds the canonical pagination defaults derived from the shared schema so
+/// every list view stays consistent across the whole admin surface everywhere.
+";
+        let a = write(&dir, "a.rs", &format!("{doc}pub fn init() {{}}\n"));
+        let b = write(&dir, "b.rs", &format!("{doc}pub fn init_db() {{}}\n"));
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "short shared root is not a parallel-API signal");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
     #[test]
