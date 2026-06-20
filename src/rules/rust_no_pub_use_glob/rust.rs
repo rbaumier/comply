@@ -19,7 +19,11 @@
 //! - a glob re-export of a proc-macro companion crate (`pub use serde_derive::*;`,
 //!   `pub use thiserror_impl::*;`), identified by the `_derive` / `_impl` / `_macros`
 //!   naming convention — the only way a parent crate can expose a `proc-macro = true`
-//!   crate's derive macro, and a documented part of its public API.
+//!   crate's derive macro, and a documented part of its public API;
+//! - an umbrella/facade crate re-exporting one of its own Cargo-family sub-crates
+//!   (`pub use salvo_core::*;` in package `salvo`, `pub use poem_core::*;` in `poem`),
+//!   identified by the glob source starting with `<package_name>_` — wholesale
+//!   re-export of the core sub-crate IS the umbrella crate's public API.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -106,6 +110,10 @@ impl AstCheck for Check {
         if let Some(seg) = first_use_segment(trimmed) {
             if declares_submodule(node, seg, source_bytes)
                 || is_proc_macro_companion_crate(seg)
+                || ctx
+                    .project
+                    .nearest_cargo_manifest(ctx.path)
+                    .is_some_and(|m| m.is_own_family_subcrate(seg))
             {
                 return;
             }
@@ -243,9 +251,57 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, child_src, &child_path)
     }
 
+    /// Build a crate on disk so `nearest_cargo_manifest` resolves the package
+    /// name from a real `Cargo.toml`. Writes the manifest with `name = pkg`, a
+    /// crate root (`src/lib.rs`), and `src/foo.rs` holding the source under test;
+    /// the rule runs on `foo.rs`.
+    fn run_in_crate(pkg: &str, foo_src: &str) -> Vec<Diagnostic> {
+        use std::fs;
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            format!("[package]\nname = \"{pkg}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+        )
+        .unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+        let foo_path = dir.path().join("src/foo.rs");
+        fs::write(&foo_path, foo_src).unwrap();
+        crate::rules::test_helpers::run_rule(&Check, foo_src, &foo_path)
+    }
+
     #[test]
     fn flags_pub_use_glob() {
         assert_eq!(run_on("pub use crate::types::*;").len(), 1);
+    }
+
+    #[test]
+    fn exempts_umbrella_family_subcrate_glob_issue_4461() {
+        // Issue #4461: salvo-rs/salvo — the umbrella `salvo` crate re-exports its
+        // own core sub-crate's entire public API via `pub use salvo_core::*;`.
+        assert!(run_in_crate("salvo", "pub use salvo_core::*;").is_empty());
+    }
+
+    #[test]
+    fn exempts_umbrella_family_extra_subcrate_glob_issue_4461() {
+        // Other family sub-crates of the same umbrella (`salvo_extra`) too.
+        assert!(run_in_crate("salvo", "pub use salvo_extra::*;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_family_subcrate_glob_in_unrelated_crate_issue_4461() {
+        // The exemption is package-relative, not a blanket `*_core` suffix: a crate
+        // named `othercrate` re-exporting `salvo_core::*` is still mirroring an
+        // external dependency's surface -> flagged.
+        assert_eq!(run_in_crate("othercrate", "pub use salvo_core::*;").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_external_crate_glob_in_umbrella_crate_issue_4461() {
+        // `serde` is not a `salvo_*` family sub-crate, so package `salvo` re-exporting
+        // `serde::*` does mirror an external dependency -> flagged.
+        assert_eq!(run_in_crate("salvo", "pub use serde::*;").len(), 1);
     }
 
     #[test]

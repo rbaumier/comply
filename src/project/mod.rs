@@ -1915,6 +1915,17 @@ impl CargoManifest {
                 .any(|suffix| n.ends_with(suffix))
         })
     }
+
+    /// True when `root` is a sibling sub-crate of this package's Cargo family —
+    /// its name starts with `<package_name>_` (e.g. package `salvo` → `salvo_core`,
+    /// `salvo_extra`). Used to recognize an umbrella/facade crate's wholesale
+    /// re-export of its own core sub-crate's public API.
+    #[must_use]
+    pub fn is_own_family_subcrate(&self, root: &str) -> bool {
+        self.name
+            .as_deref()
+            .is_some_and(|n| root.strip_prefix(n).is_some_and(|rest| rest.starts_with('_')))
+    }
 }
 
 /// Parsed Tailwind theme. Populated statically from `@theme` CSS blocks (v4)
@@ -6066,6 +6077,51 @@ tokio = "1"
         assert!(
             !no_name.is_test_helper(),
             "no [package].name => not a test-helper crate"
+        );
+    }
+
+    #[test]
+    fn cargo_manifest_recognizes_own_family_subcrate() {
+        let dir = PathBuf::from("/crate");
+
+        let parse_name = |name: &str| {
+            CargoManifest::parse(
+                &format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n"),
+                dir.clone(),
+            )
+            .unwrap()
+        };
+
+        let salvo = parse_name("salvo");
+        assert!(
+            salvo.is_own_family_subcrate("salvo_core"),
+            "`salvo_core` starts with `salvo_` => own family sub-crate"
+        );
+        assert!(
+            salvo.is_own_family_subcrate("salvo_extra"),
+            "`salvo_extra` starts with `salvo_` => own family sub-crate"
+        );
+        assert!(
+            !salvo.is_own_family_subcrate("salvo"),
+            "the package name itself has no `_` separator => not a sub-crate"
+        );
+        assert!(
+            !salvo.is_own_family_subcrate("salvocore"),
+            "`salvocore` lacks the `_` separator => not a family sub-crate"
+        );
+        assert!(
+            !salvo.is_own_family_subcrate("serde"),
+            "an unrelated crate is not in the `salvo` family"
+        );
+        assert!(
+            !salvo.is_own_family_subcrate("othercrate_core"),
+            "`othercrate_core` does not start with `salvo_` => not in the family"
+        );
+
+        let no_name = CargoManifest::parse("[lib]\nname = \"anon\"\n", dir).unwrap();
+        assert!(
+            !no_name.is_own_family_subcrate("anon_core"),
+            "no [package].name => cannot match a family sub-crate"
         );
     }
 
