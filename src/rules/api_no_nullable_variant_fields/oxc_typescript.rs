@@ -25,6 +25,16 @@ fn leading_prefix(name: &str) -> String {
     buf
 }
 
+/// Whether `name` is a DOM/React event-handler prop (`on` followed by an
+/// uppercase letter, e.g. `onClick`, `onMouseEnter`). These are independent
+/// callbacks that share the `on*` prefix by naming convention — a component
+/// can wire up `onMouseEnter`, `onMouseMove` and `onMouseLeave` together — so
+/// they never encode mutually-exclusive state and must not feed a cluster.
+fn is_event_handler_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    bytes.len() > 2 && bytes[0] == b'o' && bytes[1] == b'n' && bytes[2].is_ascii_uppercase()
+}
+
 /// Prefix buckets that name a React/UI concept rather than a state
 /// machine, so a cluster sharing one is a semantic grouping, not an
 /// optional-flag state encoding:
@@ -157,6 +167,12 @@ fn collect_optional_prefixes<'b>(
             oxc_ast::ast::PropertyKey::StaticIdentifier(id) => id.name.as_str(),
             _ => continue,
         };
+        // Skip DOM/React event-handler props (`onClick`, `onMouseEnter`):
+        // independent callbacks sharing the `on*` convention, never a
+        // state-variant cluster. (Regression: #4776.)
+        if is_event_handler_name(name) {
+            continue;
+        }
         let prefix = leading_prefix(name);
         if prefix.len() < 4 {
             continue;
@@ -440,6 +456,45 @@ mod tests {
   cancelledAt?: Date;
   cancelledBy?: User;
 }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_dom_event_handler_props() {
+        // Regression for #4776: independent DOM/React event-handler callbacks
+        // (`onMouseEnter`/`onMouseMove`/`onMouseLeave`, bucket `onmo`) share
+        // the `on*` prefix by naming convention, not mutual exclusion — a
+        // component wires up all three together. They must not be flagged.
+        let src = r#"export type MouseHandlers<Datum> = {
+  onClick?: MouseHandler<Datum>
+  onMouseEnter?: MouseHandler<Datum>
+  onMouseMove?: MouseHandler<Datum>
+  onMouseLeave?: MouseHandler<Datum>
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_state_cluster_alongside_event_handlers() {
+        // Negative-space guard for #4776: dropping event handlers from the
+        // cluster count must not mask a genuine state cluster declared in the
+        // same type — `cancelReason`/`cancelledAt` (bucket `canc`) stays flagged.
+        let src = r#"interface Order {
+  onClick?: () => void;
+  onMouseEnter?: () => void;
+  cancelReason?: string;
+  cancelledAt?: Date;
+}"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_on_prefixed_non_handler_cluster() {
+        // Negative-space guard for #4776: the exemption is `on` + an uppercase
+        // letter, not `on` + anything. A genuine cluster whose names merely
+        // start with `on` followed by a lowercase letter (`onlineSince`/
+        // `onlineUntil`, bucket `onli`) is not an event handler and stays flagged.
+        let src = "interface Session { onlineSince?: Date; onlineUntil?: Date }";
         assert_eq!(run_on(src).len(), 1);
     }
 
