@@ -17,7 +17,8 @@
 //! into a struct/enum-variant literal (`Thing { name }` / `Variant { error }`
 //! / `Thing { name: name }`), as a bare argument of a call — a function
 //! call, a method call, or an enum tuple-variant constructor
-//! (`some_fn(name)` / `Variant::String(name)`) — or by being referenced
+//! (`some_fn(name)` / `Variant::String(name)`) — by a bare assignment that
+//! stores it in an owned place (`self.field = name`), or by being referenced
 //! anywhere inside a `move` closure (`move || { … name … }`), which captures
 //! every used variable by value. There the function genuinely needs ownership,
 //! so taking `String` is the correct API — switching to `&str` would only
@@ -72,8 +73,9 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
 
 /// Whether `param_name` is moved by value anywhere in `node`'s subtree, either
 /// as a bare `identifier` field value of a struct/enum-variant literal
-/// (`{ x }` shorthand, or `{ x: x }`) or as a bare `identifier` argument of a
-/// call (`some_fn(x)`, `obj.method(x)`, `Variant::String(x)`). A bare
+/// (`{ x }` shorthand, or `{ x: x }`), as a bare `identifier` argument of a
+/// call (`some_fn(x)`, `obj.method(x)`, `Variant::String(x)`), or as the bare
+/// `identifier` right-hand side of an assignment (`self.field = x`). A bare
 /// identifier consumes the owned value; `&x` (`reference_expression`) and
 /// `x.clone()` (a method call whose `arguments` list does not contain `x`) do
 /// not, so they are ignored and still warrant the warning.
@@ -111,6 +113,15 @@ fn param_is_moved(node: tree_sitter::Node, source: &[u8], param_name: &str) -> b
                         return true;
                     }
                 }
+            }
+        }
+        "assignment_expression" => {
+            // `self.field = x` stores the owned value in a place the struct
+            // owns; ownership is genuinely needed, so `String` is correct. Only
+            // a bare `identifier` right-hand side moves — `&x` is a
+            // `reference_expression` and `x.clone()` a `call_expression`.
+            if is_param_identifier(node.child_by_field_name("right"), source, param_name) {
+                return true;
             }
         }
         "closure_expression" => {
@@ -268,6 +279,26 @@ mod tests {
     #[test]
     fn allows_param_moved_into_struct_explicit_field() {
         assert!(run("pub fn make(name: String) -> Thing { Thing { name: name } }").is_empty());
+    }
+
+    #[test]
+    fn allows_param_moved_into_field_assignment() {
+        // Repro of #4891: a setter that moves the param into an owned struct
+        // field stores ownership, so `String` is correct — `&str` would force a
+        // `.to_string()` in the body and `Cow` would change the field type too.
+        assert!(
+            run("pub fn set_title(&mut self, value: String) { self.title = value; }").is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_param_borrowed_into_field_assignment() {
+        // `self.field = &value` does not consume the owned value, so the param
+        // is only borrowed — `&str` would compile and the warning still holds.
+        assert_eq!(
+            run("pub fn set_title(&mut self, value: String) { self.title = &value; }").len(),
+            1
+        );
     }
 
     #[test]
