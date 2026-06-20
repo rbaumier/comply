@@ -5,6 +5,12 @@
 //! has a bodyless sibling `MethodDefinition` with the same name) are exempt:
 //! inlining or removing the implementation would erase the overload signatures
 //! and the type-level discrimination they provide.
+//!
+//! Methods that fan out to a shared helper are exempt: when two or more sibling
+//! methods in the same class each forward to the same `this.<target>(...)`, the
+//! distinct method names are an extension-seam (template-method) — each is a
+//! separate override point a subclass can specialise without touching the
+//! others. Inlining or removing one would collapse that override granularity.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, node_has_preceding_deprecated_tag};
@@ -50,6 +56,51 @@ fn class_has_overload_signature_for<'a>(
     })
 }
 
+/// The name of the `this.<target>` method a shallow pass-through forwards to,
+/// i.e. when the body is a single `return this.<target>(p0, p1, …)` whose
+/// arguments are exactly the method's own parameters in order. `None` for any
+/// method that is not such a pass-through (the existing flag conditions).
+fn passthrough_target_name<'a>(method: &'a oxc_ast::ast::MethodDefinition<'a>) -> Option<&'a str> {
+    let body = method.value.body.as_ref()?;
+    if body.statements.len() != 1 {
+        return None;
+    }
+    let Statement::ReturnStatement(ret) = &body.statements[0] else { return None };
+    let Expression::CallExpression(call) = ret.argument.as_ref()? else { return None };
+    let Expression::StaticMemberExpression(member) = &call.callee else { return None };
+    if !matches!(&member.object, Expression::ThisExpression(_)) {
+        return None;
+    }
+    let arg_names = argument_names(&call.arguments)?;
+    let params = param_names(&method.value.params);
+    if params.is_empty() || params != arg_names {
+        return None;
+    }
+    Some(member.property.name.as_str())
+}
+
+/// True when at least one OTHER method in `class` is also a shallow pass-through
+/// forwarding to `target` (the same `this.<target>(...)` helper). Two or more
+/// distinct method names converging on one helper is the extension-seam
+/// (template-method) signal: the separate names are override points, not a
+/// deletable wrapper.
+fn class_has_sibling_passthrough_to<'a>(
+    class: &'a oxc_ast::ast::Class<'a>,
+    method: &'a oxc_ast::ast::MethodDefinition<'a>,
+    target: &str,
+) -> bool {
+    class.body.body.iter().any(|element| {
+        let oxc_ast::ast::ClassElement::MethodDefinition(other) = element else {
+            return false;
+        };
+        // Skip the method under inspection itself (compare by identity).
+        if std::ptr::eq(other.as_ref(), method) {
+            return false;
+        }
+        passthrough_target_name(other) == Some(target)
+    })
+}
+
 fn argument_names<'a>(args: &'a oxc_allocator::Vec<'a, oxc_ast::ast::Argument<'a>>) -> Option<Vec<&'a str>> {
     let mut out = Vec::new();
     for arg in args {
@@ -83,6 +134,7 @@ impl OxcCheck for Check {
         // (that reverts to base behaviour). This backend cannot resolve the base
         // class to prove the method is not such an override, so it stays
         // conservative and skips the whole class.
+        let mut enclosing_class: Option<&'a oxc_ast::ast::Class<'a>> = None;
         for ancestor in semantic.nodes().ancestors(node.id()) {
             if let AstKind::Class(class) = ancestor.kind() {
                 if class.super_class.is_some() || !class.implements.is_empty() {
@@ -96,6 +148,7 @@ impl OxcCheck for Check {
                 if class_has_overload_signature_for(class, method) {
                     return;
                 }
+                enclosing_class = Some(class);
                 break;
             }
         }
@@ -122,32 +175,24 @@ impl OxcCheck for Check {
             return;
         }
 
-        let Some(ref body) = method.value.body else { return };
+        // The body must be a single `return this.<target>(p0, p1, …)` whose
+        // arguments are exactly the method's own parameters in order. A receiver
+        // that is itself a call or member chain (e.g. knex's
+        // `this._bool('or').whereRaw(...)`) mutates state before delegating, so
+        // it is behaviourally distinct — `passthrough_target_name` rejects it.
+        let Some(target) = passthrough_target_name(method) else { return };
 
-        // Body must contain exactly one statement, a return statement.
-        if body.statements.len() != 1 {
-            return;
-        }
-        let Statement::ReturnStatement(ret) = &body.statements[0] else { return };
-        let Some(ref expr) = ret.argument else { return };
-        let Expression::CallExpression(call) = expr else { return };
-
-        // The delegation must target a bare `this.<other>(...)`. When the
-        // receiver is itself a call or member chain (e.g. knex's
-        // `this._bool('or').whereRaw(...)`), the intervening call mutates state
-        // before delegating, so the method is behaviourally distinct from a
-        // direct call — not a shallow pass-through.
-        let Expression::StaticMemberExpression(member) = &call.callee else { return };
-        if !matches!(&member.object, Expression::ThisExpression(_)) {
-            return;
-        }
-
-        let Some(arg_names) = argument_names(&call.arguments) else { return };
-        let params = param_names(&method.value.params);
-        if params.is_empty() {
-            return;
-        }
-        if params != arg_names {
+        // Extension-seam (template-method) fan-out: when a sibling method in the
+        // same class also forwards to the same `this.<target>(...)` helper, the
+        // distinct method names are separate override points — a subclass can
+        // specialise one (e.g. only `styleOptionDescription`) without touching
+        // the others. Collapsing them into the shared helper would erase that
+        // override granularity, so the pass-through is intentional. A lone
+        // wrapper with no sibling sharing its target is still a deletable
+        // indirection and keeps flagging.
+        if let Some(class) = enclosing_class
+            && class_has_sibling_passthrough_to(class, method, target)
+        {
             return;
         }
 
@@ -299,6 +344,38 @@ mod tests {
         // pass-through and must flag. Proves the name match is required.
         let src = "class Foo { baz(x): void; bar(x) { return this._bar(x); } }";
         assert_eq!(run(src).len(), 1, "expected one diagnostic, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_fan_out_override_hooks() {
+        // Regression for #5023: commander.js `Help` class exposes documented
+        // override hooks — `styleCommandDescription` / `styleOptionDescription` /
+        // … each forward to a shared `styleDescriptionText`. The separate names
+        // are the override-point API surface (a subclass can restyle one element
+        // type only), so two-or-more siblings fanning out to the same helper are
+        // exempt even though the class has no heritage clause.
+        let src = "class Help {
+            styleCommandDescription(str) { return this.styleDescriptionText(str); }
+            styleOptionDescription(str) { return this.styleDescriptionText(str); }
+            styleSubcommandDescription(str) { return this.styleDescriptionText(str); }
+            styleArgumentDescription(str) { return this.styleDescriptionText(str); }
+            styleDescriptionText(str) { return str; }
+        }";
+        assert!(run(src).is_empty(), "expected no diagnostics, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_lone_wrapper_with_no_sibling_sharing_target() {
+        // A single pass-through whose target no sibling shares is still a
+        // deletable indirection — the fan-out exemption must not over-suppress a
+        // genuine pointless wrapper. Here `wrap` forwards to `collaborate` while
+        // the sibling `other` forwards to a DIFFERENT helper, so neither shares a
+        // target and both must flag.
+        let src = "class A {
+            wrap(a, b) { return this.collaborate(a, b); }
+            other(x) { return this.somethingElse(x); }
+        }";
+        assert_eq!(run(src).len(), 2, "expected two diagnostics, got: {:?}", run(src));
     }
 
     #[test]
