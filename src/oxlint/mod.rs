@@ -187,7 +187,47 @@ pub fn lint_files(
 
     all.retain(|d| keep_delegated_diagnostic(d.rule_id.as_ref(), d.path.as_ref()));
 
+    all.retain(|d| keep_jest_no_export(d, project));
+
     Ok(all)
+}
+
+/// `jest-no-export` flags every `export` from a `.spec.`/`.test.` file because a
+/// test runner would re-execute the file's tests when another module imports it.
+/// But a spec file that doubles as a shared-fixture provider — co-locating a
+/// fixture (e.g. node-redis's `MATH_FUNCTION` Lua-script definition) and a helper
+/// (`loadMathFunction`) with the command it tests, then exporting them to sibling
+/// spec files — exports those bindings on purpose.
+///
+/// The exemption is file-level: when *any* of the file's exports is imported by
+/// *another* test file, every `jest-no-export` diagnostic on that file is
+/// dropped. A cross-spec import is the signal that the file is a deliberate
+/// shared-fixture provider, not a leak. Imports from non-test files are not
+/// considered — a production module importing a test file's export is a separate
+/// problem and must not silence this rule.
+///
+/// Limitation: a fixture consumed only through a namespace import
+/// (`import * as ns from './foo.spec'`) is not seen here — `get_usages` does not
+/// record namespace imports per name — so such a file is still flagged.
+fn keep_jest_no_export(diag: &Diagnostic, project: &ProjectCtx) -> bool {
+    if diag.rule_id.as_ref() != "jest-no-export" {
+        return true;
+    }
+    let index = project.import_index();
+    // Single-file invocations (LSP, `comply path/to/file.spec.ts`) index only the
+    // checked file, so no cross-spec consumer can ever be seen. Fall back to the
+    // default behaviour rather than silence a real leak we simply can't disprove.
+    if index.total_files() < 2 {
+        return true;
+    }
+    let canon = index.canonical(diag.path.as_ref());
+    let imported_by_another_test_file = index.get_exports(&canon).iter().any(|export| {
+        index
+            .get_usages(&canon, &export.name)
+            .iter()
+            .any(|usage| usage.importer != canon && is_jest_test_file(&usage.importer))
+    });
+    !imported_by_another_test_file
 }
 
 fn changed_path_set(files: &[&SourceFile]) -> FxHashSet<PathBuf> {
@@ -633,5 +673,96 @@ mod tests {
         assert_eq!(esm.len(), 2);
         assert!(esm.iter().any(|file| file.path.ends_with("module.js")));
         assert!(esm.iter().any(|file| file.path.ends_with("standalone.mjs")));
+    }
+
+    /// Build a `ProjectCtx` over `files`, then run `keep_jest_no_export` on a
+    /// synthetic `jest-no-export` diagnostic pointing at `target_rel`. Returns
+    /// whether the diagnostic is kept (`true`) or dropped as a shared fixture.
+    fn keep_jest_no_export_on_project(files: &[(&str, &str)], target_rel: &str) -> bool {
+        use crate::config::Config;
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"t"}"#).unwrap();
+        let mut source_files: Vec<SourceFile> = Vec::new();
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            if let Some(parent) = p.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(&p, content).unwrap();
+            let lang = crate::files::Language::from_path(&p).unwrap();
+            source_files.push(SourceFile { path: p, language: lang });
+        }
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let project = ProjectCtx::load(&refs, &Config::default());
+
+        let target = dir.path().join(target_rel);
+        let diag = crate::diagnostic::Diagnostic {
+            path: std::sync::Arc::from(target.as_path()),
+            line: 11,
+            column: 1,
+            rule_id: std::borrow::Cow::Borrowed("jest-no-export"),
+            message: "Do not export from a test file".into(),
+            severity: crate::diagnostic::Severity::Error,
+            span: None,
+        };
+        keep_jest_no_export(&diag, &project)
+    }
+
+    #[test]
+    fn jest_no_export_dropped_when_fixture_imported_by_sibling_spec_issue_4941() {
+        // node-redis: FUNCTION_LOAD.spec.ts both tests FUNCTION_LOAD AND exports
+        // a shared fixture (MATH_FUNCTION) + helper (loadMathFunction) consumed by
+        // sibling spec files. The export is intentional, not a leak.
+        let provider = "import { it } from 'vitest';\n\
+            export const MATH_FUNCTION = { name: 'math' };\n\
+            export function loadMathFunction(c) { return c.load(MATH_FUNCTION); }\n\
+            describe('FUNCTION_LOAD', () => { it('loads', () => {}); });\n";
+        let consumer = "import { MATH_FUNCTION, loadMathFunction } from './FUNCTION_LOAD.spec';\n\
+            describe('FCALL', () => { it('calls', () => { loadMathFunction(MATH_FUNCTION); }); });\n";
+        assert!(
+            !keep_jest_no_export_on_project(
+                &[
+                    ("FUNCTION_LOAD.spec.ts", provider),
+                    ("FCALL.spec.ts", consumer),
+                ],
+                "FUNCTION_LOAD.spec.ts",
+            ),
+            "export consumed by a sibling spec file is a shared fixture, not a leak"
+        );
+    }
+
+    #[test]
+    fn jest_no_export_kept_when_export_unconsumed() {
+        // A real test file that exports something no other test file imports: the
+        // export is a genuine leak and must still be flagged.
+        let leaky = "import { it } from 'vitest';\n\
+            export const helper = 1;\n\
+            describe('A', () => { it('works', () => {}); });\n";
+        let unrelated = "import { it } from 'vitest';\n\
+            describe('B', () => { it('works', () => {}); });\n";
+        assert!(
+            keep_jest_no_export_on_project(
+                &[("A.spec.ts", leaky), ("B.spec.ts", unrelated)],
+                "A.spec.ts",
+            ),
+            "export imported by no other test file is still a leak"
+        );
+    }
+
+    #[test]
+    fn jest_no_export_kept_when_consumer_is_not_a_test_file() {
+        // A production module importing a test file's export is a separate problem
+        // (no-test-imports-in-prod). It must NOT silence jest-no-export.
+        let provider = "import { it } from 'vitest';\n\
+            export const helper = 1;\n\
+            describe('A', () => { it('works', () => {}); });\n";
+        let prod = "import { helper } from './A.spec';\nexport const x = helper + 1;\n";
+        assert!(
+            keep_jest_no_export_on_project(
+                &[("A.spec.ts", provider), ("prod.ts", prod)],
+                "A.spec.ts",
+            ),
+            "a non-test consumer must not exempt the export"
+        );
     }
 }
