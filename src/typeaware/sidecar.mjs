@@ -151,46 +151,29 @@ function operandIsCaughtError(checker, operand) {
   return !!catchSym && catchSym === checker.getSymbolAtLocation(id);
 }
 
-/** Live runtime/DOM objects whose shape carries no methods yet must not be
- *  reconstructed from validated data (e.g. an element's `dataset`). */
-const RUNTIME_OBJECT_TYPE_NAMES = new Set([
-  "DOMStringMap",
-  "DOMTokenList",
-  "CSSStyleDeclaration",
-  "NamedNodeMap",
-]);
-
-/** Whether a type owns a method (a property whose type is a function).
- *  The typescript-go API does not expose call-signature queries
- *  (`getCallSignatures` returns nothing on a constituent), so a function-typed
- *  property is detected from its rendered type containing `=>`. */
-function typeHasMethod(checker, type) {
-  const props = checker.getPropertiesOfType(type) || [];
-  return props.some((p) => {
-    const pt = checker.getTypeOfSymbol(p);
-    return pt && /=>/.test(checker.typeToString(pt));
-  });
+/** Whether a type is `unknown` or `any` — a genuinely unvalidated value that a
+ *  schema parse should narrow. Narrowing an already-typed value or union with
+ *  `typeof`/`in` is idiomatic, not a boundary smell, so the rules skip it. */
+function typeIsUnknownOrAny(type) {
+  return !!(type && type.flags & TypeFlags.AnyOrUnknown);
 }
 
-/** Whether a value of this type cannot be reconstructed from validated data —
- *  it is a function, a JSX/runtime object, or a class instance with methods
- *  (Playwright `Page`/`Locator`, DOM nodes, …). For a union, true when any
- *  constituent is non-serializable (the `function`-variant discriminant case).
- *
- *  Method presence is the only available proxy for "live runtime object": the
- *  API exposes neither call signatures nor a symbol's declaration file, so a
- *  class instance from `node_modules` cannot be told apart from an owned object
- *  that happens to carry a method. The `in` rule therefore deliberately does
- *  NOT flag `key in ownedObjectWithAMethod` — favouring no false positive on
- *  the runtime objects this exemption exists for (DOM, Playwright). */
-function isNonSerializable(checker, type) {
-  return constituents(type).some((c) => {
-    const s = checker.typeToString(c);
-    const base = s.replace(/<.*$/s, "").trim();
-    if (RUNTIME_OBJECT_TYPE_NAMES.has(base)) return true;
-    if (/=>/.test(s)) return true;
-    return typeHasMethod(checker, c);
-  });
+/** Whether `node` sits lexically inside a function whose return-type annotation
+ *  is a type predicate (`x is T`). A `typeof`/`in` there is the cast-free
+ *  narrowing primitive the rules steer toward, so flagging it is contradictory.
+ *  Walks enclosing function-like nodes; the nearest one's return type decides. */
+function inTypePredicateFunction(node) {
+  for (let p = node.parent; p; p = p.parent) {
+    switch (p.kind) {
+      case SyntaxKind.ArrowFunction:
+      case SyntaxKind.FunctionExpression:
+      case SyntaxKind.FunctionDeclaration:
+      case SyntaxKind.MethodDeclaration:
+      case SyntaxKind.GetAccessor:
+        return p.type?.kind === SyntaxKind.TypePredicate;
+    }
+  }
+  return false;
 }
 
 function pushDiag(sourceFile, lineStarts, file, node, rule, message) {
@@ -304,12 +287,13 @@ function emitDuplicateTypeDiagnostics(candidates) {
 }
 
 // ── Rule: ts-no-in-operator ──────────────────────────────────────────────────
-// `"key" in obj` probes an object's shape by hand. External input must be parsed
-// with a schema (Zod) and an owned union must be discriminated by a tag; the
-// only legitimate `in` guards are on a caught error or a non-serializable
-// runtime object (DOM dataset, Playwright Page vs Locator). `for ... in` is a
-// ForInStatement (never a binary expression); `#field in obj` is the class-brand
-// idiom and is skipped.
+// `"key" in obj` probes an object's shape by hand. It fires only when the RHS is
+// an unvalidated `unknown`/`any` value that should instead be parsed with a
+// schema (Zod). It is skipped on a caught error, inside a user-defined type-
+// predicate function (`x is T`, the cast-free narrowing primitive the rule steers
+// toward), and on any already-typed RHS (narrowing an owned value/union is
+// idiomatic). `for ... in` is a ForInStatement (never a binary expression);
+// `#field in obj` is the class-brand idiom and is skipped.
 function ruleNoInOperator(sourceFile, checker, text, lineStarts, file) {
   walk(sourceFile, (node) => {
     if (node.kind !== SyntaxKind.BinaryExpression) return;
@@ -318,8 +302,9 @@ function ruleNoInOperator(sourceFile, checker, text, lineStarts, file) {
 
     const rhs = node.right;
     if (operandIsCaughtError(checker, rhs)) return;
+    if (inTypePredicateFunction(node)) return;
     const type = checker.getTypeAtLocation(rhs);
-    if (type && isNonSerializable(checker, type)) return;
+    if (!typeIsUnknownOrAny(type)) return;
 
     pushDiag(
       sourceFile,
@@ -333,10 +318,12 @@ function ruleNoInOperator(sourceFile, checker, text, lineStarts, file) {
 }
 
 // ── Rule: ts-no-typeof-operator ──────────────────────────────────────────────
-// `typeof x` stands in for validating a boundary value or discriminating an
-// owned union. It is allowed only as an environment guard (`typeof window`), on
-// a caught error, inside a `z.preprocess` normaliser, or to discriminate a union
-// whose variant is non-serializable (function/JSX, e.g. SetStateAction).
+// `typeof x` stands in for validating a boundary value. It fires only when the
+// operand is an unvalidated `unknown`/`any` value that should instead be parsed
+// with a schema (Zod). It is skipped as an environment guard (`typeof window`),
+// on a caught error, inside a `z.preprocess` normaliser, inside a user-defined
+// type-predicate function (`x is T`), and on any already-typed operand (narrowing
+// an owned value/union is idiomatic).
 const ENV_GLOBALS = new Set([
   "window",
   "document",
@@ -396,9 +383,10 @@ function ruleNoTypeofOperator(sourceFile, checker, text, lineStarts, file) {
     }
     if (operandIsCaughtError(checker, operand)) return;
     if (inPreprocessCallback(text, sourceFile, node)) return;
+    if (inTypePredicateFunction(node)) return;
 
     const type = checker.getTypeAtLocation(operand);
-    if (type && type.flags & TypeFlags.Union && isNonSerializable(checker, type)) return;
+    if (!typeIsUnknownOrAny(type)) return;
 
     pushDiag(
       sourceFile,
