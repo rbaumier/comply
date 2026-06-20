@@ -2130,6 +2130,74 @@ mod tests {
     }
 
     #[test]
+    fn ignores_vite_fake_server_mock_default_export_issue_4798() {
+        // Regression for #4798 (pure-admin/vue-pure-admin) — `vite-plugin-fake-
+        // server` glob-discovers every file under `mock/` and registers its
+        // `export default defineFakeRoute(...)` as mock API endpoints by directory
+        // convention, never through a static import, so the `default` export has
+        // no importer yet is live.
+        let pkg = r#"{ "dependencies": { "vite-plugin-fake-server": "^2.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "mock/login.ts",
+                "import { defineFakeRoute } from 'vite-plugin-fake-server/client';\n\
+                 export default defineFakeRoute([{ url: '/api/user/login' }]);\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "mock/login.ts");
+        assert!(
+            diags.is_empty(),
+            "fake-server mock `default` is framework-consumed: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_mock_default_export_without_fake_server_dep_issue_4798() {
+        // Negative-space guard for #4798 — the `mock/` exemption is dep-gated. The
+        // same `mock/login.ts` default export in a project with no
+        // `vite-plugin-fake-server` dependency is an ordinary unused export and
+        // must still be flagged.
+        let pkg = r#"{ "dependencies": { "lodash": "^4.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "mock/login.ts",
+                "export default [{ url: '/api/user/login' }];\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "mock/login.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a mock default export without the fake-server dep must still be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_named_export_in_fake_server_mock_file_issue_4798() {
+        // Negative-space guard for #4798 — the exemption is scoped to the
+        // framework-consumed `default` export. An ordinary named export in a mock
+        // file, with no importer, is genuinely dead and must still fire.
+        let pkg = r#"{ "dependencies": { "vite-plugin-fake-server": "^2.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "mock/login.ts",
+                "export default defineFakeRoute([]);\n\
+                 export const helper = () => 1;\n",
+            ),
+            ("src/util.ts", "export const z = 1;\nz;\n"),
+        ];
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "mock/login.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "an ordinary named export in a mock file must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("helper"));
+    }
+
+    #[test]
     fn ignores_nuxt_auto_imported_composable_issue_3314() {
         // Regression for #3314 (nuxt/ui) — Nuxt auto-imports every export of a
         // file under a `composables/` directory across the app, so the named
