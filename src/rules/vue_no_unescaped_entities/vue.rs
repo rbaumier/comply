@@ -11,7 +11,14 @@ use crate::rules::walker::collect_nodes_of_kinds;
 #[derive(Debug)]
 pub struct Check;
 
-const PROBLEMATIC: &[char] = &['"', '\''];
+/// Characters that genuinely need escaping inside element text content.
+///
+/// Only `<` is flagged: it always begins a tag, so a literal `<` in text
+/// changes how the markup parses and must be written `&lt;`. `"`, `'`, `>`,
+/// and a bare `&` are valid inside HTML text nodes (`"`/`'` only need escaping
+/// in attribute values; `&` only when it forms an ambiguous entity reference,
+/// which prose like `Tom & Jerry` does not) and are therefore not flagged.
+const PROBLEMATIC: &[char] = &['<'];
 
 impl AstCheck for Check {
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
@@ -53,9 +60,31 @@ mod tests {
     }
 
     #[test]
-    fn flags_unescaped_quote() {
-        let src = "<template>\n  <div>She said \"hello\"</div>\n</template>";
+    fn flags_unescaped_lt() {
+        // The grammar keeps `a < b` as a single text node (the `<` is not a
+        // valid tag start), so the literal `<` reaches the check.
+        let src = "<template>\n  <div>a < b</div>\n</template>";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_bare_ampersand_in_prose() {
+        let src = "<template>\n  <div>Tom & Jerry</div>\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_double_quote_in_text() {
+        // https://github.com/rbaumier/comply/issues/4712 — `"` is valid in HTML
+        // text nodes and must not be flagged.
+        let src = "<template>\n  <div>\n    <h5>\"Slide\" Transition</h5>\n  </div>\n</template>";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_single_quote_in_text() {
+        let src = "<template>\n  <div>it's a 'quoted' word</div>\n</template>";
+        assert!(run(src).is_empty());
     }
 
     #[test]
@@ -77,8 +106,8 @@ mod tests {
     }
 
     #[test]
-    fn flags_quote_outside_mustache() {
+    fn allows_quote_outside_mustache() {
         let src = "<template>\n  <div>He said \"hi\" {{ name }}</div>\n</template>";
-        assert_eq!(run(src).len(), 1);
+        assert!(run(src).is_empty());
     }
 }
