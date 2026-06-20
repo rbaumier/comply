@@ -19,6 +19,13 @@
 //! `julian_days`, `unix_seconds`, `created_at_seconds`, `*_timestamp`,
 //! `*_epoch`, `*_epoch_*`) are exempted — `Duration` models an elapsed span,
 //! not an absolute timeline point, so the suggestion would be wrong.
+//! A plain-integer field is exempted when the file declares an atomic-integer
+//! field (`AtomicU64`, `std::sync::atomic::AtomicI64`, ...) with the exact same
+//! name. Rust has no `AtomicDuration`, so a field built from an atomic counter
+//! (the typical shape is a `Copy` snapshot struct loaded from a paired counter
+//! struct) must keep the integer type. The match is purely nominal and
+//! file-wide — it does not verify a structural link — which deliberately errs
+//! toward silence over a false positive on a name collision.
 //! Test code is exempted via `is_in_test_context`.
 
 use crate::diagnostic::{Diagnostic, Severity};
@@ -82,6 +89,7 @@ impl AstCheck for Check {
             && let Ok(type_text) = type_node.utf8_text(source_bytes)
             && has_time_unit_suffix(name)
             && is_integer_type(type_text)
+            && !mirrors_atomic_counter(node, name, source_bytes)
         {
             diagnostics.push(make_diagnostic(ctx, node, name, type_text));
             return;
@@ -122,6 +130,53 @@ fn is_absolute_time_coordinate(lower: &str) -> bool {
 fn is_integer_type(text: &str) -> bool {
     let trimmed = text.trim();
     INTEGER_TYPES.contains(&trimmed)
+}
+
+/// True when `text` names a `std::sync::atomic` integer type
+/// (`AtomicU64`, `AtomicI32`, `AtomicUsize`, ...), accepting qualified
+/// paths (`std::sync::atomic::AtomicU64`, `atomic::AtomicI64`) via the
+/// last `::` segment.
+fn is_atomic_integer_type(text: &str) -> bool {
+    let last = text.trim().rsplit("::").next().unwrap_or("").trim();
+    let Some(suffix) = last.strip_prefix("Atomic") else {
+        return false;
+    };
+    INTEGER_TYPES.contains(&suffix.to_ascii_lowercase().as_str())
+}
+
+/// True when a plain-integer `field_declaration` named `name` is taken to
+/// mirror an atomic counter, so it must keep the integer type (no
+/// `AtomicDuration` exists in std).
+///
+/// Heuristic: the file declares *any* atomic-integer field with this exact
+/// name. It does not verify a structural link to the candidate — the typical
+/// shape it targets is a `Copy` snapshot struct whose fields are built from
+/// `AtomicU64::load(...)` of a paired counter struct, but a coincidental
+/// same-named atomic field elsewhere in the file also exempts. That nominal,
+/// file-wide match trades a possible missed flag for never suggesting a
+/// `Duration` the matching atomic cannot store.
+fn mirrors_atomic_counter(field: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    let mut root = field;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    file_has_atomic_field_named(root, name, source)
+}
+
+fn file_has_atomic_field_named(node: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    if node.kind() == "field_declaration"
+        && let Some(name_node) = node.child_by_field_name("name")
+        && let Some(type_node) = node.child_by_field_name("type")
+        && let Ok(field_name) = name_node.utf8_text(source)
+        && field_name == name
+        && let Ok(type_text) = type_node.utf8_text(source)
+        && is_atomic_integer_type(type_text)
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| file_has_atomic_field_named(child, name, source))
 }
 
 fn make_diagnostic(
@@ -284,6 +339,44 @@ mod tests {
     #[test]
     fn allows_file_modified_epoch_seconds_absolute_coordinate() {
         assert!(run_on("struct S { file_modified_epoch_seconds: u64 }").is_empty());
+    }
+
+    #[test]
+    fn allows_snapshot_field_mirroring_atomic_counter() {
+        // sled `CacheStats`: the `u64` snapshot fields are built from
+        // `AtomicU64::load(...)` of a paired counter struct. Rust has no
+        // `AtomicDuration`, so the snapshot must keep the integer type to
+        // match its atomic source. Regression for #4753.
+        let source = "\
+struct ReadStatTracker { max_read_io_latency_us: AtomicU64, sum_read_io_latency_us: AtomicU64 }
+struct CacheStats { max_read_io_latency_us: u64, sum_read_io_latency_us: u64 }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_atomic_field_qualified_path() {
+        // A directly atomic-typed counter is never a `Duration` candidate.
+        let source = "struct S { read_latency_us: std::sync::atomic::AtomicU64 }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_plain_integer_without_paired_atomic() {
+        // No same-named atomic field in the file → a genuine config field that
+        // should be a `Duration`.
+        assert_eq!(run_on("struct Config { timeout_ms: u64 }").len(), 1);
+    }
+
+    #[test]
+    fn known_limitation_nominal_collision_silences_config_field() {
+        // The atomic match is nominal and file-wide: a config field is silenced
+        // when an *unrelated* struct in the same file happens to declare an
+        // atomic field of the same name. Deliberate FP-over-FN tradeoff —
+        // characterizes the heuristic's boundary, not desired behaviour.
+        let source = "\
+struct Config { timeout_ms: u64 }
+struct UnrelatedMetrics { timeout_ms: AtomicU64 }";
+        assert!(run_on(source).is_empty());
     }
 
     #[test]
