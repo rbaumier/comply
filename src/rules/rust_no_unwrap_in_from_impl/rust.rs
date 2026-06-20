@@ -16,6 +16,10 @@
 //! contains "invariant" or "unreachable") is also skipped: the author is
 //! asserting a guaranteed condition (such as a validated newtype's inner
 //! value), not handling a real failure path.
+//! A `.unwrap()` / `.expect()` whose receiver is `NonZero*::new(<nonzero
+//! integer literal>)` is also skipped: `NonZero*::new(n)` returns `None`
+//! only when `n == 0`, so a non-zero literal makes the result statically
+//! `Some` and the unwrap cannot panic.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -92,6 +96,9 @@ fn collect_unwraps_in(
             // A `.expect("…")` whose message documents an infallible invariant
             // asserts a guaranteed condition, not a real failure path.
             && !expect_documents_invariant(node, source)
+            // `NonZero*::new(<nonzero literal>)` is statically `Some`, so the
+            // unwrap cannot panic — it is provably infallible.
+            && !is_infallible_nonzero_new(function, source)
         {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
@@ -128,6 +135,82 @@ fn expect_documents_invariant(call: tree_sitter::Node, source: &[u8]) -> bool {
     };
     let lower = args_text.to_ascii_lowercase();
     lower.contains("invariant") || lower.contains("unreachable")
+}
+
+/// True when the `.unwrap()`/`.expect()` receiver is `NonZero*::new(<nonzero
+/// integer literal>)` — statically `Some`, so the unwrap cannot panic.
+/// `field_expr` is the `<receiver>.unwrap` field_expression.
+fn is_infallible_nonzero_new(field_expr: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(receiver) = field_expr.child_by_field_name("value") else {
+        return false;
+    };
+    if receiver.kind() != "call_expression" {
+        return false;
+    }
+    let Some(func) = receiver.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "scoped_identifier" {
+        return false;
+    }
+    // function name must be `new`
+    if func.child_by_field_name("name").and_then(|n| n.utf8_text(source).ok()) != Some("new") {
+        return false;
+    }
+    // the type segment (last path component) must start with `NonZero`
+    let Some(path) = func
+        .child_by_field_name("path")
+        .and_then(|n| n.utf8_text(source).ok())
+    else {
+        return false;
+    };
+    let ty = path.rsplit("::").next().unwrap_or(path);
+    if !ty.starts_with("NonZero") {
+        return false;
+    }
+    // single argument must be a non-zero integer literal
+    let Some(args) = receiver.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut cursor = args.walk();
+    let Some(arg) = args.named_children(&mut cursor).next() else {
+        return false;
+    };
+    is_nonzero_int_literal(arg, source)
+}
+
+/// True when `node` is an integer literal (optionally negated) whose value is
+/// not zero. Conservative: returns false for non-literals or anything it can't
+/// confidently classify as non-zero.
+fn is_nonzero_int_literal(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // peel a unary minus: `-1`
+    let lit = if node.kind() == "unary_expression" {
+        match node.named_child(0) {
+            Some(n) => n,
+            None => return false,
+        }
+    } else {
+        node
+    };
+    if lit.kind() != "integer_literal" {
+        return false;
+    }
+    let Ok(text) = lit.utf8_text(source) else {
+        return false;
+    };
+    // strip `_` separators and a trailing type suffix (i8/u64/usize/…)
+    let cleaned: String = text.chars().filter(|c| *c != '_').collect();
+    let cleaned = cleaned.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    // strip a radix prefix and parse the magnitude; non-zero iff some digit != '0'
+    let body = cleaned
+        .strip_prefix("0x")
+        .or_else(|| cleaned.strip_prefix("0X"))
+        .or_else(|| cleaned.strip_prefix("0o"))
+        .or_else(|| cleaned.strip_prefix("0O"))
+        .or_else(|| cleaned.strip_prefix("0b"))
+        .or_else(|| cleaned.strip_prefix("0B"))
+        .unwrap_or(cleaned);
+    !body.is_empty() && body.bytes().any(|b| b != b'0')
 }
 
 #[cfg(test)]
@@ -304,6 +387,53 @@ mod tests {
     fn flags_expect_with_non_invariant_message() {
         let source =
             r#"impl From<A> for B { fn from(a: A) -> B { parse(a).expect("failed to parse input") } }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// Closes #4420: `NonZeroI64::new(1).unwrap()` is provably infallible —
+    /// `NonZero*::new(n)` is `None` only for `n == 0`, and `1` is a non-zero
+    /// literal — so the unwrap cannot panic and must not be flagged.
+    #[test]
+    fn allows_unwrap_on_nonzero_new_literal() {
+        let source =
+            "impl From<A> for B { fn from(a: A) -> B { B::E(NonZeroI64::new(1).unwrap()) } }";
+        assert!(
+            run_on(source).is_empty(),
+            "NonZeroI64::new(1).unwrap() is provably infallible"
+        );
+    }
+
+    /// A larger non-zero literal is equally infallible.
+    #[test]
+    fn allows_unwrap_on_nonzero_new_large_literal() {
+        let source =
+            "impl From<A> for B { fn from(a: A) -> B { B::E(NonZeroU8::new(255).unwrap()) } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    /// A fully-qualified `std::num::NonZeroUsize::new(8)` path resolves to the
+    /// same infallible shape and must not be flagged.
+    #[test]
+    fn allows_unwrap_on_fully_qualified_nonzero_new_literal() {
+        let source = "impl From<A> for B { fn from(a: A) -> B { B::E(std::num::NonZeroUsize::new(8).unwrap()) } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    /// A zero literal makes `NonZero*::new(0)` return `None`, so the unwrap
+    /// genuinely panics — it must still flag.
+    #[test]
+    fn flags_unwrap_on_nonzero_new_zero_literal() {
+        let source =
+            "impl From<A> for B { fn from(a: A) -> B { B::E(NonZeroI64::new(0).unwrap()) } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// A non-literal argument is not provably non-zero, so the unwrap may
+    /// panic — it must still flag.
+    #[test]
+    fn flags_unwrap_on_nonzero_new_variable() {
+        let source =
+            "impl From<A> for B { fn from(a: A) -> B { B::E(NonZeroI64::new(n).unwrap()) } }";
         assert_eq!(run_on(source).len(), 1);
     }
 }
