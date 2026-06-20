@@ -37,11 +37,16 @@ fn collect_ref_bindings(source: &str) -> FxHashSet<String> {
     bindings
 }
 
-/// A block-bodied `function`/arrow scope: the byte range of its `{ … }` body
-/// and the bare parameter names that shadow any outer binding inside it.
+/// A block-bodied `function`/arrow scope: the byte range of its `{ … }` body,
+/// the bare parameter names that shadow any outer binding inside it, and the
+/// local `const`/`let`/`var` declarations inside the body that shadow an outer
+/// name. Each local is `(name, decl_offset)`, where `decl_offset` is the
+/// absolute byte offset of the declared identifier; a local shadows the outer
+/// ref only for usages textually after its declaration.
 struct ShadowScope {
     body: std::ops::Range<usize>,
     params: FxHashSet<String>,
+    locals: Vec<(String, usize)>,
 }
 
 /// Whether `byte` is part of a JS/TS identifier (so we can require word
@@ -112,10 +117,46 @@ fn parse_param_names(param_list: &str) -> FxHashSet<String> {
     names
 }
 
+/// Scan a scope body for local `const`/`let`/`var` declarations that shadow an
+/// outer name. Returns `(name, decl_offset)` where `decl_offset` is the absolute
+/// byte offset (`base + local_offset`) of the declared identifier. Destructuring
+/// declarations (`const { x }` / `const [x]`) yield an empty identifier (the byte
+/// after the keyword is `{`/`[`) and are skipped, mirroring `parse_param_names`.
+fn collect_local_decls(body: &str, base: usize) -> Vec<(String, usize)> {
+    let bytes = body.as_bytes();
+    let mut locals = Vec::new();
+    for kw in ["const", "let", "var"] {
+        for (kw_pos, _) in body.match_indices(kw) {
+            // Require word boundaries so `letter`/`constant` don't match.
+            let before_ok = kw_pos == 0 || !is_ident_byte(bytes[kw_pos - 1]);
+            let after_kw = kw_pos + kw.len();
+            let after_ok = after_kw >= bytes.len() || !is_ident_byte(bytes[after_kw]);
+            if !before_ok || !after_ok {
+                continue;
+            }
+            // Skip whitespace, then read the declared identifier.
+            let mut i = after_kw;
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            let name_start = i;
+            let ident: String = body[name_start..]
+                .chars()
+                .take_while(|&c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+                .collect();
+            if !ident.is_empty() {
+                locals.push((ident, base + name_start));
+            }
+        }
+    }
+    locals
+}
+
 /// Collect block-bodied `function …(params) { … }` and arrow `(params) => { … }`
-/// shadow scopes. A misuse match whose offset lies inside a scope's body and
-/// whose name is one of that scope's params is shadowing the outer ref and must
-/// not be flagged.
+/// shadow scopes. A misuse match whose offset lies inside a scope's body is
+/// shadowing the outer ref — and must not be flagged — when its name is one of
+/// that scope's params, or matches a local `const`/`let`/`var` declaration of the
+/// same name that appears textually before the usage.
 fn collect_shadow_scopes(source: &str) -> Vec<ShadowScope> {
     let bytes = source.as_bytes();
     let mut scopes = Vec::new();
@@ -163,7 +204,15 @@ fn collect_shadow_scopes(source: &str) -> Vec<ShadowScope> {
         scopes.push(ShadowScope {
             body: j..body_close,
             params,
+            locals: Vec::new(),
         });
+    }
+
+    // Populate each scope's local `const`/`let`/`var` declarations from its body
+    // text, recording absolute offsets so position checks line up with usage
+    // offsets in `check`.
+    for scope in &mut scopes {
+        scope.locals = collect_local_decls(&source[scope.body.clone()], scope.body.start);
     }
 
     scopes
@@ -199,6 +248,7 @@ fn scope_from_params_at(source: &str, after_kw: usize) -> Option<ShadowScope> {
     Some(ShadowScope {
         body: b..body_close,
         params,
+        locals: Vec::new(),
     })
 }
 
@@ -261,13 +311,16 @@ impl TextCheck for Check {
         // patterns where the binding is used like a primitive.
         for name in &bindings {
             for (i, _) in ctx.source.match_indices(name.as_str()) {
-                // A function/arrow parameter with the same name shadows the
-                // outer ref inside its body; the bare name there is the param,
-                // not the ref, so it is not a misuse.
-                if shadow_scopes
-                    .iter()
-                    .any(|s| s.body.contains(&i) && s.params.contains(name))
-                {
+                // A same-named function/arrow parameter, or a local
+                // `const`/`let`/`var` declared earlier in the body, shadows the
+                // outer ref inside that scope; the bare name there is the plain
+                // local value, not the ref, so it is not a misuse. The local
+                // shadows only for usages textually after its declaration.
+                if shadow_scopes.iter().any(|s| {
+                    s.body.contains(&i)
+                        && (s.params.contains(name)
+                            || s.locals.iter().any(|(n, d)| n == name && *d < i))
+                }) {
                     continue;
                 }
                 if template_range.as_ref().is_some_and(|r| r.contains(&i)) {
@@ -398,6 +451,44 @@ mod tests {
     fn allows_computed_as_operand_inside_template() {
         let src = "<script setup lang=\"ts\">\nconst count = computed(() => 0)\n</script>\n<template>\n  <div v-if=\"count > 1\" />\n</template>";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_local_const_shadowing_ref() {
+        // The nuxt/image repro: an outer computed ref `placeholder`, shadowed by
+        // a local `const placeholder` inside the callback. The comparison-operand
+        // usage after the local decl is the plain value, not the ref.
+        let src = "const placeholder = computed(() => {\n  const placeholder = props.placeholder === '' ? [10, 10] : props.placeholder\n  if (placeholder === 'string') { return placeholder }\n  return false\n})";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_local_let_shadowing_ref() {
+        let src = "const count = computed(() => { let count = props.count; return count + 1; })";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_ref_misuse_without_local_redeclaration() {
+        // `count` is the outer ref inside `f` — no local redeclaration shadows it.
+        let src = "const count = ref(0);\nfunction f() { return count + 1; }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_ref_misuse_before_local_redeclaration() {
+        // The usage precedes the local `const count`, so it is still the outer
+        // ref (position-aware shadowing): the misuse must still flag.
+        let src = "const count = ref(0);\nfunction f() {\n  const x = count + 1;\n  const count = 2;\n  return x + count;\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_ref_misuse_despite_destructuring_local_decl() {
+        // A destructuring `const { count }` binds no bare `count` identifier the
+        // scanner tracks, so the bare `count` operand stays the outer ref.
+        let src = "const count = ref(0);\nfunction f() {\n  const { other } = obj;\n  return count + 1;\n}";
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
