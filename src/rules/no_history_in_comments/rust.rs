@@ -99,6 +99,15 @@ mod tests {
     }
 
     #[test]
+    fn allows_config_in_favor_of() {
+        // Regression for issue #4784: "in favor of" in a lint/config comment
+        // describes the current configuration choice, not code history.
+        assert!(run("// Disabled in favor of import/no-duplicates\nfn f() {}").is_empty());
+        assert!(run("// off in favor of our custom rule\nfn f() {}").is_empty());
+        assert!(run("// prefer x in favor of y\nfn f() {}").is_empty());
+    }
+
+    #[test]
     fn allows_was_replaced_test_assertion() {
         // Regression for issue #4526: "content was replaced" is a test-assertion
         // description (subject "content" is not a code artifact), not code history.
