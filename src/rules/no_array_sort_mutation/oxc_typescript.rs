@@ -1,7 +1,7 @@
 //! no-array-sort-mutation oxc backend — flag `.sort()` calls.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_local_fresh_array_binding};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
@@ -21,7 +21,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else { return };
@@ -37,6 +37,16 @@ impl OxcCheck for Check {
         // as `Object.keys(o).sort()` or `items.filter(p).sort()` — has no
         // aliasing risk: the in-place mutation is not observable.
         if is_fresh_array(&member.object) {
+            return;
+        }
+
+        // Same fresh-value pattern split across two statements: the receiver is a
+        // local `const`/`let` bound to a call/array-literal result that never
+        // escapes (`const arr = fn(); arr.sort()`). It carries the identical
+        // non-aliasing profile as the direct chain above, so do not flag it.
+        if let Expression::Identifier(ident) = &member.object
+            && is_local_fresh_array_binding(ident, semantic)
+        {
             return;
         }
 
@@ -111,5 +121,54 @@ mod oxc_tests {
     #[test]
     fn skips_sort_on_filter_result() {
         assert!(run("const s = items.filter((x) => x).sort();").is_empty());
+    }
+
+    #[test]
+    fn skips_sort_on_local_call_result_binding_issue_4772() {
+        let src = "let domain = rollups(range, reduce, key); \
+                   if (order) domain.sort(order); \
+                   if (reverse) domain.reverse(); \
+                   return domain.map(first);";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn skips_sort_on_local_const_call_result_binding_issue_4772() {
+        let src = "const domain = nodes.leaves().map((d) => d.data); \
+                   domain.sort((a, b) => ascending(a, b));";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn skips_sort_on_local_array_literal_binding() {
+        let src = "const xs = [3, 1, 2]; xs.sort();";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_sort_on_param() {
+        assert_eq!(run("function f(arr) { arr.sort(); }").len(), 1);
+    }
+
+    #[test]
+    fn flags_sort_on_escaped_local_binding() {
+        // The fresh array is passed to a function before sorting: a caller could
+        // hold the same reference and observe the reorder, so it stays flagged.
+        let src = "const xs = getItems(); register(xs); xs.sort();";
+        assert_eq!(run(src).len(), 1, "got {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_sort_on_returned_local_binding() {
+        let src = "const xs = getItems(); xs.sort(); return xs;";
+        assert_eq!(run(src).len(), 1, "got {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_sort_on_reassigned_local_binding() {
+        // The binding is rebound to a possibly-shared array after declaration,
+        // so the fresh-array guarantee no longer holds and it stays flagged.
+        let src = "let xs = getItems(); xs = shared; xs.sort();";
+        assert_eq!(run(src).len(), 1, "got {:?}", run(src));
     }
 }
