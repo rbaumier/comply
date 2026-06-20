@@ -26,11 +26,23 @@ fn is_test_path(path: &std::path::Path) -> bool {
 }
 
 /// Check if a call expression's callee is a known I/O pattern.
-fn is_io_callee(callee: &Expression, source: &str) -> bool {
+///
+/// A bare `fetch(...)` is only the global network API when the `fetch`
+/// identifier is an *unresolved* global reference. A local binding that shadows
+/// it (`const fetch = …`, a parameter, or an import) is a different function —
+/// often local filesystem work — and must not be flagged.
+fn is_io_callee(callee: &Expression, source: &str, semantic: &oxc_semantic::Semantic) -> bool {
     let text = &source[callee.span().start as usize..callee.span().end as usize];
 
     // Bare identifier: `fetch(...)`
     if IO_CALLEE_BASES.contains(&text) {
+        if let Expression::Identifier(ident) = callee {
+            if ident.name.as_str() == "fetch"
+                && !semantic.is_reference_to_global_variable(ident)
+            {
+                return false;
+            }
+        }
         return true;
     }
 
@@ -137,7 +149,7 @@ impl OxcCheck for Check {
             return;
         };
 
-        if !is_io_callee(&call.callee, ctx.source) {
+        if !is_io_callee(&call.callee, ctx.source, semantic) {
             return;
         }
 
@@ -231,5 +243,30 @@ mod tests {
     fn still_flags_inline_options_without_signal() {
         let src = "async function f() { await fetch('/api', { method: 'POST' }); }";
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for #5017: a locally-declared `const fetch` shadows the global
+    // network API. The awaited `fetch()` here is local filesystem work, not the
+    // global `fetch`, so it must not be flagged.
+    #[test]
+    fn allows_local_const_fetch_shadowing_global_issue_5017() {
+        let src = "async function findCommand() { \
+                   const fetch = async () => loadFromDisk(); \
+                   const cmd = await fetch(); \
+                   return cmd; }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // A `fetch` parameter shadows the global too — not the network API.
+    #[test]
+    fn allows_fetch_parameter_shadowing_global_issue_5017() {
+        let src = "async function run(fetch) { return await fetch(); }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // The genuine global `fetch` is still flagged when it lacks a timeout.
+    #[test]
+    fn still_flags_global_fetch_without_timeout_issue_5017() {
+        assert_eq!(run("async function f() { await fetch('/api'); }").len(), 1);
     }
 }
