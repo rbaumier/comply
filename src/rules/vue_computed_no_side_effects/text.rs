@@ -16,6 +16,14 @@
 //! `.value =` checks — assignments and reactive writes are a setter's purpose.
 //! The pure getter body stays checked.
 //!
+//! Nested-function exemption: markers and `.value =` inside a function the getter
+//! *returns* (an arrow or `function` expression stored as a property/element of
+//! the returned value, e.g. `onClick: () => emit('x')`) are skipped. That body
+//! runs when the callback is later invoked, not during getter evaluation, so it
+//! is not a side effect of the computed. Only side effects in the getter's own
+//! body (top-level statements, conditionals, loops that run during evaluation)
+//! stay flagged.
+//!
 //! String/comment awareness: markers and `.value =` matches that land inside a
 //! string literal, a template literal, or a comment are skipped — they are text
 //! content, not executed code. A computed that builds a string of code (an
@@ -139,6 +147,151 @@ fn non_code_mask(body: &str) -> Vec<bool> {
     mask
 }
 
+/// A boolean mask over `body`'s bytes: `true` marks a byte that lives inside a
+/// *nested* function body — an arrow or `function` expression defined within the
+/// getter. Such a function is a value the getter produces (an event handler, a
+/// callback); its body runs later when that function is invoked, not during
+/// getter evaluation, so a side-effect marker or `.value =` landing there is not
+/// a side effect of the computed itself.
+///
+/// The getter is the outermost function (function-nesting depth 1); only depth
+/// 2 or deeper is deferred. `code` is `non_code_mask(body)` — only code bytes
+/// (not strings/comments) drive bracket and token tracking.
+///
+/// Function bodies are recognized two ways:
+/// - **Arrow `=>`**: a braced body (`=> { ... }`) ends when its `{` closes; a
+///   concise body (`=> expr`) ends at the first `,` or closing `)`/`}`/`]` at or
+///   below the bracket depth where the arrow appeared (its natural expression
+///   boundary).
+/// - **`function` keyword**: the body is the next `{ ... }` block and ends when
+///   that brace closes.
+///
+/// Method-shorthand callbacks (`onClick() { ... }`) are not recognized as nested
+/// functions; the real-world deferred-callback shapes are arrows and `function`
+/// expressions stored as property values.
+///
+/// Known limitation: an immediately-invoked nested function (an IIFE,
+/// `(() => { ... })()`) runs synchronously during getter evaluation, but its
+/// body is treated as deferred because the trailing `()` invocation is not
+/// detected without re-parsing TS. This trades a vanishingly-rare false negative
+/// for eliminating the common callback-as-property false positive.
+fn deferred_mask(body: &str, code: &[bool]) -> Vec<bool> {
+    let bytes = body.as_bytes();
+    let mut mask = vec![false; bytes.len()];
+    // Each active function body, in nesting order. `Brace(depth)` ends when the
+    // bracket depth returns to `depth` (the `{` that opened it closes).
+    // `Concise(depth)` ends at the first `,` or closing bracket at depth <=
+    // `depth`.
+    enum Body {
+        Brace(i32),
+        Concise(i32),
+    }
+    let mut stack: Vec<Body> = Vec::new();
+    let mut depth: i32 = 0;
+    // After an arrow `=>`, await the body's first non-whitespace char to choose
+    // brace vs concise; holds the bracket depth at the arrow.
+    let mut pending_arrow: Option<i32> = None;
+    // After a `function` keyword, the next `{` opens a (always-braced) body.
+    let mut expect_fn_brace = false;
+    let is_code = |k: usize| code.get(k).copied() == Some(false);
+    let mut i = 0;
+    while i < bytes.len() {
+        if !is_code(i) {
+            if !stack.is_empty() {
+                mask[i] = true;
+            }
+            i += 1;
+            continue;
+        }
+        let c = bytes[i];
+        if let Some(arrow_depth) = pending_arrow {
+            if (c as char).is_whitespace() {
+                if stack.len() >= 2 {
+                    mask[i] = true;
+                }
+                i += 1;
+                continue;
+            }
+            // First real char of the arrow body decides its shape.
+            if c == b'{' {
+                stack.push(Body::Brace(depth));
+            } else {
+                stack.push(Body::Concise(arrow_depth));
+            }
+            pending_arrow = None;
+            // Fall through so this char is processed under the now-active body.
+        }
+        // Close every concise body whose boundary delimiter is this char, before
+        // attributing the delimiter to the enclosing function.
+        while let Some(Body::Concise(d)) = stack.last() {
+            let ends_here = (matches!(c, b')' | b'}' | b']') || c == b',') && depth <= *d;
+            if ends_here {
+                stack.pop();
+            } else {
+                break;
+            }
+        }
+        if stack.len() >= 2 {
+            mask[i] = true;
+        }
+        match c {
+            b'(' | b'[' => depth += 1,
+            b'{' => {
+                depth += 1;
+                if expect_fn_brace {
+                    stack.push(Body::Brace(depth - 1));
+                    expect_fn_brace = false;
+                }
+            }
+            b')' | b']' => depth -= 1,
+            b'}' => {
+                depth -= 1;
+                if let Some(&Body::Brace(d)) = stack.last()
+                    && depth == d
+                {
+                    stack.pop();
+                }
+            }
+            b'=' if i + 1 < bytes.len() && bytes[i + 1] == b'>' && is_code(i + 1) => {
+                if stack.len() >= 2 {
+                    mask[i + 1] = true;
+                }
+                pending_arrow = Some(depth);
+                i += 2;
+                continue;
+            }
+            _ => {
+                if is_function_keyword(body, code, i) {
+                    expect_fn_brace = true;
+                }
+            }
+        }
+        i += 1;
+    }
+    mask
+}
+
+/// Whether a `function` keyword starts at byte `i` in `body` — a code-byte run
+/// spelling `function` whose neighbors are not identifier characters (so
+/// `myfunction`/`functions` are rejected).
+fn is_function_keyword(body: &str, code: &[bool], i: usize) -> bool {
+    const KW: &[u8] = b"function";
+    let bytes = body.as_bytes();
+    if i + KW.len() > bytes.len() || &bytes[i..i + KW.len()] != KW {
+        return false;
+    }
+    if !(0..KW.len()).all(|k| code.get(i + k).copied() == Some(false)) {
+        return false;
+    }
+    let before_ok = i == 0 || !is_ident_char(bytes[i - 1]);
+    let after_ok = i + KW.len() >= bytes.len() || !is_ident_char(bytes[i + KW.len()]);
+    before_ok && after_ok
+}
+
+fn is_ident_char(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_' || c == b'$'
+}
+
 /// Byte range `[key_start ..= end]` spanning the writable-computed `set`
 /// property within `body`, or `None` when there is no such property.
 ///
@@ -225,6 +378,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
         let base_line = src[..abs].matches('\n').count();
         let set_range = set_block_range(body);
         let mask = non_code_mask(body);
+        let deferred = deferred_mask(body, &mask);
         let mut line_start = 0usize;
         // Split on '\n' (not `.lines()`) so a trailing '\r' stays inside the
         // segment and `seg.len() + 1` advances the byte cursor exactly — the
@@ -241,10 +395,12 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
                     continue;
                 }
             }
-            // A marker/assignment is real code only when it starts on a byte the
-            // mask marks as code (not inside a string, template literal, or
-            // comment).
-            let is_code = |off_in_line: usize| !mask[cur_start + off_in_line];
+            // A marker/assignment is a synchronous side effect only when it
+            // starts on a code byte (not inside a string, template literal, or
+            // comment) AND is not inside a nested function body — a callback the
+            // getter returns runs later, not during evaluation.
+            let is_code =
+                |off_in_line: usize| !mask[cur_start + off_in_line] && !deferred[cur_start + off_in_line];
             for marker in SIDE_EFFECT_MARKERS {
                 if line.match_indices(marker).any(|(off, _)| is_code(off)) {
                     diagnostics.push(Diagnostic {
@@ -420,6 +576,59 @@ mod tests {
     #[test]
     fn allows_value_assign_in_comment() {
         let sfc = "<script setup>\nconst c = computed(() => {\n  // other.value = 2\n  return 1\n})\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_emit_in_nested_arrow_callback() {
+        // Issue #4892: `emit(...)` inside arrow callbacks stored as object
+        // properties are deferred — invoked later by the consumer, not during
+        // getter evaluation. The getter returns a config object and is pure.
+        let sfc = "<script setup>\nconst c = useScrollable(computed(() => ({\n  ...reactive({ direction }),\n  onDragStart: (data) => emit('onDragStart', data),\n  onDragEnd: (data) => emit('onDragEnd', data),\n  onScroll: (data) => emit('onScroll', data),\n})))\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_value_assign_in_nested_arrow_callback() {
+        // Issue #4887: `.value =` inside nested arrow callbacks (event handlers
+        // returned in a config array) are deferred, not getter side effects.
+        let sfc = "<script setup>\nconst actions = computed(() => [\n  {\n    onClick: async () => {\n      await navigator.clipboard.writeText('x')\n      copied.value = true\n      copied.value = false\n    },\n  },\n  {\n    onClick: () => {\n      showCode.value = !showCode.value\n    },\n  },\n])\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn allows_emit_in_nested_function_expression() {
+        let sfc = "<script setup>\nconst c = computed(() => ({\n  handler: function (e) { emit('x', e) },\n}))\n</script>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn flags_emit_directly_in_getter_with_nested_callback_sibling() {
+        // A real side effect in the getter body is still flagged even when the
+        // getter also returns nested callbacks.
+        let sfc = "<script setup>\nconst c = computed(() => {\n  emit('side')\n  return { onClick: () => emit('deferred') }\n})\n</script>";
+        let diags = run(sfc);
+        assert_eq!(diags.len(), 1);
+        // Only the synchronous getter emit (line 3), not the nested one (line 4).
+        assert_eq!(diags[0].line, 3);
+    }
+
+    #[test]
+    fn flags_value_assign_directly_in_getter_with_nested_callback() {
+        let sfc = "<script setup>\nconst c = computed(() => {\n  other.value = 1\n  return { onClick: () => { x.value = 2 } }\n})\n</script>";
+        let diags = run(sfc);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 3);
+    }
+
+    #[test]
+    fn iife_in_getter_is_not_flagged_known_limitation() {
+        // An IIFE runs synchronously during getter evaluation, so its `emit` is
+        // a real side effect — but the trailing `()` invocation is not detected
+        // without re-parsing TS, so the body is treated as deferred. Documented
+        // as a deliberate false negative (see `deferred_mask` docblock): the
+        // tradeoff eliminates the common callback-as-property false positive.
+        let sfc = "<script setup>\nconst c = computed(() => {\n  (() => { emit('x') })()\n  return 1\n})\n</script>";
         assert!(run(sfc).is_empty());
     }
 
