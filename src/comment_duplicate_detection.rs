@@ -546,12 +546,13 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
             // analogous variant of the same — named declaration or member in
             // another file (a SIMD vs scalar backend both exposing
             // `aes128_decrypt`, a runtime props object and the TS type declaring
-            // the same prop, or a server `ignore_invalid_headers` and its client
-            // `ignore_invalid_headers_in_responses` builder twin) carries the
-            // same description because it describes the same item, not because
-            // it was copy-pasted. Restricted to cross-file matches between
-            // declaration names so an intra-file duplicate, or a copy-pasted
-            // free-floating rationale, still flags.
+            // the same prop, a server `ignore_invalid_headers` and its client
+            // `ignore_invalid_headers_in_responses` builder twin, or a safe
+            // `read_integer` and its unsafe `read_integer_ptr` decompressor
+            // twin) carries the same description because it describes the same
+            // item, not because it was copy-pasted. Restricted to cross-file
+            // matches between declaration names so an intra-file duplicate, or a
+            // copy-pasted free-floating rationale, still flags.
             if entry.file_idx != partner.file_idx
                 && are_parallel_decl_names(entry.decl_name.as_deref(), partner.decl_name.as_deref())
             {
@@ -615,6 +616,18 @@ fn common_prefix_len(a: &[String], b: &[String]) -> usize {
 /// could just be two unrelated functions sharing a copy-pasted doc.
 const MIN_VARIANT_ROOT_SEGMENTS: usize = 3;
 
+/// Name segments that mark one of two parallel implementations of a single
+/// algorithm — a safe/unsafe twin, a pointer/slice twin, or a SIMD/scalar twin.
+/// A Rust performance crate routinely ships the same algorithm twice (a checked
+/// path and an unchecked-indexing fast path), naming the two by appending one of
+/// these qualifiers to a shared root (`read_integer` / `read_integer_ptr`,
+/// `duplicate` / `duplicate_slice`). Both carry the same algorithm-description
+/// doc because they implement the same steps, so the repetition is intentional,
+/// not a copy-paste smell.
+const IMPL_QUALIFIER_SEGMENTS: &[&str] = &[
+    "safe", "unsafe", "checked", "unchecked", "ptr", "slice", "simd", "scalar", "generic",
+];
+
 /// Two doc-comments document parallel API surfaces when both name a declaration
 /// and the names are either identical or analogous variants: one a clean
 /// `_`-boundary prefix of the other (`ignore_invalid_headers` ⊂
@@ -629,7 +642,48 @@ fn are_parallel_decl_names(a: Option<&str>, b: Option<&str>) -> bool {
     if a == b {
         return true;
     }
-    is_variant_suffix_of(a, b) || is_variant_suffix_of(b, a)
+    is_variant_suffix_of(a, b)
+        || is_variant_suffix_of(b, a)
+        || are_impl_qualifier_twins(a, b)
+}
+
+/// Two declaration names are parallel-implementation twins when they reduce to
+/// the same root after stripping one leading/trailing implementation-direction
+/// qualifier segment (`read_integer` / `read_integer_ptr`, `duplicate` /
+/// `duplicate_slice`, `decode_simd` / `decode_scalar`). The shared root must
+/// still carry a segment, so a bare `ptr` / `safe` collapsing to nothing is not
+/// a twin. Because the names *differ*, this can only ever pair two distinct
+/// declarations — an exact-copy of one name onto itself stays caught by the
+/// `a == b` cross-file path, and an intra-file copy-paste does not become two
+/// differently-qualified names.
+///
+/// Unlike `is_variant_suffix_of`, a one-segment shared root (`run_safe` /
+/// `run_unsafe` → `run`) is accepted: the discriminating signal here is the
+/// closed, semantically-loaded qualifier vocabulary, not the length of the root.
+/// A `_safe`/`_ptr` segment marks a deliberate implementation direction, whereas
+/// the arbitrary `_in_responses`-style suffix the variant path handles needs a
+/// long root to rule out two unrelated functions sharing a generic prefix.
+fn are_impl_qualifier_twins(a: &str, b: &str) -> bool {
+    let root_a = strip_impl_qualifier(a);
+    let root_b = strip_impl_qualifier(b);
+    root_a == root_b && !root_a.is_empty()
+}
+
+/// `name` with one recognized implementation-direction qualifier removed from a
+/// `_`-boundary at either end, e.g. `read_integer_ptr` → `read_integer`,
+/// `unsafe_copy` → `copy`. Returns `name` unchanged when it carries no such
+/// qualifier. Only one qualifier is stripped, so the remaining root keeps any
+/// other distinguishing segments.
+fn strip_impl_qualifier(name: &str) -> &str {
+    for q in IMPL_QUALIFIER_SEGMENTS {
+        if let Some(root) = name.strip_suffix(q).and_then(|r| r.strip_suffix('_')) {
+            return root;
+        }
+        if let Some(root) = name.strip_prefix(q).and_then(|r| r.strip_prefix('_')) {
+            return root;
+        }
+    }
+    name
 }
 
 /// Two doc-comments document parallel enum variants when both name a variant
@@ -1289,6 +1343,54 @@ pub(crate) fn aes128_decrypt(rkeys: u8, blocks: u8) -> u8 { rkeys ^ blocks }
         let a = write(&dir, "server.rs", &server);
         let b = write(&dir, "client.rs", &client);
         assert!(run(&[&a, &b]).is_empty(), "parallel builder variant docs must not flag");
+    }
+
+    #[test]
+    fn ignores_parallel_safe_unsafe_decompressor_impl_docs() {
+        // Regression (#5312): lz4_flex ships a safe (bounds-checked) and an unsafe
+        // (unchecked-indexing) implementation of the same LZ4 decompressor in two
+        // files. The two functions differ only by an implementation-direction
+        // qualifier (`read_integer` safe / `read_integer_ptr` unsafe) and carry
+        // the identical algorithm-description doc because they implement the same
+        // protocol steps — intentional parallel documentation, not a copy-paste.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "\
+/// Read an integer.
+///
+/// In LZ4, we encode small integers in a way that we can have an arbitrary number
+/// of bytes. In particular, we add the bytes repeatedly until we hit a non-0xFF
+/// byte. When we do, we add this byte to our sum and terminate the loop.\n";
+        let safe = write(
+            &dir,
+            "decompress_safe.rs",
+            &format!("{doc}pub(super) fn read_integer(input: u8) -> u8 {{ input }}\n"),
+        );
+        let unsafe_ = write(
+            &dir,
+            "decompress.rs",
+            &format!("{doc}pub(super) fn read_integer_ptr(input: u8) -> u8 {{ input }}\n"),
+        );
+        assert!(
+            run(&[&safe, &unsafe_]).is_empty(),
+            "safe/unsafe decompressor twins sharing algorithm docs must not flag"
+        );
+    }
+
+    #[test]
+    fn still_flags_duplicate_doc_on_non_qualifier_suffixed_decls() {
+        // The twin exemption only strips a recognized implementation-direction
+        // qualifier (`_ptr`, `_safe`, `_simd`, …). Two functions whose names
+        // differ by an ordinary suffix (`_db`) are unrelated, so an identical doc
+        // copy-pasted onto both is real duplication and must still flag.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "\
+/// Builds the canonical pagination defaults derived from the shared schema so
+/// every list view stays consistent across the whole admin surface everywhere.\n";
+        let a = write(&dir, "a.rs", &format!("{doc}pub fn init() {{}}\n"));
+        let b = write(&dir, "b.rs", &format!("{doc}pub fn init_db() {{}}\n"));
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "a non-qualifier suffix is not a parallel-impl signal");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
     #[test]
