@@ -22,10 +22,25 @@ const ALLOWED_NAMES: &[&str] = &[
     "noValidate", "value", "defaultOpen", "defaultChecked", "hour12",
 ];
 
+/// True if the name ends in the explicit `flag` suffix as a distinct word
+/// (`useDeltaFlag`, `use_delta_flag`, or bare `flag`). The `flag` suffix is
+/// itself a boolean marker — as clear an intent signal as an `is*`/`has*`
+/// prefix — and is the verbatim naming convention for boolean syntax elements
+/// in ITU-T/ISO codec and protocol specifications. A trailing `flag` mid-word
+/// (`flagged`) does not match: the word boundary (camelCase `Flag` or
+/// snake_case `_flag`) is required, so adjective/state names still need a
+/// prefix.
+fn has_flag_suffix(name: &str) -> bool {
+    name == "flag" || name.ends_with("Flag") || name.ends_with("_flag")
+}
+
 /// Return a short problem description if the name doesn't match the rule.
 fn classify_name(name: &str) -> Option<&'static str> {
     if NEGATIVE_SUBSTRINGS.iter().any(|neg| name.contains(neg)) {
         return Some("is negatively phrased — use the positive form with `!`");
+    }
+    if has_flag_suffix(name) {
+        return None;
     }
     for &prefix in VALID_PREFIXES {
         if let Some(rest) = name.strip_prefix(prefix)
@@ -178,7 +193,29 @@ mod tests {
 
     #[test]
     fn still_flags_boolean_var_at_runtime() {
-        assert_eq!(run("const enabledFlag: boolean = true;").len(), 1);
+        assert_eq!(run("const retry: boolean = true;").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_flag_suffix() {
+        // The explicit `flag` suffix is itself a boolean marker — the verbatim
+        // naming convention for boolean syntax elements in ITU-T/ISO codec
+        // specs (HEVC/H.265, H.264). Renaming would break correspondence with
+        // the standard. (Closes #5065)
+        assert!(run("let inter_ref_pic_set_prediction_flag = false;").is_empty());
+        assert!(run("let use_delta_flag: boolean = false;").is_empty());
+        assert!(run("let sps_temporal_id_nesting_flag: boolean = true;").is_empty());
+        assert!(run("let defaultDisplayWindowFlag = false;").is_empty());
+    }
+
+    #[test]
+    fn flag_suffix_does_not_soften_adjective_strictness() {
+        // The `flag` suffix only validates a trailing-word `flag`; bare
+        // adjective/state names without a prefix or flag suffix still flag.
+        assert_eq!(run("const debug: boolean = true;").len(), 1);
+        assert_eq!(run("let ready = false;").len(), 1);
+        // A mid-word `flag` (e.g. `flagged`) is not the boolean-marker suffix.
+        assert_eq!(run("let flagged: boolean = true;").len(), 1);
     }
 
     #[test]
