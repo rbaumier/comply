@@ -2267,6 +2267,30 @@ mod tests {
     }
 
     #[test]
+    fn skips_test_dts_type_compilation_files_issue5053() {
+        // Issue #5053: vue/test-utils's `test-dts/` directory and `.d-test.ts`
+        // files hold compile-time `expectType` assertions that never run at
+        // runtime, so the tree-shaking concern does not apply.
+        let src = "expectType<string>(shallowMount(App, { props: { a: 'x' } }).vm.a);";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "test-dts/shallowMount.d-test.ts")
+                .is_empty()
+        );
+        // The `.d-test.ts` infix alone (outside a `test-dts/` directory) is also
+        // exempt.
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "src/shallowMount.d-test.ts")
+                .is_empty()
+        );
+        // A genuine top-level side effect in a normal runtime module is STILL
+        // flagged — the exemption is scoped to type-compilation-test files.
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, src, "src/shallow-mount.ts").len(),
+            1
+        );
+    }
+
+    #[test]
     fn skips_cypress_e2e_file_by_extension() {
         // Issue #1868: Cypress E2E specs use the `.cy.*` extension and always
         // open with a top-level `describe(...)` — required Cypress API. These
