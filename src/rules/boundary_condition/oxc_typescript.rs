@@ -225,6 +225,24 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `str[0]` / `str[str.length - 1]` inside the truthy branch of a
+        // same-variable truthiness guard on `str` — `str ? …str[0]… : …`,
+        // `str && …str[0]…`, or `if (str) { …str[0]… }`. A string is falsy
+        // exactly when empty, so a truthy `str` is non-empty and the boundary
+        // read is in-bounds. Restricted to strings: an array is truthy even when
+        // empty (`[]`), so a truthy-guarded array index stays flagged. String
+        // evidence is a `string` annotation on the binding, or a string method
+        // (`.toUpperCase()` / `.slice()` / …) called on the same variable inside
+        // the guarded branch (the `str ? str[0].toUpperCase() + str.slice(1) : ""`
+        // idiom, where `str` is a generic `S extends string` with no plain
+        // `string` annotation).
+        if (is_first || is_last)
+            && let Expression::Identifier(obj_ident) = &member.object
+            && is_in_same_var_truthy_string_guard(node, obj_ident, semantic)
+        {
+            return;
+        }
+
         let which = if is_first { "first" } else { "last" };
         let at_arg = if is_first { "0" } else { "-1" };
         // Report at the opening `[` of this access, not at `member.span().start`.
@@ -1721,6 +1739,176 @@ fn condition_truthy_narrows(expr: &Expression, name: &str) -> bool {
     }
 }
 
+/// Returns true when the boundary access at `node` sits in the truthy branch of a
+/// same-variable truthiness guard on the indexed binding `ident`, AND that binding
+/// is known to be a string. A truthy string is non-empty (`""` is the only falsy
+/// string), so the boundary read is in-bounds; the string restriction is essential
+/// because an empty array is truthy, leaving a truthy-guarded array index unsafe.
+///
+/// The guard shapes are `str ? <branch> : …`, `str && <branch>`, and
+/// `if (str) { <branch> }`, where `<branch>` contains the access — recognized via
+/// [`reference_in_truthy_narrowed_branch`]. String evidence is either a plain
+/// `string` annotation on the binding, or a string-exclusive method called on the
+/// same variable inside the guarded branch (see [`branch_has_string_method_on`]).
+fn is_in_same_var_truthy_string_guard(
+    node: &oxc_semantic::AstNode,
+    ident: &IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let name = ident.name.as_str();
+    let nodes = semantic.nodes();
+    let node_span = node.kind().span();
+    if !reference_in_truthy_narrowed_branch(node.id(), node_span, name, nodes) {
+        return false;
+    }
+    binding_has_string_type(ident, semantic)
+        || branch_has_string_method_on(node, name, semantic)
+}
+
+/// String-exclusive method names — present on `String.prototype` but not
+/// `Array.prototype`. A call of one of these on a variable proves the variable is
+/// a string, so an enclosing truthiness guard on it bounds the boundary access.
+/// Methods shared with arrays (`slice`, `concat`, `indexOf`, `includes`) are
+/// deliberately excluded: they would not distinguish a string from an array.
+const STRING_EXCLUSIVE_METHODS: [&str; 12] = [
+    "toUpperCase",
+    "toLowerCase",
+    "charAt",
+    "charCodeAt",
+    "codePointAt",
+    "substring",
+    "substr",
+    "normalize",
+    "padStart",
+    "padEnd",
+    "startsWith",
+    "endsWith",
+];
+
+/// Returns true when, within the enclosing truthiness-guarded branch around the
+/// access at `node`, the variable `name` is the receiver of a string-exclusive
+/// method call (`name.toUpperCase()`, `name.slice(1)` is NOT counted — see
+/// [`STRING_EXCLUSIVE_METHODS`]). Scans the consequent of the nearest enclosing
+/// `if (name)` / `name ? … : …` or the right operand of `name && …` for such a
+/// call, proving `name` is a string in the same scope as the access.
+fn branch_has_string_method_on(
+    node: &oxc_semantic::AstNode,
+    name: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let ref_span = node.kind().span();
+    for ancestor in nodes.ancestors(node.id()) {
+        let branch: &Expression = match ancestor.kind() {
+            AstKind::ConditionalExpression(cond)
+                if condition_truthy_narrows(&cond.test, name)
+                    && span_contains(cond.consequent.span(), ref_span) =>
+            {
+                &cond.consequent
+            }
+            AstKind::LogicalExpression(logical)
+                if matches!(logical.operator, LogicalOperator::And)
+                    && condition_truthy_narrows(&logical.left, name)
+                    && span_contains(logical.right.span(), ref_span) =>
+            {
+                &logical.right
+            }
+            AstKind::IfStatement(if_stmt)
+                if condition_truthy_narrows(&if_stmt.test, name)
+                    && span_contains(if_stmt.consequent.span(), ref_span) =>
+            {
+                return statement_has_string_method_on(&if_stmt.consequent, name);
+            }
+            AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Program(_) => return false,
+            _ => continue,
+        };
+        if expression_has_string_method_on(branch, name) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns true when `expr` is the bare identifier `name` or an index access into
+/// it (`name[i]`). Indexing a string yields a (single-char) string, so a
+/// string-exclusive method on `name[i]` proves `name` is a string just as a method
+/// on `name` itself does — covering `str[0].toUpperCase()`.
+fn receiver_roots_at_string(expr: &Expression, name: &str) -> bool {
+    match expr {
+        Expression::Identifier(id) => id.name.as_str() == name,
+        Expression::ComputedMemberExpression(member) => {
+            receiver_roots_at_string(&member.object, name)
+        }
+        _ => false,
+    }
+}
+
+/// Recursively scans `expr` for a string-exclusive method call whose receiver is
+/// the identifier `name` or an index into it (`name.toUpperCase()`,
+/// `name[0].toUpperCase()`). Walks the operator nodes that hold sub-expressions of
+/// a typical guarded branch — binary `+`, logical, member, call, parentheses —
+/// without needing to cover every node kind.
+fn expression_has_string_method_on(expr: &Expression, name: &str) -> bool {
+    match expr {
+        Expression::CallExpression(call) => {
+            if let Expression::StaticMemberExpression(member) = &call.callee
+                && STRING_EXCLUSIVE_METHODS.contains(&member.property.name.as_str())
+                && receiver_roots_at_string(&member.object, name)
+            {
+                return true;
+            }
+            // The callee or any argument may itself contain the marker call.
+            expression_has_string_method_on(&call.callee, name)
+                || call
+                    .arguments
+                    .iter()
+                    .filter_map(|arg| arg.as_expression())
+                    .any(|arg| expression_has_string_method_on(arg, name))
+        }
+        Expression::BinaryExpression(bin) => {
+            expression_has_string_method_on(&bin.left, name)
+                || expression_has_string_method_on(&bin.right, name)
+        }
+        Expression::LogicalExpression(logical) => {
+            expression_has_string_method_on(&logical.left, name)
+                || expression_has_string_method_on(&logical.right, name)
+        }
+        Expression::StaticMemberExpression(member) => {
+            expression_has_string_method_on(&member.object, name)
+        }
+        Expression::ComputedMemberExpression(member) => {
+            expression_has_string_method_on(&member.object, name)
+                || expression_has_string_method_on(&member.expression, name)
+        }
+        Expression::ParenthesizedExpression(paren) => {
+            expression_has_string_method_on(&paren.expression, name)
+        }
+        _ => false,
+    }
+}
+
+/// Scans an `if` consequent statement (an expression-statement or block) for a
+/// string-exclusive method call on `name`. Only the direct statements are walked,
+/// which covers the `if (str) { return str[0].toUpperCase(); }` idiom.
+fn statement_has_string_method_on(stmt: &Statement, name: &str) -> bool {
+    match stmt {
+        Statement::BlockStatement(block) => block
+            .body
+            .iter()
+            .any(|s| statement_has_string_method_on(s, name)),
+        Statement::ExpressionStatement(expr_stmt) => {
+            expression_has_string_method_on(&expr_stmt.expression, name)
+        }
+        Statement::ReturnStatement(ret) => ret
+            .argument
+            .as_ref()
+            .is_some_and(|arg| expression_has_string_method_on(arg, name)),
+        _ => false,
+    }
+}
+
 /// Returns true when `outer` fully contains `inner`.
 fn span_contains(outer: oxc_span::Span, inner: oxc_span::Span) -> bool {
     outer.start <= inner.start && inner.end <= outer.end
@@ -2812,6 +3000,68 @@ mod tests {
         // does not prove `base` is non-nullish even though one arm is `!base`. The
         // `&&` guard must not be recognized, so the read stays flagged.
         let src = "function f(base: string, other: boolean) { if (!base && other) { return \"\"; } const c = base[base.length - 1]; return c; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_string_index0_in_truthy_ternary_consequent_issue_5254() {
+        // The issue's exact shape (unjs/scule): `str ? str[0].toUpperCase() +
+        // str.slice(1) : ""`. The ternary tests `str` for truthiness — an empty
+        // string is falsy — so in the consequent `str` is a non-empty string and
+        // `str[0]` is in-bounds. `str: S` (generic `S extends string`) has no plain
+        // `string` annotation, so the string-method call on `str` supplies the
+        // evidence.
+        let src = "function upperFirst<S extends string>(str: S): Capitalize<S> {\n  return (str ? str[0].toUpperCase() + str.slice(1) : \"\") as Capitalize<S>;\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_string_index0_in_truthy_ternary_annotated_issue_5254() {
+        // A plain `: string` annotation alone supplies the string evidence under the
+        // same-variable truthy ternary guard — no method call needed.
+        let src = "function f(str: string) { return str ? str[0] : \"\"; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_string_index0_in_truthy_logical_and_issue_5254() {
+        // The logical-and form: `str && str[0].toUpperCase()` accesses `str[0]` only
+        // when `str` is truthy (non-empty string).
+        let src = "function f<S extends string>(str: S) { return str && str[0].toUpperCase(); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_string_index0_in_truthy_if_block_issue_5254() {
+        // The `if (str) { … }` form: inside the truthy block `str` is a non-empty
+        // string, proven by the `.charAt`-style method (here `.toUpperCase`).
+        let src = "function f<S extends string>(str: S) { if (str) { return str[0].toUpperCase(); } return \"\"; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_array_index0_in_truthy_ternary_issue_5254() {
+        // Load-bearing negative: an empty array is truthy (`[]`), so `arr ? arr[0] :
+        // null` does NOT prove non-emptiness — there is no string evidence, so the
+        // boundary read stays flagged.
+        let src = "function f(arr: number[]) { return arr ? arr[0] : null; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_untyped_index0_in_truthy_ternary_no_string_evidence_issue_5254() {
+        // No `string` annotation and no string-exclusive method on the variable: the
+        // truthy guard could be on an array, so the read stays flagged. `.slice` is
+        // shared with arrays and is deliberately not counted as string evidence.
+        let src = "function f(x) { return x ? x[0].slice(1) : null; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_string_index0_in_ternary_alternate_branch_issue_5254() {
+        // The alternate (falsy) branch runs when `str` is empty, so a boundary access
+        // there is genuinely unsafe and stays flagged.
+        let src = "function f(str: string) { return str ? str.toUpperCase() : str[0]; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
