@@ -74,6 +74,54 @@ fn validates_state(text: &str) -> bool {
     false
 }
 
+/// A signed-cookie / JWT CSRF mechanism is equivalent to the `state` query
+/// param: the callback proves it originated the flow by *verifying* a token it
+/// set as a cookie before the redirect. Accept it only when the cookie value is
+/// genuinely validated, never on a bare cookie read.
+fn validates_signed_cookie_csrf(text: &str) -> bool {
+    let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    let lower = compact.to_ascii_lowercase();
+
+    // `req.signedCookies[...]` / `request.signedCookies.x`: Express verifies the
+    // HMAC signature before populating `signedCookies`, so reading it is itself
+    // proof of a validated, tamper-evident cookie.
+    if lower.contains(".signedcookies") {
+        return true;
+    }
+
+    // Otherwise require a verification call *applied to a cookie value*: e.g.
+    // `verifyJWT(req.cookies[...], secret)`, `jwt.verify(req.cookies.x, ...)`.
+    // The cookie reference alone is not enough — the token must be verified.
+    let reads_cookie = lower.contains(".cookies[") || lower.contains(".cookies.");
+    if !reads_cookie {
+        return false;
+    }
+    let verifies = lower.contains("verifyjwt(")
+        || lower.contains("jwt.verify(")
+        || lower.contains("jwtverify(")
+        || lower.contains("verifytoken(")
+        || lower.contains("verifyandparse(")
+        || lower.contains("decodeandverify(");
+    if verifies {
+        return true;
+    }
+    // Generic `verify(` immediately followed by a cookie read in the argument
+    // list (`verify(req.cookies...`). A bare `decode(` is intentionally excluded:
+    // `jwt.decode` does no signature check, so it is not CSRF evidence — the
+    // verifying variant is matched by `decodeandverify(` in the named list above.
+    if let Some(idx) = lower.find("verify(") {
+        let tail = &lower[idx + "verify(".len()..];
+        if tail.starts_with("req.cookies")
+            || tail.starts_with("request.cookies")
+            || tail.starts_with("ctx.cookies")
+            || tail.starts_with("c.cookies")
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn is_oauth_callback_path(path: &str) -> bool {
     let unquoted = path.trim_matches(|c: char| c == '"' || c == '\'' || c == '`');
     let lower = unquoted.to_ascii_lowercase();
@@ -139,7 +187,7 @@ impl OxcCheck for Check {
             let span = arg.span();
             let text = &ctx.source[span.start as usize..span.end as usize];
             let stripped = strip_comments(text);
-            if validates_state(&stripped) {
+            if validates_state(&stripped) || validates_signed_cookie_csrf(&stripped) {
                 reads_state = true;
                 break;
             }
@@ -210,6 +258,79 @@ mod tests {
     #[test]
     fn flags_bare_callback_without_state() {
         let src = r#"app.get('/callback', (c) => { return c.text('ok') })"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // #5369: CSRF protection via a verified signed JWT cookie (Directus' OAuth
+    // flow) is equivalent to the `state` query param — the callback proves it
+    // originated the flow by verifying a token it set as a cookie.
+    #[test]
+    fn ignores_callback_validating_signed_jwt_cookie() {
+        let src = r#"
+            router.get('/callback', async (req, res, next) => {
+              let tokenData
+              try {
+                tokenData = verifyJWT(req.cookies[`openid.${providerName}`], getSecret())
+              } catch (e) {
+                return res.redirect('/login')
+              }
+              const { verifier } = tokenData
+              return res.redirect('/')
+            })
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    // `req.signedCookies` is framework-verified (Express checks the HMAC before
+    // populating it), so reading it is proof of a validated CSRF token.
+    #[test]
+    fn ignores_callback_reading_signed_cookies() {
+        let src = r#"
+            app.get('/oauth/callback', (req, res) => {
+              const csrf = req.signedCookies['oauth_csrf']
+              return res.redirect('/')
+            })
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    // Generic `verify(` marker: accepted only when the cookie read is the
+    // *immediate* argument (`verify(req.cookies...`).
+    #[test]
+    fn ignores_callback_with_generic_verify_on_cookie() {
+        let src = r#"
+            app.get('/oauth/callback', (req, res) => {
+              const data = verify(req.cookies['oauth'], secret)
+              return res.redirect('/')
+            })
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    // Security preserved: a `verify(...)` of something unrelated next to a bare
+    // cookie read does NOT exempt — the verification must be on the cookie.
+    #[test]
+    fn flags_verify_unrelated_to_cookie() {
+        let src = r#"
+            app.get('/oauth/callback', (req, res) => {
+              verify(signature, key)
+              const sid = req.cookies['session']
+              return res.redirect('/')
+            })
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Security preserved: a bare `req.cookies.x` read with NO verification is not
+    // a CSRF defense and must still flag.
+    #[test]
+    fn flags_bare_cookie_read_without_verification() {
+        let src = r#"
+            app.get('/oauth/callback', (req, res) => {
+              const sid = req.cookies['session']
+              return res.redirect('/')
+            })
+        "#;
         assert_eq!(run(src).len(), 1);
     }
 
