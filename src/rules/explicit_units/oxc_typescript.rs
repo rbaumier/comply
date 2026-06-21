@@ -28,11 +28,16 @@ use std::sync::Arc;
 /// unit (Hz): in Web Audio / DSP code (`OscillatorNode.frequency`,
 /// `frequencyMin`/`frequencyMax`) the unit is implicit and a suffix adds
 /// nothing, while the suggested `frequencyMs`/`frequencyBytes` are nonsensical.
+///
+/// `duration` is excluded as a named temporal quantity whose canonical
+/// implicit unit is seconds in media APIs: the Web Audio / HTMLMediaElement
+/// specs and HLS (`#EXTINF`) all express `duration` as floating-point
+/// seconds (`HTMLMediaElement.duration`, `AudioBuffer.duration`), so the
+/// unit is conventional and the suggested `durationMs` would be misleading.
 const AMBIGUOUS_BASES: &[&str] = &[
     "delay",
     "timeout",
     "interval",
-    "duration",
     "elapsed",
     "age",
     "wait",
@@ -304,6 +309,24 @@ mod tests {
         // Removing `frequency` must not loosen genuinely unit-ambiguous bases.
         assert_eq!(run_on("function f(timeout: number) {}").len(), 1);
         assert_eq!(run_on("function f(delay: number) {}").len(), 1);
+    }
+
+    #[test]
+    fn allows_duration_named_temporal_quantity() {
+        // `duration` is seconds by media convention (Web Audio / HTMLMediaElement
+        // / HLS `#EXTINF`); the unit is implicit and `durationMs` would mislead
+        // (#5064).
+        assert!(run_on("function loadAudio(duration: number) {}").is_empty());
+        assert!(run_on("function f(durationMin: number, durationMax: number) {}").is_empty());
+        assert!(run_on("const duration: number = 5;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_other_temporal_bases_after_duration_removal() {
+        // Removing `duration` must not loosen genuinely unit-ambiguous bases.
+        assert_eq!(run_on("function f(timeout: number) {}").len(), 1);
+        assert_eq!(run_on("function f(delay: number) {}").len(), 1);
+        assert_eq!(run_on("function f(interval: number) {}").len(), 1);
     }
 
     #[test]
