@@ -116,7 +116,12 @@ fn has_safety_comment_above(node: tree_sitter::Node, source: &str) -> bool {
 /// preceding lines up to the previous code line) because tree-sitter
 /// doesn't attach comments to expressions. Blank lines, other comments,
 /// and outer attributes (`#[...]`) are skipped so a comment above an
-/// `impl` carrying `#[allow(unsafe_code)]` still counts.
+/// `impl` carrying `#[allow(unsafe_code)]` still counts. A contiguous run
+/// of simple `let` bindings directly above is also skipped: documenting
+/// the invariant once above the preparatory bindings, then performing the
+/// unsafe call, is idiomatic. The scan stops at the first non-`let` code
+/// line (a call/expression statement, an opening/closing brace, another
+/// unsafe block), so a stray faraway comment never counts.
 fn safety_comment_above_row(start_row: usize, lines: &[&str]) -> bool {
     let mut row = start_row;
     while row > 0 {
@@ -132,10 +137,28 @@ fn safety_comment_above_row(start_row: usize, lines: &[&str]) -> bool {
             }
             continue;
         }
+        if is_simple_let_binding(trimmed) {
+            // Preparatory binding between the comment and the unsafe block —
+            // skip it and keep looking upward for the SAFETY comment.
+            continue;
+        }
         // Hit real code — stop looking.
         break;
     }
     false
+}
+
+/// True if `trimmed` is a complete single-line `let` binding, e.g.
+/// `let handler = setup();`. Requires the `let` keyword at the start and a
+/// trailing `;` so a multi-line binding's continuation lines (which carry
+/// arbitrary code) don't get skipped, and a binding initialized from its
+/// own `unsafe` block (`let x = unsafe { .. };`) is not treated as plain
+/// setup.
+fn is_simple_let_binding(trimmed: &str) -> bool {
+    let Some(rest) = trimmed.strip_prefix("let ") else {
+        return false;
+    };
+    trimmed.ends_with(';') && !rest.contains("unsafe")
 }
 
 #[cfg(test)]
@@ -308,5 +331,56 @@ mod tests {
             crate::rules::test_helpers::run_rule(&Check, source, "src/metadata/value.rs").len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_safety_comment_separated_by_let_issue_5199() {
+        // Issue #5199: miette src/eyreish/error.rs — a `// Safety:` comment
+        // documents the unsafe block but a preparatory `let` binding sits
+        // between them. The upward scan skips the simple `let` and finds the
+        // comment.
+        let source = "fn f(error: E) {\n\
+                      // Safety: passing vtable that operates on the right type E.\n\
+                      let handler = Some(super::capture_handler(&error));\n\
+                      unsafe { Report::construct(error, vtable, handler) }\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_safety_comment_separated_by_two_lets_issue_5199() {
+        // Two contiguous preparatory bindings between the comment and the
+        // unsafe block are both skipped.
+        let source = "fn f(p: *const u8) {\n\
+                      // SAFETY: p is non-null and points to valid memory.\n\
+                      let len = compute_len();\n\
+                      let cap = len * 2;\n\
+                      unsafe { let _ = *p; }\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_unsafe_separated_from_comment_by_real_code_issue_5199() {
+        // A non-`let` statement (a function call) between the comment and the
+        // unsafe block breaks the association — the comment documents the call,
+        // not the unsafe block, so it still fires.
+        let source = "fn f(p: *const u8) {\n\
+                      // SAFETY: p is non-null and points to valid memory.\n\
+                      do_setup();\n\
+                      unsafe { let _ = *p; }\n\
+                      }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_unsafe_with_let_but_no_comment_issue_5199() {
+        // Skipping the preparatory `let` must not invent a SAFETY comment:
+        // a genuinely undocumented unsafe block above a `let` still fires.
+        let source = "fn f(p: *const u8) {\n\
+                      let handler = setup();\n\
+                      unsafe { let _ = *p; }\n\
+                      }";
+        assert_eq!(run_on(source).len(), 1);
     }
 }
