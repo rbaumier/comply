@@ -9,6 +9,8 @@ crate::ast_check! { on ["const_item", "static_item"] prefilter = ["const", "stat
 
     if super::is_screaming_snake(name) { return; }
 
+    if is_google_k_prefix_constant(name) { return; }
+
     // A `static`/`const` with no initializer is never free-standing Rust: it is a
     // foreign declaration inside `extern "C" { … }` (ABI-mandated symbol names like
     // `errno`, `__ImageBase`, which the author cannot rename) or a trait/associated
@@ -26,6 +28,23 @@ crate::ast_check! { on ["const_item", "static_item"] prefilter = ["const", "stat
         format!("Constant `{name}` is not in `SCREAMING_SNAKE_CASE`."),
         Severity::Warning,
     ));
+}
+
+/// True if `name` follows the Google C++ `k`-prefix constant convention:
+/// a lowercase `k` immediately followed by an uppercase letter and then any
+/// alphanumerics (`kInsBase`, `kMaxValue`, `kHashMul32`). Rust ports of C/C++
+/// codebases (e.g. brotli) deliberately keep these names so the source stays
+/// cross-referenceable with the original.
+///
+/// The required uppercase letter right after `k` keeps the exemption tight: it
+/// cannot match a normal lowercase name (`key`, `kind`), a SCREAMING_SNAKE name,
+/// or a non-`k`-prefixed PascalCase name. Every other mis-cased constant
+/// (`maxValue`, `MaxValue`, `ksomething`) still fires.
+fn is_google_k_prefix_constant(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes.next() == Some(b'k')
+        && bytes.next().is_some_and(|b| b.is_ascii_uppercase())
+        && bytes.all(|b| b.is_ascii_alphanumeric())
 }
 
 /// True if the const/static `item` is covered by an explicit
@@ -307,5 +326,41 @@ mod tests {
         let diags = run("#[doc = \"deprecated\"]\nconst fooBar: u32 = 1;");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("fooBar"));
+    }
+
+    #[test]
+    fn allows_google_k_prefix_constants() {
+        // The rust-brotli case from the issue: a direct port of the Google C++
+        // brotli reference implementation keeps the `k`-prefix constant names.
+        assert!(run("pub static kInsBase: [u32; 24] = [0, 1, 2];").is_empty());
+        assert!(run("pub static kHashMul32: u32 = 0x1e35_a7bd;").is_empty());
+        assert!(run("static kCutoffTransformsCount: u32 = 10;").is_empty());
+        assert!(run("const kMaxValue: i32 = 100;").is_empty());
+        assert!(run("const kDefaultSize: usize = 8;").is_empty());
+    }
+
+    #[test]
+    fn flags_k_prefix_without_uppercase() {
+        // `k` not immediately followed by an uppercase letter is not the
+        // convention and must still fire.
+        let diags = run("const ksomething: u32 = 1;");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("ksomething"));
+    }
+
+    #[test]
+    fn flags_camel_and_pascal_despite_k_exemption() {
+        // The `k`-prefix exemption must not weaken the rule for ordinary
+        // non-SCREAMING_SNAKE constants.
+        assert_eq!(run("const maxValue: i32 = 1;").len(), 1);
+        assert_eq!(run("const MaxValue: i32 = 1;").len(), 1);
+        assert_eq!(run("const Kvalue: i32 = 1;").len(), 1);
+    }
+
+    #[test]
+    fn k_exemption_keeps_screaming_snake_accepted() {
+        // The canonical form remains accepted (covered by is_screaming_snake,
+        // not the k-prefix path).
+        assert!(run("const MAX_VALUE: i32 = 1;").is_empty());
     }
 }
