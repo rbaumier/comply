@@ -34,6 +34,13 @@ use std::sync::Arc;
 /// specs and HLS (`#EXTINF`) all express `duration` as floating-point
 /// seconds (`HTMLMediaElement.duration`, `AudioBuffer.duration`), so the
 /// unit is conventional and the suggested `durationMs` would be misleading.
+///
+/// `rate` is excluded as a dimensionless ratio/multiplier: a playback `rate`
+/// mirrors `HTMLMediaElement.playbackRate` (1.0 = normal, 2.0 = double speed),
+/// which has no physical unit, so the suggested `rateMs`/`rateBytes`/`rateCount`
+/// are all wrong. Data-transfer rates carry their unit in a qualifier
+/// (`sampleRate`→Hz, `bitRate`→bps); those do not start with `rate` and are
+/// unaffected by this exclusion.
 const AMBIGUOUS_BASES: &[&str] = &[
     "delay",
     "timeout",
@@ -43,7 +50,6 @@ const AMBIGUOUS_BASES: &[&str] = &[
     "wait",
     "distance",
     "limit",
-    "rate",
     "threshold",
 ];
 
@@ -327,6 +333,33 @@ mod tests {
         assert_eq!(run_on("function f(timeout: number) {}").len(), 1);
         assert_eq!(run_on("function f(delay: number) {}").len(), 1);
         assert_eq!(run_on("function f(interval: number) {}").len(), 1);
+    }
+
+    #[test]
+    fn allows_rate_playback_multiplier() {
+        // `rate` is a dimensionless ratio (HTMLMediaElement.playbackRate:
+        // 1.0 = normal, 2.0 = double speed), not a measured quantity — a unit
+        // suffix is nonsensical, so it must not be flagged (#5073).
+        assert!(run_on("public setPlaybackRate(rate: number) {}").is_empty());
+        assert!(run_on("const rate: number = 1.0;").is_empty());
+        // `rateLimit` starts with `rate`, so it is also un-flagged.
+        assert!(run_on("const rateLimit: number = 100;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_other_ambiguous_bases_after_rate_removal() {
+        // Removing `rate` must not gut the rest of the set.
+        assert_eq!(run_on("function f(timeout: number) {}").len(), 1);
+        assert_eq!(run_on("const delay: number = 100;").len(), 1);
+        assert_eq!(run_on("function g(interval: number) {}").len(), 1);
+    }
+
+    #[test]
+    fn sample_rate_unaffected_by_rate_removal() {
+        // `sampleRate`/`bitRate` do not start with `rate`, so they were never
+        // matched by the `rate` base and are unchanged by its removal.
+        assert!(run_on("const sampleRate: number = 44100;").is_empty());
+        assert!(run_on("function f(bitRate: number) {}").is_empty());
     }
 
     #[test]
