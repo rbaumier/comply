@@ -1,4 +1,9 @@
 //! escape-case — require uppercase hex digits in escape sequences.
+//!
+//! Skipped in test directories: NLP/tokenizer fixtures capture verbatim model
+//! output as `\uXXXX` escapes copied from upstream references, where the hex
+//! casing is cosmetic (`\u0e1e` and `\u0E1E` decode to the same code point) and
+//! normalizing it diverges from the source. Real source still flags.
 
 mod oxc_typescript;
 
@@ -17,7 +22,7 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["unicorn"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 

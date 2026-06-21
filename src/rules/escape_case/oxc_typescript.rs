@@ -194,4 +194,27 @@ mod tests {
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains(r"\xFF"));
     }
+
+    #[test]
+    fn skips_test_fixture_unicode_escapes() {
+        // HuggingFace NLP tokenizer test capturing verbatim Thai model output as
+        // lowercase `\uXXXX` escapes (U+0E1E U+0E22) — cosmetic casing, no
+        // normalization wanted.
+        let src = r#"expect(out).toEqual([{ generated_text: "\u0e1e\u0e22" }]);"#;
+        let d = crate::rules::test_helpers::run_rule_gated(
+            &Check,
+            src,
+            "packages/transformers/tests/pipelines/test_pipelines_text_generation.js",
+        );
+        assert!(d.is_empty(), "test-fixture escapes should not be flagged");
+    }
+
+    #[test]
+    fn still_flags_lowercase_escape_in_real_source() {
+        // Same lowercase escape in non-test source must still flag.
+        let src = r#"const a = "\u0e1e";"#;
+        let d = crate::rules::test_helpers::run_rule_gated(&Check, src, "src/lib/decode.ts");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains(r"\u0E1E"));
+    }
 }
