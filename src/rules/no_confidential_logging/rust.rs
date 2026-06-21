@@ -50,6 +50,17 @@ const BOOLEAN_PREFIXES: &[&str] = &[
 /// directory — neither leaks a credential.
 const METADATA_SUFFIXES: &[&str] = &["_path", "_dir", "_file", "_store", "_cache"];
 
+/// Word segments that mark an identifier as describing a count, position, or
+/// category *about* a secret-named value rather than the value itself. In a
+/// parser/lexer/compiler, `token` denotes a grammar terminal and `token_index`
+/// is its position in the token stream — numeric metadata, not a credential.
+/// Logging a secret's index/count/length/kind cannot leak the secret.
+/// `index`/`count`/`length`/`position`/`offset` are clearly numeric; `kind`/
+/// `type` name a category enum, never the value.
+const METADATA_QUALIFIERS: &[&str] = &[
+    "index", "idx", "count", "length", "len", "position", "pos", "offset", "kind", "type",
+];
+
 fn is_boolean_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     BOOLEAN_PREFIXES.iter().any(|p| lower.starts_with(p))
@@ -82,6 +93,61 @@ fn is_metadata_only(name: &str) -> bool {
     })
 }
 
+/// Splits an identifier into lowercase word segments across both snake_case
+/// (`_`) and camelCase/PascalCase boundaries, so `opt_token_index` and
+/// `optTokenIndex` both yield `["opt", "token", "index"]`.
+fn word_segments(name: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    for c in name.chars() {
+        if c == '_' {
+            if !current.is_empty() {
+                segments.push(std::mem::take(&mut current));
+            }
+        } else if c.is_ascii_uppercase() && !current.is_empty() {
+            segments.push(std::mem::take(&mut current));
+            current.push(c.to_ascii_lowercase());
+        } else {
+            current.push(c.to_ascii_lowercase());
+        }
+    }
+    if !current.is_empty() {
+        segments.push(current);
+    }
+    segments
+}
+
+/// Returns true when every sensitive word in `name` is immediately followed by
+/// a metadata qualifier (`token_index`, `tokenCount`, `opt_token_index`, …),
+/// making the identifier a count/position/category *about* the secret rather
+/// than the secret value. Logging a secret's index or length leaks nothing.
+///
+/// The qualifier must FOLLOW the sensitive segment it describes: `token_index`
+/// is "the index of the token" and is exempt, but a sensitive segment with no
+/// trailing qualifier (e.g. `secret` in `max_token_len_secret`) is the value
+/// itself and keeps the name flagged. The check is segment-aware (not a
+/// substring scan), so `accessToken`/`auth_token` carry no qualifier and stay
+/// flagged.
+fn is_metadata_qualified(name: &str) -> bool {
+    let segments = word_segments(name);
+    let is_sensitive = |seg: &str| SENSITIVE_WORDS.iter().any(|w| seg.contains(w));
+    let is_qualifier = |seg: &str| METADATA_QUALIFIERS.contains(&seg);
+
+    let mut saw_sensitive = false;
+    for (i, seg) in segments.iter().enumerate() {
+        if is_sensitive(seg) {
+            saw_sensitive = true;
+            let qualified = segments
+                .get(i + 1)
+                .is_some_and(|next| is_qualifier(next.as_str()));
+            if !qualified {
+                return false;
+            }
+        }
+    }
+    saw_sensitive
+}
+
 fn has_sensitive_identifier(node: tree_sitter::Node, source: &[u8]) -> bool {
     let kind = node.kind();
     if kind == "string_literal" || kind == "raw_string_literal" || kind == "string_content" {
@@ -94,6 +160,9 @@ fn has_sensitive_identifier(node: tree_sitter::Node, source: &[u8]) -> bool {
                 let Ok(field_name) = field.utf8_text(source) else {
                     return false;
                 };
+                if is_metadata_qualified(field_name) {
+                    return false;
+                }
                 let lower = field_name.to_ascii_lowercase();
                 return SENSITIVE_WORDS.iter().any(|w| lower.contains(w));
             }
@@ -110,6 +179,9 @@ fn has_sensitive_identifier(node: tree_sitter::Node, source: &[u8]) -> bool {
             return false;
         }
         if is_metadata_only(text) {
+            return false;
+        }
+        if is_metadata_qualified(text) {
             return false;
         }
         if let Some(next) = node.next_sibling()
@@ -299,6 +371,52 @@ mod tests {
                 debug!("Using secret store at {:?}", secret_store);
             }
         "#).is_empty());
+    }
+
+    // Regression for issue #5120: in a LALR parser state machine, `token` is a
+    // grammar terminal and `token_index` is its position in the token stream —
+    // numeric metadata, not an auth token. Logging it leaks nothing.
+    #[test]
+    fn allows_token_index_in_parser() {
+        assert!(run_on(r#"
+            fn f(token_index: usize) {
+                debug!("\\ token_index: {:?}", token_index);
+            }
+        "#).is_empty());
+    }
+
+    #[test]
+    fn allows_opt_token_index_in_parser() {
+        assert!(run_on(r#"
+            fn f(opt_lookahead: usize, opt_token_index: Option<usize>) {
+                debug!(
+                    "\\+ error_recovery(opt_lookahead={:?}, opt_token_index={:?})",
+                    opt_lookahead, opt_token_index,
+                );
+            }
+        "#).is_empty());
+    }
+
+    #[test]
+    fn allows_camel_case_token_index() {
+        assert!(run_on(r#"fn f(tokenIndex: usize) { debug!("{:?}", tokenIndex); }"#).is_empty());
+    }
+
+    #[test]
+    fn allows_token_count_and_length() {
+        assert!(run_on(r#"fn f(token_count: usize) { info!("n: {}", token_count); }"#).is_empty());
+        assert!(run_on(r#"fn f(token_len: usize) { info!("n: {}", token_len); }"#).is_empty());
+        assert!(run_on(r#"fn f(token_kind: u8) { info!("k: {:?}", token_kind); }"#).is_empty());
+    }
+
+    // `token_id` carries no numeric/category qualifier — an id can be the secret
+    // value itself (a session/bearer token id), so it stays flagged.
+    #[test]
+    fn still_flags_token_id() {
+        assert_eq!(
+            run_on(r#"fn f(token_id: String) { debug!("id: {}", token_id); }"#).len(),
+            1
+        );
     }
 
     #[test]
