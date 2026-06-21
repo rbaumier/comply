@@ -531,6 +531,60 @@ pub fn is_browser_asset_dir_path(path: &Path) -> bool {
     has_path_segment(path, &["public", "static", "assets"])
 }
 
+/// Directory segments that hold bundler output: the conventional roots a
+/// Vite/Rollup/webpack/Next/Nuxt build writes to, plus the static-asset dirs
+/// such bundles are commonly checked in under. Segment match.
+const BUILD_OUTPUT_SEGMENTS: &[&str] = &[
+    "dist", "build", "out", ".output", ".next", ".nuxt", "public", "static", "assets",
+];
+
+/// True for a content-hash-named bundler artifact in a build-output location: a
+/// filename of the form `<name>-<contenthash>.<ext>` (Vite/Rollup/webpack's
+/// `[name]-[hash].[ext]` convention, e.g. `index-CJXmzTYg.js`,
+/// `vendor-a1b2c3d4.css`) for a built asset extension, sitting under a
+/// build-output directory (`dist`/`build`/`out`/`.output`/`.next`/`.nuxt`) or a
+/// static-asset directory (`public`/`static`/`assets`) where such bundles are
+/// checked in. Both signals are required: a hand-written `foo-bar.js` in `src/`
+/// has no build-output segment, and a non-hash file in `public/` (e.g.
+/// `public/widget.js`) has no content-hash suffix, so neither is matched. These
+/// are generated, never hand-edited, so the engine skips them for every rule.
+pub fn is_build_artifact_path(path: &Path) -> bool {
+    if !has_path_segment(path, BUILD_OUTPUT_SEGMENTS) {
+        return false;
+    }
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let Some((stem, ext)) = name.rsplit_once('.') else {
+        return false;
+    };
+    if !matches!(ext, "js" | "mjs" | "cjs" | "css") {
+        return false;
+    }
+    let Some((_, hash)) = stem.rsplit_once('-') else {
+        return false;
+    };
+    has_content_hash_shape(hash)
+}
+
+/// True when `segment` looks like a bundler content hash rather than a
+/// hand-written name component: at least 8 characters, all in the base64url/hex
+/// charset `[A-Za-z0-9_-]`, and either containing a digit or mixing upper- and
+/// lowercase letters. A lowercase-only word such as `helper` or `bar` never
+/// matches, so `foo-bar.js` and `web-streams.js` stay hand-written.
+fn has_content_hash_shape(segment: &str) -> bool {
+    if segment.len() < 8 {
+        return false;
+    }
+    if !segment.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        return false;
+    }
+    let has_digit = segment.bytes().any(|b| b.is_ascii_digit());
+    let has_upper = segment.bytes().any(|b| b.is_ascii_uppercase());
+    let has_lower = segment.bytes().any(|b| b.is_ascii_lowercase());
+    has_digit || (has_upper && has_lower)
+}
+
 /// True when `path` lives under a `__mocks__/` directory, the Jest/Vitest
 /// manual-mock convention. These files are auto-loaded by the test runner to
 /// replace a module during tests; they import the package they mock and other
@@ -2310,5 +2364,29 @@ mod aux_path_tests {
         assert!(!is_in_client_boundary_dir(&PathBuf::from("src/client-utils/loader.ts")));
         assert!(!is_in_client_boundary_dir(&PathBuf::from("src/lib/myclient.ts")));
         assert!(!is_in_client_boundary_dir(&PathBuf::from("src/lib/config.ts")));
+    }
+
+    #[test]
+    fn build_artifact_content_hash_bundles_issue5419() {
+        // Content-hash-named Vite/Rollup bundles in build-output and static-asset
+        // dirs are generated build artifacts.
+        assert!(is_build_artifact_path(&PathBuf::from(
+            "website/public/demos/territory-wars/assets/index-CJXmzTYg.js"
+        )));
+        assert!(is_build_artifact_path(&PathBuf::from("dist/assets/index-CJXmzTYg.js")));
+        assert!(is_build_artifact_path(&PathBuf::from("dist/assets/vendor-a1b2c3d4.css")));
+        assert!(is_build_artifact_path(&PathBuf::from("build/main-DeadBeef0.mjs")));
+        assert!(is_build_artifact_path(&PathBuf::from(".output/public/chunk-abcd1234.js")));
+        // Hand-written source keeps both guards honest: a non-hash name in a
+        // build/asset dir, and a hash-shaped name outside any build-output dir,
+        // are both still analysed.
+        assert!(!is_build_artifact_path(&PathBuf::from("public/widget.js")));
+        assert!(!is_build_artifact_path(&PathBuf::from("public/web-streams.js")));
+        assert!(!is_build_artifact_path(&PathBuf::from("src/index.js")));
+        assert!(!is_build_artifact_path(&PathBuf::from("src/index-CJXmzTYg.js")));
+        // A lowercase-only suffix is a word, not a content hash.
+        assert!(!is_build_artifact_path(&PathBuf::from("dist/assets/utils-helper.js")));
+        // A built-asset extension is required: a hash-named `.html`/`.map` is not.
+        assert!(!is_build_artifact_path(&PathBuf::from("dist/assets/index-CJXmzTYg.html")));
     }
 }
