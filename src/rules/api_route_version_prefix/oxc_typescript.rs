@@ -11,8 +11,19 @@ const ROUTE_METHODS: &[&str] = &[
     "get", "post", "put", "patch", "delete", "all", "head", "options", "route",
 ];
 
+/// Standardized operational/infrastructure endpoints that are unversioned by
+/// convention: Kubernetes liveness/readiness probes (`/healthz`, `/readyz`,
+/// `/livez`, and the bare/underscore variants orchestrators and load balancers
+/// poll), the Prometheus scrape target (`/metrics`), and the conventional
+/// `/ping`, `/status`, `/version` checks plus crawler files (`/favicon.ico`,
+/// `/robots.txt`). These are infrastructure-level, not API resources; a version
+/// prefix like `/v1/healthz` would break every probe and orchestration config.
 const INFRA_PATHS: &[&str] = &[
-    "/healthz", "/health", "/readyz", "/ready", "/livez", "/live", "/metrics",
+    "/healthz", "/health", "/_health", "/_healthz",
+    "/readyz", "/ready", "/_ready", "/_readyz",
+    "/livez", "/live", "/_live", "/_livez",
+    "/metrics", "/ping", "/status", "/version",
+    "/favicon.ico", "/robots.txt",
 ];
 
 /// OAuth 2.0 (RFC 6749) and OpenID Connect Core 1.0 protocol endpoints. Clients,
@@ -443,6 +454,37 @@ mod tests {
     #[test]
     fn allows_dev_endpoints() {
         assert!(run("app.get('/dev/last-reset-url', handler);").is_empty());
+    }
+
+    #[test]
+    fn allows_underscore_health_probe() {
+        // Issue #5372 — Strapi registers `router.all('/_health', healthCheck)`.
+        // `/_health` (and other underscore-prefixed probe variants) are standard
+        // liveness endpoints polled by orchestrators; they are unversioned by
+        // convention and must not be flagged.
+        assert!(run("router.all('/_health', healthCheck);").is_empty());
+        assert!(run("app.get('/_ready', handler);").is_empty());
+        assert!(run("app.get('/_live', handler);").is_empty());
+    }
+
+    #[test]
+    fn allows_conventional_infra_endpoints() {
+        // The standardized operational-route family: probe, scrape target, and
+        // the conventional ping/status/version + crawler files.
+        assert!(run("app.get('/ping', handler);").is_empty());
+        assert!(run("app.get('/status', handler);").is_empty());
+        assert!(run("app.get('/version', handler);").is_empty());
+        assert!(run("app.get('/favicon.ico', handler);").is_empty());
+        assert!(run("app.get('/robots.txt', handler);").is_empty());
+    }
+
+    #[test]
+    fn flags_resource_route_resembling_infra_segment() {
+        // Negative space: the infra exemption is segment-aware. A real API
+        // resource whose name merely contains `health` as a substring is not a
+        // probe and still requires a version prefix.
+        assert_eq!(run("app.get('/healthcheck-config', handler);").len(), 1);
+        assert_eq!(run("app.get('/status-reports', handler);").len(), 1);
     }
 
     #[test]
