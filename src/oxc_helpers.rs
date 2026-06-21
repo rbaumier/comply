@@ -3368,6 +3368,104 @@ fn expression_produces_typed_array(
     }
 }
 
+/// True when `ident` resolves to a `const`-declared local array that was
+/// initialised as an empty array literal — `const x = []`. Such a binding is a
+/// locally-owned array being *built* into a sparse dispatch / lookup table by
+/// constant-index assignment (`handlers[0x01] = fn`), the array analogue of the
+/// `const items = []; items.push(x)` accumulator: the sparse layout can't be a
+/// constructor literal, so indexed assignment is the only way to populate it and
+/// there is no immutable element-setter to suggest.
+///
+/// Only the empty array *literal* `[]` qualifies — a populated literal (`[a, b]`)
+/// is a complete array, and a pre-sized `new Array(n)` is a fixed-length buffer
+/// whose plain-array element writes the rules deliberately keep flagged; later
+/// indexed writes on either are mutation, not table construction. Resolution uses
+/// the same `reference_id` → symbol → declaration path as [`is_typed_array_binding`]:
+/// a function parameter, import, `let`/`var` binding, or non-`[]` initializer
+/// resolves to no signal and returns `false`, so mutation through it stays flagged.
+#[must_use]
+pub fn is_local_dispatch_table_binding(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{Expression, VariableDeclarationKind};
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            return decl.kind == VariableDeclarationKind::Const
+                && matches!(
+                    &decl.init,
+                    Some(Expression::ArrayExpression(arr)) if arr.elements.is_empty()
+                );
+        }
+    }
+    false
+}
+
+/// True when `index` is a constant/static dispatch-table key: a numeric literal
+/// (`handlers[0x01]`) or an identifier resolving to a `const` binding (a named
+/// opcode constant `handlers[messageSync]`). A dynamic index (a loop variable, a
+/// `let`/parameter, or a computed expression) does not qualify, keeping the
+/// dispatch-table exemption tight: only constant-keyed table construction is
+/// exempt, not arbitrary runtime indexed writes.
+#[must_use]
+pub fn is_constant_index_expression(
+    index: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{Expression, VariableDeclarationKind};
+
+    match index {
+        Expression::NumericLiteral(_) => true,
+        Expression::Identifier(id) => {
+            let Some(ref_id) = id.reference_id.get() else {
+                return false;
+            };
+            let scoping = semantic.scoping();
+            let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+                return false;
+            };
+            let decl_node_id = scoping.symbol_declaration(sym_id);
+            let nodes = semantic.nodes();
+            for kind in std::iter::once(nodes.kind(decl_node_id))
+                .chain(nodes.ancestor_kinds(decl_node_id))
+            {
+                match kind {
+                    AstKind::VariableDeclaration(decl) => {
+                        return decl.kind == VariableDeclarationKind::Const;
+                    }
+                    // A parameter / function / module scope reached before any
+                    // `VariableDeclaration` means the index is not a `const`
+                    // binding — stop here so a parameter index never resolves to
+                    // an enclosing `const f = (k) => …` declarator.
+                    AstKind::FormalParameter(_)
+                    | AstKind::Function(_)
+                    | AstKind::ArrowFunctionExpression(_)
+                    | AstKind::Program(_) => {
+                        return false;
+                    }
+                    _ => {}
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod oxc_helpers_tests {
     use super::{byte_offset_to_line_col, mask_comments, reset_file_caches, source_contains};

@@ -2,7 +2,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
-    byte_offset_to_line_col, is_get_context_call_binding, is_local_object_builder_binding,
+    byte_offset_to_line_col, is_constant_index_expression, is_get_context_call_binding,
+    is_local_dispatch_table_binding, is_local_object_builder_binding,
     is_react_display_name_assignment, is_typed_array_binding, is_vue_ref_value_target,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
@@ -90,6 +91,12 @@ impl OxcCheck for Check {
                 // only way to populate a TypedArray (a fixed-length binary buffer
                 // with no immutable element-setter and no spread-then-build form).
                 if is_typed_array_element_target(&assign.left, semantic) {
+                    return;
+                }
+                // Sparse dispatch-table construction: `const handlers = [];
+                // handlers[0x01] = fn` builds a locally-owned lookup table by
+                // constant-index assignment — array construction, not mutation.
+                if is_dispatch_table_element_target(&assign.left, semantic) {
                     return;
                 }
                 if let Some(id) = root_identifier_of_target(&assign.left)
@@ -385,6 +392,26 @@ fn is_typed_array_element_target(
         &member.object,
         Expression::Identifier(id) if is_typed_array_binding(id, semantic)
     )
+}
+
+/// True when `target` is a constant-keyed indexed write into a freshly-constructed,
+/// locally-owned array — `const handlers = []; handlers[0x01] = fn` — i.e. a sparse
+/// dispatch/lookup table being built. The base must be a direct identifier resolving
+/// to a local empty-array `const` binding, and the index a constant key (numeric
+/// literal or `const` opcode). A dynamic index, a foreign or parameter array, or a
+/// deeper chain (`obj.table[k]`) does not match, so post-construction or shared-state
+/// mutation stays flagged.
+fn is_dispatch_table_element_target(
+    target: &AssignmentTarget,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let AssignmentTarget::ComputedMemberExpression(member) = target else {
+        return false;
+    };
+    matches!(
+        &member.object,
+        Expression::Identifier(id) if is_local_dispatch_table_binding(id, semantic)
+    ) && is_constant_index_expression(&member.expression, semantic)
 }
 
 /// [`is_typed_array_element_target`] for an `UpdateExpression`'s
@@ -1072,6 +1099,52 @@ mod tests {
         let src = r#"
             const buf = new Uint8Array(4);
             buf.foo = 1;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Sparse dispatch-table construction — issue #5412
+
+    #[test]
+    fn allows_sparse_dispatch_table_construction_issue_5412() {
+        // Regression for rbaumier/comply#5412 — y-websocket message handlers: a
+        // locally-owned `const handlers = []` populated by constant-keyed indexed
+        // assignment to build an O(1) protocol dispatch table. The sparse layout
+        // can't be a constructor literal, so indexed assignment is construction,
+        // not mutation.
+        let src = r#"
+            const messageSync = 0
+            const messageAwareness = 1
+            const messageHandlers = []
+            messageHandlers[messageSync] = (encoder, decoder) => {}
+            messageHandlers[messageAwareness] = (encoder, decoder) => {}
+            messageHandlers[0x02] = (encoder, decoder) => {}
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_dynamic_index_write_on_local_empty_array_5412() {
+        // Negative space: a dynamic (non-constant) index is not the dispatch-table
+        // signature — `arr[i] = v` with a `let` loop variable stays flagged.
+        let src = r#"
+            const arr = [];
+            for (let i = 0; i < 3; i++) {
+                arr[i] = i;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_object_property_mutation_alongside_dispatch_table_5412() {
+        // Negative space: the dispatch-table exemption must not leak — a property
+        // write on a const referencing external state stays flagged alongside it.
+        let src = r#"
+            const handlers = [];
+            handlers[0] = fn;
+            const cfg = getConfig();
+            cfg.x = 2;
         "#;
         assert_eq!(run(src).len(), 1);
     }
