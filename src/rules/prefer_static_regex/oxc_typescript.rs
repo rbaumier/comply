@@ -4,6 +4,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::{BindingPattern, Expression, RegExpFlags};
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -51,6 +53,20 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A `g`/`y`-flagged regex used as the receiver of `.exec()`/`.test()`
+        // is stateful: those methods read and advance the regex's `lastIndex`.
+        // Hoisting such a regex to module scope makes that mutable cursor persist
+        // across separate calls (and re-entrant use), corrupting iteration — the
+        // canonical `while ((m = re.exec(s)))` loop relies on `lastIndex`
+        // restarting at 0 on every fresh local instance. Keep it local. Stateless
+        // regexes (no `g`/`y`, or used only with `.match`/`.replace`/…) are still
+        // suggested for hoisting.
+        if regex.regex.flags.intersects(RegExpFlags::G | RegExpFlags::Y)
+            && stateful_exec_or_test_usage(node, ctx.source, semantic)
+        {
+            return;
+        }
+
         let (line, column) = byte_offset_to_line_col(ctx.source, regex.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -62,6 +78,67 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// True when the regex literal at `node` is the receiver of a `.exec()`/`.test()`
+/// call — either inline (`/…/g.exec(s)`) or via a binding (`const re = /…/g;
+/// re.exec(s)`). These are the methods that read/advance `lastIndex`, so a
+/// `g`/`y`-flagged regex used this way must stay local rather than be hoisted.
+fn stateful_exec_or_test_usage<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    source: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    if regex_is_inline_exec_test_receiver(node, semantic) {
+        return true;
+    }
+    let Some(var_name) = find_enclosing_binding(node, semantic) else {
+        return false;
+    };
+    let test_pattern = format!("{var_name}.test(");
+    let exec_pattern = format!("{var_name}.exec(");
+    crate::oxc_helpers::source_contains(source, &test_pattern)
+        || crate::oxc_helpers::source_contains(source, &exec_pattern)
+}
+
+/// True when the regex literal is the immediate object of a `.exec(...)`/
+/// `.test(...)` member call, e.g. `/…/g.exec(s)`.
+fn regex_is_inline_exec_test_receiver<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let regex_span = node.kind().span();
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        if let AstKind::CallExpression(call) = ancestor.kind() {
+            if let Expression::StaticMemberExpression(member) = &call.callee {
+                let method = member.property.name.as_str();
+                if (method == "exec" || method == "test")
+                    && member.object.span() == regex_span
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+    false
+}
+
+/// Walk ancestors to find the enclosing `VariableDeclarator` and return the
+/// binding identifier name (`const re = /…/g` → `re`).
+fn find_enclosing_binding<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a str> {
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        if let AstKind::VariableDeclarator(decl) = ancestor.kind() {
+            if let BindingPattern::BindingIdentifier(id) = &decl.id {
+                return Some(id.name.as_str());
+            }
+            return None;
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -155,5 +232,55 @@ mod tests {
         assert!(run_at(code, "webpack.config.js").is_empty());
         assert!(run_at(code, "vite.config.ts").is_empty());
         assert!(run_at(code, "rollup.config.mjs").is_empty());
+    }
+
+    #[test]
+    fn allows_global_regex_driving_exec_loop() {
+        // Regression for issue #5445: a `/g` regex used with `.exec()` in a
+        // `while` loop is stateful (it advances `lastIndex` each call).
+        // Hoisting it would persist that cursor across separate calls and
+        // corrupt iteration, so it must stay local.
+        let code = "function findAllBrackets(v) {\n\
+                    \tconst ANGLED = /<([^>]+)>/g;\n\
+                    \tlet m;\n\
+                    \twhile ((m = ANGLED.exec(v))) { res.push(m); }\n\
+                    }";
+        assert!(run(code).is_empty());
+    }
+
+    #[test]
+    fn allows_global_regex_with_test() {
+        // A `/g` regex used as the receiver of `.test()` is stateful too.
+        let code = "function f(s) { const re = /a/g; return re.test(s); }";
+        assert!(run(code).is_empty());
+    }
+
+    #[test]
+    fn allows_inline_global_regex_exec() {
+        // Inline `/…/g.exec(s)` — the literal is the immediate receiver.
+        let code = "function f(s) { let m; while ((m = /a/g.exec(s))) {} }";
+        assert!(run(code).is_empty());
+    }
+
+    #[test]
+    fn allows_sticky_regex_with_exec() {
+        // The sticky `/y` flag is stateful the same way as `/g`.
+        let code = "function f(s) { const re = /a/y; return re.exec(s); }";
+        assert!(run(code).is_empty());
+    }
+
+    #[test]
+    fn flags_global_regex_used_with_replace() {
+        // A `/g` regex used only with `.replace` (not `.exec`/`.test`) has no
+        // cross-call `lastIndex` hazard — still suggest hoisting.
+        let code = "function f(s) { const re = /a/g; return s.replace(re, 'b'); }";
+        assert_eq!(run(code).len(), 1);
+    }
+
+    #[test]
+    fn flags_global_regex_not_used_statefully() {
+        // A `/g` regex never used with `.exec`/`.test` is hoistable.
+        let code = "function f(s) { const re = /a/g; return s.match(re); }";
+        assert_eq!(run(code).len(), 1);
     }
 }
