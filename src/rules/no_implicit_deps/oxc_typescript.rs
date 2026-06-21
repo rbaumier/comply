@@ -28,7 +28,9 @@ use super::{
 /// `h3`/`nitropack` are the HTTP layer and server engine Nitro provides. Nuxt's
 /// own runtime code and official modules `import { computed } from 'vue'` /
 /// `import { getHeader } from 'h3'` in `src/runtime/` without re-declaring them
-/// (re-declaring risks duplicate installs). Exact-match allowlist.
+/// (re-declaring risks duplicate installs). Matched on the root package name, so
+/// subpath imports (`nitropack/runtime`, `nitropack/types`) are covered too.
+/// Exact-match allowlist.
 const NUXT_IMPLIED_PEERS: &[&str] = &[
     "vue",
     "vue-router",
@@ -191,9 +193,12 @@ impl OxcCheck for Check {
         // Nitro (Nuxt's server engine) provides `h3`/`nitropack`; all are present
         // transitively in any project that depends on `nuxt` or `@nuxt/kit`. Nuxt
         // modules idiomatically `import { computed } from "vue"` /
-        // `import { getHeader } from "h3"` in `src/runtime/` without re-declaring
-        // them, so treat them as implied peers of the Nuxt ecosystem (gated on the
-        // Nuxt dependency, so a non-Nuxt project still reports them as implicit).
+        // `import { getHeader } from "h3"` /
+        // `import { defineCachedFunction } from "nitropack/runtime"` in
+        // `src/runtime/` without re-declaring them. Matching on `root` collapses
+        // such subpaths to the base package, so treat them as implied peers of the
+        // Nuxt ecosystem (gated on the Nuxt dependency, so a non-Nuxt project still
+        // reports them as implicit).
         if NUXT_IMPLIED_PEERS.contains(&root)
             && ctx
                 .project
@@ -2364,6 +2369,76 @@ export default {
             diags.len(),
             1,
             "`vue` import without a Nuxt dependency must still fire, got {diags:?}"
+        );
+    }
+
+    // Regression #5110: `nitropack` is Nuxt's server engine, present transitively
+    // in any project depending on `nuxt`. Nuxt modules import composables from its
+    // `/runtime` subpath in server runtime code without declaring it, so the
+    // subpath specifier must not be flagged when the project depends on `nuxt`.
+    #[test]
+    fn allows_nitropack_runtime_subpath_in_nuxt_project_issue_5110() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"@nuxt/scripts","dependencies":{"nuxt":"^4"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src").join("runtime").join("server");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("instagram-embed.ts");
+        let source = "import { defineCachedFunction, useRuntimeConfig } from 'nitropack/runtime';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "`nitropack/runtime` import in a `nuxt` project must not be flagged, got {diags:?}"
+        );
+    }
+
+    // The bare `nitropack` specifier (not just its subpaths) is likewise an
+    // implied peer of a project depending on `@nuxt/kit`.
+    #[test]
+    fn allows_bare_nitropack_with_nuxt_kit_dep_issue_5110() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"@nuxt/scripts","dependencies":{"@nuxt/kit":"^4"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src").join("runtime").join("server");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("proxy-handler.ts");
+        let source = "import { useRuntimeConfig } from 'nitropack';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "`nitropack` import in a `@nuxt/kit` project must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Negative space for #5110: outside the Nuxt ecosystem (no `nuxt`/`@nuxt/kit`
+    // dependency) an undeclared `nitropack/runtime` import is still an implicit
+    // dependency and must fire — the exemption is gated on the Nuxt dependency.
+    #[test]
+    fn flags_nitropack_runtime_without_nuxt_dep_issue_5110() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","dependencies":{"lodash":"^4"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("t.ts");
+        let source = "import { useRuntimeConfig } from 'nitropack/runtime';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "`nitropack/runtime` import without a Nuxt dependency must still fire, got {diags:?}"
         );
     }
 }
