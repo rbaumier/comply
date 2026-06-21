@@ -52,11 +52,26 @@ pub fn register() -> RuleDef {
     }
 }
 
-/// True if `text` contains a `SELECT *` (case-insensitive), allowing
+/// True if `text` contains a `SELECT *` wildcard (case-insensitive), allowing
 /// for one or two spaces between the keyword and the asterisk.
+///
+/// A real SQL wildcard `*` is never immediately followed by `/`. The `*/`
+/// sequence is a block-comment terminator, so prose like `state of the Select */`
+/// (the close of a JSDoc comment) is not a `SELECT *` query and is not matched.
 pub(super) fn contains_select_star(text: &str) -> bool {
     let upper = text.to_ascii_uppercase();
-    upper.contains("SELECT *") || upper.contains("SELECT  *")
+    let bytes = upper.as_bytes();
+    for needle in ["SELECT *", "SELECT  *"] {
+        let mut from = 0;
+        while let Some(rel) = upper[from..].find(needle) {
+            let star_idx = from + rel + needle.len() - 1;
+            if bytes.get(star_idx + 1) != Some(&b'/') {
+                return true;
+            }
+            from = star_idx + 1;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -70,5 +85,29 @@ mod tests {
             ..Default::default()
         };
         assert!(!super::META.applies_to_file(&file_ctx));
+    }
+
+    #[test]
+    fn matches_real_wildcards() {
+        assert!(super::contains_select_star("SELECT * FROM users"));
+        assert!(super::contains_select_star("select *\n"));
+        assert!(super::contains_select_star("SELECT *,"));
+        assert!(super::contains_select_star("SELECT *)"));
+        assert!(super::contains_select_star("SELECT  * FROM t"));
+    }
+
+    #[test]
+    fn rejects_comment_terminator() {
+        assert!(!super::contains_select_star(
+            "/** close the popover on date select */"
+        ));
+        assert!(!super::contains_select_star("interacting with Select */"));
+    }
+
+    #[test]
+    fn matches_when_real_wildcard_precedes_a_terminator() {
+        // The first `SELECT *` is a real wildcard; a later `select */` must not
+        // suppress it.
+        assert!(super::contains_select_star("SELECT * FROM t /* select */"));
     }
 }

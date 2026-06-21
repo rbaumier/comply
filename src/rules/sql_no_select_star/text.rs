@@ -8,8 +8,7 @@ impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {
-            let line_upper = line.to_ascii_uppercase();
-            if line_upper.contains("SELECT *") || line_upper.contains("SELECT  *") {
+            if super::contains_select_star(line) {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
                     line: idx + 1,
@@ -47,5 +46,24 @@ mod tests {
     #[test]
     fn allows_explicit() {
         assert!(run("const q = `SELECT id, name FROM users`;").is_empty());
+    }
+
+    #[test]
+    fn allows_jsdoc_comment_terminator() {
+        // `*/` here closes a JSDoc comment describing a Vue Select component;
+        // the `*` is a comment terminator, not a SQL wildcard (issue #4917).
+        assert!(
+            run("/** Whether or not to close the popover on date select */").is_empty()
+        );
+        assert!(
+            run("  /** prevents the user from interacting with Select */").is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_real_query_on_a_comment_line() {
+        // A genuine wildcard followed by whitespace must still fire even when a
+        // comment terminator appears later on the same line.
+        assert_eq!(run("const q = `SELECT * FROM users`; // select */").len(), 1);
     }
 }
