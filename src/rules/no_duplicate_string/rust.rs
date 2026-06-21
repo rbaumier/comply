@@ -2,6 +2,7 @@
 
 use crate::diagnostic::Diagnostic;
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::path_utils::is_cargo_example_path;
 use crate::rules::sql_helpers::RUST_STRING_KINDS;
 
 /// Macros whose first string argument is a compile-time format template.
@@ -69,6 +70,13 @@ impl AstCheck for Check {
         if ctx.file.path_segments.in_test_dir {
             return Vec::new();
         }
+        // Cargo `examples/` files are illustrative example targets, not
+        // production code. Intentional string repetition there (e.g. a source
+        // identifier threaded through a builder chain) is part of the demo and
+        // need not be hoisted to a `const`, so skip them like test code.
+        if is_cargo_example_path(ctx.path) {
+            return Vec::new();
+        }
         super::collect_diagnostics(tree, ctx, RUST_STRING_KINDS)
     }
 }
@@ -94,6 +102,10 @@ mod tests {
 
     fn run(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, src, "t.rs")
+    }
+
+    fn run_at(src: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, path)
     }
 
     #[test]
@@ -256,6 +268,37 @@ mod tests {
             }
         "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn skips_duplicate_string_in_cargo_examples_dir() {
+        // The issue's FP: a source-file identifier repeated across a
+        // builder-pattern chain in `examples/stresstest.rs`. Example targets
+        // are illustrative code, so the repetition need not be hoisted.
+        let src = r#"
+            fn main() {
+                let a = Label::new(("stresstest.tao", 1..2));
+                let b = Label::new(("stresstest.tao", 2..3));
+                let c = Label::new(("stresstest.tao", 3..4));
+                let _ = (a, b, c);
+            }
+        "#;
+        assert!(run_at(src, "examples/stresstest.rs").is_empty());
+    }
+
+    #[test]
+    fn still_flags_duplicate_string_in_production_src() {
+        // The same duplicated source identifier in production `src/` is still
+        // an extractable constant and stays flagged.
+        let src = r#"
+            fn main() {
+                let a = Label::new(("stresstest.tao", 1..2));
+                let b = Label::new(("stresstest.tao", 2..3));
+                let c = Label::new(("stresstest.tao", 3..4));
+                let _ = (a, b, c);
+            }
+        "#;
+        assert_eq!(run_at(src, "src/render.rs").len(), 1);
     }
 
     #[test]
