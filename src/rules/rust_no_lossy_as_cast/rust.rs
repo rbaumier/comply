@@ -355,6 +355,57 @@ mod tests {
     }
 
     #[test]
+    fn repro_5259_u8_as_i32_not_flagged() {
+        // Issue #5259 (jpeg-decoder ycbcr_to_rgb): `u8 as i32` is unsigned ->
+        // strictly wider signed — every u8 (0..=255) fits in i32, so lossless.
+        assert!(run_on("fn f(y: u8) -> i32 { y as i32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5259_u8_as_i64_not_flagged() {
+        assert!(run_on("fn f(y: u8) -> i64 { y as i64 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5259_u16_as_i64_not_flagged() {
+        assert!(run_on("fn f(y: u16) -> i64 { y as i64 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5259_u16_as_i8_owned_by_numeric_cast() {
+        // Unsigned -> narrower signed: u16 max 65535 > i8 max 127 — genuinely
+        // lossy, NOT exempted by the widening carve-out. `rust-no-as-numeric-cast`
+        // owns the span, so this rule suppresses its diagnostic.
+        assert!(run_on("fn f(x: u16) -> i8 { x as i8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5259_i32_as_u32_signed_to_unsigned_unchanged() {
+        // Signed -> same-width unsigned stays a bit reinterpretation (negative
+        // values reinterpret); `rust-no-as-numeric-cast` owns the span.
+        assert!(run_on("fn f(x: i32) -> u32 { x as u32 }").is_empty());
+    }
+
+    #[test]
+    fn is_dangerous_cast_unsigned_to_signed_boundary() {
+        let u = |bits| NumericType { kind: NumericKind::Unsigned, bits };
+        let i = |bits| NumericType { kind: NumericKind::Signed, bits };
+        // uN -> iM lossless iff M > N (strictly wider signed).
+        assert!(!is_dangerous_cast(u(8), i(16)));
+        assert!(!is_dangerous_cast(u(8), i(32)));
+        assert!(!is_dangerous_cast(u(16), i(32)));
+        // M == N: same-width reinterpretation, also exempt (issue #4807).
+        assert!(!is_dangerous_cast(u(16), i(16)));
+        assert!(!is_dangerous_cast(u(32), i(32)));
+        // M < N: unsigned -> narrower signed is genuinely lossy.
+        assert!(is_dangerous_cast(u(16), i(8)));
+        assert!(is_dangerous_cast(u(32), i(16)));
+        // Signed -> unsigned is unchanged (existing behavior).
+        assert!(!is_dangerous_cast(i(32), u(32))); // same-width reinterpret
+        assert!(is_dangerous_cast(i(32), u(16))); // narrowing
+    }
+
+    #[test]
     fn repro_4807_u8_as_i8_not_flagged() {
         // Issue #4807: `u8 as i8` is a same-width two's-complement bit
         // reinterpretation (gluon's `(b as i8) >= -0x40` parser bit magic) —
