@@ -11,6 +11,10 @@
 //! When the type isn't visible we fall back to "operand is a float
 //! literal" — that's the unambiguous case clippy's `float_cmp` also
 //! catches first.
+//!
+//! Skips exact zero, lossless integer round-trip casts, and state-change
+//! detection (`old = current; if new == old`) — see the guards in
+//! `visit_node`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -65,6 +69,17 @@ impl AstCheck for Check {
         if operand_is_int_to_float_cast(left, source)
             || operand_is_int_to_float_cast(right, source)
         {
+            return;
+        }
+        // State-change detection: `old = current; … if new == old { … }`. When
+        // both operands are plain identifiers and one was just *stored to* via a
+        // bare `x = …;` assignment in an enclosing block, this compares a freshly
+        // read value against a previously captured one to detect whether the
+        // exact value changed. Both come from the same deterministic source, so
+        // exact `==`/`!=` is correct — an epsilon would miss real changes. A
+        // naive `computed == 0.1` has a literal operand (no store), so it still
+        // fires.
+        if is_change_detection(left, right, source) {
             return;
         }
         diagnostics.push(Diagnostic::at_node(
@@ -267,6 +282,64 @@ fn init_is_int_cast(init: tree_sitter::Node, source: &[u8]) -> bool {
             .is_some_and(is_integer_type)
 }
 
+/// Is this comparison a state-change detector — `old = current; if new == old`?
+///
+/// Requires both operands to be plain identifiers (no float literal on either
+/// side; a literal means a fixed-threshold compare, not change detection) and
+/// at least one operand to be the assignment *target* of a bare
+/// `x = …;` statement in an enclosing block. Capturing a value into a variable
+/// and later comparing a fresh reading against it is exact-equality by design.
+fn is_change_detection(left: tree_sitter::Node, right: tree_sitter::Node, source: &[u8]) -> bool {
+    if left.kind() != "identifier" || right.kind() != "identifier" {
+        return false;
+    }
+    let (Ok(left_name), Ok(right_name)) = (left.utf8_text(source), right.utf8_text(source)) else {
+        return false;
+    };
+    // Store *presence* (not store-then-compare ordering) is intentional: a
+    // captured-then-reassigned float local compared to another float local is
+    // the change-detection shape; demanding exact ordering would add fragility
+    // for no real precision gain.
+    ident_stored_in_enclosing_block(left, left_name, source)
+        || ident_stored_in_enclosing_block(right, right_name, source)
+}
+
+/// Walk upward from `node`, scanning every statement in each enclosing block for
+/// an `assignment_expression` whose left-hand side is exactly `ident`.
+fn ident_stored_in_enclosing_block(node: tree_sitter::Node, ident: &str, source: &[u8]) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "block" {
+            let mut walker = parent.walk();
+            for child in parent.named_children(&mut walker) {
+                if assignment_lhs_is(child, ident, source) {
+                    return true;
+                }
+            }
+        }
+        cur = parent;
+    }
+    false
+}
+
+/// Is `node` an `expression_statement` wrapping `ident = …` (or `ident = …`
+/// directly)?
+fn assignment_lhs_is(node: tree_sitter::Node, ident: &str, source: &[u8]) -> bool {
+    let expr = if node.kind() == "expression_statement" {
+        match node.named_child(0) {
+            Some(inner) => inner,
+            None => return false,
+        }
+    } else {
+        node
+    };
+    expr.kind() == "assignment_expression"
+        && expr
+            .child_by_field_name("left")
+            .and_then(|lhs| lhs.utf8_text(source).ok())
+            == Some(ident)
+}
+
 fn let_decl_type_for(decl: tree_sitter::Node, ident: &str, source: &[u8]) -> Option<String> {
     let pat = decl.child_by_field_name("pattern")?;
     let pat_text = pat.utf8_text(source).ok()?;
@@ -391,6 +464,33 @@ mod tests {
     fn allows_annotated_int_local_roundtrip() {
         let src = "fn f(value: f64) -> bool { let i: u32 = something(); i as f64 != value }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_state_change_detection() {
+        // winit-win32/src/event_loop.rs: `old = current; if new == old { return }`
+        // — compare a freshly read OS value against the previously stored one.
+        let src = "fn f() { \
+                   let old_scale_factor: f64; \
+                   { old_scale_factor = window_state.scale_factor; \
+                   window_state.scale_factor = new_scale_factor; \
+                   if new_scale_factor == old_scale_factor { return; } } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_change_detection_neq() {
+        let src = "fn f(new: f64) -> bool { let prev: f64; prev = read(); prev != new }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_naive_literal_threshold_still() {
+        // Negative space for the change-detection exemption: a fixed-threshold
+        // compare has a literal operand and no store, so it still fires even
+        // when the other operand was assigned nearby.
+        let src = "fn f() -> bool { let ratio: f64; ratio = compute(); ratio == 0.1 }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
