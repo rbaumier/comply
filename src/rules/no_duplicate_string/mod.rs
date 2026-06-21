@@ -228,8 +228,9 @@ pub(super) fn should_ignore_string_node(node: tree_sitter::Node<'_>, source: &[u
                         }
             }
             // Rust attributes — `#[cfg(feature = "x")]`, `#[serde(rename = "y")]`,
-            // etc. — strings here are compile-time metadata that cannot be
-            // extracted to a `const`.
+            // `#[must_use = "..."]`, `#[deprecated(note = "...")]`, `#[doc = "..."]`,
+            // etc. — strings here are attribute arguments that Rust requires to be
+            // inline literals; they cannot be extracted to a `const`.
             "attribute_item" | "inner_attribute_item" => return true,
             // Equality comparison against a string literal (e.g.
             // `status === "pending"`). TS literal-type narrowing already

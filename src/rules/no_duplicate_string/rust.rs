@@ -343,6 +343,38 @@ mod tests {
     }
 
     #[test]
+    fn does_not_flag_repeated_must_use_attribute_message() {
+        // The issue's FP (futures-lite): the same `#[must_use = "..."]`
+        // message on many combinator structs. The attribute argument must be
+        // an inline string literal on each type and cannot be hoisted to a
+        // `const`, so it must not be flagged.
+        let src = r#"
+            #[must_use = "streams do nothing unless polled"]
+            pub struct TryUnfold;
+            #[must_use = "streams do nothing unless polled"]
+            pub struct Chain;
+            #[must_use = "streams do nothing unless polled"]
+            pub struct Zip;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_repeated_deprecated_note_attribute() {
+        // `#[deprecated(note = "...")]` repeated across items — the note is an
+        // attribute argument and cannot be extracted to a constant.
+        let src = r#"
+            #[deprecated(note = "use the new builder API instead")]
+            pub fn old_one() {}
+            #[deprecated(note = "use the new builder API instead")]
+            pub fn old_two() {}
+            #[deprecated(note = "use the new builder API instead")]
+            pub fn old_three() {}
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
     fn flags_raw_string_duplicated_three_times() {
         // Same raw-string body three times → correctly flagged.
         let src = r###"
