@@ -289,17 +289,35 @@ mod tests {
         );
     }
 
+    // juliangarnier/anime tests/suites/parameters.test.js — a high-precision
+    // literal used as an animation *target value* (`{ plainValue: 3.14159265359 }`)
+    // and re-asserted with `expect(...).to.equal(3.14159265359)`. The point of the
+    // test is that the engine preserves an arbitrary float; rewriting it to
+    // `Math.PI` would change the test's intent. The path lives under `tests/`, so
+    // the `skip_in_test_dir` gate suppresses every literal in the file.
+    #[test]
+    fn gated_no_fp_on_animation_target_value_in_test_file() {
+        use crate::rules::test_helpers::run_rule_gated;
+        let src = "const animation1 = animate(testObject, { plainValue: 3.14159265359 });\n\
+            expect(testObject.plainValue).to.equal(3.14159265359);\n";
+        assert!(
+            run_rule_gated(&Check, src, "tests/suites/parameters.test.js").is_empty(),
+            "skip_in_test_dir must suppress animation target values in test files"
+        );
+    }
+
     // A symbolic-constant approximation in a production source file is a real
     // approximation and must keep firing.
     #[test]
     fn gated_still_flags_approximation_in_production() {
         use crate::rules::test_helpers::run_rule_gated;
-        let src = "const x = 3.14159;\n";
-        assert_eq!(
-            run_rule_gated(&Check, src, "src/util/math.ts").len(),
-            1,
-            "production constant approximation must still be flagged"
-        );
+        // The same high-precision literal from #5307, but in production code, is a
+        // genuine π approximation: outside a test the gate does not apply.
+        for src in ["const x = 3.14159;\n", "const x = 3.14159265359;\n"] {
+            let d = run_rule_gated(&Check, src, "src/util/math.ts");
+            assert_eq!(d.len(), 1, "production constant approximation must still be flagged: {src}");
+            assert!(d[0].message.contains("Math.PI"));
+        }
     }
 
     // --- Biome valid.js fixtures: must NOT fire ---
