@@ -5,8 +5,9 @@
 //! in templates so they stay consistent and distinct from camelCase/PascalCase
 //! JavaScript identifiers. This rule flags plain HTML attributes, `:foo`
 //! shorthand bindings, and `v-bind:`/`v-model:` directive arguments whose name
-//! is not kebab-case or pure-lowercase. Attributes on SVG-exclusive elements
-//! (e.g. `<svg viewBox>`) are skipped.
+//! is not kebab-case or pure-lowercase. Canonical camelCase HTML/DOM attributes
+//! (e.g. `frameBorder`, `allowFullScreen`, `tabIndex`) and attributes on
+//! SVG-exclusive elements (e.g. `<svg viewBox>`) are skipped.
 
 mod text;
 
