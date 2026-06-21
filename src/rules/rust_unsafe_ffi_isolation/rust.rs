@@ -19,6 +19,13 @@
 //! left untouched as well: it is already scoped to that one function, more
 //! isolated than any module-level `mod sys`, so only module-scope blocks
 //! are flagged.
+//!
+//! A block with no `#[link(name = ...)]` whose every declared function is
+//! namespaced under the owning crate's name (`<crate>_*`) is left untouched:
+//! it binds the crate's own hand-written assembly / intrinsic symbols (linked
+//! from the same crate's build), not an external library, so it is already at
+//! its isolation boundary. Genuine external-library FFI — carrying `#[link]`,
+//! or declaring a foreign library's own symbol names — is still flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -76,20 +83,17 @@ fn abi<'a>(node: &tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
     content.utf8_text(source).ok()
 }
 
-/// Whether the `foreign_mod_item` carries an outer attribute naming a
-/// binding-generation proc macro (see `BINDING_MACRO_ATTRS`). Outer
-/// attributes are preceding siblings of the block, optionally separated
-/// from it by comments, so the scan walks back over `attribute_item`
-/// siblings and skips interleaved comments.
-fn has_binding_macro_attr(node: &tree_sitter::Node, source: &[u8]) -> bool {
+/// Whether any outer attribute preceding the `foreign_mod_item` has a leading
+/// path identifier satisfying `pred`. Outer attributes are preceding siblings
+/// of the block, optionally separated from it by comments, so the scan walks
+/// back over `attribute_item` siblings and skips interleaved comments.
+fn has_outer_attr(node: &tree_sitter::Node, source: &[u8], pred: impl Fn(&str) -> bool) -> bool {
     let mut sibling = node.prev_sibling();
     while let Some(prev) = sibling {
         match prev.kind() {
             "line_comment" | "block_comment" => {}
             "attribute_item" => {
-                if attr_path_head(&prev, source)
-                    .is_some_and(|head| BINDING_MACRO_ATTRS.contains(&head))
-                {
+                if attr_path_head(&prev, source).is_some_and(&pred) {
                     return true;
                 }
             }
@@ -98,6 +102,61 @@ fn has_binding_macro_attr(node: &tree_sitter::Node, source: &[u8]) -> bool {
         sibling = prev.prev_sibling();
     }
     false
+}
+
+/// Whether the block carries an outer attribute naming a binding-generation
+/// proc macro (see `BINDING_MACRO_ATTRS`).
+fn has_binding_macro_attr(node: &tree_sitter::Node, source: &[u8]) -> bool {
+    has_outer_attr(node, source, |head| BINDING_MACRO_ATTRS.contains(&head))
+}
+
+/// Whether the block carries a `#[link(...)]` attribute — the explicit
+/// external-library link marker that genuine foreign-library FFI uses to name
+/// the library it binds. Its presence means the block is a real external
+/// boundary, so the in-crate-asm exemption must not apply.
+fn has_link_attr(node: &tree_sitter::Node, source: &[u8]) -> bool {
+    has_outer_attr(node, source, |head| head == "link")
+}
+
+/// Whether every foreign function declared in the block is namespaced under
+/// the owning crate's name (`<crate>_<rest>`, see
+/// [`crate::project::CargoManifest::owns_asm_symbol`]). Such a block declares
+/// the crate's own hand-written assembly / intrinsic symbols (linked from the
+/// same crate's build), not bindings to an external library, so it is already
+/// at its isolation boundary and needs no `mod sys`/`ffi` wrapper. Returns
+/// `false` for an empty block (no symbols to attribute) or when any declared
+/// symbol is not crate-namespaced.
+fn declares_only_own_asm_symbols(
+    node: &tree_sitter::Node,
+    source: &[u8],
+    ctx: &crate::rules::backend::CheckCtx,
+) -> bool {
+    let Some(manifest) = ctx.project.nearest_cargo_manifest(ctx.path) else {
+        return false;
+    };
+    let mut block_cursor = node.walk();
+    let Some(body) = node
+        .children(&mut block_cursor)
+        .find(|child| child.kind() == "declaration_list")
+    else {
+        return false;
+    };
+    let mut body_cursor = body.walk();
+    let mut saw_fn = false;
+    for item in body.children(&mut body_cursor) {
+        if item.kind() != "function_signature_item" {
+            continue;
+        }
+        saw_fn = true;
+        let owned = item
+            .child_by_field_name("name")
+            .and_then(|name| name.utf8_text(source).ok())
+            .is_some_and(|name| manifest.owns_asm_symbol(name));
+        if !owned {
+            return false;
+        }
+    }
+    saw_fn
 }
 
 /// The leading path identifier of an `attribute_item`, e.g. `wasm_bindgen`
@@ -127,6 +186,17 @@ crate::ast_check! { on ["foreign_mod_item"] => |node, source, ctx, diagnostics|
     if let Some(abi) = abi(&node, source)
         && !FOREIGN_ABIS.contains(&abi)
     {
+        return;
+    }
+
+    // A block with no `#[link(name = ...)]` whose every declared function is
+    // namespaced under the owning crate's name (`<crate>_*`) binds the crate's
+    // own hand-written assembly / intrinsic symbols, not an external library.
+    // It is already at its isolation boundary; a `mod sys`/`ffi` wrapper would
+    // add artificial nesting with no safety benefit. Genuine external-library
+    // FFI (carrying `#[link]`, or declaring a foreign library's own symbol
+    // names) stays flagged.
+    if !has_link_attr(&node, source) && declares_only_own_asm_symbols(&node, source, ctx) {
         return;
     }
 
@@ -183,6 +253,22 @@ mod tests {
 
     fn run(s: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, s, "t.rs")
+    }
+
+    /// Run `source` at `rel_path` inside a temp crate whose `Cargo.toml`
+    /// declares `[package] name = "{crate_name}"`, so `owns_asm_symbol`
+    /// resolves against a controlled manifest.
+    fn run_in_crate(crate_name: &str, rel_path: &str, source: &str) -> Vec<Diagnostic> {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cargo_toml =
+            format!("[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n");
+        std::fs::write(dir.path().join("Cargo.toml"), cargo_toml).unwrap();
+        let src_path = dir.path().join(rel_path);
+        if let Some(parent) = src_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&src_path, source).unwrap();
+        crate::rules::test_helpers::run_rule(&Check, source, &src_path)
     }
 
     #[test]
@@ -281,5 +367,60 @@ mod tests {
         let src = "impl Foo {\n    fn m(&self) {\n        \
                    extern \"C\" {\n            fn g();\n        }\n    }\n}";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_in_crate_asm_symbols() {
+        // rav1e `src/asm/x86/mc.rs`: a bare `extern {}` declaring the crate's own
+        // hand-written SIMD assembly symbols (`rav1e_*`), linked from `.asm`
+        // files in the same crate's build — not external-library FFI.
+        let src = "extern {\n    \
+                   fn rav1e_avg_8bpc_ssse3(dst: *mut u8);\n    \
+                   fn rav1e_avg_8bpc_avx2(dst: *mut u8);\n}";
+        assert!(run_in_crate("rav1e", "src/asm/x86/mc.rs", src).is_empty());
+    }
+
+    #[test]
+    fn allows_in_crate_asm_symbols_hyphenated_crate() {
+        // The package name's `-` is normalized to `_` to match Rust symbol
+        // identifiers: package `my-codec` owns `my_codec_*` symbols.
+        let src = "extern \"C\" {\n    fn my_codec_blend_avx2(dst: *mut u8);\n}";
+        assert!(run_in_crate("my-codec", "src/asm.rs", src).is_empty());
+    }
+
+    #[test]
+    fn flags_external_library_symbols_without_link() {
+        // An extern block declaring a foreign library's own symbols (not
+        // crate-namespaced) is genuine external FFI and still needs isolation,
+        // even without an explicit `#[link]`.
+        let src = "extern \"C\" {\n    fn deflate(strm: *mut u8) -> i32;\n}";
+        assert_eq!(run_in_crate("rav1e", "src/lib.rs", src).len(), 1);
+    }
+
+    #[test]
+    fn flags_crate_prefixed_symbols_with_link_attr() {
+        // A `#[link(name = ...)]` marker means a real external library boundary,
+        // so the crate-namespaced-symbol exemption must not apply.
+        let src = "#[link(name = \"rav1e_extern\")]\n\
+                   extern \"C\" {\n    fn rav1e_thing(dst: *mut u8);\n}";
+        assert_eq!(run_in_crate("rav1e", "src/lib.rs", src).len(), 1);
+    }
+
+    #[test]
+    fn flags_block_mixing_crate_and_foreign_symbols() {
+        // If any declared symbol is not crate-namespaced, the block binds an
+        // external library and stays flagged.
+        let src = "extern {\n    \
+                   fn rav1e_avg_8bpc_avx2(dst: *mut u8);\n    \
+                   fn libc_memcpy(dst: *mut u8);\n}";
+        assert_eq!(run_in_crate("rav1e", "src/asm/x86/mc.rs", src).len(), 1);
+    }
+
+    #[test]
+    fn flags_foreign_symbols_unrelated_crate() {
+        // `rav1e_*` symbols are not namespaced under the resolved crate, so the
+        // exemption does not apply and the block is flagged as before.
+        let src = "extern {\n    fn rav1e_avg_8bpc_avx2(dst: *mut u8);\n}";
+        assert_eq!(run_in_crate("some-other-crate", "src/lib.rs", src).len(), 1);
     }
 }
