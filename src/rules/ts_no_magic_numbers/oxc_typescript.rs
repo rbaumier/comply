@@ -120,6 +120,14 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A literal compared against a version-named operand (`version >= 3.5`,
+        // `vueVersion < 3`, `this.version === 2.7`) is a version gate: the literal
+        // *is* the framework release where the relevant API was introduced, named
+        // by the operand it is compared to. The comparison gives it its meaning.
+        if is_version_gate_comparison(node.id(), semantic) {
+            return;
+        }
+
         if is_allowed_context(node.id(), semantic) {
             return;
         }
@@ -279,6 +287,80 @@ fn is_modular_arithmetic_constant(
         }
         _ => false,
     }
+}
+
+/// True when this literal is an operand of a comparison whose other operand is a
+/// version-named reference — a version gate (`version >= 3.5`, `vueVersion < 3`,
+/// `this.version === 2.7`, `pkg.version !== 2`). The literal *is* the version the
+/// code branches on, named by the operand it is compared to, so the comparison
+/// supplies its meaning. The literal may be wrapped in a unary minus.
+fn is_version_gate_comparison(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    // The operand expression is the literal itself, or a `-literal` unary.
+    let mut operand_id = node_id;
+    let parent_id = nodes.parent_id(operand_id);
+    if parent_id != operand_id
+        && let AstKind::UnaryExpression(unary) = nodes.get_node(parent_id).kind()
+        && unary.operator == oxc_ast::ast::UnaryOperator::UnaryNegation
+    {
+        operand_id = parent_id;
+    }
+    let operand_span = nodes.get_node(operand_id).kind().span();
+
+    let bin_id = nodes.parent_id(operand_id);
+    if bin_id == operand_id {
+        return false;
+    }
+    let AstKind::BinaryExpression(bin) = nodes.get_node(bin_id).kind() else {
+        return false;
+    };
+
+    let is_left = bin.left.span() == operand_span;
+    let is_right = bin.right.span() == operand_span;
+    if !is_left && !is_right {
+        return false;
+    }
+
+    match bin.operator {
+        BinaryOperator::Equality
+        | BinaryOperator::Inequality
+        | BinaryOperator::StrictEquality
+        | BinaryOperator::StrictInequality
+        | BinaryOperator::LessThan
+        | BinaryOperator::LessEqualThan
+        | BinaryOperator::GreaterThan
+        | BinaryOperator::GreaterEqualThan => {
+            let sibling = if is_left { &bin.right } else { &bin.left };
+            is_version_reference(sibling)
+        }
+        _ => false,
+    }
+}
+
+/// True when the expression is a version-named reference: an identifier
+/// (`version`, `vueVersion`) or a member expression whose property names a
+/// version (`this.version`, `pkg.version`, `engine.version`). Matching is
+/// case-insensitive on `version` and `*version` suffixes (`vueVersion`,
+/// `api_version`), but not names that merely contain "version" as a substring.
+fn is_version_reference(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::Identifier(id) => is_version_name(id.name.as_str()),
+        Expression::StaticMemberExpression(member) => {
+            is_version_name(member.property.name.as_str())
+        }
+        _ => false,
+    }
+}
+
+/// Name that denotes a version value: `version` exactly, or a `version` suffix
+/// (`vueVersion`, `apiVersion`, `api_version`), case-insensitive.
+fn is_version_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == "version" || lower.ends_with("version")
 }
 
 fn is_allowed_context(
@@ -562,6 +644,46 @@ mod tests {
         // The exemption is structural (operand of `satisfies`/`as`); a bare
         // literal in the same position is still flagged.
         let src = r#"function f() { return foo(86400); }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for issue #5062: a numeric literal compared against a
+    // version-named operand is a version gate — the literal IS the framework
+    // release that introduced the gated API (`version >= 3.5` for Vue 3.5).
+    #[test]
+    fn allows_version_gate_comparisons() {
+        let src = r#"
+            function f(version: number, vueVersion: number) {
+                const a = version >= 3.5;
+                const b = vueVersion < 3;
+                const c = version < 3.5;
+                return a || b || c;
+            }
+        "#;
+        assert!(
+            run(src).is_empty(),
+            "version-gate comparisons must not be flagged"
+        );
+    }
+
+    #[test]
+    fn allows_version_gate_member_expression() {
+        let src = r#"
+            class C {
+                version = 0;
+                f(pkg: { version: number }) {
+                    return this.version === 2.7 && pkg.version >= 18.3;
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_comparison_against_non_version_operand() {
+        // The exemption requires a version-named operand; comparing a magic
+        // number against an unrelated reference is still flagged.
+        let src = r#"function f(count: number) { return count >= 86400; }"#;
         assert_eq!(run(src).len(), 1);
     }
 
