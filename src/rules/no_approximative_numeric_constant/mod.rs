@@ -1,5 +1,11 @@
 //! no-approximative-numeric-constant — flag numeric literals that approximate
 //! a standard `Math` constant.
+//!
+//! Skipped in test files (`skip_in_test_dir`): test code legitimately hardcodes
+//! truncated or rounded constant values as assertion boundaries (e.g. straddling
+//! values around a `sqrt(2)` threshold, or the rounded output of
+//! `Math.round(n * 1000) / 1000`). Replacing such a literal with the symbolic
+//! `Math` constant would change the test's precision intent.
 
 mod oxc_typescript;
 
@@ -16,7 +22,7 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["suspicious"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 

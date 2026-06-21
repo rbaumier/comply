@@ -176,6 +176,48 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
+    // --- Test-dir gate (rbaumier/comply#5273) ---
+
+    // maplibre/maplibre-gl-js — test files hardcode truncated/rounded constant
+    // values as deliberate assertion boundaries: `1.4142`/`1.4143` straddle the
+    // `sqrt(2)` threshold (one yields Partial, the other Full), and `0.707` is
+    // the rounded output of `Math.round(n * 1000) / 1000`. Swapping in the
+    // symbolic `Math` constant would change the test's precision intent, so the
+    // central `skip_in_test_dir` gate suppresses the rule in test files.
+    #[test]
+    fn gated_no_fp_on_truncated_boundary_in_test_file() {
+        use crate::rules::test_helpers::run_rule_gated;
+        let src =
+            "expect(obb.intersectsPlane([1, 0, 0, 1.4142])).toBe(IntersectionResult.Partial);\n";
+        assert!(
+            run_rule_gated(&Check, src, "src/util/primitives/convex_volume.test.ts").is_empty(),
+            "skip_in_test_dir must suppress approximations in test files"
+        );
+    }
+
+    #[test]
+    fn gated_no_fp_on_rounded_expected_value_in_test_file() {
+        use crate::rules::test_helpers::run_rule_gated;
+        let src = "const expectedFrustumPlanes = [[-0.707, 0, 0.707, -0]];\n";
+        assert!(
+            run_rule_gated(&Check, src, "src/util/primitives/frustum.test.ts").is_empty(),
+            "skip_in_test_dir must suppress rounded expected values in test files"
+        );
+    }
+
+    // A symbolic-constant approximation in a production source file is a real
+    // approximation and must keep firing.
+    #[test]
+    fn gated_still_flags_approximation_in_production() {
+        use crate::rules::test_helpers::run_rule_gated;
+        let src = "const x = 3.14159;\n";
+        assert_eq!(
+            run_rule_gated(&Check, src, "src/util/math.ts").len(),
+            1,
+            "production constant approximation must still be flagged"
+        );
+    }
+
     // --- Biome valid.js fixtures: must NOT fire ---
 
     #[test]
