@@ -74,6 +74,9 @@ impl AstCheck for Check {
         if is_one_shot_rendezvous(node, source_bytes) {
             return;
         }
+        if is_channel_provider_constructor(node, source_bytes) {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -96,6 +99,75 @@ impl AstCheck for Check {
 fn is_inside_mpsc_use(_node: tree_sitter::Node, source: &[u8]) -> bool {
     let text = std::str::from_utf8(source).unwrap_or("");
     text.contains("std::sync::mpsc") || text.contains("use mpsc")
+}
+
+/// True when the unbounded construction at `node` is the implementation of a
+/// channel *provider* — a `pub fn` that builds the channel and hands the
+/// halves back to its caller, so the backpressure decision belongs to the
+/// consumer, not here. This is the shape of an unbounded-channel library's own
+/// `unbounded`/`channel` constructor (issue #5364: `async_channel::unbounded`).
+///
+/// Both signals are required so an internal-consumer construction still flags:
+/// 1. the enclosing `function_item` carries a `pub` `visibility_modifier`; and
+/// 2. its `return_type` exposes a channel half — the return type's subtree
+///    names a `Sender`/`Receiver` type (incl. `UnboundedSender`/`Unbounded-
+///    Receiver`). A function that constructs an unbounded channel and consumes
+///    it internally (stores the receiver in a field, spawns a reader task)
+///    returns `Self`/`()`/some unrelated type, so its return type does not name
+///    a channel half and it keeps flagging.
+fn is_channel_provider_constructor(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(function) = crate::rules::rust_helpers::enclosing_fn(node) else {
+        return false;
+    };
+    if !fn_is_pub(function, source) {
+        return false;
+    }
+    let Some(return_type) = function.child_by_field_name("return_type") else {
+        return false;
+    };
+    return_type_exposes_channel_half(return_type, source)
+}
+
+/// True if `function_item` has a direct `visibility_modifier` child whose text
+/// begins with `pub` (covers `pub`, `pub(crate)`, `pub(super)`).
+fn fn_is_pub(function: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = function.walk();
+    function.children(&mut cursor).any(|child| {
+        child.kind() == "visibility_modifier"
+            && child
+                .utf8_text(source)
+                .is_ok_and(|t| t.starts_with("pub"))
+    })
+}
+
+/// True if any `type_identifier` within `return_type` names a channel half —
+/// `Sender`, `Receiver`, or their `Unbounded*` variants. Matched by suffix so
+/// fully-qualified or aliased names (`mpsc::UnboundedSender<T>`) are covered.
+fn return_type_exposes_channel_half(return_type: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut found = false;
+    walk_type_identifiers(return_type, source, &mut |name| {
+        if name.ends_with("Sender") || name.ends_with("Receiver") {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Invoke `f` on the text of every `type_identifier` node within `subtree`.
+fn walk_type_identifiers(
+    subtree: tree_sitter::Node,
+    source: &[u8],
+    f: &mut dyn FnMut(&str),
+) {
+    let mut cursor = subtree.walk();
+    for child in subtree.children(&mut cursor) {
+        if child.kind() == "type_identifier"
+            && let Ok(text) = child.utf8_text(source)
+        {
+            f(text);
+        }
+        walk_type_identifiers(child, source, f);
+    }
 }
 
 /// True for the one-shot rendezvous shape, where the channel carries at most
@@ -563,6 +635,61 @@ mod tests {
                 let sender = tx;\n\
                 rx.recv().unwrap();\n\
             }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_unbounded_inside_pub_channel_provider_constructor() {
+        // Issue #5364: async_channel's own `unbounded()` constructor builds the
+        // channel and returns the (Sender, Receiver) halves to its caller — the
+        // backpressure decision belongs to the consumer, not the provider.
+        let source = "pub fn unbounded<T>() -> (Sender<T>, Receiver<T>) {\n\
+            let channel = Arc::new(Channel { queue: ConcurrentQueue::unbounded() });\n\
+            let s = Sender { channel: channel.clone() };\n\
+            let r = Receiver { channel };\n\
+            (s, r)\n\
+        }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_unbounded_in_pub_constructor_returning_sender_only() {
+        let source = "pub fn unbounded_channel<T>() -> UnboundedSender<T> {\n\
+            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();\n\
+            tx\n\
+        }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_unbounded_in_pub_fn_consuming_channel_internally() {
+        // The function builds an unbounded channel and consumes the receiver
+        // internally (stores it in `Self`); its return type is `Self`, not a
+        // channel half, so the consumer never gets to choose — keep flagging.
+        let source = "pub fn new() -> Self {\n\
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();\n\
+            Self { sender: tx, receiver: rx }\n\
+        }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_unbounded_in_private_constructor_returning_halves() {
+        // Same provider return shape but the function is not `pub`: an internal
+        // helper is a consumer-side decision the crate owns — keep flagging.
+        let source = "fn make() -> (Sender<T>, Receiver<T>) {\n\
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();\n\
+            (tx, rx)\n\
+        }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_unbounded_in_pub_fn_returning_unit() {
+        let source = "pub fn run() {\n\
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();\n\
+            tokio::spawn(async move { while let Some(m) = rx.recv().await { handle(m); } });\n\
+        }";
         assert_eq!(run_on(source).len(), 1);
     }
 
