@@ -117,6 +117,32 @@ fn declares_top_level_value(body: &str) -> bool {
     false
 }
 
+/// Whether `line` contains an access of the member literally named `value` on
+/// the reactive binding `name` (i.e. `name.value`). The member name must be
+/// exactly `value`: a following identifier character (`value1`, `valueOf`)
+/// means a different property, so it does not match. `name` must likewise be a
+/// whole identifier, not a suffix of a longer one (`mystate.value` for `state`).
+fn accesses_value_member(line: &str, name: &str) -> bool {
+    let pattern = format!("{name}.value");
+    let mut search_from = 0usize;
+    while let Some(rel) = line[search_from..].find(&pattern) {
+        let abs = search_from + rel;
+        search_from = abs + pattern.len();
+        let prev_is_ident = line[..abs]
+            .chars()
+            .next_back()
+            .is_some_and(|p| p.is_alphanumeric() || p == '_' || p == '.');
+        let next_is_ident = line[abs + pattern.len()..]
+            .chars()
+            .next()
+            .is_some_and(|n| n.is_alphanumeric() || n == '_');
+        if !prev_is_ident && !next_is_ident {
+            return true;
+        }
+    }
+    false
+}
+
 fn collect_reactives(source: &str) -> Vec<String> {
     let needle = "reactive(";
     let mut names = Vec::new();
@@ -159,8 +185,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
             continue;
         }
         for name in &names {
-            let pattern = format!("{name}.value");
-            if line.contains(&pattern) {
+            if accesses_value_member(line, name) {
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
                     line: idx + 1,
@@ -247,6 +272,29 @@ mod tests {
         let sfc =
             "<script setup>\nconst c = reactive({ myValue: 1 })\nconsole.log(c.value)\n</script>";
         assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn allows_value_prefixed_keys() {
+        // Regression #4907: properties named `value1`/`value2` start with
+        // `value` but are not the member `value` — they must not be flagged.
+        let sfc = "<script setup lang=\"ts\">\nconst state = reactive({ value1: [], value2: ['Apple'] })\n</script>\n<template>\n  <a-checkbox-group :value=\"state.value1\" />\n  <a-checkbox-group :value=\"state.value2\" />\n</template>";
+        assert!(run(sfc).is_empty());
+    }
+
+    #[test]
+    fn flags_exact_value_even_with_value_prefixed_sibling() {
+        // The exact `.value` access is still a bug even when `value1` exists.
+        let sfc = "<script setup>\nconst state = reactive({ value1: [] })\nconsole.log(state.value)\n</script>";
+        assert_eq!(run(sfc).len(), 1);
+    }
+
+    #[test]
+    fn allows_valueof_member() {
+        // `valueOf` is a distinct member, not `value`.
+        let sfc =
+            "<script setup>\nconst state = reactive({ n: 0 })\nconsole.log(state.valueOf())\n</script>";
+        assert!(run(sfc).is_empty());
     }
 
     #[test]
