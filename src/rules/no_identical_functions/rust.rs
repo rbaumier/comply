@@ -27,8 +27,15 @@
 //! well: a safe `fn` and an `unsafe fn` with the same body are not
 //! interchangeable — the `unsafe` qualifier is part of the API contract, so the
 //! two cannot be merged into one helper without changing what callers may do.
-//! Free functions with identical signatures, and inherent methods on the same
-//! type with the same receiver and in the same module, are still flagged.
+//! Pairs where either member carries an intentional-duplication attribute are
+//! exempt as well: a `#[deprecated]` function is a backward-compat alias that
+//! must keep doing exactly what its replacement does (deleting it breaks
+//! downstream callers), and a proc-macro entry point (`#[proc_macro_derive(...)]`,
+//! `#[proc_macro]`, `#[proc_macro_attribute]`) cannot be merged or aliased —
+//! each macro name needs its own exported `fn` — so the identical body is
+//! unavoidable. Free functions with identical signatures, and inherent methods
+//! on the same type with the same receiver and in the same module, are still
+//! flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -85,6 +92,13 @@ struct CollectedFn {
     /// modifier sets differ have different ABIs/safety contracts and cannot be
     /// merged into a shared helper, so they are never identical for this rule.
     modifiers: String,
+    /// True if the function carries an intentional-duplication marker —
+    /// `#[deprecated]` (a backward-compat alias kept on purpose) or a
+    /// proc-macro entry-point attribute (`#[proc_macro_derive(...)]`,
+    /// `#[proc_macro]`, `#[proc_macro_attribute]`). Such a duplicate body cannot
+    /// be removed or aliased away, so a pair where either member is marked is
+    /// never flagged.
+    intentional_dup: bool,
 }
 
 crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
@@ -104,6 +118,15 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
             // Functions in different `mod` scopes are distinct namespaces
             // (`a::f` vs `b::f`) and cannot be merged — skip cross-module pairs.
             if functions[i].module_key != functions[j].module_key {
+                continue;
+            }
+            // Intentional-duplication markers: a `#[deprecated]` backward-compat
+            // alias keeps the old body on purpose (deleting it breaks downstream
+            // callers), and a proc-macro entry point (`#[proc_macro_derive(...)]`
+            // and siblings) cannot be merged or aliased — each derive name needs
+            // its own exported fn. If either member of the pair is so marked the
+            // identical body is unavoidable, not copy-paste — skip the pair.
+            if functions[i].intentional_dup || functions[j].intentional_dup {
                 continue;
             }
             // Same-name functions in the same scope can only legally coexist
@@ -208,6 +231,16 @@ fn collect_functions(
                         module_key,
                         cfg_gated: crate::rules::rust_helpers::has_cfg_attribute(node, source),
                         modifiers: extract_modifiers(node, source),
+                        intentional_dup: crate::rules::rust_helpers::has_outer_attribute_path(
+                            node,
+                            source,
+                            &[
+                                "deprecated",
+                                "proc_macro_derive",
+                                "proc_macro",
+                                "proc_macro_attribute",
+                            ],
+                        ),
                     });
                 }
             }
@@ -936,5 +969,81 @@ impl Foo {
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("`b`"));
         assert!(d[0].message.contains("`a`"));
+    }
+
+    #[test]
+    fn allows_deprecated_proc_macro_derive_alias() {
+        // Issue #5413: strum's `variant_names` and its `#[deprecated]`
+        // `#[proc_macro_derive(EnumVariantNames)]` backward-compat alias have a
+        // byte-identical body. The deprecated alias must do exactly what the new
+        // entry point does, and a proc-macro derive cannot be merged or aliased
+        // — so the duplication is unavoidable.
+        let src = r#"
+#[proc_macro_derive(VariantNames, attributes(strum))]
+pub fn variant_names(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let ast = syn::parse_macro_input!(input as DeriveInput);
+    let toks = enum_variant_names_inner(&ast).unwrap_or_else(|err| err.to_compile_error());
+    debug_print_generated(&ast, &toks);
+    toks.into()
+}
+
+#[doc(hidden)]
+#[proc_macro_derive(EnumVariantNames, attributes(strum))]
+#[deprecated(since = "0.26.0", note = "please use `#[derive(VariantNames)]` instead")]
+pub fn variant_names_deprecated(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let ast = syn::parse_macro_input!(input as DeriveInput);
+    let toks = enum_variant_names_inner(&ast).unwrap_or_else(|err| err.to_compile_error());
+    debug_print_generated(&ast, &toks);
+    toks.into()
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_deprecated_free_function_alias() {
+        // A plain `#[deprecated]` free-function alias (no proc-macro): the old
+        // name is kept on purpose for downstream callers and forwards to the same
+        // logic, so the identical body is intentional.
+        let src = r#"
+pub fn compute(x: i32) -> i32 {
+    let a = x + 1;
+    let b = a * 2;
+    println!("{}", b);
+    b
+}
+
+#[deprecated(note = "use `compute`")]
+pub fn compute_old(x: i32) -> i32 {
+    let a = x + 1;
+    let b = a * 2;
+    println!("{}", b);
+    b
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_genuine_duplicate_free_functions_without_marker() {
+        // Negative-space guard: two ordinary identical functions with no
+        // `#[deprecated]`/proc-macro marker are real copy-paste and still flagged.
+        let src = r#"
+pub fn compute(x: i32) -> i32 {
+    let a = x + 1;
+    let b = a * 2;
+    println!("{}", b);
+    b
+}
+
+pub fn compute_copy(x: i32) -> i32 {
+    let a = x + 1;
+    let b = a * 2;
+    println!("{}", b);
+    b
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
     }
 }
