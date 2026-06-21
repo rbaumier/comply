@@ -50,6 +50,26 @@ impl OxcCheck for Check {
         if is_symbol_operand(&bin.left, semantic) || is_symbol_operand(&bin.right, semantic) {
             return;
         }
+        // A function reference is compared by identity (a pointer/slot check),
+        // not byte by byte, so it cannot leak a secret through timing. This
+        // covers a sensitively-named operand bound to a function (a configurable
+        // callback such as `issueRefreshToken`), where the `===`/`!==` asks "was
+        // the default policy callback overridden?" rather than "do two secret
+        // strings match?".
+        if operand_is_function_reference(&bin.left, semantic)
+            || operand_is_function_reference(&bin.right, semantic)
+        {
+            return;
+        }
+        // The class-defaults override idiom: `this.x !== this.#defaults.x`
+        // compares a public property against the same-named property on a
+        // private `#defaults` object, i.e. checks whether the configured value
+        // still equals its built-in default (typically a callback). This is an
+        // identity check against private internal state, not a remote-secret
+        // comparison.
+        if is_private_default_override_check(bin) {
+            return;
+        }
         let left_name = operand_name(&bin.left);
         let right_name = operand_name(&bin.right);
         // A content-integrity / checksum comparison (e.g. a downloaded file's
@@ -193,6 +213,100 @@ fn is_symbol_operand(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bo
         }
     }
     false
+}
+
+/// True when `expr` is provably a reference to a function rather than a secret
+/// string/buffer value. A function is compared by reference identity, so an
+/// equality check on one cannot leak a secret through timing.
+///
+/// Only the plain-identifier case is resolved: the binding is followed via
+/// `reference_id` → symbol → declaration node, and matches when the declaration
+/// is a `FunctionDeclaration`, or a `const`/`let` `VariableDeclarator` whose
+/// initializer is an arrow function or function expression. A binding that does
+/// not resolve, or resolves to a non-function value (a stored secret string,
+/// buffer, or token), does not match and stays flagged.
+fn operand_is_function_reference(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bool {
+    use oxc_ast::AstKind;
+
+    let Expression::Identifier(ident) = expr else {
+        return false;
+    };
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    // A `function foo() {}` binding declares the symbol directly on the
+    // `Function` node, so only the declaration node itself counts — never an
+    // ancestor, which would be the *enclosing* function of an unrelated binding.
+    if let AstKind::Function(func) = nodes.kind(decl_node_id)
+        && func.is_declaration()
+    {
+        return true;
+    }
+    // A `const foo = () => {}` binding declares the symbol on the binding
+    // identifier nested under a `VariableDeclarator`; walk up to that declarator
+    // and inspect its initializer, stopping at the first one found so the search
+    // cannot escape into an enclosing scope.
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            return matches!(
+                decl.init.as_ref(),
+                Some(Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_))
+            );
+        }
+    }
+    false
+}
+
+/// True when `bin` compares a value against the same-named property on a private
+/// field — the `this.x !== this.#defaults.x` override-check idiom. One operand
+/// reaches a property through a private-field expression (`this.#defaults.x`)
+/// and the other reads a property of the same trailing name (`this.x`), so the
+/// comparison asks "is the configured value still the built-in default?" rather
+/// than matching two secret strings.
+fn is_private_default_override_check(bin: &BinaryExpression) -> bool {
+    let private_then_plain = |private_side: &Expression, plain_side: &Expression| -> bool {
+        matches!(
+            (
+                member_property_via_private_field(private_side),
+                operand_name(plain_side),
+            ),
+            (Some(a), Some(b)) if a == b
+        )
+    };
+    private_then_plain(&bin.left, &bin.right) || private_then_plain(&bin.right, &bin.left)
+}
+
+/// If `expr` is a `<object>.<property>` access whose receiver chain reaches a
+/// private-field access (`this.#defaults.foo`, `this.#defaults.bar.foo`),
+/// returns the trailing property name; otherwise `None`.
+fn member_property_via_private_field(expr: &Expression) -> Option<String> {
+    let Expression::StaticMemberExpression(member) = expr else {
+        return None;
+    };
+    if object_reaches_private_field(&member.object) {
+        Some(member.property.name.to_string())
+    } else {
+        None
+    }
+}
+
+/// True when `expr` is, or accesses a property through, a private-field
+/// expression (`this.#x`, `this.#x.y`).
+fn object_reaches_private_field(expr: &Expression) -> bool {
+    match expr {
+        Expression::PrivateFieldExpression(_) => true,
+        Expression::StaticMemberExpression(member) => {
+            object_reaches_private_field(&member.object)
+        }
+        _ => false,
+    }
 }
 
 fn both_from_same_object(bin: &BinaryExpression) -> bool {
@@ -405,6 +519,63 @@ mod tests {
         assert!(run_on("if (a.hash === b.hash) {}").is_empty());
         assert!(run_on("if (tracked.hash.v !== to.hash) {}").is_empty());
         assert!(run_on("if (location.hash === '#footer') {}").is_empty());
+    }
+
+    /// panva/node-oidc-provider configuration.js:173 — `issueRefreshToken` is a
+    /// configurable policy callback (a function). The `!==` against the same
+    /// property on a private `#defaults` object asks whether the user overrode
+    /// the default callback, an identity check on function references, not a
+    /// secret-string comparison.
+    #[test]
+    fn allows_private_defaults_override_check() {
+        assert!(
+            run_on(
+                "class C { #defaults = getDefaults(); f() { return this.issueRefreshToken !== this.#defaults.issueRefreshToken; } }"
+            )
+            .is_empty()
+        );
+        // Operands in the other order.
+        assert!(
+            run_on(
+                "class C { #defaults = getDefaults(); f() { return this.#defaults.accessToken === this.accessToken; } }"
+            )
+            .is_empty()
+        );
+    }
+
+    /// A sensitively-named operand bound to a function reference is compared by
+    /// identity, not byte content, so it cannot leak a secret through timing.
+    #[test]
+    fn allows_function_reference_comparison() {
+        assert!(
+            run_on("function issueToken() {} function f(x) { if (x === issueToken) {} }")
+                .is_empty()
+        );
+        assert!(
+            run_on("const issueRefreshToken = () => true; function f(x) { return x !== issueRefreshToken; }")
+                .is_empty()
+        );
+        assert!(
+            run_on("const authToken = function () {}; function f(x) { if (x === authToken) {} }")
+                .is_empty()
+        );
+    }
+
+    /// Over-exemption guard: a sensitive operand bound to a non-function value
+    /// (a stored secret string) must still flag, and a same-named comparison
+    /// that does NOT reach through a private field is not the override idiom.
+    #[test]
+    fn flags_secret_string_not_function_reference() {
+        assert_eq!(
+            run_on("const authToken = getSecret(); function f(x) { if (x === authToken) {} }").len(),
+            1
+        );
+        // No private-field defaults object: a plain `this.authToken === other.authToken`
+        // is a genuine secret comparison and is not the override idiom.
+        assert_eq!(
+            run_on("class C { f(other) { return this.authToken === other.authToken; } }").len(),
+            1
+        );
     }
 
     /// Over-exemption guard: a qualified cryptographic hash still flags — the
