@@ -63,6 +63,14 @@ fn is_screaming_case(name: &str) -> bool {
 
 /// Return a short problem description if the name doesn't match the rule.
 fn classify_name(name: &str) -> Option<&'static str> {
+    // A leading `$` sigil marks a spec/framework-bound name (jQuery, Vue
+    // `$`-props, JSON Schema `$`-keywords like `$async`/`$data`), not a
+    // developer-chosen camelCase boolean. Such names mirror an external
+    // contract and the `$is*` form is not idiomatic, so the predicate-prefix
+    // convention does not apply.
+    if name.starts_with('$') {
+        return None;
+    }
     if is_screaming_case(name) {
         return None;
     }
@@ -332,6 +340,24 @@ mod tests {
     fn still_flags_user_defined_unprefixed_boolean() {
         // Strictness preserved: user-controlled names still require a prefix.
         assert_eq!(run("const debug: boolean = true;").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_dollar_prefixed_spec_boolean() {
+        // `$`-sigil names mirror spec/framework contracts (JSON Schema
+        // `$async`/`$data` keywords in ajv) and cannot take an `is*` prefix.
+        // (Closes #5290)
+        assert!(run("function f($async: boolean) {}").is_empty());
+        assert!(run("function g($data?: boolean) {}").is_empty());
+        assert!(run("const $async: boolean = true;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_unprefixed_boolean_alongside_dollar_exemption() {
+        // Strictness preserved: only the leading `$` is exempt; ordinary
+        // unprefixed booleans still require a predicate prefix.
+        assert_eq!(run("const optional: boolean = true;").len(), 1);
+        assert_eq!(run("let debug = false;").len(), 1);
     }
 
     #[test]
