@@ -2,10 +2,11 @@
 //! declared in the nearest ancestor `package.json` and are not Node.js
 //! builtins.
 //!
-//! Implied Nuxt/Nitro peers (`h3`) are exempt in projects depending on `nuxt`
-//! or `@nuxt/kit`: the Nuxt server engine provides them transitively and Nuxt
-//! modules import them without re-declaring them. The exemption is gated on the
-//! Nuxt dependency, so the same specifiers still fire outside the Nuxt ecosystem.
+//! Implied Nuxt peers (`vue`, `vue-router`, `h3`, `nitropack`, …) are exempt in
+//! projects depending on `nuxt` or `@nuxt/kit`: Nuxt hard-depends on and provides
+//! them transitively, and Nuxt modules import them without re-declaring them. The
+//! exemption is gated on the Nuxt dependency, so the same specifiers still fire
+//! outside the Nuxt ecosystem.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -20,10 +21,22 @@ use super::{
     jest_module_roots, matches_alias, module_federation, root_package_name, types_package_name,
 };
 
-/// Packages that the Nuxt/Nitro ecosystem provides transitively to every project
-/// depending on `nuxt`/`@nuxt/kit`. Nuxt modules import these in server runtime
-/// code without declaring them directly. Exact-match allowlist.
-const NUXT_NITRO_IMPLIED_PEERS: &[&str] = &["h3"];
+/// Packages the Nuxt ecosystem provides transitively to every project depending
+/// on `nuxt`/`@nuxt/kit`, so Nuxt modules import them without declaring them
+/// directly. `vue` (and its core siblings `vue-router`, `@vue/runtime-core`,
+/// `@vue/shared`) is a guaranteed peer Nuxt hard-depends on and re-exports;
+/// `h3`/`nitropack` are the HTTP layer and server engine Nitro provides. Nuxt's
+/// own runtime code and official modules `import { computed } from 'vue'` /
+/// `import { getHeader } from 'h3'` in `src/runtime/` without re-declaring them
+/// (re-declaring risks duplicate installs). Exact-match allowlist.
+const NUXT_IMPLIED_PEERS: &[&str] = &[
+    "vue",
+    "vue-router",
+    "@vue/runtime-core",
+    "@vue/shared",
+    "h3",
+    "nitropack",
+];
 
 pub struct Check;
 
@@ -174,13 +187,14 @@ impl OxcCheck for Check {
         // `json-schema`). The aliased name is consulted alongside `root` at
         // every dependency-resolution layer below.
         let types_root = types_package_name(root);
-        // `h3` is the HTTP layer of Nitro (Nuxt's server engine) and is present
+        // Nuxt hard-depends on and re-exports `vue` (and its core siblings), and
+        // Nitro (Nuxt's server engine) provides `h3`/`nitropack`; all are present
         // transitively in any project that depends on `nuxt` or `@nuxt/kit`. Nuxt
-        // modules idiomatically `import { H3Event, getHeader } from "h3"` in server
-        // runtime code without re-declaring it, so treat it as an implied peer of the
-        // Nuxt ecosystem (gated on the Nuxt dependency, so a non-Nuxt project still
-        // reports it as implicit).
-        if NUXT_NITRO_IMPLIED_PEERS.contains(&root)
+        // modules idiomatically `import { computed } from "vue"` /
+        // `import { getHeader } from "h3"` in `src/runtime/` without re-declaring
+        // them, so treat them as implied peers of the Nuxt ecosystem (gated on the
+        // Nuxt dependency, so a non-Nuxt project still reports them as implicit).
+        if NUXT_IMPLIED_PEERS.contains(&root)
             && ctx
                 .project
                 .effective_package_jsons(ctx.path)
@@ -2260,8 +2274,8 @@ export default {
         );
     }
 
-    // Negative space for #4484: the exemption is scoped to `h3` only — another
-    // undeclared package in a Nuxt project must still fire.
+    // Negative space for #4484: the exemption is scoped to the implied-peer set —
+    // another undeclared package in a Nuxt project must still fire.
     #[test]
     fn flags_other_undeclared_dep_in_nuxt_project_issue_4484() {
         let dir = TempDir::new().unwrap();
@@ -2279,7 +2293,77 @@ export default {
         assert_eq!(
             diags.len(),
             1,
-            "an undeclared package other than `h3` in a Nuxt project must still fire, got {diags:?}"
+            "an undeclared package other than an implied peer in a Nuxt project must still fire, got {diags:?}"
+        );
+    }
+
+    // Regression #5106: Nuxt hard-depends on and re-exports `vue`, so Nuxt module
+    // runtime code (`src/runtime/`) `import { computed, reactive } from 'vue'`
+    // without re-declaring it. In a project depending on `nuxt`, the `vue` import
+    // must not be flagged.
+    #[test]
+    fn allows_vue_import_in_nuxt_project_issue_5106() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"@nuxtjs/color-mode","dependencies":{"nuxt":"^4"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src").join("runtime");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("plugin.client.ts");
+        let source = "import { computed, reactive, watch } from 'vue';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "`vue` import in a `nuxt` project must not be flagged, got {diags:?}"
+        );
+    }
+
+    // `@nuxt/kit` likewise pulls in `vue` transitively, so the same exemption
+    // applies to a project depending on `@nuxt/kit` instead of `nuxt`.
+    #[test]
+    fn allows_vue_import_with_nuxt_kit_dep_issue_5106() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"@nuxt/icon","dependencies":{"@nuxt/kit":"^4"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src").join("runtime").join("components");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("index.ts");
+        let source = "import { defineComponent, h } from 'vue';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "`vue` import in a `@nuxt/kit` project must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Negative space for #5106: outside the Nuxt ecosystem (no `nuxt`/`@nuxt/kit`
+    // dependency) an undeclared `vue` import is still an implicit dependency and
+    // must fire — the exemption is gated on the Nuxt dependency.
+    #[test]
+    fn flags_vue_import_without_nuxt_dep_issue_5106() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","dependencies":{"lodash":"^4"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("t.ts");
+        let source = "import { computed } from 'vue';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "`vue` import without a Nuxt dependency must still fire, got {diags:?}"
         );
     }
 }
