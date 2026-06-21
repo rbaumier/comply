@@ -9,9 +9,13 @@
 //! or `#[clap(value_parser = …)]`), where clap requires `fn(&str) -> Result<T, E>`
 //! with `E: Into<Box<dyn Error + Send + Sync>>` and consumes the error internally,
 //! so `String` is the idiomatic error and a structured error adds no value.
+//! Also suppressed in test context (`#[test]` functions, `#[cfg(test)]` modules,
+//! `tests/` integration files), where `Result<_, String>` is the idiomatic
+//! lightweight error-propagation pattern — tests only display the error message,
+//! never pattern-match it, so a structured error enum adds no value.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::result_error_type;
+use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir, result_error_type};
 
 crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     let Some(err_type) = result_error_type(node, source) else {
@@ -21,6 +25,13 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
         return;
     };
     if err_text.trim() != "String" {
+        return;
+    }
+    // `Result<_, String>` is the idiomatic lightweight error-propagation pattern
+    // in test code: tests return `Result` so the body can use `?`, and a `String`
+    // error is fine there since the harness only displays it. The typed-error
+    // guidance applies to library/production code, not tests.
+    if is_in_test_context(node, source) || is_under_tests_dir(ctx.path) {
         return;
     }
     // A `Result<_, String>` in a trait method signature is a public API contract:
@@ -125,6 +136,36 @@ mod tests {
 
     #[test]
     fn flags_result_string_error() {
+        assert_eq!(run_on("fn f() -> Result<i32, String> { Ok(0) }").len(), 1);
+    }
+
+    #[test]
+    fn allows_result_string_in_test_fn() {
+        // `Result<_, String>` is the idiomatic lightweight error-propagation
+        // pattern in `#[test]` functions — the harness only displays the error.
+        let src = "#[test]\nfn t() -> Result<(), String> { Ok(()) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_result_string_in_cfg_test_module() {
+        // A `#[cfg(test)]` module is test-only code.
+        let src = "#[cfg(test)]\nmod tests { fn f() -> Result<i32, String> { Ok(0) } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_result_string_in_tests_dir() {
+        // A file under `tests/` is integration-test infrastructure.
+        let src = "fn f() -> Result<(), String> { Ok(()) }";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "tests/all/emplace.rs").is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_result_string_in_production() {
+        // Outside test context the typed-error guidance still applies.
         assert_eq!(run_on("fn f() -> Result<i32, String> { Ok(0) }").len(), 1);
     }
 
