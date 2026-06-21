@@ -427,6 +427,18 @@ pub fn is_rust_build_script(path: &Path) -> bool {
     path.file_name().and_then(|n| n.to_str()) == Some("build.rs")
 }
 
+/// True for a Gulp task file: a file whose stem is `gulpfile` (`gulpfile.js`,
+/// `gulpfile.mjs`, `gulpfile.cjs`, `gulpfile.ts`, …). Gulp orchestrates a build
+/// through Vinyl file-object streams whose `.pipe()` is a distinct API from
+/// Node's `Readable`/`Writable` streams, so stream-pipe heuristics don't apply.
+pub fn is_gulpfile(path: &Path) -> bool {
+    path.file_stem().and_then(|s| s.to_str()) == Some("gulpfile")
+        && matches!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs")
+        )
+}
+
 /// True for demonstration code under `samples/`, `sample/`, `samples-dev/`,
 /// `examples/`, `example/`, `example-apps/`, `demo/`, or `demos/`. Compiled and
 /// run at dev time to show library usage; it never ships in the published
