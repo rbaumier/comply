@@ -32,16 +32,54 @@ fn is_flag_member_name(name: &str) -> bool {
     name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
+/// Word segments that mark a name as carrying a bitmask, regardless of casing,
+/// e.g. `mask`, `eventMask`, `flags`, `dirtyBits`.
+const BITMASK_WORDS: &[&str] = &["mask", "bitmask", "flag", "flags", "bit", "bits"];
+
+/// Whether a name contains a bitmask-vocabulary word as a whole
+/// camelCase/snake_case segment, so `mask`, `eventMask`, `obs_flags`, `Bitmask`
+/// match but `flagship` or `arbiter` do not. Casing is ignored.
+///
+/// Segments are delimited by camelCase boundaries (`event|Mask`) and by
+/// `_`/`$`/digit separators (`dirty_bits` -> `dirty`, `bits`; `MASK2` -> `MASK`).
+/// Walks the bytes without allocating, since this runs per operand per node.
+fn has_bitmask_word(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    let is_sep = |b: u8| b == b'_' || b == b'$' || b.is_ascii_digit();
+    let mut start = 0;
+    for i in 0..=bytes.len() {
+        let at_camel_boundary = i > start
+            && i < bytes.len()
+            && bytes[i].is_ascii_uppercase()
+            && bytes[i - 1].is_ascii_lowercase();
+        let at_separator = i < bytes.len() && is_sep(bytes[i]);
+        if i == bytes.len() || at_separator || at_camel_boundary {
+            if start < i && BITMASK_WORDS.iter().any(|w| w.eq_ignore_ascii_case(&name[start..i])) {
+                return true;
+            }
+            // A separator is consumed (not part of any segment); a camelCase
+            // boundary starts the next segment at the uppercase byte itself.
+            start = if at_separator { i + 1 } else { i };
+        }
+    }
+    false
+}
+
 /// Whether an operand is an unambiguous bit-flag signal: a numeric literal,
-/// a SCREAMING_SNAKE constant, a member access to an enum-like flag
+/// a SCREAMING_SNAKE constant, an identifier or member-access property whose
+/// name carries a bitmask-vocabulary word (`mask`, `flags`, `eventMask`,
+/// `obs.mask`, `this.flags`), a member access to an enum-like flag
 /// (`ScopeFlag.STATIC_BLOCK`, `OptionFlags.Locations`, `FLAGS.X`), or a
 /// bitwise combination of such flags (`ScopeFlag.VAR | ScopeFlag.CLASS_BASE`).
 fn is_flag_operand(expr: &Expression) -> bool {
     match expr {
         Expression::NumericLiteral(_) => true,
-        Expression::Identifier(id) => is_flag_constant_name(id.name.as_str()),
+        Expression::Identifier(id) => {
+            is_flag_constant_name(id.name.as_str()) || has_bitmask_word(id.name.as_str())
+        }
         Expression::StaticMemberExpression(member) => {
             is_flag_member_name(member.property.name.as_str())
+                || has_bitmask_word(member.property.name.as_str())
         }
         Expression::ParenthesizedExpression(paren) => is_flag_operand(&paren.expression),
         Expression::BinaryExpression(bin)
@@ -222,6 +260,27 @@ mod tests {
     #[test]
     fn allows_numeric_literal_bitmask_test() {
         assert!(run_on("if (flags & 4) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_bitmask_named_operand_bitmask_test() {
+        // Regression for #5272: a genuine bitwise-AND on bitmask-named operands
+        // is not a `&&` typo, whether the name is a lowercase identifier, a
+        // member-access property, or a camelCase segment.
+        assert!(run_on("if (obs.mask & mask) {}").is_empty());
+        assert!(run_on("if (this.flags & FLAG_A) {}").is_empty());
+        assert!(run_on("if (observerMask & eventMask) {}").is_empty());
+        assert!(run_on("if (state.dirtyBits & x.bits) {}").is_empty());
+    }
+
+    #[test]
+    fn flags_genuine_boolean_typo_with_no_bitmask_operand() {
+        // Neither operand looks like a bitmask, so a `&` is a likely `&&` typo.
+        assert_eq!(run_on("if (isReady & isDone) {}").len(), 1);
+        assert_eq!(run_on("if (a.enabled & b.visible) {}").len(), 1);
+        // A name merely containing `flag`/`mask` inside another word must not
+        // be treated as a bitmask (`flagship`, `unmasked` is not a segment).
+        assert_eq!(run_on("if (flagship & arbiter) {}").len(), 1);
     }
 
     #[test]
