@@ -320,6 +320,22 @@ pub fn is_cargo_bin_target_path(path: &Path) -> bool {
         == Some("src")
 }
 
+/// True when `path` is a Cargo benchmark target file: a file sitting directly in
+/// a `benches/` directory (the immediate parent is `benches`, e.g.
+/// `benches/my-bench.rs` or a workspace member's `crates/foo/benches/io.rs`).
+/// Cargo auto-discovers each such file as a benchmark target whose name is the
+/// file stem (`cargo bench --bench my-bench`); benchmark target names are
+/// freely-chosen identifiers that conventionally use kebab-case like Cargo crate
+/// names, so filename-convention checks exempt them. Only files directly in
+/// `benches/` qualify — a file nested deeper (`benches/my_bench/helper.rs`) is a
+/// module of a directory-based benchmark and must still follow snake_case.
+pub fn is_cargo_bench_target_path(path: &Path) -> bool {
+    path.parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        == Some("benches")
+}
+
 /// True when `path` lives under an Angular `schematics/` or `migrations/`
 /// directory. These hold Angular CLI schematic and `ng update` migration entry
 /// points: each is an `index.ts` exporting a default factory function that the
@@ -2160,6 +2176,23 @@ mod aux_path_tests {
         assert!(!is_cargo_bin_target_path(&PathBuf::from("bin/tool.rs")));
         // Ordinary library source is not a binary target.
         assert!(!is_cargo_bin_target_path(&PathBuf::from("src/lib.rs")));
+    }
+
+    #[test]
+    fn cargo_bench_target_path_matches_benches_files_issue5179() {
+        // The issue's exact reproducer path (nextest).
+        assert!(is_cargo_bench_target_path(&PathBuf::from(
+            "fixtures/fixture-project/benches/my-bench.rs"
+        )));
+        // A workspace member's `benches/` is the same convention.
+        assert!(is_cargo_bench_target_path(&PathBuf::from("crates/foo/benches/io.rs")));
+        // A file nested deeper under `benches/` is a module of a directory-based
+        // benchmark and must still follow snake_case.
+        assert!(!is_cargo_bench_target_path(&PathBuf::from(
+            "benches/my_bench/my-helper.rs"
+        )));
+        // Ordinary library source is not a benchmark target.
+        assert!(!is_cargo_bench_target_path(&PathBuf::from("src/lib.rs")));
     }
 
     #[test]
