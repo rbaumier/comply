@@ -795,6 +795,33 @@ fn attribute_path_is(attribute_item: Node, source: &[u8], attr_path: &str) -> bo
     path.utf8_text(source) == Ok(attr_path)
 }
 
+/// True if any preceding `attribute_item` sibling of `item` names one of
+/// `attr_paths` as its attribute path (the identifier before any `(...)`
+/// arguments). Unlike [`has_outer_attribute`], which matches the bracketed
+/// token text and so only recognizes argument-less attributes, this keys on the
+/// AST path child via [`attribute_path_is`], so argument-bearing attributes such
+/// as `#[deprecated(since = "…")]` and `#[proc_macro_derive(Name, …)]` match.
+///
+/// Interleaved `line_comment`/`block_comment` siblings are skipped and unrelated
+/// attributes are traversed, so the marker need not be the attribute nearest the
+/// item.
+pub fn has_outer_attribute_path(item: Node, source: &[u8], attr_paths: &[&str]) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "line_comment" | "block_comment" => {}
+            "attribute_item" => {
+                if attr_paths.iter().any(|p| attribute_path_is(s, source, p)) {
+                    return true;
+                }
+            }
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
 /// True if `node` is covered by an `#[allow(<scope>::<lint>)]` or
 /// `#[expect(<scope>::<lint>)]` attribute naming `lint`, applied to an enclosing
 /// statement, expression, or item.
