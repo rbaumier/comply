@@ -74,7 +74,14 @@ fn callee_is_allowed_test_call(expr: &Expression) -> bool {
     let Expression::CallExpression(call) = expr else {
         return false;
     };
-    if let Some(name) = root_callee_name(expr)
+    call_is_allowed_test_call(call)
+}
+
+/// `callee_is_allowed_test_call` operating on a `CallExpression` directly — used
+/// when walking the semantic node graph, where call nodes are reached as
+/// `AstKind::CallExpression` rather than wrapped in an `Expression`.
+fn call_is_allowed_test_call(call: &CallExpression) -> bool {
+    if let Some(name) = root_callee_name(&call.callee)
         && is_allowed_test_callee(name)
     {
         return true;
@@ -405,11 +412,93 @@ fn is_local_data_table_assignment(expr: &Expression, semantic: &oxc_semantic::Se
     crate::oxc_helpers::is_local_object_builder_binding(root, semantic)
 }
 
+/// Is `expr` a call to a locally-defined function whose body registers a test
+/// suite — `runTest("normalizeWindowsPath", fn, { ... })`, where `runTest` is a
+/// same-module `function`/arrow declaration that internally calls
+/// `describe`/`it`/`test`?
+///
+/// Such a wrapper organizes a test suite declaratively (it expands to one or
+/// more `describe(name, () => { it(...) })` registrations), so calling it at
+/// module scope is test structure, not ungated setup — there is no hook to move
+/// it into. The callee must be a bare identifier that resolves, via symbol
+/// resolution, to a declaration node in this module (a `Function` declaration or
+/// a `const`/`let` bound to an arrow/function expression). Imported bindings
+/// resolve to an import-specifier node, not a `Function`/`VariableDeclarator`,
+/// so an imported `setupDatabase()` is never matched; a local helper whose body
+/// has no test-registration call (`function doSetup() { fetch(...) }`) is not in
+/// the precomputed set and stays flagged.
+fn is_local_test_suite_wrapper_call(
+    expr: &Expression,
+    wrapper_decl_ids: &FxHashSet<oxc_semantic::NodeId>,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    let Expression::Identifier(callee) = &call.callee else {
+        return false;
+    };
+    let Some(ref_id) = callee.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    wrapper_decl_ids.contains(&scoping.symbol_declaration(sym_id))
+}
+
+/// Collect the declaration node ids of same-module functions whose body contains
+/// a test-registration call (`describe`/`it`/`test`/hook). A declaration node is
+/// either the `Function` of a `function foo()` declaration or the
+/// `VariableDeclarator` of a `const foo = () => …`/`function () {}` binding — the
+/// two node kinds `symbol_declaration` returns for a local callable.
+///
+/// Found by a single pass over the semantic node graph: for every test-suite
+/// registration call, walk its ancestors and record the nearest enclosing
+/// function-declaration / arrow-bound-declarator node. A module-scope call whose
+/// callee resolves to one of these ids is a local test-suite wrapper.
+fn local_test_suite_wrapper_decl_ids(
+    semantic: &oxc_semantic::Semantic,
+) -> FxHashSet<oxc_semantic::NodeId> {
+    use oxc_ast::AstKind;
+    let nodes = semantic.nodes();
+    let mut out = FxHashSet::default();
+    for node in nodes.iter() {
+        let AstKind::CallExpression(call) = node.kind() else {
+            continue;
+        };
+        if !call_is_allowed_test_call(call) {
+            continue;
+        }
+        for ancestor_id in nodes.ancestor_ids(node.id()) {
+            match nodes.kind(ancestor_id) {
+                AstKind::Function(_) => {
+                    out.insert(ancestor_id);
+                    break;
+                }
+                AstKind::ArrowFunctionExpression(_) => {
+                    // The declarator that binds the arrow is the node
+                    // `symbol_declaration` returns for `const foo = () => …`.
+                    let parent_id = nodes.parent_id(ancestor_id);
+                    if let AstKind::VariableDeclarator(_) = nodes.kind(parent_id) {
+                        out.insert(parent_id);
+                    }
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 /// Classify a top-level statement.
 fn top_level_is_allowed(
     stmt: &Statement,
     node_test_mode: bool,
     package_bindings: &FxHashSet<&str>,
+    wrapper_decl_ids: &FxHashSet<oxc_semantic::NodeId>,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
     match stmt {
@@ -471,6 +560,12 @@ fn top_level_is_allowed(
                 return true;
             }
             if is_fixture_runner_call(expr, package_bindings) {
+                return true;
+            }
+            // A call to a locally-defined function whose body registers a test
+            // suite (`runTest(...)` wrapping `describe`/`it`) is test structure,
+            // not ungated setup — see `is_local_test_suite_wrapper_call`.
+            if is_local_test_suite_wrapper_call(expr, wrapper_decl_ids, semantic) {
                 return true;
             }
             callee_is_allowed_test_call(expr)
@@ -1583,6 +1678,98 @@ describe("x", () => { it("works", () => {}); });
     }
 
     #[test]
+    fn allows_local_test_suite_wrapper_call_at_top_level() {
+        let src = r#"
+import { describe, expect, it, vi } from "vitest";
+import { normalizeWindowsPath } from "../src/_internal";
+
+runTest("normalizeWindowsPath", normalizeWindowsPath, {
+  "/foo/bar": "/foo/bar",
+  "c:\\foo\\bar": "C:/foo/bar",
+});
+
+runTest("isAbsolute", isAbsolute, {
+  "/foo/bar": true,
+});
+
+export function runTest(name, function_, items) {
+  describe(`${name}`, () => {
+    for (const item of items) {
+      it(`${name}`, () => {
+        expect(function_(item)).toEqual(item);
+      });
+    }
+  });
+}
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "test/index.spec.ts");
+        assert!(
+            d.is_empty(),
+            "a call to a locally-defined function whose body wraps describe()/it() must be allowed at top level: {d:?}"
+        );
+    }
+
+    #[test]
+    fn allows_local_arrow_test_suite_wrapper_call_at_top_level() {
+        let src = r#"
+import { describe, it } from "vitest";
+
+const runSuite = (name) => {
+  describe(name, () => {
+    it("works", () => {});
+  });
+};
+
+runSuite("alpha");
+runSuite("beta");
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "suite.spec.ts");
+        assert!(
+            d.is_empty(),
+            "a call to a local arrow wrapper that registers a describe() suite must be allowed at top level: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_local_function_call_without_test_registration() {
+        let src = r#"
+import { describe, it } from "vitest";
+
+function doSetup() {
+  fetch("https://example.com");
+}
+
+doSetup();
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "setup.spec.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "a local function whose body has no test-registration call is genuine setup and must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_imported_setup_call_even_when_named_like_wrapper() {
+        let src = r#"
+import { setupDatabase } from "./db-helpers";
+import { describe, it } from "vitest";
+
+setupDatabase();
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "db.spec.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "an imported setup call must still be flagged — it does not resolve to a same-module function declaration: {d:?}"
+        );
+    }
+
+    #[test]
     fn flags_top_level_iife_side_effect() {
         let src = r#"
 (() => { sideEffectCall(); })();
@@ -1643,10 +1830,17 @@ impl OxcCheck for Check {
         if !node_test_mode && !file_has_test_framework_context(program, &package_bindings) {
             return Vec::new();
         }
+        let wrapper_decl_ids = local_test_suite_wrapper_decl_ids(semantic);
         let mut diagnostics = Vec::new();
 
         for stmt in &program.body {
-            if top_level_is_allowed(stmt, node_test_mode, &package_bindings, semantic) {
+            if top_level_is_allowed(
+                stmt,
+                node_test_mode,
+                &package_bindings,
+                &wrapper_decl_ids,
+                semantic,
+            ) {
                 continue;
             }
             let span = stmt.span();
