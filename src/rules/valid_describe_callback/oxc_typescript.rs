@@ -94,7 +94,7 @@ impl OxcCheck for Check {
 
         match cb {
             oxc_ast::ast::Argument::ArrowFunctionExpression(arrow) => {
-                let is_async = arrow.r#async;
+                let is_async = arrow.r#async && !body_contains_vi_hoisted_call(&arrow.body.statements);
                 let has_params = !is_parameterized && !arrow.params.items.is_empty();
                 let returns_value = if arrow.expression {
                     // Arrow with expression body = implicit return. A bare call
@@ -128,7 +128,8 @@ impl OxcCheck for Check {
                 });
             }
             oxc_ast::ast::Argument::FunctionExpression(func) => {
-                let is_async = func.r#async;
+                let is_async = func.r#async
+                    && !func.body.as_ref().is_some_and(|body| body_contains_vi_hoisted_call(&body.statements));
                 let has_params = !is_parameterized && !func.params.items.is_empty();
                 let returns_value = func.body.as_ref()
                     .map(|body| body_returns_value_stmts(&body.statements))
@@ -169,6 +170,42 @@ fn expression_body_is_bare_call(stmts: &[oxc_ast::ast::Statement]) -> bool {
         return false;
     };
     matches!(expr_stmt.expression, Expression::CallExpression(_))
+}
+
+/// True when the describe callback body contains a `vi.hoisted(...)` call.
+/// Vitest's `vi.hoisted(async () => …)` returns a Promise, so a describe
+/// callback that `await`s it is legitimately async (the documented Vitest
+/// hoisted-mock-setup pattern). The scan stays within the callback body and
+/// does not descend into nested functions (`it`/`beforeAll`/`vi.hoisted`'s own
+/// callback), since their async-ness is unrelated to the describe callback.
+fn body_contains_vi_hoisted_call(stmts: &[oxc_ast::ast::Statement]) -> bool {
+    use oxc_ast::ast::Statement;
+    stmts.iter().any(|stmt| match stmt {
+        Statement::ExpressionStatement(expr_stmt) => expr_contains_vi_hoisted_call(&expr_stmt.expression),
+        Statement::VariableDeclaration(decl) => decl
+            .declarations
+            .iter()
+            .filter_map(|d| d.init.as_ref())
+            .any(expr_contains_vi_hoisted_call),
+        _ => false,
+    })
+}
+
+/// True when `expr` is (or directly wraps, via `await`) a `vi.hoisted(...)` call.
+fn expr_contains_vi_hoisted_call(expr: &Expression) -> bool {
+    match expr {
+        Expression::AwaitExpression(await_expr) => expr_contains_vi_hoisted_call(&await_expr.argument),
+        Expression::CallExpression(call) => {
+            let Expression::StaticMemberExpression(member) = &call.callee else {
+                return false;
+            };
+            let Expression::Identifier(obj) = &member.object else {
+                return false;
+            };
+            obj.name.as_str() == "vi" && member.property.name.as_str() == "hoisted"
+        }
+        _ => false,
+    }
 }
 
 /// Walk statements looking for a `return` with a value, without descending
@@ -347,6 +384,49 @@ mod tests {
             "test-text-parser.test.mts",
         );
         assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+    }
+
+    // Regression #5195 — Vitest's `vi.hoisted(async () => …)` returns a Promise,
+    // so a describe callback that `await`s it for hoisted mock setup is
+    // legitimately async and must not be flagged.
+    #[test]
+    fn allows_async_describe_callback_with_awaited_vi_hoisted() {
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "import { describe, it, expect, vi } from 'vitest'; \
+             describe('tryModuleResolve', async () => { \
+                 const { mockedResolve } = await vi.hoisted(async () => { \
+                     const m = await vi.importActual('import-meta-resolve'); \
+                     return { mockedResolve: vi.fn() }; \
+                 }); \
+                 it('x', () => { expect(mockedResolve).toBeDefined(); }); \
+             });",
+            "resolve.test.ts",
+        );
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+    }
+
+    // A function-expression describe callback awaiting vi.hoisted is also valid.
+    #[test]
+    fn allows_async_function_describe_callback_with_vi_hoisted() {
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "describe('x', async function () { await vi.hoisted(async () => ({})); it('y', () => {}); });",
+            "t.ts",
+        );
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+    }
+
+    // An async describe callback without vi.hoisted is still flagged.
+    #[test]
+    fn still_flags_async_describe_callback_without_vi_hoisted() {
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "describe('x', async () => { await setup(); it('y', () => {}); });",
+            "t.ts",
+        );
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("async"));
     }
 
     // A same-named `describe` imported from Jest/Vitest is still the sync API.
