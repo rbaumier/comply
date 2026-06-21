@@ -5,7 +5,7 @@
 //! `'undefined'` and environment globals are not shape validation.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_inside_type_predicate_fn};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BinaryExpression, BinaryOperator, Expression, LogicalOperator, UnaryOperator};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -70,6 +70,14 @@ impl OxcCheck for Check {
         // `((a && b) && c)`, so a sub-chain whose nearest non-paren ancestor is
         // another `&&` would otherwise flag the same chain twice.
         if has_and_ancestor(node, semantic) {
+            return;
+        }
+
+        // A function whose return type is a type predicate (`value is T` or
+        // `asserts value is T`) IS a user-defined type guard: chained `typeof`
+        // checks are the narrowing primitive it implements, so "prefer a schema"
+        // is circular — the guard would still need the same `typeof` checks.
+        if is_inside_type_predicate_fn(node.id(), semantic) {
             return;
         }
 
@@ -298,5 +306,60 @@ mod tests {
     fn allows_two_partial_checks_on_different_objects() {
         let d = run_on("if (typeof x.a === 'string' && typeof y.b === 'number') {}");
         assert!(d.is_empty(), "{d:?}");
+    }
+
+    // Issue #5280: a `value is T` type guard implements narrowing with `typeof`;
+    // suggesting a schema is circular. The same shape WITHOUT the predicate
+    // return type (see `flags_handrolled_shape_guard`) still flags.
+    #[test]
+    fn allows_type_predicate_guard() {
+        let d = run_on(
+            "function isUser(x: unknown): x is User {\n  return typeof x === 'object' && x !== null \
+             && typeof x.name === 'string' && typeof x.age === 'number';\n}",
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    // Arrow type guards are equally narrowing primitives.
+    #[test]
+    fn allows_type_predicate_arrow_guard() {
+        let d = run_on(
+            "const isUser = (x: unknown): x is User =>\n  typeof x === 'object' && x !== null \
+             && typeof x.name === 'string' && typeof x.age === 'number';",
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    // `asserts x is T` assertion signatures are also type-narrowing primitives.
+    #[test]
+    fn allows_assertion_signature_guard() {
+        let d = run_on(
+            "function assertUser(x: unknown): asserts x is User {\n  if (!(typeof x === 'object' \
+             && x !== null && typeof x.name === 'string' && typeof x.age === 'number')) \
+             throw new Error('bad');\n}",
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    // A `typeof` shape check nested inside a `.every` callback of a type guard is
+    // still the guard's narrowing logic — the issue #5280 reduced shape.
+    #[test]
+    fn allows_nested_shape_check_in_type_guard() {
+        let d = run_on(
+            "function isDocs(value: unknown): value is Document {\n  return Array.isArray(value) \
+             && value.every((v) => typeof v === 'object' && v !== null \
+             && typeof v.description === 'string' && typeof v.schema === 'boolean');\n}",
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    // An ordinary function (no type-predicate return type) still flags.
+    #[test]
+    fn flags_shape_check_in_plain_function() {
+        let d = run_on(
+            "function check(x: unknown): boolean {\n  return typeof x === 'object' && x !== null \
+             && typeof x.name === 'string' && typeof x.age === 'number';\n}",
+        );
+        assert_eq!(d.len(), 1, "{d:?}");
     }
 }
