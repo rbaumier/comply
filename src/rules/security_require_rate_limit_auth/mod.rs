@@ -2,6 +2,8 @@
 
 mod oxc_typescript;
 
+pub(crate) use oxc_typescript::has_global_rate_limit;
+
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use crate::rules::RuleDef;
