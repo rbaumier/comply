@@ -592,6 +592,48 @@ mod tests {
     }
 
     #[test]
+    fn repro_5165_if_let_some_char_from_u32_as_u32_not_flagged() {
+        // `if let Some(ch) = char::from_u32(..)` binds `ch: char`; `char as u32`
+        // is lossless (≤ 0x10FFFF fits u32). The source is not numeric.
+        let src = "fn f(x: u32) -> u32 { \
+                   if let Some(ch) = char::from_u32(x) { ch as u32 } else { 0 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5165_if_let_some_char_core_path_as_u32_not_flagged() {
+        // The issue's exact path shape: `::core::char::from_u32`.
+        let src = "fn f(x: u32) -> u32 { \
+                   if let Some(ch) = ::core::char::from_u32(x) { ch as u32 } else { 0 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5165_if_let_some_char_from_digit_as_u32_not_flagged() {
+        let src = "fn f(d: u32) -> u32 { \
+                   if let Some(ch) = char::from_digit(d, 10) { ch as u32 } else { 0 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5165_if_let_some_non_char_from_u32_still_flagged() {
+        // `Foo::from_u32` is not a char-returning function — the unwrapped
+        // binding is not a char, so a narrowing numeric cast stays flagged.
+        let src = "fn f(x: u64) -> u8 { \
+                   if let Some(n) = Foo::from_u32(x) { n as u8 } else { 0 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_5165_if_let_some_char_as_u8_still_flagged() {
+        // u8 is only 8 bits — even a char-bound operand truncates, so the
+        // narrowing cast stays flagged (the char exemption needs ≥ 21 bits).
+        let src = "fn f(x: u32) -> u8 { \
+                   if let Some(ch) = char::from_u32(x) { ch as u8 } else { 0 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
     fn repro_4922_range_guarded_narrowing_not_flagged() {
         // The msgpack encoder pattern (rmp/src/encode/uint.rs): each `as`
         // narrowing is guarded by an `if`/`else if` upper bound proving the
