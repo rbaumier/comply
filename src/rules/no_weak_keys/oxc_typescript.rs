@@ -105,3 +105,63 @@ impl OxcCheck for Check {
         }
     }
 }
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::run_rule_gated;
+
+    // Regression for rbaumier/comply#5118 — panva/oauth4webapi's
+    // `tap/modulus_length.ts` generates a weak (1024-bit) RSA key as deliberate
+    // input, asserting the library rejects it. The key is never used for a real
+    // crypto operation and never ships to production, so the weak-key harm does
+    // not apply. The central `skip_in_test_dir` gate suppresses the rule for the
+    // node-tap test directory (the issue's exact path, no `.test.` infix).
+    #[test]
+    fn gated_no_fp_on_weak_key_in_node_tap_test() {
+        let src = "const kp = await lib.generateKeyPair('RS256', { modulusLength: 1024 })\n";
+        assert!(
+            run_rule_gated(&Check, src, "tap/modulus_length.ts").is_empty(),
+            "skip_in_test_dir must suppress weak keys in the node-tap test dir"
+        );
+    }
+
+    // A weak key in a production/source file is a real credential and must keep
+    // firing.
+    #[test]
+    fn gated_still_flags_weak_key_in_production() {
+        let src = "const kp = generateKeyPairSync('rsa', { modulusLength: 1024 })\n";
+        assert_eq!(
+            run_rule_gated(&Check, src, "src/crypto.ts").len(),
+            1,
+            "production weak key must still be flagged"
+        );
+    }
+
+    // A weak EC curve in production is equally a real credential.
+    #[test]
+    fn gated_still_flags_weak_curve_in_production() {
+        let src = "const kp = generateKeyPairSync('ec', { namedCurve: 'p-192' })\n";
+        assert_eq!(
+            run_rule_gated(&Check, src, "src/crypto.ts").len(),
+            1,
+            "production weak EC curve must still be flagged"
+        );
+    }
+}
