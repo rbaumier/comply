@@ -96,6 +96,16 @@ impl OxcCheck for Check {
         {
             return;
         }
+        // Performance benchmark files, recognized by the shared benchmark
+        // predicate: a `bench`/`benchmark`/`benches` directory, a `.bench.`
+        // filename infix, a `_bench`/`-bench` stem marker, or a stem that is
+        // exactly `bench`/`benchmark` (e.g. Turf's per-package `bench.ts`).
+        // They import benchmark runners and comparison libraries from
+        // devDependencies and never ship in the published package, so importing
+        // a devDependency from them is correct (issue #5286).
+        if ctx.file.path_segments.in_benchmark_dir {
+            return;
+        }
         // Custom linter tooling (`lint-rules/`, `lint-processors/`) and general
         // development tooling (`tools/`) run only during development and never
         // ship in the published package (e.g. type-fest excludes them from its
@@ -1073,6 +1083,43 @@ import { List } from "immutable";
         let src = r#"import { add, complete, cycle, save, suite } from "benny";"#;
         let d = run_with_pkg_at_path(pkg, "benchmarks/read-write.ts", src);
         assert!(d.is_empty(), "benchmarks/ file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_bench_ts_filename() {
+        // Issue #5286: Turf places each package's performance benchmark in a file
+        // named exactly `bench.ts` at the package root (not inside a `bench/`
+        // directory). Such a file imports the `benchmark` runner and comparison
+        // libraries from devDependencies and never ships, so the import is correct.
+        let pkg = r#"{"devDependencies":{"benchmark":"^2","load-json-file":"^7"}}"#;
+        let src = r#"
+import { loadJsonFileSync } from "load-json-file";
+import Benchmark from "benchmark";
+"#;
+        let d = run_with_pkg_at_path(pkg, "packages/turf-length/bench.ts", src);
+        assert!(d.is_empty(), "bench.ts file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn allows_dev_dep_in_dot_bench_filename() {
+        // Issue #5286: the `*.bench.ts` filename convention is also a benchmark
+        // file and must not flag its devDependency imports.
+        let pkg = r#"{"devDependencies":{"mitata":"^1"}}"#;
+        let src = r#"import { bench } from "mitata";"#;
+        let d = run_with_pkg_at_path(pkg, "src/parse.bench.ts", src);
+        assert!(d.is_empty(), "*.bench.ts file should not flag devDeps: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_dev_dep_in_bencher_lookalike() {
+        // Guard against over-relaxing: a stem that merely starts with `bench`
+        // (e.g. `bencher.ts`) is production code, not a benchmark file, so its
+        // devDependency imports must still flag.
+        let pkg = r#"{"devDependencies":{"mitata":"^1"}}"#;
+        let src = r#"import { bench } from "mitata";"#;
+        let d = run_with_pkg_at_path(pkg, "src/bencher.ts", src);
+        assert_eq!(d.len(), 1, "bencher.ts is production code and should still flag: {d:?}");
+        assert!(d[0].message.contains("mitata"));
     }
 
     #[test]

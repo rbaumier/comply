@@ -555,7 +555,8 @@ fn has_test_internal_dir(normalized: &str) -> bool {
 /// `benchmark`, or `benchmarks` directory segment (matched whole between `/`
 /// delimiters, so `benches-old/` or `workbench/` are not matched), or a file
 /// stem carrying a `_bench`/`-bench` marker (e.g. `parse_bench.rs`), or a
-/// `.bench.` filename infix (e.g. `parse.bench.ts`).
+/// `.bench.` filename infix (e.g. `parse.bench.ts`), or a file whose stem is
+/// exactly `bench` or `benchmark` (e.g. Turf's per-package `bench.ts`).
 fn is_benchmark_path(normalized: &str) -> bool {
     if normalized
         .split('/')
@@ -570,7 +571,7 @@ fn is_benchmark_path(normalized: &str) -> bool {
         return true;
     }
     let stem = name.split('.').next().unwrap_or("");
-    stem.ends_with("_bench") || stem.ends_with("-bench")
+    stem == "bench" || stem == "benchmark" || stem.ends_with("_bench") || stem.ends_with("-bench")
 }
 
 pub(crate) fn scan_path(path: &Path) -> PathSegments {
@@ -1040,10 +1041,17 @@ mod tests {
         assert!(scan_path(&PathBuf::from("packages/bench/discriminated-union.ts")).in_benchmark_dir);
         assert!(scan_path(&PathBuf::from("benchmark/x.ts")).in_benchmark_dir);
         assert!(scan_path(&PathBuf::from("benchmarks/perf/y.ts")).in_benchmark_dir);
+        // Exact `bench`/`benchmark` stem at the package root (Turf convention,
+        // issue #5286) — a filename, not a directory.
+        assert!(scan_path(&PathBuf::from("packages/turf-length/bench.ts")).in_benchmark_dir);
+        assert!(scan_path(&PathBuf::from("packages/turf-length/bench.js")).in_benchmark_dir);
+        assert!(scan_path(&PathBuf::from("packages/turf-length/bench.mjs")).in_benchmark_dir);
+        assert!(scan_path(&PathBuf::from("src/benchmark.ts")).in_benchmark_dir);
         // Plain production files are not benchmarks.
         assert!(!scan_path(&PathBuf::from("src/foo.rs")).in_benchmark_dir);
         // Exact-segment match only: `benches-old/` is not a benchmark dir, and a
-        // `bench` substring (`src/bencher.ts`) is not a whole-segment match.
+        // `bench` prefix (`src/bencher.ts`) is neither a whole-segment nor an
+        // exact-stem match.
         assert!(!scan_path(&PathBuf::from("benches-old/x.rs")).in_benchmark_dir);
         assert!(!scan_path(&PathBuf::from("src/bencher.ts")).in_benchmark_dir);
     }
