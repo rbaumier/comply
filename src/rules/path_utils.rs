@@ -684,13 +684,16 @@ pub fn is_type_test_file(path: &Path) -> bool {
 /// (`const err: QueryError | null = _e`) as compile-time assertions instead.
 /// `tsc-build` is the node-mysql2 convention; `type-tests`/`types-tests`/
 /// `type-check` are the general names projects give such suites; `typecheck` is
-/// the Vue-ecosystem convention (e.g. vue-virtual-scroller's `src/typecheck/`).
+/// the Vue-ecosystem convention (e.g. vue-virtual-scroller's `src/typecheck/`);
+/// `test-dts` is the vue/test-utils convention (its `test-dts/` directory holds
+/// `.d-test.ts` files of `expectType`/`expectError` compile-time assertions).
 const TYPE_COMPILATION_TEST_DIR_SEGMENTS: &[&str] = &[
     "tsc-build",
     "type-tests",
     "types-tests",
     "type-check",
     "typecheck",
+    "test-dts",
 ];
 
 /// True when the file name carries a `.typecheck.` infix (e.g.
@@ -704,13 +707,26 @@ fn has_typecheck_infix(path: &Path) -> bool {
         .is_some_and(|name| name.to_ascii_lowercase().contains(".typecheck."))
 }
 
+/// True when the file name carries a `.d-test.` infix (e.g.
+/// `shallowMount.d-test.ts`), the vue/test-utils convention for
+/// type-compilation-test files that hold `expectType`/`expectError` assertions.
+/// Such files exist solely to confirm the public API type-checks and are never
+/// bundled or run as runtime code. The surrounding dots keep a bare
+/// `d-test.ts` (no leading dot) from matching.
+fn has_d_test_infix(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name.to_ascii_lowercase().contains(".d-test."))
+}
+
 /// True when `path` is a type-compilation test: one under a type-compilation-test
 /// directory ([`TYPE_COMPILATION_TEST_DIR_SEGMENTS`]) or carrying a `.typecheck.`
-/// filename infix. Files there annotate the public API to verify it type-checks
-/// and have no runtime test cases or runtime semantics, so checks that demand
-/// runtime assertions (e.g. `no-empty-test-file`) or that model runtime behavior
-/// of imported modules (e.g. `no-side-effects-in-initialization`'s tree-shaking
-/// concern) must not flag them. Segment match keeps an unrelated
+/// or `.d-test.` filename infix. Files there annotate the public API to verify
+/// it type-checks and have no runtime test cases or runtime semantics, so checks
+/// that demand runtime assertions (e.g. `no-empty-test-file`) or that model
+/// runtime behavior of imported modules (e.g.
+/// `no-side-effects-in-initialization`'s tree-shaking concern) must not flag
+/// them. Segment match keeps an unrelated
 /// `src/type-checker/` from matching.
 ///
 /// Deliberately separate from [`is_type_test_file`]: that predicate tells
@@ -720,7 +736,9 @@ fn has_typecheck_infix(path: &Path) -> bool {
 /// relax those unrelated type-ban rules for `tsc-build/` files, so the two sets
 /// stay distinct.
 pub fn is_type_compilation_test_path(path: &Path) -> bool {
-    has_typecheck_infix(path) || has_path_segment(path, TYPE_COMPILATION_TEST_DIR_SEGMENTS)
+    has_typecheck_infix(path)
+        || has_d_test_infix(path)
+        || has_path_segment(path, TYPE_COMPILATION_TEST_DIR_SEGMENTS)
 }
 
 /// True when the file name carries a `.actual.` or `.expected.` infix (e.g.
@@ -1510,6 +1528,34 @@ mod aux_path_tests {
         // The infix requires surrounding dots — a bare `typecheck.ts` filename
         // (no leading dot, e.g. a `typecheck` runtime module) does NOT match.
         assert!(!is_type_compilation_test_path(&PathBuf::from("src/typecheck.ts")));
+    }
+
+    #[test]
+    fn type_compilation_test_path_covers_test_dts_convention_issue5053() {
+        // Issue #5053: vue/test-utils's `test-dts/` directory and `.d-test.ts`
+        // infix are type-compilation-test files (compile-time `expectType`/
+        // `expectError` assertions, never run at runtime).
+        assert!(is_type_compilation_test_path(&PathBuf::from(
+            "test-dts/shallowMount.d-test.ts"
+        )));
+        assert!(is_type_compilation_test_path(&PathBuf::from(
+            "packages/test-utils/test-dts/mount.d-test.ts"
+        )));
+        // The `.d-test.` infix matches even outside a `test-dts/` directory.
+        assert!(is_type_compilation_test_path(&PathBuf::from(
+            "src/shallowMount.d-test.ts"
+        )));
+        // Segment (not substring) match — an unrelated `test-dts-helpers/` dir
+        // must NOT match.
+        assert!(!is_type_compilation_test_path(&PathBuf::from(
+            "src/test-dts-helpers/run.ts"
+        )));
+        // The infix requires surrounding dots — a bare `d-test.ts` filename
+        // (no leading dot) does NOT match.
+        assert!(!is_type_compilation_test_path(&PathBuf::from("src/d-test.ts")));
+        assert!(!is_type_compilation_test_path(&PathBuf::from(
+            "src/myd-test.ts"
+        )));
     }
 
     #[test]
