@@ -4,7 +4,7 @@
 //! 0/1/-1).
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_typed_array_binding};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BinaryOperator, Expression, PropertyKey};
 use oxc_span::GetSpan;
@@ -135,6 +135,33 @@ impl OxcCheck for Check {
         // *is* the framework release where the relevant API was introduced, named
         // by the operand it is compared to. The comparison gives it its meaning.
         if is_version_gate_comparison(node.id(), semantic) {
+            return;
+        }
+
+        // `255` (decimal or `0xff`) used in a bitwise mask (`x & 255`), a
+        // normalization (`x / 255`, `x * 255`), or a clamp comparison
+        // (`v <= 255`) is the maximum value of an 8-bit channel — the ubiquitous
+        // image/pixel byte constant whose meaning is the operator context, not a
+        // nameable application constant. Other values in these operator positions
+        // still flag; only `255` is exempt.
+        if is_byte_max_value(text) && is_byte_value_operator_context(node.id(), semantic) {
+            return;
+        }
+
+        // A numeric element of an array that is the value of a `color`/`colors`
+        // property (`{ color: [110, 64, 170] }`) is an RGB(A) channel component,
+        // named by the property key. The key is the anchor: a numeric array in a
+        // non-color property still flags element by element.
+        if is_color_array_element(node.id(), semantic) {
+            return;
+        }
+
+        // `3`/`4` (or any literal) used as the per-pixel stride in indexing a
+        // typed-array image buffer (`data[i * 4]`, where `data` resolves to a
+        // `Uint8ClampedArray`/`Uint8Array`/…) is a channel-count stride named by
+        // the buffer it indexes. The typed-array binding is the anchor: the same
+        // `i * 4` indexing a plain `Array` still flags.
+        if is_typed_array_pixel_stride(node.id(), semantic) {
             return;
         }
 
@@ -473,6 +500,183 @@ fn is_version_reference(expr: &Expression<'_>) -> bool {
 fn is_version_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower == "version" || lower.ends_with("version")
+}
+
+/// True when the literal text is the 8-bit channel maximum `255` — written
+/// either as the decimal `255` or the hex byte mask `0xff` (case-insensitive).
+fn is_byte_max_value(text: &str) -> bool {
+    text == "255" || text.eq_ignore_ascii_case("0xff")
+}
+
+/// True when this literal is an operand of a bitwise mask (`&`/`|`/`^`),
+/// a multiplicative normalization (`*`/`/`), or a clamp comparison (`<`/`<=`/
+/// `>`/`>=`/`===`/`!==`/`==`/`!=`). Combined with [`is_byte_max_value`], this
+/// recognizes the 8-bit-channel idiom (`x & 255`, `c / 255`, `v <= 255`). The
+/// literal may be wrapped in a unary minus. Anchored on the operator, so it
+/// exempts only `255` in these positions — never a call argument or a bare
+/// initializer.
+fn is_byte_value_operator_context(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    // The operand expression is the literal itself, or a `-literal` unary.
+    let mut operand_id = node_id;
+    let parent_id = nodes.parent_id(operand_id);
+    if parent_id != operand_id
+        && let AstKind::UnaryExpression(unary) = nodes.get_node(parent_id).kind()
+        && unary.operator == oxc_ast::ast::UnaryOperator::UnaryNegation
+    {
+        operand_id = parent_id;
+    }
+    let operand_span = nodes.get_node(operand_id).kind().span();
+
+    let bin_id = nodes.parent_id(operand_id);
+    if bin_id == operand_id {
+        return false;
+    }
+    let AstKind::BinaryExpression(bin) = nodes.get_node(bin_id).kind() else {
+        return false;
+    };
+    if bin.left.span() != operand_span && bin.right.span() != operand_span {
+        return false;
+    }
+
+    matches!(
+        bin.operator,
+        BinaryOperator::BitwiseAnd
+            | BinaryOperator::BitwiseOR
+            | BinaryOperator::BitwiseXOR
+            | BinaryOperator::Multiplication
+            | BinaryOperator::Division
+            | BinaryOperator::Equality
+            | BinaryOperator::Inequality
+            | BinaryOperator::StrictEquality
+            | BinaryOperator::StrictInequality
+            | BinaryOperator::LessThan
+            | BinaryOperator::LessEqualThan
+            | BinaryOperator::GreaterThan
+            | BinaryOperator::GreaterEqualThan
+    )
+}
+
+/// True when this literal is a numeric element of an array literal that is the
+/// value of a `color`/`colors`-named object property (`{ color: [110, 64, 170] }`,
+/// `{ "colors": [255, 0, 0] }`). The elements are RGB(A) channel components named
+/// by the property key, so naming each one adds noise. Anchored on the key: a
+/// numeric array in a non-color property keeps every element flagged.
+fn is_color_array_element(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    // The element is the literal itself, or a `-literal` unary.
+    let mut element_id = node_id;
+    let parent_id = nodes.parent_id(element_id);
+    if parent_id != element_id
+        && let AstKind::UnaryExpression(unary) = nodes.get_node(parent_id).kind()
+        && unary.operator == oxc_ast::ast::UnaryOperator::UnaryNegation
+    {
+        element_id = parent_id;
+    }
+
+    let array_id = nodes.parent_id(element_id);
+    if array_id == element_id {
+        return false;
+    }
+    if !matches!(nodes.get_node(array_id).kind(), AstKind::ArrayExpression(_)) {
+        return false;
+    }
+
+    let prop_id = nodes.parent_id(array_id);
+    if prop_id == array_id {
+        return false;
+    }
+    let AstKind::ObjectProperty(prop) = nodes.get_node(prop_id).kind() else {
+        return false;
+    };
+    match &prop.key {
+        PropertyKey::StaticIdentifier(id) => is_color_array_key(id.name.as_str()),
+        PropertyKey::StringLiteral(s) => is_color_array_key(s.value.as_str()),
+        _ => false,
+    }
+}
+
+/// Property name holding a list of color components: `color` or `colors`
+/// (case-insensitive). Narrower than [`is_color_key`] — a single-color hex is a
+/// different idiom from an RGB(A) component array, and the broader color suffixes
+/// (`*Color`, `fill`, `stroke`) are not used for plain numeric channel arrays.
+fn is_color_array_key(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == "color" || lower == "colors"
+}
+
+/// True when this literal is the per-pixel stride factor in `i * N` (or `N * i`)
+/// whose product is the index into a typed-array image buffer
+/// (`data[i * 4]`, `buf[idx * 3]`, where `data`/`buf` resolves to a TypedArray
+/// such as `Uint8ClampedArray`). The typed-array binding is the anchor — the
+/// same `i * 4` indexing a plain `Array` is not exempt — so the channel-count
+/// stride is recognized only in genuine pixel-buffer addressing.
+fn is_typed_array_pixel_stride(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    // The literal must be an operand of a `*` multiplication.
+    let literal_span = nodes.get_node(node_id).kind().span();
+    let mul_id = nodes.parent_id(node_id);
+    if mul_id == node_id {
+        return false;
+    }
+    let AstKind::BinaryExpression(mul) = nodes.get_node(mul_id).kind() else {
+        return false;
+    };
+    if mul.operator != BinaryOperator::Multiplication {
+        return false;
+    }
+    if mul.left.span() != literal_span && mul.right.span() != literal_span {
+        return false;
+    }
+    let mul_span = nodes.get_node(mul_id).kind().span();
+
+    // That product must be the index expression of a computed member access.
+    let member_id = nodes.parent_id(mul_id);
+    if member_id == mul_id {
+        return false;
+    }
+    let AstKind::ComputedMemberExpression(member) = nodes.get_node(member_id).kind() else {
+        return false;
+    };
+    if member.expression.span() != mul_span {
+        return false;
+    }
+
+    // The indexed object must resolve to a typed-array buffer.
+    typed_array_member_object(&member.object, semantic)
+}
+
+/// True when `object` is (or ends in) an identifier that resolves to a
+/// TypedArray binding. Looks through a `.data` member access so an
+/// `ImageData`/canvas buffer (`imageData.data[i * 4]`) — whose `.data` is a
+/// `Uint8ClampedArray` — is recognized when the receiver is bound to a
+/// TypedArray; the bare identifier case (`buf[i * 4]`) is the common one.
+fn typed_array_member_object(
+    object: &Expression<'_>,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    match object {
+        Expression::Identifier(id) => is_typed_array_binding(id, semantic),
+        Expression::StaticMemberExpression(member) if member.property.name == "data" => {
+            matches!(
+                &member.object,
+                Expression::Identifier(id) if is_typed_array_binding(id, semantic)
+            )
+        }
+        _ => false,
+    }
 }
 
 fn is_allowed_context(
@@ -927,5 +1131,102 @@ mod tests {
             1,
             "a magic number in ordinary source must still be flagged"
         );
+    }
+
+    // Regression for issue #5421: in image/pixel processing `255` is the 8-bit
+    // channel maximum, self-documented by the byte-mask / normalization / clamp
+    // operator it appears with.
+    #[test]
+    fn allows_byte_max_255_in_operator_contexts() {
+        let src = r#"
+            function f(x: number) {
+                const a = x & 255;
+                const b = x | 255;
+                const c = x ^ 255;
+                const d = x / 255;
+                const e = x * 255;
+                const g = x <= 255;
+                const h = x === 255;
+                return a + b + c + d + e + (g ? 1 : 0) + (h ? 1 : 0);
+            }
+        "#;
+        assert!(
+            run(src).is_empty(),
+            "255 as an 8-bit byte mask/normalization/clamp must not be flagged"
+        );
+    }
+
+    #[test]
+    fn allows_hex_byte_mask_0xff_in_operator_context() {
+        let src = r#"function f(x: number) { return x & 0xff; }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_255_outside_operator_context() {
+        // `255` only exempt as a bitwise/normalization/clamp operand; a bare
+        // initializer or call argument is still a magic number.
+        let src = r#"function f(svc) { svc.configure(255); }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_other_value_in_byte_operator_context() {
+        // The 8-bit exemption is value-gated to 255; a different mask still flags.
+        let src = r#"function f(x: number) { return x & 86400; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for issue #5421: RGB(A) channel components in a `color`/`colors`
+    // property array are named by the key.
+    #[test]
+    fn allows_numeric_color_array_elements() {
+        // Returned (not const-bound) so the color-key guard, not the const-init
+        // exemption, is what suppresses the channel components.
+        let src = r#"function f() { return { color: [110, 64, 170], colors: [106, 72, 183] }; }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_numeric_array_in_non_color_property() {
+        // The exemption is keyed on `color`/`colors`; a numeric array in another
+        // property keeps each element flagged. Returned (not const-bound) so the
+        // const-initializer exemption does not mask the test.
+        let src = r#"function f() { return { sizes: [110, 64, 170] }; }"#;
+        assert_eq!(run(src).len(), 3);
+    }
+
+    // Regression for issue #5421: a channel-count stride indexing a typed-array
+    // image buffer (`data[i * 4]`) is named by the buffer it addresses.
+    #[test]
+    fn allows_pixel_stride_indexing_typed_array() {
+        let src = r#"
+            function px(i: number) {
+                const data = new Uint8ClampedArray(16);
+                const r = data[i * 4];
+                const g = data[i * 3];
+                return r + g;
+            }
+        "#;
+        assert!(
+            run(src).is_empty(),
+            "a stride indexing a typed-array pixel buffer must not be flagged"
+        );
+    }
+
+    #[test]
+    fn flags_stride_indexing_plain_array() {
+        // The anchor is the typed-array binding; the same `i * 4` indexing a
+        // plain array is still a magic stride.
+        let src = r#"function f(rows: number[], i: number) { return rows[i * 4]; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_bare_channel_count_literals() {
+        // The high-risk values `3`/`4` outside any pixel-buffer context must
+        // still flag (a bare expression value, not a const init or stride).
+        let src = r#"function f(n: number) { return n + 3 + 4; }"#;
+        assert_eq!(run(src).len(), 2);
     }
 }
