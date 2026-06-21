@@ -790,6 +790,31 @@ mod tests {
     }
 
     #[test]
+    fn emscripten_libs_js_without_min_suffix_is_minified_issue5299() {
+        // visgl/loaders.gl `modules/draco/src/libs/draco_encoder.js`: an
+        // Emscripten-compiled codec shipped as a suffix-less `.js` file (no
+        // `.min.`), a few dozen lines, several of which are multi-KB machine
+        // output. The content heuristic must classify it minified so that all
+        // rules — including delegated oxlint rules like `no-label-var` — skip it.
+        let payload = "a".repeat(6495);
+        let src = format!(
+            "var Module=typeof DracoEncoderModule!=\"undefined\"?DracoEncoderModule:{{}};\nvar b={payload};\nvar c={payload};\n"
+        );
+        assert!(scan_minified(&PathBuf::from("modules/draco/src/libs/draco_encoder.js"), &src));
+    }
+
+    #[test]
+    fn handwritten_js_with_long_url_line_is_not_minified_issue5299() {
+        // Boundary: a hand-written `.js` whose longest line is a long URL well
+        // under MINIFIED_LONG_LINE, with normal average line length, must stay
+        // linted — the content heuristic must not misclassify ordinary source.
+        let url = "x".repeat(300);
+        let body = "const a = 1;\nconst b = 2;\nfunction f() {\n  return a + b;\n}\n".repeat(80);
+        let src = format!("const url = \"https://example.com/{url}\";\n{body}");
+        assert!(!scan_minified(&PathBuf::from("src/config.js"), &src));
+    }
+
+    #[test]
     fn path_app_router() {
         let seg = scan_path(&PathBuf::from("/proj/app/page.tsx"));
         assert!(seg.in_app_router);
