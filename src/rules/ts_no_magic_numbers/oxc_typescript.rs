@@ -1,6 +1,7 @@
 //! no-magic-numbers OxcCheck backend — flag numeric literals that are not in
 //! an allowed context (const declarations, enums, type annotations,
-//! default parameter values, array indices 0/1/-1).
+//! `satisfies`/`as` annotations, default parameter values, array indices
+//! 0/1/-1).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -310,6 +311,11 @@ fn is_allowed_context(
             }
             // Type annotation / type literal
             AstKind::TSTypeAnnotation(_) | AstKind::TSLiteralType(_) => return true,
+            // `satisfies`/`as` operand: `7 satisfies NodeTypes.DIRECTIVE`,
+            // `3 as Priority`. The annotation binds the literal to a named type
+            // at compile time, giving it the same semantic context a named
+            // constant would — exactly what this rule asks for.
+            AstKind::TSSatisfiesExpression(_) | AstKind::TSAsExpression(_) => return true,
             // Default parameter value
             AstKind::FormalParameter(_) => return true,
             // Class property (readonly or not — the TS version allows all)
@@ -520,6 +526,42 @@ mod tests {
     fn flags_multiplication_constant() {
         // `x * 1000` is ordinary arithmetic, not modular — still a magic number.
         let src = r#"function f(x) { return x * 1000; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for issue #5052: a numeric literal constrained by `satisfies`
+    // to a named enum/type member is bound to that meaning at compile time, the
+    // same semantic context a named constant provides — flagging it is noise.
+    #[test]
+    fn allows_satisfies_annotated_literal() {
+        let src = r#"
+            function f(prop: { type: number }) {
+                return prop.type !== (7 satisfies NodeTypes.DIRECTIVE);
+            }
+        "#;
+        assert!(
+            run(src).is_empty(),
+            "a `satisfies`-annotated numeric literal must not be flagged"
+        );
+    }
+
+    #[test]
+    fn allows_satisfies_typeof_enum_member() {
+        let src = r#"const kind = 17 satisfies typeof CompletionItemKind.File;"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_as_cast_literal() {
+        let src = r#"function f() { return foo(3 as Priority); }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_magic_number_not_annotated() {
+        // The exemption is structural (operand of `satisfies`/`as`); a bare
+        // literal in the same position is still flagged.
+        let src = r#"function f() { return foo(86400); }"#;
         assert_eq!(run(src).len(), 1);
     }
 
