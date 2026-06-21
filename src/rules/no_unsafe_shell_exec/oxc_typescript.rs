@@ -444,6 +444,31 @@ const bin = spawn(cmds[0], cmds.slice(1).concat(args.map(String)), { cwd });"#;
         assert!(run(src).is_empty(), "got {:?}", run(src));
     }
 
+    // Regression for #5376: ioredis `multi.exec(callback)` is a Redis pipeline
+    // execute (atomic multi-command), not a subprocess. `multi` does not resolve
+    // to the `child_process` module object.
+    #[test]
+    fn allows_ioredis_multi_exec_callback_issue_5376() {
+        let src = "multi.exec(done);";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    // Regression for #5376: ioredis `batch.exec(callback)` is a Redis batch
+    // execute, not a subprocess.
+    #[test]
+    fn allows_ioredis_batch_exec_callback_issue_5376() {
+        let src = "batch.exec(done);";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    // Regression for #5376: a chained `client.multi().exec(cb)` — the receiver is
+    // a call expression (a pipeline object), not the `child_process` module.
+    #[test]
+    fn allows_ioredis_chained_multi_exec_issue_5376() {
+        let src = "client.multi().exec(done);";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
     // A namespace import of `child_process` is the module object — a dynamic
     // `cp.exec(...)` must still flag.
     #[test]
