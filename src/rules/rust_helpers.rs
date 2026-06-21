@@ -1495,8 +1495,9 @@ fn call_method_returns_bool(call: Node, source: &[u8]) -> bool {
 
 /// True when the operand of `cast` (a `type_cast_expression`) is a `char`: a
 /// `char_literal` (`'A' as u32`), an identifier whose local binding is annotated
-/// `char` (`c as u32`), or an identifier bound by a `chars()`/`char_indices()`
-/// for-loop (`for c in s.chars()`).
+/// `char` (`c as u32`), an identifier bound by a `chars()`/`char_indices()`
+/// for-loop (`for c in s.chars()`), or a dereference of a `&char` range accessor
+/// (`*range.start() as u32` where `range: RangeInclusive<char>`).
 ///
 /// A `char` is a Unicode scalar value in `0..=0x10FFFF` (21 bits), so casting it
 /// to any integer at least 21 bits wide is lossless and total. Shared by
@@ -1506,15 +1507,76 @@ pub fn cast_operand_is_char(cast: Node, source: &[u8]) -> bool {
     let Some(value) = cast.child_by_field_name("value") else {
         return false;
     };
-    match value.kind() {
+    operand_is_char(value, cast, source)
+}
+
+/// Names of zero-argument inherent methods that, on a `char`-parameterized range,
+/// return `&char` — so dereferencing the call yields a `char`. Restricted to the
+/// inherent `RangeInclusive` accessors (`range.start()` / `range.end()`), where
+/// the deref-then-widening-cast shape is a strong char signal.
+const CHAR_REF_RANGE_ACCESSORS: &[&str] = &["start", "end"];
+
+/// True when `node` is provably a `char` value:
+/// - a `char_literal`;
+/// - a `parenthesized_expression` wrapping a char (peeled);
+/// - a `unary_expression` `*<expr>` dereferencing a `&char` range accessor call
+///   (`*range.start()`), since `*&char` is `char`;
+/// - an `identifier` whose local binding is annotated `char`, or bound by a
+///   `chars()`/`char_indices()` for-loop.
+///
+/// `cast` is the enclosing `type_cast_expression`, used as the lookup anchor for
+/// identifier-binding resolution.
+fn operand_is_char(node: Node, cast: Node, source: &[u8]) -> bool {
+    match node.kind() {
         "char_literal" => true,
-        "identifier" => value.utf8_text(source).ok().is_some_and(|name| {
+        "parenthesized_expression" => node
+            .named_child(0)
+            .is_some_and(|inner| operand_is_char(inner, cast, source)),
+        "unary_expression" => {
+            // `*<call>` is `char` only when `<call>` returns `&char`; the deref
+            // operator is the first anonymous child of the unary expression.
+            let is_deref = node
+                .child(0)
+                .and_then(|op| op.utf8_text(source).ok())
+                .is_some_and(|op| op == "*");
+            is_deref
+                && node
+                    .named_child(0)
+                    .is_some_and(|operand| call_returns_char_ref(operand, source))
+        }
+        "identifier" => node.utf8_text(source).ok().is_some_and(|name| {
             find_identifier_type(cast, name, source)
                 .is_some_and(|type_text| type_text == "char")
                 || binding_is_chars_iter(cast, name, source)
         }),
         _ => false,
     }
+}
+
+/// True when `node` is a no-argument method call `<receiver>.<method>()` whose
+/// method name is a `char`-range accessor returning `&char` (`range.start()` /
+/// `range.end()`). The receiver type is not provable from the AST, so the
+/// method-name set is deliberately narrow to stay sound.
+fn call_returns_char_ref(node: Node, source: &[u8]) -> bool {
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    if node
+        .child_by_field_name("arguments")
+        .is_some_and(|args| args.named_child_count() > 0)
+    {
+        return false;
+    }
+    let Some(function) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    function
+        .child_by_field_name("field")
+        .and_then(|field| field.utf8_text(source).ok())
+        .is_some_and(|name| CHAR_REF_RANGE_ACCESSORS.contains(&name))
 }
 
 /// True when `name` is the `char` binding of an enclosing `for <pat> in
@@ -3346,6 +3408,52 @@ mod tests {
                 cast_operand_is_bool(cast, src.as_bytes()),
                 expected,
                 "cast_operand_is_bool mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn cast_operand_is_char_recognizes_char_producing_operands() {
+        let cases = [
+            // Char literal.
+            ("fn f() -> u32 { 'a' as u32 }", true),
+            // Identifier annotated char.
+            ("fn f(c: char) -> u32 { c as u32 }", true),
+            // `chars()` for-loop binding.
+            (
+                "fn f(s: &str) { for c in s.chars() { let _ = c as u32; } }",
+                true,
+            ),
+            // Deref of a `&char` range accessor (the #5162 shape).
+            (
+                "fn f(range: std::ops::RangeInclusive<char>) -> u32 { *range.start() as u32 }",
+                true,
+            ),
+            (
+                "fn f(range: std::ops::RangeInclusive<char>) -> u32 { *range.end() as u32 }",
+                true,
+            ),
+            // Parenthesized deref of a range accessor is still char.
+            (
+                "fn f(range: std::ops::RangeInclusive<char>) -> u32 { (*range.start()) as u32 }",
+                true,
+            ),
+            // A deref of a non-accessor method is not recognized (sound: the
+            // receiver type is unknown, so only the narrow accessor set qualifies).
+            ("fn f(p: P) -> u32 { *p.value() as u32 }", false),
+            // A method call with arguments is not a zero-arg accessor.
+            ("fn f(p: P) -> u32 { *p.start(1) as u32 }", false),
+            // A plain integer identifier is not a char operand.
+            ("fn f(x: u32) -> u32 { x as u32 }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_of_kind(tree.root_node(), "type_cast_expression")
+                .expect("snippet should contain a type_cast_expression");
+            assert_eq!(
+                cast_operand_is_char(cast, src.as_bytes()),
+                expected,
+                "cast_operand_is_char mismatch for `{src}`"
             );
         }
     }

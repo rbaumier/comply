@@ -732,6 +732,40 @@ mod tests {
     }
 
     #[test]
+    fn repro_5162_deref_range_start_as_u32_not_flagged() {
+        // Issue #5162: `RangeInclusive<char>::start()`/`.end()` return `&char`;
+        // `*range.start()` derefs to `char`, and `char as u32` is lossless.
+        let src = "fn f(range: std::ops::RangeInclusive<char>) -> u32 { *range.start() as u32 }";
+        assert!(run_on(src).is_empty());
+        let src_end = "fn f(range: std::ops::RangeInclusive<char>) -> u32 { *range.end() as u32 }";
+        assert!(run_on(src_end).is_empty());
+    }
+
+    #[test]
+    fn repro_5162_deref_range_start_as_u8_still_flagged() {
+        // Narrowing guard: `*range.start() as u8` truncates a char (21 bits) to a
+        // byte — `char_fits(u8)` is false, so the char carve-out does not apply
+        // and the genuine lossy cast is still flagged. Proves the deref/char
+        // detection only exempts wide-enough targets, not narrowing ones.
+        let src = "fn f(range: std::ops::RangeInclusive<char>) -> u8 { *range.start() as u8 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn char_literal_as_u32_not_flagged() {
+        // `'a' as u32` is lossless and total.
+        assert!(run_on("fn f() -> u32 { 'a' as u32 }").is_empty());
+    }
+
+    #[test]
+    fn genuine_lossy_int_as_f32_still_flagged() {
+        // Sanity guard that the char carve-out did not over-exempt: a real
+        // unsigned widening to f32 (which `rust-no-as-numeric-cast` skips) still
+        // fires here.
+        assert_eq!(run_on("fn f(x: u32) -> f32 { x as f32 }").len(), 1);
+    }
+
+    #[test]
     fn repro_5033_byte_extraction_shift_not_flagged() {
         // `(bits >> 32) as u8` — high-bits-cleared byte extraction (HPACK
         // Huffman encoder pattern). The cast is deliberate bit manipulation;
