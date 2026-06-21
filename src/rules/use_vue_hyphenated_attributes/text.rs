@@ -3,9 +3,11 @@
 //! Walks `attribute` and `directive_attribute` nodes. For plain HTML attributes
 //! it checks the `attribute_name`; for `:foo` shorthand binds and `v-bind:`/
 //! `v-model:` directives it checks the static `directive_argument`. An attribute
-//! whose name is neither kebab-case nor pure-lowercase is reported. Attributes on
-//! SVG-exclusive elements (`<svg>`, `<path>`, ...) are skipped, mirroring Biome's
-//! `useVueHyphenatedAttributes`. Attributes on TresJS elements (`Tres`-prefixed
+//! whose name is neither kebab-case nor pure-lowercase is reported. Canonical
+//! camelCase HTML/DOM attributes (`frameBorder`, `allowFullScreen`, `tabIndex`,
+//! ...) are skipped: their spec form is camelCase, not a custom Vue prop.
+//! Attributes on SVG-exclusive elements (`<svg>`, `<path>`, ...) are skipped,
+//! mirroring Biome's `useVueHyphenatedAttributes`. Attributes on TresJS elements (`Tres`-prefixed
 //! components and `<primitive>`) are skipped: their names carry camelCase Three.js
 //! property segments that must stay camelCase. Bindings on a `<slot>` element are
 //! also skipped: they are slot props, not DOM attributes or component props.
@@ -102,6 +104,75 @@ const SVG_EXCLUSIVE_ELEMENTS: &[&str] = &[
     "view",
     "vkern",
 ];
+
+/// Canonical camelCase HTML/DOM attribute names. These are standard attributes
+/// whose spec/DOM-property form is camelCase (the React-style spelling), not
+/// custom Vue props, so hyphenating them does not match any real attribute and
+/// can silently break the element. They are accepted on any element (kept sorted
+/// for `binary_search`). The SVG camelCase attributes are handled separately via
+/// `SVG_EXCLUSIVE_ELEMENTS`.
+const CAMEL_CASE_HTML_ATTRIBUTES: &[&str] = &[
+    "acceptCharset",
+    "accessKey",
+    "allowFullScreen",
+    "autoCapitalize",
+    "autoComplete",
+    "autoCorrect",
+    "autoFocus",
+    "autoPlay",
+    "autoSave",
+    "cellPadding",
+    "cellSpacing",
+    "charSet",
+    "classID",
+    "colSpan",
+    "contentEditable",
+    "contextMenu",
+    "controlsList",
+    "crossOrigin",
+    "dateTime",
+    "disablePictureInPicture",
+    "disableRemotePlayback",
+    "encType",
+    "enterKeyHint",
+    "fetchPriority",
+    "formAction",
+    "formEncType",
+    "formMethod",
+    "formNoValidate",
+    "formTarget",
+    "frameBorder",
+    "hrefLang",
+    "httpEquiv",
+    "imageSizes",
+    "imageSrcSet",
+    "inputMode",
+    "itemID",
+    "itemProp",
+    "itemRef",
+    "itemScope",
+    "itemType",
+    "marginHeight",
+    "marginWidth",
+    "maxLength",
+    "mediaGroup",
+    "minLength",
+    "noModule",
+    "noValidate",
+    "radioGroup",
+    "readOnly",
+    "referrerPolicy",
+    "rowSpan",
+    "tabIndex",
+    "useMap",
+];
+
+/// Whether the attribute name is a canonical camelCase HTML/DOM attribute
+/// (`frameBorder`, `allowFullScreen`, `tabIndex`, ...), which is a standard
+/// attribute spelled in camelCase rather than a custom Vue prop.
+fn is_camel_case_html_attribute(name: &str) -> bool {
+    CAMEL_CASE_HTML_ATTRIBUTES.binary_search(&name).is_ok()
+}
 
 /// Whether the attribute name is hyphenated (kebab-case) or pure lowercase, the
 /// two forms Biome accepts (`Case::Kebab | Case::Lower`).
@@ -231,6 +302,7 @@ crate::ast_check! { on ["attribute", "directive_attribute"] => |node, source, ct
         return;
     };
     if is_hyphenated(name)
+        || is_camel_case_html_attribute(name)
         || is_on_svg_element(node, source)
         || is_on_tresjs_element(node, source)
         || is_slot_prop_binding(node, source)
@@ -375,6 +447,38 @@ mod tests {
             "<div\n  :markerWidth=\"`${width}`\"\n  :markerHeight=\"`${height}`\"\n  :markerUnits=\"markerUnits\"\n>\n</div>",
         ));
         assert_eq!(diags.len(), 3, "unexpected diags: {diags:?}");
+    }
+
+    // --- Canonical camelCase HTML/DOM attributes (name-level allowlist) ---
+
+    #[test]
+    fn allows_camelcase_html_attributes_on_iframe() {
+        // Issue #5112: `frameBorder` and `allowFullScreen` are spec camelCase HTML
+        // attributes on `<iframe>`, not custom Vue props → not flagged.
+        let diags = run(&wrap("<iframe frameBorder=\"0\" allowFullScreen />"));
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+    }
+
+    #[test]
+    fn allows_camelcase_html_attribute_binding() {
+        // The allowlist is name-based, so the same attribute as a `:` binding is
+        // also accepted.
+        assert!(run(&wrap("<iframe :frameBorder=\"border\" />")).is_empty());
+        assert!(run(&wrap("<input :tabIndex=\"idx\" :readOnly=\"ro\" />")).is_empty());
+    }
+
+    #[test]
+    fn allows_contenteditable_and_other_camelcase_html_attributes() {
+        assert!(run(&wrap("<div contentEditable=\"true\" tabIndex=\"0\" />")).is_empty());
+    }
+
+    #[test]
+    fn flags_custom_camelcase_prop_not_in_html_allowlist() {
+        // The allowlist only covers canonical HTML attributes; a genuine custom
+        // camelCase prop is still flagged and should be hyphenated.
+        let diags = run(&wrap("<div myCustomProp=\"x\" />"));
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("myCustomProp"));
     }
 
     // --- TresJS exemption (element-level: `Tres`-prefixed components + `<primitive>`) ---
