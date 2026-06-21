@@ -15,7 +15,10 @@
 //! An empty test carrying an `#[ignore]` attribute is likewise exempt:
 //! Cargo never runs an ignored test (absent `--include-ignored`), so an
 //! empty body creates no false confidence — it is an intentional
-//! placeholder, just like a `#[cfg(...)]`-gated one.
+//! placeholder, just like a `#[cfg(...)]`-gated one. The `#[ignore]` may be
+//! direct (`#[ignore]` / `#[ignore = "reason"]`) or wrapped in a predicate
+//! gate (`#[cfg_attr(<predicate>, ignore = "reason")]`): under the predicate
+//! the test is still ignored, so the empty body is intentional there too.
 //!
 //! Empty test fns inside a trybuild/ui_test compile-fail fixture are
 //! also exempt. Those fixtures hold intentionally-malformed test
@@ -127,10 +130,17 @@ fn has_cfg_attribute(item: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-/// True if the function carries an `#[ignore]` / `#[ignore = "..."]` attribute
-/// as a preceding `attribute_item` sibling. An ignored test is never executed by
-/// Cargo (absent `--include-ignored`), so an empty body cannot create false
-/// confidence — it is an intentional placeholder, like a `#[cfg(...)]`-gated one.
+/// True if the function carries an ignore attribute as a preceding
+/// `attribute_item` sibling, in either form:
+///
+/// * direct — `#[ignore]` / `#[ignore = "reason"]`;
+/// * predicate-gated — `#[cfg_attr(<predicate>, ignore)]` /
+///   `#[cfg_attr(<predicate>, ignore = "reason")]`, including cfg_attr lists
+///   carrying several attributes (e.g. `cfg_attr(x, foo, ignore = "...")`).
+///
+/// An ignored test is never executed by Cargo (absent `--include-ignored`), so
+/// an empty body cannot create false confidence — it is an intentional
+/// placeholder, like a `#[cfg(...)]`-gated one.
 fn has_ignore_attribute(item: tree_sitter::Node, source: &[u8]) -> bool {
     let mut sibling = item.prev_named_sibling();
     while let Some(s) = sibling {
@@ -145,9 +155,49 @@ fn has_ignore_attribute(item: tree_sitter::Node, source: &[u8]) -> bool {
                 return true;
             }
         }
+        if is_cfg_attr_with_ignore(s, source) {
+            return true;
+        }
         sibling = s.prev_named_sibling();
     }
     false
+}
+
+/// True if `attribute_item` is a `#[cfg_attr(<predicate>, ..., ignore ...)]`
+/// whose attribute list contains an `ignore` attribute (bare or with a reason).
+///
+/// `attribute_item > attribute` holds `identifier("cfg_attr")` then a
+/// `token_tree` of the comma-separated arguments. The predicate is the first
+/// argument; the attributes it applies when the predicate holds follow it. An
+/// `ignore` attribute appears as an `identifier("ignore")` that is a *direct*
+/// child of that outer `token_tree` — a predicate identifier named `ignore`
+/// would instead sit inside a *nested* `token_tree` (e.g. `not(ignore)`), so
+/// scanning only direct children does not confuse a predicate for an attribute.
+fn is_cfg_attr_with_ignore(attribute_item: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut item_cursor = attribute_item.walk();
+    let Some(attribute) = attribute_item
+        .children(&mut item_cursor)
+        .find(|child| child.kind() == "attribute")
+    else {
+        return false;
+    };
+
+    let mut attr_cursor = attribute.walk();
+    let mut attr_children = attribute.children(&mut attr_cursor);
+    let is_cfg_attr = attr_children
+        .next()
+        .is_some_and(|n| n.kind() == "identifier" && n.utf8_text(source) == Ok("cfg_attr"));
+    if !is_cfg_attr {
+        return false;
+    }
+    let Some(token_tree) = attr_children.find(|child| child.kind() == "token_tree") else {
+        return false;
+    };
+
+    let mut tree_cursor = token_tree.walk();
+    token_tree
+        .children(&mut tree_cursor)
+        .any(|child| child.kind() == "identifier" && child.utf8_text(source) == Ok("ignore"))
 }
 
 /// True if `path` is a trybuild/ui_test compile-fail fixture: a `.rs` file
@@ -287,6 +337,38 @@ mod tests {
         // Negative-space guard: a plain empty `#[test]` with no ignore gate
         // must still fire.
         let src = "#[test]\nfn t() {}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_empty_test_with_cfg_attr_ignore() {
+        // thiserror: an empty `#[test]` carrying
+        // `#[cfg_attr(<predicate>, ignore = "...")]` is conditionally ignored,
+        // so under the predicate the empty body is intentional (Closes #5285).
+        let src = "#[test]\n#[cfg_attr(\n    not(thiserror_nightly_testing),\n    ignore = \"requires `--cfg=thiserror_nightly_testing`\"\n)]\nfn test_backtrace() {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_empty_test_with_bare_cfg_attr_ignore() {
+        let src = "#[test]\n#[cfg_attr(miri, ignore)]\nfn t() {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_empty_test_with_cfg_attr_ignore_in_multi_attr_list() {
+        // cfg_attr can apply several attributes at once; `ignore` may sit
+        // after another attribute in the list.
+        let src = "#[test]\n#[cfg_attr(windows, should_panic, ignore = \"flaky\")]\nfn t() {}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn cfg_attr_predicate_named_ignore_does_not_exempt() {
+        // Precision guard: an `ignore` identifier inside the *predicate*
+        // (a nested token tree) is not an applied attribute, so it must NOT
+        // exempt the empty test.
+        let src = "#[test]\n#[cfg_attr(not(ignore), should_panic)]\nfn t() {}";
         assert_eq!(run_on(src).len(), 1);
     }
 
