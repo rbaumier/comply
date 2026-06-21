@@ -81,6 +81,18 @@ impl OxcCheck for Check {
                         return;
                     }
 
+                    // A `test<T>(...)`/`it<T>(...)` call carries explicit type
+                    // arguments only when it is a type-level test helper, not the
+                    // runtime framework `test`/`it` (Jest/Vitest/Mocha/node:test
+                    // take no generics). There the callback's `return` is the
+                    // type-checking mechanism: its value is checked against the
+                    // helper's parameter return type to verify TypeScript
+                    // inference, so it is the assertion, not a runner-ignored
+                    // value.
+                    if call.type_arguments.is_some() {
+                        return;
+                    }
+
                     // Allow expression forms that opaquely yield a value the
                     // runner can await — call/new (`return fetch(url)`,
                     // `return new Promise(...)`) and property reads
@@ -231,5 +243,28 @@ mod tests {
         // conditionally is still the anti-pattern.
         let d = run("test('x', () => { if (skip) return 42; });");
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_type_level_assertion_return_in_generic_test() {
+        // Regression for #5283: `test<T>(fn)` is a type-level test helper
+        // (superstruct test/typings). The `return x` is the type-checking
+        // mechanism — the callback return is checked against the generic — not
+        // a runner-ignored value, so it must not be flagged. A plain value
+        // return in a non-generic runtime test still flags
+        // (flags_identifier_return_in_test).
+        let d = run(
+            "test<string>((x) => { \
+             assert(x, define<string>('custom', () => true)); \
+             return x; });",
+        );
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_type_level_assertion_return_in_generic_it() {
+        // The exemption covers `it<T>(...)` symmetrically with `test<T>(...)`.
+        let d = run("it<number>((x) => { return x; });");
+        assert!(d.is_empty());
     }
 }
