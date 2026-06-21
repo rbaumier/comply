@@ -283,58 +283,89 @@ fn file_contains_jsx(semantic: &oxc_semantic::Semantic) -> bool {
         .any(|node| matches!(node.kind(), AstKind::JSXElement(_) | AstKind::JSXFragment(_)))
 }
 
-/// Collects every enum member referenced in *type position* as
-/// `EnumName.Member` — the discriminated-union literal-type pattern
-/// (`readonly kind: ReaderStateKind.Header`). oxc resolves the enum name itself
-/// but not the trailing member, so these references are invisible to the symbol
-/// reference count and the member would otherwise be flagged as unused.
+/// Resolves an `IdentifierReference` (the left side of `EnumName.Member`) to the
+/// `SymbolId` of an enum it names, or `None` if the reference is unresolved or
+/// its symbol is not an enum declaration. Used to attribute a member access to
+/// the enum's own symbol so the match is symbol-accurate, not name-based.
+fn resolve_enum_symbol(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> Option<SymbolId> {
+    let scoping = semantic.scoping();
+    let ref_id = ident.reference_id.get()?;
+    let enum_symbol = scoping.get_reference(ref_id).symbol_id()?;
+    matches!(
+        semantic.nodes().kind(scoping.symbol_declaration(enum_symbol)),
+        AstKind::TSEnumDeclaration(_)
+    )
+    .then_some(enum_symbol)
+}
+
+/// Collects every enum member referenced as `EnumName.Member`, in either type or
+/// value position — type-level discriminants (`readonly kind:
+/// ReaderStateKind.Header`), value member access (`ByteMarker.Array`), and
+/// computed value access (`ByteMarker["Array"]`). oxc resolves the enum name
+/// itself but not the trailing member, so these references are invisible to the
+/// symbol reference count and the member would otherwise be flagged as unused.
 ///
 /// Each pair is `(enum symbol id, member name)`: `ReaderStateKind.Header`
 /// records `(ReaderStateKind, "Header")` and counts only as a use of `Header`,
-/// never `Body`. The left side is resolved through its `reference_id` so the
+/// never `Body`. The enum side is resolved through its `reference_id` so the
 /// match is symbol-accurate, not name-based — an unrelated `Other.Header` in the
-/// same file does not exempt the enum's `Header`.
-fn collect_type_position_enum_member_uses(
-    semantic: &oxc_semantic::Semantic,
-) -> FxHashSet<(SymbolId, String)> {
-    let scoping = semantic.scoping();
+/// same file does not exempt the enum's `Header`, and a member whose name
+/// shadows a built-in global (`String`, `Number`, …) is still attributed to its
+/// own enum.
+fn collect_enum_member_uses(semantic: &oxc_semantic::Semantic) -> FxHashSet<(SymbolId, String)> {
     let nodes = semantic.nodes();
     let mut uses = FxHashSet::default();
 
     for node in nodes.iter() {
-        let AstKind::TSQualifiedName(qualified) = node.kind() else {
-            continue;
-        };
-        let TSTypeName::IdentifierReference(left) = &qualified.left else {
-            continue;
-        };
-        let Some(ref_id) = left.reference_id.get() else {
-            continue;
-        };
-        let Some(enum_symbol) = scoping.get_reference(ref_id).symbol_id() else {
-            continue;
-        };
-        if !matches!(
-            nodes.kind(scoping.symbol_declaration(enum_symbol)),
-            AstKind::TSEnumDeclaration(_)
-        ) {
-            continue;
+        match node.kind() {
+            // Type position: `EnumName.Member` as a literal type.
+            AstKind::TSQualifiedName(qualified) => {
+                let TSTypeName::IdentifierReference(left) = &qualified.left else {
+                    continue;
+                };
+                if let Some(enum_symbol) = resolve_enum_symbol(left, semantic) {
+                    uses.insert((enum_symbol, qualified.right.name.to_string()));
+                }
+            }
+            // Value position: `EnumName.Member`.
+            AstKind::StaticMemberExpression(member) => {
+                let Expression::Identifier(obj) = &member.object else {
+                    continue;
+                };
+                if let Some(enum_symbol) = resolve_enum_symbol(obj, semantic) {
+                    uses.insert((enum_symbol, member.property.name.to_string()));
+                }
+            }
+            // Value position: `EnumName["Member"]`.
+            AstKind::ComputedMemberExpression(member) => {
+                let Expression::Identifier(obj) = &member.object else {
+                    continue;
+                };
+                let Expression::StringLiteral(key) = &member.expression else {
+                    continue;
+                };
+                if let Some(enum_symbol) = resolve_enum_symbol(obj, semantic) {
+                    uses.insert((enum_symbol, key.value.to_string()));
+                }
+            }
+            _ => {}
         }
-        uses.insert((enum_symbol, qualified.right.name.to_string()));
     }
 
     uses
 }
 
-/// True when the enum member declared at `decl_node` is referenced in type
-/// position as `EnumName.Member` — i.e. `(enclosing enum symbol, member name)`
-/// is present in `type_position_uses`. Returns false for any non-enum-member
-/// declaration, so a genuinely unreferenced member (value or type) stays
-/// reportable.
-fn is_enum_member_used_in_type_position(
+/// True when the enum member declared at `decl_node` is referenced as
+/// `EnumName.Member` (type or value position) — i.e. `(enclosing enum symbol,
+/// member name)` is present in `member_uses`. Returns false for any non-enum-member
+/// declaration, so a genuinely unreferenced member stays reportable.
+fn is_enum_member_used(
     decl_node: oxc_semantic::NodeId,
     member_name: &str,
-    type_position_uses: &FxHashSet<(SymbolId, String)>,
+    member_uses: &FxHashSet<(SymbolId, String)>,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
     let nodes = semantic.nodes();
@@ -347,7 +378,7 @@ fn is_enum_member_used_in_type_position(
     }) else {
         return false;
     };
-    type_position_uses.contains(&(enum_symbol, member_name.to_string()))
+    member_uses.contains(&(enum_symbol, member_name.to_string()))
 }
 
 /// True when `decl_node` is a parameter of a class method whose enclosing class
@@ -424,9 +455,9 @@ impl OxcCheck for Check {
         // declares an import that would otherwise be flagged.
         let mut jsx_factories: Option<FxHashSet<String>> = None;
         // Memoized on the first unreferenced enum member; building the
-        // type-position use set scans every node, so it is only paid for in
-        // files that actually declare an enum member that looks unused.
-        let mut enum_member_type_uses: Option<FxHashSet<(SymbolId, String)>> = None;
+        // member-use set scans every node, so it is only paid for in files that
+        // actually declare an enum member that looks unused.
+        let mut enum_member_uses: Option<FxHashSet<(SymbolId, String)>> = None;
 
         for symbol_id in scoping.symbol_ids() {
             let name = scoping.symbol_name(symbol_id);
@@ -468,16 +499,15 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            // An enum member referenced only as `EnumName.Member` in a type
-            // position (discriminated-union literal type) is used; oxc resolves
-            // the enum name but not the trailing member, so it is invisible to
-            // the reference count above.
+            // An enum member referenced as `EnumName.Member` (a type-level
+            // discriminant, a value member access, or a computed value access)
+            // is used; oxc resolves the enum name but not the trailing member,
+            // so it is invisible to the reference count above.
             if matches!(nodes.kind(decl_node), AstKind::TSEnumMember(_))
-                && is_enum_member_used_in_type_position(
+                && is_enum_member_used(
                     decl_node,
                     name,
-                    enum_member_type_uses
-                        .get_or_insert_with(|| collect_type_position_enum_member_uses(semantic)),
+                    enum_member_uses.get_or_insert_with(|| collect_enum_member_uses(semantic)),
                     semantic,
                 )
             {
@@ -1387,6 +1417,109 @@ export {};
         assert!(
             diags.iter().any(|d| d.message.contains("`unusedTyped`")),
             "expected unused non-ambient `unusedTyped` to be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_enum_member_used_as_value_with_global_shadowing_name() {
+        // Enum members accessed as runtime values via `EnumName.Member` are
+        // used, even when the member names shadow built-in globals (`Array`,
+        // `Number`, `String`, …). The member access is attributed to the enum's
+        // own symbol, not the global, so none of these are dead code. (Closes
+        // #5275)
+        let src = r#"
+enum ByteMarker {
+    Array = 0x0,
+    BigInt = 0x1,
+    Number = 0x7,
+    Object = 0x8,
+    String = 0xA,
+    Symbol = 0xB,
+    Undefined = 0xD,
+}
+
+function op(_marker: ByteMarker): void {}
+
+op(ByteMarker.Array);
+op(ByteMarker.BigInt);
+op(ByteMarker.Number);
+op(ByteMarker.Object);
+op(ByteMarker.String);
+op(ByteMarker.Symbol);
+op(ByteMarker.Undefined);
+export {};
+"#;
+        let diags = run(src);
+        assert!(
+            diags.is_empty(),
+            "FP on enum members accessed by value via `ByteMarker.Member`: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_enum_member_used_via_computed_value_access() {
+        // `EnumName["Member"]` is the computed-access form of the same value
+        // usage and must be recognised too. (Closes #5275)
+        let src = r#"
+enum Kind {
+    String = "String",
+    Number = "Number",
+}
+const a = Kind["String"];
+const b = Kind["Number"];
+console.log(a, b);
+export {};
+"#;
+        let diags = run(src);
+        assert!(
+            diags.is_empty(),
+            "FP on enum members accessed via computed `Kind[\"Member\"]`: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_enum_member_never_referenced_as_value_or_type() {
+        // Negative-space guard for #5275 — only members actually accessed via
+        // `EnumName.Member` are exempted. `Array` is accessed; `Unused` is
+        // referenced nowhere, so it stays reportable, and the shadowing name of
+        // `Array` does not blanket-exempt the enum.
+        let src = r#"
+enum Marker {
+    Array = 0,
+    Unused = 1,
+}
+const x = Marker.Array;
+console.log(x);
+export {};
+"#;
+        let diags = run(src);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`Array`")),
+            "FP on enum member `Array` accessed by value: {diags:?}"
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("`Unused`")),
+            "expected unused enum member `Unused` to be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_member_access_on_non_enum_with_global_name() {
+        // Negative-space guard for #5275 — a `Foo.Array` access on a non-enum
+        // (here a plain object const) must not exempt an unrelated unused enum
+        // member of the same name. Attribution is by the enum's symbol.
+        let src = r#"
+const Foo = { Array: 1 };
+enum Marker {
+    Array = 0,
+}
+console.log(Foo.Array);
+export {};
+"#;
+        let diags = run(src);
+        assert!(
+            diags.iter().any(|d| d.message.contains("`Array`")),
+            "expected unused enum member `Marker.Array` to be flagged despite `Foo.Array`: {diags:?}"
         );
     }
 
