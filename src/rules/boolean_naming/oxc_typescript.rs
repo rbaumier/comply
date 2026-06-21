@@ -22,6 +22,16 @@ const ALLOWED_NAMES: &[&str] = &[
     "noValidate", "value", "defaultOpen", "defaultChecked", "hour12",
 ];
 
+/// Standard Web Audio / media-element / audio-mixer boolean property names. A
+/// `set name(name: boolean)` accessor that mirrors one of these is bound to the
+/// platform's exact spelling — `loop` mirrors `AudioBufferSourceNode.loop` /
+/// `HTMLMediaElement.loop`, `muted`/`mute` mirror `HTMLMediaElement.muted` and
+/// mixer terminology, `solo` is standard sequencer/DAW terminology. Renaming
+/// the setter to `isLoop` would break the property contract. Used only in the
+/// setter-accessor context (see `is_setter_accessor_param`), never for plain
+/// variables or non-accessor parameters.
+const MEDIA_API_BOOLEAN_PROPS: &[&str] = &["loop", "mute", "muted", "solo"];
+
 /// True if the name ends in the explicit `flag` suffix as a distinct word
 /// (`useDeltaFlag`, `use_delta_flag`, or bare `flag`). The `flag` suffix is
 /// itself a boolean marker — as clear an intent signal as an `is*`/`has*`
@@ -74,6 +84,54 @@ fn classify_name(name: &str) -> Option<&'static str> {
 /// Check if a type annotation is `: boolean`.
 fn is_boolean_annotation(annotation: &TSTypeAnnotation) -> bool {
     matches!(&annotation.type_annotation, TSType::TSBooleanKeyword(_))
+}
+
+/// True when `node` is the parameter of a `set name(...)` accessor whose
+/// property name equals `param_name`. Walks up to the parameter's owning
+/// function (the setter's own `Function`); that function's enclosing element
+/// must be a non-computed `set` `MethodDefinition` keyed by the same name. A
+/// non-accessor parameter (constructor, method, free function) never matches,
+/// so strictness is preserved outside this context.
+fn is_setter_accessor_param(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    param_name: &str,
+) -> bool {
+    let mut saw_owning_function = false;
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            // The setter's own function body. Any further function boundary
+            // would mean the parameter belongs to a nested function, not the
+            // accessor — bail out in that case.
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
+                if saw_owning_function {
+                    return false;
+                }
+                saw_owning_function = true;
+            }
+            AstKind::MethodDefinition(method) => {
+                return method.kind == MethodDefinitionKind::Set
+                    && !method.computed
+                    && setter_key_matches(&method.key, param_name);
+            }
+            // An accessor declared as a class field (`accessor`-shaped) — not a
+            // setter parameter context.
+            AstKind::Class(_) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// True if the accessor key is a plain identifier (or quoted-string literal)
+/// equal to `param_name`. Computed keys are rejected by the `!method.computed`
+/// guard in `is_setter_accessor_param` before this is reached.
+fn setter_key_matches(key: &PropertyKey, param_name: &str) -> bool {
+    match key {
+        PropertyKey::StaticIdentifier(id) => id.name == param_name,
+        PropertyKey::StringLiteral(s) => s.value == param_name,
+        _ => false,
+    }
 }
 
 impl OxcCheck for Check {
@@ -133,6 +191,16 @@ impl OxcCheck for Check {
                     .as_ref()
                     .is_some_and(|ann| is_boolean_annotation(ann));
                 if !has_annotation {
+                    return;
+                }
+                // A `set loop(loop: boolean)` accessor mirroring a standard
+                // Web Audio / media-element boolean property is bound to the
+                // platform's exact name; a predicate prefix would break the
+                // property contract. Both gates required: setter-accessor
+                // context AND a recognized platform boolean property name.
+                if MEDIA_API_BOOLEAN_PROPS.contains(&name)
+                    && is_setter_accessor_param(node, semantic, name)
+                {
                     return;
                 }
                 (name, id.span, true)
@@ -287,5 +355,68 @@ mod tests {
         // Lowercase counterparts of the exempt constant names still flag —
         // only the ALL-CAPS form is a value label.
         assert_eq!(run("let operator = true;").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_media_api_setter_accessor_param() {
+        // A `set name(name: boolean)` accessor mirroring a standard Web Audio /
+        // media-element boolean property is bound to the platform's exact name;
+        // a predicate prefix would break the property contract. (Closes #5074)
+        assert!(
+            run("class S { set loop(loop: boolean) { this._loop = loop; } }").is_empty()
+        );
+        assert!(
+            run("class S { set mute(mute: boolean) { this._mute = mute; } }").is_empty()
+        );
+        assert!(
+            run("class S { set muted(muted: boolean) { this._muted = muted; } }").is_empty()
+        );
+        assert!(
+            run("class S { set solo(solo: boolean) { this._solo = solo; } }").is_empty()
+        );
+    }
+
+    #[test]
+    fn media_api_exemption_requires_setter_accessor_context() {
+        // Both gates required. A recognized media-API name as a plain variable,
+        // a non-accessor function parameter, or a constructor parameter still
+        // flags — the exemption is scoped to the setter-accessor context only.
+        assert_eq!(run("let mute = false;").len(), 1);
+        assert_eq!(run("const loop: boolean = true;").len(), 1);
+        assert_eq!(run("function f(mute: boolean) {}").len(), 1);
+        assert_eq!(
+            run("class S { constructor(solo?: boolean) {} }").len(),
+            1
+        );
+        // A getter is not a value-bearing setter context.
+        assert_eq!(
+            run("class S { method(loop: boolean) {} }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn setter_accessor_exemption_requires_recognized_media_api_name() {
+        // Both gates required. An unrecognized adjective name in a setter
+        // accessor still flags — only genuine platform boolean properties are
+        // exempt, so ordinary boolean setters keep needing a prefix.
+        assert_eq!(
+            run("class S { set debug(debug: boolean) { this._debug = debug; } }").len(),
+            1
+        );
+        assert_eq!(
+            run("class S { set ready(ready: boolean) { this._ready = ready; } }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn computed_key_setter_still_flags() {
+        // A computed accessor key (`set ['loop'](...)`) is not the canonical
+        // platform-property mirror; the name is dynamic, so strictness holds.
+        assert_eq!(
+            run("class S { set ['loop'](loop: boolean) { this._loop = loop; } }").len(),
+            1
+        );
     }
 }
