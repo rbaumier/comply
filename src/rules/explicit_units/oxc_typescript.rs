@@ -71,8 +71,8 @@ const HANDLE_WORDS: &[&str] = &["Id", "Key", "Index", "Ref", "Handle", "Name"];
 /// Recognised unit suffixes. An identifier matching a base is accepted if
 /// it ends with one of these (case-insensitive).
 const KNOWN_SUFFIXES: &[&str] = &[
-    "Ms", "Sec", "Seconds", "Minutes", "Hours", "Days", "Bytes", "Kb", "Mb", "Gb", "Kib", "Mib",
-    "Gib", "Px", "Em", "Rem", "Pct", "Percent", "Rps", "Qps", "Hz", "Khz", "Count",
+    "Ms", "Sec", "Secs", "Seconds", "Minutes", "Hours", "Days", "Bytes", "Kb", "Mb", "Gb", "Kib",
+    "Mib", "Gib", "Px", "Em", "Rem", "Pct", "Percent", "Rps", "Qps", "Hz", "Khz", "Count",
     // Distance
     "Meters", "Kilometers", "Millimeters", "Centimeters",
     // Weight
@@ -533,5 +533,18 @@ mod tests {
         // not be a blanket exemption for every `distance*` name.
         assert_eq!(run_on("function f(distance: number) {}").len(), 1);
         assert_eq!(run_on("const distanceTraveled: number = 5;").len(), 1);
+    }
+
+    #[test]
+    fn allows_timeout_secs() {
+        // `Secs` is the plural of `Sec` — an unambiguous time-unit suffix that
+        // must be accepted just like `Sec`/`Seconds`.
+        assert!(run_on("const timeoutSecs: number = 30;").is_empty());
+        assert!(run_on("function f(timeoutSecs: number) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_timeout_sec_singular() {
+        assert!(run_on("const timeoutSec: number = 30;").is_empty());
     }
 }
