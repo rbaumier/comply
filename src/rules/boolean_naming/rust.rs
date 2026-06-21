@@ -119,10 +119,24 @@ fn extract_identifier<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&
     None
 }
 
+/// True if the name ends in the explicit `flag` suffix as a distinct word
+/// (`use_delta_flag` or bare `flag`). The `flag` suffix is itself a boolean
+/// marker — as clear an intent signal as an `is_*`/`has_*` prefix — and is the
+/// verbatim naming convention for boolean syntax elements in ITU-T/ISO codec
+/// and protocol specifications. A trailing `flag` mid-word (`flagged`) does
+/// not match: the snake_case word boundary (`_flag`) is required, so
+/// adjective/state names still need a prefix.
+fn has_flag_suffix(name: &str) -> bool {
+    name == "flag" || name.ends_with("_flag")
+}
+
 /// Return a short problem description if the name violates the rule.
 fn classify_name(name: &str) -> Option<&'static str> {
     if NEGATIVE_SUBSTRINGS.iter().any(|neg| name.contains(neg)) {
         return Some("is negatively phrased — use the positive form with `!`");
+    }
+    if has_flag_suffix(name) {
+        return None;
     }
     for &prefix in VALID_PREFIXES {
         if name.starts_with(prefix) {
@@ -249,6 +263,22 @@ mod tests {
     fn still_flags_user_defined_unprefixed_boolean() {
         // Strictness preserved: user-controlled names still require a prefix.
         assert_eq!(run_on("fn f() { let disabled: bool = true; }").len(), 1);
+    }
+
+    #[test]
+    fn allows_flag_suffix() {
+        // The explicit `flag` suffix is itself a boolean marker — the verbatim
+        // naming convention for boolean syntax elements in ITU-T/ISO codec
+        // specs (HEVC/H.265, H.264). (Closes #5065)
+        assert!(run_on("fn f() { let sps_temporal_id_nesting_flag: bool = true; }").is_empty());
+        assert!(run_on("fn f(use_delta_flag: bool) {}").is_empty());
+    }
+
+    #[test]
+    fn flag_suffix_does_not_soften_adjective_strictness() {
+        // The `flag` suffix only validates a trailing-word `flag`; a mid-word
+        // `flag` (e.g. `flagged`) is not the boolean-marker suffix.
+        assert_eq!(run_on("fn f() { let flagged: bool = true; }").len(), 1);
     }
 
     #[test]
