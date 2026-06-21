@@ -9,6 +9,10 @@
 //! turns a "won't fail" contract into "panics at runtime under the
 //! wrong input" — the worst kind of bug because every caller assumes
 //! the conversion is total.
+//!
+//! Test code (`skip_in_test_dir`) is exempt: a `From` impl written as a
+//! test helper may legitimately `.unwrap()` — a failed conversion in a
+//! test should just panic the test, which is the desired loud failure.
 
 mod rust;
 
@@ -28,7 +32,7 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["rust"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: true,
 };
 pub fn register() -> RuleDef {

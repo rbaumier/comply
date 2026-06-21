@@ -761,6 +761,33 @@ mod tests {
         assert_eq!(run_on(source).len(), 1);
     }
 
+    /// Closes #5171: a `From` impl living under a `tests/` directory is a test
+    /// helper where a panicking conversion is acceptable (the test fails loudly).
+    /// `skip_in_test_dir` makes the engine skip the rule there entirely. A
+    /// production `From` impl with the same `.unwrap()` is still flagged.
+    #[test]
+    fn skips_from_impl_in_tests_dir() {
+        let source = r#"impl<F: Fn(&str) -> String> From<OutputFormatter<F>> for Stdio {
+            fn from(output: OutputFormatter<F>) -> Stdio {
+                let (read_end, write_end) = os_pipe::pipe().unwrap();
+                Stdio::from(write_end)
+            }
+        }"#;
+        let in_tests =
+            crate::rules::test_helpers::run_rule_gated(&Check, source, "cargo-insta/tests/functional/main.rs");
+        assert!(
+            in_tests.is_empty(),
+            "a From impl in a tests/ directory is a test helper; unwrap is acceptable"
+        );
+        let in_src =
+            crate::rules::test_helpers::run_rule_gated(&Check, source, "src/conversion.rs");
+        assert_eq!(
+            in_src.len(),
+            1,
+            "a production From impl with .unwrap() is still flagged"
+        );
+    }
+
     /// Closes #3799: a `.unwrap()` on a statement gated by
     /// `#[cfg(debug_assertions)]` compiles out entirely in release builds, so
     /// the conversion has no runtime fallible path — the idiomatic equivalent
