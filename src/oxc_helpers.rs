@@ -2544,6 +2544,37 @@ pub fn is_custom_element_decorator_name(decorator_name: &str) -> bool {
     decorator_name == "customElement"
 }
 
+/// Built-in constructors that produce a brand-new, indexable, array-like value
+/// with no prior alias: the dense-`Array` constructor plus every TypedArray
+/// constructor. `new <name>(n)` is a freshly-created container, so a mutating
+/// fill/sort/reverse chained directly onto it (`new Uint8Array(n).fill(0)`) is
+/// unobservable through any other reference and must not be flagged as a
+/// misleading in-place mutation.
+const FRESH_ARRAY_CTORS: &[&str] = &[
+    "Array",
+    "Int8Array",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "Int16Array",
+    "Uint16Array",
+    "Int32Array",
+    "Uint32Array",
+    "Float16Array",
+    "Float32Array",
+    "Float64Array",
+    "BigInt64Array",
+    "BigUint64Array",
+];
+
+/// Whether `name` is a built-in constructor that yields a freshly-created
+/// array-like value (the dense `Array` constructor or any TypedArray
+/// constructor). Shared by the mutating-array rules so a `new <Ctor>(n)`
+/// receiver is recognised as fresh in one place.
+#[must_use]
+pub fn is_fresh_array_ctor_name(name: &str) -> bool {
+    FRESH_ARRAY_CTORS.contains(&name)
+}
+
 /// Peel any nested `ParenthesizedExpression` wrappers off `expr`, returning the
 /// first non-parenthesized inner expression. Used by the cast rules so that
 /// `(x as unknown) as T` is analyzed identically to `x as unknown as T`.
