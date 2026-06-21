@@ -1104,6 +1104,56 @@ pub fn is_in_trait_impl(node: Node) -> bool {
     false
 }
 
+/// True if `node` sits inside a method of an `impl Index for …` or
+/// `impl IndexMut for …` block.
+///
+/// The `Index::index` / `IndexMut::index_mut` methods return `&Self::Output` /
+/// `&mut Self::Output` — a reference, never a `Result`/`Option` — so they cannot
+/// propagate an error. The documented trait contract is to panic on invalid
+/// access (exactly how `Vec`/`HashMap`/`BTreeMap` indexing behaves), which makes
+/// `.unwrap()`/`.expect()` the idiomatic, correct implementation. Rules that
+/// otherwise forbid panicking exempt these bodies.
+///
+/// Matches both bare `impl Index<…> for T` and path-qualified
+/// `impl ops::Index<…> for T` / `impl std::ops::IndexMut<…> for T` by keying on
+/// the trait name's last path segment, via the nearest enclosing `impl_item`.
+pub fn is_in_index_trait_impl(node: Node, source: &[u8]) -> bool {
+    let mut current = node.parent();
+    while let Some(ancestor) = current {
+        if ancestor.kind() == "impl_item" {
+            return ancestor
+                .child_by_field_name("trait")
+                .and_then(|t| trait_base_name(t, source))
+                .is_some_and(|name| name == "Index" || name == "IndexMut");
+        }
+        current = ancestor.parent();
+    }
+    false
+}
+
+/// The trait's last path segment from an `impl_item`'s `trait` field, e.g.
+/// `Index` for `Index<&str>`, `ops::Index<…>`, or `std::ops::IndexMut`.
+///
+/// The `trait` field is a `type_identifier` (bare `Foo`), a
+/// `scoped_type_identifier` (`a::b::Foo`), or a `generic_type` wrapping either
+/// (`Foo<T>`, `a::b::Foo<T>`). This unwraps the generic and resolves the final
+/// segment in each case.
+fn trait_base_name<'a>(trait_node: Node, source: &'a [u8]) -> Option<&'a str> {
+    let base = if trait_node.kind() == "generic_type" {
+        trait_node.child_by_field_name("type")?
+    } else {
+        trait_node
+    };
+    match base.kind() {
+        "type_identifier" => base.utf8_text(source).ok(),
+        "scoped_type_identifier" => base
+            .utf8_text(source)
+            .ok()
+            .and_then(|t| t.rsplit("::").next()),
+        _ => None,
+    }
+}
+
 /// True if `node` sits inside a trait definition (`trait Foo { … }`).
 ///
 /// Walks up via `node.parent()` and returns true at the first enclosing
