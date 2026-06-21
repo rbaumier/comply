@@ -18,6 +18,31 @@ fn is_process_env(expr: &Expression) -> bool {
     obj.name.as_str() == "process"
 }
 
+/// Name of the rightmost identifier/property of a member-access chain or identifier.
+/// `require` -> "require"; `ctx.nativeRequire` -> "nativeRequire"; `module.constructor` -> "constructor".
+fn tail_name<'a>(expr: &'a Expression) -> Option<&'a str> {
+    match expr {
+        Expression::Identifier(ident) => Some(ident.name.as_str()),
+        Expression::StaticMemberExpression(member) => Some(member.property.name.as_str()),
+        _ => None,
+    }
+}
+
+/// Allow `delete require.cache[id]` / `delete Module._cache[id]` and their aliases.
+///
+/// The Node module cache is a `Record<string, NodeModule>` keyed by resolved module path,
+/// so a computed-key delete is the canonical cache-busting idiom (not a fixed-shape object).
+/// Receivers: `require.cache` / `nativeRequire.cache` (incl. `ctx.nativeRequire.cache`),
+/// `Module._cache`, `module.constructor._cache`.
+fn is_module_cache(expr: &Expression) -> bool {
+    let Expression::StaticMemberExpression(member) = expr else { return false };
+    match member.property.name.as_str() {
+        "cache" => matches!(tail_name(&member.object), Some("require" | "nativeRequire")),
+        "_cache" => matches!(tail_name(&member.object), Some("Module" | "constructor")),
+        _ => false,
+    }
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::UnaryExpression]
@@ -42,6 +67,13 @@ impl OxcCheck for Check {
 
         // Allow `delete process.env[key]` — only way to unset an env var in Node.js.
         if is_process_env(&member.object) {
+            return;
+        }
+
+        // Allow `delete require.cache[id]` / `delete Module._cache[id]` — the Node module
+        // cache is dictionary-keyed by module path, so a computed-key delete is the
+        // canonical cache-busting idiom, not a dynamic delete on a fixed-shape object.
+        if is_module_cache(&member.object) {
             return;
         }
 
@@ -131,6 +163,34 @@ mod tests {
     #[test]
     fn still_flags_non_process_env_dynamic_delete() {
         let diags = run_on("delete obj[key];");
+        assert_eq!(diags.len(), 1);
+    }
+
+    // Regression #5252 — Node module cache busting in a module loader (jiti)
+    #[test]
+    fn allows_delete_require_cache_dynamic_key() {
+        assert!(run_on("delete require.cache[id];").is_empty());
+    }
+
+    #[test]
+    fn allows_delete_native_require_cache_member_chain() {
+        assert!(run_on("delete ctx.nativeRequire.cache[id];").is_empty());
+    }
+
+    #[test]
+    fn allows_delete_module_cache_dynamic_key() {
+        assert!(run_on("delete Module._cache[resolved];").is_empty());
+    }
+
+    #[test]
+    fn allows_delete_module_constructor_cache() {
+        assert!(run_on("delete module.constructor._cache[resolved];").is_empty());
+    }
+
+    #[test]
+    fn still_flags_unrelated_dot_cache_dynamic_delete() {
+        // A plain `.cache` whose base is not require/nativeRequire is an ordinary object.
+        let diags = run_on("delete obj.cache[key];");
         assert_eq!(diags.len(), 1);
     }
 
