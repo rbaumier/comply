@@ -1,8 +1,10 @@
 //! sql-require-transaction-timeout oxc backend — flag `new Pool(...)`,
 //! `drizzle(...)`, and `createPool(...)` calls when the file never
-//! references `statement_timeout`. Files using a serverless or embedded
-//! driver that has no `statement_timeout` option (libsql/SQLite,
-//! PlanetScale serverless) are exempt.
+//! references `statement_timeout`. `new Pool(...)` and `createPool(...)` only
+//! flag when the file imports from a known DB pool library, so a non-DB object
+//! pool (worker pool, game-engine object pool) is not flagged. Files using a
+//! serverless or embedded driver that has no `statement_timeout` option
+//! (libsql/SQLite, PlanetScale serverless) are exempt.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -115,6 +117,27 @@ const pool = new Pool({ host: "localhost", database: "app" });"#;
 const pool = new Pool({ host: "localhost" });"#;
         assert_eq!(run(src).len(), 1);
     }
+
+    #[test]
+    fn no_fp_game_engine_object_pool_create_pool() {
+        // Regression: issue #4884 — `createPool` imported from a game-engine
+        // object-pooling utility (melonJS) is not a DB pool and must not flag.
+        let src = r#"import { createPool } from "../system/pooling.ts";
+
+export const vector2dPool = createPool<Vector2d, [x?: number, y?: number]>((x, y) => {
+  const vector = new Vector2d(x, y);
+  return { instance: vector, reset(x = 0, y = 0) {} };
+});"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_mysql2_create_pool_without_timeout() {
+        // A real mysql2 `createPool` with no statement_timeout must still flag.
+        let src = r#"import { createPool } from "mysql2/promise";
+const pool = createPool({ host: "localhost", database: "app", connectionLimit: 10 });"#;
+        assert_eq!(run(src).len(), 1);
+    }
 }
 
 pub struct Check;
@@ -142,15 +165,18 @@ fn uses_driver_without_statement_timeout(ctx: &CheckCtx) -> bool {
         .any(|source| ctx.source_contains(source))
 }
 
-/// Import sources whose `Pool` export is a database connection pool that
-/// honours `statement_timeout`. `new Pool(...)` only flags when the file
-/// imports `Pool` from one of these — a bare `Pool` from any other module
-/// (e.g. a worker-process pool) is not a DB pool.
+/// Import sources whose `Pool`/`createPool` export is a database connection
+/// pool that honours `statement_timeout`. `new Pool(...)` and `createPool(...)`
+/// only flag when the file imports from one of these — a bare `Pool` or
+/// `createPool` from any other module (e.g. a worker-process pool or a
+/// game-engine object pool) is not a DB pool.
 const DB_POOL_IMPORT_SOURCES: &[&str] = &[
     "pg",
     "pg-pool",
+    "mysql",
     "mysql2",
     "mysql2/promise",
+    "mariadb",
     "postgres",
     "@neondatabase/serverless",
 ];
@@ -214,6 +240,13 @@ impl OxcCheck for Check {
             AstKind::CallExpression(call) => {
                 let Some(name) = callee_name(&call.callee) else { return };
                 if name != "drizzle" && name != "createPool" {
+                    return;
+                }
+                // `createPool` is a generic name also used by object-pool
+                // utilities (game engines, worker pools). Only flag it when the
+                // file imports from a known DB pool library. `drizzle` is a
+                // DB-specific name with no such collision and needs no gate.
+                if name == "createPool" && !pool_imported_from_db_library(ctx) {
                     return;
                 }
                 let (line, column) =
