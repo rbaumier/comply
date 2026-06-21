@@ -95,8 +95,47 @@ pub(crate) fn text_category(class: &str) -> Option<&'static str> {
         };
     }
 
-    // Default: a named color token (`text-foreground`, `text-red-500`).
-    Some("text-color")
+    // Named color token (`text-foreground`, `text-red-500`, `text-red-500/50`).
+    // `size_part` already has any `/<modifier>` (line-height or opacity) stripped.
+    // Accept only shapes matching a real Tailwind text-color; a `text-*` token
+    // matching none of them is not a Tailwind utility (e.g. Vuetify's
+    // `text-title-large`, `text-medium-emphasis`) and must NOT bucket into the
+    // conflict group.
+    if is_text_color_token(size_part) {
+        return Some("text-color");
+    }
+    None
+}
+
+/// True when `token` (the `text-` suffix, opacity already stripped) is a real
+/// Tailwind/shadcn text-color value:
+/// - a CSS color keyword (`inherit`, `transparent`, `black`, …);
+/// - a single semantic CSS-variable color (`primary`, `muted`, custom `brand`);
+/// - a palette name ending in a numeric shade (`red-500`, `neutral-50`);
+/// - a shadcn `*-foreground` compound at any depth (`muted-foreground`,
+///   `sidebar-primary-foreground`).
+///
+/// Descriptive multi-segment tokens whose final segment is neither a shade nor
+/// `foreground` (Material/Vuetify typography & emphasis scales like
+/// `title-large`, `medium-emphasis`) are rejected — they are not Tailwind
+/// utilities and must not be grouped into the conflict bucket.
+fn is_text_color_token(token: &str) -> bool {
+    const COLOR_KEYWORDS: &[&str] = &["inherit", "current", "transparent", "black", "white"];
+    if COLOR_KEYWORDS.contains(&token) {
+        return true;
+    }
+    if token.is_empty() {
+        return false;
+    }
+    let Some(last) = token.rsplit('-').next() else {
+        return false;
+    };
+    if !token.contains('-') {
+        // Single semantic CSS-variable color (`primary`, `muted`, `brand`).
+        return true;
+    }
+    // Palette + numeric shade (`red-500`) or the shadcn `*-foreground` compound.
+    (!last.is_empty() && last.chars().all(|c| c.is_ascii_digit())) || last == "foreground"
 }
 
 pub(crate) fn flex_category(class: &str) -> Option<&'static str> {
@@ -234,6 +273,39 @@ mod text_category_tests {
         // not a color, so it must not share a key with `text-black`.
         assert_eq!(text_category("text-md"), Some("text-size"));
         assert_ne!(text_category("text-md"), text_category("text-black"));
+    }
+
+    #[test]
+    fn vuetify_typography_and_emphasis_are_not_text_color() {
+        // Regression for rbaumier/comply#4878 — `text-title-large` (Material
+        // typography scale) and `text-medium-emphasis` (emphasis opacity) are
+        // Vuetify utilities, not Tailwind colors. They match no known Tailwind
+        // text-color shape, so they must not bucket into `text-color`.
+        assert_eq!(text_category("text-title-large"), None);
+        assert_eq!(text_category("text-medium-emphasis"), None);
+        assert_eq!(text_category("text-body-medium"), None);
+        assert_eq!(text_category("text-headline-small"), None);
+    }
+
+    #[test]
+    fn real_color_tokens_still_classified() {
+        // Palette shades, CSS keywords, semantic vars and the shadcn
+        // `*-foreground` compound remain text-color.
+        assert_eq!(text_category("text-red-500"), Some("text-color"));
+        assert_eq!(text_category("text-neutral-50"), Some("text-color"));
+        assert_eq!(text_category("text-black"), Some("text-color"));
+        assert_eq!(text_category("text-white"), Some("text-color"));
+        assert_eq!(text_category("text-transparent"), Some("text-color"));
+        assert_eq!(text_category("text-primary"), Some("text-color"));
+        assert_eq!(text_category("text-foreground"), Some("text-color"));
+        assert_eq!(text_category("text-muted-foreground"), Some("text-color"));
+        // Deep shadcn `*-foreground` compound (`text-sidebar-primary-foreground`).
+        assert_eq!(
+            text_category("text-sidebar-primary-foreground"),
+            Some("text-color")
+        );
+        // Opacity modifier on a palette color (`text-red-500/50`) still color.
+        assert_eq!(text_category("text-red-500/50"), Some("text-color"));
     }
 }
 

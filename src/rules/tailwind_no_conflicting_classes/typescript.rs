@@ -14,238 +14,7 @@ use rustc_hash::FxHashMap;
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-/// Prefixes whose values are unambiguously mutually exclusive — any two
-/// classes sharing one of these prefixes conflict. Ambiguous prefixes
-/// (`text-`, `font-`, `flex-`, `border-`, `bg-`) are handled by dedicated
-/// sub-categorisation functions that split by CSS sub-property.
-const CONFLICT_PREFIXES: &[&str] = &[
-    // spacing
-    "p-",
-    "px-",
-    "py-",
-    "pt-",
-    "pr-",
-    "pb-",
-    "pl-",
-    "m-",
-    "mx-",
-    "my-",
-    "mt-",
-    "mr-",
-    "mb-",
-    "ml-",
-    // sizing
-    "w-",
-    "h-",
-    "min-w-",
-    "min-h-",
-    "max-w-",
-    "max-h-",
-    // visual
-    "rounded-",
-    "shadow-",
-    "opacity-",
-    "z-",
-    // layout
-    "gap-",
-    "gap-x-",
-    "gap-y-",
-    "grid-cols-",
-    "grid-rows-",
-    "justify-",
-    "items-",
-    "self-",
-    "order-",
-    "overflow-",
-];
-
-/// Display classes that conflict (only one can be active).
-const DISPLAY_CLASSES: &[&str] = &[
-    "block",
-    "flex",
-    "grid",
-    "inline",
-    "inline-block",
-    "inline-flex",
-    "inline-grid",
-    "hidden",
-    "table",
-    "contents",
-    "flow-root",
-];
-
-/// Detect CSS value type from an arbitrary Tailwind value (inside `[...]`).
-/// Mirrors Tailwind's own type inference: lengths → size, colors → color.
-fn css_value_type(value: &str) -> Option<&'static str> {
-    let v = value.trim();
-    if v.starts_with('#')
-        || v.starts_with("rgb")
-        || v.starts_with("hsl")
-        || v.starts_with("oklch")
-        || v.starts_with("hwb")
-        || v.starts_with("lab")
-        || v.starts_with("lch")
-        || v.starts_with("color(")
-    {
-        return Some("color");
-    }
-    const LENGTH_UNITS: &[&str] = &[
-        "px", "rem", "em", "%", "vw", "vh", "dvh", "svh", "lvh", "vmin", "vmax", "ch", "ex", "cap",
-        "lh", "rlh", "pt", "pc", "mm", "cm", "in",
-    ];
-    if LENGTH_UNITS.iter().any(|u| v.ends_with(u))
-        || v.starts_with("calc(")
-        || v.starts_with("clamp(")
-        || v.starts_with("min(")
-        || v.starts_with("max(")
-    {
-        return Some("length");
-    }
-    if v.starts_with("var(--") || v.starts_with("--") {
-        return None;
-    }
-    None
-}
-
-fn text_category(class: &str) -> Option<&'static str> {
-    let suffix = &class[5..]; // strip "text-"
-    match suffix {
-        // `md` is a common non-standard size alias (the "missing" step
-        // between `sm` and `lg`); it is never a color name.
-        "xs" | "sm" | "md" | "base" | "lg" | "xl" => return Some("text-size"),
-        "wrap" | "nowrap" | "balance" | "pretty" => return Some("text-wrap"),
-        "left" | "center" | "right" | "justify" | "start" | "end" => return Some("text-align"),
-        "ellipsis" | "clip" => return Some("text-overflow"),
-        "uppercase" | "lowercase" | "capitalize" | "normal-case" => return Some("text-transform"),
-        "underline" | "overline" | "line-through" | "no-underline" => {
-            return Some("text-decoration");
-        }
-        _ => {}
-    }
-    if suffix.ends_with("xl") && suffix.len() > 2 {
-        return Some("text-size");
-    }
-    // Arbitrary value: text-[10px] → size, text-[#fff] → color
-    if suffix.starts_with('[') && suffix.ends_with(']') {
-        let inner = &suffix[1..suffix.len() - 1];
-        return match css_value_type(inner) {
-            Some("length") => Some("text-size"),
-            Some("color") => Some("text-color"),
-            _ => None, // ambiguous → don't group
-        };
-    }
-    Some("text-color")
-}
-
-fn flex_category(class: &str) -> Option<&'static str> {
-    match class {
-        "flex-row" | "flex-row-reverse" | "flex-col" | "flex-col-reverse" => Some("flex-direction"),
-        "flex-wrap" | "flex-wrap-reverse" | "flex-nowrap" => Some("flex-wrap"),
-        "flex-1" | "flex-auto" | "flex-initial" | "flex-none" => Some("flex-shorthand"),
-        _ => None,
-    }
-}
-
-fn border_category(class: &str) -> Option<&'static str> {
-    let suffix = &class[7..]; // strip "border-"
-    match suffix {
-        "solid" | "dashed" | "dotted" | "double" | "hidden" | "none" => {
-            return Some("border-style");
-        }
-        "collapse" | "separate" => return Some("border-collapse"),
-        _ => {}
-    }
-    if suffix.chars().all(|c| c.is_ascii_digit()) {
-        return Some("border-width");
-    }
-    for (side, group) in [
-        ("t", "border-top"),
-        ("r", "border-right"),
-        ("b", "border-bottom"),
-        ("l", "border-left"),
-        ("x", "border-x"),
-        ("y", "border-y"),
-        ("s", "border-start"),
-        ("e", "border-end"),
-    ] {
-        if suffix == side || suffix.starts_with(&format!("{side}-")) {
-            return Some(group);
-        }
-    }
-    Some("border-color")
-}
-
-fn font_category(class: &str) -> Option<&'static str> {
-    match class {
-        "font-sans" | "font-serif" | "font-mono" => Some("font-family"),
-        "font-italic" | "font-not-italic" => Some("font-style"),
-        "font-thin" | "font-extralight" | "font-light" | "font-normal" | "font-medium"
-        | "font-semibold" | "font-bold" | "font-extrabold" | "font-black" => Some("font-weight"),
-        _ => None,
-    }
-}
-
-/// Subdivides `bg-*` utilities by the CSS sub-property they set, so utilities
-/// targeting different sub-properties (`bg-cover` size + `bg-center` position +
-/// `bg-no-repeat` repeat — the idiomatic full-cover-image combo) don't conflict.
-/// Only two `bg-*` setting the SAME sub-property conflict. The catch-all
-/// `bg-color` covers background-color/image/gradient utilities, which do conflict
-/// (`bg-red-500 bg-blue-500`).
-fn bg_category(class: &str) -> Option<&'static str> {
-    // background-repeat (`bg-repeat`, `bg-no-repeat`, `bg-repeat-x/y/round/space`)
-    if class == "bg-repeat" || class == "bg-no-repeat" || class.starts_with("bg-repeat-") {
-        return Some("bg-repeat");
-    }
-    if class.starts_with("bg-clip-") {
-        return Some("bg-clip"); // background-clip (e.g. `bg-clip-text` for gradient text)
-    }
-    if class.starts_with("bg-origin-") {
-        return Some("bg-origin"); // background-origin
-    }
-    if class.starts_with("bg-blend-") {
-        return Some("bg-blend"); // background-blend-mode
-    }
-    match class {
-        "bg-auto" | "bg-cover" | "bg-contain" => Some("bg-size"),
-        "bg-center" | "bg-top" | "bg-right" | "bg-bottom" | "bg-left"
-        | "bg-left-top" | "bg-left-bottom" | "bg-right-top" | "bg-right-bottom" => {
-            Some("bg-position")
-        }
-        "bg-fixed" | "bg-local" | "bg-scroll" => Some("bg-attachment"),
-        // background-color / image / gradient — catch-all paint group.
-        _ => Some("bg-color"),
-    }
-}
-
-fn conflict_key(class: &str) -> Option<&'static str> {
-    if class.starts_with("text-") {
-        return text_category(class);
-    }
-    if class.starts_with("flex-") {
-        return flex_category(class);
-    }
-    if class.starts_with("border-") {
-        return border_category(class);
-    }
-    if class.starts_with("font-") {
-        return font_category(class);
-    }
-    if class.starts_with("bg-") {
-        return bg_category(class);
-    }
-
-    let mut prefixes: Vec<&&str> = CONFLICT_PREFIXES.iter().collect();
-    prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
-    for prefix in prefixes {
-        if class.starts_with(*prefix) {
-            return Some(prefix);
-        }
-    }
-    if DISPLAY_CLASSES.contains(&class) {
-        return Some("display");
-    }
-    None
-}
+use super::conflict_key;
 
 fn jsx_class_value<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
     if node.kind() != "jsx_attribute" {
@@ -356,6 +125,37 @@ mod tests {
   <div class="text-h6 text-weight-bold" />
 </template>"#;
         assert!(crate::rules::test_helpers::run_rule(&Check, source, "t.vue").is_empty());
+    }
+
+    #[test]
+    fn silent_on_vuetify_typography_emphasis_in_vue() {
+        // Regression for rbaumier/comply#4878 — `text-title-large` (Material
+        // typography scale) and `text-medium-emphasis` (emphasis opacity) are
+        // Vuetify utilities, not Tailwind text-color classes. They control
+        // orthogonal style dimensions and must not be reported as conflicting.
+        let source = r#"<template>
+  <h6 class="text-title-large font-weight-regular text-medium-emphasis my-5">x</h6>
+</template>"#;
+        assert!(run_vue(source).is_empty());
+    }
+
+    #[test]
+    fn flags_two_text_sizes_in_vue() {
+        // Genuine same-property conflict (two font-sizes) still fires.
+        let source = r#"<template>
+  <div class="text-lg text-2xl" />
+</template>"#;
+        assert_eq!(run_vue(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_text_size_with_text_align_in_vue() {
+        // Two text-* utilities on orthogonal properties (font-size + alignment)
+        // do not conflict.
+        let source = r#"<template>
+  <div class="text-lg text-center" />
+</template>"#;
+        assert!(run_vue(source).is_empty());
     }
 
     #[test]
