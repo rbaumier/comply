@@ -37,6 +37,13 @@ crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, 
     // confusing, so the prefix is the only sensible name.
     if is_rust_primitive_type_name(&name[4..]) { return; }
 
+    // A method named exactly like one of the standard library's `get_`-prefixed
+    // indexed/unsafe accessors mirrors that established std API by name; a custom
+    // type implementing the same contract must keep the exact name, and stripping
+    // `get_` would break the std-mirroring convention (e.g. `unchecked()` no
+    // longer signals it is the unsafe sibling of the checked `get()`).
+    if is_std_mirrored_accessor(&name[4..]) { return; }
+
     if !has_self_param(node, source) { return; }
 
     // A method that takes a key/index argument beyond `self` is a keyed lookup
@@ -178,6 +185,29 @@ fn is_rust_primitive_type_name(name: &str) -> bool {
             | "bool"
             | "char"
             | "str"
+    )
+}
+
+/// True when the bare name (the part after `get_`) matches a standard library
+/// `get_`-prefixed accessor that legitimately keeps the prefix. These names mirror
+/// std's indexed/fallible/unsafe accessor API, an established Rust idiom distinct
+/// from a `get_field()` getter:
+///   - `slice::get_unchecked` / `get_unchecked_mut` — unsafe bounds-unchecked indexing
+///   - `slice::get_disjoint_mut` — multiple disjoint mutable indices
+///   - `Option::get_or_insert` / `get_or_insert_with` / `get_or_insert_default` —
+///     read-or-initialize accessors
+/// A custom type implementing the same contract must reuse these exact names, so
+/// the `get_` prefix is part of the convention, not a dispensable accessor prefix.
+/// (`get_mut` is already exempt via the reserved-keyword guard, `mut`.)
+fn is_std_mirrored_accessor(bare_name: &str) -> bool {
+    matches!(
+        bare_name,
+        "unchecked"
+            | "unchecked_mut"
+            | "disjoint_mut"
+            | "or_insert"
+            | "or_insert_with"
+            | "or_insert_default"
     )
 }
 
@@ -434,6 +464,26 @@ mod tests {
             fn get_and_reset_local_max_idle_duration(&self) -> Duration { todo!() }\n\
         }";
         assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_get_unchecked_std_mirrored_accessor_issue_5049() {
+        // `get_unchecked`/`get_unchecked_mut` mirror the std slice unsafe-accessor
+        // API (`<[T]>::get_unchecked`); a custom type must keep the exact name, so
+        // they are exempt even in an inherent impl with no extra param.
+        let src = "impl Slot {\n\
+            pub unsafe fn get_unchecked(&self) -> &T { todo!() }\n\
+            pub unsafe fn get_unchecked_mut(&mut self) -> &mut T { todo!() }\n\
+        }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_real_getter_alongside_std_mirrored_accessor_issue_5049() {
+        // A plain `get_name` field accessor is not a std-mirrored accessor and
+        // must still flag.
+        let src = "impl Slot {\n    fn get_name(&self) -> &str { &self.name }\n}";
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
