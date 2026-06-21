@@ -5,8 +5,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    AssignmentOperator, AssignmentTarget, BinaryOperator, BindingPattern, Expression, TSType,
-    UpdateOperator,
+    AssignmentOperator, AssignmentTarget, BinaryOperator, BindingPattern, Expression,
+    ObjectPropertyKind, PropertyKey, TSType, UpdateOperator,
 };
 use oxc_ast::AstKind;
 use oxc_semantic::Semantic;
@@ -68,6 +68,14 @@ use std::sync::Arc;
 /// flags. A `wait` used as a countdown latch (a counter of pending async ops
 /// decremented toward zero / equality-tested against `0`) is exempted by usage
 /// shape, not by name — see `used_as_countdown_latch`.
+///
+/// `limit` stays a base — a dimensioned `limit` (a byte/size threshold, a time
+/// limit assigned a millisecond magnitude) is genuinely unit-ambiguous and
+/// still flags. A `limit` used as a dimensionless pagination record count
+/// (the argument of a `.limit(...)`/`.take(...)` query-builder call, or a key
+/// paired with pagination siblings like `offset`/`pageSize` in the same
+/// object) is exempted by usage shape, not by name — see
+/// `used_as_pagination_count`.
 const AMBIGUOUS_BASES: &[&str] = &[
     "timeout",
     "interval",
@@ -170,6 +178,9 @@ impl OxcCheck for Check {
                 if used_as_countdown_latch(id.symbol_id.get(), semantic) {
                     return;
                 }
+                if used_as_pagination_count(name, id.symbol_id.get(), semantic) {
+                    return;
+                }
                 check_name(name, decl.span().start, ctx, diagnostics);
             }
             oxc_ast::AstKind::FormalParameter(param) => {
@@ -185,6 +196,9 @@ impl OxcCheck for Check {
                     return;
                 }
                 if used_as_countdown_latch(id.symbol_id.get(), semantic) {
+                    return;
+                }
+                if used_as_pagination_count(name, id.symbol_id.get(), semantic) {
                     return;
                 }
                 check_name(name, param.span().start, ctx, diagnostics);
@@ -260,6 +274,83 @@ fn is_zero_equality(op: BinaryOperator) -> bool {
 
 fn is_zero_literal(expr: &Expression) -> bool {
     matches!(expr, Expression::NumericLiteral(lit) if lit.value == 0.0)
+}
+
+/// Query-builder method names whose argument is a row count, and object keys
+/// that travel with a pagination `limit`. A `limit` flowing into one of these
+/// shapes is a dimensionless record count, not a dimensioned magnitude.
+const PAGINATION_SIBLINGS: &[&str] = &[
+    "limit", "offset", "page", "pagesize", "perpage", "skip", "take", "cursor",
+];
+
+/// Whether a `limit`-based numeric binding is used as a dimensionless pagination
+/// record count rather than a dimensioned (byte/time) magnitude. The guard fires
+/// only for the `limit` base: a byte or time `limit` carries no pagination usage
+/// shape and stays flagged.
+///
+/// The structural signals, resolved from the binding's references:
+///   - the binding is an argument of a `.limit(...)`/`.offset(...)`/`.take(...)`/
+///     `.skip(...)` query-builder call (`query.limit(limit)`), or
+///   - the binding is an object-property value paired with a pagination sibling
+///     key (`offset`/`page`/`pageSize`/`perPage`/`skip`/`take`/`cursor`) in the
+///     same object literal (`{ limit, offset }`).
+///
+/// Anchoring on usage keeps a dimensioned `limit` flagged — a byte/size limit or
+/// a time limit passed to `setTimeout`/a size API has neither shape.
+fn used_as_pagination_count(
+    name: &str,
+    symbol_id: Option<oxc_semantic::SymbolId>,
+    semantic: &Semantic<'_>,
+) -> bool {
+    if matches_ambiguous_base(name) != Some("limit") {
+        return false;
+    }
+    let Some(symbol_id) = symbol_id else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let nodes = semantic.nodes();
+    scoping.get_resolved_references(symbol_id).any(|reference| {
+        let ref_node = reference.node_id();
+        match nodes.kind(nodes.parent_id(ref_node)) {
+            // `query.limit(limit)` — argument of a pagination query-builder call.
+            AstKind::CallExpression(call) => is_pagination_method_call(call),
+            // `{ limit, offset }` — property value (shorthand or not) paired
+            // with a pagination sibling key.
+            AstKind::ObjectProperty(_) => {
+                let object_id = nodes.parent_id(nodes.parent_id(ref_node));
+                matches!(nodes.kind(object_id), AstKind::ObjectExpression(obj)
+                    if object_has_pagination_sibling(obj))
+            }
+            _ => false,
+        }
+    })
+}
+
+/// Whether the call is `<obj>.limit(...)`/`.offset(...)`/`.take(...)`/`.skip(...)`.
+fn is_pagination_method_call(call: &oxc_ast::ast::CallExpression) -> bool {
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    matches!(member.property.name.as_str(), "limit" | "offset" | "take" | "skip")
+}
+
+/// Whether the object literal has at least one property keyed by a pagination
+/// sibling (`offset`/`page`/`pageSize`/...), the marker that a co-located
+/// `limit` is a pagination record count.
+fn object_has_pagination_sibling(obj: &oxc_ast::ast::ObjectExpression) -> bool {
+    obj.properties.iter().any(|prop| {
+        let ObjectPropertyKind::ObjectProperty(p) = prop else {
+            return false;
+        };
+        let key = match &p.key {
+            PropertyKey::StaticIdentifier(id) => id.name.as_str(),
+            PropertyKey::StringLiteral(s) => s.value.as_str(),
+            _ => return false,
+        };
+        let lower = key.to_ascii_lowercase();
+        lower != "limit" && PAGINATION_SIBLINGS.contains(&lower.as_str())
+    })
 }
 
 fn check_name(name: &str, offset: u32, ctx: &CheckCtx, diagnostics: &mut Vec<Diagnostic>) {
@@ -738,5 +829,47 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_limit_pagination_query_builder_call() {
+        // `limit` passed to a `.limit(...)`/`.take(...)` query-builder call is a
+        // dimensionless record count, not a dimensioned magnitude — `limitMs`/
+        // `limitBytes` would be wrong (#5379). Covers the issue's exact shape:
+        // a numeric-init local reassigned from a pagination arg then used as
+        // `.limit(limit)`.
+        assert!(
+            run_on("function f(first?: number) { let limit = 50; if (first) limit = first; return query.limit(limit); }")
+                .is_empty()
+        );
+        assert!(run_on("function f(limit: number) { return query.take(limit); }").is_empty());
+    }
+
+    #[test]
+    fn allows_limit_paired_with_pagination_sibling() {
+        // A `limit` keyed alongside a pagination sibling (`offset`) in the same
+        // object literal is a record count, not a magnitude (#5379).
+        assert!(
+            run_on("function f() { const limit = 50; const offset = 0; return { limit, offset }; }")
+                .is_empty()
+        );
+        assert!(
+            run_on("function f(limit: number, pageSize: number) { return { limit, pageSize }; }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_dimensioned_limit_without_pagination_usage() {
+        // A `limit` used as a dimensioned (byte/time) magnitude — neither a
+        // pagination call argument nor paired with a pagination sibling — still
+        // demands a unit (#5379). A time limit passed to `setTimeout` and a bare
+        // size threshold must both flag.
+        assert_eq!(
+            run_on("function f() { let limit = 5000; setTimeout(() => {}, limit); }").len(),
+            1
+        );
+        assert_eq!(run_on("const limit: number = 1048576;").len(), 1);
+        assert_eq!(run_on("function f(limit: number) { if (size > limit) reject(); }").len(), 1);
     }
 }
