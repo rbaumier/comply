@@ -890,6 +890,60 @@ mod tests {
     }
 
     #[test]
+    fn no_fp_on_jsdoc_import_tag_issue_5258() {
+        // Regression for #5258 — playcanvas/engine pattern: a `.js` file declares
+        // type-only imports through JSDoc `@import` tags (TypeScript 5.5+). These
+        // comment-level tags name no module-level binding; they must not be
+        // validated as runtime named imports. Both the named and the `* as ns`
+        // forms must stay silent.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "components/anim/component.js",
+                "export const AnimComponent = 1;\n",
+            ),
+            (
+                "components/animation/component.js",
+                "export const AnimationComponent = 1;\n",
+            ),
+            (
+                "framework/entity.js",
+                "/**\n\
+                 * @import { AnimComponent } from '../components/anim/component.js'\n\
+                 * @import * as ns from '../components/animation/component.js'\n\
+                 */\n\
+                 export class Entity {}\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "framework/entity.js");
+        assert!(
+            diags.is_empty(),
+            "JSDoc `@import` tags must not be flagged by import-named: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_real_missing_named_import_alongside_jsdoc() {
+        // Guard: a JSDoc `@import` is skipped, but a genuine `import { Missing }`
+        // statement for a name the target does not export is still flagged.
+        let files: Vec<(&str, &str)> = vec![
+            ("bar.js", "export const Foo = 1;\n"),
+            (
+                "app.js",
+                "/**\n * @import { Foo } from './bar.js'\n */\n\
+                 import { Missing } from './bar.js';\n\
+                 const x = Missing;\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "app.js");
+        assert_eq!(
+            diags.len(),
+            1,
+            "real missing named import must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("Missing"));
+    }
+
+    #[test]
     fn still_flags_missing_name_with_package_types_dts() {
         // True positive preserved: a name exported by neither the runtime JS nor
         // the package's `"types"` declaration is still reported.
