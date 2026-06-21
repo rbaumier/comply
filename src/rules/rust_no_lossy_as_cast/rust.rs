@@ -52,7 +52,7 @@ use crate::rules::rust_helpers::{
     cast_operand_bit_width, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
     cast_operand_is_enum_discriminant, cast_operand_is_range_guarded, cast_operand_is_repr_enum_field,
-    find_identifier_type, is_in_enum_discriminant,
+    cast_operand_literal_value, find_identifier_type, is_in_enum_discriminant,
 };
 use crate::rules::rust_no_as_numeric_cast::rust::fires_on_cast;
 
@@ -103,6 +103,11 @@ impl AstCheck for Check {
             return;
         };
         if cast_operand_is_char(node, source_bytes) && char_fits(target_type) {
+            return;
+        }
+        if cast_operand_literal_value(node, source_bytes)
+            .is_some_and(|value| literal_fits(value, target_type))
+        {
             return;
         }
         if cast_operand_bit_width(node, source_bytes)
@@ -250,6 +255,37 @@ fn bit_width_fits(read_bits: u16, target: NumericType) -> bool {
         NumericKind::Unsigned => read_bits <= target.bits,
         NumericKind::Signed => read_bits < target.bits,
         NumericKind::Float => false,
+    }
+}
+
+/// True if the integer `value` (parsed from a literal operand) lies within the
+/// inclusive `[MIN, MAX]` range of the integer `target`, making the cast
+/// lossless — e.g. `b' ' as i8` (the byte 32 fits `-128..=127`). The rule's
+/// `NARROWING_TARGETS` set never includes a float or platform-width type, so
+/// `target_int_bounds` always resolves here.
+fn literal_fits(value: i128, target: NumericType) -> bool {
+    let Some((min, max)) = target_int_bounds(target) else {
+        return false;
+    };
+    value >= min && value <= max
+}
+
+/// The inclusive `[MIN, MAX]` bounds of an integer `target` as `i128`, or `None`
+/// for a float target. Shifts are checked to stay within `i128`.
+fn target_int_bounds(target: NumericType) -> Option<(i128, i128)> {
+    match target.kind {
+        NumericKind::Float => None,
+        NumericKind::Unsigned => {
+            let max = 1i128.checked_shl(u32::from(target.bits)).map_or(i128::MAX, |p| p - 1);
+            Some((0, max))
+        }
+        NumericKind::Signed => {
+            let max = 1i128
+                .checked_shl(u32::from(target.bits - 1))
+                .map_or(i128::MAX, |p| p - 1);
+            let min = max.checked_neg().and_then(|n| n.checked_sub(1)).unwrap_or(i128::MIN);
+            Some((min, max))
+        }
     }
 }
 
@@ -972,5 +1008,48 @@ mod tests {
         let src = "struct S { count: u16 } \
                    fn g(s: &S) -> u8 { s.count as u8 }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5209_byte_literal_as_i8_not_flagged() {
+        // The issue's shape: `b' ' as i8` (WinAPI `CHAR`). Byte 32 fits i8, so
+        // this rule exempts it directly (not merely via numeric-cast dedup).
+        assert!(run_on("fn f() -> i8 { b' ' as i8 }").is_empty());
+        assert!(run_on("fn f() -> i8 { b'A' as i8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5209_int_literal_in_range_not_flagged() {
+        assert!(run_on("fn f() -> i8 { 0x41 as i8 }").is_empty());
+        assert!(run_on("fn f() -> i8 { 65 as i8 }").is_empty());
+        assert!(run_on("fn f() -> i8 { -5 as i8 }").is_empty());
+        assert!(run_on("fn f() -> i8 { 0o17 as i8 }").is_empty());
+        assert!(run_on("fn f() -> i8 { 0b0101 as i8 }").is_empty());
+        assert!(run_on("fn f() -> i8 { 65u8 as i8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5209_positive_out_of_range_literal_owned_by_numeric_cast() {
+        // 200 > i8::MAX: a genuine lossy literal cast. `rust-no-as-numeric-cast`
+        // owns the span (it flags out-of-range integer literals), so this rule
+        // suppresses — the pair still emits exactly one diagnostic.
+        assert!(run_on("fn f() -> i8 { 200 as i8 }").is_empty());
+        assert!(run_on("fn f() -> i8 { 0xFF as i8 }").is_empty());
+        assert!(run_on("fn f() -> u8 { 300 as u8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5209_negative_out_of_range_literal_still_flagged() {
+        // -200 < i8::MIN: a negated literal is a `unary_expression`, which
+        // `rust-no-as-numeric-cast` cedes, so this rule is the sole owner and
+        // must flag the out-of-range value.
+        assert_eq!(run_on("fn f() -> i8 { -200 as i8 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_5209_non_literal_operand_owned_by_numeric_cast() {
+        // A variable operand is not a literal; the narrowing stays a finding,
+        // owned by `rust-no-as-numeric-cast`.
+        assert!(run_on("fn f(x: i32) -> i8 { x as i8 }").is_empty());
     }
 }

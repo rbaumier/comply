@@ -2325,6 +2325,111 @@ pub fn cast_operand_is_bitwise(cast: Node, source: &[u8]) -> bool {
         .is_some_and(|op| matches!(op, ">>" | "<<" | "&" | "|" | "^"))
 }
 
+/// The compile-time value of `cast`'s operand when it is an integer or byte
+/// literal whose value is statically known, or `None` for any other operand.
+///
+/// Recognized operands:
+/// - an `integer_literal` in decimal, hex (`0x`), octal (`0o`), or binary
+///   (`0b`), with optional digit separators (`_`) and an optional integer type
+///   suffix (`65u8`, `0xFFi32`);
+/// - the same wrapped in a leading unary minus (`-5 as i8`);
+/// - a byte literal `b'A'` / `b'\n'` / `b'\x41'`, whose value is the byte.
+///
+/// Float and `char` literals are excluded: precision/width for those is handled
+/// by the float-target machinery and `cast_operand_is_char`. The value is
+/// returned as `i128`, wide enough to hold every fixed-width integer literal
+/// (including `u128::MAX`) without loss.
+///
+/// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`: a literal
+/// whose value provably fits the target type's range is a lossless, statically
+/// verifiable cast (e.g. `b' ' as i8`, the WinAPI `CHAR` idiom). Each rule pairs
+/// this with its target's `[MIN, MAX]` bounds and exempts the cast only when the
+/// value is in range; an out-of-range literal stays flagged.
+pub fn cast_operand_literal_value(cast: Node, source: &[u8]) -> Option<i128> {
+    let value = cast.child_by_field_name("value")?;
+    operand_literal_value(value, source)
+}
+
+fn operand_literal_value(node: Node, source: &[u8]) -> Option<i128> {
+    match node.kind() {
+        "integer_literal" => parse_integer_literal(node.utf8_text(source).ok()?),
+        "char_literal" => byte_literal_value(node.utf8_text(source).ok()?),
+        "unary_expression" => {
+            // Only a leading minus negates the inner literal; `!lit` is bitwise
+            // and `*ptr`/`&x` are not literals.
+            let is_neg = node
+                .child(0)
+                .and_then(|op| op.utf8_text(source).ok())
+                .is_some_and(|op| op == "-");
+            if !is_neg {
+                return None;
+            }
+            node.named_child(0)
+                .and_then(|inner| operand_literal_value(inner, source))
+                .and_then(i128::checked_neg)
+        }
+        _ => None,
+    }
+}
+
+/// Parse an `integer_literal`'s text into its value: decimal / `0x` / `0o` /
+/// `0b`, with `_` separators and an optional integer type suffix stripped. Only
+/// integer suffixes are accepted — a float-suffixed token (`5f32`) parses as a
+/// `float_literal`, never reaching here. Returns `None` on overflow of `i128`.
+fn parse_integer_literal(text: &str) -> Option<i128> {
+    let text = text.trim();
+    let (radix, rest) = match text.as_bytes() {
+        [b'0', b'x' | b'X', ..] => (16, &text[2..]),
+        [b'0', b'o' | b'O', ..] => (8, &text[2..]),
+        [b'0', b'b' | b'B', ..] => (2, &text[2..]),
+        _ => (10, text),
+    };
+    let mut digits = String::with_capacity(rest.len());
+    for ch in rest.chars() {
+        if ch == '_' {
+            continue;
+        }
+        if ch.is_digit(radix) {
+            digits.push(ch);
+        } else {
+            // The first non-digit, non-separator char begins the type suffix
+            // (`u8`, `i32`, …); the remainder is the suffix, not part of the value.
+            break;
+        }
+    }
+    if digits.is_empty() {
+        return None;
+    }
+    i128::from_str_radix(&digits, radix).ok()
+}
+
+/// The value of a byte literal `b'…'` (an ASCII byte, `0..=255`), handling the
+/// escapes Rust permits in a byte literal: `\n \r \t \\ \0 \' \"` and `\xNN`.
+/// Returns `None` for any text that is not a single-byte literal.
+fn byte_literal_value(text: &str) -> Option<i128> {
+    let inner = text.strip_prefix("b'")?.strip_suffix('\'')?;
+    let value = match inner.as_bytes() {
+        [b'\\', b'x', hi, lo] => {
+            let pair = [*hi, *lo];
+            let hex = std::str::from_utf8(&pair).ok()?;
+            u8::from_str_radix(hex, 16).ok()?
+        }
+        [b'\\', esc] => match esc {
+            b'n' => b'\n',
+            b'r' => b'\r',
+            b't' => b'\t',
+            b'\\' => b'\\',
+            b'0' => 0,
+            b'\'' => b'\'',
+            b'"' => b'"',
+            _ => return None,
+        },
+        [b] => *b,
+        _ => return None,
+    };
+    Some(i128::from(value))
+}
+
 /// True if `cast` (a `type_cast_expression`) reads the discriminant of a
 /// fieldless (C-like) enum — `<enum value> as <integer>`. For such an enum the
 /// `as`-cast is the language-blessed way to obtain the discriminant: no
@@ -3231,6 +3336,46 @@ mod tests {
                 .expect("source should contain a cast");
             assert_eq!(
                 cast_operand_is_enum_discriminant(cast, src.as_bytes()),
+                expected,
+                "src: {src}"
+            );
+        }
+    }
+
+    #[test]
+    fn cast_operand_literal_value_parses_every_literal_form() {
+        let cases = [
+            // Decimal, hex, octal, binary — all the same value 65.
+            ("fn f() { let _ = 65 as i8; }", Some(65)),
+            ("fn f() { let _ = 0x41 as i8; }", Some(65)),
+            ("fn f() { let _ = 0o101 as i8; }", Some(65)),
+            ("fn f() { let _ = 0b1000001 as i8; }", Some(65)),
+            // Digit separators and a type suffix.
+            ("fn f() { let _ = 1_000 as u16; }", Some(1000)),
+            ("fn f() { let _ = 65u8 as i8; }", Some(65)),
+            ("fn f() { let _ = 0xFFi32 as i32; }", Some(255)),
+            // Leading unary minus.
+            ("fn f() { let _ = -5 as i8; }", Some(-5)),
+            ("fn f() { let _ = -128 as i8; }", Some(-128)),
+            // Byte literals, including escapes.
+            ("fn f() { let _ = b'A' as i8; }", Some(65)),
+            ("fn f() { let _ = b' ' as i8; }", Some(32)),
+            ("fn f() { let _ = b'\\n' as i8; }", Some(10)),
+            ("fn f() { let _ = b'\\x7f' as i8; }", Some(127)),
+            ("fn f() { let _ = b'\\\\' as i8; }", Some(92)),
+            // Non-literal operands have no statically known value.
+            ("fn f(x: i32) { let _ = x as i8; }", None),
+            ("fn f(x: u32) { let _ = (x >> 8) as u8; }", None),
+            // Float and char literals are deliberately excluded.
+            ("fn f() { let _ = 1.0 as f32; }", None),
+            ("fn f() { let _ = 'A' as i32; }", None),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_type_cast_expression(tree.root_node())
+                .expect("source should contain a cast");
+            assert_eq!(
+                cast_operand_literal_value(cast, src.as_bytes()),
                 expected,
                 "src: {src}"
             );

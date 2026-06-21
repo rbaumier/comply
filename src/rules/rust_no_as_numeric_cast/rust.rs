@@ -43,7 +43,7 @@ use crate::rules::rust_helpers::{
     cast_operand_bit_width, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
     cast_operand_is_enum_discriminant, cast_operand_is_range_guarded, cast_operand_is_repr_enum_field,
-    find_identifier_type, is_in_enum_discriminant, is_in_test_context,
+    cast_operand_literal_value, find_identifier_type, is_in_enum_discriminant, is_in_test_context,
 };
 
 const KINDS: &[&str] = &["type_cast_expression"];
@@ -131,6 +131,11 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
         return false;
     }
     if is_literal_cast(node, source_bytes) {
+        return false;
+    }
+    if cast_operand_literal_value(node, source_bytes)
+        .is_some_and(|value| literal_fits(value, target_type))
+    {
         return false;
     }
     if cast_operand_is_bitwise(node, source_bytes) {
@@ -253,14 +258,52 @@ fn source_numeric_type(node: tree_sitter::Node, source: &[u8]) -> Option<Numeric
     numeric_type(&type_text)
 }
 
+/// A `float_literal` operand (`1.0 as f32`) is exempt unconditionally: a written
+/// float constant is the programmer's chosen representation, with no fallible
+/// `as` alternative. A `unary_expression` operand — a deref (`*x as i8`) or a
+/// negation — is ceded to `rust-no-lossy-as-cast`, which owns those spans.
+///
+/// Plain `integer_literal` operands are NOT exempted here: they are range-checked
+/// by `cast_operand_literal_value` + `literal_fits`, so an in-range literal
+/// (`65 as i8`) is silenced while an out-of-range one (`200 as i8`) stays flagged.
 fn is_literal_cast(node: tree_sitter::Node, _source: &[u8]) -> bool {
-    let Some(value) = node.child_by_field_name("value") else {
+    node.child_by_field_name("value")
+        .is_some_and(|value| matches!(value.kind(), "float_literal" | "unary_expression"))
+}
+
+/// True if the integer `value` (parsed from a literal operand) lies within the
+/// inclusive `[MIN, MAX]` range of the integer `target`, making the cast
+/// lossless. Float targets never fit an integer literal here. Callers must have
+/// already excluded `usize`/`isize` targets, whose host-dependent width is not
+/// modelled (both cast rules filter those before reaching this check).
+fn literal_fits(value: i128, target: NumericType) -> bool {
+    let Some((min, max)) = target_int_bounds(target) else {
         return false;
     };
-    matches!(
-        value.kind(),
-        "integer_literal" | "float_literal" | "unary_expression"
-    )
+    value >= min && value <= max
+}
+
+/// The inclusive `[MIN, MAX]` bounds of an integer `target` as `i128`, or `None`
+/// for a float target or a width too wide to represent in `i128` (`u128`/`i128`
+/// MAX exceed `i128::MAX`, so a literal large enough to overflow them never
+/// fits anyway). Shifts are checked to avoid overflow on the 128-bit boundary.
+fn target_int_bounds(target: NumericType) -> Option<(i128, i128)> {
+    match target.kind {
+        NumericKind::Float => None,
+        NumericKind::Unsigned => {
+            // `u128::MAX` exceeds `i128::MAX`; cap at `i128::MAX` since no
+            // `i128` literal value can be larger anyway.
+            let max = 1i128.checked_shl(u32::from(target.bits)).map_or(i128::MAX, |p| p - 1);
+            Some((0, max))
+        }
+        NumericKind::Signed => {
+            let max = 1i128
+                .checked_shl(u32::from(target.bits - 1))
+                .map_or(i128::MAX, |p| p - 1);
+            let min = max.checked_neg().and_then(|n| n.checked_sub(1)).unwrap_or(i128::MIN);
+            Some((min, max))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -847,5 +890,50 @@ mod tests {
                    struct S { f: E } \
                    fn g(s: &S) -> u8 { s.f as u8 }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_5209_byte_literal_as_i8_not_flagged() {
+        // The issue's exact shape (console-rs WinAPI `CHAR`): `b' ' as i8`. The
+        // byte value 32 fits i8's -128..=127, so the cast is provably lossless.
+        assert!(run_on("fn f() -> i8 { b' ' as i8 }").is_empty());
+        assert!(run_on("fn f() -> i8 { b'A' as i8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5209_hex_and_decimal_literal_in_range_not_flagged() {
+        assert!(run_on("fn f() -> i8 { 0x41 as i8 }").is_empty());
+        assert!(run_on("fn f() -> i8 { 65 as i8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5209_negative_literal_in_range_not_flagged() {
+        assert!(run_on("fn f() -> i8 { -5 as i8 }").is_empty());
+        assert!(run_on("fn f() -> i8 { -128 as i8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5209_octal_binary_and_suffixed_literal_in_range_not_flagged() {
+        assert!(run_on("fn f() -> i8 { 0o17 as i8 }").is_empty());
+        assert!(run_on("fn f() -> i8 { 0b0101 as i8 }").is_empty());
+        assert!(run_on("fn f() -> i8 { 65u8 as i8 }").is_empty());
+        assert!(run_on("fn f() -> u16 { 1_000 as u16 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5209_out_of_range_literal_still_flagged() {
+        // 200 > i8::MAX (127): a genuine lossy literal cast stays flagged.
+        assert_eq!(run_on("fn f() -> i8 { 200 as i8 }").len(), 1);
+        // 0xFF = 255 > 127.
+        assert_eq!(run_on("fn f() -> i8 { 0xFF as i8 }").len(), 1);
+        // 300 > u8::MAX (255).
+        assert_eq!(run_on("fn f() -> u8 { 300 as u8 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_5209_non_literal_operand_still_flagged() {
+        // A variable operand is not a literal — its value is unknown, so a
+        // narrowing cast stays flagged.
+        assert_eq!(run_on("fn f(x: i32) -> i8 { x as i8 }").len(), 1);
     }
 }
