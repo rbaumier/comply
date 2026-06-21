@@ -1,7 +1,7 @@
 //! Type-prefix detection shared by the Rust and TypeScript backends.
 //!
 //! Both backends look for the same Hungarian-notation prefixes (`str`,
-//! `arr`, `obj`, …) but on different word boundaries: snake_case
+//! `arr`, `bool`, …) but on different word boundaries: snake_case
 //! (`str_name`) for Rust, camelCase (`strName`) for TypeScript. The
 //! list of prefixes lives here so adding a new one lands in both
 //! backends in one edit.
@@ -27,6 +27,13 @@
 //!   `number`, Rust uses `i32`/`u64`/etc.).
 //! - `vec` — `vec_indices` is "vector of indices" in Rust prose; the
 //!   descriptive use dominates the Hungarian use.
+//! - `obj` — unlike `str`/`arr`/`bool`, "object" is a ubiquitous
+//!   *domain noun* (PDF indirect objects, DOM objects, storage/S3
+//!   objects, 3D/game objects, DB objects). An `obj`-prefixed name
+//!   (`objId`, `objRef`, `objDict`, `objStore`) almost always names
+//!   something *about* an object, not a redundantly type-encoded
+//!   `Object` variable. The descriptive use dominates the Hungarian
+//!   one, so `obj` is a faux ami like `num`/`vec`.
 //! - Single letters (`i`, `b`, `s`, `f`, `r`, `o`) — too short to be
 //!   anything but ambiguous; `i` is the loop-counter idiom.
 //! - `el`, `dt`, `set`, `map`, `lst`, `dict` — descriptive English
@@ -38,7 +45,6 @@ const TYPE_PREFIXES: &[&str] = &[
     // Universally Hungarian, no descriptive use that competes.
     "str",  // string / String
     "arr",  // array / Array
-    "obj",  // object / Object
     "bool", // boolean / bool
     // Legacy C/C++ Hungarian — extremely rare in modern TS or Rust,
     // so zero false positives are expected. Included for exhaustive

@@ -7,7 +7,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-const RUST_DOMAIN_PREFIXES: &[&str] = &["str", "arr", "bool", "obj"];
+const RUST_DOMAIN_PREFIXES: &[&str] = &["str", "arr", "bool"];
 
 crate::ast_check! { on ["identifier"] => |node, source, ctx, diagnostics|
     if !is_declaration_site(node) {

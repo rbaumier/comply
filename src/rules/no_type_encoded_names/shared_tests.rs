@@ -29,7 +29,7 @@ const SCENARIOS: &[Scenario] = &[
         rust: "fn f() { let bool_flag = true; }",
     },
     Scenario {
-        name: "obj prefix — domain qualifier in Rust",
+        name: "obj prefix — domain noun, not a type encoding (#5067)",
         expected_rust: false,
         rust: "fn f() { let obj_user = (); }",
     },
