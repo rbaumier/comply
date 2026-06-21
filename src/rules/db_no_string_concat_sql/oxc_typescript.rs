@@ -510,4 +510,27 @@ mod tests {
         let src = r#"const q = `SELECT * FROM ${t} WHERE id = ${userId}`;"#;
         assert_eq!(run_on(src).len(), 1);
     }
+
+    // Issue #5375 — a table name in PostgreSQL quoted-identifier syntax
+    // (`FROM "${tableName}"`) is an identifier position. The opening double
+    // quote before the placeholder previously hid the FROM keyword.
+    #[test]
+    fn does_not_flag_pg_quoted_identifier_in_template_literal() {
+        let src = r#"const q = `SELECT DISTINCT name FROM "${this.tableName}" ORDER BY name`;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_pg_quoted_identifier_in_binary_concat() {
+        let src = r#"const q = "SELECT * FROM \"" + tableName;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // #5375 guard — a single-quoted value interpolation must still fire; only
+    // double-quoted identifiers are exempt, not single-quoted string literals.
+    #[test]
+    fn flags_single_quoted_value_interpolation_template() {
+        let src = r#"const q = `UPDATE users SET name = '${name}' WHERE id = 1`;"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
 }
