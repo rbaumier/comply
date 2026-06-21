@@ -100,18 +100,58 @@ const DIRECTIVE_MARKERS: &[&str] = &[
 /// and can sit on *any* line of a multi-line banner (the Apache header carries
 /// `copyright` on line 4), so they exclude the whole merged block but must never
 /// fragment it — unlike directives, they do not drive the `line_is_marker` split.
+/// `@license` / `@copyright` are the JSDoc tags whose sole purpose is to declare a
+/// per-file license/copyright header (the IDux MIT banner opens with `@license`).
 const BANNER_MARKERS: &[&str] = &[
     "spdx-license-identifier",
     "copyright",
     "licensed under",
     "licensed to the",
+    "@license",
+    "@copyright",
+    "all rights reserved",
 ];
 
+/// Recognized open-source license names. A banner that pairs one of these with the
+/// word `license`/`licence` is a license header (`MIT-style license`,
+/// `BSD-3-Clause license`) even when it carries none of the `BANNER_MARKERS`
+/// phrases — the IDux MIT header is exactly this prose shape.
+const LICENSE_NAMES: &[&str] =
+    &["mit", "apache", "bsd", "isc", "gpl", "lgpl", "agpl", "mpl", "mozilla", "unlicense"];
+
 /// A merged comment block is excluded when it carries any directive or banner
-/// marker. Matched by content, not file position, so a banner below `#![attr]` /
-/// `'use client'` / a shebang is still caught and a Rust `//!` module doc is not.
+/// marker, or is a license header named in prose. Matched by content, not file
+/// position, so a banner below `#![attr]` / `'use client'` / a shebang is still
+/// caught and a Rust `//!` module doc is not.
 fn is_excluded_comment(lower: &str) -> bool {
     DIRECTIVE_MARKERS.iter().chain(BANNER_MARKERS).any(|m| lower.contains(m))
+        || is_named_license_banner(lower)
+}
+
+/// A license header that declares its license by name in prose rather than by an
+/// SPDX id or `@license` tag — `governed by an MIT-style license`, `released under
+/// the BSD license`. Requires a recognized license name *token* (not substring, so
+/// `permit`/`commit`/`mozilla-bound` do not match) to co-occur with the word
+/// `license`/`licence`, keeping ordinary prose that merely mentions one word out.
+///
+/// The name+word pairing is deliberately broader than a strict file-top banner: a
+/// rare copy-pasted prose comment that names a license is exempted too. That trade
+/// is intentional — license wording recurs across files by design far more often
+/// than it is genuinely copy-pasted cruft.
+fn is_named_license_banner(lower: &str) -> bool {
+    let mut has_license_name = false;
+    let mut has_license_word = false;
+    for token in lower.split(|c: char| !c.is_alphanumeric()).filter(|t| !t.is_empty()) {
+        if LICENSE_NAMES.contains(&token) {
+            has_license_name = true;
+        } else if matches!(token, "license" | "licence" | "licensed" | "licensing") {
+            has_license_word = true;
+        }
+        if has_license_name && has_license_word {
+            return true;
+        }
+    }
+    false
 }
 
 /// Tool/lint directives whose text is fixed by an external contract, so it is
@@ -995,6 +1035,59 @@ export const labSection = 2;
         let a = write(&dir, "a.ts", &format!("{banner}export const a = 1;\n"));
         let b = write(&dir, "b.ts", &format!("{banner}export const b = 2;\n"));
         assert!(run(&[&a, &b]).is_empty());
+    }
+
+    /// The IDux MIT banner: a `/** */` block opening with the `@license` JSDoc tag
+    /// and declaring an `MIT-style license` in prose — neither an SPDX id nor a
+    /// `copyright`/`licensed under` phrase.
+    const IDUX_MIT_HEADER: &str = "\
+/**
+ * @license
+ *
+ * Use of this source code is governed by an MIT-style license that can be
+ * found in the LICENSE file at https://github.com/IDuxFE/idux/blob/main/LICENSE
+ */
+";
+
+    #[test]
+    fn ignores_jsdoc_license_banner() {
+        // Regression (#5038): IDux ships this `@license` MIT banner atop all 1215
+        // files. The `@license` tag and the `MIT-style license` prose are both
+        // license-header markers, so the banner must be excluded across files.
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "popper.ts", &format!("{IDUX_MIT_HEADER}export const a = 1;\n"));
+        let b = write(&dir, "a11y.ts", &format!("{IDUX_MIT_HEADER}export const b = 2;\n"));
+        assert!(run(&[&a, &b]).is_empty(), "@license / MIT-style banner must be excluded");
+    }
+
+    #[test]
+    fn ignores_named_license_banner_without_jsdoc_tag() {
+        // The prose license-name signature stands alone: a banner that names its
+        // license (`BSD license`) in prose, with no `@license` tag or SPDX id,
+        // is still a license header repeated per file.
+        let dir = tempfile::tempdir().unwrap();
+        let banner = "// This source code is released under the BSD license and may be freely redistributed and modified under those documented terms.\n";
+        let a = write(&dir, "a.ts", &format!("{banner}export const a = 1;\n"));
+        let b = write(&dir, "b.ts", &format!("{banner}export const b = 2;\n"));
+        assert!(run(&[&a, &b]).is_empty(), "prose-named license banner must be excluded");
+    }
+
+    #[test]
+    fn still_flags_duplicate_comment_merely_mentioning_a_license_word() {
+        // Over-exclusion guard for #5038: a genuine explanatory comment that uses
+        // the word `license` in prose — but names no license and carries no banner
+        // marker — is ordinary duplicated prose and must still flag.
+        let dir = tempfile::tempdir().unwrap();
+        let note = "\
+// The seat allocator checks the remaining license entitlement before granting a
+// session, so an overcommitted tenant is refused instead of silently exceeding.
+let x = 1;
+";
+        let a = write(&dir, "a.ts", note);
+        let b = write(&dir, "b.ts", note);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "comment merely mentioning a license word still flags");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
     /// The standard 16-line Apache 2.0 header. `licensed to the` opens line 1 and
