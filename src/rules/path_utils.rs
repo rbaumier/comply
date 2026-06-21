@@ -1068,6 +1068,48 @@ pub fn is_generated_file_specifier(spec: &str) -> bool {
     last.ends_with(".gen") || last.contains(".gen.") || last.contains(".prebuilt.")
 }
 
+/// Banner phrases that mark a single source file as a verbatim copy of
+/// third-party code — matched case-insensitively against a leading comment.
+/// "Vendored from" is the conventional marker (e.g. proc-macro2's
+/// `// Vendored from rustc-literal-escaper`); "Copied from" is the equivalent
+/// phrasing other projects use for the same intent.
+const VENDORED_BANNER_PHRASES: &[&str] = &["vendored from", "copied from"];
+
+/// Number of leading lines scanned for a vendored banner. The marker is a
+/// file-header convention, so it sits in the first comment block; scanning a
+/// small window keeps a passing mention of "copied from" deep in the body from
+/// exempting an ordinary file.
+const VENDORED_BANNER_SCAN_LINES: usize = 5;
+
+/// True when `source` opens with a vendored-banner comment: one of the first
+/// [`VENDORED_BANNER_SCAN_LINES`] lines is a comment (`//`, `#`, `*`, or `/*`)
+/// containing a [`VENDORED_BANNER_PHRASES`] marker (e.g.
+/// `// Vendored from rustc-literal-escaper v0.0.5`). Such a file is a verbatim
+/// copy of third-party code the project intentionally does not modify, so it is
+/// not the project's own authored surface.
+///
+/// Complements the directory-segment [`crate::rules::file_ctx`] `is_vendored`
+/// classifier, which only catches files under a `vendor/`/`third_party/`
+/// directory; this covers a lone vendored file dropped into `src/`. Content-based
+/// (not path-based) by design: the banner is the only reliable signal that a file
+/// inside otherwise-authored `src/` is a third-party copy.
+pub fn has_vendored_source_banner(source: &str) -> bool {
+    source.lines().take(VENDORED_BANNER_SCAN_LINES).any(|line| {
+        let trimmed = line.trim_start();
+        let is_comment = trimmed.starts_with("//")
+            || trimmed.starts_with('#')
+            || trimmed.starts_with('*')
+            || trimmed.starts_with("/*");
+        if !is_comment {
+            return false;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        VENDORED_BANNER_PHRASES
+            .iter()
+            .any(|phrase| lower.contains(phrase))
+    })
+}
+
 /// True when `path` matches a framework entry point via FILES, SUFFIXES, or
 /// ROOT_FILES only — does NOT check dirs. Used by `dead-export` to bail out
 /// for framework-specific files even when the user has configured additional
@@ -2388,5 +2430,27 @@ mod aux_path_tests {
         assert!(!is_build_artifact_path(&PathBuf::from("dist/assets/utils-helper.js")));
         // A built-asset extension is required: a hash-named `.html`/`.map` is not.
         assert!(!is_build_artifact_path(&PathBuf::from("dist/assets/index-CJXmzTYg.html")));
+    }
+
+    #[test]
+    fn vendored_source_banner_issue5407() {
+        // proc-macro2's exact reproducer: a lone file in `src/` opening with a
+        // "Vendored from" banner is a verbatim third-party copy.
+        let banner = "// Vendored from rustc-literal-escaper v0.0.5\n\
+                      // https://github.com/rust-lang/literal-escaper/tree/v0.0.5\n\
+                      pub enum EscapeError { ZeroChars }\n";
+        assert!(has_vendored_source_banner(banner));
+        // "Copied from" is the equivalent phrasing.
+        assert!(has_vendored_source_banner("// Copied from upstream\npub enum E {}\n"));
+        // Case-insensitive, and other comment styles count.
+        assert!(has_vendored_source_banner("# vendored from foo\n"));
+        assert!(has_vendored_source_banner("/* Vendored from bar */\n"));
+        // The marker must sit in the leading comment block, not deep in the body.
+        let deep = "pub enum A {}\n\n\n\n\n// vendored from somewhere\n";
+        assert!(!has_vendored_source_banner(deep));
+        // An ordinary authored file has no banner.
+        assert!(!has_vendored_source_banner("// the public status enum\npub enum Status {}\n"));
+        // A non-comment line mentioning the phrase does not count.
+        assert!(!has_vendored_source_banner("let note = \"vendored from x\";\n"));
     }
 }
