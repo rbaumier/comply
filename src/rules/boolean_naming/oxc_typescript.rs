@@ -34,8 +34,28 @@ fn has_flag_suffix(name: &str) -> bool {
     name == "flag" || name.ends_with("Flag") || name.ends_with("_flag")
 }
 
+/// A SCREAMING_SNAKE_CASE / ALL-CAPS identifier is a named-constant value label
+/// (e.g. `LTR`, `RTL`, `OPERATOR`, `OPERAND`), not a predicate variable. The
+/// name encodes a value from a domain vocabulary — often a 2-variant enum
+/// expressed as a boolean — so a predicate prefix (`isLTR`) would be nonsensical.
+fn is_screaming_case(name: &str) -> bool {
+    let mut has_letter = false;
+    for c in name.chars() {
+        if c.is_ascii_lowercase() {
+            return false;
+        }
+        if c.is_ascii_uppercase() {
+            has_letter = true;
+        }
+    }
+    has_letter
+}
+
 /// Return a short problem description if the name doesn't match the rule.
 fn classify_name(name: &str) -> Option<&'static str> {
+    if is_screaming_case(name) {
+        return None;
+    }
     if NEGATIVE_SUBSTRINGS.iter().any(|neg| name.contains(neg)) {
         return Some("is negatively phrased — use the positive form with `!`");
     }
@@ -244,5 +264,28 @@ mod tests {
     fn still_flags_user_defined_unprefixed_boolean() {
         // Strictness preserved: user-controlled names still require a prefix.
         assert_eq!(run("const debug: boolean = true;").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_screaming_case_boolean_constant() {
+        // ALL-CAPS boolean constants are named value labels encoding a 2-variant
+        // enum (associativity direction, token kind), not predicate variables.
+        // A predicate prefix (`isLTR`) would be nonsensical. (Closes #5069)
+        assert!(run("const LTR = true;").is_empty());
+        assert!(run("const RTL = false;").is_empty());
+        assert!(run("const OPERATOR = true;").is_empty());
+        assert!(run("const OPERAND = false;").is_empty());
+        assert!(run("const LEFT_TO_RIGHT = true;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_lowercase_adjective_boolean() {
+        // Strictness preserved: regular (non-ALL-CAPS) adjective/state boolean
+        // variables still require a predicate prefix.
+        assert_eq!(run("let ready = true;").len(), 1);
+        assert_eq!(run("let active = false;").len(), 1);
+        // Lowercase counterparts of the exempt constant names still flag —
+        // only the ALL-CAPS form is a value label.
+        assert_eq!(run("let operator = true;").len(), 1);
     }
 }
