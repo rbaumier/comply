@@ -1,7 +1,13 @@
 //! no-misleading-array-reverse OXC backend.
+//!
+//! Only fires when the receiver is demonstrably an array (an array literal, a
+//! binding typed `T[]`/`Array<T>`, or an array-producing expression): a
+//! `.reverse()` / `.sort()` / `.fill()` whose receiver cannot be proven an array
+//! is a method-name collision on a non-array object (e.g. a canvas
+//! `shape.fill(color)` color-setter), not `Array.prototype`.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, expression_is_array};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Expression, IdentifierReference, VariableDeclarationKind};
 use oxc_span::GetSpan;
@@ -113,14 +119,10 @@ fn is_mutating_call(expr: &Expression, semantic: &oxc_semantic::Semantic, source
     if !MUTATING_METHODS.contains(&member.property.name.as_str()) {
         return false;
     }
-    // A receiver whose name starts with an uppercase letter (all-caps `MAP`/`BIT`
-    // or PascalCase `Foo`/`Immutable`) names a namespace / class / constant
-    // object, not an array instance. `reverse`/`sort`/`fill` are
-    // `Array.prototype` instance methods; an uppercase-first receiver is a
-    // method-name collision with a user-defined static (e.g. `Immutable.sort(x)`).
-    if let Expression::Identifier(obj) = &member.object
-        && obj.name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-    {
+    // Only a genuine array receiver returns `this` from these mutators; a
+    // method-name collision on a non-array object (`shape.fill(color)`,
+    // `Immutable.sort(x)`) is not `Array.prototype` and is never misleading.
+    if !expression_is_array(&member.object, semantic) {
         return false;
     }
     // Not misleading when the receiver is a fresh array — either literally
@@ -221,24 +223,27 @@ mod oxc_tests {
 
     #[test]
     fn flags_const_reverse() {
-        assert_eq!(run("const reversed = arr.reverse();").len(), 1);
+        assert_eq!(
+            run("function f(arr: number[]) { const reversed = arr.reverse(); }").len(),
+            1
+        );
     }
 
     #[test]
     fn flags_const_sort() {
         // `arr.sort(cmp)` mutates the shared `arr` directly — still misleading.
-        assert_eq!(run("const x = arr.sort((a, b) => a - b);").len(), 1);
+        assert_eq!(
+            run("function f(arr: number[]) { const x = arr.sort((a, b) => a - b); }").len(),
+            1
+        );
     }
 
     #[test]
     fn flags_return_sort() {
-        assert_eq!(run("function f() { return arr.sort(); }").len(), 1);
-    }
-
-    #[test]
-    fn flags_direct_property_reverse() {
-        // `obj.items.reverse()` mutates the shared `obj.items` — still misleading.
-        assert_eq!(run("const x = obj.items.reverse();").len(), 1);
+        assert_eq!(
+            run("function f(arr: number[]) { return arr.sort(); }").len(),
+            1
+        );
     }
 
     #[test]
@@ -287,8 +292,11 @@ mod oxc_tests {
 
     #[test]
     fn flags_preexisting_array_sort() {
-        // GUARD: a pre-existing receiver is still mutated in place.
-        assert_eq!(run("const sorted = arr.sort();").len(), 1);
+        // GUARD: a pre-existing typed array receiver is still mutated in place.
+        assert_eq!(
+            run("function f(arr: number[]) { const sorted = arr.sort(); }").len(),
+            1
+        );
     }
 
     // === issue #3950: uppercase-first receiver is a namespace/class, not an array ===
@@ -301,6 +309,26 @@ mod oxc_tests {
     #[test]
     fn allows_pascalcase_namespace_sort() {
         assert!(run("const x = Immutable.sort(x);").is_empty());
+    }
+
+    // === issue #4883: `.fill()`/`.reverse()`/`.sort()` on a non-array object ===
+
+    #[test]
+    fn allows_fill_on_canvas_shape_param() {
+        // `shape.fill()` is a Konva canvas color-getter, not `Array.prototype`.
+        assert!(
+            run("function _fillColor(shape: Shape) { const fill = shape.fill(); }").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_fill_on_unresolved_receiver() {
+        assert!(run("const fill = shape.fill();").is_empty());
+    }
+
+    #[test]
+    fn flags_array_literal_reverse() {
+        assert_eq!(run("const r = [1, 2, 3].reverse();").len(), 1);
     }
 
     // === issue #3794: `splice` returns a new array of removed elements, never `this` ===
@@ -324,16 +352,12 @@ mod oxc_tests {
     }
 
     #[test]
-    fn flags_lowercase_receiver_reverse() {
-        // GUARD: a lowercase receiver is an array instance — still misleading.
-        assert_eq!(run("function f() { return items.reverse(); }").len(), 1);
-    }
-
-    #[test]
-    fn flags_member_chain_receiver_sort() {
-        // GUARD: a member-access-chain receiver (`obj.items`) is not an
-        // Identifier, so the uppercase guard does not apply — still flags.
-        assert_eq!(run("function f() { return obj.items.sort(); }").len(), 1);
+    fn flags_typed_array_receiver_reverse() {
+        // GUARD: a receiver typed as an array is an array instance — still misleading.
+        assert_eq!(
+            run("function f(items: string[]) { return items.reverse(); }").len(),
+            1
+        );
     }
 
     // === issue #3826: String#split() returns a freshly-allocated array ===
@@ -409,10 +433,10 @@ mod oxc_tests {
 
     #[test]
     fn flags_const_non_fresh_init_sort() {
-        // GUARD: the initializer is a call returning an unknown (possibly shared)
-        // array, not a fresh copy — still misleading.
+        // GUARD: a typed-array binding that is not a fresh copy (a shared array
+        // passed in and rebound) is still mutated in place — still misleading.
         assert_eq!(
-            run("function f() { const b = getArr(); return b.sort(); }").len(),
+            run("function f(shared: number[]) { const b: number[] = shared; return b.sort(); }").len(),
             1
         );
     }
