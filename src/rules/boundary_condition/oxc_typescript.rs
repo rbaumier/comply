@@ -47,6 +47,16 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `typeof arr[0]` — the access is the operand of a `typeof` operator. An
+        // out-of-bounds index yields `undefined`, and `typeof undefined` is the
+        // string `"undefined"` (the operator never throws), so an empty array
+        // simply makes the surrounding type-guard comparison evaluate false. The
+        // possibly-`undefined` result is harmless by construction — this is the
+        // idiomatic `Array.isArray(x) && typeof x[0] === "number"` narrowing.
+        if is_typeof_operand(node, semantic) {
+            return;
+        }
+
         // jest/vitest mock-introspection arrays — `<spy>.mock.calls[0]`,
         // `.mock.results[0]`, `.mock.instances[0]` (and a further index into a
         // call entry, `.mock.calls[0][1]`). These arrays are framework-managed
@@ -396,6 +406,46 @@ fn result_consumed_by_optional_access(
         }
         AstKind::CallExpression(call) => call.optional && call.callee.span() == node_span,
         _ => false,
+    }
+}
+
+/// Returns true when the index-access `node` is the operand of a `typeof`
+/// operator (`typeof arr[0]`, `typeof obj[key]`, `typeof (arr[0])`). `typeof`
+/// returns the string `"undefined"` for an out-of-bounds (`undefined`) read and
+/// never throws, so the possibly-empty array does not produce a boundary
+/// violation — the surrounding type-guard comparison just evaluates false.
+///
+/// Climbs only through `ParenthesizedExpression` wrappers (so a parenthesized
+/// operand still counts), then requires the immediate enclosing node to be a
+/// `UnaryExpression` whose operator is `typeof` and whose argument is exactly
+/// this access. The argument span is matched against the climbed node's span, so
+/// the access must BE the operand — `typeof x === arr[0]` (where `arr[0]` is a
+/// comparison operand, not the `typeof` operand) and `typeof arr[0].length`
+/// (where the operand is `arr[0].length`, a value read of `arr[0]`) stay flagged.
+fn is_typeof_operand(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let mut current_id = node.id();
+    let mut current_span = node.kind().span();
+    loop {
+        let parent_id = nodes.parent_id(current_id);
+        if parent_id == current_id {
+            return false;
+        }
+        let parent = nodes.get_node(parent_id);
+        match parent.kind() {
+            AstKind::ParenthesizedExpression(paren) => {
+                current_span = paren.span;
+                current_id = parent_id;
+            }
+            AstKind::UnaryExpression(unary) => {
+                return unary.operator == UnaryOperator::Typeof
+                    && unary.argument.span() == current_span;
+            }
+            _ => return false,
+        }
     }
 }
 
@@ -3238,5 +3288,63 @@ mod tests {
             crate::rules::test_helpers::run_rule_gated(&Check, src, "src/api/feature.ts").len(),
             1
         );
+    }
+
+    #[test]
+    fn no_fp_typeof_index0_type_guard_issue_5302() {
+        // The issue's `is-bezier-definition.ts` shape: `typeof easing[0] === "number"`
+        // is a type-narrowing guard. On an empty array `easing[0]` is `undefined`
+        // and `typeof undefined` is `"undefined"` (never throws), so the guard
+        // simply evaluates false — no boundary violation.
+        let src = "function f(easing) { return Array.isArray(easing) && typeof easing[0] === 'number'; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_typeof_index0_not_equal_issue_5302() {
+        // The issue's `is-easing-array.ts` shape: `typeof ease[0] !== "number"`.
+        let src = "function f(ease) { return Array.isArray(ease) && typeof ease[0] !== 'number'; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_typeof_parenthesized_index0_issue_5302() {
+        // A parenthesized operand is still a `typeof` operand: `typeof (arr[0])`
+        // is identical to `typeof arr[0]`.
+        let src = "function f(arr) { return typeof (arr[0]) === 'number'; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_typeof_computed_member_issue_5302() {
+        // `typeof obj[key]` — a computed (non-zero-literal) access is also safe as
+        // a `typeof` operand.
+        let src = "function f(obj, key) { return typeof obj[key] === 'string'; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_index0_value_use_alongside_typeof_issue_5302() {
+        // Negative space: the `typeof` operates on a different expression; the
+        // `arr[0]` here is read as a real value, so it stays flagged.
+        let src = "function f(arr) { return typeof x === arr[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_member_on_typeof_index0_issue_5302() {
+        // Negative space: `typeof arr[0].length` — `typeof`'s operand is
+        // `arr[0].length`, not `arr[0]`. The inner `arr[0]` is read as a value
+        // (its `.length` is accessed), so an empty array would throw. Still flagged.
+        let src = "function f(arr) { return typeof arr[0].length === 'number'; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_unguarded_last_index_value_use_issue_5302() {
+        // Negative space: an unguarded last-element read used as a value stays
+        // flagged — the `typeof` exemption is strictly about the operand position.
+        let src = "function f(arr) { return arr[arr.length - 1].id; }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
