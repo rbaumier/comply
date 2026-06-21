@@ -72,9 +72,11 @@ fn is_fresh_array(expr: &Expression, source: &str) -> bool {
             let text = &source[expr.span().start as usize..expr.span().end as usize];
             text.contains("...")
         }
-        // `new Array(n)` constructs a brand-new array with no prior alias.
+        // `new Array(n)` / `new Uint8Array(n)` (or any TypedArray ctor) build a
+        // brand-new array-like value with no prior alias.
         Expression::NewExpression(new_expr) => {
-            matches!(&new_expr.callee, Expression::Identifier(id) if id.name == "Array")
+            matches!(&new_expr.callee, Expression::Identifier(id)
+                if crate::oxc_helpers::is_fresh_array_ctor_name(&id.name))
         }
         Expression::CallExpression(call) => {
             let Expression::StaticMemberExpression(member) = &call.callee else {
@@ -220,6 +222,18 @@ mod oxc_tests {
     fn flags_preexisting_array_fill() {
         // GUARD: a pre-existing typed array receiver is still mutated in place.
         assert_eq!(run("function f(arr: number[]) { const x = arr.fill(0); }").len(), 1);
+    }
+
+    // === issue #5320: TypedArray constructors are fresh, like `new Array` ===
+
+    #[test]
+    fn allows_new_uint8array_fill() {
+        assert!(run("const buffer = new Uint8Array(9).fill(toCharCode(' '));").is_empty());
+    }
+
+    #[test]
+    fn allows_new_float32array_fill() {
+        assert!(run("const buffer = new Float32Array(n).fill(1);").is_empty());
     }
 
     // === issue #4883: `.fill()`/`.reverse()`/`.sort()` on a non-array object ===
