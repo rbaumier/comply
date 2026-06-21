@@ -13,11 +13,15 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 // (measured in the same units as the bucketed data, not a fixed physical unit)
 // as well as confidence/sampling intervals, so it cannot demand a single unit
 // suffix like `_ms`.
+//
+// `elapsed` is excluded as a named temporal quantity whose unit is conventional
+// (the sibling of `duration`): elapsed time since a start point is expressed
+// without a suffix, so a unit suffix adds little and `elapsed_bytes`/
+// `elapsed_count` are nonsensical.
 const AMBIGUOUS_BASES: &[&str] = &[
     "delay",
     "timeout",
     "duration",
-    "elapsed",
     "age",
     "wait",
     "rate",
@@ -218,5 +222,21 @@ mod tests {
     #[test]
     fn allows_timeout_sec_singular() {
         assert!(run_on("fn f(timeout_sec: u64) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_bare_elapsed_temporal_quantity() {
+        // `elapsed` is a named temporal quantity whose unit is conventional (the
+        // sibling of `duration`) — `elapsed_bytes`/`elapsed_count` are
+        // nonsensical, so it must not be flagged (#5330).
+        assert!(run_on("fn f() { let elapsed: u64 = 0; }").is_empty());
+        assert!(run_on("fn f(elapsed: u64) {}").is_empty());
+    }
+
+    #[test]
+    fn still_flags_other_bases_after_elapsed_removal() {
+        // Removing `elapsed` must not loosen genuinely unit-ambiguous bases.
+        assert_eq!(run_on("fn f(timeout: u64) {}").len(), 1);
+        assert_eq!(run_on("fn f(duration: u64) {}").len(), 1);
     }
 }
