@@ -37,6 +37,18 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Only flag the CommonJS module-level `exports` binding. An `exports`
+        // that resolves to a local declaration — a function parameter or a
+        // `let`/`const`/`var exports` — is an ordinary variable, and assigning
+        // to it does not break module exports. A resolved `symbol_id` means a
+        // local binding; the CommonJS `exports` global is a free reference with
+        // no symbol.
+        if let Some(ref_id) = ident.reference_id.get()
+            && semantic.scoping().get_reference(ref_id).symbol_id().is_some()
+        {
+            return;
+        }
+
         // Allow `module.exports = exports = {}` pattern:
         // if parent is also an assignment whose left is `module.exports`, skip.
         let parent = semantic.nodes().parent_node(node.id());
@@ -74,5 +86,55 @@ fn is_module_exports_target(target: &AssignmentTarget) -> bool {
             matches!(&mem.object, Expression::Identifier(id) if id.name.as_str() == "module")
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn flags_module_level_exports_assign() {
+        let diags = run_on("exports = {};");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_assignment_to_function_parameter_named_exports() {
+        // Regression for #5188: `exports` is a function parameter, not the CJS
+        // module global; reassigning it targets the local binding.
+        let src = "function _findSubpath(subpath, exports) {\n  if (typeof exports === \"string\") {\n    exports = { \".\": exports };\n  }\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_assignment_to_local_variable_named_exports() {
+        let src = "function f() {\n  let exports = {};\n  exports = { a: 1 };\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_module_exports_chained_assignment() {
+        assert!(run_on("module.exports = exports = {};").is_empty());
     }
 }
