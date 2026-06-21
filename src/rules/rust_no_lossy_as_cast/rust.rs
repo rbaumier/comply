@@ -49,9 +49,10 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cast_operand_is_assert_bounded, cast_operand_is_bitwise, cast_operand_is_bool,
-    cast_operand_is_char, cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
-    cast_operand_is_range_guarded, find_identifier_type, is_in_enum_discriminant,
+    cast_operand_bit_width, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
+    cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
+    cast_operand_is_enum_discriminant, cast_operand_is_range_guarded, find_identifier_type,
+    is_in_enum_discriminant,
 };
 use crate::rules::rust_no_as_numeric_cast::rust::fires_on_cast;
 
@@ -102,6 +103,11 @@ impl AstCheck for Check {
             return;
         };
         if cast_operand_is_char(node, source_bytes) && char_fits(target_type) {
+            return;
+        }
+        if cast_operand_bit_width(node, source_bytes)
+            .is_some_and(|bits| bit_width_fits(bits, target_type))
+        {
             return;
         }
         if cast_operand_is_collection_size(node, source_bytes) {
@@ -229,6 +235,19 @@ fn is_dangerous_cast(source: NumericType, target: NumericType) -> bool {
 /// excluded — the rule never claims a float target is safe here.
 fn char_fits(target: NumericType) -> bool {
     target.kind != NumericKind::Float && target.bits >= 21
+}
+
+/// True if an `N`-bit value (from a bit-reader `read_bits(N)` operand) fits
+/// losslessly into `target`. An unsigned `uM` holds any `N`-bit value when
+/// `N <= M`; a signed `iM` reserves one bit for the sign, so it holds an
+/// (unsigned) `N`-bit value only when `N <= M - 1`. Floats are excluded — a
+/// bit-reader value is an integer, never a float target here.
+fn bit_width_fits(read_bits: u16, target: NumericType) -> bool {
+    match target.kind {
+        NumericKind::Unsigned => read_bits <= target.bits,
+        NumericKind::Signed => read_bits < target.bits,
+        NumericKind::Float => false,
+    }
 }
 
 fn source_numeric_type(node: tree_sitter::Node, source: &[u8]) -> Option<NumericType> {
@@ -853,5 +872,32 @@ mod tests {
         // The assert bounds `m`, not the cast operand `n`; the narrowing stays a
         // finding, owned by `rust-no-as-numeric-cast`.
         assert!(run_on("fn f(n: u64, m: u64) -> u8 { assert!(m <= 255); n as u8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5257_read_bits_within_target_not_flagged() {
+        // A bit-reader reading N <= target bits is lossless — codec idiom.
+        assert!(run_on("fn f(r: R) -> u8 { r.read_bits(4) as u8 }").is_empty());
+        assert!(run_on("fn f(r: R) -> u8 { r.read_bits(8) as u8 }").is_empty());
+        assert!(run_on("fn f(bs: B) -> u16 { bs.read_bits_leq32(16)? as u16 }").is_empty());
+        assert!(run_on("fn f(r: R) -> u8 { r.get_bits(2)? as u8 }").is_empty());
+        // 7 bits fit a signed `i8`.
+        assert!(run_on("fn f(r: R) -> i8 { r.read_bits(7) as i8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5257_oversized_read_bits_owned_by_numeric_cast() {
+        // Reading more bits than the target holds is a genuine narrowing, owned
+        // by `rust-no-as-numeric-cast`, so this rule suppresses on the span.
+        assert!(run_on("fn f(r: R) -> u8 { r.read_bits(9) as u8 }").is_empty());
+        // `i8` reserves the sign bit: an 8-bit read does not fit.
+        assert!(run_on("fn f(r: R) -> i8 { r.read_bits(8) as i8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5257_non_literal_count_owned_by_numeric_cast() {
+        // A non-literal count is not statically bounded; the narrowing stays a
+        // finding, owned by `rust-no-as-numeric-cast`.
+        assert!(run_on("fn f(r: R, n: u32) -> u8 { r.read_bits(n) as u8 }").is_empty());
     }
 }

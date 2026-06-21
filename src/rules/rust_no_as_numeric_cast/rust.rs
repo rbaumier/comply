@@ -40,9 +40,10 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cast_operand_is_assert_bounded, cast_operand_is_bitwise, cast_operand_is_bool,
-    cast_operand_is_char, cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
-    cast_operand_is_range_guarded, find_identifier_type, is_in_enum_discriminant, is_in_test_context,
+    cast_operand_bit_width, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
+    cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
+    cast_operand_is_enum_discriminant, cast_operand_is_range_guarded, find_identifier_type,
+    is_in_enum_discriminant, is_in_test_context,
 };
 
 const KINDS: &[&str] = &["type_cast_expression"];
@@ -144,6 +145,11 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
     if cast_operand_is_char(node, source_bytes) && char_fits(target_type) {
         return false;
     }
+    if cast_operand_bit_width(node, source_bytes)
+        .is_some_and(|bits| bit_width_fits(bits, target_type))
+    {
+        return false;
+    }
     if cast_operand_is_enum_discriminant(node, source_bytes) {
         return false;
     }
@@ -218,6 +224,20 @@ fn is_dangerous_cast(source: NumericType, target: NumericType) -> bool {
 /// excluded — `char as f32`/`f64` falls through to the float-target handling.
 fn char_fits(target: NumericType) -> bool {
     target.kind != NumericKind::Float && target.bits >= 21
+}
+
+/// True if an `N`-bit value (from a bit-reader `read_bits(N)` operand) fits
+/// losslessly into `target`. An unsigned `uM` holds any `N`-bit value when
+/// `N <= M`; a signed `iM` reserves one bit for the sign, so it holds an
+/// (unsigned) `N`-bit value only when `N <= M - 1`. Floats are excluded — a
+/// bit-reader value is an integer, so `as f32`/`f64` falls through to the
+/// float-target handling.
+fn bit_width_fits(read_bits: u16, target: NumericType) -> bool {
+    match target.kind {
+        NumericKind::Unsigned => read_bits <= target.bits,
+        NumericKind::Signed => read_bits < target.bits,
+        NumericKind::Float => false,
+    }
 }
 
 fn source_numeric_type(node: tree_sitter::Node, source: &[u8]) -> Option<NumericType> {
@@ -760,5 +780,41 @@ mod tests {
         // does not break bound detection: the first comparison still proves it.
         let src = "fn f(n: u64) -> u8 { assert!(n <= 255, \"too big\"); n as u8 }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5257_read_bits_within_target_not_flagged() {
+        // A bit-reader reading N <= target bits yields a value that fits the
+        // target losslessly — the codec/bitstream parsing idiom.
+        assert!(run_on("fn f(r: R) -> u8 { r.read_bits(4) as u8 }").is_empty());
+        assert!(run_on("fn f(r: R) -> u8 { r.read_bits(8) as u8 }").is_empty());
+        assert!(run_on("fn f(bs: B) -> u16 { bs.read_bits_leq32(16)? as u16 }").is_empty());
+        assert!(run_on("fn f(r: R) -> u8 { r.get_bits(2)? as u8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5257_read_bits_over_target_still_flagged() {
+        // Reading more bits than the target holds is a genuine narrowing.
+        assert_eq!(run_on("fn f(r: R) -> u8 { r.read_bits(9) as u8 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_5257_read_bits_signed_target_reserves_sign_bit() {
+        // `i8` holds 7 value bits; an 8-bit read does not fit losslessly.
+        assert_eq!(run_on("fn f(r: R) -> i8 { r.read_bits(8) as i8 }").len(), 1);
+        // 7 bits fit a signed `i8`.
+        assert!(run_on("fn f(r: R) -> i8 { r.read_bits(7) as i8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5257_read_bits_non_literal_count_still_flagged() {
+        // A non-literal count is not statically bounded.
+        assert_eq!(run_on("fn f(r: R, n: u32) -> u8 { r.read_bits(n) as u8 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_5257_plain_numeric_cast_still_flagged() {
+        // A real numeric narrowing with no bit-reader operand stays flagged.
+        assert_eq!(run_on("fn f(x: u32) -> u8 { x as u8 }").len(), 1);
     }
 }
