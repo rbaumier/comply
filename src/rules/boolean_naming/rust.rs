@@ -74,6 +74,9 @@ fn check_node(
         return None;
     }
     let name = extract_identifier(node, source)?;
+    if is_std_net_toggle_setter_param(node, name, source) {
+        return None;
+    }
     let problem = classify_name(name)?;
     let pos = node.start_position();
     Some(Diagnostic {
@@ -107,6 +110,56 @@ fn has_boolean_type_or_value(node: tree_sitter::Node, source: &[u8]) -> bool {
         }
     }
     false
+}
+
+/// True for a `bool` parameter named exactly `on`/`off` on a `set_*` method
+/// with a `self` receiver — the std::net toggle-setter convention
+/// (`UdpSocket::set_broadcast(&self, on: bool)`, `set_multicast_loop_v4`, …).
+/// async/wrapping crates mirror this signature verbatim, so forcing `is_on`
+/// would make the wrapper diverge from the API it reproduces.
+///
+/// Anchored on three AST signals so it cannot widen into a name allowlist:
+/// the node is a `parameter` whose name is `on`/`off`, its directly-enclosing
+/// `function_item` `name` field starts with `set_`, and that function's
+/// `parameters` declare a `self_parameter` receiver. A `bool` param named `on`
+/// in a free function, a non-`set_*` method, or any other unprefixed boolean
+/// is unaffected and still flags. The walk stops at the first
+/// `closure_expression` boundary so a closure callback param named `on`/`off`
+/// nested inside a `set_*` method is not exempted.
+fn is_std_net_toggle_setter_param(
+    node: tree_sitter::Node,
+    name: &str,
+    source: &[u8],
+) -> bool {
+    if node.kind() != "parameter" || (name != "on" && name != "off") {
+        return false;
+    }
+    let mut cursor = node;
+    while let Some(parent) = cursor.parent() {
+        if parent.kind() == "closure_expression" {
+            return false;
+        }
+        if parent.kind() == "function_item" {
+            let starts_with_set = parent
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok())
+                .is_some_and(|fn_name| fn_name.starts_with("set_"));
+            return starts_with_set && method_has_self_receiver(parent);
+        }
+        cursor = parent;
+    }
+    false
+}
+
+/// True if `function_item`'s `parameters` declare a `self_parameter` receiver.
+fn method_has_self_receiver(function_item: tree_sitter::Node) -> bool {
+    let Some(params) = function_item.child_by_field_name("parameters") else {
+        return false;
+    };
+    let mut cursor = params.walk();
+    params
+        .children(&mut cursor)
+        .any(|child| child.kind() == "self_parameter")
 }
 
 fn extract_identifier<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
@@ -279,6 +332,58 @@ mod tests {
         // The `flag` suffix only validates a trailing-word `flag`; a mid-word
         // `flag` (e.g. `flagged`) is not the boolean-marker suffix.
         assert_eq!(run_on("fn f() { let flagged: bool = true; }").len(), 1);
+    }
+
+    #[test]
+    fn allows_std_net_toggle_setter_on_param() {
+        // std::net convention: `set_*(&self, on: bool)` toggle setters.
+        // async/wrapping crates mirror the signature verbatim. (Closes #5356)
+        for src in [
+            "impl X { pub fn set_broadcast(&self, on: bool) {} }",
+            "impl X { pub fn set_multicast_loop_v4(&self, on: bool) {} }",
+            "impl X { fn set_nonblocking(&mut self, on: bool) {} }",
+            "impl X { fn set_keepalive(&self, off: bool) {} }",
+        ] {
+            assert!(run_on(src).is_empty(), "`{src}` should be allowed");
+        }
+    }
+
+    #[test]
+    fn still_flags_on_param_in_non_setter_method() {
+        // The exemption is anchored to the `set_` prefix; a non-setter method
+        // with `on: bool` still requires a predicate prefix.
+        let diags = run_on("impl X { fn handle(&self, on: bool) {} }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'on'"));
+    }
+
+    #[test]
+    fn still_flags_on_param_in_free_function() {
+        // No `self` receiver — not the std::net setter shape.
+        assert_eq!(run_on("fn set_broadcast(on: bool) {}").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_on_param_in_set_assoc_fn_without_receiver() {
+        // A `set_*` associated fn in an impl but without a `self` receiver is
+        // not a toggle setter; its `on` param still requires a prefix.
+        assert_eq!(run_on("impl X { fn set_broadcast(on: bool) {} }").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_closure_on_param_nested_in_setter() {
+        // The walk stops at the closure boundary: a closure callback param
+        // named `on` inside a `set_*` method is not the setter's own param.
+        let diags = run_on("impl X { fn set_cb(&self) { let f = |on: bool| {}; } }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'on'"));
+    }
+
+    #[test]
+    fn still_flags_unprefixed_boolean_alongside_setter_exemption() {
+        // The setter exemption does not weaken the strict rule elsewhere:
+        // a bare adjective local still flags.
+        assert_eq!(run_on("fn f() { let disabled: bool = true; }").len(), 1);
     }
 
     #[test]
