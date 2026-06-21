@@ -1348,6 +1348,75 @@ pub fn cast_operand_is_collection_size(cast: Node, source: &[u8]) -> bool {
         .is_some_and(|name| SIZE_METHODS.contains(&name))
 }
 
+/// If the operand of `cast` (a `type_cast_expression`) is a bit-reader call
+/// reading a literal number of bits, return that bit count `N`.
+///
+/// A bit-reader `read_bits(N)` / `get_bits(N)` / `peek_bits(N)` returns a value
+/// occupying at most `N` significant bits, i.e. in `0..2^N`. When `N` is a
+/// literal and the cast target is wide enough to hold an `N`-bit value, the
+/// narrowing cast is provably lossless — the canonical codec/bitstream parsing
+/// idiom (`bs.read_bits_leq32(8)? as u8`, `r.get_bits(2)? as u8`).
+///
+/// The match is deliberately tight, so a genuinely unbounded cast stays flagged:
+///
+/// - the operand is a method call (`<receiver>.<method>(...)`) whose method name
+///   *contains* `bits`, matched case-insensitively — `read_bits`, `get_bits`,
+///   `peek_bits`, `read_bits_leq32`, … . Requiring `bits` in the name means the
+///   single argument denotes a bit count, never a byte count (a bare `read(n)`
+///   reads `n` *bytes* and is not matched);
+/// - the call takes exactly one argument, a decimal `integer_literal` (`8`,
+///   `16`); a non-literal count (`read_bits(n)`) yields `None` because the bound
+///   is not statically known, and a non-decimal literal that `parse_int_literal`
+///   cannot read yields `None`.
+///
+/// A `try_expression` (`...?`) and `parenthesized_expression` around the operand
+/// are transparent. Returns `None` for any other operand shape.
+///
+/// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`, which both
+/// otherwise flag the narrowing because the operand's bit-bounded range is not
+/// visible from the cast in isolation. Callers combine it with the target width:
+/// lossless iff `N <= M` for an unsigned `uM` target, `N <= M - 1` for a signed
+/// `iM` target (the sign bit).
+pub fn cast_operand_bit_width(cast: Node, source: &[u8]) -> Option<u16> {
+    let mut value = cast.child_by_field_name("value")?;
+    // `read_bits(8)?` and `(read_bits(8))` wrap the call; unwrap to the call.
+    while matches!(value.kind(), "try_expression" | "parenthesized_expression") {
+        value = value.named_child(0)?;
+    }
+    if value.kind() != "call_expression" {
+        return None;
+    }
+    let function = value.child_by_field_name("function")?;
+    if function.kind() != "field_expression" {
+        return None;
+    }
+    let method = function
+        .child_by_field_name("field")
+        .and_then(|field| field.utf8_text(source).ok())?;
+    if !method.to_ascii_lowercase().contains("bits") {
+        return None;
+    }
+    let args = value.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let positional: Vec<_> = args.named_children(&mut cursor).collect();
+    let [only] = positional.as_slice() else {
+        return None;
+    };
+    if only.kind() != "integer_literal" {
+        return None;
+    }
+    // `parse_int_literal` reads decimal digits only; a radix-prefixed literal
+    // (`0xFF`, `0o17`, `0b101`) would be silently misparsed (it stops at the
+    // `x`/`o`/`b`, yielding `0`). Reject those so a non-decimal count is treated
+    // as not statically bounded rather than as a spurious zero-bit read.
+    let text = only.utf8_text(source).ok()?;
+    if matches!(text.get(..2), Some("0x" | "0o" | "0b" | "0X" | "0O" | "0B")) {
+        return None;
+    }
+    let bits = parse_int_literal(*only, source)?;
+    u16::try_from(bits).ok()
+}
+
 /// Resolve the declared type of a local binding named `name` that is visible at
 /// `node`. Walks up each enclosing scope (`function_item`, `closure_expression`,
 /// `block`, `source_file`) and, within it, finds the nearest `parameter` or
@@ -3446,6 +3515,51 @@ mod tests {
                 cast_operand_is_collection_size(cast, src.as_bytes()),
                 expected,
                 "cast_operand_is_collection_size mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn cast_operand_bit_width_reads_literal_bit_count() {
+        let cases = [
+            // Canonical bit-reader idioms with `?`.
+            ("fn f(bs: B) -> u8 { bs.read_bits_leq32(8)? as u8 }", Some(8)),
+            ("fn f(bs: B) -> u16 { bs.read_bits_leq32(16)? as u16 }", Some(16)),
+            ("fn f(r: R) -> u8 { r.get_bits(2)? as u8 }", Some(2)),
+            ("fn f(r: R) -> u8 { r.peek_bits(1)? as u8 }", Some(1)),
+            // No `?`.
+            ("fn f(r: R) -> u8 { r.read_bits(4) as u8 }", Some(4)),
+            // Parenthesized operand is transparent.
+            ("fn f(r: R) -> u8 { (r.read_bits(5)) as u8 }", Some(5)),
+            // A larger decimal count.
+            ("fn f(r: R) -> u16 { r.read_bits(12) as u16 }", Some(12)),
+            // A decimal type suffix is stripped.
+            ("fn f(r: R) -> u8 { r.read_bits(8u32) as u8 }", Some(8)),
+            // A radix-prefixed count is not parsed as decimal — not bounded.
+            ("fn f(r: R) -> u8 { r.read_bits(0xFF) as u8 }", None),
+            // A method name *containing* `bits` matches (case-insensitive).
+            ("fn f(r: R) -> u8 { r.GetBitsLE(3)? as u8 }", Some(3)),
+            // A method whose name has no `bits` is a byte/other read — not matched.
+            ("fn f(r: R) -> u8 { r.read(1)? as u8 }", None),
+            ("fn f(r: R) -> u8 { r.read_u8()? as u8 }", None),
+            // Non-literal count is not statically bounded.
+            ("fn f(r: R, n: u32) -> u8 { r.read_bits(n)? as u8 }", None),
+            // Zero or multiple arguments do not match the single-count shape.
+            ("fn f(r: R) -> u8 { r.read_bits() as u8 }", None),
+            ("fn f(r: R) -> u8 { r.read_bits(1, 2) as u8 }", None),
+            // A free function `read_bits(8)` is not a method call.
+            ("fn f() -> u8 { read_bits(8) as u8 }", None),
+            // A bare identifier operand has no call shape.
+            ("fn f(n: u32) -> u8 { n as u8 }", None),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_of_kind(tree.root_node(), "type_cast_expression")
+                .expect("snippet should contain a type_cast_expression");
+            assert_eq!(
+                cast_operand_bit_width(cast, src.as_bytes()),
+                expected,
+                "cast_operand_bit_width mismatch for `{src}`"
             );
         }
     }
