@@ -2512,13 +2512,17 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
         }
         let line = oxc_line_at(&lines, comment.span.start as usize);
         for spec in jsdoc_import_specifiers(body) {
-            // Only `specifier`/`source_path`/`is_type_only` matter for the
-            // bare-specifier collection this entry feeds; the binding fields are
-            // intentionally empty (a JSDoc `@import` names no module-level value).
+            // A JSDoc `@import` names no module-level binding, so the binding
+            // fields stay empty and the kind is `SideEffect` — the same shape as
+            // a bare `import '…'`. Only the specifier feeds the bare-specifier
+            // collection this entry exists for. Modelling it as `Named` would
+            // surface an empty-named entry to rules that iterate named imports
+            // (e.g. import-named would look up `""` in the target's exports and
+            // report it missing).
             imports.push(ImportedSymbol {
                 local_name: String::new(),
                 imported_name: String::new(),
-                kind: ImportKind::Named,
+                kind: ImportKind::SideEffect,
                 specifier: spec,
                 source_path: None,
                 line,
