@@ -6,7 +6,11 @@
 //!
 //! Flags:
 //! - `unbounded_channel` (tokio's `tokio::sync::mpsc::unbounded_channel`).
-//! - `unbounded` (crossbeam's `crossbeam::channel::unbounded`).
+//! - `unbounded` only when its qualifier names a known channel module
+//!   (`channel`, `mpsc`, `flume`, `kanal`, or any `*_channel` crate) or the
+//!   call is unqualified, so a lock-free queue with an `unbounded()`
+//!   constructor (`ConcurrentQueue::unbounded()`) is not mistaken for a
+//!   channel.
 //! - `channel` when the file uses `std::sync::mpsc` — `std::sync::mpsc`
 //!   has no bounded `channel()` (the bounded one is `sync_channel(N)`),
 //!   so a zero-arg `mpsc::channel()` is always unbounded. Tokio's
@@ -46,7 +50,7 @@ impl AstCheck for Check {
         // happens to end in `unbounded`) is not mistaken for a constructor.
         let last_segment = text.rsplit("::").next().unwrap_or(text);
         let is_unbounded = last_segment == "unbounded_channel"
-            || last_segment == "unbounded"
+            || last_segment == "unbounded" && is_channel_unbounded_path(text)
             || last_segment == "channel" && is_inside_mpsc_use(node, source_bytes);
         if !is_unbounded {
             return;
@@ -91,6 +95,34 @@ impl AstCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+
+/// True when a bare `unbounded()` constructor call belongs to a recognized
+/// *channel* API, as opposed to a lock-free queue whose constructor is also
+/// named `unbounded` (issue #5363: `concurrent_queue::ConcurrentQueue::
+/// unbounded()`, used as an executor's task queue, is a queue, not a channel).
+///
+/// `unbounded()` is ambiguous by name, so it only counts as a channel when the
+/// qualifier immediately before it names a known channel module — `channel`
+/// (`crossbeam::channel`), `mpsc` (`futures::channel::mpsc`), `flume`, `kanal`,
+/// or any crate ending in `_channel` (`crossbeam_channel`, `async_channel`) —
+/// or when the call is unqualified (`use flume::unbounded; unbounded()`). A
+/// qualifier that names a non-channel queue type (`ConcurrentQueue`,
+/// `SegQueue`, `ArrayQueue`, …) does not match.
+fn is_channel_unbounded_path(text: &str) -> bool {
+    let mut segments = text.rsplit("::");
+    // Skip the trailing `unbounded` segment; inspect its qualifier.
+    let _ = segments.next();
+    match segments.next() {
+        // Unqualified `unbounded()` — assume a channel constructor brought in
+        // by `use`; non-channel queues are practically always called through
+        // their type (`ConcurrentQueue::unbounded()`), never bare.
+        None => true,
+        Some(qualifier) => {
+            matches!(qualifier, "channel" | "mpsc" | "flume" | "kanal")
+                || qualifier.ends_with("_channel")
+        }
     }
 }
 
@@ -690,6 +722,53 @@ mod tests {
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();\n\
             tokio::spawn(async move { while let Some(m) = rx.recv().await { handle(m); } });\n\
         }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_concurrent_queue_unbounded_as_task_queue() {
+        // Issue #5363: ConcurrentQueue (concurrent-queue crate) is a lock-free
+        // queue, not a channel — its `unbounded()` constructor must not be
+        // flagged by a *channel* rule, even consumed internally (no Sender/
+        // Receiver return type, so the provider exemption does not apply here).
+        let source = "impl State {\n\
+            const fn new() -> Self {\n\
+                Self { queue: ConcurrentQueue::unbounded() }\n\
+            }\n\
+        }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_flume_unbounded() {
+        let source = "fn f() { let (tx, rx) = flume::unbounded(); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_async_channel_unbounded() {
+        let source = "fn f() { let (tx, rx) = async_channel::unbounded(); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_crossbeam_channel_crate_root_unbounded() {
+        // Fully-qualified crate-root form `crossbeam_channel::unbounded()` —
+        // qualifier ends in `_channel`, so it is recognized.
+        let source = "fn f() { let (tx, rx) = crossbeam_channel::unbounded(); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_futures_mpsc_unbounded() {
+        let source = "fn f() { let (tx, rx) = futures::channel::mpsc::unbounded(); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_bare_imported_unbounded() {
+        // `use flume::unbounded; unbounded()` — unqualified, still a channel.
+        let source = "use flume::unbounded;\nfn f() { let (tx, rx) = unbounded(); }";
         assert_eq!(run_on(source).len(), 1);
     }
 
