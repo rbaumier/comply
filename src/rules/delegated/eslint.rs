@@ -321,7 +321,7 @@ pub fn register_all() -> Vec<RuleDef> {
              extract, or drop the destructuring. `const {} = x` is almost \
              always a mistake.",
         ),
-        entry(
+        entry_with_filter(
             "no-new",
             "no-new",
             Severity::Error,
@@ -329,6 +329,7 @@ pub fn register_all() -> Vec<RuleDef> {
             "Assign the `new X()` result to a variable, or call a plain \
              function if you only want side effects. A bare `new` signals a \
              misused constructor.",
+            Some(Arc::new(NoNewFilter)),
         ),
         entry(
             "no-ex-assign",
@@ -758,6 +759,76 @@ fn has_backtick_before_placeholder(content: &str) -> bool {
     content[..placeholder].contains('`')
 }
 
+// ── no-new post-filter ──────────────────────────────────────────────────────
+//
+// `no-new` flags any `new X()` used as a statement (result discarded), reading
+// it as a constructor misused for side effects. The false positive: inside a
+// throw-assertion callback the discard is the test's whole intent — the
+// assertion is that *constructing* `X` throws, so the new value is meant to be
+// thrown away (`expect(() => { new Foo() }).to.throw()`,
+// `assert.throws(() => { new Foo() })`, Jest `expect(() => { new Foo() }).toThrow()`).
+//
+// Unlike the native `no-constructor-side-effects` rule, the delegated diagnostic
+// arrives from oxlint with no AST, so the filter re-parses the file and locates
+// the `NewExpression` at the diagnostic position, then reuses the shared
+// throw-assertion detection. A genuine side-effect-only `new Foo();` outside any
+// throw-assertion callback is still flagged. Failing safe: if the source is
+// unreadable or the position does not resolve to a `NewExpression`, the
+// diagnostic is kept.
+
+struct NoNewFilter;
+
+impl PostFilter for NoNewFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        let Some(src) = source else {
+            return true;
+        };
+        let Some(offset) = byte_offset(src, diag.line, diag.column) else {
+            return true;
+        };
+        !new_at_offset_is_throw_assertion_subject(src, &diag.path, offset)
+    }
+}
+
+/// Re-parse `src` and report whether the `NewExpression` covering byte `offset`
+/// (the position oxlint reports for a `no-new` diagnostic — the `new` keyword)
+/// sits inside a throw-assertion callback. Returns `false` when no
+/// `NewExpression` covers the offset, so an unresolved position keeps the
+/// diagnostic.
+fn new_at_offset_is_throw_assertion_subject(
+    src: &str,
+    path: &std::path::Path,
+    offset: usize,
+) -> bool {
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser;
+    use oxc_semantic::SemanticBuilder;
+    use oxc_span::GetSpan;
+
+    let allocator = Allocator::default();
+    let source_type = crate::oxc_helpers::source_type_for_path(path);
+    let parse_ret = Parser::new(&allocator, src, source_type).parse();
+    let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+
+    // The smallest `NewExpression` whose span contains the diagnostic offset is
+    // the one oxlint flagged; nested `new` arguments would have wider-or-equal
+    // outer spans, so the minimal span is the precise match.
+    let offset = offset as u32;
+    let target = semantic
+        .nodes()
+        .iter()
+        .filter(|node| matches!(node.kind(), crate::rules::backend::AstKind::NewExpression(_)))
+        .filter(|node| {
+            let span = node.kind().span();
+            span.start <= offset && offset < span.end
+        })
+        .min_by_key(|node| node.kind().span().size());
+    let Some(target) = target else {
+        return false;
+    };
+    crate::rules::throw_assertion::new_is_throw_assertion_subject(target.id(), &semantic)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -967,5 +1038,71 @@ mod tests {
         let src = "const s = \"x ${y} `\";\n";
         let d = tcs_diag("src/x.ts", 1, 11);
         assert!(NoTemplateCurlyInStringFilter.keep(&d, Some(src)));
+    }
+
+    // ── no-new filter tests ──────────────────────────────────────────────────
+
+    /// Build a `no-new` diagnostic pointing at the (single) `new` keyword in
+    /// `src`, mirroring oxlint's reported position (1-based line/column on the
+    /// `new` token).
+    fn no_new_diag(path: &str, src: &str) -> Diagnostic {
+        let idx = src.find("new ").expect("source must contain a `new` token");
+        let line = src[..idx].bytes().filter(|&b| b == b'\n').count() + 1;
+        let line_start = src[..idx].rfind('\n').map_or(0, |p| p + 1);
+        let column = idx - line_start + 1;
+        Diagnostic {
+            path: Arc::from(Path::new(path)),
+            line,
+            column,
+            rule_id: Cow::Borrowed("no-new"),
+            message: "Do not use 'new' for side effects.".into(),
+            severity: Severity::Error,
+            span: None,
+        }
+    }
+
+    #[test]
+    fn no_new_dropped_in_chai_expect_to_throw() {
+        // Regression for #5100 — node-oidc-provider Chai `.to.throw()` idiom.
+        let src =
+            "expect(() => {\n  new Configuration({ features: { foo: {} } });\n}).to.throw('x');\n";
+        let d = no_new_diag("test/configuration.test.js", src);
+        assert!(!NoNewFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn no_new_dropped_in_assert_throws() {
+        let src = "assert.throws(() => {\n  new Foo();\n});\n";
+        let d = no_new_diag("test/foo.test.js", src);
+        assert!(!NoNewFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn no_new_dropped_in_jest_to_throw() {
+        let src = "expect(() => {\n  new Foo();\n}).toThrow();\n";
+        let d = no_new_diag("test/foo.test.ts", src);
+        assert!(!NoNewFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn no_new_kept_for_genuine_side_effect_statement() {
+        // A side-effect-only `new` outside any throw assertion still flags.
+        let src = "function f() {\n  new Logger('global');\n}\n";
+        let d = no_new_diag("src/log.ts", src);
+        assert!(NoNewFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn no_new_kept_in_plain_callback() {
+        // A `new` in a non-throw-assertion callback is a genuine discard.
+        let src = "arr.forEach(() => {\n  new X();\n});\n";
+        let d = no_new_diag("src/each.ts", src);
+        assert!(NoNewFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn no_new_kept_when_source_unavailable() {
+        let d = no_new_diag("src/x.ts", "function f() {\n  new X();\n}\n");
+        assert!(NoNewFilter.keep(&d, None));
     }
 }
