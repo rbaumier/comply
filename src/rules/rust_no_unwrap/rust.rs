@@ -35,6 +35,13 @@
 //! literal range (`a[5..2]`) is also suppressed; a dynamic-length receiver
 //! (`chunk`, `a[i..i+4]`, `a[4..]`) still flags.
 //!
+//! `Index`/`IndexMut` impls are exempted — `fn index`/`fn index_mut` return
+//! `&Self::Output` / `&mut Self::Output`, never a `Result`/`Option`, so they
+//! cannot propagate an error. Panicking on missing elements is the documented
+//! trait contract (as `Vec`/`HashMap`/`BTreeMap` indexing does), making
+//! `.unwrap()`/`.expect()` the only valid implementation. Matches bare and
+//! path-qualified `impl Index`/`impl ops::Index`/`impl std::ops::IndexMut`.
+//!
 //! This rule is equivalent to `clippy::unwrap_used` + `clippy::expect_used`
 //! (both restriction-group lints, off by default in clippy). Running it
 //! via comply means you get the check without having to enable the lints
@@ -43,7 +50,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::path_utils::is_cargo_example_path;
-use crate::rules::rust_helpers::{is_in_const_initializer, is_in_test_context, is_under_tests_dir};
+use crate::rules::rust_helpers::{
+    is_in_const_initializer, is_in_index_trait_impl, is_in_test_context, is_under_tests_dir,
+};
 
 const KINDS: &[&str] = &["call_expression"];
 
@@ -93,6 +102,13 @@ impl AstCheck for Check {
         // Skip const/static item initializers — `unwrap`/`expect` is const-evaluated
         // at compile time and is the only valid way to extract the value there.
         if is_in_const_initializer(node) {
+            return;
+        }
+        // Skip `Index`/`IndexMut` impl bodies — `fn index`/`fn index_mut` return a
+        // reference, never a `Result`/`Option`, so panicking on a missing element
+        // is the documented trait contract and `unwrap`/`expect` is the only valid
+        // implementation.
+        if is_in_index_trait_impl(node, source_bytes) {
             return;
         }
         // Skip lock operations and constant-bounds `try_into()` — both call the
@@ -652,6 +668,54 @@ mod tests {
         // A `const fn` body is a runtime body that can return `Result` / use `?`,
         // so unwrap there is still flagged.
         let source = "const fn f(x: Option<u32>) -> u32 { x.unwrap() }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_expect_in_path_qualified_index_impl() {
+        // #4919: toml_edit's `impl ops::Index<&str> for Table` — `fn index`
+        // returns `&Item`, so panicking on a missing key is the trait contract.
+        let source = r#"impl<'s> ops::Index<&'s str> for Table {
+    type Output = Item;
+    fn index(&self, key: &'s str) -> &Item {
+        self.get(key).expect("index not found")
+    }
+}"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_unwrap_in_bare_index_mut_impl() {
+        // Bare `impl IndexMut<…> for T` (no `ops::` path) and `.unwrap()`.
+        let source = r#"impl IndexMut<usize> for Grid {
+    fn index_mut(&mut self, i: usize) -> &mut Cell {
+        self.cells.get_mut(i).unwrap()
+    }
+}"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_unwrap_in_non_index_trait_impl() {
+        // A non-Index trait whose method *can* return `Result` — the unwrap is a
+        // real panic risk and must still flag.
+        let source = r#"impl Loader for Db {
+    fn load(&self, k: &str) -> Result<Value, Error> {
+        Ok(self.get(k).unwrap())
+    }
+}"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_unwrap_in_inherent_index_fn() {
+        // An inherent `impl T` with a method merely *named* `index` has no `trait`
+        // field, so the exemption must not apply — the unwrap still flags.
+        let source = r#"impl Grid {
+    fn index(&self, i: usize) -> &Cell {
+        self.cells.get(i).unwrap()
+    }
+}"#;
         assert_eq!(run_on(source).len(), 1);
     }
 }
