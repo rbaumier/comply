@@ -336,6 +336,23 @@ pub fn is_cargo_bench_target_path(path: &Path) -> bool {
         == Some("benches")
 }
 
+/// True when `path` is a Cargo integration-test target file: a file sitting
+/// directly in a `tests/` directory (the immediate parent is `tests`, e.g.
+/// `tests/multi-autodrop.rs` or a workspace member's `crates/foo/tests/io.rs`).
+/// Cargo auto-discovers each such file as an integration-test target whose name
+/// is the file stem (`cargo test --test multi-autodrop`); integration-test
+/// target names are freely-chosen identifiers that conventionally use kebab-case
+/// like Cargo crate names, so filename-convention checks exempt them. Only files
+/// directly in `tests/` qualify — a file nested deeper (`tests/common/mod.rs`,
+/// `tests/helpers/foo-bar.rs`) is a shared helper module and must still follow
+/// snake_case.
+pub fn is_cargo_integration_test_target_path(path: &Path) -> bool {
+    path.parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        == Some("tests")
+}
+
 /// True when `path` lives under an Angular `schematics/` or `migrations/`
 /// directory. These hold Angular CLI schematic and `ng update` migration entry
 /// points: each is an `index.ts` exporting a default factory function that the
@@ -2193,6 +2210,28 @@ mod aux_path_tests {
         )));
         // Ordinary library source is not a benchmark target.
         assert!(!is_cargo_bench_target_path(&PathBuf::from("src/lib.rs")));
+    }
+
+    #[test]
+    fn cargo_integration_test_target_path_matches_tests_files_issue5193() {
+        // The issue's exact reproducer path (indicatif).
+        assert!(is_cargo_integration_test_target_path(&PathBuf::from(
+            "tests/multi-autodrop.rs"
+        )));
+        // A workspace member's `tests/` is the same convention.
+        assert!(is_cargo_integration_test_target_path(&PathBuf::from(
+            "crates/foo/tests/io.rs"
+        )));
+        // A file nested deeper under `tests/` is a shared helper module and must
+        // still follow snake_case.
+        assert!(!is_cargo_integration_test_target_path(&PathBuf::from(
+            "tests/common/foo-bar.rs"
+        )));
+        assert!(!is_cargo_integration_test_target_path(&PathBuf::from(
+            "tests/common/mod.rs"
+        )));
+        // Ordinary library source is not an integration-test target.
+        assert!(!is_cargo_integration_test_target_path(&PathBuf::from("src/lib.rs")));
     }
 
     #[test]

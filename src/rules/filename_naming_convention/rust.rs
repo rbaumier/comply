@@ -4,10 +4,10 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 /// Rust backend for `filename-naming-convention`: flags `.rs` filenames whose
 /// stem is not snake_case, after stripping a numeric ordering prefix
 /// (`0065_`) and a leading `_` private-module marker. Cargo target paths
-/// (`src/bin/`, `examples/`, `benches/`, and any file declared as an explicit
-/// `[[bin]]` / `[[example]]` / `[[bench]]` / `[[test]]` target via a
-/// `path = "..."` field), trybuild and rustc-UI fixture paths are exempt
-/// because their kebab-case name
+/// (`src/bin/`, `examples/`, `benches/`, files directly in `tests/`, and any
+/// file declared as an explicit `[[bin]]` / `[[example]]` / `[[bench]]` /
+/// `[[test]]` target via a `path = "..."` field), trybuild and rustc-UI fixture
+/// paths are exempt because their kebab-case name
 /// is the build-target / scenario identifier. Files carrying a machine-generated
 /// marker near the top of their content are also exempt: the generator
 /// dictates the name (e.g. wasm-bindgen WebIDL `gen_*.rs`).
@@ -126,6 +126,13 @@ impl TextCheck for Check {
         // `--bench <stem>`, where the stem is a freely-chosen target name that
         // conventionally uses kebab-case; nested modules under `benches/` are not.
         if crate::rules::path_utils::is_cargo_bench_target_path(ctx.path) {
+            return Vec::new();
+        }
+        // Cargo integration-test targets directly in `tests/` are auto-discovered
+        // with `--test <stem>`, where the stem is a freely-chosen target name that
+        // conventionally uses kebab-case; nested helper modules under `tests/`
+        // (e.g. `tests/common/mod.rs`) are not.
+        if crate::rules::path_utils::is_cargo_integration_test_target_path(ctx.path) {
             return Vec::new();
         }
         // Cargo targets declared with an explicit `path = "..."` in the nearest
@@ -311,6 +318,23 @@ mod tests {
     #[test]
     fn still_flags_kebab_case_module_nested_under_benches() {
         assert_eq!(run("benches/my_bench/my-helper.rs").len(), 1);
+    }
+
+    #[test]
+    fn allows_kebab_case_cargo_integration_test_target() {
+        // The issue's exact reproducer path (indicatif): a file directly in
+        // `tests/` is a Cargo integration-test target whose stem is the
+        // freely-chosen target name.
+        assert!(run("tests/multi-autodrop.rs").is_empty());
+        // A workspace member's `tests/` is the same convention.
+        assert!(run("crates/foo/tests/io.rs").is_empty());
+    }
+
+    #[test]
+    fn still_flags_kebab_case_module_nested_under_tests() {
+        // Nested helper modules under `tests/` are ordinary modules and must
+        // still follow snake_case.
+        assert_eq!(run("tests/common/foo-bar.rs").len(), 1);
     }
 
     #[test]
