@@ -65,6 +65,17 @@
 //! crate's own identity, not on whether it depends on a logging crate, so an
 //! application that merely uses `tracing` stays flagged.
 //!
+//! A custom panic hook installed via `std::panic::set_hook(|info| { … })`
+//! exists to write a human-readable crash report to stderr before the
+//! process dies — that is exactly what the default hook does. At the point
+//! the closure runs the program is unwinding from a panic, so a `tracing`
+//! subscriber may already be torn down and a panic hook is expected to be
+//! minimal and dependency-free; `eprintln!` / `eprint!` is the correct and
+//! idiomatic output channel there. An `eprintln!` whose enclosing closure is
+//! the hook argument to a `set_hook` call (directly, or wrapped in
+//! `Box::new(…)`) is exempt. Output in a *different* closure nested inside
+//! the hook body stays flagged.
+//!
 //! Output gated behind a runtime verbosity flag is opt-in diagnostics,
 //! not unconditional library noise: the consumer only sees it after
 //! turning the flag on. The guard is recognised when the `if` condition
@@ -167,6 +178,9 @@ impl AstCheck for Check {
         if is_under_verbose_flag_guard(node, source_bytes) {
             return;
         }
+        if is_in_panic_hook_closure(node, source_bytes) {
+            return;
+        }
         diagnostics.push(Diagnostic::at_node(
             std::sync::Arc::clone(&ctx.path_arc),
             &node,
@@ -228,6 +242,88 @@ fn is_descendant_of(node: tree_sitter::Node, ancestor: tree_sitter::Node) -> boo
         current = n.parent();
     }
     false
+}
+
+/// True when `node` sits inside the closure passed to a panic-hook
+/// installer — `std::panic::set_hook(…)` / `panic::set_hook(…)` /
+/// `set_hook(…)`. Finds the nearest enclosing `closure_expression`, then
+/// checks that closure is the hook argument of a `set_hook` call, allowing
+/// a single `Box::new(…)` wrapper between the closure and the call (the
+/// canonical `set_hook(Box::new(|info| …))` shape). A panic hook writes the
+/// crash report to stderr by design, so its `eprintln!` / `eprint!` is
+/// intended output, not stray library noise.
+///
+/// The closure must itself be the hook argument: an `eprintln!` in a
+/// *different* closure nested deeper in the hook body resolves to that
+/// inner closure, which is not a `set_hook` argument, so it stays flagged.
+fn is_in_panic_hook_closure(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        if parent.kind() == "closure_expression" {
+            return closure_is_set_hook_argument(parent, source);
+        }
+        current = parent;
+    }
+    false
+}
+
+/// True when `closure` is the argument to a `set_hook` call, possibly via a
+/// single wrapping call (in practice `Box::new(closure)`, as `set_hook` takes
+/// a `Box<dyn Fn>`). The closure is the hook argument when it is a direct
+/// argument to a `set_hook` call, or when the one call it is a direct argument
+/// to is itself a direct argument to a `set_hook` call
+/// (`set_hook(Box::new(|info| …))`). Only the outer call must be `set_hook`;
+/// the single wrapper's callee is not constrained.
+fn closure_is_set_hook_argument(closure: tree_sitter::Node, source: &[u8]) -> bool {
+    if is_set_hook_argument(closure, source) {
+        return true;
+    }
+    // `set_hook(Box::new(closure))`: the closure's enclosing call (the
+    // `Box::new(…)`) is itself the argument to `set_hook`.
+    enclosing_call(closure).is_some_and(|call| is_set_hook_argument(call, source))
+}
+
+/// True when `node` is a direct argument of a `call_expression` whose callee
+/// path ends in `set_hook`.
+fn is_set_hook_argument(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(args) = node.parent() else {
+        return false;
+    };
+    if args.kind() != "arguments" {
+        return false;
+    }
+    let Some(call) = args.parent() else {
+        return false;
+    };
+    if call.kind() != "call_expression" {
+        return false;
+    }
+    call.child_by_field_name("function")
+        .is_some_and(|f| callee_ends_in_set_hook(f, source))
+}
+
+/// If `node` is a direct argument of a `call_expression`, return that call.
+fn enclosing_call(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let args = node.parent()?;
+    if args.kind() != "arguments" {
+        return None;
+    }
+    let call = args.parent()?;
+    (call.kind() == "call_expression").then_some(call)
+}
+
+/// True when a call's callee names `set_hook` as its final path segment —
+/// `std::panic::set_hook`, `panic::set_hook`, or a bare `set_hook`.
+fn callee_ends_in_set_hook(func: tree_sitter::Node, source: &[u8]) -> bool {
+    match func.kind() {
+        "identifier" => func.utf8_text(source).ok() == Some("set_hook"),
+        "scoped_identifier" => {
+            func.child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok())
+                == Some("set_hook")
+        }
+        _ => false,
+    }
 }
 
 /// True when `cond` is a recognised runtime opt-in guard: either a
@@ -765,6 +861,41 @@ required-features = ["std"]
     fn flags_eprintln_in_else_of_verbose_guard() {
         let source =
             "fn f(&self) { if self.verbose() { let _ = 1; } else { eprintln!(\"oops\"); } }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// Regression for #5197 (zkat/miette `src/panic.rs:24`): an `eprintln!`
+    /// inside the closure passed to `std::panic::set_hook(Box::new(…))` is a
+    /// panic hook writing the crash report to stderr — its intended job. The
+    /// `tracing` alternative is unreliable mid-panic, so it is exempt.
+    #[test]
+    fn allows_eprintln_in_panic_hook_closure() {
+        let source = "pub fn set_panic_hook() { std::panic::set_hook(Box::new(move |info| { eprintln!(\"Error: {:?}\", info); })); }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/panic.rs", source).is_empty());
+    }
+
+    /// A `set_hook` closure passed directly (no `Box::new` wrapper) is the
+    /// same case.
+    #[test]
+    fn allows_eprintln_in_bare_set_hook_closure() {
+        let source = "pub fn f() { panic::set_hook(|info| { eprintln!(\"{info}\"); }); }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// The exemption is scoped to the hook closure: an `eprintln!` in a
+    /// *different* closure nested inside the hook body resolves to that inner
+    /// closure (not a `set_hook` argument) and stays flagged.
+    #[test]
+    fn flags_eprintln_in_nested_non_hook_closure_inside_panic_hook() {
+        let source = "pub fn f() { std::panic::set_hook(Box::new(|_info| { (|| { eprintln!(\"oops\"); })(); })); }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// A closure passed to some other (non-`set_hook`) call is not a panic
+    /// hook — ordinary library `eprintln!` in such a closure stays flagged.
+    #[test]
+    fn flags_eprintln_in_non_set_hook_closure() {
+        let source = "pub fn f() { with_thing(Box::new(|info| { eprintln!(\"{info}\"); })); }";
         assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
     }
 
