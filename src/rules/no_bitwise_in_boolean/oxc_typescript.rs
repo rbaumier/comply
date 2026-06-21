@@ -69,8 +69,12 @@ fn has_bitmask_word(name: &str) -> bool {
 /// a SCREAMING_SNAKE constant, an identifier or member-access property whose
 /// name carries a bitmask-vocabulary word (`mask`, `flags`, `eventMask`,
 /// `obs.mask`, `this.flags`), a member access to an enum-like flag
-/// (`ScopeFlag.STATIC_BLOCK`, `OptionFlags.Locations`, `FLAGS.X`), or a
-/// bitwise combination of such flags (`ScopeFlag.VAR | ScopeFlag.CLASS_BASE`).
+/// (`ScopeFlag.STATIC_BLOCK`, `OptionFlags.Locations`, `FLAGS.X`), a shift
+/// expression producing a bit position (`1 << i`, `x >> 2`), a bitwise
+/// sub-expression (`~y`, `ScopeFlag.VAR | ScopeFlag.CLASS_BASE`), or a
+/// bitwise combination of such flags. A shift or bitwise operator is itself
+/// the signal that the enclosing `&`/`|`/`^` is deliberate, not an `&&`/`||`
+/// typo.
 fn is_flag_operand(expr: &Expression) -> bool {
     match expr {
         Expression::NumericLiteral(_) => true,
@@ -82,24 +86,23 @@ fn is_flag_operand(expr: &Expression) -> bool {
                 || has_bitmask_word(member.property.name.as_str())
         }
         Expression::ParenthesizedExpression(paren) => is_flag_operand(&paren.expression),
-        Expression::BinaryExpression(bin)
-            if matches!(
-                bin.operator,
-                BinaryOperator::BitwiseAnd
-                    | BinaryOperator::BitwiseOR
-                    | BinaryOperator::BitwiseXOR
-            ) =>
-        {
-            is_flag_operand(&bin.left) && is_flag_operand(&bin.right)
-        }
+        Expression::BinaryExpression(bin) => matches!(
+            bin.operator,
+            BinaryOperator::ShiftLeft
+                | BinaryOperator::ShiftRight
+                | BinaryOperator::ShiftRightZeroFill
+                | BinaryOperator::BitwiseAnd
+                | BinaryOperator::BitwiseOR
+                | BinaryOperator::BitwiseXOR
+        ),
+        Expression::UnaryExpression(un) => un.operator == UnaryOperator::BitwiseNot,
         _ => false,
     }
 }
 
 /// Whether a bitwise binary expression is a deliberate bitmask test rather
 /// than a likely `&&`/`||` typo. True when either operand is a flag signal,
-/// applied recursively so combined masks (`ScopeFlag.VAR | ScopeFlag.CLASS`)
-/// remain exempt.
+/// so combined masks (`ScopeFlag.VAR | ScopeFlag.CLASS`) remain exempt.
 fn is_bitmask_test(bin: &oxc_ast::ast::BinaryExpression) -> bool {
     is_flag_operand(&bin.left) || is_flag_operand(&bin.right)
 }
@@ -281,6 +284,29 @@ mod tests {
         // A name merely containing `flag`/`mask` inside another word must not
         // be treated as a bitmask (`flagship`, `unmasked` is not a segment).
         assert_eq!(run_on("if (flagship & arbiter) {}").len(), 1);
+    }
+
+    #[test]
+    fn allows_shift_expression_bitmask_test() {
+        // Regression for #5271: `flags & (1 << i)` is the classic bit-test —
+        // the `(1 << i)` shift produces a power-of-two mask at runtime.
+        assert!(run_on("if (flags & (1 << i)) {}").is_empty());
+        assert!(run_on("if (flags & 1 << i) {}").is_empty());
+        assert!(run_on("if (x & (y >> 2)) {}").is_empty());
+        assert!(run_on("if (mask & (v >>> 3)) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_bitwise_not_operand_bitmask_test() {
+        // A `~y` operand is a bitwise mask, so the enclosing `&` is deliberate.
+        assert!(run_on("if (flags & ~mask) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_nested_bitwise_operand_bitmask_test() {
+        // An operand that is itself a bitwise expression marks the enclosing
+        // op as deliberate bit manipulation, not an `&&`/`||` typo.
+        assert!(run_on("if (flags & (a | b)) {}").is_empty());
     }
 
     #[test]
