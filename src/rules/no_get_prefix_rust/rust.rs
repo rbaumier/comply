@@ -72,6 +72,14 @@ crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, 
     // the contract and renaming would desync the pair.
     if sibling_method_named(node, &format!("set_{}", &name[4..]), source) { return; }
 
+    // A `get_`-prefixed method whose body is a thin safe wrapper delegating to a
+    // foreign function (an `unsafe` call qualified by an FFI/`-sys` module path,
+    // e.g. `unsafe { zstd_sys::ZSTD_getBlockSize(..) }`) mirrors the wrapped C
+    // API name (`ZSTD_getBlockSize` → `get_block_size`); the name is dictated by
+    // the foreign library, not chosen as an idiomatic Rust getter, so RFC 344's
+    // "drop the `get_`" rename does not apply.
+    if wraps_foreign_call(node, source) { return; }
+
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &name_node,
@@ -101,6 +109,99 @@ fn sibling_method_named(func: tree_sitter::Node, bare_name: &str, source: &[u8])
         }
     }
     false
+}
+
+/// True when the method body contains an `unsafe` block that delegates to a
+/// foreign function — a `call_expression` whose callee path carries an FFI
+/// module marker segment (`ffi`, `sys`, or a `*_sys`/`*_ffi` crate such as
+/// `zstd_sys`). Such a `get_` method is a thin safe wrapper whose name mirrors
+/// the wrapped C API (e.g. `ZSTD_getBlockSize` → `get_block_size`), so the
+/// prefix is dictated by the foreign library rather than chosen as a getter.
+///
+/// The marker is structural: it requires a path-qualified call (`scoped_identifier`)
+/// inside an `unsafe_block`. An ordinary field getter has no call; an `unsafe`
+/// block doing a raw deref (`unsafe { *self.ptr }`) or an unqualified local call
+/// (`unsafe { helper() }`) has no FFI-marked path segment, so neither matches.
+fn wraps_foreign_call(func: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(body) = func.child_by_field_name("body") else {
+        return false;
+    };
+    contains_foreign_unsafe_call(body, source, false)
+}
+
+/// Recursively scan `node` for a `call_expression` whose callee is an
+/// FFI-marked scoped path, requiring the call to sit inside an `unsafe_block`.
+/// `in_unsafe` tracks whether the current subtree is already under one.
+fn contains_foreign_unsafe_call(node: tree_sitter::Node, source: &[u8], in_unsafe: bool) -> bool {
+    let in_unsafe = in_unsafe || node.kind() == "unsafe_block";
+
+    if in_unsafe
+        && node.kind() == "call_expression"
+        && let Some(callee) = node.child_by_field_name("function")
+        && scoped_path_has_ffi_marker(callee, source)
+    {
+        return true;
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if contains_foreign_unsafe_call(child, source, in_unsafe) {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when `callee` is a `scoped_identifier` (possibly nested, e.g.
+/// `libfoo_sys::ffi::bar`) any of whose `identifier` segments is an FFI module
+/// marker: exactly `ffi`/`sys`, or ending in `_sys`/`_ffi` (the `-sys`-crate
+/// convention, `zstd_sys`). A bare `identifier` callee (unqualified local call)
+/// is not a foreign delegation.
+fn scoped_path_has_ffi_marker(callee: tree_sitter::Node, source: &[u8]) -> bool {
+    if callee.kind() != "scoped_identifier" {
+        return false;
+    }
+    scoped_segments(callee).into_iter().any(|seg_node| {
+        seg_node
+            .utf8_text(source)
+            .is_ok_and(is_ffi_module_marker)
+    })
+}
+
+/// Yields the `identifier` segments of a (possibly nested) `scoped_identifier`
+/// path. The grammar nests left-recursively: `a::b::c` is
+/// `scoped_identifier(path: scoped_identifier(path: a, name: b), name: c)`, so
+/// the `name` of each level plus the innermost `path` identifier are the segments.
+/// Non-identifier roots (`crate`, `super`, `self`) are skipped — they cannot be
+/// FFI markers.
+fn scoped_segments(node: tree_sitter::Node) -> Vec<tree_sitter::Node> {
+    let mut segments = Vec::new();
+    let mut current = Some(node);
+    while let Some(n) = current {
+        if let Some(name) = n.child_by_field_name("name")
+            && name.kind() == "identifier"
+        {
+            segments.push(name);
+        }
+        match n.child_by_field_name("path") {
+            Some(p) if p.kind() == "scoped_identifier" => current = Some(p),
+            Some(p) => {
+                if p.kind() == "identifier" {
+                    segments.push(p);
+                }
+                current = None;
+            }
+            None => current = None,
+        }
+    }
+    segments
+}
+
+/// True when a path segment names a foreign-function-interface module: the
+/// conventional `ffi`/`sys` module names, or a `-sys` crate (`*_sys`) / an
+/// `*_ffi` module.
+fn is_ffi_module_marker(seg: &str) -> bool {
+    seg == "ffi" || seg == "sys" || seg.ends_with("_sys") || seg.ends_with("_ffi")
 }
 
 /// Canonical set of Rust reserved keywords (strict + reserved-for-future),
@@ -483,6 +584,67 @@ mod tests {
         // A plain `get_name` field accessor is not a std-mirrored accessor and
         // must still flag.
         let src = "impl Slot {\n    fn get_name(&self) -> &str { &self.name }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_ffi_wrapper_sys_crate_call_issue_5313() {
+        // `get_block_size` is a thin safe wrapper over `zstd_sys::ZSTD_getBlockSize`
+        // — the name mirrors the wrapped C API, dictated by the foreign library.
+        let src = "impl Foo {\n\
+            pub fn get_block_size(&self) -> usize {\n\
+                unsafe { zstd_sys::ZSTD_getBlockSize(self.0.as_ptr()) }\n\
+            }\n\
+        }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_ffi_wrapper_nested_ffi_path_issue_5313() {
+        // A nested FFI path (`libfoo_sys::ffi::get_v`) inside an `unsafe` block,
+        // bound via `let`, is still a foreign delegation.
+        let src = "impl Foo {\n\
+            fn get_v(&self) -> u32 { let r = unsafe { libfoo_sys::ffi::get_v(self.p) }; r }\n\
+        }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_ordinary_field_getter_not_ffi_issue_5313() {
+        // An ordinary field getter has no foreign call — still flagged.
+        let src = "impl Foo {\n    fn get_name(&self) -> &str { &self.name }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_unsafe_block_without_foreign_call_issue_5313() {
+        // An `unsafe` block doing a raw deref (no FFI-marked call) is not a
+        // foreign delegation — the getter is still flagged.
+        let src = "impl Foo {\n    fn get_val(&self) -> u32 { unsafe { *self.ptr } }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_unsafe_local_call_not_ffi_path_issue_5313() {
+        // An unqualified local call inside `unsafe` (`helper()`) carries no FFI
+        // module marker — still flagged.
+        let src = "impl Foo {\n    fn get_val(&self) -> u32 { unsafe { helper() } }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_non_ffi_scoped_call_inside_unsafe_issue_5313() {
+        // A scoped call whose path has no `ffi`/`sys`/`*_sys` segment
+        // (`crate::config::read()`) is not a foreign delegation — still flagged.
+        let src = "impl Foo {\n    fn get_val(&self) -> u32 { unsafe { crate::config::read() } }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_foreign_call_outside_unsafe_issue_5313() {
+        // A `sys`-pathed call NOT wrapped in `unsafe` is not the FFI safe-wrapper
+        // shape (FFI calls are unsafe); the getter is still flagged.
+        let src = "impl Foo {\n    fn get_val(&self) -> u32 { sys::read() }\n}";
         assert_eq!(run(src).len(), 1);
     }
 
