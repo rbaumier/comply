@@ -295,6 +295,18 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Plugin-registered virtual modules: a Vite/Rollup/Nuxt plugin defined in
+        // the project source can register a virtual module whose ID looks like an
+        // npm package name (`nuxt-vitest-environment-options`) but is resolved to
+        // generated code at build time via `resolveId`/`load`. The full specifier
+        // (not just its root) is the registered ID, so an `import` of it is
+        // legitimate without a `package.json` entry. Detected structurally from
+        // the project's own source, so a genuinely missing package — which no
+        // local plugin registers — still fires.
+        if ctx.project.is_registered_virtual_module(ctx.path, spec) {
+            return;
+        }
+
         let (line, column) =
             byte_offset_to_line_col(ctx.source, import.span.start as usize);
         diagnostics.push(Diagnostic {
@@ -392,6 +404,77 @@ mod tests {
         fs::write(&file, source).unwrap();
         let diags = run_oxc_in_project(&file, source);
         assert_eq!(diags.len(), 1, "unlisted dep in root must be flagged, got {diags:?}");
+    }
+
+    // Regression #5163: a Vite plugin defined in the project registers a virtual
+    // module whose ID looks like a package name (`nuxt-vitest-environment-options`)
+    // via `resolveId`/`load`. An `import` of it must not be flagged, since it is
+    // resolved to generated code at build time, not installed from npm.
+    #[test]
+    fn allows_project_registered_virtual_module() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"nuxt-test-utils","dependencies":{"vite":"^5.0.0"}}"#,
+        )
+        .unwrap();
+        let plugins = dir.path().join("src").join("module").join("plugins");
+        fs::create_dir_all(&plugins).unwrap();
+        fs::write(
+            plugins.join("options.ts"),
+            r#"import type { Plugin } from 'vite'
+const STUB_ID = 'nuxt-vitest-environment-options'
+export function NuxtVitestEnvironmentOptionsPlugin(options = {}): Plugin {
+  return {
+    resolveId(id) { if (id.endsWith(STUB_ID)) return STUB_ID },
+    load(id) { if (id.endsWith(STUB_ID)) return `export default ${JSON.stringify(options)}` },
+  }
+}
+"#,
+        )
+        .unwrap();
+        let runtime = dir.path().join("src").join("runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        let file = runtime.join("browser-entry.ts");
+        let source = "import environmentOptions from 'nuxt-vitest-environment-options'\n";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert!(
+            diags.is_empty(),
+            "project-registered virtual module must not be flagged, got {diags:?}"
+        );
+    }
+
+    // Negative space for #5163: a genuinely missing bare dependency (no local
+    // plugin registers it as a virtual module) still fires even when the project
+    // does register *other* virtual modules.
+    #[test]
+    fn flags_missing_dep_alongside_registered_virtual_module() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","dependencies":{"vite":"^5.0.0"}}"#,
+        )
+        .unwrap();
+        let plugins = dir.path().join("src").join("plugins");
+        fs::create_dir_all(&plugins).unwrap();
+        fs::write(
+            plugins.join("virtual.ts"),
+            r#"export function plugin() {
+  return { resolveId(id) { if (id === 'my-virtual-stub') return id } }
+}
+"#,
+        )
+        .unwrap();
+        let file = dir.path().join("src").join("index.ts");
+        let source = "import x from 'genuinely-missing-package';";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "missing dep must still fire despite a registered virtual module, got {diags:?}"
+        );
     }
 
     #[test]
