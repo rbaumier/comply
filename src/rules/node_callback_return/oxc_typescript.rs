@@ -54,6 +54,14 @@ impl OxcCheck for Check {
             return;
         }
 
+        // If a loop encloses the call before any function boundary, the call is
+        // invoked once per iteration on purpose (calling all callbacks, not
+        // branching). A `return` there would stop the loop after the first
+        // item, dropping the rest — the opposite of the intended behavior.
+        if inside_enclosing_loop(node, semantic) {
+            return;
+        }
+
         // Walk up to find the parent statement context.
         let parent = semantic.nodes().parent_node(node.id());
         match parent.kind() {
@@ -169,6 +177,38 @@ impl OxcCheck for Check {
 /// `SpreadElement`, not the call), so a direct span match is exact.
 fn is_argument(call_span: Span, arguments: &[Argument<'_>]) -> bool {
     arguments.iter().any(|arg| arg.span() == call_span)
+}
+
+/// Walk up from `node`; return true if a loop statement (`for`, `for...of`,
+/// `for...in`, `while`, `do...while`) encloses the call before any function
+/// boundary is crossed. The walk stops at the first `Function`, arrow, or
+/// `Program`, so a loop in an outer function does not exempt a call sitting in
+/// an inner function (e.g. a callback called inside a nested `forEach` arrow).
+fn inside_enclosing_loop<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let mut cur = node;
+    loop {
+        let p = semantic.nodes().parent_node(cur.id());
+        if p.id() == cur.id() {
+            return false;
+        }
+        match p.kind() {
+            AstKind::ForStatement(_)
+            | AstKind::ForInStatement(_)
+            | AstKind::ForOfStatement(_)
+            | AstKind::WhileStatement(_)
+            | AstKind::DoWhileStatement(_) => return true,
+            // Function boundary: a loop above this point belongs to an outer
+            // function and must not exempt this call.
+            AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Program(_) => return false,
+            _ => {}
+        }
+        cur = p;
+    }
 }
 
 /// Walk up from `node`; return true only if we reach an
@@ -499,6 +539,47 @@ mod tests {
         // `cb(x)(y)` — the inner `cb(x)` is the OUTER call's callee, not an
         // argument; its result is dropped, so it stays flagged.
         let src = "function f(cb) { cb(err)(y); doMore(); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_callback_in_for_of_loop() {
+        // Issue #5201 (unjs/hookable callEachWith): the callback is invoked once
+        // per iteration to call ALL callbacks. `return callback(arg0)` would stop
+        // the loop after the first, dropping the rest — the opposite of intent.
+        let src = r#"
+            function callEachWith(callbacks, arg0) {
+              for (const callback of [...callbacks]) {
+                callback(arg0);
+              }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_callback_in_while_loop() {
+        // A callback called inside a `while` loop body is invoked per iteration.
+        let src = "function f(cb, queue) { while (queue.length) { cb(queue.pop()); } }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_callback_in_if_inside_function_with_outer_loop_unrelated() {
+        // Negative space: a genuine branching double-call risk inside an inner
+        // function must still be flagged even though an outer function has a loop.
+        // The walk stops at the inner function boundary, so the outer loop does
+        // not exempt this call.
+        let src = r#"
+            function outer(cbs) {
+              for (const make of cbs) {
+                make(function handle(err, cb) {
+                  if (err) { cb(err); }
+                  cb();
+                });
+              }
+            }
+        "#;
         assert_eq!(run(src).len(), 1);
     }
 }
