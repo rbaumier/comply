@@ -54,11 +54,11 @@ impl OxcCheck for Check {
         }
 
         // Throw-assertion callbacks: `t.throws(() => { new X(); })`,
-        // `assert.throws(() => { new X(); })`, `expect(() => { new X(); }).toThrow()`.
-        // Constructing `X` here is deliberate — the thrown error is the assertion
-        // subject — so the unassigned `new` is intentional, not a discarded side
-        // effect.
-        if is_in_throw_assertion(node, semantic) {
+        // `assert.throws(() => { new X(); })`, `expect(() => { new X(); }).toThrow()`,
+        // Chai `expect(() => { new X(); }).to.throw()`. Constructing `X` here is
+        // deliberate — the thrown error is the assertion subject — so the
+        // unassigned `new` is intentional, not a discarded side effect.
+        if crate::rules::throw_assertion::new_is_throw_assertion_subject(node.id(), semantic) {
             return;
         }
 
@@ -134,67 +134,6 @@ fn is_controller_registration<'a>(
         }
     }
     false
-}
-
-/// True when `node` (a `NewExpression`) sits inside a callback that is the
-/// subject of a throw assertion. Walks up to the nearest enclosing
-/// arrow/function expression and inspects the `CallExpression` it is an argument
-/// to. Two recognized shapes:
-///   1. `t.throws(cb, ...)` / `assert.rejects(cb)` — callee is a member access or
-///      bare identifier named `throws` / `throwsAsync` / `rejects`.
-///   2. `expect(cb).toThrow()` — callee is `expect` and the `expect(...)` call is
-///      the object of a `.toThrow*` member access.
-fn is_in_throw_assertion(
-    node: &oxc_semantic::AstNode,
-    semantic: &oxc_semantic::Semantic,
-) -> bool {
-    let nodes = semantic.nodes();
-    for ancestor in nodes.ancestors(node.id()) {
-        match ancestor.kind() {
-            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
-                let parent = nodes.parent_node(ancestor.id());
-                let AstKind::CallExpression(call) = parent.kind() else {
-                    return false;
-                };
-                return is_throw_assertion_callee(&call.callee)
-                    || is_expect_to_throw(parent, &call.callee, semantic);
-            }
-            _ => {}
-        }
-    }
-    false
-}
-
-/// True when `callee` names a throw-assertion: a member access
-/// (`t.throws`, `assert.rejects`) or bare identifier whose name is one of
-/// `throws` / `throwsAsync` / `rejects`.
-fn is_throw_assertion_callee(callee: &Expression) -> bool {
-    let name = match callee {
-        Expression::StaticMemberExpression(member) => member.property.name.as_str(),
-        Expression::Identifier(ident) => ident.name.as_str(),
-        _ => return false,
-    };
-    matches!(name, "throws" | "throwsAsync" | "rejects")
-}
-
-/// True when `call` is `expect(cb)` and the `expect(...)` result is the object of
-/// a `.toThrow*` member access (`expect(cb).toThrow()`).
-fn is_expect_to_throw(
-    call_node: &oxc_semantic::AstNode,
-    callee: &Expression,
-    semantic: &oxc_semantic::Semantic,
-) -> bool {
-    let Expression::Identifier(ident) = callee else {
-        return false;
-    };
-    if ident.name.as_str() != "expect" {
-        return false;
-    }
-    let member = semantic.nodes().parent_node(call_node.id());
-    matches!(
-        member.kind(),
-        AstKind::StaticMemberExpression(m) if m.property.name.as_str().starts_with("toThrow")
-    )
 }
 
 /// True when `expr_stmt` (the `ExpressionStatement` wrapping the `new`) sits
@@ -383,6 +322,16 @@ mod tests {
         // Block-body arrow so the `new` is an ExpressionStatement.
         let src = r#"
             expect(() => { new Foo(bad); }).toThrow();
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_new_in_chai_expect_to_throw_callback() {
+        // Regression for #5100 — Chai `.to.throw()` chain (node-oidc-provider).
+        let src = r#"
+            expect(() => { new Configuration({ features: { foo: {} } }); })
+              .to.throw('Unknown feature configuration: foo');
         "#;
         assert!(run(src).is_empty());
     }
