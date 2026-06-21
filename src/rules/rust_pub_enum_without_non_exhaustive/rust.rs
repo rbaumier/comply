@@ -41,6 +41,16 @@ impl AstCheck for Check {
         if has_c_repr(node, source_bytes) {
             return;
         }
+        // Wire-format/protocol enum: every variant carries an explicit integer
+        // discriminant (`Stream = 0xFF`, …), so the variant set is fully pinned
+        // to an external specification (a wire format, an on-disk tag byte, a
+        // protocol code). The spec defines exactly these values with no room for
+        // extension, and downstream callers rely on exhaustive matching for
+        // correctness. `#[non_exhaustive]` would falsely signal that new variants
+        // may appear and is therefore the wrong fix here.
+        if all_variants_have_discriminant(node) {
+            return;
+        }
         // Test-helper enum: `#[non_exhaustive]` would force wildcard match
         // arms in tests, defeating exhaustiveness checking. Not an external API.
         // A `pub enum` under a `tests/` directory (integration tests, fixtures)
@@ -255,6 +265,30 @@ fn attribute_is_c_repr(attribute_item: tree_sitter::Node, source: &[u8]) -> bool
     })
 }
 
+/// True when the enum has at least one variant and *every* variant carries an
+/// explicit discriminant value (`Variant = <expr>`).
+///
+/// Walks the enum's `enum_variant_list` body (field `body`); a variant's
+/// discriminant is the `value` field of its `enum_variant` node. A fully
+/// enumerated discriminant mapping marks the variant set as fixed by an external
+/// wire/protocol specification, so it is treated like a `#[repr(<int>)]` enum
+/// even when no `repr` attribute is present. An empty enum, or one with any
+/// discriminant-less variant, is an ordinary growable API and stays flagged.
+fn all_variants_have_discriminant(enum_item: tree_sitter::Node) -> bool {
+    let Some(body) = enum_item.child_by_field_name("body") else {
+        return false;
+    };
+    let mut cursor = body.walk();
+    let mut variants = body
+        .named_children(&mut cursor)
+        .filter(|child| child.kind() == "enum_variant")
+        .peekable();
+    if variants.peek().is_none() {
+        return false;
+    }
+    variants.all(|variant| variant.child_by_field_name("value").is_some())
+}
+
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {
     fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
@@ -334,6 +368,22 @@ mod tests {
         // #3971: only `#[repr(C)]`/`#[repr(<int>)]` exempts — an unrelated
         // attribute such as `#[derive(Debug)]` leaves the enum flagged.
         assert_eq!(run_on("#[derive(Debug)]\npub enum E { A, B }").len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_wire_format_enum_with_explicit_discriminants() {
+        // #5311: the rust-snappy `ChunkType` enum — every variant pinned to an
+        // explicit wire-format discriminant value (no `repr`). The variant set
+        // is fixed by the Snappy framing spec, so `#[non_exhaustive]` is wrong.
+        let source = "pub enum ChunkType {\n    Stream = 0xFF,\n    Compressed = 0x00,\n    Uncompressed = 0x01,\n    Padding = 0xFE,\n}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_pub_enum_with_only_some_discriminants() {
+        // #5311: a partial discriminant mapping is not a fully-enumerated wire
+        // format — it stays flagged as an ordinary growable API.
+        assert_eq!(run_on("pub enum E { A = 1, B }").len(), 1);
     }
 
     #[test]
