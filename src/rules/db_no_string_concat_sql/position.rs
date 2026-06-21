@@ -15,17 +15,29 @@ const IDENTIFIER_KEYWORDS: &[&str] = &["FROM", "JOIN", "INTO", "UPDATE", "TABLE"
 /// identifier position (a table/column name) rather than a value position.
 ///
 /// Identifier position holds when the text before the placeholder, ignoring
-/// trailing whitespace, either ends with `.` (a `.`-qualified member such as
-/// `alias.{col}` or `schema.{table}`) or has, as its last word token, one of
-/// [`IDENTIFIER_KEYWORDS`] (case-insensitive). Everything else — after `=`,
-/// inside quotes, inside a `VALUES (…)` list, at string start — is a value
-/// position, where a placeholder is a real injection vector.
+/// trailing whitespace and a single leading double-quote of a PostgreSQL
+/// quoted identifier (`FROM "{table}"`), either ends with `.` (a `.`-qualified
+/// member such as `alias.{col}` or `schema.{table}`) or has, as its last word
+/// token, one of [`IDENTIFIER_KEYWORDS`] (case-insensitive). Everything else —
+/// after `=`, inside a single-quoted string literal, inside a `VALUES (…)`
+/// list, at string start — is a value position, where a placeholder is a real
+/// injection vector.
 ///
 /// `brace_index` is the byte offset of the placeholder's opening delimiter
 /// (`{` for Rust format strings, `$` of `${` for JS/TS template literals); only
 /// the preceding text is inspected, so the delimiter style does not matter.
 pub(super) fn placeholder_is_identifier_position(sql_text: &str, brace_index: usize) -> bool {
-    let before = sql_text[..brace_index].trim_end_matches([' ', '\t', '\r', '\n']);
+    const WHITESPACE: [char; 4] = [' ', '\t', '\r', '\n'];
+    let trimmed = sql_text[..brace_index].trim_end_matches(WHITESPACE);
+    // A PostgreSQL quoted identifier wraps the placeholder in double quotes
+    // (`FROM "{table}"`): the opening `"` sits directly before the placeholder
+    // and would otherwise stop the last-word scan at an empty token, hiding the
+    // preceding keyword. Strip that single opening quote so `FROM "` still reads
+    // as `FROM`. Single quotes (string literals) are not stripped — those are
+    // value positions.
+    let before = trimmed
+        .strip_suffix('"')
+        .map_or(trimmed, |s| s.trim_end_matches(WHITESPACE));
     if before.ends_with('.') {
         return true;
     }
@@ -99,6 +111,23 @@ mod tests {
     fn keyword_match_is_case_insensitive() {
         assert!(is_ident_pos("select * from {t}"));
         assert!(is_ident_pos("delete From {t}"));
+    }
+
+    #[test]
+    fn pg_quoted_identifier_is_identifier_position() {
+        // PostgreSQL double-quoted identifier: `FROM "{table}"`. The opening
+        // quote before the placeholder must not hide the FROM keyword.
+        assert!(is_ident_pos("SELECT DISTINCT name FROM \"{table}\" ORDER BY name"));
+        assert!(is_ident_pos("UPDATE \"{table}\" SET x = 1"));
+        assert!(is_ident_pos("SELECT * FROM \"{table}\""));
+    }
+
+    #[test]
+    fn single_quote_string_literal_is_not_identifier_position() {
+        // A single-quoted string literal is a value position; the opening `'`
+        // must not be stripped the way a quoted-identifier `"` is.
+        assert!(!is_ident_pos("UPDATE t SET name = '{user_name}'"));
+        assert!(!is_ident_pos("SELECT * FROM t WHERE name = '{name}'"));
     }
 
     #[test]
