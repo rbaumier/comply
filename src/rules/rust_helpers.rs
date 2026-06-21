@@ -1496,8 +1496,11 @@ fn call_method_returns_bool(call: Node, source: &[u8]) -> bool {
 /// True when the operand of `cast` (a `type_cast_expression`) is a `char`: a
 /// `char_literal` (`'A' as u32`), an identifier whose local binding is annotated
 /// `char` (`c as u32`), an identifier bound by a `chars()`/`char_indices()`
-/// for-loop (`for c in s.chars()`), or a dereference of a `&char` range accessor
-/// (`*range.start() as u32` where `range: RangeInclusive<char>`).
+/// for-loop (`for c in s.chars()`), an identifier bound by `if let Some(c) =
+/// char::from_u32(..)` / `while let Some(c) = char::from_digit(..)` (a
+/// `Some`-unwrap of an `Option<char>`-returning function), or a dereference of a
+/// `&char` range accessor (`*range.start() as u32` where `range:
+/// RangeInclusive<char>`).
 ///
 /// A `char` is a Unicode scalar value in `0..=0x10FFFF` (21 bits), so casting it
 /// to any integer at least 21 bits wide is lossless and total. Shared by
@@ -1548,6 +1551,7 @@ fn operand_is_char(node: Node, cast: Node, source: &[u8]) -> bool {
             find_identifier_type(cast, name, source)
                 .is_some_and(|type_text| type_text == "char")
                 || binding_is_chars_iter(cast, name, source)
+                || binding_is_char_option_unwrap(cast, name, source)
         }),
         _ => false,
     }
@@ -1577,6 +1581,87 @@ fn call_returns_char_ref(node: Node, source: &[u8]) -> bool {
         .child_by_field_name("field")
         .and_then(|field| field.utf8_text(source).ok())
         .is_some_and(|name| CHAR_REF_RANGE_ACCESSORS.contains(&name))
+}
+
+/// True when `name` is the `char` binding of an enclosing `if let Some(name) =
+/// char::from_u32(..)` or `while let Some(name) = char::from_digit(..)` — a
+/// `Some`-unwrap of a call to a well-known `Option<char>`-returning function.
+///
+/// `char::from_u32` and `char::from_digit` return `Option<char>`, so the
+/// `Some(name)` pattern binds `name: char` unconditionally. The match requires
+/// both the call's final path segment to be in the closed char-returning set and
+/// a `char` segment in the path, so an unrelated `from_u32` on another type does
+/// not qualify.
+fn binding_is_char_option_unwrap(node: Node, name: &str, source: &[u8]) -> bool {
+    let mut current = node.parent();
+    while let Some(n) = current {
+        if matches!(n.kind(), "if_expression" | "while_expression")
+            && let Some(condition) = n.child_by_field_name("condition")
+            && condition.kind() == "let_condition"
+            && let Some(pattern) = condition.child_by_field_name("pattern")
+            && some_pattern_binds(pattern, name, source)
+            && let Some(value) = condition.child_by_field_name("value")
+            && call_returns_char_option(value, source)
+        {
+            return true;
+        }
+        current = n.parent();
+    }
+    false
+}
+
+/// True when `pattern` is `Some(name)` — a `tuple_struct_pattern` whose type
+/// path is `Some` wrapping the single identifier binding `name`.
+fn some_pattern_binds(pattern: Node, name: &str, source: &[u8]) -> bool {
+    if pattern.kind() != "tuple_struct_pattern" {
+        return false;
+    }
+    let is_some = pattern
+        .child_by_field_name("type")
+        .and_then(|t| t.utf8_text(source).ok())
+        .is_some_and(|t| t == "Some");
+    is_some
+        && pattern.named_child_count() == 2
+        && pattern.named_child(1).is_some_and(|binding| {
+            binding.kind() == "identifier" && binding.utf8_text(source).is_ok_and(|t| t == name)
+        })
+}
+
+/// True when `call` is a `<path>(..)` whose path resolves to a well-known
+/// `Option<char>`-returning function on the `char` primitive: `char::from_u32`
+/// or `char::from_digit`, optionally module-qualified as `std::char::…` /
+/// `core::char::…` (with or without a leading `::`).
+///
+/// The path is matched against a closed set rather than a `…::char` suffix so a
+/// user module literally named `char` exposing a `from_u32`/`from_digit` does
+/// not qualify.
+fn call_returns_char_option(call: Node, source: &[u8]) -> bool {
+    const CHAR_OPTION_FNS: &[&str] = &["from_u32", "from_digit"];
+    const CHAR_PATHS: &[&str] = &[
+        "char",
+        "std::char",
+        "core::char",
+        "::std::char",
+        "::core::char",
+    ];
+
+    if call.kind() != "call_expression" {
+        return false;
+    }
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "scoped_identifier" {
+        return false;
+    }
+    let last = function
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source).ok());
+    let path = function
+        .child_by_field_name("path")
+        .and_then(|p| p.utf8_text(source).ok());
+    last.is_some_and(|name| CHAR_OPTION_FNS.contains(&name))
+        && path.is_some_and(|p| CHAR_PATHS.contains(&p))
 }
 
 /// True when `name` is the `char` binding of an enclosing `for <pat> in
