@@ -106,6 +106,16 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A hex literal carrying an explanatory inline comment on the same line
+        // (`case 0x5b: // [`) is self-documenting — the comment names the value
+        // exactly as a `const LEFT_BRACKET = 0x5b` would. This is the canonical
+        // char-code idiom of hand-written lexers/parsers.
+        if is_hex_literal(text)
+            && has_same_line_trailing_comment(num.span, ctx.source, semantic.comments())
+        {
+            return;
+        }
+
         // A numeric argument to a `Date` time-component setter or the `Date`
         // constructor is a calendar/clock boundary value named by the call.
         if is_date_component_argument(node.id(), semantic) {
@@ -149,6 +159,43 @@ impl OxcCheck for Check {
 fn is_hex_literal(text: &str) -> bool {
     let bytes = text.as_bytes();
     bytes.len() > 2 && bytes[0] == b'0' && (bytes[1] == b'x' || bytes[1] == b'X')
+}
+
+/// True when an explanatory comment is bound to this literal as its trailing
+/// documentation (`0x22 // "`, `case 0x5b: // [`, `ch === 0x22 /* " */`).
+///
+/// The comment must begin at or after the literal's end with only *binding
+/// trivia* in between: whitespace and the closing/label punctuation that
+/// legitimately separates a literal from a comment that documents it — `:`
+/// (switch-case label), `)` and `]` (grouping/index). Any other character
+/// (another literal, a comma, a semicolon, an operator) means the comment
+/// documents something else on the line, so it does not exempt this literal.
+/// This keeps `foo(0xAA, 0xBB) // note` and `mask = 0xDEAD; f(); // x` flagged
+/// while exempting the lexer/parser char-code idiom.
+///
+/// Worked from the real comment spans of `semantic.comments()` (not a text
+/// scan), so a `//` appearing inside a string literal earlier on the line is
+/// never mistaken for a trailing comment.
+fn has_same_line_trailing_comment(
+    span: oxc_span::Span,
+    source: &str,
+    comments: &[oxc_ast::ast::Comment],
+) -> bool {
+    let lit_end = span.end as usize;
+    comments.iter().any(|comment| {
+        let comment_start = comment.span.start as usize;
+        comment_start >= lit_end
+            && source
+                .get(lit_end..comment_start)
+                .is_some_and(|gap| gap.chars().all(is_binding_trivia))
+    })
+}
+
+/// A character permitted between a literal and its trailing documentation
+/// comment: whitespace or the closing/label punctuation that does not introduce
+/// another value (`:` for `case 0xNN:`, `)`/`]` for grouped/indexed literals).
+fn is_binding_trivia(c: char) -> bool {
+    c.is_whitespace() || matches!(c, ':' | ')' | ']')
 }
 
 /// True when this literal is the value of an object property whose key
@@ -684,6 +731,80 @@ mod tests {
         // The exemption requires a version-named operand; comparing a magic
         // number against an unrelated reference is still flagged.
         let src = r#"function f(count: number) { return count >= 86400; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for issue #5058: hand-written lexers/parsers compare against
+    // hex char codes documented by an inline comment naming the character
+    // (`case 0x5b: // [`). The comment names the value exactly as a named
+    // constant would, so these are self-documenting, not magic.
+    #[test]
+    fn allows_hex_charcode_with_trailing_comment_in_switch() {
+        let src = r#"
+            function getPathCharType(code) {
+                switch (code) {
+                    case 0x5b: // [
+                    case 0x5d: // ]
+                    case 0x2e: // .
+                    case 0x22: // "
+                    case 0x27: // '
+                        return "x";
+                }
+            }
+        "#;
+        assert!(
+            run(src).is_empty(),
+            "documented hex char-code constants must not be flagged"
+        );
+    }
+
+    #[test]
+    fn allows_hex_charcode_with_inline_comment_in_condition() {
+        let src = r#"function f(ch) { return ch === 0x22 /* " */ ? 1 : 0; }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_hex_without_explanatory_comment() {
+        // The exemption is the inline comment, not the hex format: an undocumented
+        // hex literal in a non-charcode context is still a magic number.
+        let src = r#"function f(x) { return x & 0xABCDEF; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_decimal_with_trailing_comment() {
+        // The exemption is scoped to hex literals; a bare decimal magic number
+        // is still flagged even with a trailing comment.
+        let src = "function f(price) { return price * 86400; } // one day";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_hex_when_comment_is_on_next_line() {
+        // The comment must trail the literal on the same line; a comment on a
+        // following line documents something else and does not exempt the hex.
+        let src = "function f(x) { return x & 0xABCDEF;\n// unrelated comment\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_sibling_hex_when_only_one_is_documented() {
+        // A trailing comment binds only to a literal reachable through binding
+        // trivia. `0xBB` reaches the comment through `) ` and is exempted, but
+        // `0xAA` is separated by `, 0xBB)` (another literal) and stays flagged —
+        // a blanket same-line exemption would have silenced both.
+        let src = r#"function f() { return foo(0xAA, 0xBB) /* x */; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_undocumented_hex_before_a_documented_statement() {
+        // A trailing comment must not reach across a statement boundary: the
+        // undocumented `0xDEAD` is separated from the comment by `; g();`, so it
+        // is still flagged. (`let`, not `const`, so the const-initializer
+        // exemption does not apply.)
+        let src = "function f(x) { let y = x & 0xDEAD; g(); /* note */ return y; }";
         assert_eq!(run(src).len(), 1);
     }
 
