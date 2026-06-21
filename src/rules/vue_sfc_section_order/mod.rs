@@ -13,7 +13,10 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["vue"],
 
-    skip_in_test_dir: false,
+    // Test-fixture SFCs intentionally use non-canonical section order (e.g.
+    // Vue 2-style template-before-script) to exercise parsers and runtime
+    // behavior — they are inputs under test, not shipped components.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 

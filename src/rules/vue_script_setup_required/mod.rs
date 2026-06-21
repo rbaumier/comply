@@ -13,7 +13,10 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["vue"],
 
-    skip_in_test_dir: false,
+    // Test-fixture SFCs intentionally use Options-API `<script>` with a
+    // `setup()` function to exercise that authoring style — requiring
+    // `<script setup>` would defeat the purpose of the fixture.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
