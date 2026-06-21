@@ -2844,6 +2844,58 @@ pub fn file_imports_db_library(semantic: &oxc_semantic::Semantic<'_>) -> bool {
     })
 }
 
+/// Known HTML-email template libraries. Components built with these render to
+/// email markup, where inline `style={{…}}` is the *only* reliable styling
+/// mechanism — every major client (Outlook, Gmail, Apple Mail) strips `<style>`
+/// blocks and external CSS. UI rules that push styles out of the markup
+/// (e.g. `ui-no-inline-exhaustive-style`) must not fire on these files.
+///
+/// Matched against the *root* package of every import specifier, plus the
+/// `@react-email/` scope (whose primitives live under several sibling packages
+/// like `@react-email/button`).
+const EMAIL_TEMPLATE_PACKAGES: &[&str] = &[
+    "@react-email/components",
+    "react-email",
+    "jsx-email",
+    "mjml",
+    "mjml-react",
+];
+
+/// True when the file imports at least one known HTML-email template library
+/// ([`EMAIL_TEMPLATE_PACKAGES`], plus any `@react-email/*` sub-package). Covers
+/// static `import`/`export … from`, dynamic `import('…')`, and CommonJS
+/// `require('…')`.
+#[must_use]
+pub fn file_imports_email_template_library(semantic: &oxc_semantic::Semantic<'_>) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{Argument, Expression};
+
+    let is_email_specifier = |spec: &str| {
+        let root = import_root_package(spec);
+        EMAIL_TEMPLATE_PACKAGES.contains(&root) || root.starts_with("@react-email/")
+    };
+
+    semantic.nodes().iter().any(|node| match node.kind() {
+        AstKind::ImportDeclaration(decl) => is_email_specifier(decl.source.value.as_str()),
+        AstKind::ExportNamedDeclaration(decl) => decl
+            .source
+            .as_ref()
+            .is_some_and(|src| is_email_specifier(src.value.as_str())),
+        AstKind::ExportAllDeclaration(decl) => is_email_specifier(decl.source.value.as_str()),
+        AstKind::ImportExpression(expr) => {
+            matches!(peel_parens(&expr.source), Expression::StringLiteral(lit)
+                if is_email_specifier(lit.value.as_str()))
+        }
+        AstKind::CallExpression(call) => {
+            let is_require = matches!(&call.callee, Expression::Identifier(id) if id.name == "require");
+            is_require
+                && matches!(call.arguments.first(), Some(Argument::StringLiteral(lit))
+                    if is_email_specifier(lit.value.as_str()))
+        }
+        _ => false,
+    })
+}
+
 /// Leftmost identifier of a member/call chain: the object the chain is rooted
 /// on. `x.tags.find(...)` → `"x"`, `conn.manager.qb().execute()` → `"conn"`.
 /// Returns `None` for chains not rooted on a plain identifier (e.g. `this`,
@@ -3109,15 +3161,34 @@ mod oxc_helpers_tests {
 
     use super::{
         ClassShape, expression_is_or_resolves_to_literal, file_imports_db_library,
-        has_ts_expect_error_above, is_as_unknown_double_cast, is_outer_as_unknown_double_cast,
-        node_has_preceding_deprecated_tag, peel_parens, type_annotation_is_type_predicate,
-        with_semantic,
+        file_imports_email_template_library, has_ts_expect_error_above, is_as_unknown_double_cast,
+        is_outer_as_unknown_double_cast, node_has_preceding_deprecated_tag, peel_parens,
+        type_annotation_is_type_predicate, with_semantic,
     };
     use oxc_ast::AstKind;
     use oxc_span::SourceType;
 
     fn imports_db(src: &str) -> bool {
         with_semantic(src, SourceType::ts(), file_imports_db_library)
+    }
+
+    fn imports_email(src: &str) -> bool {
+        with_semantic(src, SourceType::tsx(), file_imports_email_template_library)
+    }
+
+    #[test]
+    fn file_imports_email_template_library_detects_known_packages() {
+        assert!(imports_email("import { Button } from '@react-email/components';"));
+        assert!(imports_email("import { Button } from '@react-email/button';"));
+        assert!(imports_email("import { Button } from 'jsx-email';"));
+        assert!(imports_email("import mjml from 'mjml';"));
+    }
+
+    #[test]
+    fn file_imports_email_template_library_rejects_non_email_imports() {
+        assert!(!imports_email("import React from 'react';"));
+        assert!(!imports_email("import { foo } from './email';"));
+        assert!(!imports_email("const x = 1;"));
     }
 
     #[test]
