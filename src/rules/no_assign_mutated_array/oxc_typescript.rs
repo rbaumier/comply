@@ -1,13 +1,20 @@
 //! no-assign-mutated-array OxcCheck backend — flag assignments whose RHS
 //! is a mutating array method call (sort, reverse, fill).
 //!
-//! Receivers known to be a fresh array (spread copy, `new Array`, `Array.from`/
-//! `of`, `Object.keys`/`values`/`entries`/`getOwnPropertyNames`, and
-//! fresh-returning methods like `slice`/`filter`/`map`) are exempt: mutating
-//! them in place is not observable through any other reference.
+//! Only fires when the receiver is demonstrably an array (an array literal, a
+//! binding typed `T[]`/`Array<T>`, or an array-producing expression): a `.fill()`
+//! / `.sort()` / `.reverse()` whose receiver cannot be proven an array is a
+//! method-name collision on a non-array object (e.g. a canvas `shape.fill(color)`
+//! color-setter), not `Array.prototype`.
+//!
+//! Within genuine arrays, receivers known to be a fresh array (spread copy,
+//! `new Array`, `Array.from`/`of`, `Object.keys`/`values`/`entries`/
+//! `getOwnPropertyNames`, and fresh-returning methods like `slice`/`filter`/
+//! `map`) are exempt: mutating them in place is not observable through any other
+//! reference.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, expression_is_array};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use oxc_span::GetSpan;
@@ -18,7 +25,11 @@ pub struct Check;
 const MUTATING_METHODS: &[&str] = &["sort", "reverse", "fill"];
 
 /// Check if a call is a mutating array method and return the method name.
-fn mutating_method_name<'a>(expr: &'a Expression<'a>, source: &str) -> Option<&'a str> {
+fn mutating_method_name<'a>(
+    expr: &'a Expression<'a>,
+    semantic: &oxc_semantic::Semantic,
+    source: &str,
+) -> Option<&'a str> {
     let call = unwrap_expr(expr);
     let Expression::CallExpression(call) = call else { return None };
     let Expression::StaticMemberExpression(member) = &call.callee else { return None };
@@ -27,7 +38,14 @@ fn mutating_method_name<'a>(expr: &'a Expression<'a>, source: &str) -> Option<&'
         return None;
     }
 
-    // Allow when the receiver is a freshly-created array.
+    // Only a genuine array receiver mutates in place; a method-name collision on
+    // a non-array object (`shape.fill(color)`) is not `Array.prototype`.
+    if !expression_is_array(&member.object, semantic) {
+        return None;
+    }
+
+    // Allow when the receiver is a freshly-created array — mutating it in place
+    // is unobservable through any other reference.
     if is_fresh_array(&member.object, source) {
         return None;
     }
@@ -101,14 +119,14 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         match node.kind() {
             AstKind::VariableDeclaration(decl) => {
                 for declarator in &decl.declarations {
                     let Some(init) = &declarator.init else { continue };
-                    let Some(method) = mutating_method_name(init, ctx.source) else { continue };
+                    let Some(method) = mutating_method_name(init, semantic, ctx.source) else { continue };
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, init.span().start as usize);
                     diagnostics.push(Diagnostic {
@@ -126,7 +144,7 @@ impl OxcCheck for Check {
                 }
             }
             AstKind::AssignmentExpression(assign) => {
-                let Some(method) = mutating_method_name(&assign.right, ctx.source) else { return };
+                let Some(method) = mutating_method_name(&assign.right, semantic, ctx.source) else { return };
                 let (line, column) =
                     byte_offset_to_line_col(ctx.source, assign.right.span().start as usize);
                 diagnostics.push(Diagnostic {
@@ -173,7 +191,7 @@ mod oxc_tests {
 
     #[test]
     fn flags_const_sort() {
-        assert_eq!(run("const x = arr.sort();").len(), 1);
+        assert_eq!(run("function f(arr: number[]) { const x = arr.sort(); }").len(), 1);
     }
 
     #[test]
@@ -200,8 +218,40 @@ mod oxc_tests {
 
     #[test]
     fn flags_preexisting_array_fill() {
-        // GUARD: a pre-existing receiver is still mutated in place.
-        assert_eq!(run("const x = arr.fill(0);").len(), 1);
+        // GUARD: a pre-existing typed array receiver is still mutated in place.
+        assert_eq!(run("function f(arr: number[]) { const x = arr.fill(0); }").len(), 1);
+    }
+
+    // === issue #4883: `.fill()`/`.reverse()`/`.sort()` on a non-array object ===
+
+    #[test]
+    fn allows_fill_on_canvas_shape_param() {
+        // `shape.fill(color)` is a Konva canvas color-getter/setter, not
+        // `Array.prototype.fill` — the receiver is typed as a non-array class.
+        assert!(
+            run("function _fillColor(shape: Shape) { const fill = shape.fill(); }").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_fill_on_unresolved_receiver() {
+        // An unprovable receiver (no type, no array initializer) is not flagged:
+        // the method-name collision is too weak a signal on its own.
+        assert!(run("const fill = shape.fill();").is_empty());
+    }
+
+    #[test]
+    fn flags_array_literal_fill() {
+        // GUARD: an array literal receiver is unambiguously an array.
+        assert_eq!(run("const b = [1, 2, 3].fill(0);").len(), 1);
+    }
+
+    #[test]
+    fn flags_typed_array_reverse() {
+        assert_eq!(
+            run("function f(arr: number[]) { const r = arr.reverse(); }").len(),
+            1
+        );
     }
 
     // === issue #4527: Object.keys/values/entries/getOwnPropertyNames return fresh arrays ===

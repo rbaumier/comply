@@ -1126,6 +1126,133 @@ fn reference_is_member_object(
     }
 }
 
+/// Calls whose result is an array: `[...].map(...)`, `Object.keys(o)`,
+/// `Array.from(x)`, `str.split(...)`, etc. Matched on the member/static method
+/// name of the callee.
+const ARRAY_PRODUCING_METHODS: &[&str] = &[
+    "map", "filter", "slice", "splice", "concat", "flat", "flatMap", "split", "sort", "reverse",
+    "fill", "from", "of", "keys", "values", "entries", "toSorted", "toReversed", "toSpliced",
+    "with", "getOwnPropertyNames",
+];
+
+/// Whether a type annotation denotes an array: `T[]`, `readonly T[]`,
+/// `Array<T>`, `ReadonlyArray<T>`.
+fn type_is_array(ty: &oxc_ast::ast::TSType) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeName, TSTypeOperatorOperator};
+    match ty {
+        TSType::TSArrayType(_) => true,
+        TSType::TSTypeOperatorType(op) if op.operator == TSTypeOperatorOperator::Readonly => {
+            type_is_array(&op.type_annotation)
+        }
+        TSType::TSTypeReference(tref) => matches!(
+            &tref.type_name,
+            TSTypeName::IdentifierReference(id)
+                if matches!(id.name.as_str(), "Array" | "ReadonlyArray")
+        ),
+        _ => false,
+    }
+}
+
+/// Whether a call's callee is an array-producing method (`x.map`, `Object.keys`,
+/// `Array.from`).
+fn callee_produces_array(callee: &oxc_ast::ast::Expression) -> bool {
+    let oxc_ast::ast::Expression::StaticMemberExpression(member) = callee else {
+        return false;
+    };
+    ARRAY_PRODUCING_METHODS.contains(&member.property.name.as_str())
+}
+
+/// Whether an initializer expression evaluates to an array: an array literal,
+/// `new Array(...)`, or an array-producing method/static call.
+fn initializer_is_array(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+    match expr {
+        Expression::ArrayExpression(_) => true,
+        Expression::NewExpression(new_expr) => matches!(
+            &new_expr.callee,
+            Expression::Identifier(id) if id.name.as_str() == "Array"
+        ),
+        Expression::CallExpression(call) => callee_produces_array(&call.callee),
+        Expression::ParenthesizedExpression(paren) => initializer_is_array(&paren.expression),
+        Expression::TSAsExpression(as_expr) => {
+            type_is_array(&as_expr.type_annotation) || initializer_is_array(&as_expr.expression)
+        }
+        Expression::TSSatisfiesExpression(sat) => initializer_is_array(&sat.expression),
+        Expression::TSNonNullExpression(nn) => initializer_is_array(&nn.expression),
+        _ => false,
+    }
+}
+
+/// Resolve an identifier reference to its declaration and decide whether that
+/// declaration proves the binding holds an array — a `let`/`const`/`var`
+/// declarator carrying an array type annotation or initialised from an
+/// array-producing expression, or a parameter typed as an array.
+fn binding_is_array(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    let scoping = semantic.scoping();
+    let Some(symbol_id) = ident
+        .reference_id
+        .get()
+        .and_then(|ref_id| scoping.get_reference(ref_id).symbol_id())
+    else {
+        return false;
+    };
+    let nodes = semantic.nodes();
+    let decl_id = scoping.symbol_declaration(symbol_id);
+    match nodes.kind(decl_id) {
+        AstKind::VariableDeclarator(decl) => {
+            if let Some(type_ann) = &decl.type_annotation
+                && type_is_array(&type_ann.type_annotation)
+            {
+                return true;
+            }
+            decl.init.as_ref().is_some_and(initializer_is_array)
+        }
+        AstKind::FormalParameter(param) => param
+            .type_annotation
+            .as_ref()
+            .is_some_and(|ann| type_is_array(&ann.type_annotation)),
+        _ => false,
+    }
+}
+
+/// Whether `expr` is demonstrably an array. An array literal is one directly; an
+/// array-producing expression (`new Array(...)`, `[...].map()`, `Array.from(x)`,
+/// `Object.keys(o)`, `str.split(...)`) is one; an identifier is one only if its
+/// binding carries an array type annotation (`T[]`/`readonly T[]`/`Array<T>`/
+/// `ReadonlyArray<T>`) or is initialised from an array-producing expression.
+///
+/// A receiver's *name* is never evidence — names do not determine type. A
+/// receiver whose type cannot be proven an array (an untyped parameter, a
+/// member-access chain, a call returning an unknown shape) returns `false`, so
+/// callers that gate on this predicate do not flag method-name collisions on
+/// non-array objects (e.g. a canvas `shape.fill(color)` color-setter).
+#[must_use]
+pub fn expression_is_array(
+    expr: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::Expression;
+    match expr {
+        Expression::ArrayExpression(_) => true,
+        Expression::NewExpression(_) | Expression::CallExpression(_) => initializer_is_array(expr),
+        Expression::Identifier(ident) => binding_is_array(ident, semantic),
+        Expression::ParenthesizedExpression(paren) => {
+            expression_is_array(&paren.expression, semantic)
+        }
+        Expression::TSAsExpression(as_expr) => {
+            type_is_array(&as_expr.type_annotation)
+                || expression_is_array(&as_expr.expression, semantic)
+        }
+        Expression::TSSatisfiesExpression(sat) => expression_is_array(&sat.expression, semantic),
+        Expression::TSNonNullExpression(nn) => expression_is_array(&nn.expression, semantic),
+        _ => false,
+    }
+}
+
 /// True when `id` resolves (via its binding) to an import whose source module
 /// is one of `modules`. Returns `false` for an unresolved reference or a binding
 /// that is not an import (e.g. a local function/param shadowing the name), so a

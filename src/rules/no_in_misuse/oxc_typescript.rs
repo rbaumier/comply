@@ -7,115 +7,11 @@
 //! suffix, a plural) is never treated as evidence — names do not determine type.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, expression_is_array};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{
-    BinaryOperator, Expression, TSType, TSTypeName, TSTypeOperatorOperator, UnaryOperator,
-};
+use oxc_ast::ast::{BinaryOperator, Expression, UnaryOperator};
 use oxc_span::GetSpan;
 use std::sync::Arc;
-
-/// Calls whose result is an array: `[...].map(...)`, `Object.keys(o)`,
-/// `Array.from(x)`, `str.split(...)`, etc. Matched on the member/static method
-/// name of the callee.
-const ARRAY_PRODUCING_METHODS: &[&str] = &[
-    "map", "filter", "slice", "splice", "concat", "flat", "flatMap", "split", "sort", "reverse",
-    "fill", "from", "of", "keys", "values", "entries",
-];
-
-/// Whether a type annotation denotes an array: `T[]`, `readonly T[]`,
-/// `Array<T>`, `ReadonlyArray<T>`.
-fn type_is_array(ty: &TSType) -> bool {
-    match ty {
-        TSType::TSArrayType(_) => true,
-        TSType::TSTypeOperatorType(op) if op.operator == TSTypeOperatorOperator::Readonly => {
-            type_is_array(&op.type_annotation)
-        }
-        TSType::TSTypeReference(tref) => matches!(
-            &tref.type_name,
-            TSTypeName::IdentifierReference(id)
-                if matches!(id.name.as_str(), "Array" | "ReadonlyArray")
-        ),
-        _ => false,
-    }
-}
-
-/// Whether an initializer expression evaluates to an array: an array literal,
-/// `new Array(...)`, or an array-producing method/static call.
-fn initializer_is_array(expr: &Expression) -> bool {
-    match expr {
-        Expression::ArrayExpression(_) => true,
-        Expression::NewExpression(new_expr) => matches!(
-            &new_expr.callee,
-            Expression::Identifier(id) if id.name.as_str() == "Array"
-        ),
-        Expression::CallExpression(call) => callee_produces_array(&call.callee),
-        Expression::ParenthesizedExpression(paren) => initializer_is_array(&paren.expression),
-        Expression::TSAsExpression(as_expr) => {
-            type_is_array(&as_expr.type_annotation) || initializer_is_array(&as_expr.expression)
-        }
-        Expression::TSSatisfiesExpression(sat) => initializer_is_array(&sat.expression),
-        Expression::TSNonNullExpression(nn) => initializer_is_array(&nn.expression),
-        _ => false,
-    }
-}
-
-/// Whether a call's callee is an array-producing method (`x.map`, `Object.keys`,
-/// `Array.from`).
-fn callee_produces_array(callee: &Expression) -> bool {
-    let Expression::StaticMemberExpression(member) = callee else {
-        return false;
-    };
-    ARRAY_PRODUCING_METHODS.contains(&member.property.name.as_str())
-}
-
-/// Whether the right-hand operand is actually an array. An array literal is one
-/// directly; an identifier is one only if its binding (a `let`/`const`/`var`
-/// declarator or a typed parameter) carries an array type annotation or is
-/// initialised from an array-producing expression.
-fn rhs_is_array<'a>(
-    rhs: &Expression,
-    semantic: &'a oxc_semantic::Semantic<'a>,
-) -> bool {
-    match rhs {
-        Expression::ArrayExpression(_) => true,
-        Expression::Identifier(ident) => binding_is_array(ident, semantic),
-        _ => false,
-    }
-}
-
-/// Resolve an identifier reference to its declaration and decide whether that
-/// declaration proves the binding holds an array.
-fn binding_is_array<'a>(
-    ident: &oxc_ast::ast::IdentifierReference,
-    semantic: &'a oxc_semantic::Semantic<'a>,
-) -> bool {
-    let scoping = semantic.scoping();
-    let Some(symbol_id) = ident
-        .reference_id
-        .get()
-        .and_then(|ref_id| scoping.get_reference(ref_id).symbol_id())
-    else {
-        return false;
-    };
-    let nodes = semantic.nodes();
-    let decl_id = scoping.symbol_declaration(symbol_id);
-    match nodes.kind(decl_id) {
-        AstKind::VariableDeclarator(decl) => {
-            if let Some(type_ann) = &decl.type_annotation
-                && type_is_array(&type_ann.type_annotation)
-            {
-                return true;
-            }
-            decl.init.as_ref().is_some_and(initializer_is_array)
-        }
-        AstKind::FormalParameter(param) => param
-            .type_annotation
-            .as_ref()
-            .is_some_and(|ann| type_is_array(&ann.type_annotation)),
-        _ => false,
-    }
-}
 
 /// Span of the topmost expression enclosing the `in` node that still belongs to
 /// the same boolean/comparison condition — the boundary inside which a sibling
@@ -207,7 +103,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        if !rhs_is_array(&bin.right, semantic) {
+        if !expression_is_array(&bin.right, semantic) {
             return;
         }
 
