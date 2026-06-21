@@ -76,6 +76,7 @@ impl TextCheck for Check {
                 continue;
             }
             if is_declaration_file(path)
+                || is_markdown_doc_file(path)
                 || is_config_file(path)
                 || is_test_file(path)
                 || is_auto_mock_dir_path(path)
@@ -455,6 +456,18 @@ fn is_declaration_file(path: &Path) -> bool {
         .is_some_and(|n| n.ends_with(".d.ts"))
 }
 
+/// True for a `.md` documentation/metadata file (`README.md`, `CHANGELOG.md`,
+/// `LICENSE.md`, …). Markdown is indexed only for the ESM `import` statements it
+/// makes (MDX/Docusaurus pages can import components), so it is an importer in
+/// the graph but never an import *target* — nothing `import`s a `.md` file as a
+/// module. Reporting one as "unreachable from any entry point" is vacuous, so
+/// `.md` files are not candidates for dead-file analysis. `.mdx` is excluded
+/// from this exemption: it can be imported as a module (Docusaurus / Next.js
+/// MDX), so it stays subject to the normal import-graph reachability check.
+fn is_markdown_doc_file(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()) == Some("md")
+}
+
 fn is_test_file(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let path_str = path.to_str().unwrap_or("");
@@ -574,6 +587,50 @@ mod tests {
         assert!(
             diags[0].path.to_str().unwrap().contains("orphan"),
             "diagnostic should target orphan.ts"
+        );
+    }
+
+    // Regression for #5333 (popmotion): `.md` documentation/metadata files are
+    // indexed for the imports they make, never as import targets — nothing
+    // `import`s a `.md` file as a module, so flagging one as "unreachable from
+    // any entry point" is vacuous. README/CONTRIBUTING/CHANGELOG/LICENSE.md must
+    // not be flagged; a genuinely unreachable `.ts` source module still is.
+    #[test]
+    fn markdown_doc_files_are_not_flagged_issue_5333() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.ts", "export const root = 1;\n"),
+            ("README.md", "# Project\n"),
+            ("CONTRIBUTING.md", "# Contributing\n"),
+            ("CHANGELOG.md", "# Changelog\n"),
+            ("LICENSE.md", "MIT\n"),
+            ("orphan.ts", "export const orphan = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        let flagged: Vec<&str> = diags.iter().filter_map(|d| d.path.to_str()).collect();
+        assert!(
+            !flagged.iter().any(|p| p.ends_with(".md")),
+            "`.md` documentation files are never import targets and must not be \
+             flagged unused: {flagged:?}"
+        );
+        assert!(
+            flagged.iter().any(|p| p.contains("orphan")),
+            "a genuinely unreachable .ts source module must still be flagged: {flagged:?}"
+        );
+    }
+
+    // Regression for #5333: the doc exemption is scoped to `.md` only. `.mdx`
+    // CAN be imported as a module (Docusaurus / Next.js MDX), so it stays
+    // subject to the import-graph check — an unreachable `.mdx` is still flagged.
+    #[test]
+    fn unreachable_mdx_is_still_flagged_issue_5333() {
+        let files: Vec<(&str, &str)> = vec![
+            ("index.ts", "export const root = 1;\n"),
+            ("orphan.mdx", "# Orphan\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert!(
+            diags.iter().any(|d| d.path.to_str().is_some_and(|p| p.ends_with(".mdx"))),
+            "an unreachable .mdx module must still be flagged (not blanket-exempt): {diags:?}"
         );
     }
 
