@@ -286,43 +286,56 @@ pub fn is_in_test_context(node: Node, source: &[u8]) -> bool {
     false
 }
 
+/// True if a single path SEGMENT names a test directory by a `-`/`_`-delimited
+/// `test`/`tests` token.
+///
+/// The segment is split on `-` and `_`; it qualifies when any resulting token
+/// is exactly `test` or `tests`. This recognizes both snake_case and kebab-case
+/// conventions (`property_tests`, `test_helpers`, `integration-tests`,
+/// `test-helpers`, `e2e-tests`, `end-to-end-tests`, `test-utils`) while
+/// rejecting segments where `test` is a non-delimited substring (`latest`,
+/// `greatest`, `contest`, `attestation`, `testingground`).
+fn segment_is_test_token_dir(segment: &str) -> bool {
+    segment
+        .split(['-', '_'])
+        .any(|token| token == "test" || token == "tests")
+}
+
 /// True if `path` is test infrastructure recognizable by path or file name,
 /// independent of any `#[cfg(test)]` attribute.
 ///
 /// A file qualifies when either:
 ///
-/// - any path SEGMENT (exact component match) is `tests`, `property_tests`,
-///   `test_utils`, `test_helpers`, `testing`, or `testutil` — covers Cargo's
-///   `tests/` integration directory, `property_tests/` generators, and shared
-///   test-helper modules at any nesting depth; OR
+/// - any path SEGMENT contains a `-`/`_`-delimited `test`/`tests` token
+///   (`tests`, `property_tests`, `test_helpers`, `integration-tests`,
+///   `test-helpers`, `e2e-tests`, …) — covers Cargo's `tests/` integration
+///   directory, integration-test crates, and shared test-helper modules at any
+///   nesting depth in both snake_case and kebab-case; OR
+/// - any path SEGMENT is exactly `testing` or `testutil` (where `test` is a
+///   prefix, not a delimited token); OR
 /// - the file NAME is exactly `testing.rs`, `test_utils.rs`, `test_helpers.rs`,
 ///   or `testutil.rs`.
 ///
 /// Cross-crate test helpers cannot be `#[cfg(test)]` (that gate hides them
 /// from integration tests in *other* crates), so their test-only nature is
-/// conveyed by path and name instead. Matching is on exact segments / exact
-/// file names, never substrings: `testingground/` and `my_testing.rs` are
+/// conveyed by path and name instead. The `test`/`tests` token must be
+/// delimited by segment boundaries or `-`/`_`, never a bare substring:
+/// `latest/`, `greatest/`, `testingground/`, and `my_testing.rs` are
 /// production code and do not qualify.
 ///
 /// Shared by Rust rules that relax their discipline (allow `unwrap`,
 /// `panic!`, …) for test infrastructure without relying on the tree-sitter
 /// attribute walk.
 pub fn is_under_tests_dir(path: &std::path::Path) -> bool {
-    const TEST_SEGMENTS: &[&str] = &[
-        "tests",
-        "property_tests",
-        "test_utils",
-        "test_helpers",
-        "testing",
-        "testutil",
-    ];
+    const TEST_SEGMENTS: &[&str] = &["testing", "testutil"];
     const TEST_FILE_NAMES: &[&str] =
         &["testing.rs", "test_utils.rs", "test_helpers.rs", "testutil.rs"];
 
-    if path
-        .components()
-        .any(|c| TEST_SEGMENTS.iter().any(|seg| c.as_os_str() == *seg))
-    {
+    if path.components().any(|c| {
+        c.as_os_str().to_str().is_some_and(|seg| {
+            segment_is_test_token_dir(seg) || TEST_SEGMENTS.contains(&seg)
+        })
+    }) {
         return true;
     }
     path.file_name()
@@ -3937,10 +3950,19 @@ mod tests {
             // Existing `tests/` behavior, any depth.
             ("tests/helpers.rs", true),
             ("crates/foo/tests/it.rs", true),
-            // New test-infrastructure segments.
+            // Snake_case test-infrastructure segments (delimited token).
             ("crates/foo/src/types/property_tests/gen.rs", true),
             ("crates/foo/src/test_utils/db.rs", true),
             ("crates/foo/src/test_helpers/mod.rs", true),
+            ("crates/foo/src/property_tests_old/gen.rs", true),
+            // Kebab-case test-infrastructure segments (delimited token).
+            ("integration-tests/src/env.rs", true),
+            ("integration-tests/foo/src/lib.rs", true),
+            ("test-helpers/src/lib.rs", true),
+            ("crates/foo/e2e-tests/run.rs", true),
+            ("crates/foo/end-to-end-tests/run.rs", true),
+            ("crates/foo/test-utils/db.rs", true),
+            // Prefix-only segments (`test` not a delimited token) still match.
             ("crates/foo/src/testing/mod.rs", true),
             ("crates/foo/src/testutil/mod.rs", true),
             // New exact file names (cross-crate test helpers, no #[cfg(test)]).
@@ -3952,7 +3974,11 @@ mod tests {
             ("crates/foo/src/lib.rs", false),
             ("crates/foo/src/my_testing.rs", false),
             ("crates/foo/src/testingground/k.rs", false),
-            ("crates/foo/src/property_tests_old/gen.rs", false),
+            // `test` as a non-delimited substring is NOT a test dir.
+            ("crates/foo/src/latest/v.rs", false),
+            ("crates/foo/src/greatest/v.rs", false),
+            ("crates/foo/src/contest/v.rs", false),
+            ("crates/foo/src/attestation/v.rs", false),
         ];
         for (path, expected) in cases {
             assert_eq!(

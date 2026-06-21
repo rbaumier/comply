@@ -142,6 +142,34 @@ fn t() { let url = std::env::var("URL").unwrap(); }"#;
     }
 
     #[test]
+    fn allows_env_var_in_kebab_case_integration_tests_dir() {
+        let src = r#"pub fn setup() { let r = std::env::var("NEXTEST_WORKSPACE_ROOT").expect("set"); }"#;
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "integration-tests/foo/src/lib.rs")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_env_var_in_kebab_case_test_helpers_dir() {
+        let src = r#"pub fn setup() { let p = env::var("PATH").unwrap(); }"#;
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "test-helpers/src/lib.rs").is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_env_var_unwrap_in_latest_dir() {
+        // `latest` contains `test` only as a non-delimited substring — it is a
+        // production directory, not test infrastructure.
+        let src = r#"fn load() { let url = std::env::var("URL").unwrap(); }"#;
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, src, "src/latest/v.rs").len(),
+            1
+        );
+    }
+
+    #[test]
     fn allows_env_var_with_unwrap_or() {
         let src = r#"fn handler() { let url = env::var("URL").unwrap_or_default(); }"#;
         // unwrap_or_default is a graceful fallback, not a panic — but our
