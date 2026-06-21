@@ -547,11 +547,12 @@ pub fn register_all() -> Vec<RuleDef> {
         // ══════════════════════════════════════════════════════════════════
         // OTHER
         // ══════════════════════════════════════════════════════════════════
-        entry(
+        entry_with_filter(
             "no-deprecated",
             "no-deprecated",
             "Using deprecated API that may be removed in future.",
             "Replace with the recommended alternative.",
+            Some(Arc::new(NoDeprecatedFilter)),
         ),
         entry(
             "no-base-to-string",
@@ -1222,6 +1223,116 @@ fn nms_is_error_constructor_interop_spread(src: &str, line_1based: usize) -> boo
     let end = (line_1based + 1).min(lines.len());
     let window = lines[start..end].join("\n");
     window.contains("new ") && window.contains("Error(")
+}
+
+// ── no-deprecated post-filter ──────────────────────────────────────────────
+//
+// A re-export forwards a symbol for backward compatibility — it is not a use of
+// the deprecated API. tsgolint flags the specifier inside the re-export, e.g.
+// `export { Line } from './shapes/Line'` where `Line` is `@deprecated`. Dropping
+// the export here means library consumers are still warned at their own import
+// sites while the maintainer keeps the compat barrel. Genuine uses (calling,
+// instantiating, referencing, or import-and-use of a deprecated symbol) still
+// fire. (Closes #5325)
+
+struct NoDeprecatedFilter;
+
+impl PostFilter for NoDeprecatedFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        let Some(src) = source else {
+            return true;
+        };
+        !nd_is_reexport_specifier(src, diag.line)
+    }
+}
+
+// True when the diagnostic's line is part of an `export … from '…'` re-export
+// statement. Covers the named (`export { X } from`, `export { X as Y } from`)
+// and namespace (`export * from`, `export * as NS from`) forms. A local
+// `export { X }` without a `from` clause is the deprecated declaration itself
+// and is not exempted.
+fn nd_is_reexport_specifier(src: &str, line_1based: usize) -> bool {
+    let lines: Vec<&str> = src.lines().collect();
+    if line_1based == 0 || line_1based > lines.len() {
+        return false;
+    }
+    // Find the line that starts the statement enclosing the diagnostic: scan
+    // upward (the specifier may sit several lines below `export {`) for a line
+    // whose first token is `export`. Bound the walk so an unterminated brace
+    // can't run off to the top of the file.
+    let mut start = None;
+    for i in (1..=line_1based).rev() {
+        if line_1based - i > 50 {
+            break;
+        }
+        if lines[i - 1].trim_start().starts_with("export") {
+            start = Some(i);
+            break;
+        }
+    }
+    let Some(start) = start else {
+        return false;
+    };
+    // Determine the statement span and whether it is a re-export. The diagnostic
+    // line must fall *within* that span — otherwise a genuine use sitting below
+    // an unrelated `export … from` (common in barrel files) would be wrongly
+    // dropped.
+    let end = (start + 50).min(lines.len());
+    let stmt = lines[start - 1..end].join("\n");
+    let Some(stmt_line_span) = nd_reexport_line_span(&stmt) else {
+        return false;
+    };
+    line_1based <= start + stmt_line_span
+}
+
+// When `stmt` (starting at an `export` line) is an `export … from '…'`
+// re-export, returns the number of additional lines the statement spans past
+// its first line (0 for a single-line re-export); `None` when it is not a
+// re-export with a module source. The end is the line that carries the
+// `from '…'` clause.
+fn nd_reexport_line_span(stmt: &str) -> Option<usize> {
+    let rest = stmt.trim_start().strip_prefix("export")?;
+    // Limit to the first statement: cut at the first `;`.
+    let stmt_body = match rest.find(';') {
+        Some(i) => &rest[..i],
+        None => rest,
+    };
+    let from_at = nd_from_source_offset(stmt_body)?;
+    // Re-anchor the offset onto the original `stmt` (it was trimmed/prefixed).
+    let prefix_len = stmt.len() - stmt.trim_start().len() + "export".len();
+    let abs = prefix_len + from_at;
+    Some(stmt[..abs].matches('\n').count())
+}
+
+// Byte offset, within `stmt_body`, of a `from` keyword followed by a
+// string-literal module source (single or double quoted) — i.e. a re-export's
+// `from '…'` clause. `None` when the body has no such clause (a local export or
+// a declaration). The keyword is word-boundaried so `from` inside an identifier
+// (e.g. `computeFrom`) does not match.
+fn nd_from_source_offset(stmt_body: &str) -> Option<usize> {
+    let mut search_from = 0;
+    while let Some(rel) = stmt_body[search_from..].find("from") {
+        let at = search_from + rel;
+        let before_ok = at == 0
+            || !stmt_body[..at]
+                .chars()
+                .next_back()
+                .is_some_and(nd_is_ident_char);
+        let after = &stmt_body[at + "from".len()..];
+        let after_ok = after.chars().next().is_none_or(|c| !nd_is_ident_char(c));
+        if before_ok && after_ok {
+            let src_part = after.trim_start();
+            if src_part.starts_with('\'') || src_part.starts_with('"') {
+                return Some(at);
+            }
+        }
+        search_from = at + "from".len();
+    }
+    None
+}
+
+fn nd_is_ident_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '$'
 }
 
 // ── no-redundant-type-constituents post-filter ────────────────────────────
@@ -2915,5 +3026,149 @@ test('a', () => {
         let f = StrictVoidReturnFilter;
         assert!(f.keep(&svr_diag(&path, line, col_a), Some(&src_content)));
         assert!(!f.keep(&svr_diag(&path, line, col_b), Some(&src_content)));
+    }
+
+    // ── no-deprecated ─────────────────────────────────────────────────────────
+
+    fn nd_diag(path: &std::path::Path, line: usize, column: usize) -> Diagnostic {
+        Diagnostic {
+            path: std::sync::Arc::from(path),
+            line,
+            column,
+            rule_id: Cow::Borrowed("no-deprecated"),
+            message: "'Line' is deprecated.".into(),
+            severity: Severity::Error,
+            span: None,
+        }
+    }
+
+    // Regression for #5325: re-exporting a deprecated class from a barrel file is
+    // backward-compat forwarding, not a use of the deprecated API.
+    #[test]
+    fn nd_drops_named_reexport() {
+        let src = "export { Line } from './src/shapes/Line';\n";
+        let path = write_temp("nd_named_reexport.ts", src);
+        let (line, col) = line_col_of(src, "Line }");
+        let src_content = source_for(&path);
+        let f = NoDeprecatedFilter;
+        assert!(!f.keep(&nd_diag(&path, line, col), Some(&src_content)));
+    }
+
+    #[test]
+    fn nd_drops_aliased_reexport() {
+        let src = "export { Line as FabricLine } from './src/shapes/Line';\n";
+        let path = write_temp("nd_aliased_reexport.ts", src);
+        let (line, col) = line_col_of(src, "Line as");
+        let src_content = source_for(&path);
+        let f = NoDeprecatedFilter;
+        assert!(!f.keep(&nd_diag(&path, line, col), Some(&src_content)));
+    }
+
+    #[test]
+    fn nd_drops_multiline_named_reexport() {
+        let src =
+            "export {\n  Circle,\n  Line,\n  Rect,\n} from './src/shapes';\n";
+        let path = write_temp("nd_multiline_reexport.ts", src);
+        let (line, col) = line_col_of(src, "  Line,");
+        let src_content = source_for(&path);
+        let f = NoDeprecatedFilter;
+        assert!(!f.keep(&nd_diag(&path, line, col + 2), Some(&src_content)));
+    }
+
+    #[test]
+    fn nd_drops_namespace_reexport() {
+        let src = "export * from './src/shapes/Line';\n";
+        let path = write_temp("nd_star_reexport.ts", src);
+        let (line, col) = line_col_of(src, "export *");
+        let src_content = source_for(&path);
+        let f = NoDeprecatedFilter;
+        assert!(!f.keep(&nd_diag(&path, line, col), Some(&src_content)));
+    }
+
+    #[test]
+    fn nd_drops_named_namespace_reexport() {
+        let src = "export * as Shapes from './src/shapes';\n";
+        let path = write_temp("nd_named_star_reexport.ts", src);
+        let (line, col) = line_col_of(src, "export *");
+        let src_content = source_for(&path);
+        let f = NoDeprecatedFilter;
+        assert!(!f.keep(&nd_diag(&path, line, col), Some(&src_content)));
+    }
+
+    #[test]
+    fn nd_drops_type_reexport() {
+        let src = "export type { Line } from './src/shapes/Line';\n";
+        let path = write_temp("nd_type_reexport.ts", src);
+        let (line, col) = line_col_of(src, "Line }");
+        let src_content = source_for(&path);
+        let f = NoDeprecatedFilter;
+        assert!(!f.keep(&nd_diag(&path, line, col), Some(&src_content)));
+    }
+
+    // A genuine use of the deprecated symbol must still fire.
+    #[test]
+    fn nd_keeps_instantiation() {
+        let src = "import { Line } from './shapes/Line';\nconst l = new Line(0, 0, 1, 1);\n";
+        let path = write_temp("nd_instantiation.ts", src);
+        let (line, col) = line_col_of(src, "new Line(");
+        let src_content = source_for(&path);
+        let f = NoDeprecatedFilter;
+        assert!(f.keep(&nd_diag(&path, line, col + "new ".len()), Some(&src_content)));
+    }
+
+    // Regression for the review's MAJOR: a genuine use sitting BELOW a re-export
+    // line (the barrel-file scenario) must still fire — the re-export exemption
+    // must not bleed onto later statements.
+    #[test]
+    fn nd_keeps_use_after_reexport() {
+        let src = "export { Foo } from './a';\nconst l = new Line();\n";
+        let path = write_temp("nd_use_after_reexport.ts", src);
+        let (line, col) = line_col_of(src, "new Line(");
+        let src_content = source_for(&path);
+        let f = NoDeprecatedFilter;
+        assert!(f.keep(&nd_diag(&path, line, col + "new ".len()), Some(&src_content)));
+    }
+
+    // A use several lines below a multi-line re-export must still fire.
+    #[test]
+    fn nd_keeps_use_after_multiline_reexport() {
+        let src =
+            "export {\n  Foo,\n  Bar,\n} from './a';\nconst l = new Line();\n";
+        let path = write_temp("nd_use_after_multiline_reexport.ts", src);
+        let (line, col) = line_col_of(src, "new Line(");
+        let src_content = source_for(&path);
+        let f = NoDeprecatedFilter;
+        assert!(f.keep(&nd_diag(&path, line, col + "new ".len()), Some(&src_content)));
+    }
+
+    // A local `export { X }` WITHOUT a `from` source is the deprecated
+    // declaration's own export, not forwarding — it must still fire.
+    #[test]
+    fn nd_keeps_local_export_without_source() {
+        let src = "class Line {}\nexport { Line };\n";
+        let path = write_temp("nd_local_export.ts", src);
+        let (line, col) = line_col_of(src, "export { Line }");
+        let src_content = source_for(&path);
+        let f = NoDeprecatedFilter;
+        assert!(f.keep(&nd_diag(&path, line, col + "export { ".len()), Some(&src_content)));
+    }
+
+    // `from` appearing as an identifier in a real expression must not be
+    // mistaken for a re-export `from` clause.
+    #[test]
+    fn nd_keeps_use_with_from_identifier() {
+        let src = "const from = makeLine();\nconst l = new Line(from);\n";
+        let path = write_temp("nd_from_identifier.ts", src);
+        let (line, col) = line_col_of(src, "new Line(");
+        let src_content = source_for(&path);
+        let f = NoDeprecatedFilter;
+        assert!(f.keep(&nd_diag(&path, line, col + "new ".len()), Some(&src_content)));
+    }
+
+    #[test]
+    fn nd_keeps_when_source_missing() {
+        let f = NoDeprecatedFilter;
+        let d = nd_diag(Path::new("src/foo.ts"), 1, 1);
+        assert!(f.keep(&d, None));
     }
 }
