@@ -461,4 +461,182 @@ mod tests {
             "a <code src> inside a code fence is an example, not an include, so it must still be flagged, got: {diags:?}"
         );
     }
+
+    // Regression for #5403 (partykit/partykit) — a PartyKit server class declared
+    // as `main` in `partykit.json` is loaded by the PartyKit runtime, never
+    // through a static import, so its `default` export has no in-repo importer yet
+    // is a live entry point and must not be flagged dead.
+    #[test]
+    fn no_fp_for_partykit_main_entry_class_issue_5403() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "partykit.json",
+                r#"{ "name": "partykit-site", "main": "party/server.ts", "parties": { "presence": "party/presence.ts" } }"#,
+            ),
+            (
+                "party/server.ts",
+                "import type * as Party from \"partykit/server\";\n\
+                 export default class NoopServer implements Party.Server {}\n",
+            ),
+            // A second app file so the index is not in single-file mode.
+            ("src/app.ts", "export const used = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "party/server.ts");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("default")),
+            "a PartyKit `main` entry class must not be flagged dead, got: {diags:?}"
+        );
+    }
+
+    // Regression for #5403 — the same for a `parties.<name>` entry: the server
+    // class declared under `parties.presence` is equally framework-loaded.
+    #[test]
+    fn no_fp_for_partykit_parties_entry_class_issue_5403() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "partykit.json",
+                r#"{ "name": "partykit-site", "main": "party/server.ts", "parties": { "presence": "party/presence.ts" } }"#,
+            ),
+            (
+                "party/presence.ts",
+                "import type * as Party from \"partykit/server\";\n\
+                 export default class PresenceServer implements Party.Server {\n\
+                   constructor(public room: Party.Room) {}\n\
+                 }\n",
+            ),
+            ("src/app.ts", "export const used = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "party/presence.ts");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("default")),
+            "a PartyKit `parties.<name>` entry class must not be flagged dead, got: {diags:?}"
+        );
+    }
+
+    // Regression for #5403 — convention fallback: a `party/`-directory server
+    // class NOT listed in `partykit.json` (partial config) is still exempt
+    // because its `default` export implements `Party.Server` and a `partykit.json`
+    // marks the project as a PartyKit app.
+    #[test]
+    fn no_fp_for_partykit_convention_server_class_issue_5403() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "partykit.json",
+                r#"{ "name": "partykit-site", "main": "party/server.ts" }"#,
+            ),
+            (
+                "party/server.ts",
+                "import type * as Party from \"partykit/server\";\n\
+                 export default class MainServer implements Party.Server {}\n",
+            ),
+            (
+                "party/extra.ts",
+                "import type * as Party from \"partykit/server\";\n\
+                 export default class ExtraServer implements Party.Server {}\n",
+            ),
+            ("src/app.ts", "export const used = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "party/extra.ts");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("default")),
+            "an unlisted `party/` server class must be exempt via convention, got: {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #5403 — a genuinely-unused export in an ordinary
+    // module of a PartyKit project (outside `party/`, not in `partykit.json`)
+    // must still be flagged.
+    #[test]
+    fn still_flags_dead_export_in_ordinary_module_of_partykit_project_issue_5403() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "partykit.json",
+                r#"{ "name": "partykit-site", "main": "party/server.ts" }"#,
+            ),
+            (
+                "party/server.ts",
+                "import type * as Party from \"partykit/server\";\n\
+                 export default class MainServer implements Party.Server {}\n",
+            ),
+            ("src/orphan.ts", "export const deadHelper = 1;\n"),
+            ("src/app.ts", "export const used = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/orphan.ts");
+        assert!(
+            diags.iter().any(|d| d.message.contains("deadHelper")),
+            "a dead export in an ordinary module of a PartyKit project must still be flagged, got: {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #5403 — a `party/`-directory class with no
+    // `partykit.json` in the project is not a PartyKit entry (the convention
+    // fallback is gated on a manifest), so a genuinely-dead default export still
+    // fires.
+    #[test]
+    fn still_flags_party_dir_class_without_partykit_manifest_issue_5403() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "party/server.ts",
+                "export default class NotAPartyServer {}\n",
+            ),
+            ("src/app.ts", "export const used = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "party/server.ts");
+        assert!(
+            diags.iter().any(|d| d.message.contains("default")),
+            "a `party/` class without a partykit.json must still be flagged, got: {diags:?}"
+        );
+    }
+
+    // Regression for #5403 — convention fallback covers the plural `parties/`
+    // directory and the named-import `extends Server` heritage form.
+    #[test]
+    fn no_fp_for_partykit_convention_parties_dir_extends_server_issue_5403() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "partykit.json",
+                r#"{ "name": "partykit-site", "main": "parties/main.ts" }"#,
+            ),
+            (
+                "parties/chat.ts",
+                "import { Server } from \"partykit/server\";\n\
+                 export default class ChatServer extends Server {}\n",
+            ),
+            ("src/app.ts", "export const used = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "parties/chat.ts");
+        assert!(
+            diags.iter().all(|d| !d.message.contains("default")),
+            "a `parties/` server class extending Server must be exempt, got: {diags:?}"
+        );
+    }
+
+    // Negative-space guard for #5403 — a `party/` class whose default export
+    // extends an unrelated namespaced `*.Server` (not `Party.Server`) is not a
+    // PartyKit server, so a genuinely-dead default export still fires.
+    #[test]
+    fn still_flags_party_dir_class_extending_unrelated_namespaced_server_issue_5403() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "partykit.json",
+                r#"{ "name": "partykit-site", "main": "party/server.ts" }"#,
+            ),
+            (
+                "party/server.ts",
+                "import type * as Party from \"partykit/server\";\n\
+                 export default class MainServer implements Party.Server {}\n",
+            ),
+            (
+                "party/http.ts",
+                "import * as http from \"node:http\";\n\
+                 export default class MyHttp extends http.Server {}\n",
+            ),
+            ("src/app.ts", "export const used = 1;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "party/http.ts");
+        assert!(
+            diags.iter().any(|d| d.message.contains("default")),
+            "a party/ class extending an unrelated *.Server must still be flagged, got: {diags:?}"
+        );
+    }
 }

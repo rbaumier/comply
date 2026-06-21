@@ -88,6 +88,14 @@
 //!     consumer's project; the repo's build step reads them as text, never
 //!     importing them as modules, so every export is consumed downstream and the
 //!     whole file is exempt. Detected via `ProjectCtx::is_in_distributed_registry_dir`.
+//!   - PartyKit server entry points — a file declared as `main` or
+//!     `parties.<name>` in `partykit.json`, or (fallback, gated on a
+//!     `partykit.json` existing) a `party/`-directory module whose `default`
+//!     export is a class implementing/extending the PartyKit server type
+//!     (`Party.Server`). The PartyKit runtime loads these server classes by
+//!     resolving the entry from `partykit.json`, never through a static import,
+//!     so the whole file is exempt. Detected via
+//!     `ProjectCtx::is_partykit_entry_file` / `is_partykit_convention_server_file`.
 //!   - Auto-imported composables/utils — a file under a `composables/` or
 //!     `utils/` directory in a project whose build step auto-imports every export
 //!     of these files across the app: a Nuxt project (`nuxt` in the root or
@@ -393,6 +401,117 @@ fn is_framework_route_export(path: &Path, export_name: &str) -> bool {
     false
 }
 
+/// True when `path` is a PartyKit server module recognized by convention rather
+/// than by an explicit `partykit.json` entry — a file under a `party/` (or
+/// `parties/`) directory whose `default` export is a class implementing or
+/// extending the PartyKit server type (`Party.Server` / `Server`). This is the
+/// fallback for a project whose `partykit.json` omits or only partially lists
+/// its entry files. It is gated on a `partykit.json` existing in the project, so
+/// a `party/` directory in an unrelated project stays subject to the rule, and
+/// the export-shape scan only runs once both path gates pass.
+fn is_partykit_convention_server_file(
+    path: &Path,
+    project: &crate::project::ProjectCtx,
+    source: &str,
+    lang: crate::files::Language,
+) -> bool {
+    if !has_path_segment(path, "party") && !has_path_segment(path, "parties") {
+        return false;
+    }
+    let Some(start_dir) = path.parent() else {
+        return false;
+    };
+    if !project.has_partykit_manifest(start_dir) {
+        return false;
+    }
+    has_partykit_server_default_export(source, lang)
+}
+
+/// True when `source` has a `default`-exported class whose heritage names the
+/// PartyKit server type — `implements Party.Server` (the canonical form) or
+/// `extends Server`/`extends Party.Server`. The PartyKit runtime instantiates
+/// this class; no static import names it. Keying on the heritage shape keeps an
+/// ordinary `export default class {}` in a `party/` directory subject to the
+/// rule.
+fn has_partykit_server_default_export(source: &str, lang: crate::files::Language) -> bool {
+    let Some(grammar) = ts_language_for(lang) else {
+        return false;
+    };
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&grammar).is_err() {
+        return false;
+    }
+    let Some(tree) = parser.parse(source, None) else {
+        return false;
+    };
+    let bytes = source.as_bytes();
+    let mut found = false;
+    walk_tree(&tree, |node| {
+        if found || node.kind() != "export_statement" {
+            return;
+        }
+        let is_default = node.children(&mut node.walk()).any(|c| c.kind() == "default");
+        if !is_default {
+            return;
+        }
+        let Some(class) = node
+            .named_children(&mut node.walk())
+            .find(|c| c.kind() == "class" || c.kind() == "class_declaration")
+        else {
+            return;
+        };
+        if class_heritage_names_partykit_server(class, bytes) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// True when a `class`/`class_declaration` node's heritage clause references the
+/// PartyKit server type — its `class_heritage` text contains `Party.Server` or a
+/// bare `Server` after `extends`/`implements`.
+fn class_heritage_names_partykit_server(class: tree_sitter::Node, source: &[u8]) -> bool {
+    class
+        .named_children(&mut class.walk())
+        .filter(|c| c.kind() == "class_heritage")
+        .filter_map(|h| h.utf8_text(source).ok())
+        .any(partykit_heritage_text_names_server)
+}
+
+/// True when a class-heritage text names the PartyKit server type — the two
+/// canonical PartyKit forms `Party.Server` (namespace import) and a bare `Server`
+/// (named import: `import { Server } from "partykit/server"`). Anchored on these
+/// shapes so an unrelated `MyServerBase` (substring) or a different namespaced
+/// `Foo.Server` (e.g. `http.Server`) does not qualify.
+fn partykit_heritage_text_names_server(heritage: &str) -> bool {
+    if heritage.contains("Party.Server") {
+        return true;
+    }
+    // A bare `Server` token: a `Server` word not immediately preceded by `.`
+    // (which would make it a `Foo.Server` member access of an unrelated type).
+    let bytes = heritage.as_bytes();
+    let mut search_from = 0;
+    while let Some(rel) = heritage[search_from..].find("Server") {
+        let start = search_from + rel;
+        let end = start + "Server".len();
+        let preceded_by_ident_or_dot = start
+            .checked_sub(1)
+            .is_some_and(|i| bytes[i] == b'.' || is_js_ident_byte(bytes[i]));
+        let followed_by_ident = bytes.get(end).is_some_and(|&b| is_js_ident_byte(b));
+        if !preceded_by_ident_or_dot && !followed_by_ident {
+            return true;
+        }
+        search_from = end;
+    }
+    false
+}
+
+/// True for bytes that may appear inside a JS/TS identifier — used to reject a
+/// `Server` substring inside a longer identifier (`MyServerBase`, `WebSocket`).
+fn is_js_ident_byte(b: u8) -> bool {
+    b == b'_' || b == b'$' || b.is_ascii_alphanumeric()
+}
+
 /// A framework convention whose named exports are discovered dynamically by a
 /// runtime/build tool and therefore never have a static importer.
 ///
@@ -631,6 +750,20 @@ impl TextCheck for Check {
         // the registry build step, never imported as modules within the repo, so
         // every export is consumed downstream and none is dead.
         if ctx.project.is_in_distributed_registry_dir(&canon) {
+            return Vec::new();
+        }
+        // PartyKit server entry point — a file declared as `main` or
+        // `parties.<name>` in `partykit.json`, or (fallback) a `party/`-directory
+        // module whose `default` export is a class implementing/extending the
+        // PartyKit server type. PartyKit (a realtime framework on Cloudflare
+        // Durable Objects) loads these server classes by resolving the entry from
+        // `partykit.json`, never through a static TS import, so the file has no
+        // in-repo importer yet is a live entry point. The convention fallback is
+        // gated on a `partykit.json` existing in the project so a stray `party/`
+        // directory in a non-PartyKit project stays subject to the rule.
+        if ctx.project.is_partykit_entry_file(&canon)
+            || is_partykit_convention_server_file(&canon, ctx.project, ctx.source, ctx.lang)
+        {
             return Vec::new();
         }
         // Auto-imported composable/util — a file under a `composables/` or
