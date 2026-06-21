@@ -33,6 +33,14 @@ impl AstCheck for Check {
         if has_non_exhaustive(node, source_bytes) {
             return;
         }
+        // Uninhabited (zero-variant) enum: a `pub enum Never {}` has no variants
+        // and can never be constructed — it is a sealed type-state / phantom
+        // marker. `#[non_exhaustive]` is meaningless on it (there is nothing to
+        // match exhaustively, and a variant is never meant to be added), so it is
+        // not the right fix here.
+        if is_uninhabited(node) {
+            return;
+        }
         // C-ABI enum (`#[repr(C)]` or `#[repr(<int>)]`): the fixed, complete set
         // of integer-valued variants *is* the cross-language ABI contract the C
         // side switches on. `#[non_exhaustive]` is a Rust-only construct that C
@@ -179,6 +187,19 @@ fn is_pub(item: tree_sitter::Node, source: &[u8]) -> bool {
         }
     }
     false
+}
+
+/// True when the `enum_item` has zero variants: its `body`
+/// (`enum_variant_list`) holds no `enum_variant` named children (e.g.
+/// `pub enum Never {}`). A missing body is likewise treated as uninhabited.
+fn is_uninhabited(item: tree_sitter::Node) -> bool {
+    let Some(body) = item.child_by_field_name("body") else {
+        return true;
+    };
+    let mut cursor = body.walk();
+    !body
+        .named_children(&mut cursor)
+        .any(|v| v.kind() == "enum_variant")
 }
 
 fn has_non_exhaustive(item: tree_sitter::Node, source: &[u8]) -> bool {
@@ -384,6 +405,28 @@ mod tests {
         // #5311: a partial discriminant mapping is not a fully-enumerated wire
         // format — it stays flagged as an ordinary growable API.
         assert_eq!(run_on("pub enum E { A = 1, B }").len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_uninhabited_pub_enum() {
+        // #5310: an uninhabited (zero-variant) `pub enum` is a sealed
+        // type-state / phantom marker that can never be constructed.
+        // `#[non_exhaustive]` is meaningless on it.
+        assert!(run_on("pub enum Never {}").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_uninhabited_pub_enum_with_derive() {
+        // #5310: the flate2-rs `Direction` marker shape — a `#[derive(Debug)]`
+        // before a zero-variant `pub enum` must still be exempt.
+        assert!(run_on("#[derive(Debug)]\npub enum DirCompress {}").is_empty());
+    }
+
+    #[test]
+    fn flags_non_empty_pub_enum() {
+        // #5310 negative space: a `pub enum` with variants is still flagged —
+        // the uninhabited exemption must not weaken the rule for real enums.
+        assert_eq!(run_on("pub enum Foo { A, B }").len(), 1);
     }
 
     #[test]
