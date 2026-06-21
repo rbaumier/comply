@@ -189,6 +189,22 @@ fn is_test_subject_stem(stem: &str) -> bool {
         .all(|segment| is_camel_case(segment) || is_pascal_case(segment))
 }
 
+/// Returns `true` for a TensorFlow.js gradient-file stem
+/// `<PascalCaseOperator>_grad`: a non-empty PascalCase operator name followed by
+/// the distinctive `_grad` suffix (e.g. `Conv2DBackpropInput_grad`, `MatMul_grad`,
+/// `Sigmoid_grad`). TensorFlow names each operator in PascalCase to match its
+/// canonical operator-registry name, and TF.js mirrors that name in the gradient
+/// file so the gradient implementation is searchable by the operator name and
+/// stays consistent with the equivalent Python `<OpName>_grad.py`. The `_grad`
+/// suffix is the unambiguous gradient-file marker, so combined with the PascalCase
+/// stem it identifies the convention without granting a blanket underscore
+/// allowance — an ordinary mis-cased stem without `_grad` is unaffected.
+/// See https://github.com/tensorflow/tfjs/tree/master/tfjs-core/src/gradients.
+fn is_tfjs_gradient_stem(stem: &str) -> bool {
+    stem.strip_suffix("_grad")
+        .is_some_and(is_pascal_case)
+}
+
 /// Returns `true` for the cross-ecosystem regression-test stem
 /// `issue-<digits>-<apiName>`: the literal `issue-` prefix, one or more ASCII
 /// digits naming the GitHub issue, then a `-` introducing the API-name segment.
@@ -387,7 +403,8 @@ impl TextCheck for Check {
         if is_ts_or_jsx_file(ctx.path)
             && (is_pascal_case(convention_stem)
                 || is_camel_case(convention_stem)
-                || is_test_subject_stem(convention_stem))
+                || is_test_subject_stem(convention_stem)
+                || is_tfjs_gradient_stem(convention_stem))
         {
             return Vec::new();
         }
@@ -1231,5 +1248,47 @@ mod tests {
     #[test]
     fn flags_versioned_test_file_arbitrary_suffix_issue_5107() {
         assert_eq!(run("test/tailwind@foo.test.ts").len(), 1);
+    }
+
+    // Regression for #5418: TensorFlow.js gradient files use the
+    // `<PascalCaseOperator>_grad.ts` convention so the gradient implementation is
+    // searchable by the operator's canonical PascalCase name. The PascalCase stem
+    // plus the distinctive `_grad` suffix is framework-dictated and must not flag.
+    #[test]
+    fn allows_tfjs_gradient_file_issue_5418() {
+        assert!(run("tfjs-core/src/gradients/Conv2DBackpropInput_grad.ts").is_empty());
+        assert!(run("tfjs-core/src/gradients/MatMul_grad.ts").is_empty());
+        assert!(run("tfjs-core/src/gradients/Sigmoid_grad.ts").is_empty());
+        assert!(run("tfjs-core/src/gradients/ResizeNearestNeighbor_grad.ts").is_empty());
+    }
+
+    // The `_grad` convention is not directory-gated (the `_grad` suffix is itself
+    // the unambiguous marker) and applies to the `.js` extension too.
+    #[test]
+    fn allows_tfjs_gradient_file_js_issue_5418() {
+        assert!(run("src/Atan2_grad.js").is_empty());
+    }
+
+    // Guard (scope proof): an ordinary mis-cased file WITHOUT the `_grad` suffix,
+    // where kebab-case is expected, must STILL fire — the allowance is anchored on
+    // the `_grad` suffix combined with PascalCase, not a blanket underscore allow.
+    #[test]
+    fn flags_non_gradient_underscore_file_issue_5418() {
+        assert_eq!(run("src/My_Helper.ts").len(), 1);
+    }
+
+    // Guard: a snake_cased stem ending in `_grad` is NOT a TF.js gradient file —
+    // the part before `_grad` must be PascalCase, so `compute_grad` still fires.
+    #[test]
+    fn flags_snake_case_grad_suffix_issue_5418() {
+        assert_eq!(run("src/compute_grad.ts").len(), 1);
+    }
+
+    // Guard (unit): the empty operator name (`_grad` with nothing before it) is not
+    // a gradient stem — `is_tfjs_gradient_stem` requires a non-empty PascalCase op.
+    #[test]
+    fn rejects_bare_grad_stem_unit_issue_5418() {
+        assert!(!is_tfjs_gradient_stem("_grad"));
+        assert!(!is_tfjs_gradient_stem("grad"));
     }
 }
