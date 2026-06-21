@@ -92,12 +92,20 @@ fn approximated_constant(raw: &str) -> Option<&'static str> {
         return None;
     }
 
-    let num = num.trim_matches('0');
+    // Normalize a bare-zero integer part (`0.693` → `.693`) so it lines up with
+    // the fraction-only constants, which omit the leading `0`. Trailing zeros in
+    // the fraction stay: they are significant, so `0.690` must not collapse into
+    // a prefix of `.6931…` (LN2).
+    let normalized = if decimal == "0" {
+        &num[1..]
+    } else {
+        num
+    };
     for (constant, name) in KNOWN_CONSTS {
-        let is_constant_approximated = match constant.len().cmp(&num.len()) {
-            Ordering::Less => is_approx_const(num, constant),
-            Ordering::Equal => constant == num,
-            Ordering::Greater => is_approx_const(constant, num),
+        let is_constant_approximated = match constant.len().cmp(&normalized.len()) {
+            Ordering::Less => is_approx_const(normalized, constant),
+            Ordering::Equal => constant == normalized,
+            Ordering::Greater => is_approx_const(constant, normalized),
         };
         if is_constant_approximated {
             return Some(name);
@@ -276,5 +284,31 @@ mod tests {
     fn ignores_large_integer_part() {
         // Integer part outside {"", 0, 1, 2, 3}, so never an approximation.
         assert!(run("const x = 4.141592;").is_empty());
+    }
+
+    #[test]
+    fn ignores_trailing_zero_literals() {
+        // Regression for #5245: trailing zeros are significant. These are not
+        // approximations of any Math constant and must not be flagged.
+        assert!(run("const z = 0.000000;").is_empty(), "0.000000 is zero, not LN2");
+        assert!(run("const z = 0.0000000;").is_empty(), "0.0000000 is zero, not LN2");
+        assert!(run("const p = 0.690;").is_empty(), "0.690 rounds to .69, not LN2 (.6931)");
+        assert!(run("const p = 0.600;").is_empty(), "0.600 rounds to .6, not LN2");
+    }
+
+    #[test]
+    fn flags_genuine_approximations_with_enough_precision() {
+        // Counterpart to the trailing-zero guard: real approximations still fire.
+        for (src, name) in [
+            ("const v = 0.6931;", "Math.LN2"),
+            ("const v = 0.69314;", "Math.LN2"),
+            ("const v = 0.7071;", "Math.SQRT1_2"),
+            ("const v = 3.14159;", "Math.PI"),
+            ("const v = 2.7182;", "Math.E"),
+        ] {
+            let d = run(src);
+            assert_eq!(d.len(), 1, "expected one diagnostic for {src}");
+            assert!(d[0].message.contains(name), "{src} should suggest {name}");
+        }
     }
 }
