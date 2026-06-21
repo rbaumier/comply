@@ -81,6 +81,10 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            if is_dom_dimension_name(name) {
+                continue;
+            }
+
             if super::is_screaming_snake(name) {
                 continue;
             }
@@ -107,6 +111,34 @@ fn is_sveltekit_page_option(name: &str) -> bool {
     matches!(
         name,
         "prerender" | "ssr" | "csr" | "trailingSlash" | "config" | "actions" | "load" | "entries"
+    )
+}
+
+/// Canonical DOM, canvas, and viewport dimension property names. In web
+/// graphics and creative-coding code (p5.js, d3, Three.js, raw canvas) these
+/// `const` bindings mirror the lowercase property names of the platform APIs
+/// they parallel — `HTMLCanvasElement.width`/`.height`, `window.innerWidth`,
+/// `element.clientWidth`/`.offsetHeight`. Renaming them to SCREAMING_SNAKE_CASE
+/// would break the visual correspondence with the API reads they shadow, so
+/// this curated set is an accepted lowercase convention (issue #5416). Kept to
+/// names that are unambiguously dimension properties — single-letter
+/// coordinates and direction words are excluded because they are common magic
+/// constants outside graphics code — so ordinary literal constants (`timeout`,
+/// `maxRetries`) still require SCREAMING_SNAKE_CASE.
+fn is_dom_dimension_name(name: &str) -> bool {
+    matches!(
+        name,
+        "width"
+            | "height"
+            | "depth"
+            | "innerWidth"
+            | "innerHeight"
+            | "outerWidth"
+            | "outerHeight"
+            | "clientWidth"
+            | "clientHeight"
+            | "offsetWidth"
+            | "offsetHeight"
     )
 }
 
@@ -162,5 +194,61 @@ impl crate::rules::test_helpers::RunRule for Check {
         file: &crate::rules::file_ctx::FileCtx,
     ) -> Vec<crate::diagnostic::Diagnostic> {
         crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "sketch.js")
+    }
+
+    #[test]
+    fn allows_canvas_dimension_constants() {
+        // Regression for #5416: `width`/`height` mirror the DOM/canvas API
+        // property names and are an accepted lowercase convention.
+        assert!(run_on("const width = 640;\nconst height = 480;").is_empty());
+    }
+
+    #[test]
+    fn allows_viewport_dimension_constants() {
+        assert!(run_on("const innerWidth = 1024;\nconst clientHeight = 768;").is_empty());
+    }
+
+    #[test]
+    fn flags_ordinary_literal_constant() {
+        let diags = run_on("const timeout = 3000;");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("timeout"));
+    }
+
+    #[test]
+    fn flags_camel_case_dimension_alias() {
+        // `canvasSize`/`rectWidth` are camelCase author choices, not DOM API
+        // property names, so they still require SCREAMING_SNAKE_CASE.
+        assert_eq!(run_on("const canvasSize = 400;").len(), 1);
+        assert_eq!(run_on("const rectWidth = 100;").len(), 1);
+    }
+
+    #[test]
+    fn flags_single_letter_coordinate_constant() {
+        // `x`/`y` are common magic constants outside graphics, so they are not
+        // exempt and still require SCREAMING_SNAKE_CASE.
+        assert_eq!(run_on("const x = 0;").len(), 1);
+    }
+
+    #[test]
+    fn exemption_is_confined_to_literal_inits() {
+        // The exemption only applies to literal-initialized constants. A
+        // non-primitive init never reaches the dimension-name check, so it is
+        // not flagged regardless of name (`is_primitive_init` gates first).
+        assert!(run_on("const width = computeLayout();").is_empty());
+    }
+
+    #[test]
+    fn allows_screaming_snake() {
+        assert!(run_on("const MAX_RETRIES = 5;").is_empty());
     }
 }
