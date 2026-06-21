@@ -445,6 +445,39 @@ fn is_function_param<'a>(
     false
 }
 
+/// True when the identifier is the ONLY parameter of its enclosing function and
+/// that parameter is typed `string` or carries no type annotation (the
+/// untyped-JS case). A lone string input named `str` is unambiguous — there is
+/// exactly one value and the name matches its type — so it is idiomatic rather
+/// than vague. A `str` among several parameters does not qualify: with siblings
+/// the name no longer pins down which input it is.
+fn is_sole_string_param<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let mut param_is_string_or_untyped = false;
+    for kind in semantic.nodes().ancestor_kinds(node.id()) {
+        match kind {
+            AstKind::FormalParameter(p) => {
+                param_is_string_or_untyped = match p.type_annotation.as_ref() {
+                    None => true,
+                    Some(ann) => matches!(ann.type_annotation, TSType::TSStringKeyword(_)),
+                };
+            }
+            AstKind::FormalParameters(params) => {
+                return param_is_string_or_untyped
+                    && params.rest.is_none()
+                    && params.items.len() == 1;
+            }
+            AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Program(_) => return false,
+            _ => continue,
+        }
+    }
+    false
+}
+
 /// True when the identifier is the loop variable of a `for...of` /
 /// `for await...of` / `for...in` statement (`for (const item of items)`). The
 /// singular form of the collection name is the idiomatic, self-documenting
@@ -1178,6 +1211,16 @@ impl OxcCheck for Check {
                     // statement (bridging an `any`-returning call to satisfy
                     // no-unsafe-return); a generic name fits an opaque value.
                     if binding_annotation_is_unknown(node, semantic) {
+                        return;
+                    }
+                    // `str` is the idiomatic, unambiguous name for the SOLE
+                    // parameter of a string-transformation utility
+                    // (`function capitalize(str)`, `cached(str => …)`): there is
+                    // exactly one input and the name matches its type. Limited to
+                    // the lone parameter typed `string` or left untyped (the JS
+                    // case); `str` in a multi-parameter function stays ambiguous
+                    // and still flags. (Closes #4914)
+                    if lower == "str" && is_sole_string_param(node, semantic) {
                         return;
                     }
                     // The identifier is a parameter of an arrow/function that is
@@ -2203,5 +2246,47 @@ mod tests {
         // genuinely generic names — `data` and `temp` keep firing.
         assert_eq!(run(r#"const data = fetchData();"#).len(), 1);
         assert_eq!(run(r#"function f() { const temp = compute(); return temp; }"#).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_str_sole_parameter_of_string_utility_issue_4914() {
+        // Regression for #4914 — `str` as the lone parameter of a
+        // string-transformation utility is unambiguous and idiomatic. Both the
+        // untyped-JS forms from the issue and the explicitly `string`-typed form
+        // must pass.
+        assert!(
+            run(r#"function cachedFn(str) { return cache[str]; }"#).is_empty(),
+            "untyped sole `str` param must NOT flag"
+        );
+        assert!(
+            run(r#"const camelize = str => str.replace(regex, c => c.toUpperCase());"#).is_empty(),
+            "untyped sole `str` arrow param must NOT flag"
+        );
+        assert!(
+            run(r#"function capitalize(str: string) { return str.toUpperCase(); }"#).is_empty(),
+            "string-typed sole `str` param must NOT flag"
+        );
+    }
+
+    #[test]
+    fn still_flags_str_when_ambiguous_issue_4914() {
+        // Negative space: the exemption is scoped to the SOLE parameter. `str`
+        // alongside another parameter, as a local variable, or typed as
+        // something other than `string` stays ambiguous and keeps firing.
+        assert_eq!(
+            run(r#"function f(str: string, sep: string) { return str.split(sep); }"#).len(),
+            1,
+            "`str` in a multi-param function must still flag"
+        );
+        assert_eq!(
+            run(r#"function f() { const str = build(); return str; }"#).len(),
+            1,
+            "`str` as a local variable must still flag"
+        );
+        assert_eq!(
+            run(r#"function f(str: number) { return str; }"#).len(),
+            1,
+            "sole `str` typed as a non-string must still flag"
+        );
     }
 }
