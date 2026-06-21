@@ -1,7 +1,9 @@
 //! ts-no-unused-generic-parameter OXC backend — flag generic parameters
 //! not referenced in function parameters or return type. A generic parameter
 //! referenced inside a function returned by the function (the curried-generic
-//! idiom) is not flagged.
+//! idiom) is not flagged. Type parameters on overload signatures (a function
+//! declaration with no body, or a class method overload signature) are never
+//! flagged: they drive TypeScript's overload dispatch via their constraint.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -85,6 +87,16 @@ impl OxcCheck for Check {
         for node in semantic.nodes().iter() {
             let (type_params, params, return_type, ret_fn_span, body_span, body_is_empty) =
                 match node.kind() {
+                    // Overload signatures (a standalone `function f<T>(...): R;`
+                    // declaration without a body, or a class method overload
+                    // signature) declare type parameters to drive TypeScript's
+                    // overload dispatch via their constraint — e.g. the
+                    // `<T extends never>` catch-all and `<T extends Foo>`
+                    // discriminant overloads. Such `T`s are load-bearing even
+                    // when absent from params/return, so they are never flagged.
+                    AstKind::Function(f) if f.r#type.is_typescript_syntax() => {
+                        continue;
+                    }
                     AstKind::Function(f) => (
                         f.type_parameters.as_deref(),
                         f.params.span,
@@ -295,6 +307,28 @@ mod tests {
     #[test]
     fn still_flags_constrained_generic_with_real_body_issue_1206() {
         let src = "function f<T extends true>(x: number): number {\n  return x + 1;\n}";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_class_method_overload_dispatch_signatures_issue_5056() {
+        // `T extends never` catch-all and `T extends FunctionalComponent`
+        // discriminant overloads: T drives overload resolution, not params.
+        let src = "abstract class BaseWrapper {\n  findComponent<T extends never>(selector: string): WrapperLike\n  findComponent<T extends FunctionalComponent<any>>(selector: T): DOMWrapper<Node>\n  findComponent<T extends FunctionalComponent<any>>(selector: string): DOMWrapper<Element>\n  findComponent<T extends never>(selector: NameSelector | RefSelector): VueWrapper\n  findComponent<T extends never>(selector: FindComponentSelector): WrapperLike\n  findComponent(selector: FindComponentSelector): WrapperLike {\n    return {} as WrapperLike;\n  }\n}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_standalone_function_overload_signatures_issue_5056() {
+        let src = "function find<T extends never>(selector: string): unknown;\nfunction find<T extends Foo>(selector: T): unknown;\nfunction find(selector: unknown): unknown {\n  return selector;\n}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_unused_generic_on_implemented_function_issue_5056() {
+        // An ordinary implemented function with a body still gets flagged when
+        // its type parameter appears nowhere.
+        let src = "function f<T extends never>(selector: string): unknown {\n  return selector;\n}";
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
