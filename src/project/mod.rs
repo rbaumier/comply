@@ -1886,6 +1886,9 @@ pub struct CargoManifest {
     async_runtime: bool,
     /// `[package].categories` lists `"no-std"`.
     no_std_category: bool,
+    /// A derive-based error-handling library (`thiserror`, `snafu`, `miette`,
+    /// `derive_more`, `error-stack`) is declared in any dependency section.
+    error_derive_crate: bool,
     /// `[package].rust-version` (MSRV). `WorkspaceInherited` until resolved
     /// against the workspace root by [`ProjectCtx::nearest_cargo_manifest`].
     rust_version: RustVersion,
@@ -1963,6 +1966,11 @@ impl CargoManifest {
             .filter_map(|section| value.get(section).and_then(toml::Value::as_table))
             .any(|table| Self::ASYNC_RUNTIMES.iter().any(|rt| table.contains_key(*rt)));
 
+        let error_derive_crate = ["dependencies", "dev-dependencies", "build-dependencies"]
+            .iter()
+            .filter_map(|section| value.get(section).and_then(toml::Value::as_table))
+            .any(|table| table.keys().any(|dep| is_error_derive_crate_name(dep)));
+
         let no_std_category = value
             .get("package")
             .and_then(|package| package.get("categories"))
@@ -1986,6 +1994,7 @@ impl CargoManifest {
             explicit_target_paths,
             async_runtime,
             no_std_category,
+            error_derive_crate,
             rust_version,
         })
     }
@@ -2056,6 +2065,18 @@ impl CargoManifest {
     /// True when `[package].categories` lists `"no-std"`.
     pub fn is_no_std(&self) -> bool {
         self.no_std_category
+    }
+
+    /// True when a derive-based error-handling library is declared in any
+    /// dependency section (`thiserror`, `snafu`, `miette`, `derive_more`,
+    /// `error-stack`). A crate that pulls in one of these already derives its
+    /// error types from a structured library rather than hand-rolling
+    /// `impl Display`/`impl Error`, so it satisfies the intent of the
+    /// `rust-thiserror-for-lib` rule even when the specific library is not
+    /// `thiserror`.
+    #[must_use]
+    pub fn uses_error_derive_crate(&self) -> bool {
+        self.error_derive_crate
     }
 
     /// The crate's declared minimum supported Rust version (`rust-version`),
@@ -2243,6 +2264,28 @@ const XML_PARSER_CRATE_NAMES: &[&str] = &[
 fn is_xml_parser_crate_name(name: &str) -> bool {
     let normalized = name.replace('_', "-");
     XML_PARSER_CRATE_NAMES.contains(&normalized.as_str())
+}
+
+/// Crate names of derive-based error-handling libraries, normalized to the `-`
+/// spelling. A crate depending on any of these derives its error types from a
+/// structured library (`#[derive(Snafu)]`, `#[derive(thiserror::Error)]`, etc.)
+/// rather than hand-rolling `impl Display`/`impl Error`, which is exactly what
+/// the `rust-thiserror-for-lib` rule asks for. [`is_error_derive_crate_name`]
+/// also accepts the `_` separator spelling crates.io publishes the same package
+/// under.
+const ERROR_DERIVE_CRATE_NAMES: &[&str] = &[
+    "thiserror",
+    "snafu",
+    "miette",
+    "derive-more",
+    "error-stack",
+];
+
+/// True when `name` is a known error-derive library crate, comparing against
+/// both the `-` and `_` separator spellings (`derive-more` / `derive_more`).
+fn is_error_derive_crate_name(name: &str) -> bool {
+    let normalized = name.replace('_', "-");
+    ERROR_DERIVE_CRATE_NAMES.contains(&normalized.as_str())
 }
 
 /// Parsed Tailwind theme. Populated statically from `@theme` CSS blocks (v4)
@@ -6751,6 +6794,41 @@ tokio = "1"
         );
         assert!(first.has_async_runtime(), "tokio is declared");
         assert!(first.is_no_std(), "categories lists no-std");
+    }
+
+    #[test]
+    fn cargo_manifest_uses_error_derive_crate_detects_alternatives() {
+        let dir = PathBuf::from("/crate");
+        let parse = |toml: &str| CargoManifest::parse(toml, dir.clone()).unwrap();
+
+        for dep in ["thiserror", "snafu", "miette", "derive_more", "error-stack"] {
+            let toml = format!("[package]\nname = \"lib\"\n[dependencies]\n{dep} = \"1\"\n");
+            assert!(
+                parse(&toml).uses_error_derive_crate(),
+                "{dep} in [dependencies] => error-derive crate"
+            );
+        }
+
+        // `_` separator spelling matches the same package.
+        assert!(
+            parse("[package]\nname = \"lib\"\n[dependencies]\nerror_stack = \"0.5\"\n")
+                .uses_error_derive_crate(),
+            "underscore spelling of error-stack matches"
+        );
+
+        // Declared in a non-default dependency section.
+        assert!(
+            parse("[package]\nname = \"lib\"\n[dev-dependencies]\nsnafu = \"0.8\"\n")
+                .uses_error_derive_crate(),
+            "snafu in [dev-dependencies] matches"
+        );
+
+        // No error-derive library => not exempt.
+        assert!(
+            !parse("[package]\nname = \"lib\"\n[dependencies]\nserde = \"1\"\n")
+                .uses_error_derive_crate(),
+            "serde alone is not an error-derive crate"
+        );
     }
 
     #[test]

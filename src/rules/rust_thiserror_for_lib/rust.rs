@@ -1,12 +1,22 @@
 //! rust-thiserror-for-lib backend.
 //!
 //! Skips `main.rs` / `src/bin/` (application crates) and any file that
-//! already mentions `thiserror`. In what remains, flags `enum_item`
-//! declarations that are truly `pub` (bare `pub` only — `pub(crate)`,
-//! `pub(super)`, and `pub(in …)` are crate-internal, not library API)
-//! and whose name contains `Error` — the signal that this is a
-//! library-facing error type which should derive `thiserror::Error`
-//! rather than hand-roll `Display`/`Error`.
+//! already uses a derive-based error-handling library. In what remains,
+//! flags `enum_item` declarations that are truly `pub` (bare `pub` only —
+//! `pub(crate)`, `pub(super)`, and `pub(in …)` are crate-internal, not
+//! library API) and whose name contains `Error` — the signal that this is
+//! a library-facing error type which should derive its error rather than
+//! hand-roll `Display`/`Error`.
+//!
+//! ## error-derive-library exemption
+//!
+//! The rule's intent is "derive library error types from a structured error
+//! library", not "use `thiserror` specifically". A crate using any recognized
+//! error-derive library (`thiserror`, `snafu`, `miette`, `derive_more`,
+//! `error-stack`) already satisfies that intent, so it is exempt — detected
+//! either from the file source importing the library (`use snafu::…`,
+//! `#[derive(Snafu)]`) or from the nearest `Cargo.toml` declaring it as a
+//! dependency (covering a derive that lives in a sibling file).
 //!
 //! Names ending in `Kind` are exempt: by Rust convention (cf.
 //! `std::io::ErrorKind`) a `*ErrorKind` / `*Kind` enum is an error
@@ -26,10 +36,21 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 
+/// Crate import roots of derive-based error-handling libraries. A file that
+/// imports one of these (`use snafu::…`, `use miette::…`) or names one in a
+/// derive (`#[derive(Snafu)]`) already derives its error types from a structured
+/// library, so the rule must not push it toward `thiserror`. Keyed on the Rust
+/// path segment (`derive_more`, `error_stack` — never the `-` crate spelling),
+/// mirroring the manifest-side crate set recognized by `CargoManifest`.
+const ERROR_DERIVE_IMPORT_ROOTS: &[&str] =
+    &["thiserror", "snafu", "miette", "derive_more", "error_stack"];
+
 crate::ast_check! { on ["enum_item"] => |node, source, ctx, diagnostics|
     let path_str = ctx.path.to_string_lossy();
     if path_str.contains("main.rs") || path_str.contains("src/bin/") { return; }
-    if ctx.source_contains("thiserror") { return; }
+    // A file using any error-derive library already satisfies the rule's intent;
+    // only the absence of every such library is a true hand-rolled error type.
+    if ERROR_DERIVE_IMPORT_ROOTS.iter().any(|root| ctx.source_contains(root)) { return; }
     if ctx.source_contains("no_std") { return; }
 
     if !is_pub(node, source) { return; }
@@ -42,6 +63,10 @@ crate::ast_check! { on ["enum_item"] => |node, source, ctx, diagnostics|
     // `thiserror::Error` would be pointless.
     if name_text.ends_with("Kind") { return; }
 
+    // The error-derive library may be a crate dependency whose derive lives in a
+    // sibling file; the manifest carries it crate-wide where this file's source
+    // alone cannot.
+    if ctx.project.nearest_cargo_manifest(ctx.path).is_some_and(|m| m.uses_error_derive_crate()) { return; }
     if ctx.project.nearest_cargo_manifest(ctx.path).is_some_and(|m| m.is_no_std()) { return; }
     if ctx.project.crate_root_is_no_std(ctx.path) { return; }
 
@@ -107,12 +132,21 @@ mod tests {
 
     #[test]
     fn flags_pub_enum_error_without_thiserror() {
-        assert_eq!(run("pub enum MyError { NotFound, Unauthorized }").len(), 1);
+        // Isolated crate manifest: the relative-path `run` helper would resolve
+        // to comply's own `Cargo.toml`, which depends on an error-derive library
+        // (`miette`) and would exempt the whole crate.
+        assert_eq!(
+            run_on_with_cargo(STD_CARGO_TOML, "pub enum MyError { NotFound, Unauthorized }").len(),
+            1
+        );
     }
 
     #[test]
     fn flags_pub_app_error_without_thiserror() {
-        assert_eq!(run("pub enum AppError { Network }").len(), 1);
+        assert_eq!(
+            run_on_with_cargo(STD_CARGO_TOML, "pub enum AppError { Network }").len(),
+            1
+        );
     }
 
     /// Regression for #4402: `*ErrorKind` enums are error classifiers
@@ -141,6 +175,75 @@ mod tests {
                 "#[derive(thiserror::Error)]\npub enum MyError { #[error(\"not found\")] NotFound }"
             )
             .is_empty()
+        );
+    }
+
+    /// Regression for #5288 (shepmaster/snafu): `snafu` is itself a derive-based
+    /// error library — `#[derive(Snafu)]` provides the same structured error
+    /// handling as `#[derive(thiserror::Error)]`, so a file importing it must
+    /// not be pushed toward `thiserror`.
+    #[test]
+    fn allows_enum_with_snafu() {
+        assert!(
+            run("use snafu::prelude::*;\n#[derive(Debug, Snafu)]\npub enum Error { InvalidUrl { url: String } }")
+                .is_empty(),
+            "must not flag an enum deriving snafu's error library"
+        );
+    }
+
+    #[test]
+    fn allows_enum_with_miette() {
+        assert!(
+            run("use miette::Diagnostic;\n#[derive(Debug, Diagnostic, thiserror::Error)]\npub enum Error { #[error(\"boom\")] Boom }")
+                .is_empty(),
+            "must not flag an enum deriving miette's diagnostic/error library"
+        );
+    }
+
+    /// Regression for #5288: the error-derive library may be declared as a crate
+    /// dependency while the derive itself lives in a sibling file. The nearest
+    /// `Cargo.toml` listing `snafu` exempts the crate even when this file's own
+    /// source never names it.
+    #[test]
+    fn allows_pub_enum_error_in_snafu_dep_crate() {
+        const SNAFU_DEP_CARGO_TOML: &str = r#"
+[package]
+name = "snafu-lib"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+snafu = "0.8"
+"#;
+        assert!(
+            run_on_with_cargo(SNAFU_DEP_CARGO_TOML, "pub enum MyError { Fail }").is_empty(),
+            "must not flag pub error enums in a crate depending on snafu"
+        );
+    }
+
+    /// Negative counterpart of #5288: a crate that hand-rolls its error type
+    /// with no error-derive library at all — neither in source nor manifest —
+    /// must still be flagged.
+    #[test]
+    fn still_flags_hand_rolled_error_without_error_derive_crate() {
+        const PLAIN_CARGO_TOML: &str = r#"
+[package]
+name = "plain-lib"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = "1"
+"#;
+        let src = "pub enum MyError { Fail }\n\
+                   impl std::fmt::Display for MyError {\n\
+                       fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, \"fail\") }\n\
+                   }\n\
+                   impl std::error::Error for MyError {}";
+        assert_eq!(
+            run_on_with_cargo(PLAIN_CARGO_TOML, src).len(),
+            1,
+            "must keep flagging hand-rolled error types with no error-derive library"
         );
     }
 
