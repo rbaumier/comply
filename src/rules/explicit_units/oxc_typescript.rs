@@ -49,10 +49,17 @@ use std::sync::Arc;
 /// (GSAP/anime.js/Framer Motion/Theatre.js) use a bare `delay`. The dimension
 /// (time) is unambiguous, so a suffix adds little and the suggested
 /// `delayBytes`/`delayCount` are nonsensical.
+///
+/// `elapsed` is excluded as a named temporal quantity whose conventional
+/// implicit unit is milliseconds in JS timing contexts: the time elapsed since
+/// an animation/loop started is expressed without a suffix in
+/// `requestAnimationFrame` timestamps, `performance.now()` deltas, and every JS
+/// animation library (Framer Motion, Popmotion) uses a bare `elapsed`. The
+/// dimension (time) is unambiguous, so a suffix adds little and the suggested
+/// `elapsedBytes`/`elapsedCount` are nonsensical.
 const AMBIGUOUS_BASES: &[&str] = &[
     "timeout",
     "interval",
-    "elapsed",
     "age",
     "wait",
     "distance",
@@ -444,7 +451,7 @@ mod tests {
         // Removing `duration` must not loosen genuinely unit-ambiguous bases.
         assert_eq!(run_on("function f(timeout: number) {}").len(), 1);
         assert_eq!(run_on("function f(interval: number) {}").len(), 1);
-        assert_eq!(run_on("function f(elapsed: number) {}").len(), 1);
+        assert_eq!(run_on("function f(wait: number) {}").len(), 1);
     }
 
     #[test]
@@ -546,5 +553,29 @@ mod tests {
     #[test]
     fn allows_timeout_sec_singular() {
         assert!(run_on("const timeoutSec: number = 30;").is_empty());
+    }
+
+    #[test]
+    fn allows_elapsed_animation_timing() {
+        // `elapsed` is a temporal quantity whose conventional unit is ms in JS
+        // timing contexts (rAF deltas, performance.now()) and every animation
+        // library uses a bare `elapsed` — `elapsedBytes`/`elapsedCount` are
+        // nonsensical, so it must not be flagged (#5330). Covers the issue's
+        // reported shapes: a numeric-init local and `number`-typed params.
+        assert!(run_on("let elapsed = 0;").is_empty());
+        assert!(
+            run_on("function loopElapsed(elapsed: number, duration: number, delay = 0) {}")
+                .is_empty()
+        );
+        assert!(run_on("const elapsedTime: number = 0;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_other_temporal_bases_after_elapsed_removal() {
+        // Removing `elapsed` must not loosen genuinely unit-ambiguous bases — a
+        // bare `timeout`/`interval`/`wait` still demands a suffix (#5330).
+        assert_eq!(run_on("function f(timeout: number) {}").len(), 1);
+        assert_eq!(run_on("function f(interval: number) {}").len(), 1);
+        assert_eq!(run_on("function f(wait: number) {}").len(), 1);
     }
 }
