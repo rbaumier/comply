@@ -3234,6 +3234,140 @@ pub fn local_binding_imported_from_foreign_package(
     })
 }
 
+/// The TypedArray constructor family. A TypedArray is a fixed-length view over a
+/// binary buffer; its elements are written exclusively through indexed assignment
+/// (`buf[i] = v`) — there is no immutable element-setter and no spread-then-build
+/// form (spreading a TypedArray yields a plain `Array`). Excludes `Array`, whose
+/// element writes do have immutable alternatives.
+const TYPED_ARRAY_CTORS: &[&str] = &[
+    "Int8Array",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "Int16Array",
+    "Uint16Array",
+    "Int32Array",
+    "Uint32Array",
+    "Float16Array",
+    "Float32Array",
+    "Float64Array",
+    "BigInt64Array",
+    "BigUint64Array",
+];
+
+/// True when `ident` resolves to a binding whose value is a TypedArray — a
+/// fixed-length binary buffer (`Uint8Array`, `Float64Array`, `Int32Array`, …).
+/// Indexed element assignment (`buf[i] = v`) is the only way to populate a
+/// TypedArray's contents: spreading one produces a plain `Array`, and a sparse
+/// lookup table can't be expressed as a constructor literal, so there is no
+/// immutable element-setter to suggest. Mutation rules use this to exempt such
+/// element writes while still flagging plain object/array property mutation.
+///
+/// Resolves the binding via `reference_id` → symbol → declaration node, then
+/// recognizes a TypedArray binding three ways on the enclosing
+/// `VariableDeclarator`:
+/// 1. a `: Uint8Array` (or other TypedArray) type annotation on the declarator;
+/// 2. an initializer that produces a TypedArray — `new Uint8Array(...)`,
+///    `Uint8Array.from(...)` / `Uint8Array.of(...)`, or a `.subarray(...)` /
+///    `.slice(...)` call whose own receiver resolves to a TypedArray (a TypedArray
+///    view of a TypedArray).
+///
+/// A plain `Array` binding, a function parameter, an import, or any other shape
+/// resolves to no TypedArray signal and returns `false`, so mutation through it
+/// stays flagged.
+#[must_use]
+pub fn is_typed_array_binding(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            if decl
+                .type_annotation
+                .as_ref()
+                .is_some_and(|ann| type_is_typed_array(&ann.type_annotation))
+            {
+                return true;
+            }
+            return decl
+                .init
+                .as_ref()
+                .is_some_and(|init| expression_produces_typed_array(init, semantic));
+        }
+    }
+    false
+}
+
+/// True when `ty` is a direct type reference naming a TypedArray
+/// (`Uint8Array`, `Float64Array`, …). A union or aliased type does not qualify.
+fn type_is_typed_array(ty: &oxc_ast::ast::TSType) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeName};
+    let TSType::TSTypeReference(reference) = ty else {
+        return false;
+    };
+    matches!(
+        &reference.type_name,
+        TSTypeName::IdentifierReference(id) if TYPED_ARRAY_CTORS.contains(&id.name.as_str())
+    )
+}
+
+/// True when `expr` evaluates to a TypedArray: a `new <TypedArray>(...)`
+/// construction, a `<TypedArray>.from(...)`/`.of(...)` static factory, or a
+/// `.subarray(...)`/`.slice(...)` view whose receiver itself resolves to a
+/// TypedArray. Looks through a trailing non-null assertion (`buf!`).
+fn expression_produces_typed_array(
+    expr: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::Expression;
+
+    match expr {
+        Expression::TSNonNullExpression(nn) => {
+            expression_produces_typed_array(&nn.expression, semantic)
+        }
+        // `new Uint8Array(...)`
+        Expression::NewExpression(new_expr) => matches!(
+            &new_expr.callee,
+            Expression::Identifier(callee) if TYPED_ARRAY_CTORS.contains(&callee.name.as_str())
+        ),
+        Expression::CallExpression(call) => {
+            let Expression::StaticMemberExpression(member) = &call.callee else {
+                return false;
+            };
+            match &member.object {
+                // `Uint8Array.from(...)` / `Uint8Array.of(...)`
+                Expression::Identifier(obj)
+                    if TYPED_ARRAY_CTORS.contains(&obj.name.as_str()) =>
+                {
+                    matches!(member.property.name.as_str(), "from" | "of")
+                }
+                // `buf.subarray(...)` / `buf.slice(...)` — a TypedArray view of a
+                // TypedArray. The receiver must itself resolve to a TypedArray
+                // binding, so a `.slice()` on a plain array does not qualify.
+                Expression::Identifier(obj)
+                    if matches!(member.property.name.as_str(), "subarray" | "slice") =>
+                {
+                    is_typed_array_binding(obj, semantic)
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod oxc_helpers_tests {
     use super::{byte_offset_to_line_col, mask_comments, reset_file_caches, source_contains};
