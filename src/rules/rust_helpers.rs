@@ -1520,6 +1520,91 @@ fn pattern_contains_identifier(pattern: Node, name: &str, source: &[u8]) -> bool
         .any(|child| pattern_contains_identifier(child, name, source))
 }
 
+/// If `cast`'s operand is an index expression `base[idx]` whose `base` is a local
+/// binding declared as a slice/array/Vec/Box-slice of a fixed-width integer,
+/// return that element type's name (`"u8"`, `"i32"`, …); otherwise `None`.
+///
+/// This lets the numeric-cast rules resolve the source type of the idiomatic
+/// byte-buffer assembly `(buf[0] as u32) | (buf[1] as u32) << 8 | …` where
+/// `buf: &[u8; N]`: `buf[0]` is `u8`, so the cast to a wider integer is a
+/// provable widening. Without this, the index operand resolves to no source type
+/// and both rules flag it conservatively.
+///
+/// Resolution is intentionally narrow — only a bare `identifier` base whose
+/// declared type is locally annotated as one of the recognized container shapes
+/// of a known fixed-width integer is resolved. A base from a method return, an
+/// inferred binding, or a non-integer element type yields `None`, so genuinely
+/// unresolvable casts stay flagged.
+///
+/// The returned type name is fed back through each rule's own width/signedness
+/// table, so signedness and the widening/narrowing decision are not re-derived
+/// here. Shared by `rust-no-as-numeric-cast` and `rust-no-lossy-as-cast`.
+pub fn cast_operand_indexed_element_type(cast: Node, source: &[u8]) -> Option<String> {
+    let value = cast.child_by_field_name("value")?;
+    if value.kind() != "index_expression" {
+        return None;
+    }
+    // tree-sitter exposes the indexed container as the first named child; the
+    // remaining children are the bracket tokens and the index expression.
+    let base = value.named_child(0)?;
+    if base.kind() != "identifier" {
+        return None;
+    }
+    let name = base.utf8_text(source).ok()?;
+    let declared = find_identifier_type(cast, name, source)?;
+    element_int_type(&declared).map(str::to_string)
+}
+
+/// Extract the element type name from a container type that is a slice, array,
+/// `Vec<T>`, or `Box<[T]>` of a fixed-width integer, returning `None` for any
+/// other shape or a non-integer element.
+///
+/// Leading `&` / `&mut` reference markers are stripped first, so `&[u8]`,
+/// `&mut [u8]`, `[u8]`, `[u8; 8]`, `Vec<u8>`, and `Box<[u8]>` all resolve to
+/// `"u8"`. The element must be one of the fixed-width integer primitives
+/// (`u8`..`u128`, `i8`..`i128`); `usize`/`isize` (platform width) and any
+/// non-integer element return `None`.
+fn element_int_type(declared: &str) -> Option<&str> {
+    let mut t = declared.trim();
+    // Strip leading reference markers: `&`, `&mut `, possibly repeated.
+    loop {
+        t = t.trim();
+        if let Some(rest) = t.strip_prefix('&') {
+            t = rest.trim_start();
+            if let Some(rest) = t.strip_prefix("mut ") {
+                t = rest;
+            }
+        } else {
+            break;
+        }
+    }
+    let element = if let Some(inner) = t.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        // Slice `[T]` or array `[T; N]`.
+        inner.split(';').next().unwrap_or(inner).trim()
+    } else if let Some(inner) = t.strip_prefix("Vec<").and_then(|s| s.strip_suffix('>')) {
+        inner.trim()
+    } else if let Some(inner) = t.strip_prefix("Box<").and_then(|s| s.strip_suffix('>')) {
+        // `Box<[T]>` — the box wraps a slice.
+        let slice = inner.trim();
+        slice
+            .strip_prefix('[')
+            .and_then(|s| s.strip_suffix(']'))?
+            .trim()
+    } else {
+        return None;
+    };
+    is_fixed_width_int(element).then_some(element)
+}
+
+/// True if `name` is one of the fixed-width integer primitives — `u8`..`u128`,
+/// `i8`..`i128`. Excludes `usize`/`isize`, whose width is platform-dependent.
+fn is_fixed_width_int(name: &str) -> bool {
+    matches!(
+        name,
+        "u8" | "u16" | "u32" | "u64" | "u128" | "i8" | "i16" | "i32" | "i64" | "i128"
+    )
+}
+
 /// True if `cast` (a `type_cast_expression`) casts a boolean-producing operand
 /// to an integer. `bool as <integer>` is always lossless and total
 /// (`false` → 0, `true` → 1; a `bool` is a single bit that fits every integer

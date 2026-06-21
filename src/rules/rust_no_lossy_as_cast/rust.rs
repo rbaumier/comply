@@ -49,11 +49,12 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cast_operand_bit_width, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
-    cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
-    cast_operand_is_enum_discriminant, cast_operand_is_non_negative_guarded,
-    cast_operand_is_range_guarded, cast_operand_is_repr_enum_field, cast_operand_literal_value,
-    find_identifier_type, is_in_enum_discriminant,
+    cast_operand_bit_width, cast_operand_indexed_element_type, cast_operand_is_assert_bounded,
+    cast_operand_is_bitwise, cast_operand_is_bool, cast_operand_is_char,
+    cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
+    cast_operand_is_non_negative_guarded, cast_operand_is_range_guarded,
+    cast_operand_is_repr_enum_field, cast_operand_literal_value, find_identifier_type,
+    is_in_enum_discriminant,
 };
 use crate::rules::rust_no_as_numeric_cast::rust::fires_on_cast;
 
@@ -297,7 +298,11 @@ fn source_numeric_type(node: tree_sitter::Node, source: &[u8]) -> Option<Numeric
     let value = node.child_by_field_name("value")?;
     let ident = deref_identifier(value, source).unwrap_or(value);
     if ident.kind() != "identifier" {
-        return None;
+        // `base[idx] as T` where `base` is a locally-declared slice/array/Vec of
+        // a fixed-width integer (`buf: &[u8; N]`): the element type is the cast's
+        // source, so `buf[0] as u32` is a provable widening.
+        let element_type = cast_operand_indexed_element_type(node, source)?;
+        return numeric_type(&element_type);
     }
     let name = ident.utf8_text(source).ok()?;
     let type_text = find_identifier_type(node, name, source)?;
@@ -1078,5 +1083,32 @@ mod tests {
         // No guard: the cast is a finding, owned by `rust-no-as-numeric-cast`,
         // so this rule cedes the span and stays empty.
         assert!(run_on("fn f(x: i16) -> u8 { x as u8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5318_byte_slice_index_as_u32_not_flagged() {
+        // `buf: &[u8]`, so `buf[0]` is u8 and `buf[0] as u32` is widening — the
+        // resolved element type proves the cast is safe.
+        assert!(run_on("fn f(buf: &[u8]) -> u32 { buf[0] as u32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5318_byte_array_index_as_u32_not_flagged() {
+        assert!(run_on("fn f(buf: &[u8; 8]) -> u32 { buf[0] as u32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5318_narrowing_index_cast_owned_by_numeric_cast() {
+        // `buf: &[u32]`, target u8 — a genuine narrowing. The element type now
+        // resolves, so the cast is a real finding; `rust-no-as-numeric-cast`
+        // owns the span, so this rule cedes it and stays empty.
+        assert!(run_on("fn f(buf: &[u32]) -> u8 { buf[0] as u8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5318_unresolvable_base_index_cast_owned_by_numeric_cast() {
+        // The base element type is unresolvable (method return); the narrowing
+        // stays a finding, owned by `rust-no-as-numeric-cast`.
+        assert!(run_on("fn f(thing: T) -> u8 { thing.bytes()[0] as u8 }").is_empty());
     }
 }
