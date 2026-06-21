@@ -2616,7 +2616,7 @@ const DB_PACKAGES: &[&str] = &[
 /// Root package of a bare import specifier: `@scope/pkg/deep` → `@scope/pkg`,
 /// `drizzle-orm/node-postgres` → `drizzle-orm`. Relative specifiers (`./db`) are
 /// returned unchanged and never match a package name.
-fn import_root_package(specifier: &str) -> &str {
+pub(crate) fn import_root_package(specifier: &str) -> &str {
     if specifier.starts_with('@') {
         let end = specifier
             .match_indices('/')
