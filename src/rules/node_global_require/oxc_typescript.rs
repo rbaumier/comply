@@ -20,6 +20,52 @@ fn is_static_asset_path(path: &str) -> bool {
     STATIC_ASSET_EXTENSIONS.iter().any(|ext| lower.ends_with(ext))
 }
 
+/// Data-file extensions loaded as values rather than executable modules. A
+/// conditional `require()` of one of these is a lazy data-dispatch (load only
+/// the requested locale/dataset on demand), not a hoistable module import.
+const DATA_FILE_EXTENSIONS: &[&str] = &[".json", ".json5", ".jsonc", ".yaml", ".yml", ".toml"];
+
+/// True when `path` is a relative reference (`./` or `../`) to a local data
+/// file. Such a require points at project-local data, not an npm/builtin module,
+/// so a conditional one is on-demand data loading rather than a deferrable
+/// module import.
+fn is_relative_data_file(path: &str) -> bool {
+    let is_relative = path.starts_with("./") || path.starts_with("../");
+    if !is_relative {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase();
+    DATA_FILE_EXTENSIONS.iter().any(|ext| lower.ends_with(ext))
+}
+
+/// The string-literal argument of a `require()` call, or `None` when the call
+/// has no argument or a non-literal (dynamic) argument.
+fn string_literal_arg<'a>(call: &'a oxc_ast::ast::CallExpression) -> Option<&'a str> {
+    match call.arguments.first() {
+        Some(oxc_ast::ast::Argument::StringLiteral(lit)) => Some(lit.value.as_str()),
+        _ => None,
+    }
+}
+
+/// True when the require argument is a dynamic (computed) expression rather than
+/// a plain string literal — a template literal with substitutions, a variable,
+/// or any other expression. Such a path is only known at runtime and cannot be
+/// rewritten as a static top-level import, so the rule's remediation does not
+/// apply.
+fn has_dynamic_argument(call: &oxc_ast::ast::CallExpression) -> bool {
+    let Some(arg) = call.arguments.first() else {
+        return false;
+    };
+    match arg {
+        oxc_ast::ast::Argument::StringLiteral(_) => false,
+        // A template literal with no substitutions (a single static quasi) is
+        // statically known and therefore hoistable; one with expressions is not.
+        oxc_ast::ast::Argument::TemplateLiteral(tpl) => !tpl.expressions.is_empty(),
+        oxc_ast::ast::Argument::SpreadElement(_) => false,
+        _ => true,
+    }
+}
+
 /// Test-runner lifecycle hooks whose callback bodies legitimately call
 /// `require()`: after `jest.resetModules()` / `vi.resetModules()` the module
 /// registry is cleared, and a fresh CommonJS `require()` is the only way to
@@ -87,11 +133,20 @@ impl OxcCheck for Check {
         // inside JSX — these are bundler-managed asset references, not CommonJS
         // module loads, and the documented pattern requires them inline. Exempt
         // string-literal arguments pointing at a known static-asset extension.
-        if let Some(oxc_ast::ast::Argument::StringLiteral(lit)) = call.arguments.first()
-            && is_static_asset_path(lit.value.as_str())
+        if let Some(path) = string_literal_arg(call)
+            && is_static_asset_path(path)
         {
             return;
         }
+
+        // A dynamic `require(`./locales/${locale}.json`)` / `require(name)` is
+        // resolved at runtime and cannot be rewritten as a static top-level
+        // import, so the rule's "move to top level" remediation does not apply.
+        if has_dynamic_argument(call) {
+            return;
+        }
+
+        let data_file_arg = string_literal_arg(call).map(is_relative_data_file).unwrap_or(false);
 
         // Walk ancestors: require is OK if all ancestors are top-level.
         let mut in_function = false;
@@ -112,6 +167,13 @@ impl OxcCheck for Check {
                     }
                     in_function = true;
                     break;
+                }
+                // A relative data-file `require()` inside a conditional branch is
+                // a lazy data-dispatch: load only the requested locale/dataset on
+                // demand (idiomatic in language servers / VS Code extensions).
+                // Hoisting it would eagerly bundle every branch's data file.
+                AstKind::IfStatement(_) | AstKind::SwitchStatement(_) if data_file_arg => {
+                    return;
                 }
                 AstKind::MethodDefinition(_)
                 | AstKind::IfStatement(_)
@@ -223,6 +285,82 @@ mod tests {
     #[test]
     fn flags_require_in_non_hook_callback() {
         let d = run(r#"setup(() => { const fs = require("fs"); return fs; });"#);
+        assert_eq!(d.len(), 1);
+    }
+
+    // Regression for #5055: conditional lazy data-dispatch — relative `.json`
+    // data files loaded on demand per locale inside an if/else chain. Hoisting
+    // would eagerly bundle every locale's data file.
+    #[test]
+    fn allows_conditional_locale_data_dispatch() {
+        let d = run(
+            r#"function getHtmlData(lang: string) {
+                let data;
+                if (lang === 'ja') { data = require('../data/template/ja.json'); }
+                else if (lang === 'fr') { data = require('../data/template/fr.json'); }
+                else if (lang === 'ko') { data = require('../data/template/ko.json'); }
+                return data;
+            }"#,
+        );
+        assert!(d.is_empty());
+    }
+
+    // #5055: same lazy data-dispatch expressed as a switch.
+    #[test]
+    fn allows_switch_locale_data_dispatch() {
+        let d = run(
+            r#"function load(lang: string) {
+                switch (lang) {
+                    case 'ja': return require('./locales/ja.json');
+                    case 'fr': return require('./locales/fr.json');
+                    default: return require('./locales/en.json');
+                }
+            }"#,
+        );
+        assert!(d.is_empty());
+    }
+
+    // #5055: a dynamic (computed) require path cannot be hoisted to a static
+    // top-level import, so it is never flagged.
+    #[test]
+    fn allows_dynamic_template_literal_require() {
+        let d = run(
+            r#"function load(locale: string) { return require(`./locales/${locale}.json`); }"#,
+        );
+        assert!(d.is_empty());
+    }
+
+    // #5055: a variable-argument require is also dynamic and not hoistable.
+    #[test]
+    fn allows_variable_argument_require() {
+        let d = run(r#"function load(name: string) { return require(name); }"#);
+        assert!(d.is_empty());
+    }
+
+    // Negative space for #5055: a hoistable code module (`fs`) inside a
+    // conditional is still flagged — the data-dispatch exemption is scoped to
+    // relative data files, not arbitrary in-conditional requires.
+    #[test]
+    fn flags_module_require_in_conditional() {
+        let d = run(r#"function f(x: boolean) { if (x) { const fs = require("fs"); return fs; } }"#);
+        assert_eq!(d.len(), 1);
+    }
+
+    // Negative space for #5055: a relative `.js` module (executable code, not
+    // data) inside a conditional is still flagged — it is hoistable.
+    #[test]
+    fn flags_relative_js_module_in_conditional() {
+        let d = run(
+            r#"function f(x: boolean) { if (x) { const m = require("./helper.js"); return m; } }"#,
+        );
+        assert_eq!(d.len(), 1);
+    }
+
+    // Negative space for #5055: a static template literal (no substitutions) is
+    // statically known and hoistable, so a code-module one stays flagged.
+    #[test]
+    fn flags_static_template_literal_module_require() {
+        let d = run(r#"function f() { const fs = require(`fs`); return fs; }"#);
         assert_eq!(d.len(), 1);
     }
 }
