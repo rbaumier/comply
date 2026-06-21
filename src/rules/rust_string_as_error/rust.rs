@@ -13,6 +13,11 @@
 //! `tests/` integration files), where `Result<_, String>` is the idiomatic
 //! lightweight error-propagation pattern — tests only display the error message,
 //! never pattern-match it, so a structured error enum adds no value.
+//! Also suppressed when the enclosing function's body both calls
+//! `catch_unwind` and downcasts the panic payload to a string
+//! (`downcast_ref::<String>()` / `downcast::<&str>()` / …): the `String` error
+//! is the panic message itself, recovered from a `Box<dyn Any>` that has no
+//! structure to discriminate on, so there is no typed-error alternative.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir, result_error_type};
@@ -44,6 +49,14 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
         return;
     }
     if is_in_clap_value_parser_fn(node, source) {
+        return;
+    }
+    // A `String` error recovered from `catch_unwind` is the panic message itself:
+    // `catch_unwind` yields `Box<dyn Any + Send>`, the payload is downcast to
+    // `String`/`&str` (what `panic!("…")` produces). That `String` is the only
+    // faithful representation of a panic message — there is no structure to
+    // discriminate on, so a typed error would just wrap the same string.
+    if is_in_catch_unwind_payload_fn(node, source) {
         return;
     }
     let pos = node.start_position();
@@ -105,6 +118,48 @@ fn is_in_clap_value_parser_fn(node: tree_sitter::Node, source: &[u8]) -> bool {
                 return false;
             };
             return source_wires_value_parser(src, name);
+        }
+        cur = parent;
+    }
+    false
+}
+
+/// True when `body` downcasts a panic payload to a string type, i.e. it contains
+/// `downcast_ref::<String>`, `downcast::<String>`, `downcast_ref::<&str>`, or
+/// `downcast::<&str>` (tolerating whitespace inside the turbofish). This is the
+/// `Any` -> `String` recovery that produces the panic message.
+fn downcasts_payload_to_string(body: &str) -> bool {
+    body.match_indices("downcast").any(|(idx, _)| {
+        let rest = body[idx + "downcast".len()..].trim_start();
+        let rest = rest.strip_prefix("_ref").unwrap_or(rest).trim_start();
+        let Some(rest) = rest.strip_prefix("::") else {
+            return false;
+        };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix('<') else {
+            return false;
+        };
+        let rest = rest.trim_start();
+        rest.starts_with("String") || rest.starts_with("&str")
+    })
+}
+
+/// True when the `Result<_, String>` node sits inside a function whose body both
+/// calls `catch_unwind` and downcasts the panic payload to a string. The error
+/// `String` is then the panic message recovered from `Box<dyn Any>`, which has no
+/// structure to discriminate on, so a typed error adds nothing. Both signals are
+/// required so a function that merely mentions `catch_unwind` is still flagged.
+fn is_in_catch_unwind_payload_fn(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "function_item" {
+            let Some(body) = parent
+                .child_by_field_name("body")
+                .and_then(|n| n.utf8_text(source).ok())
+            else {
+                return false;
+            };
+            return body.contains("catch_unwind") && downcasts_payload_to_string(body);
         }
         cur = parent;
     }
@@ -250,6 +305,72 @@ mod tests {
         let src = "struct S { e: Result<i32, String> }\n\
                    #[arg(value_parser = something)]\n\
                    fn g() {}";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_result_string_from_catch_unwind_payload() {
+        // The issue's quickcheck `safe` fn: the `String` error is the panic
+        // message downcast from the `catch_unwind` `Box<dyn Any>` payload — there
+        // is no typed-error alternative.
+        let src = "fn safe<T, F>(fun: F) -> Result<T, String>\n\
+                   where F: FnOnce() -> T {\n\
+                       panic::catch_unwind(panic::AssertUnwindSafe(fun)).map_err(|any_err| {\n\
+                           if let Some(&s) = any_err.downcast_ref::<&str>() {\n\
+                               s.to_owned()\n\
+                           } else if let Some(s) = any_err.downcast_ref::<String>() {\n\
+                               s.to_owned()\n\
+                           } else {\n\
+                               \"UNABLE TO SHOW RESULT OF PANIC.\".to_owned()\n\
+                           }\n\
+                       })\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_result_string_from_catch_unwind_consuming_downcast() {
+        // The consuming `downcast::<String>()` form is equally a panic-payload
+        // recovery, not a stringly-typed domain error.
+        let src = "fn run<F: FnOnce()>(f: F) -> Result<(), String> {\n\
+                       std::panic::catch_unwind(f).map_err(|e| {\n\
+                           match e.downcast::<String>() {\n\
+                               Ok(s) => *s,\n\
+                               Err(_) => \"panic\".to_owned(),\n\
+                           }\n\
+                       })\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_catch_unwind_without_string_downcast() {
+        // `catch_unwind` alone is not enough: without a downcast to a string type
+        // the `String` error is an unforced local choice and stays flagged.
+        let src = "fn run<F: FnOnce()>(f: F) -> Result<(), String> {\n\
+                       std::panic::catch_unwind(f).map_err(|_| \"boom\".to_owned())\n\
+                   }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_string_downcast_without_catch_unwind() {
+        // A string downcast alone (no `catch_unwind`) is not panic-payload
+        // recovery, so the `String` error remains an unforced choice.
+        let src = "fn f(any: &Box<dyn std::any::Any>) -> Result<(), String> {\n\
+                       match any.downcast_ref::<String>() {\n\
+                           Some(s) => Err(s.clone()),\n\
+                           None => Ok(()),\n\
+                       }\n\
+                   }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_plain_domain_string_error() {
+        // A plain function returning a domain string error (no catch_unwind) is
+        // still flagged — the exemption is scoped to panic-payload recovery.
+        let src = "fn load() -> Result<i32, String> { Err(\"bad config\".to_owned()) }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
