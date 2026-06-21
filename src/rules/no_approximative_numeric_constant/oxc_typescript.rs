@@ -3,9 +3,26 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::Expression;
 use oxc_span::GetSpan;
 use std::cmp::Ordering;
 use std::sync::Arc;
+
+/// Constructors whose array argument holds precomputed binary data, never a
+/// symbolic math constant.
+const TYPED_ARRAY_CTORS: [&str; 11] = [
+    "Float32Array",
+    "Float64Array",
+    "Int8Array",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "Int16Array",
+    "Uint16Array",
+    "Int32Array",
+    "Uint32Array",
+    "BigInt64Array",
+    "BigUint64Array",
+];
 
 /// Standard `Math` constants and their decimal representations, ordered as in
 /// Biome's source. Fraction-only constants keep their leading `.` (no `0`).
@@ -114,6 +131,67 @@ fn approximated_constant(raw: &str) -> Option<&'static str> {
     None
 }
 
+/// Counts the numeric elements (positive or unary-negated numeric literals) of
+/// an array literal. Spread/object/string elements are ignored, so a mostly
+/// numeric data array still reads as numeric.
+fn numeric_element_count(arr: &oxc_ast::ast::ArrayExpression) -> usize {
+    arr.elements
+        .iter()
+        .filter(|elem| match elem.as_expression() {
+            Some(Expression::NumericLiteral(_)) => true,
+            Some(Expression::UnaryExpression(unary)) => {
+                matches!(unary.argument, Expression::NumericLiteral(_))
+            }
+            _ => false,
+        })
+        .count()
+}
+
+/// Whether the literal `node` sits in a numeric *data* array — a typed-array
+/// initializer (`new Float32Array([...])`, etc.) or a plain array literal that
+/// holds at least `min_array_elements` numeric siblings. Such a literal is
+/// precomputed data, so a coincidental Math-constant prefix match is spurious.
+fn is_in_numeric_data_array(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    min_array_elements: usize,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    // A negated literal (`-0.985`) is wrapped in a UnaryExpression; step over it
+    // so the array literal is the immediate parent we inspect.
+    let mut current = node.id();
+    if matches!(nodes.parent_node(current).kind(), oxc_ast::AstKind::UnaryExpression(_)) {
+        current = nodes.parent_node(current).id();
+    }
+
+    let parent = nodes.parent_node(current);
+    let oxc_ast::AstKind::ArrayExpression(arr) = parent.kind() else {
+        return false;
+    };
+
+    // Typed-array initializer: `new Float32Array([...])`. Walk past any nesting
+    // of array literals (matrix-of-rows) up to the enclosing `new` expression.
+    let mut ancestor = parent.id();
+    loop {
+        let grandparent = nodes.parent_node(ancestor);
+        match grandparent.kind() {
+            oxc_ast::AstKind::ArrayExpression(_) => ancestor = grandparent.id(),
+            oxc_ast::AstKind::NewExpression(new_expr) => {
+                if let Expression::Identifier(id) = &new_expr.callee
+                    && TYPED_ARRAY_CTORS.contains(&id.name.as_str())
+                {
+                    return true;
+                }
+                break;
+            }
+            _ => break,
+        }
+    }
+
+    numeric_element_count(arr) >= min_array_elements
+}
+
 #[derive(Debug)]
 pub struct Check;
 
@@ -135,6 +213,12 @@ impl OxcCheck for Check {
         let span = lit.span();
         let raw = &semantic.source_text()[span.start as usize..span.end as usize];
         if let Some(name) = approximated_constant(raw) {
+            let min_array_elements =
+                ctx.config
+                    .threshold("no-approximative-numeric-constant", "min_array_elements", ctx.lang);
+            if is_in_numeric_data_array(node, semantic, min_array_elements) {
+                return;
+            }
             let (line, col) = byte_offset_to_line_col(ctx.source, span.start as usize);
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
@@ -310,5 +394,63 @@ mod tests {
             assert_eq!(d.len(), 1, "expected one diagnostic for {src}");
             assert!(d[0].message.contains(name), "{src} should suggest {name}");
         }
+    }
+
+    // --- #5266: numeric data-array context ---
+
+    #[test]
+    fn ignores_constant_match_in_typed_array_initializer() {
+        // Regression for #5266: a body-tracking rotation-matrix coefficient that
+        // coincidentally matches LOG10E's prefix is data, not a symbolic constant.
+        let src = "const SnapshotRhs = new Float32Array([\n\
+            -0.036, -0.985, -0.168, 0, -0.113, 0.171, -0.979, 0, 0.993, -0.016, -0.117, 0,\n\
+            0.006, 0.586, 2.035, 1,\n\
+            0.434, 0.775, 0.46, 0,\n\
+        ]);";
+        assert!(run(src).is_empty(), "typed-array data element must not be flagged");
+    }
+
+    #[test]
+    fn ignores_constant_match_in_small_typed_array() {
+        // Typed arrays are always data regardless of element count.
+        assert!(run("const v = new Float64Array([0.434, 1.0]);").is_empty());
+    }
+
+    #[test]
+    fn ignores_constant_match_in_large_numeric_array() {
+        // A plain array literal with many numeric siblings is a data table.
+        let src = "const data = [0.1, 0.2, 0.3, 0.434, 0.5, 0.6, 0.7, 0.8, 0.9];";
+        assert!(run(src).is_empty(), "element of a large numeric array is data");
+    }
+
+    #[test]
+    fn ignores_constant_match_in_numeric_matrix() {
+        // Nested matrix rows inside a typed array are still data.
+        let src = "const m = new Float32Array([[0.434, 0.5], [0.6, 0.7]]);";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_constant_in_small_array() {
+        // A small array tuple where the value is plausibly the symbolic constant.
+        let d = run("const ratios = [0.707, 1.0];");
+        assert_eq!(d.len(), 1, "small array element is still a symbolic use");
+        assert!(d[0].message.contains("Math.SQRT1_2"));
+    }
+
+    #[test]
+    fn flags_standalone_symbolic_constant() {
+        // The classic symbolic use is unaffected by the data-array gate.
+        let d = run("const x = 3.14159;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Math.PI"));
+    }
+
+    #[test]
+    fn flags_standalone_negated_symbolic_constant() {
+        // Stepping over the negation must not suppress a standalone constant.
+        let d = run("const x = -3.14159;");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("Math.PI"));
     }
 }
