@@ -85,6 +85,20 @@ const KNOWN_SUFFIXES: &[&str] = &[
     "Radians", "Degrees",
 ];
 
+/// Head nouns that turn a compound into a derived/count quantity rather than a
+/// magnitude of the base. When an ambiguous base is only a leading qualifier
+/// (e.g. `limitResolution`, `distanceIterations`) and the head — the last
+/// camelCase segment — is one of these, the identifier denotes the resolution
+/// or iteration count *of* the base quantity, not the base measurement itself,
+/// so it needs no unit suffix.
+///
+/// `distanceIterations` is an iteration count (dimensionless), `limitResolution`
+/// is a step size *of* the search — appending `Ms`/`Bytes` would be wrong. A
+/// base that is itself the head (`maxTimeout`, `timeoutValue`) is unaffected:
+/// the value still IS the base magnitude and stays flagged. A `Count` head is
+/// not listed here because it is already accepted as a unit suffix.
+const DERIVED_QUANTITY_HEADS: &[&str] = &["resolution", "iterations"];
+
 /// Coordinate-space / domain qualifiers that, when present as a camelCase
 /// segment of the identifier, already pin down the abstract unit-space — so a
 /// physical-unit suffix is neither expected nor meaningful.
@@ -166,6 +180,9 @@ fn check_name(name: &str, offset: u32, ctx: &CheckCtx, diagnostics: &mut Vec<Dia
     if has_coordinate_space_qualifier(name) {
         return;
     }
+    if base_is_qualifier_of_derived_head(name, base) {
+        return;
+    }
     let (line, column) = byte_offset_to_line_col(ctx.source, offset as usize);
     diagnostics.push(Diagnostic {
         path: Arc::clone(&ctx.path_arc),
@@ -204,6 +221,24 @@ fn is_handle_continuation(name: &str, base_len: usize) -> bool {
 
 fn has_known_suffix(name: &str) -> bool {
     KNOWN_SUFFIXES.iter().any(|s| name.ends_with(s))
+}
+
+/// Whether the matched base is only a leading qualifier of a compound whose
+/// head noun is a derived/count quantity (`limitResolution`, `distanceIterations`).
+/// In English compounds the last segment is the head, so a base that is the whole
+/// name or the head segment itself (`timeout`, `maxTimeout`, `timeoutValue`) is
+/// the measured magnitude and stays flagged; only a base followed by a different
+/// derived-quantity head is exempt.
+fn base_is_qualifier_of_derived_head(name: &str, base: &str) -> bool {
+    let segments: Vec<String> = camel_segments(name).collect();
+    let Some(head) = segments.last() else {
+        return false;
+    };
+    // Base must be a leading qualifier, not the head itself.
+    if head == base {
+        return false;
+    }
+    DERIVED_QUANTITY_HEADS.contains(&head.as_str())
 }
 
 /// Whether the identifier carries a coordinate-space/domain qualifier as one of
@@ -443,6 +478,33 @@ mod tests {
     fn still_flags_non_handle_continuation() {
         // A continuation that is not a handle word stays ambiguous.
         assert_eq!(run_on("const timeoutValue: number = 5000;").len(), 1);
+    }
+
+    #[test]
+    fn allows_base_as_leading_qualifier_of_derived_head() {
+        // A compound whose ambiguous base is only a leading qualifier and whose
+        // head noun is a derived/count quantity (resolution = step size,
+        // iterations = a count) denotes a derived quantity, not a magnitude of the
+        // base — a unit suffix would be redundant/wrong, so it must not be flagged
+        // (#5331). `durationResolution`/`durationIterations` are the issue's exact
+        // names (already cleared because `duration` is no longer a base); the
+        // active-base shapes (`limit`/`interval`/`distance`) are the live FPs.
+        assert!(run_on("const durationResolution: number = 50;").is_empty());
+        assert!(run_on("const durationIterations: number = 199;").is_empty());
+        assert!(run_on("const limitResolution: number = 50;").is_empty());
+        assert!(run_on("const intervalResolution: number = 50;").is_empty());
+        assert!(run_on("const distanceIterations: number = 199;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_base_as_head_or_with_non_derived_head() {
+        // The gate only exempts a base that is a leading qualifier of a *derived*
+        // head. A bare base (whole name) stays flagged, and a base at the start
+        // followed by a non-derived head still denotes the base magnitude:
+        // `timeoutValue` is a timeout value, `distanceTraveled` is a distance (#5331).
+        assert_eq!(run_on("const timeout: number = 5000;").len(), 1);
+        assert_eq!(run_on("const timeoutValue: number = 5000;").len(), 1);
+        assert_eq!(run_on("const distanceTraveled: number = 5;").len(), 1);
     }
 
     #[test]
