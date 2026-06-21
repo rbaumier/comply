@@ -88,6 +88,16 @@ impl AstCheck for Check {
         if claimed == actual {
             return;
         }
+        // A `Vec` named `*_map` is the dense index-map idiom: a `Vec<V>` indexed
+        // by a contiguous integer key (`vec[id.index()]`) is the canonical Rust
+        // map from index to value, so `*_map` names its semantic role, not a
+        // mislabeled type. Restricted to the `map` token — `dict` is a pure
+        // key-value word with no positional connotation, so a Vec named `*_dict`
+        // stays flagged, as does the reverse (a Map named `*_vec`/`*_array`) and
+        // a Vec named `*_set` — those are genuinely misleading.
+        if actual == Shape::Vec && super::last_token(name) == "map" {
+            return;
+        }
         let pos = pat.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -171,6 +181,42 @@ mod tests {
     #[test]
     fn flags_set_token_holding_vec() {
         let src = "fn f() { let user_set = Vec::new(); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Dense index-map idiom (issue #5047): a `Vec` named `*_map` is a positional
+    // map from integer index to value, not a mislabeled collection.
+    #[test]
+    fn allows_node_map_holding_vec() {
+        let src = "fn f(n: usize) { let mut node_map = vec![0; n]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_index_map_holding_vec() {
+        let src = "fn f() { let mut node_index_map = Vec::new(); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_degree_map_holding_vec() {
+        let src = "fn f(n: usize) { let mut degree_map = vec![0; n]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    // The reverse mismatch is still genuinely misleading: a Map type named
+    // `*_vec` claims a sequence but holds an associative container.
+    #[test]
+    fn flags_vec_name_holding_map() {
+        let src = "fn f() { let user_vec = HashMap::new(); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // The index-map allowance is scoped to the `map` token: `dict` reads as a
+    // pure key-value word, so a `Vec` named `*_dict` stays flagged.
+    #[test]
+    fn flags_dict_name_holding_vec() {
+        let src = "fn f() { let user_dict = Vec::new(); }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
