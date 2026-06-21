@@ -1,5 +1,5 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_node_module_system_target};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
@@ -44,6 +44,11 @@ impl OxcCheck for Check {
             return;
         }
         if name == "push" && is_router_navigation(member, semantic) {
+            return;
+        }
+        // Node Module-system object: `ctx.parentModule.children.push(mod)` mutates
+        // the Node-owned CJS dependency-graph array — the module-loader contract.
+        if is_node_module_system_target(&member.object, semantic) {
             return;
         }
 
@@ -787,5 +792,53 @@ mod tests {
             }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_push_on_module_children_issue_5256() {
+        // jiti's loader registers a child module in the Node CJS dependency
+        // graph: `ctx.parentModule.children.push(mod)` mutates the Node-owned
+        // array in place — the module-loader contract.
+        let src = r#"
+            if (Array.isArray(ctx.parentModule.children) && !ctx.parentModule.children.includes(mod)) {
+                ctx.parentModule.children.push(mod);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_push_on_module_instance_children_issue_5256() {
+        // `mod.parent.children.push(...)` where `mod` resolves to a `new Module()`
+        // instance is the same dependency-graph mutation via a `parent` segment.
+        let src = r#"
+            import { Module } from "node:module";
+            const mod = new Module(filename);
+            mod.parent.children.push(child);
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_push_on_ordinary_children_array_issue_5256() {
+        // Negative space: a bare `node.children.push(...)` without a `parent`
+        // segment is an ordinary array mutation — still flagged.
+        let src = r#"
+            node.children.push(child);
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_push_on_foreign_parent_children_issue_5256() {
+        // Negative space: the generic `node.parent.children.push(...)` tree-walker
+        // idiom stays flagged when the base is not a Module instance — only
+        // `parentModule`, or a `new Module()`-rooted `parent` chain, is exempt.
+        let src = r#"
+            function attach(node, child) {
+                node.parent.children.push(child);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 }
