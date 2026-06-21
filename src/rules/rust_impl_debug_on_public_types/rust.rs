@@ -13,10 +13,12 @@
 //! consumers), items in a binary-only crate (no `[lib]` target and no
 //! `src/lib.rs`, so `pub` is merely crate-internal module visibility and no
 //! external consumer can import the type), items with `#[doc(hidden)]`, items
-//! carrying
-//! `#[allow(missing_debug_implementations)]` or
-//! `#[expect(missing_debug_implementations)]` (the rustc lint this rule
-//! mirrors — the author has explicitly opted out), types with
+//! covered by `#[allow(missing_debug_implementations)]` /
+//! `#[expect(missing_debug_implementations)]` — the rustc lint this rule
+//! mirrors — whether spelled as an item-level outer attribute, an outer
+//! attribute on an enclosing `mod`, or a file/module-level inner attribute
+//! `#![allow(missing_debug_implementations)]` (which suppresses every item in
+//! that file/module, as rustc does), types with
 //! raw-pointer fields, and types that store a closure/function in a field
 //! whose generic type parameter carries an `Fn`/`FnMut`/`FnOnce` bound (the
 //! combinator pattern in poem/tower/axum — closures don't implement `Debug`,
@@ -34,7 +36,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{has_doc_hidden, has_test_attribute, is_in_test_context};
+use crate::rules::rust_helpers::{
+    has_clippy_allow, has_doc_hidden, has_test_attribute, is_in_test_context,
+};
 
 #[derive(Debug)]
 pub struct Check;
@@ -89,7 +93,10 @@ impl AstCheck for Check {
         if has_doc_hidden(node, source_bytes) {
             return;
         }
-        if has_allow_missing_debug(node, source_bytes) {
+        // The author opted out of the rustc lint this rule mirrors, at item,
+        // enclosing-module, or file/module scope (`#[allow(...)]` /
+        // `#![allow(...)]`).
+        if has_clippy_allow(node, source_bytes, "missing_debug_implementations") {
             return;
         }
         if has_raw_pointer_field(node) {
@@ -239,75 +246,6 @@ fn base_type_name<'a>(target: tree_sitter::Node, source: &'a [u8]) -> Option<&'a
     }
 }
 
-/// True if a preceding `attribute_item` sibling is
-/// `#[allow(missing_debug_implementations)]` or
-/// `#[expect(missing_debug_implementations)]`. That is the exact rustc lint
-/// this rule mirrors, so an explicit allow/expect of it means the author has
-/// deliberately opted out and we defer to that.
-///
-/// Walks preceding siblings like `has_doc_hidden`/`has_debug_derive`, skipping
-/// interleaved comment siblings. The match is specific: the attribute path must
-/// be `allow` or `expect` AND its argument list must contain
-/// `missing_debug_implementations`, so an unrelated `#[allow(dead_code)]` does
-/// not suppress.
-fn has_allow_missing_debug(item: tree_sitter::Node, source: &[u8]) -> bool {
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "attribute_item" => {
-                if attribute_allows_lint(s, source, "missing_debug_implementations") {
-                    return true;
-                }
-            }
-            "line_comment" | "block_comment" => {}
-            _ => break,
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
-}
-
-/// True if `attribute_item` is an `allow`/`expect` attribute whose argument list
-/// names `lint`, bare or tool-scoped (`rustc::<lint>`).
-///
-/// `attribute_item` parses as `attribute_item > attribute`, where the
-/// `attribute` is `seq($._path, optional(arguments: token_tree))`: its first
-/// named child is the path (`allow`/`expect`) and its arguments live in the
-/// `token_tree` as a flat sequence of `identifier` tokens. We match on the AST
-/// path child (`allow`/`expect`) and on the `identifier` tokens inside the
-/// token tree rather than scanning raw text, so a lint merely ending in
-/// `_missing_debug_implementations`, or the name appearing inside an unrelated
-/// string, does not match. A tool-scoped `rustc::missing_debug_implementations`
-/// still tokenizes the final segment as its own `identifier`, so it matches too.
-fn attribute_allows_lint(attribute_item: tree_sitter::Node, source: &[u8], lint: &str) -> bool {
-    let mut item_cursor = attribute_item.walk();
-    let Some(attribute) = attribute_item
-        .children(&mut item_cursor)
-        .find(|child| child.kind() == "attribute")
-    else {
-        return false;
-    };
-
-    let Some(path) = attribute.named_child(0) else {
-        return false;
-    };
-    let Ok(path_text) = path.utf8_text(source) else {
-        return false;
-    };
-    if path_text != "allow" && path_text != "expect" {
-        return false;
-    }
-
-    let Some(token_tree) = attribute.child_by_field_name("arguments") else {
-        return false;
-    };
-
-    let mut tree_cursor = token_tree.walk();
-    token_tree
-        .children(&mut tree_cursor)
-        .any(|tok| tok.kind() == "identifier" && tok.utf8_text(source) == Ok(lint))
-}
-
 /// True if a preceding `attribute_item` sibling is `#[cfg(doctest)]`.
 ///
 /// A `#[cfg(doctest)]` item is compiled only when rustdoc collects doctests —
@@ -316,7 +254,7 @@ fn attribute_allows_lint(attribute_item: tree_sitter::Node, source: &[u8], lint:
 /// builds and is unreachable by consumers. It is the same class of build-gated,
 /// non-API item as `#[cfg(test)]`.
 ///
-/// Walks preceding siblings like `has_allow_missing_debug`, skipping interleaved
+/// Walks preceding siblings like `has_doc_hidden`, skipping interleaved
 /// comment siblings; the `#[doc = include_str!(...)]` of the harness is itself
 /// an `attribute_item` sibling that the walk traverses. The match is specific:
 /// the attribute path must be `cfg` AND `doctest` must appear as a bare
@@ -343,8 +281,8 @@ fn has_cfg_doctest_attr(item: tree_sitter::Node, source: &[u8]) -> bool {
 
 /// True if `attribute_item` is `#[cfg(doctest)]`: a `cfg` attribute whose
 /// `token_tree` arguments contain `doctest` as a direct-child `identifier`
-/// token. Mirrors the AST traversal in `attribute_allows_lint` — match on the
-/// path child (`cfg`) and on the `identifier` tokens inside the token tree
+/// token. Matches on the AST path child (`cfg`) and on the `identifier` tokens
+/// inside the token tree
 /// rather than scanning raw text. Matching `doctest` only as a *direct* child of
 /// the `cfg` token tree excludes `#[cfg(not(doctest))]`, whose `doctest` lives
 /// inside a nested `not(...)` token tree.
@@ -821,6 +759,72 @@ mod tests {
     fn still_flags_with_unrelated_allow() {
         // `#[allow(dead_code)]` is unrelated; suppression is lint-specific.
         assert_eq!(run_on("#[allow(dead_code)]\npub struct X { name: String }").len(), 1);
+    }
+
+    /// Closes #5289 (issue repro): eyre/src/kind.rs opens with a file-level inner
+    /// attribute `#![allow(missing_debug_implementations)]` that silences the
+    /// rustc lint for *every* item in the file. The inner attribute is a child of
+    /// `source_file`, not a preceding sibling of the struct, so the file-scope
+    /// scan must catch it.
+    #[test]
+    fn suppresses_file_level_inner_allow_missing_debug() {
+        let source = "#![allow(missing_debug_implementations, missing_docs)]\n\
+                      pub struct Adhoc;\n\
+                      pub struct Trait;\n\
+                      pub struct Boxed;";
+        assert!(
+            run_on(source).is_empty(),
+            "a file-level #![allow(missing_debug_implementations)] must suppress every item"
+        );
+    }
+
+    /// A module-level inner attribute `#![allow(missing_debug_implementations)]`
+    /// inside a `mod` block suppresses every item in that module.
+    #[test]
+    fn suppresses_module_level_inner_allow_missing_debug() {
+        let source = "pub mod kind {\n\
+                      \x20   #![allow(missing_debug_implementations)]\n\
+                      \x20   pub struct Adhoc;\n\
+                      }";
+        assert!(
+            run_on(source).is_empty(),
+            "a module-level inner #![allow(...)] must suppress every item in that module"
+        );
+    }
+
+    /// An outer `#[allow(missing_debug_implementations)]` on an enclosing `mod`
+    /// block suppresses every item inside it (as rustc does).
+    #[test]
+    fn suppresses_outer_allow_on_enclosing_mod() {
+        let source = "#[allow(missing_debug_implementations)]\n\
+                      pub mod kind {\n\
+                      \x20   pub struct Adhoc;\n\
+                      }";
+        assert!(
+            run_on(source).is_empty(),
+            "an outer #[allow(...)] on an enclosing mod must suppress every item inside"
+        );
+    }
+
+    /// Item-level outer `#[allow(missing_debug_implementations)]` (the #3980
+    /// case) still suppresses the directly-annotated item.
+    #[test]
+    fn suppresses_item_level_outer_allow_missing_debug() {
+        assert!(
+            run_on("#[allow(missing_debug_implementations)]\npub struct Adhoc;").is_empty(),
+            "an item-level #[allow(...)] must suppress that item"
+        );
+    }
+
+    /// Load-bearing negative: in a file WITHOUT the allow, a public type with no
+    /// Debug is still flagged — the file/module-scope scan must not over-suppress.
+    #[test]
+    fn still_flags_public_type_in_file_without_allow() {
+        assert_eq!(
+            run_on("#![allow(missing_docs)]\npub struct Adhoc { name: String }").len(),
+            1,
+            "a file-level allow of an unrelated lint must not suppress missing-debug"
+        );
     }
 
     const PROC_MACRO_CARGO_TOML: &str = r#"
