@@ -104,4 +104,18 @@ mod tests {
         // Genuine Hungarian still flags.
         assert_eq!(run("const bytValue = 1;").len(), 1);
     }
+
+    // Regression for #5067: `obj` is a ubiquitous domain noun (PDF indirect
+    // objects, DOM/storage objects), not a reliable type-encoding marker.
+    // `objId`/`objRef`/`objDict` name something about an object, not an
+    // `Object`-typed variable.
+    #[test]
+    fn allows_obj_domain_prefix() {
+        assert!(run("const objId = 5;").is_empty());
+        assert!(run("const objRef = obj.ref;").is_empty());
+        assert!(run("const objDict = obj.dict;").is_empty());
+        // Unambiguous type encodings are still flagged.
+        assert_eq!(run("const strName = 'x';").len(), 1);
+        assert_eq!(run("const arrItems = [];").len(), 1);
+    }
 }
