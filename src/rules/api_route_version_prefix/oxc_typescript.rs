@@ -66,6 +66,17 @@ fn is_well_known_path(path: &str) -> bool {
     path.starts_with("/.well-known/")
 }
 
+/// GraphQL endpoints are a single, unversioned URL by convention: the GraphQL
+/// spec and every major server/client (Apollo, Yoga, Pothos, Mercurius) default
+/// to `/graphql`, and versioning is done in the schema (field deprecation,
+/// additive changes), not in the URL. True when any `/`-delimited segment of the
+/// path is exactly `graphql` — covering the canonical `/graphql`, mounts like
+/// `/api/graphql`, and sub-paths like `/graphql/stream`. Whole-segment matching
+/// keeps a genuine REST resource such as `/graphql-admin-tools` flagged.
+fn is_graphql_path(path: &str) -> bool {
+    path.split('/').any(|seg| seg == "graphql")
+}
+
 fn has_version_prefix(path: &str) -> bool {
     let p = path.strip_prefix("/api").unwrap_or(path);
     if !p.starts_with("/v") {
@@ -249,6 +260,7 @@ impl OxcCheck for Check {
                 || is_infra_path(route_path)
                 || is_oauth_oidc_path(route_path)
                 || is_well_known_path(route_path)
+                || is_graphql_path(route_path)
             {
                 continue;
             }
@@ -537,6 +549,25 @@ mod tests {
         assert!(run("app.get('/.well-known/security.txt', handler);").is_empty());
         assert!(run("app.get('/.well-known/openid-configuration', handler);").is_empty());
         assert!(run("app.get('/.well-known/oauth-authorization-server', handler);").is_empty());
+    }
+
+    #[test]
+    fn allows_graphql_endpoint() {
+        // Issue #5381 — `/graphql` is the conventional single, unversioned GraphQL
+        // endpoint; versioning happens in the schema, not the URL. The canonical
+        // path, a mounted path, and a protocol sub-path are all exempt.
+        assert!(run("app.post('/graphql', async (req, res) => {});").is_empty());
+        assert!(run("app.post('/api/graphql', handler);").is_empty());
+        assert!(run("app.post('/graphql/stream', handler);").is_empty());
+        assert!(run("app.get('/graphql/subscriptions', handler);").is_empty());
+    }
+
+    #[test]
+    fn flags_graphql_lookalike_resource() {
+        // Negative space: whole-segment matching only — a real REST resource whose
+        // segment merely starts with `graphql` is not the GraphQL endpoint and
+        // still requires a version prefix.
+        assert_eq!(run("app.get('/graphql-admin-tools', handler);").len(), 1);
     }
 
     #[test]
