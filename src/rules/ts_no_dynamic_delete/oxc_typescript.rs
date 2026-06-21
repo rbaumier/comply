@@ -3,7 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, UnaryOperator};
+use oxc_ast::ast::{AssignmentTarget, Expression, UnaryOperator};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -43,6 +43,69 @@ fn is_module_cache(expr: &Expression) -> bool {
     }
 }
 
+/// Structural identity of an object expression used as a dictionary base.
+///
+/// Only the shapes the polyfill idiom actually uses are comparable: a bare
+/// identifier (`headers` / `env`) and a `this.<prop>` member (`this._events` /
+/// `this._headers`). Anything else is `None` and never matches, so arbitrary
+/// member chains on foreign objects can't leak an exemption.
+#[derive(PartialEq)]
+enum DictBase<'a> {
+    Ident(&'a str),
+    ThisMember(&'a str),
+}
+
+fn dict_base<'a>(expr: &Expression<'a>) -> Option<DictBase<'a>> {
+    match expr {
+        Expression::Identifier(ident) => Some(DictBase::Ident(ident.name.as_str())),
+        Expression::StaticMemberExpression(member)
+            if matches!(member.object, Expression::ThisExpression(_)) =>
+        {
+            Some(DictBase::ThisMember(member.property.name.as_str()))
+        }
+        _ => None,
+    }
+}
+
+/// Base of a computed-key assignment target whose key is *dynamic* (not a string
+/// or number literal). A literal key (`obj["a"] = …`) is equivalent to a fixed
+/// property and doesn't prove dictionary usage, so it's excluded.
+fn assignment_target_base<'a>(target: &AssignmentTarget<'a>) -> Option<DictBase<'a>> {
+    match target {
+        AssignmentTarget::ComputedMemberExpression(member)
+            if !matches!(
+                &member.expression,
+                Expression::StringLiteral(_) | Expression::NumericLiteral(_)
+            ) =>
+        {
+            dict_base(&member.object)
+        }
+        _ => None,
+    }
+}
+
+/// True when the same object is also written through a dynamic computed key
+/// (`base[expr] = …` or a compound assignment) somewhere in the file.
+///
+/// A dynamic computed-key write proves the object is used as a dynamic dictionary
+/// (string-indexed map), so a computed-key delete is the correct idiom rather
+/// than a dynamic delete on a fixed-shape object — matching typescript-eslint,
+/// which doesn't flag index-signature / `Record` targets.
+fn is_written_as_dictionary<'a>(
+    delete_base: &Expression,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Some(base) = dict_base(delete_base) else {
+        return false;
+    };
+    semantic.nodes().iter().any(|n| {
+        let AstKind::AssignmentExpression(assign) = n.kind() else {
+            return false;
+        };
+        assignment_target_base(&assign.left).is_some_and(|written| written == base)
+    })
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::UnaryExpression]
@@ -52,7 +115,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::UnaryExpression(unary) = node.kind() else { return };
@@ -74,6 +137,15 @@ impl OxcCheck for Check {
         // cache is dictionary-keyed by module path, so a computed-key delete is the
         // canonical cache-busting idiom, not a dynamic delete on a fixed-shape object.
         if is_module_cache(&member.object) {
+            return;
+        }
+
+        // Allow deletes on an object that is also written through a computed key
+        // elsewhere in the file: that write proves dictionary (string-indexed map)
+        // usage, so a computed-key delete is the correct idiom. Covers Node.js
+        // polyfill stores like EventEmitter `events[type]`, HTTP `this._headers`,
+        // and the `process.env` proxy's `env[prop]`.
+        if is_written_as_dictionary(&member.object, semantic) {
             return;
         }
 
@@ -211,5 +283,80 @@ afterEach(() => {
 });
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    // Regression #5253 — Node.js polyfill dictionary stores. Each object is also
+    // written through a computed key in the same file, proving dictionary usage.
+
+    #[test]
+    fn allows_delete_event_emitter_events_store() {
+        let src = r#"
+function removeListener(events, type, list) {
+  events[type] = undefined;
+  delete events[type];
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_delete_http_headers_this_member() {
+        let src = r#"
+class OutgoingMessage {
+  setHeader(name: string, value: string): void {
+    this._headers[name.toLowerCase()] = value;
+  }
+  removeHeader(name: string): void {
+    delete this._headers[name.toLowerCase()];
+  }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_delete_process_env_proxy_trap() {
+        let src = r#"
+new Proxy(_envShim, {
+  set(_, prop, value) {
+    const env = _getEnv(true);
+    env[prop as string] = value;
+    return true;
+  },
+  deleteProperty(_, prop) {
+    const env = _getEnv(true);
+    delete env[prop as string];
+    return true;
+  },
+});
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_dynamic_delete_without_computed_write() {
+        // `config` only has static property access — never written by computed key,
+        // so the delete is a genuine dynamic delete on a fixed-shape object.
+        let src = r#"
+function reset(config, userKey) {
+  config.enabled = true;
+  delete config[userKey];
+}
+"#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_dynamic_delete_when_only_static_key_written() {
+        // A static-key write (`config["a"] = …`) does not prove dictionary usage.
+        let src = r#"
+function reset(config, userKey) {
+  config["a"] = 1;
+  delete config[userKey];
+}
+"#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
     }
 }
