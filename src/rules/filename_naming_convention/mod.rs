@@ -24,6 +24,7 @@ pub const META: RuleMeta = RuleMeta {
     skip_in_relaxed_dir: false,
 };
 
+use crate::rules::path_utils::is_nuxt_server_route_file;
 use crate::rules::path_utils::is_sveltekit_route_file;
 
 /// Returns `true` when any ancestor directory of `path` is named `routes`, the
@@ -84,32 +85,6 @@ fn is_file_based_route_segment(path: &std::path::Path, file_name: &str) -> bool 
         return false;
     }
     has_route_dir_ancestor(path)
-}
-
-/// Returns `true` for a Nuxt server-route dynamic-segment file: a bracket-param
-/// filename (see `has_bracket_param`) living under one of Nuxt's server-route
-/// directories — `server/api/`, `server/routes/`, or `server/middleware/`. Nuxt's
-/// Nitro file-system router derives the server route path from these filenames
-/// (`server/api/trpc/[trpc].ts` serves `/api/trpc/:trpc`), so the bracket name is
-/// framework-mandated and renaming it breaks the route. Both signals are required:
-/// the bracket param distinguishes a route segment from an ordinary mis-named file,
-/// and the consecutive `server/<sub>` ancestor scopes the allowance to actual Nuxt
-/// server routes rather than any directory that happens to be named `api`.
-/// See https://nuxt.com/docs/guide/directory-structure/server.
-fn is_nuxt_server_route_file(path: &std::path::Path, file_name: &str) -> bool {
-    if !has_bracket_param(routing_base(file_name)) {
-        return false;
-    }
-    let segments: Vec<&str> = path
-        .components()
-        .filter_map(|c| match c {
-            std::path::Component::Normal(s) => s.to_str(),
-            _ => None,
-        })
-        .collect();
-    segments
-        .windows(2)
-        .any(|pair| pair[0] == "server" && matches!(pair[1], "api" | "routes" | "middleware"))
 }
 
 /// Returns `true` for TanStack Router pathless layout routes living under any
