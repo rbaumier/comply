@@ -485,3 +485,12 @@ ignore = []
 # ---------------------------------------------------------------
 [rules.filename-naming-convention]
 min_dominant_share = 0.6
+
+[rules.no-approximative-numeric-constant]
+# A numeric literal that coincidentally matches a Math constant prefix is data,
+# not a symbolic constant, when it sits among many siblings in a numeric array
+# literal (precomputed tables, matrices). Suppress the diagnostic once the
+# enclosing array literal holds at least this many numeric elements. (Typed-array
+# initializers like `new Float32Array([...])` are always treated as data,
+# regardless of element count.)
+min_array_elements = 8
