@@ -132,7 +132,7 @@ fn safety_comment_above_row(start_row: usize, lines: &[&str]) -> bool {
             continue;
         }
         if trimmed.starts_with("//") || trimmed.starts_with("/*") {
-            if trimmed.contains("SAFETY:") || trimmed.contains("Safety:") || trimmed.contains("# Safety") {
+            if is_safety_marker(trimmed) {
                 return true;
             }
             continue;
@@ -144,6 +144,36 @@ fn safety_comment_above_row(start_row: usize, lines: &[&str]) -> bool {
         }
         // Hit real code — stop looking.
         break;
+    }
+    false
+}
+
+/// True if a comment line carries a safety marker. Two forms are
+/// accepted:
+///
+///  - a `safety` keyword (any case) immediately followed by `:` or
+///    `.` — covers `// SAFETY:`, `// Safety:`, `// safety:`,
+///    `// safety.`, whose casing and terminator vary across projects;
+///  - the rustdoc `# Safety` heading (`/// # Safety`), where the
+///    keyword stands alone after a `#` with no terminator.
+///
+/// The `safety` keyword itself is always required, so an arbitrary
+/// comment that merely contains the word in prose
+/// (`// the safety of this depends on X`) does not count.
+fn is_safety_marker(trimmed: &str) -> bool {
+    let lower = trimmed.to_ascii_lowercase();
+    // `# Safety` rustdoc heading: a `#` heading whose sole word is `safety`.
+    if lower.split_once('#').is_some_and(|(_, after)| after.trim() == "safety") {
+        return true;
+    }
+    // `safety` immediately followed by a `:` or `.` terminator.
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find("safety") {
+        let after = from + rel + "safety".len();
+        if matches!(lower[after..].chars().next(), Some(':' | '.')) {
+            return true;
+        }
+        from = after;
     }
     false
 }
@@ -254,6 +284,38 @@ mod tests {
                       unsafe { let _ = *p; }\n\
                       }";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_lowercase_colon_safety_comment_issue_5261() {
+        // Issue #5261: zune-image uses a lowercase `// safety:` marker.
+        let source = "fn f(p: *const u8) {\n\
+                      // safety: u8's can alias anything\n\
+                      unsafe { let _ = *p; }\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_lowercase_period_safety_comment_issue_5261() {
+        // Issue #5261 (channel.rs:163): `// safety.` — lowercase + period.
+        let source = "fn f(p: *const u8) {\n\
+                      // safety.\n\
+                      // all types can alias u8\n\
+                      unsafe { let _ = *p; }\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_unrelated_preceding_comment() {
+        // A comment that doesn't carry a safety marker (even one that
+        // mentions the word in prose) must not suppress the rule.
+        let source = "fn f(p: *const u8) {\n\
+                      // the safety of this depends on the caller\n\
+                      unsafe { let _ = *p; }\n\
+                      }";
+        assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
