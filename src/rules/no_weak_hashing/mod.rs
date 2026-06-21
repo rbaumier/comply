@@ -1,4 +1,12 @@
 //! no-weak-hashing
+//!
+//! The harm is a broken hash reaching production security code (password
+//! hashing, signatures, content-addressed integrity boundaries). Test files
+//! (`skip_in_test_dir`) never ship such a primitive — a weak hash there is a
+//! non-cryptographic fixture checksum (e.g. asserting an encoder round-trip
+//! produces an expected MD5 digest), so it is out of scope and not flagged. A
+//! production use of the same weak hash is still flagged in its own (non-test)
+//! file.
 
 mod oxc_typescript;
 mod rust;
@@ -17,7 +25,7 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["security"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: true,
 };
 

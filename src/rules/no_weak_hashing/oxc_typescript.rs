@@ -118,6 +118,7 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::test_helpers::run_rule_gated;
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
@@ -172,5 +173,43 @@ mod tests {
     fn still_flags_md5_password_hash() {
         let src = "const digest = createHash('md5').update(password).digest('hex');";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Regression for rbaumier/comply#5198 — nodemailer's `test/dkim/dkim-test.js`
+    // hashes encoded output with MD5 to compare against a hardcoded expected
+    // digest. That is a non-cryptographic fixture checksum, not a security
+    // primitive, and never ships to production. The central `skip_in_test_dir`
+    // gate suppresses the rule for the `test/` directory (the issue's exact path,
+    // a `-test.js` suffix, no `.test.` infix).
+    #[test]
+    fn gated_no_fp_on_md5_checksum_in_test_dir() {
+        let src = "const digest = crypto.createHash('md5').update(message).digest('hex');";
+        assert!(
+            run_rule_gated(&Check, src, "test/dkim/dkim-test.js").is_empty(),
+            "skip_in_test_dir must suppress a fixture checksum in the test dir"
+        );
+    }
+
+    // A weak hash in a production/source file is a real security primitive and
+    // must keep firing.
+    #[test]
+    fn gated_still_flags_md5_in_production() {
+        let src = "const digest = createHash('md5').update(password).digest('hex');";
+        assert_eq!(
+            run_rule_gated(&Check, src, "src/crypto.ts").len(),
+            1,
+            "production weak hash must still be flagged"
+        );
+    }
+
+    // SHA-1 in production is equally a broken security primitive.
+    #[test]
+    fn gated_still_flags_sha1_in_production() {
+        let src = "const sig = createHash('sha1').update(token).digest('hex');";
+        assert_eq!(
+            run_rule_gated(&Check, src, "src/crypto.ts").len(),
+            1,
+            "production weak SHA-1 hash must still be flagged"
+        );
     }
 }
