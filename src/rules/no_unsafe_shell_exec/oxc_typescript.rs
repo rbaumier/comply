@@ -1,74 +1,43 @@
-//! no-unsafe-shell-exec OXC backend — flag shell-exec APIs whose first
-//! argument is not a plain string literal. Exempts calls that cannot be a
-//! subprocess: an object-literal first argument (`child_process.exec` only
-//! takes a command string) and an exact-match database receiver (`db`,
-//! `database`), whose `.exec(sql)` is a query, not a shell command.
+//! no-unsafe-shell-exec OXC backend — flag a `child_process` shell-exec call
+//! (`exec`/`execSync`/`spawn`/`spawnSync`) whose command argument is not a plain
+//! string literal. Shell provenance is established positively: a free `exec(...)`
+//! must resolve to a `child_process` import (or be an unresolved global), and an
+//! `x.exec(...)` method call must have the `child_process` module object as its
+//! receiver. Any other `.exec()` receiver — a database connector, a `RegExp`, a
+//! route/parser object — is not a subprocess and is never flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{Expression, IdentifierReference};
 use std::sync::Arc;
 
 const UNSAFE_FNS: &[&str] = &["exec", "execSync", "spawn", "spawnSync"];
-// Compared against an ASCII-lowercased receiver prefix, so entries must be
-// lowercase. `regexp` covers the common `<name>RegExp` getter/field convention.
-const SAFE_RECEIVERS: &[&str] = &["regexp", "regex", "re", "pattern", "matcher"];
-// Database clients expose `.exec(sql)` — not a subprocess. Matched EXACTLY (not
-// via `ends_with` like `SAFE_RECEIVERS`): suffix-matching would wrongly exempt
-// shell tools like `adb`/`gdb`. Excludes `client`/`connection`/`conn`, which are
-// ambiguous with remote-shell APIs (e.g. ssh2 `client.exec(command)`).
-const DB_RECEIVERS: &[&str] = &["db", "database"];
+
+/// The `child_process` module sources whose `exec`/`spawn` family is the shell
+/// injection sink this rule guards. The `node:`-prefixed form is the same
+/// builtin under the WHATWG specifier scheme.
+const CHILD_PROCESS_MODULES: &[&str] = &["child_process", "node:child_process"];
 
 pub struct Check;
 
-fn callee_name(expr: &Expression) -> Option<String> {
-    match expr {
-        Expression::Identifier(id) => Some(id.name.to_string()),
-        Expression::StaticMemberExpression(m) => {
-            let obj = callee_name(&m.object)?;
-            Some(format!("{}.{}", obj, m.property.name))
-        }
-        _ => None,
-    }
-}
-
-/// True when `expr` denotes a `RegExp`: a `/pattern/` literal or `new RegExp(...)`.
-/// `RegExp.prototype.exec(string)` is a regex match, not a subprocess.
-fn is_regexp_expression(expr: &Expression) -> bool {
-    match expr {
-        Expression::RegExpLiteral(_) => true,
-        Expression::NewExpression(new_expr) => {
-            matches!(&new_expr.callee, Expression::Identifier(id) if id.name == "RegExp")
-        }
-        _ => false,
-    }
-}
-
-/// True when `expr` is, or resolves to, a `RegExp`. Covers a direct regex
-/// literal / `new RegExp(...)` receiver and an identifier whose `const` binding
-/// is initialized from one. This catches `RegExp.exec()` on variables outside
-/// the name-based `SAFE_RECEIVERS` allowlist (e.g. `const rule = /.../`).
-fn is_regexp_receiver(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bool {
-    if is_regexp_expression(expr) {
-        return true;
-    }
-    let Expression::Identifier(id) = expr else {
-        return false;
-    };
-    let Some(ref_id) = id.reference_id.get() else {
-        return false;
-    };
-    let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-        return false;
-    };
-    let AstKind::VariableDeclarator(decl) =
-        semantic.nodes().kind(scoping.symbol_declaration(sym_id))
-    else {
-        return false;
-    };
-    matches!(&decl.init, Some(init) if is_regexp_expression(init))
+/// How a binding referenced as `exec`/`spawn` (free call) or as a method
+/// receiver (`x` in `x.exec`) was declared, with respect to the `child_process`
+/// module.
+enum CpProvenance {
+    /// The binding is the `child_process` module object — a namespace/default
+    /// import (`import * as cp` / `import cp`) or `const cp = require("child_process")`.
+    /// `cp.exec(...)` is a genuine subprocess call.
+    ModuleObject,
+    /// The binding is a named import of the function itself from `child_process`
+    /// (`import { exec } from "child_process"`). A free `exec(...)` is a subprocess call.
+    NamedImport,
+    /// The binding resolves to a declaration that is provably not `child_process`:
+    /// a local `function`/`const`/`let`/parameter, or an import from another module.
+    Local,
+    /// No resolvable binding — a free global or undeclared reference. Ambiguous,
+    /// so a free `exec(...)` is flagged for safety.
+    Unresolved,
 }
 
 /// True when `expr` is a `require.resolve(...)` call. Its result is a
@@ -151,6 +120,84 @@ fn is_unsafe_arg(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bool {
     }
 }
 
+/// Classify how `ident` (a free-call callee `exec(...)` or a method receiver
+/// `x` in `x.exec(...)`) was declared, with respect to `child_process`.
+///
+/// Resolves the `reference_id → symbol → declaration` chain used across the OXC
+/// helpers, then maps the declaration node to a [`CpProvenance`]. An unresolved
+/// reference (a free global or undeclared name) is [`CpProvenance::Unresolved`].
+fn cp_provenance(ident: &IdentifierReference, semantic: &oxc_semantic::Semantic) -> CpProvenance {
+    let Some(ref_id) = ident.reference_id.get() else {
+        return CpProvenance::Unresolved;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return CpProvenance::Unresolved;
+    };
+    let decl = semantic.nodes().kind(scoping.symbol_declaration(sym_id));
+
+    match decl {
+        // `import * as cp` / `import cp from` — `cp` is the module object.
+        AstKind::ImportNamespaceSpecifier(_) | AstKind::ImportDefaultSpecifier(_) => {
+            if import_source_is_child_process(decl, semantic) {
+                CpProvenance::ModuleObject
+            } else {
+                CpProvenance::Local
+            }
+        }
+        // `import { exec } from "child_process"` — the function itself.
+        AstKind::ImportSpecifier(_) => {
+            if import_source_is_child_process(decl, semantic) {
+                CpProvenance::NamedImport
+            } else {
+                CpProvenance::Local
+            }
+        }
+        // `const cp = require("child_process")` — the module object.
+        AstKind::VariableDeclarator(d)
+            if d.init.as_ref().is_some_and(init_is_child_process_require) =>
+        {
+            CpProvenance::ModuleObject
+        }
+        // Any other declaration (local function/var/param) is not child_process.
+        _ => CpProvenance::Local,
+    }
+}
+
+/// True when the import declaration enclosing `specifier` imports from
+/// `child_process` (or `node:child_process`).
+fn import_source_is_child_process(specifier: AstKind, semantic: &oxc_semantic::Semantic) -> bool {
+    use oxc_span::GetSpan;
+
+    let specifier_span = specifier.span();
+    semantic.nodes().iter().any(|node| {
+        let AstKind::ImportDeclaration(decl) = node.kind() else {
+            return false;
+        };
+        if !CHILD_PROCESS_MODULES.contains(&decl.source.value.as_str()) {
+            return false;
+        }
+        decl.span.start <= specifier_span.start && specifier_span.end <= decl.span.end
+    })
+}
+
+/// True when `init` is `require("child_process")` (or `node:child_process`).
+fn init_is_child_process_require(init: &Expression) -> bool {
+    let Expression::CallExpression(call) = init else {
+        return false;
+    };
+    let Expression::Identifier(callee) = &call.callee else {
+        return false;
+    };
+    if callee.name != "require" {
+        return false;
+    }
+    matches!(
+        call.arguments.first().and_then(|a| a.as_expression()),
+        Some(Expression::StringLiteral(s)) if CHILD_PROCESS_MODULES.contains(&s.value.as_str())
+    )
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::CallExpression]
@@ -169,48 +216,38 @@ impl OxcCheck for Check {
     ) {
         let AstKind::CallExpression(call) = node.kind() else { return };
 
-        let Some(name) = callee_name(&call.callee) else { return };
-        let last = name.rsplit('.').next().unwrap_or(&name);
-        if !UNSAFE_FNS.contains(&last) {
-            return;
-        }
-
-        // A `this` first argument is never a shell command: `child_process.exec`
-        // takes a command string, not `this`. A `.exec(this, ...)` call is a
-        // custom dispatch method (e.g. a KeyboardManager), not a subprocess.
-        if let Some(first) = call.arguments.first() {
-            if matches!(first.as_expression(), Some(Expression::ThisExpression(_))) {
-                return;
+        // Establish `child_process` shell provenance positively. A free
+        // `exec(...)` is a subprocess sink unless it resolves to a local
+        // function or a non-`child_process` import; an `x.exec(...)` method call
+        // is a subprocess only when `x` is the `child_process` module object.
+        // Every other receiver — a DB connector (`connector.exec(sql)`), a
+        // `RegExp`, a route/parser object — is not a shell exec.
+        let last = match &call.callee {
+            Expression::Identifier(id) => {
+                let name = id.name.as_str();
+                if !UNSAFE_FNS.contains(&name) {
+                    return;
+                }
+                if matches!(cp_provenance(id, semantic), CpProvenance::Local) {
+                    return;
+                }
+                name
             }
-        }
-
-        // `child_process.exec` takes a command string, never an object. A
-        // `.exec({...})` with an object-literal first argument is a different API
-        // (e.g. a SQLite adapter `db.exec({ sql, ... })`), not a subprocess.
-        if let Some(first) = call.arguments.first() {
-            if matches!(first.as_expression(), Some(Expression::ObjectExpression(_))) {
-                return;
+            Expression::StaticMemberExpression(member) => {
+                let prop = member.property.name.as_str();
+                if !UNSAFE_FNS.contains(&prop) {
+                    return;
+                }
+                let Expression::Identifier(obj) = &member.object else {
+                    return;
+                };
+                if !matches!(cp_provenance(obj, semantic), CpProvenance::ModuleObject) {
+                    return;
+                }
+                prop
             }
-        }
-
-        // Skip method calls whose receiver is a `RegExp` — `re.exec(str)` is a
-        // regex match, not a subprocess. The name-based `SAFE_RECEIVERS` list
-        // catches canonical names; the binding-origin check below covers any
-        // receiver assigned from a regex literal or `new RegExp(...)`.
-        if let Expression::StaticMemberExpression(member) = &call.callee {
-            if is_regexp_receiver(&member.object, semantic) {
-                return;
-            }
-        }
-        if let Some(prefix) = name.rsplit('.').nth(1) {
-            let prefix_lower = prefix.to_ascii_lowercase();
-            if SAFE_RECEIVERS.iter().any(|r| prefix_lower == *r || prefix_lower.ends_with(r)) {
-                return;
-            }
-            if DB_RECEIVERS.contains(&prefix_lower.as_str()) {
-                return;
-            }
-        }
+            _ => return,
+        };
 
         // Command and args passed as separate values (argv form, no shell) is
         // safe even with a dynamic command — there is no shell string to
@@ -262,14 +299,11 @@ mod oxc_tests {
         crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
     }
 
+    // A free `exec(...)` with no resolvable binding is an unresolved global —
+    // ambiguous, so a dynamic command is flagged for safety.
     #[test]
     fn flags_exec_with_variable() {
         assert_eq!(run("exec(cmd);").len(), 1);
-    }
-
-    #[test]
-    fn flags_cp_exec_with_variable() {
-        assert_eq!(run("cp.exec(cmd);").len(), 1);
     }
 
     #[test]
@@ -283,26 +317,31 @@ mod oxc_tests {
         assert!(run(r#"exec("ls");"#).is_empty());
     }
 
+    // A free `exec(...)` resolving to a local function is not a subprocess.
     #[test]
-    fn allows_regexp_named_receiver_exec() {
-        assert!(run("pattern.exec(content);").is_empty());
+    fn allows_free_local_function_exec() {
+        let src = "function exec(m, p) { return m; } exec(match, params);";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
     }
 
+    // `RegExp.prototype.exec` — a regex literal receiver is not `child_process`.
     #[test]
     fn allows_regex_literal_receiver_exec_issue_2249() {
         let src = "/^x/.exec(src);";
         assert!(run(src).is_empty(), "got {:?}", run(src));
     }
 
+    // A named variable holding a `RegExp` is not the `child_process` module.
     #[test]
-    fn allows_regex_literal_binding_exec_issue_2249() {
+    fn allows_regex_variable_receiver_exec_issue_2249() {
         let src = "const rule = /^(==)([^=]+)(==)/; const m = rule.exec(src);";
         assert!(run(src).is_empty(), "got {:?}", run(src));
     }
 
+    // A `…RegExp`-named static getter receiver is not `child_process`.
     #[test]
-    fn allows_new_regexp_binding_exec_issue_2249() {
-        let src = "const r = new RegExp('x'); r.exec(src);";
+    fn allows_regexp_static_getter_exec_issue_3977() {
+        let src = "const m = CFFCompiler.EncodeFloatRegExp.exec(value);";
         assert!(run(src).is_empty(), "got {:?}", run(src));
     }
 
@@ -372,39 +411,8 @@ const bin = spawn(cmds[0], cmds.slice(1).concat(args.map(String)), { cwd });"#;
         assert_eq!(run(src).len(), 1, "got {:?}", run(src));
     }
 
-    // Regression for #3977 facet A: a static getter named `…RegExp` is a regex,
-    // not a subprocess. The receiver prefix ends with `regexp` (case-insensitive).
-    #[test]
-    fn allows_regexp_static_getter_exec_issue_3977() {
-        let src = "const m = CFFCompiler.EncodeFloatRegExp.exec(value);";
-        assert!(run(src).is_empty(), "got {:?}", run(src));
-    }
-
-    // Regression for #3977 facet A: a `…RegExp` field/variable receiver is exempt
-    // by name (the case-mismatch bug previously made `RegExp` entries dead).
-    #[test]
-    fn allows_regexp_suffixed_receiver_exec_issue_3977() {
-        let src = "objRegExp.exec(s);";
-        assert!(run(src).is_empty(), "got {:?}", run(src));
-    }
-
-    // Regression for #3977 facet B: a `.exec(this, …)` call is a custom dispatch
-    // method (e.g. KeyboardManager), never `child_process.exec`.
-    #[test]
-    fn allows_exec_with_this_first_arg_issue_3977() {
-        let src = "_keyboardManager.exec(this, event);";
-        assert!(run(src).is_empty(), "got {:?}", run(src));
-    }
-
-    // Regression for #4455: a SQLite adapter `db.exec({ sql, ... })` passes a
-    // config object — `child_process.exec` never takes an object first arg.
-    #[test]
-    fn allows_db_exec_with_object_arg_issue_4455() {
-        let src = r#"db.exec({ sql, bind: params, rowMode: 'object', returnValue: 'resultRows' });"#;
-        assert!(run(src).is_empty(), "got {:?}", run(src));
-    }
-
     // Regression for #4455: `db.exec(sql)` is a database query, not a subprocess.
+    // `db` does not resolve to the `child_process` module object.
     #[test]
     fn allows_db_exec_with_string_variable_issue_4455() {
         let src = "await db.exec(sql);";
@@ -419,19 +427,38 @@ const bin = spawn(cmds[0], cmds.slice(1).concat(args.map(String)), { cwd });"#;
         assert!(run(src).is_empty(), "got {:?}", run(src));
     }
 
-    // Regression for #4455: the `database` receiver name is also a DB client.
+    // Regression for #5255: `connector.exec(sql)` (db0 driver interface) is a
+    // SQL query on a database connector, not `child_process.exec`. The receiver
+    // does not resolve to the `child_process` module object.
     #[test]
-    fn allows_database_exec_with_string_variable_issue_4455() {
-        let src = "database.exec(query);";
+    fn allows_connector_exec_with_string_variable_issue_5255() {
+        let src = "return Promise.resolve(connector.exec(sql));";
         assert!(run(src).is_empty(), "got {:?}", run(src));
     }
 
-    // Regression for #4455: the DB-receiver exemption is exact-match. `adb`
-    // (Android Debug Bridge) ends with `db` but is a shell tool, so a dynamic
-    // command must still flag — proves the exemption is not a `ends_with("db")`.
+    // Regression for #5255: any DB-connector receiver name (`client`, `pool`,
+    // `instance`, …) is exempt — provenance, not a name allowlist, decides.
     #[test]
-    fn still_flags_adb_exec_issue_4455() {
-        let src = "adb.exec(cmd);";
+    fn allows_arbitrary_db_receiver_exec_issue_5255() {
+        let src = "client.exec(query); pool.exec(stmt); instance.exec(sql);";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    // A namespace import of `child_process` is the module object — a dynamic
+    // `cp.exec(...)` must still flag.
+    #[test]
+    fn still_flags_namespace_import_cp_exec() {
+        let src = r#"import * as cp from "child_process";
+cp.exec(`ls ${dir}`);"#;
+        assert_eq!(run(src).len(), 1, "got {:?}", run(src));
+    }
+
+    // `const cp = require("child_process")` is the module object — a dynamic
+    // `cp.execSync(...)` must still flag.
+    #[test]
+    fn still_flags_require_cp_exec_sync() {
+        let src = r#"const cp = require("child_process");
+cp.execSync(userInput);"#;
         assert_eq!(run(src).len(), 1, "got {:?}", run(src));
     }
 
