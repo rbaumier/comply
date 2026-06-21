@@ -31,6 +31,24 @@ fn is_new_this_callee(
     new_expr.callee.span() == this_node.kind().span()
 }
 
+/// True when `this_node` is the receiver of a private member access
+/// (`this.#field` / `this.#method()`). Accessing a private static member through
+/// `this` is the correct idiom — `this` resolves to the actual (possibly
+/// subclass) class so the access stays polymorphic, and `#` makes the receiver
+/// unambiguous, so replacing it with the class name would be wrong. Public
+/// accesses (`this.x`) parse as a `StaticMemberExpression`, not a
+/// `PrivateFieldExpression`, and stay flagged.
+fn is_private_member_receiver(
+    this_node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let AstKind::PrivateFieldExpression(member) = nodes.kind(nodes.parent_id(this_node.id())) else {
+        return false;
+    };
+    member.object.span() == this_node.kind().span()
+}
+
 /// Determines whether the `this`/`super` at `node` is bound to a `static` class
 /// context.
 ///
@@ -119,7 +137,9 @@ impl OxcCheck for Check {
         for node in semantic.nodes().iter() {
             let (keyword, span) = match node.kind() {
                 AstKind::ThisExpression(this_expr) => {
-                    if is_new_this_callee(node, semantic) {
+                    if is_new_this_callee(node, semantic)
+                        || is_private_member_receiver(node, semantic)
+                    {
                         continue;
                     }
                     ("this", this_expr.span)
@@ -347,5 +367,40 @@ mod tests {
     fn allows_this_in_non_static_property_initializer() {
         // Instance property initializer — `this` is the instance, valid.
         assert!(run_on("class A { x = this.y; }").is_empty());
+    }
+
+    // --- Private static member access via `this` ---
+
+    #[test]
+    fn allows_this_private_field_access_in_static_method() {
+        // `this.#field` in a static method keeps polymorphism — exempt.
+        let src = "class A { static #count = 0; static m() { return this.#count; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_private_method_call_in_static_method() {
+        // `this.#method()` — the receiver `this` of a private call is exempt.
+        let src = "class A { static #priv() {} static m() { return this.#priv(); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_private_access_in_static_block() {
+        let src = "class A { static #x = 0; static { this.#x; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_public_member_access_in_static_method() {
+        // Public `this.publicStatic` — class name should be used, still flagged.
+        let diags = run_on("class A { static m() { return this.publicStatic; } }");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_bare_this_in_static_method() {
+        let diags = run_on("class A { static m() { return this; } }");
+        assert_eq!(diags.len(), 1);
     }
 }
