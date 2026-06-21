@@ -1805,6 +1805,283 @@ fn parse_int_literal(node: Node, source: &[u8]) -> Option<u128> {
     digits.parse().ok()
 }
 
+/// True if `cast` (a `type_cast_expression`) narrows an identifier whose value a
+/// preceding `assert!` / `debug_assert!` in the same block proves fits the
+/// unsigned target type — the runtime-checked counterpart of the compile-time
+/// branch guard handled by [`cast_operand_is_range_guarded`]:
+///
+/// ```ignore
+/// assert!(x <= u8::MAX as u64);
+/// let y = x as u8;        // the assert proves `x` fits u8
+/// ```
+///
+/// The exemption is deliberately narrow to stay sound — every condition must
+/// hold:
+///
+/// - the operand is a bare `identifier` (`x`), not an expression;
+/// - the target is an **unsigned** integer (`u8`..`u128`/`usize`);
+/// - the operand's source type resolves from the AST to an **unsigned** integer,
+///   which proves the value is non-negative (lower bound 0). An unresolved or
+///   signed source is not exempted: an upper-bound assertion alone cannot rule
+///   out a negative value wrapping on the cast;
+/// - a statement **before** the cast in the same enclosing `block` is an
+///   `assert!` / `debug_assert!` whose first argument upper-bounds the SAME
+///   identifier so the value provably fits the target: `x < BOUND` /
+///   `x <= BOUND` (and the symmetric `BOUND > x` / `BOUND >= x`), where `BOUND`
+///   is either an integer literal `N` in range (`< N` needs `N <= 2^bits`,
+///   `<= N` needs `N <= 2^bits - 1`) or an unsigned type's `::MAX` whose own
+///   maximum does not exceed the target's (`u8::MAX`, optionally widened by a
+///   trailing `as <type>`);
+/// - the identifier is not re-bound (a shadowing `let x`) or reassigned
+///   (`x = …` / `x += …`) between the assertion and the cast, which would break
+///   the link between the asserted bound and the value the cast reads.
+///
+/// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`, which both
+/// otherwise flag the narrowing because the asserted bound is not visible from
+/// the cast in isolation.
+pub fn cast_operand_is_assert_bounded(cast: Node, source: &[u8]) -> bool {
+    let Some(value) = cast.child_by_field_name("value") else {
+        return false;
+    };
+    if value.kind() != "identifier" {
+        return false;
+    }
+    let Ok(name) = value.utf8_text(source) else {
+        return false;
+    };
+    let Some(target_bits) = cast
+        .child_by_field_name("type")
+        .and_then(|t| t.utf8_text(source).ok())
+        .and_then(unsigned_int_bits)
+    else {
+        return false;
+    };
+    // The source must resolve to an unsigned integer so the value is provably
+    // non-negative; an upper-bound assertion cannot otherwise rule out underflow.
+    if find_identifier_type(cast, name, source)
+        .and_then(|t| unsigned_int_bits(&t))
+        .is_none()
+    {
+        return false;
+    }
+    // The cast's own statement inside the enclosing `block`; preceding siblings
+    // are the statements whose asserts can bound the value.
+    let Some((block, cast_stmt)) = enclosing_block_statement(cast) else {
+        return false;
+    };
+    let cast_start = cast.start_byte();
+    let mut cursor = block.walk();
+    for stmt in block.named_children(&mut cursor) {
+        if stmt.id() == cast_stmt.id() {
+            break;
+        }
+        let Some(macro_node) = assert_macro_invocation(stmt, source) else {
+            continue;
+        };
+        if !assert_upper_bounds(macro_node, name, target_bits, source) {
+            continue;
+        }
+        // The bound proves the value of `name` only while it is unchanged
+        // between the assertion and the cast. A re-binding (shadowing `let name`)
+        // or reassignment (`name = …` / `name += …`) in any intervening
+        // statement invalidates the bound.
+        if name_rebound_in_range(block, macro_node.end_byte(), cast_start, name, source) {
+            return false;
+        }
+        return true;
+    }
+    false
+}
+
+/// The enclosing `block` and the cast's own statement node within it (the direct
+/// child of the block that contains `cast`), or `None` if the cast is not inside
+/// a block statement (e.g. it is a tail expression nested in another expression).
+fn enclosing_block_statement(cast: Node) -> Option<(Node, Node)> {
+    let mut child = cast;
+    while let Some(parent) = child.parent() {
+        if parent.kind() == "block" {
+            return Some((parent, child));
+        }
+        child = parent;
+    }
+    None
+}
+
+/// If `stmt` is (or wraps) an `assert!` / `debug_assert!` invocation, return its
+/// `macro_invocation` node. An assertion appears as an `expression_statement`
+/// wrapping the `macro_invocation`.
+fn assert_macro_invocation<'a>(stmt: Node<'a>, source: &[u8]) -> Option<Node<'a>> {
+    let macro_node = match stmt.kind() {
+        "macro_invocation" => stmt,
+        "expression_statement" => stmt.named_child(0).filter(|c| c.kind() == "macro_invocation")?,
+        _ => return None,
+    };
+    let name = macro_node
+        .child_by_field_name("macro")
+        .and_then(|m| m.utf8_text(source).ok())?;
+    matches!(name, "assert" | "debug_assert").then_some(macro_node)
+}
+
+/// True if the first argument of the `assert!` / `debug_assert!` `macro_node`
+/// upper-bounds the identifier `name` so the value provably fits an unsigned
+/// target of `target_bits` width.
+///
+/// The macro's arguments are an unparsed `token_tree` (tree-sitter does not
+/// build a `binary_expression` inside it), so the comparison is read from the
+/// flat token sequence: the identifier `name`, a comparison operator, and the
+/// bound. `name <op> BOUND` and the symmetric `BOUND <op> name` are both read.
+fn assert_upper_bounds(macro_node: Node, name: &str, target_bits: u16, source: &[u8]) -> bool {
+    let Some(tokens) = macro_node
+        .named_children(&mut macro_node.walk())
+        .find(|c| c.kind() == "token_tree")
+    else {
+        return false;
+    };
+    // The `token_tree`'s own outer `(` … `)` delimiters are its first and last
+    // children; strip them, then locate the comparison operator (only the first
+    // argument matters; a `,` ends it). Tokens before it are the left side,
+    // tokens after are the right.
+    let mut cursor = tokens.walk();
+    let children: Vec<Node> = tokens.children(&mut cursor).collect();
+    let children = strip_paren_tokens(&children);
+    // Only the first argument bounds the value; a `,` ends it (an `assert!`
+    // message argument follows). Truncate to it before reading the comparison.
+    let first_arg = match children.iter().position(|t| t.utf8_text(source) == Ok(",")) {
+        Some(i) => &children[..i],
+        None => children,
+    };
+    let mut op_idx = None;
+    for (i, tok) in first_arg.iter().enumerate() {
+        if matches!(tok.utf8_text(source), Ok("<" | "<=" | ">" | ">=")) {
+            op_idx = Some(i);
+            break;
+        }
+    }
+    let Some(op_idx) = op_idx else { return false };
+    let op = first_arg[op_idx].utf8_text(source).unwrap_or("");
+    let left = &first_arg[..op_idx];
+    let right = &first_arg[op_idx + 1..];
+
+    // Normalize to `<name> <upper-bound-op> <bound>`: `<`/`<=` keep the bound on
+    // the right, `>`/`>=` put `name` on the right and the bound on the left.
+    let (bound_tokens, inclusive) = match op {
+        "<" if tokens_are_identifier(left, name, source) => (right, false),
+        "<=" if tokens_are_identifier(left, name, source) => (right, true),
+        ">" if tokens_are_identifier(right, name, source) => (left, false),
+        ">=" if tokens_are_identifier(right, name, source) => (left, true),
+        _ => return false,
+    };
+    let Some(bound) = bound_upper_value(bound_tokens, source) else {
+        return false;
+    };
+    let target_max: u128 = if target_bits >= 128 {
+        u128::MAX
+    } else {
+        (1u128 << target_bits) - 1
+    };
+    if inclusive {
+        bound <= target_max
+    } else {
+        // `name < N` proves `name <= N - 1`. `checked_sub` rejects `name < 0`
+        // without adding 1 to `target_max` (which would overflow a u128 target).
+        bound.checked_sub(1).is_some_and(|max_value| max_value <= target_max)
+    }
+}
+
+/// True if `tokens` (the side of a token-tree comparison, parens stripped) is
+/// exactly the single identifier `name`.
+fn tokens_are_identifier(tokens: &[Node], name: &str, source: &[u8]) -> bool {
+    let inner = strip_paren_tokens(tokens);
+    matches!(inner, [tok] if tok.kind() == "identifier" && tok.utf8_text(source) == Ok(name))
+}
+
+/// The upper-bound value a comparison's bound side proves, read from raw tokens:
+/// either an integer literal `N`, or an unsigned type's `::MAX` (e.g. `u8::MAX`),
+/// each optionally widened by a trailing `as <type>` cast (ignored — it does not
+/// change the value). Returns `None` for any other shape (a method call, field,
+/// arithmetic, or a non-`MAX` associated const).
+fn bound_upper_value(tokens: &[Node], source: &[u8]) -> Option<u128> {
+    let tokens = strip_paren_tokens(tokens);
+    // Drop a trailing `as <type>` widening — `u8::MAX as u64` has value u8::MAX.
+    let core = match tokens.iter().position(|t| t.utf8_text(source) == Ok("as")) {
+        Some(i) => &tokens[..i],
+        None => tokens,
+    };
+    match core {
+        // A bare integer literal: `256`, `65_536`.
+        [lit] if lit.kind() == "integer_literal" => parse_int_literal(*lit, source),
+        // `<utype>::MAX` — value is that type's maximum.
+        [ty, sep, max]
+            if sep.utf8_text(source) == Ok("::")
+                && max.utf8_text(source) == Ok("MAX") =>
+        {
+            ty.utf8_text(source)
+                .ok()
+                .and_then(unsigned_int_bits)
+                .map(|bits| {
+                    if bits >= 128 {
+                        u128::MAX
+                    } else {
+                        (1u128 << bits) - 1
+                    }
+                })
+        }
+        _ => None,
+    }
+}
+
+/// Strip a single layer of wrapping `(` … `)` tokens from a token-tree slice.
+fn strip_paren_tokens<'a>(tokens: &'a [Node<'a>]) -> &'a [Node<'a>] {
+    match tokens {
+        [first, mid @ .., last]
+            if first.kind() == "(" && last.kind() == ")" =>
+        {
+            mid
+        }
+        _ => tokens,
+    }
+}
+
+/// True if `name` is re-bound or reassigned anywhere in `block` whose write
+/// position lies in `[start, end)` — a shadowing `let name`, an
+/// `assignment_expression`, or a `compound_assignment_expr` to `name`. Used to
+/// invalidate an asserted bound when the value is overwritten before the cast.
+fn name_rebound_in_range(
+    block: Node,
+    start: usize,
+    end: usize,
+    name: &str,
+    source: &[u8],
+) -> bool {
+    let mut cursor = block.walk();
+    let mut stack: Vec<Node> = block.children(&mut cursor).collect();
+    while let Some(node) = stack.pop() {
+        if node.start_byte() < start || node.start_byte() >= end {
+            // Still descend into nodes that merely span the range boundary.
+            if node.end_byte() > start && node.start_byte() < end {
+                let mut c = node.walk();
+                stack.extend(node.children(&mut c));
+            }
+            continue;
+        }
+        let rebinds = match node.kind() {
+            "let_declaration" => node
+                .child_by_field_name("pattern")
+                .is_some_and(|p| pattern_contains_identifier(p, name, source)),
+            "assignment_expression" | "compound_assignment_expr" => node
+                .child_by_field_name("left")
+                .is_some_and(|l| l.kind() == "identifier" && l.utf8_text(source) == Ok(name)),
+            _ => false,
+        };
+        if rebinds {
+            return true;
+        }
+        let mut c = node.walk();
+        stack.extend(node.children(&mut c));
+    }
+    false
+}
+
 /// True if the operand of `cast` (a `type_cast_expression`) is, at its
 /// outermost level, a bitwise operation — a shift (`>>`/`<<`) or a bit op
 /// (`&`/`|`/`^`). Such a cast is deliberate bit manipulation, where narrowing

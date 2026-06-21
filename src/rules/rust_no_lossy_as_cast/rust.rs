@@ -36,6 +36,12 @@
 //! `if val < 256 { val as u8 }` — is exempt: the branch is entered only when
 //! the value is in range, so the cast cannot overflow.
 //!
+//! Likewise, a narrowing cast of an unsigned identifier bounded by a preceding
+//! `assert!` / `debug_assert!` in the same block whose condition upper-bounds
+//! that identifier to the target's range — `assert!(x <= u8::MAX as u64);
+//! let y = x as u8;` — is exempt: the assertion aborts before the cast unless
+//! the value fits.
+//!
 //! Casts that `rust-no-as-numeric-cast` already flags are suppressed here so
 //! the pair emits one diagnostic per span; this rule keeps firing only where
 //! that one does not — notably int `as f32` (no `f32::From` for those sources).
@@ -43,9 +49,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cast_operand_is_bitwise, cast_operand_is_bool, cast_operand_is_char,
-    cast_operand_is_collection_size, cast_operand_is_enum_discriminant, cast_operand_is_range_guarded,
-    find_identifier_type, is_in_enum_discriminant,
+    cast_operand_is_assert_bounded, cast_operand_is_bitwise, cast_operand_is_bool,
+    cast_operand_is_char, cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
+    cast_operand_is_range_guarded, find_identifier_type, is_in_enum_discriminant,
 };
 use crate::rules::rust_no_as_numeric_cast::rust::fires_on_cast;
 
@@ -108,6 +114,9 @@ impl AstCheck for Check {
             return;
         }
         if cast_operand_is_range_guarded(node, source_bytes) {
+            return;
+        }
+        if cast_operand_is_assert_bounded(node, source_bytes) {
             return;
         }
         if cast_operand_is_bitwise(node, source_bytes) {
@@ -730,5 +739,34 @@ mod tests {
         // bitwise operands), so this rule must not flag it either.
         assert!(run_on("fn f(bits: u64) -> u8 { (bits >> 32) as u8 }").is_empty());
         assert!(run_on("fn f(x: u32) -> u8 { (x >> 24) as u8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5034_assert_max_bound_not_flagged() {
+        // The issue's shape: an `assert!(x <= u8::MAX as u64)` proves the value
+        // fits the target. `rust-no-as-numeric-cast` exempts it too, so the pair
+        // stays silent.
+        let src = "fn f(x: u64) -> u8 { assert!(x <= u8::MAX as u64); let y = x as u8; y }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5034_assert_literal_bound_not_flagged() {
+        let src = "fn g(n: u64) -> u8 { assert!(n < 256); n as u8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5034_no_assert_owned_by_numeric_cast() {
+        // No assert — a real narrowing, but `rust-no-as-numeric-cast` owns the
+        // span, so this rule suppresses.
+        assert!(run_on("fn f(n: u64) -> u8 { n as u8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5034_assert_on_different_variable_owned_by_numeric_cast() {
+        // The assert bounds `m`, not the cast operand `n`; the narrowing stays a
+        // finding, owned by `rust-no-as-numeric-cast`.
+        assert!(run_on("fn f(n: u64, m: u64) -> u8 { assert!(m <= 255); n as u8 }").is_empty());
     }
 }

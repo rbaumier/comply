@@ -23,6 +23,12 @@
 //! `if val < 256 { val as u8 }` — is exempt: the branch is entered only when
 //! the value is in range, so the cast cannot overflow.
 //!
+//! Likewise, a narrowing cast of an unsigned identifier bounded by a preceding
+//! `assert!` / `debug_assert!` in the same block whose condition upper-bounds
+//! that identifier to the target's range — `assert!(x <= u8::MAX as u64);
+//! let y = x as u8;` — is exempt: the assertion aborts before the cast unless
+//! the value fits.
+//!
 //! Float-target casts (`as f32` / `as f64`) are only flagged when the
 //! source type is statically known to have a matching `From` impl
 //! (`f64: From<{i8,i16,i32,u8,u16,u32,f32}>`, `f32: From<{i8,i16,u8,u16}>`).
@@ -34,9 +40,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cast_operand_is_bitwise, cast_operand_is_bool, cast_operand_is_char,
-    cast_operand_is_collection_size, cast_operand_is_enum_discriminant, cast_operand_is_range_guarded,
-    find_identifier_type, is_in_enum_discriminant, is_in_test_context,
+    cast_operand_is_assert_bounded, cast_operand_is_bitwise, cast_operand_is_bool,
+    cast_operand_is_char, cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
+    cast_operand_is_range_guarded, find_identifier_type, is_in_enum_discriminant, is_in_test_context,
 };
 
 const KINDS: &[&str] = &["type_cast_expression"];
@@ -142,6 +148,9 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
         return false;
     }
     if cast_operand_is_range_guarded(node, source_bytes) {
+        return false;
+    }
+    if cast_operand_is_assert_bounded(node, source_bytes) {
         return false;
     }
     let source_type = source_numeric_type(node, source_bytes);
@@ -623,5 +632,91 @@ mod tests {
         // prove it fits the unsigned target.
         let src = "fn w(val: i64) -> u8 { if val < 256 { val as u8 } else { 0 } }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_5034_assert_max_bound_not_flagged() {
+        // The issue's shape (hyper encode.rs): an `assert!(x <= u8::MAX as u64)`
+        // on a preceding line proves the value fits the target.
+        let src = "fn f(x: u64) -> u8 { assert!(x <= u8::MAX as u64); let y = x as u8; y }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5034_assert_literal_bound_not_flagged() {
+        // A numeric-literal upper bound within the target's range.
+        let src = "fn g(n: u64) -> u8 { assert!(n < 256); n as u8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5034_debug_assert_inclusive_bound_not_flagged() {
+        let src = "fn h(n: u64) -> u8 { debug_assert!(n <= 255); n as u8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5034_assert_reversed_bound_not_flagged() {
+        // The symmetric `BOUND >= name` form.
+        let src = "fn f(n: u64) -> u8 { assert!(255 >= n); n as u8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5034_no_assert_still_flagged() {
+        let src = "fn f(n: u64) -> u8 { n as u8 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_5034_assert_on_different_variable_still_flagged() {
+        // The assert bounds `m`, not the cast operand `n`.
+        let src = "fn f(n: u64, m: u64) -> u8 { assert!(m <= 255); n as u8 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_5034_assert_without_upper_bound_still_flagged() {
+        // A non-comparison assert proves nothing about the cast operand.
+        let src = "fn f(n: u64) -> u8 { assert!(n > 0); n as u8 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_5034_assert_loose_bound_still_flagged() {
+        // The asserted bound exceeds u8's range, so the value can still overflow.
+        let src = "fn f(n: u64) -> u8 { assert!(n < 1000); n as u8 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_5034_assert_method_bound_still_flagged() {
+        // `self.remaining()` is not a provable numeric bound — without resolving
+        // it, the cast cannot be proven safe.
+        let src = "fn f(&self, n: u64) -> u8 { assert!(n <= self.remaining()); n as u8 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_5034_reassigned_after_assert_still_flagged() {
+        // `n` is overwritten after the assert, breaking the bound.
+        let src = "fn f(mut n: u64, m: u64) -> u8 { assert!(n <= 255); n = m; n as u8 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_5034_signed_source_still_flagged() {
+        // A signed source can be negative; an upper-bound assert alone does not
+        // prove it fits the unsigned target.
+        let src = "fn f(n: i64) -> u8 { assert!(n <= 255); n as u8 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_5034_assert_with_message_not_flagged() {
+        // A trailing message argument (the idiomatic `assert!(cond, "msg")` form)
+        // does not break bound detection: the first comparison still proves it.
+        let src = "fn f(n: u64) -> u8 { assert!(n <= 255, \"too big\"); n as u8 }";
+        assert!(run_on(src).is_empty());
     }
 }
