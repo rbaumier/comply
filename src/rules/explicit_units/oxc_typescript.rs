@@ -4,7 +4,11 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BindingPattern, Expression, TSType};
+use oxc_ast::ast::{
+    AssignmentOperator, AssignmentTarget, BinaryOperator, BindingPattern, Expression, TSType,
+};
+use oxc_ast::AstKind;
+use oxc_semantic::Semantic;
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -57,6 +61,12 @@ use std::sync::Arc;
 /// animation library (Framer Motion, Popmotion) uses a bare `elapsed`. The
 /// dimension (time) is unambiguous, so a suffix adds little and the suggested
 /// `elapsedBytes`/`elapsedCount` are nonsensical.
+///
+/// `wait` stays a base — a duration `wait` (passed to `setTimeout`/`sleep`,
+/// assigned a millisecond magnitude) is genuinely unit-ambiguous and still
+/// flags. A `wait` used as a countdown latch (a counter of pending async ops
+/// decremented toward zero / compared to `0`) is exempted by usage shape, not
+/// by name — see `used_as_countdown_latch`.
 const AMBIGUOUS_BASES: &[&str] = &[
     "timeout",
     "interval",
@@ -135,7 +145,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         match node.kind() {
@@ -156,6 +166,9 @@ impl OxcCheck for Check {
                 if !has_number_type && !has_number_init {
                     return;
                 }
+                if used_as_countdown_latch(id.symbol_id.get(), semantic) {
+                    return;
+                }
                 check_name(name, decl.span().start, ctx, diagnostics);
             }
             oxc_ast::AstKind::FormalParameter(param) => {
@@ -170,11 +183,79 @@ impl OxcCheck for Check {
                 if !has_number_type {
                     return;
                 }
+                if used_as_countdown_latch(id.symbol_id.get(), semantic) {
+                    return;
+                }
                 check_name(name, param.span().start, ctx, diagnostics);
             }
             _ => {}
         }
     }
+}
+
+/// Whether the numeric binding is used as a countdown latch — a counter of
+/// pending operations decremented toward zero and/or compared to `0` — rather
+/// than a time duration. The classic Node callback-coordination idiom
+/// (`var wait = 4; if (--wait) return;`) tracks how many async operations
+/// remain, a dimensionless count for which a unit suffix is wrong.
+///
+/// The signal is a usage shape, so a `wait` that IS a duration (passed to
+/// `setTimeout`, assigned a millisecond magnitude, summed with other durations)
+/// still flags: it is neither decremented nor compared to zero. A reference is
+/// latch-like when it is the operand of an increment/decrement
+/// (`--wait`/`wait--`/`wait++`), a `+=`/`-=` compound assignment, or a
+/// comparison against the literal `0`.
+fn used_as_countdown_latch(
+    symbol_id: Option<oxc_semantic::SymbolId>,
+    semantic: &Semantic<'_>,
+) -> bool {
+    let Some(symbol_id) = symbol_id else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let nodes = semantic.nodes();
+    scoping.get_resolved_references(symbol_id).any(|reference| {
+        let ref_node = reference.node_id();
+        let ref_span = nodes.get_node(ref_node).kind().span();
+        match nodes.kind(nodes.parent_id(ref_node)) {
+            // `--wait` / `wait--` / `wait++`
+            AstKind::UpdateExpression(_) => true,
+            // `wait -= 1` / `wait += 1` (the binding must be the target)
+            AstKind::AssignmentExpression(assign) => {
+                matches!(
+                    assign.operator,
+                    AssignmentOperator::Subtraction | AssignmentOperator::Addition
+                ) && matches!(
+                    &assign.left,
+                    AssignmentTarget::AssignmentTargetIdentifier(t) if t.span == ref_span
+                )
+            }
+            // `wait === 0` / `wait > 0` / `wait !== 0` …
+            AstKind::BinaryExpression(bin) => {
+                is_zero_comparison(bin.operator)
+                    && (is_zero_literal(&bin.left) || is_zero_literal(&bin.right))
+            }
+            _ => false,
+        }
+    })
+}
+
+fn is_zero_comparison(op: BinaryOperator) -> bool {
+    matches!(
+        op,
+        BinaryOperator::StrictEquality
+            | BinaryOperator::Equality
+            | BinaryOperator::StrictInequality
+            | BinaryOperator::Inequality
+            | BinaryOperator::GreaterThan
+            | BinaryOperator::GreaterEqualThan
+            | BinaryOperator::LessThan
+            | BinaryOperator::LessEqualThan
+    )
+}
+
+fn is_zero_literal(expr: &Expression) -> bool {
+    matches!(expr, Expression::NumericLiteral(lit) if lit.value == 0.0)
 }
 
 fn check_name(name: &str, offset: u32, ctx: &CheckCtx, diagnostics: &mut Vec<Diagnostic>) {
@@ -577,5 +658,50 @@ mod tests {
         assert_eq!(run_on("function f(timeout: number) {}").len(), 1);
         assert_eq!(run_on("function f(interval: number) {}").len(), 1);
         assert_eq!(run_on("function f(wait: number) {}").len(), 1);
+    }
+
+    #[test]
+    fn allows_wait_countdown_latch_decrement() {
+        // `wait` here is a countdown latch — a counter of pending async ops
+        // decremented toward zero in the Node callback-coordination idiom
+        // (`var wait = 4; if (--wait) return;`), a dimensionless count for which
+        // `waitMs`/`waitBytes` are wrong (#5400).
+        assert!(
+            run_on("function close() { var wait = 4; function finish() { if (--wait) return; } }")
+                .is_empty()
+        );
+        // The conditional increment + decrement shape (agent.js).
+        assert!(
+            run_on(
+                "function sub() { var wait = 1; if (opts) wait++; function finish() { if (--wait) return; } }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_wait_countdown_latch_compound_assign_and_compare() {
+        // `wait -= 1` and an explicit `wait === 0` guard are the same latch shape.
+        assert!(
+            run_on("function f() { var wait = 3; function done() { wait -= 1; if (wait === 0) cb(); } }")
+                .is_empty()
+        );
+        assert!(
+            run_on("function f() { var wait = 2; function done() { wait--; if (wait > 0) return; } }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_wait_used_as_duration() {
+        // A `wait` that IS a duration — neither decremented toward zero nor
+        // compared to 0 — still demands a unit. `setTimeout(fn, wait)` reads it
+        // as a delay; the latch guard must not exempt it.
+        assert_eq!(
+            run_on("function f() { let wait = 5000; setTimeout(() => {}, wait); }").len(),
+            1
+        );
+        assert_eq!(run_on("function f(wait: number) { sleep(wait); }").len(), 1);
+        assert_eq!(run_on("const wait: number = 100;").len(), 1);
     }
 }
