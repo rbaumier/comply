@@ -74,6 +74,15 @@ impl OxcCheck for Check {
         if is_utility_registration_arg(node, _semantic) {
             return;
         }
+        // A template literal nested inside a tailwind-variants / cva variant
+        // definition (a value under a `variants`/`compoundVariants` property)
+        // is build-time variant generation: the variant system enumerates every
+        // configured value, and the build pipeline emits a safelist for them, so
+        // purge never drops the generated class. This is distinct from a class
+        // built at component render time.
+        if is_in_variant_definition(node, _semantic) {
+            return;
+        }
         let (line, column) = byte_offset_to_line_col(ctx.source, tpl.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -127,6 +136,44 @@ fn is_utility_registration_arg<'a>(
         current = parent;
     }
     false
+}
+
+/// Object-property keys whose value is a tailwind-variants / cva variant-class
+/// definition. `variants` maps each variant value to its classes;
+/// `compoundVariants` lists class overrides for value combinations. Class
+/// strings under these keys are enumerated at build time and safelisted, so a
+/// dynamic template literal there is not a runtime purge hazard.
+const VARIANT_DEFINITION_KEYS: &[&str] = &["variants", "compoundVariants"];
+
+/// True when `node` (a template literal) is nested anywhere inside the value of
+/// a `variants`/`compoundVariants` object property — i.e. a tailwind-variants /
+/// cva variant definition. Walks the ancestor chain because the class string
+/// sits several levels below the variant key (e.g.
+/// `compoundVariants[i].class.item`).
+fn is_in_variant_definition<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    use oxc_ast::ast::PropertyKey;
+    let nodes = semantic.nodes();
+    let mut current = node.id();
+    loop {
+        let parent = nodes.parent_id(current);
+        if parent == current {
+            return false;
+        }
+        if let AstKind::ObjectProperty(prop) = nodes.kind(parent) {
+            let key = match &prop.key {
+                PropertyKey::StaticIdentifier(id) => id.name.as_str(),
+                PropertyKey::StringLiteral(s) => s.value.as_str(),
+                _ => "",
+            };
+            if VARIANT_DEFINITION_KEYS.contains(&key) {
+                return true;
+            }
+        }
+        current = parent;
+    }
 }
 
 #[cfg(test)]
@@ -224,5 +271,46 @@ mod tests {
     #[test]
     fn still_flags_non_utilities_static_call() {
         assert_eq!(run_on("registry.static(`bg-${color}-500`, () => []);").len(), 1);
+    }
+
+    // https://github.com/rbaumier/comply/issues/5116 — Nuxt UI v3 theme files
+    // build per-color variant classes inside a tailwind-variants
+    // `compoundVariants` array. These are enumerated and safelisted at build
+    // time, so purge never drops them.
+    #[test]
+    fn allows_dynamic_class_in_compound_variants() {
+        assert!(
+            run_on(
+                "export default (options) => ({\
+                 compoundVariants: (options.theme.colors || []).map((color) => ({\
+                 color,\
+                 class: { item: `has-data-[state=checked]:bg-${color}/10 has-data-[state=checked]:border-${color}/50` }\
+                 }))\
+                 });"
+            )
+            .is_empty()
+        );
+    }
+
+    // A dynamic class in a tailwind-variants `variants` value map is also
+    // build-time variant generation and stays silent.
+    #[test]
+    fn allows_dynamic_class_in_variants_map() {
+        assert!(
+            run_on(
+                "const theme = { variants: { color: { primary: { base: `bg-${color}-500` } } } };"
+            )
+            .is_empty()
+        );
+    }
+
+    // Negative space: a class built at component render time (not inside a
+    // variant definition) is still a purge hazard and stays flagged.
+    #[test]
+    fn still_flags_runtime_dynamic_class_in_render() {
+        assert_eq!(
+            run_on("const cls = { class: `text-${color}-500` };").len(),
+            1
+        );
     }
 }
