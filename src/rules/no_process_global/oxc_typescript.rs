@@ -238,4 +238,34 @@ mod tests {
         // An object property key named `process` is not a global reference.
         assert!(run_on("const obj = { process: 1 };").is_empty());
     }
+
+    // --- Test-context skip (skip_in_test_dir) ---
+
+    #[test]
+    fn skips_process_in_test_files() {
+        // Test files always run in Node, where spying/mocking/env-reading
+        // `process` is idiomatic; the runtime-portability concern doesn't apply.
+        let spy = "vi.spyOn(process, \"exit\").mockImplementation(() => 0 as never);";
+        let env = "if (process.env.DEBUG) { console.log('dbg'); }";
+        let cwd = "process.cwd = vi.fn(() => 'C:');";
+        for (src, path) in [
+            (spy, "test/main.test.ts"),
+            (env, "test/bundle.test.ts"),
+            (cwd, "test/index.spec.ts"),
+            (env, "__tests__/index.ts"),
+        ] {
+            assert!(
+                crate::rules::test_helpers::run_rule_gated(&Check, src, path).is_empty(),
+                "process usage in {path} must be skipped in test context"
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_process_in_production_files() {
+        // The same env access in a production source file is still flagged.
+        let env = "if (process.env.DEBUG) { console.log('dbg'); }";
+        let d = crate::rules::test_helpers::run_rule_gated(&Check, env, "src/index.ts");
+        assert_eq!(d.len(), 1);
+    }
 }
