@@ -22,9 +22,13 @@
 //! where at least one carries a `#[cfg(...)]`/`#[cfg_attr(...)]` gate are exempt
 //! too: two functions of the same name in one scope can only coexist via
 //! mutually-exclusive conditional compilation (per-feature/target/test
-//! backends), so they are distinct build variants, not copy-paste. Free
-//! functions with identical signatures, and inherent methods on the same type
-//! with the same receiver and in the same module, are still flagged.
+//! backends), so they are distinct build variants, not copy-paste. Pairs whose
+//! function modifiers differ (`unsafe`/`const`/`async`/`extern`) are exempt as
+//! well: a safe `fn` and an `unsafe fn` with the same body are not
+//! interchangeable — the `unsafe` qualifier is part of the API contract, so the
+//! two cannot be merged into one helper without changing what callers may do.
+//! Free functions with identical signatures, and inherent methods on the same
+//! type with the same receiver and in the same module, are still flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -61,8 +65,9 @@ enum Receiver {
 /// A collected function: name, 1-based line, normalized body, normalized
 /// signature (parameter list + generic params + `where`-clause text), the
 /// receiver shape, the text of its enclosing inherent-impl self-type (`None`
-/// for free functions), and a `module_key` identifying the enclosing `mod`
-/// scope. The file top level is key `0`; each `mod` block (sibling or nested)
+/// for free functions), a `module_key` identifying the enclosing `mod` scope,
+/// and its normalized contract modifiers (`unsafe`/`const`/`async`/`extern`).
+/// The file top level is key `0`; each `mod` block (sibling or nested)
 /// gets a distinct id, so only functions sharing a key are compared.
 struct CollectedFn {
     name: String,
@@ -75,6 +80,11 @@ struct CollectedFn {
     /// True if the function carries a `#[cfg(...)]`/`#[cfg_attr(...)]` gate, i.e.
     /// it is a conditional-compilation build variant rather than ordinary code.
     cfg_gated: bool,
+    /// The function's contract-affecting modifiers (`unsafe`/`const`/`async`/
+    /// `extern "C"`), sorted and whitespace-normalized. Two functions whose
+    /// modifier sets differ have different ABIs/safety contracts and cannot be
+    /// merged into a shared helper, so they are never identical for this rule.
+    modifiers: String,
 }
 
 crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
@@ -107,6 +117,14 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
             if functions[i].name == functions[j].name
                 && (functions[i].cfg_gated || functions[j].cfg_gated)
             {
+                continue;
+            }
+            // A function's safety/contract qualifiers are part of its identity:
+            // a safe `fn` and an `unsafe fn` (or a sync vs `async`, runtime vs
+            // `const`) with the same body encode different contracts and cannot
+            // be unified into one helper. The `unsafe`/safe pair in particular is
+            // an intentional safe-vs-unsafe API split, not copy-paste — skip it.
+            if functions[i].modifiers != functions[j].modifiers {
                 continue;
             }
             // Inherent methods on different types share a body by design
@@ -189,6 +207,7 @@ fn collect_functions(
                         inherent_type: inherent_type.map(str::to_string),
                         module_key,
                         cfg_gated: crate::rules::rust_helpers::has_cfg_attribute(node, source),
+                        modifiers: extract_modifiers(node, source),
                     });
                 }
             }
@@ -325,6 +344,27 @@ fn extract_receiver(node: tree_sitter::Node, source: &[u8]) -> Receiver {
         };
     }
     Receiver::None
+}
+
+/// Collect a function's contract-affecting modifiers (`unsafe`, `const`,
+/// `async`, `extern "C"`) from its `function_modifiers` child. tree-sitter-rust
+/// groups all of these in one `function_modifiers` node, so a function with no
+/// such qualifier returns the empty string. Tokens are sorted and
+/// whitespace-collapsed so the comparison is order- and formatting-independent
+/// and reflects only which qualifiers are present.
+fn extract_modifiers(node: tree_sitter::Node, source: &[u8]) -> String {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "function_modifiers" {
+            let Ok(text) = child.utf8_text(source) else {
+                return String::new();
+            };
+            let mut tokens: Vec<&str> = text.split_whitespace().collect();
+            tokens.sort_unstable();
+            return tokens.join(" ");
+        }
+    }
+    String::new()
 }
 
 
@@ -793,6 +833,80 @@ fn check_beta(x: i32) -> i32 {
     let b = a * 2;
     println!("{}", b);
     b
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_safe_and_unsafe_method_pair_with_identical_body() {
+        // Issue #5071: a safe `fn` and an `unsafe fn` on the same type with a
+        // byte-identical body are an intentional safe-vs-unsafe API split
+        // (into_mut_slice vs assume_init in bumpalo). The `unsafe` qualifier is
+        // part of the contract, so the two cannot be merged into one helper.
+        let src = r#"
+struct Emplace;
+
+impl Emplace {
+    pub fn into_mut_slice(mut self) -> &'a mut [T] {
+        self.shrink(self.len);
+        let len = self.len;
+        let ptr = self.base_ptr();
+        self.inner.guard.finish();
+        unsafe { slice::from_raw_parts_mut(ptr, len) }
+    }
+
+    pub unsafe fn assume_init(mut self) -> &'a mut [T] {
+        self.shrink(self.len);
+        let len = self.len;
+        let ptr = self.base_ptr();
+        self.inner.guard.finish();
+        unsafe { slice::from_raw_parts_mut(ptr, len) }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_safe_and_unsafe_free_function_pair_with_identical_body() {
+        // Same safe-vs-unsafe split at free-function scope.
+        let src = r#"
+fn write_at(ptr: *mut u8, len: usize) -> i32 {
+    let a = len + 1;
+    let b = a * 2;
+    println!("{}", b);
+    b as i32
+}
+
+unsafe fn write_at_unchecked(ptr: *mut u8, len: usize) -> i32 {
+    let a = len + 1;
+    let b = a * 2;
+    println!("{}", b);
+    b as i32
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_two_unsafe_functions_with_identical_body() {
+        // Negative-space guard: two `unsafe fn` with identical bodies share the
+        // SAME safety contract and are genuine duplication — still flagged.
+        let src = r#"
+unsafe fn first(ptr: *mut u8, len: usize) -> i32 {
+    let a = len + 1;
+    let b = a * 2;
+    println!("{}", b);
+    b as i32
+}
+
+unsafe fn second(ptr: *mut u8, len: usize) -> i32 {
+    let a = len + 1;
+    let b = a * 2;
+    println!("{}", b);
+    b as i32
 }
 "#;
         let d = run_on(src);
