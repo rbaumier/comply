@@ -53,6 +53,14 @@ impl OxcCheck for Check {
         if crate::rules::path_utils::is_config_file(ctx.path) {
             return;
         }
+        // Files under a Nuxt/Nitro `server/` directory (e.g. `server/api/icon.ts`,
+        // `src/runtime/server/api.ts`) run only on the server, where `process.env`
+        // is always available and is the canonical way to read env —
+        // `useRuntimeConfig()` is a Vue/app composable that does not apply in raw
+        // server-runtime code.
+        if crate::rules::path_utils::is_nuxt_server_dir_file(ctx.path) {
+            return;
+        }
         // A Nuxt module definition (`defineNuxtModule` from `@nuxt/kit`) is evaluated
         // only at build time in Node — never bundled for the browser — so reading
         // `process.env` in module setup is the canonical way to read build-time env
@@ -142,6 +150,32 @@ mod tests {
     fn still_flags_process_env_in_nuxt_runtime() {
         let src = "import { useNuxtApp } from 'nuxt/app'\nconst x = process.env.SECRET;";
         let d = run_on_path(src, "components/Foo.ts");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("process.env"));
+    }
+
+    // #5108 — files under a Nuxt/Nitro `server/` directory run only on the
+    // server, where `process.env` is always available and canonical;
+    // `useRuntimeConfig()` is a Vue/app composable that does not apply there.
+    #[test]
+    fn allows_process_env_in_server_runtime_file() {
+        let src = "import { useAppConfig, defineCachedEventHandler } from '#imports'\nfunction getInstallCommand(pkg: string): string {\n  const ua = process.env.npm_config_user_agent || ''\n  return `npm i -D ${pkg}`\n}";
+        assert!(run_on_path(src, "src/runtime/server/api.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_process_env_in_top_level_server_dir() {
+        let src = "import { defineEventHandler } from '#imports'\nexport default defineEventHandler(() => process.env.SECRET)";
+        assert!(run_on_path(src, "server/api/token.ts").is_empty());
+    }
+
+    // Load-bearing negative: client/app Nuxt source (no `server/` segment) using
+    // `process.env` must still be flagged — `useRuntimeConfig()` is the correct
+    // API there.
+    #[test]
+    fn still_flags_process_env_in_client_app_file() {
+        let src = "import { useNuxtApp } from 'nuxt/app'\nconst x = process.env.SECRET;";
+        let d = run_on_path(src, "composables/useToken.ts");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("process.env"));
     }

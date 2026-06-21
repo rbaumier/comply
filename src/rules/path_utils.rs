@@ -1132,6 +1132,22 @@ pub fn is_nuxt_server_route_file(path: &Path) -> bool {
     false
 }
 
+/// True when `path` lives under a Nuxt/Nitro `server/` directory: any file with a
+/// `server` path segment (e.g. `server/api/icon.ts`, `server/plugins/db.ts`,
+/// `src/runtime/server/api.ts`). Everything under `server/` runs only on the
+/// server (Nitro/H3), where `process.env` is always available and the canonical
+/// way to read env — `useRuntimeConfig()` is a Vue/app composable concern that
+/// does not apply in raw server-runtime code. Broader than
+/// [`is_nuxt_server_route_file`], which matches only the file-system-routed
+/// subdirectories (`server/api/`, `server/routes/`, `server/middleware/`): this
+/// covers the whole server tree, including a Nuxt *module*'s
+/// `src/runtime/server/` build directory. Segment match keeps `src/myserver.ts`
+/// and `src/serverless/` from matching; callers gate on Nuxt detection so a
+/// non-Nuxt `server/` directory stays subject to the rule.
+pub fn is_nuxt_server_dir_file(path: &Path) -> bool {
+    has_path_segment(path, &["server"])
+}
+
 /// True when `path` is a Nuxt plugin module: a file directly inside a `plugins/`
 /// directory (e.g. `plugins/wagmi.ts`, or Nuxt 4's `app/plugins/wagmi.ts`). Nuxt
 /// auto-discovers every file in `plugins/` and loads its `export default
@@ -1647,6 +1663,25 @@ mod aux_path_tests {
         assert!(!is_nuxt_server_route_file(Path::new(
             "src/server/handler.ts"
         )));
+    }
+
+    #[test]
+    fn nuxt_server_dir_file_segments() {
+        // Issue #5108: any file under a `server/` segment is server-only Nitro/H3
+        // code, broader than the file-system-routed subdirectories.
+        assert!(is_nuxt_server_dir_file(Path::new(
+            "src/runtime/server/api.ts"
+        )));
+        assert!(is_nuxt_server_dir_file(Path::new("server/api/icon.ts")));
+        assert!(is_nuxt_server_dir_file(Path::new("server/plugins/db.ts")));
+        assert!(is_nuxt_server_dir_file(Path::new("src/server/handler.ts")));
+        // No `server/` segment — application/composable code stays subject.
+        assert!(!is_nuxt_server_dir_file(Path::new(
+            "composables/useToken.ts"
+        )));
+        // Segment (not substring) match.
+        assert!(!is_nuxt_server_dir_file(Path::new("src/myserver.ts")));
+        assert!(!is_nuxt_server_dir_file(Path::new("src/serverless/fn.ts")));
     }
 
     #[test]
