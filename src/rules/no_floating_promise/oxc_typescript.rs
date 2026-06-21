@@ -1,74 +1,186 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
-use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
+use oxc_ast::ast::*;
+use oxc_span::GetSpan;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 pub struct Check;
 
-use super::shared::ASYNC_LOOKING_METHODS;
-
 impl OxcCheck for Check {
-    fn interested_kinds(&self) -> &'static [AstType] {
-        &[AstType::ExpressionStatement]
-    }
-
-    fn run<'a>(
+    fn run_on_semantic<'a>(
         &self,
-        node: &oxc_semantic::AstNode<'a>,
-        ctx: &CheckCtx,
         semantic: &'a oxc_semantic::Semantic<'a>,
-        diagnostics: &mut Vec<Diagnostic>,
-    ) {
+        ctx: &CheckCtx,
+    ) -> Vec<Diagnostic> {
         // `*.test-d.{ts,tsx}` are tsd / `expect-type` type-declaration tests:
         // call statements there are type assertions checked by `tsc --noEmit`,
         // never executed, so a "floating" promise can never reject at runtime.
         if crate::rules::path_utils::has_test_d_infix(ctx.path) {
-            return;
+            return Vec::new();
         }
 
-        let AstKind::ExpressionStatement(stmt) = node.kind() else {
-            return;
-        };
+        let evidence = AsyncEvidence::collect(semantic, ctx.source);
+        let mut diagnostics = Vec::new();
 
-        // OXC normalises an arrow's concise body (`() => expr`) into a synthetic
-        // ExpressionStatement (sometimes wrapped in a FunctionBody) under an
-        // ArrowFunctionExpression with `expression == true`. Such a node is the
-        // function's implicit return value, not a discarded statement, so a
-        // promise it produces is handed back to the caller, not floated.
-        if is_concise_arrow_body(node, semantic) {
-            return;
+        for node in semantic.nodes() {
+            let AstKind::ExpressionStatement(stmt) = node.kind() else {
+                continue;
+            };
+            // OXC normalises an arrow's concise body (`() => expr`) into a
+            // synthetic ExpressionStatement under an ArrowFunctionExpression with
+            // `expression == true`. Such a node is the function's implicit return
+            // value, not a discarded statement, so a promise it produces is handed
+            // back to the caller, not floated.
+            if is_concise_arrow_body(node, semantic) {
+                continue;
+            }
+            let Expression::CallExpression(call) = &stmt.expression else {
+                continue;
+            };
+            // Already handled by `.then`/`.catch`/`.finally`.
+            if has_promise_handler(call) {
+                continue;
+            }
+            if is_promise_combinator(call) || evidence.call_is_promise(call, ctx.source) {
+                let (line, column) =
+                    byte_offset_to_line_col(ctx.source, call.span.start as usize);
+                diagnostics.push(Diagnostic {
+                    path: Arc::clone(&ctx.path_arc),
+                    line,
+                    column,
+                    rule_id: super::META.id.into(),
+                    message: "Promise-returning call is used as a statement \u{2014} rejections will \
+                              become UnhandledPromiseRejection. Add `await`, chain `.catch`, \
+                              or prefix with `void` if you really want to ignore it."
+                        .into(),
+                    severity: Severity::Warning,
+                    span: None,
+                });
+            }
         }
-        let Expression::CallExpression(call) = &stmt.expression else {
-            return;
-        };
 
-        // Check if already handled by .then/.catch/.finally
-        if has_promise_handler(call) {
-            return;
-        }
-
-        let is_flag = is_promise_combinator(call) || is_async_looking_member_call(call, ctx);
-        if !is_flag {
-            return;
-        }
-
-        let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
-        diagnostics.push(Diagnostic {
-            path: Arc::clone(&ctx.path_arc),
-            line,
-            column,
-            rule_id: super::META.id.into(),
-            message: "Promise-returning call is used as a statement \u{2014} rejections will \
-                      become UnhandledPromiseRejection. Add `await`, chain `.catch`, \
-                      or prefix with `void` if you really want to ignore it."
-                .into(),
-            severity: Severity::Warning,
-            span: None,
-        });
+        diagnostics
     }
 }
 
-use oxc_ast::ast::*;
+/// Real, in-file evidence that a given call returns a Promise — gathered once per
+/// file in a single semantic walk. The rule fires only against this evidence,
+/// never against the method name, so a synchronous chainable method that merely
+/// shares a name with an async API (pdfkit's `doc.save()`, a sync `.run()`, ...)
+/// is never flagged.
+struct AsyncEvidence {
+    /// Receiver-method shapes (`"<receiver-text>.<method>"`) that are `await`ed or
+    /// `.then`/`.catch`/`.finally`-chained somewhere in the file. Seeing the same
+    /// shape used as an awaited/handled promise proves that method returns a
+    /// Promise on that receiver, so an un-awaited sibling call genuinely floats.
+    awaited_member_shapes: HashSet<String>,
+    /// Names of functions declared `async` in this file (`async function f` /
+    /// `const f = async () => ...`). A bare `f()` statement on such a name floats
+    /// the returned promise.
+    async_function_names: HashSet<String>,
+}
+
+impl AsyncEvidence {
+    fn collect(semantic: &oxc_semantic::Semantic, source: &str) -> Self {
+        let mut awaited_member_shapes = HashSet::new();
+        let mut async_function_names = HashSet::new();
+
+        for node in semantic.nodes() {
+            match node.kind() {
+                // `await <expr>` — record the awaited call's receiver-method shape.
+                AstKind::AwaitExpression(await_expr) => {
+                    if let Expression::CallExpression(call) = &await_expr.argument
+                        && let Some(shape) = member_call_shape(call, source)
+                    {
+                        awaited_member_shapes.insert(shape);
+                    }
+                }
+                // `<expr>.then(...)` / `.catch(...)` / `.finally(...)` — the inner
+                // receiver is a promise. Record the inner call's shape.
+                AstKind::CallExpression(call) => {
+                    if let Some(inner) = promise_handler_inner_call(call)
+                        && let Some(shape) = member_call_shape(inner, source)
+                    {
+                        awaited_member_shapes.insert(shape);
+                    }
+                }
+                AstKind::Function(func) => {
+                    if func.r#async
+                        && let Some(id) = &func.id
+                    {
+                        async_function_names.insert(id.name.to_string());
+                    }
+                }
+                AstKind::VariableDeclarator(declarator) => {
+                    if let Some(name) = async_initializer_binding(declarator) {
+                        async_function_names.insert(name);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Self {
+            awaited_member_shapes,
+            async_function_names,
+        }
+    }
+
+    /// True when `call` has real evidence of returning a Promise: it is a bare
+    /// call to a locally-declared `async` function, or a `receiver.method(...)`
+    /// whose same shape is awaited / promise-handled elsewhere in the file.
+    fn call_is_promise(&self, call: &CallExpression, source: &str) -> bool {
+        match &call.callee {
+            Expression::Identifier(id) => self.async_function_names.contains(id.name.as_str()),
+            Expression::StaticMemberExpression(_) => member_call_shape(call, source)
+                .is_some_and(|shape| self.awaited_member_shapes.contains(&shape)),
+            _ => false,
+        }
+    }
+}
+
+/// `"<receiver-text>.<method>"` for a static-member call (`db.users.save(x)` ->
+/// `"db.users.save"`), or `None` when the callee is not a static member access.
+fn member_call_shape(call: &CallExpression, source: &str) -> Option<String> {
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return None;
+    };
+    let object = peel_parens(&member.object);
+    let obj_span = object.span();
+    let obj_text = &source[obj_span.start as usize..obj_span.end as usize];
+    Some(format!("{obj_text}.{}", member.property.name.as_str()))
+}
+
+/// When `call` is `<inner>.then(...)` / `.catch(...)` / `.finally(...)`, return
+/// the `<inner>` call expression (the promise being handled), else `None`.
+fn promise_handler_inner_call<'a>(call: &'a CallExpression<'a>) -> Option<&'a CallExpression<'a>> {
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return None;
+    };
+    if !matches!(member.property.name.as_str(), "then" | "catch" | "finally") {
+        return None;
+    }
+    match peel_parens(&member.object) {
+        Expression::CallExpression(inner) => Some(inner),
+        _ => None,
+    }
+}
+
+/// The bound name when a variable declarator initializes to an `async` function
+/// or arrow expression (`const f = async () => ...`), else `None`.
+fn async_initializer_binding(declarator: &VariableDeclarator) -> Option<String> {
+    let BindingPattern::BindingIdentifier(ident) = &declarator.id else {
+        return None;
+    };
+    let is_async = match declarator.init.as_ref()? {
+        Expression::ArrowFunctionExpression(arrow) => arrow.r#async,
+        Expression::FunctionExpression(func) => func.r#async,
+        _ => false,
+    };
+    is_async.then(|| ident.name.to_string())
+}
 
 /// True when `node` (an ExpressionStatement) is the synthetic body of a
 /// concise-body arrow function — its grandparent (through the optional
@@ -95,10 +207,7 @@ fn has_promise_handler(call: &CallExpression) -> bool {
     let Expression::StaticMemberExpression(member) = &call.callee else {
         return false;
     };
-    matches!(
-        member.property.name.as_str(),
-        "then" | "catch" | "finally"
-    )
+    matches!(member.property.name.as_str(), "then" | "catch" | "finally")
 }
 
 /// Is the callee `Promise.<combinator>`?
@@ -118,204 +227,6 @@ fn is_promise_combinator(call: &CallExpression) -> bool {
     )
 }
 
-/// Is the callee a member whose method name is in the async-looking list?
-fn is_async_looking_member_call(call: &CallExpression, ctx: &CheckCtx) -> bool {
-    let Expression::StaticMemberExpression(member) = &call.callee else {
-        return false;
-    };
-    // `this.#field.insert()` is a call on an internal private class field — an
-    // in-memory data structure (trie/tree node, etc.), never a public async DB
-    // adapter (those expose a public API). Skip.
-    if matches!(&member.object, Expression::PrivateFieldExpression(_)) {
-        return false;
-    }
-    if receiver_is_cast(member) {
-        return false;
-    }
-    if is_diagnostics_channel_publish(member) {
-        return false;
-    }
-    if is_fluent_builder_run(member) {
-        return false;
-    }
-    if is_audio_node_connect(call, member) {
-        return false;
-    }
-    if is_better_sqlite3_sync_method(member, ctx) {
-        return false;
-    }
-    if is_threejs_sync_method(member, ctx) {
-        return false;
-    }
-    if is_trpc_procedure_builder_query(member, ctx) {
-        return false;
-    }
-    let method = member.property.name.as_str();
-    ASYNC_LOOKING_METHODS.contains(&method)
-}
-
-/// better-sqlite3 is a fully synchronous library: `Statement.run()` returns a
-/// `RunResult` and `Database.exec()` returns the `Database` — never a Promise.
-/// These are the only two heuristic-listed method names the library exposes, so
-/// in a file that imports `better-sqlite3` a statement-level `.run()` / `.exec()`
-/// call is synchronous and must not be flagged.
-fn is_better_sqlite3_sync_method(member: &StaticMemberExpression, ctx: &CheckCtx) -> bool {
-    matches!(member.property.name.as_str(), "run" | "exec")
-        && ctx.source_contains("better-sqlite3")
-}
-
-/// The Three.js / react-three-fiber ecosystem reuses several heuristic-listed
-/// method names for synchronous, non-Promise operations: controls and animation
-/// mixers expose `connect(domElement)` (wires DOM events, returns `void`),
-/// `save()` / `load()` (snapshot and restore controls state synchronously), and
-/// `CanvasRenderingContext2D.save()` pushes rendering state to a stack. None of
-/// these return a Promise. In a file that imports the Three.js ecosystem
-/// (`three`, `@react-three/fiber`, `@react-three/drei`), a statement-level
-/// `.connect()` / `.save()` / `.load()` is one of these synchronous calls and
-/// must not be flagged. (`update` is already absent from the heuristic.)
-fn is_threejs_sync_method(member: &StaticMemberExpression, ctx: &CheckCtx) -> bool {
-    matches!(member.property.name.as_str(), "connect" | "save" | "load")
-        && file_imports_threejs(ctx.source)
-}
-
-/// True when the file imports from the Three.js ecosystem — `three`,
-/// `@react-three/fiber`, or `@react-three/drei` — via an ESM `import ... from`.
-/// Matches the quoted specifier (not a bare substring) to avoid spurious hits on
-/// unrelated identifiers, and is memoized per file via `source_contains`.
-fn file_imports_threejs(source: &str) -> bool {
-    const SPECIFIERS: &[&str] = &[
-        "from \"three\"",
-        "from 'three'",
-        "from \"three/",
-        "from 'three/",
-        "from \"@react-three/",
-        "from '@react-three/",
-    ];
-    SPECIFIERS
-        .iter()
-        .any(|s| crate::oxc_helpers::source_contains(source, s))
-}
-
-/// tRPC's procedure builder reuses `.query(resolver)` to register a synchronous
-/// resolver, returning a `Procedure` value (not a Promise/thenable). In a file
-/// that imports `@trpc/`, a statement-level `.query(...)` whose receiver chain
-/// carries a procedure-builder marker is therefore not a floating promise.
-///
-/// Both signals are required so a genuine Promise-returning `db.query(...)` /
-/// `pool.query(...)` (DB clients) is never masked: those receivers are plain
-/// identifiers with no builder marker, so [`chain_has_trpc_builder_marker`]
-/// returns false and the call still fires.
-fn is_trpc_procedure_builder_query(member: &StaticMemberExpression, ctx: &CheckCtx) -> bool {
-    member.property.name.as_str() == "query"
-        && ctx.source_contains("@trpc/")
-        && chain_has_trpc_builder_marker(&member.object)
-}
-
-/// Walk the receiver chain of a `.query()` call and return true when any link is
-/// a tRPC procedure-builder marker:
-///   - a `StaticMemberExpression` whose property is `procedure` (e.g. `t.procedure`),
-///   - a `CallExpression` whose callee method is a builder step
-///     (`use` / `input` / `output` / `meta` / `concat` / `unstable_concat`), or
-///   - an `Identifier` named `procedure` or ending in `Procedure`
-///     (`publicProcedure`, `protectedProcedure`, ...).
-///
-/// The walk descends `StaticMemberExpression.object` and
-/// `CallExpression.callee` → `.object`, stopping at any other expression kind.
-fn chain_has_trpc_builder_marker(expr: &Expression) -> bool {
-    const BUILDER_METHODS: &[&str] =
-        &["use", "input", "output", "meta", "concat", "unstable_concat"];
-    let mut current = peel_parens(expr);
-    loop {
-        match current {
-            Expression::Identifier(id) => {
-                let name = id.name.as_str();
-                return name == "procedure" || name.ends_with("Procedure");
-            }
-            Expression::StaticMemberExpression(member) => {
-                if member.property.name.as_str() == "procedure" {
-                    return true;
-                }
-                current = peel_parens(&member.object);
-            }
-            Expression::CallExpression(call) => {
-                let Expression::StaticMemberExpression(callee) = &call.callee else {
-                    return false;
-                };
-                if BUILDER_METHODS.contains(&callee.property.name.as_str()) {
-                    return true;
-                }
-                current = peel_parens(&callee.object);
-            }
-            _ => return false,
-        }
-    }
-}
-
-/// Web Audio's `AudioNode.prototype.connect(destination)` returns the destination
-/// `AudioNode` (for chaining) or `void` — never a Promise.
-/// Matches a `.connect(...)` call by either type-free syntactic signal:
-///   - the receiver is itself a `.connect(...)` call, e.g.
-///     `osc.connect(gain).connect(masterGain)` — a Promise has no `.connect`
-///     method, so chaining `.connect()` proves the inner call returns a node; or
-///   - the sole argument is an `AudioContext`/`OfflineAudioContext` sink, i.e. a
-///     member access ending in `.destination`, e.g. `gain.connect(ctx.destination)`.
-fn is_audio_node_connect(call: &CallExpression, member: &StaticMemberExpression) -> bool {
-    if member.property.name.as_str() != "connect" {
-        return false;
-    }
-    if matches!(peel_parens(&member.object), Expression::CallExpression(inner) if callee_method_is(inner, "connect"))
-    {
-        return true;
-    }
-    let Some(arg) = call.arguments.first().and_then(Argument::as_expression) else {
-        return false;
-    };
-    matches!(peel_parens(arg), Expression::StaticMemberExpression(m) if m.property.name.as_str() == "destination")
-}
-
-/// Does `call`'s callee read as `<receiver>.<method>(...)` for the given method?
-fn callee_method_is(call: &CallExpression, method: &str) -> bool {
-    matches!(&call.callee, Expression::StaticMemberExpression(m) if m.property.name.as_str() == method)
-}
-
-/// A fluent command-builder `.run()` terminal — e.g. tiptap's
-/// `editor.chain().focus().toggleBold().run()` — returns `boolean` (whether the
-/// queued commands applied), not a Promise, so it must not be flagged.
-/// Matches `.run()` whose receiver is a method-call chain rooted in a `.chain()`
-/// call.
-fn is_fluent_builder_run(member: &StaticMemberExpression) -> bool {
-    if member.property.name.as_str() != "run" {
-        return false;
-    }
-    chain_is_rooted_in_chain_call(peel_parens(&member.object))
-}
-
-/// Walk a `a.b().c().d()` method-call chain from the outside in, returning true
-/// when any link is a `.chain()` call.
-fn chain_is_rooted_in_chain_call(expr: &Expression) -> bool {
-    let mut current = expr;
-    loop {
-        let Expression::CallExpression(call) = current else {
-            return false;
-        };
-        let Expression::StaticMemberExpression(member) = &call.callee else {
-            return false;
-        };
-        if member.property.name.as_str() == "chain" {
-            return true;
-        }
-        current = peel_parens(&member.object);
-    }
-}
-
-/// True when the call receiver is a type assertion, e.g. `(api as any).save(...)`.
-/// A cast erases any type basis the heuristic could rely on, so the purely
-/// speculative async-looking-method match must not fire — `(foo as Bar).fetch(x)`
-/// could resolve to a synchronous method.
-fn receiver_is_cast(member: &StaticMemberExpression) -> bool {
-    matches!(peel_parens(&member.object), Expression::TSAsExpression(_))
-}
-
 /// Unwrap any `ParenthesizedExpression` wrappers around `expr`.
 fn peel_parens<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
     let mut current = expr;
@@ -323,26 +234,6 @@ fn peel_parens<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
         current = &p.expression;
     }
     current
-}
-
-/// `node:diagnostics_channel` `Channel.prototype.publish(message)` returns `void`
-/// — it fires subscribers synchronously, so there is nothing to await.
-/// Matches when the `.publish(...)` receiver is, or hangs off, a bare identifier
-/// whose name (case-insensitive) reads as a diagnostics channel, e.g.
-/// `channel.publish(ctx)` or `channel.error.publish(ctx)`.
-fn is_diagnostics_channel_publish(member: &StaticMemberExpression) -> bool {
-    if member.property.name.as_str() != "publish" {
-        return false;
-    }
-    let root = match &member.object {
-        Expression::Identifier(id) => id.name.as_str(),
-        Expression::StaticMemberExpression(inner) => match &inner.object {
-            Expression::Identifier(id) => id.name.as_str(),
-            _ => return false,
-        },
-        _ => return false,
-    };
-    root.to_lowercase().contains("channel")
 }
 
 #[cfg(test)]
@@ -360,6 +251,7 @@ impl crate::rules::test_helpers::RunRule for Check {
         crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,343 +265,178 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, path)
     }
 
+    // --- Promise combinators: always a Promise, no extra evidence needed ---
+
     #[test]
-    fn flags_async_looking_method() {
-        let d = run_on("db.save(user);");
-        assert_eq!(d.len(), 1);
+    fn flags_floating_promise_all() {
+        assert_eq!(run_on("Promise.all([a, b]);").len(), 1);
     }
 
     #[test]
-    fn allows_then_chain() {
+    fn allows_promise_combinator_with_then() {
+        assert!(run_on("Promise.all([a, b]).then(done);").is_empty());
+    }
+
+    // --- Evidence: same receiver-method awaited elsewhere in the file ---
+
+    #[test]
+    fn flags_floating_call_when_same_shape_awaited_elsewhere() {
+        // `repo.save(...)` is awaited once and floated once — the floating one is a
+        // genuine bug, proven by the awaited sibling.
+        let src = "\
+async function run() {
+  await repo.save(a);
+  repo.save(b);
+}
+";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_floating_call_when_same_shape_then_chained_elsewhere() {
+        let src = "\
+api.fetch(url).then(handle);
+api.fetch(other);
+";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_then_chain_self() {
         assert!(run_on("api.fetch(url).then(handleResult);").is_empty());
     }
 
-    // Regression tests for issue #183: `.delete(...)` on Map/Set/WeakMap/WeakSet
-    // returns `boolean`, not a Promise, and must not be flagged.
+    // --- Evidence: bare call to a locally-declared async function ---
 
     #[test]
-    fn allows_map_delete_in_for_of() {
+    fn flags_floating_call_to_local_async_function() {
         let src = "\
-const cache = new Map<string, number>();
-cache.set('a', 1);
-for (const [key] of cache) {
-  cache.delete(key);
+async function sync() { await doWork(); }
+sync();
+";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_floating_call_to_local_async_arrow() {
+        let src = "\
+const sync = async () => doWork();
+sync();
+";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_awaited_call_to_local_async_function() {
+        let src = "\
+async function sync() { await doWork(); }
+async function main() { await sync(); }
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    // --- Core FP: a method that merely shares an async-sounding name but has no
+    // Promise evidence is never flagged. ---
+
+    #[test]
+    fn allows_pdfkit_doc_save() {
+        // Issue #5323: pdfkit's `doc.save()` is the synchronous PDF `q` graphics
+        // operator (returns `this`); it is never awaited, so no evidence exists.
+        let src = "\
+doc.save();
+doc.restore();
+";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_pdfkit_this_save() {
+        // `lib/mixins/text.js:78` — `this.save()` inside a pdfkit mixin.
+        let src = "\
+class PDFDocument {
+  addLine() {
+    this.save();
+  }
 }
 ";
         assert!(run_on(src).is_empty());
     }
 
     #[test]
-    fn allows_set_delete() {
-        assert!(run_on("set.delete(value);").is_empty());
+    fn allows_db_save_without_evidence() {
+        // A bare `db.save(user)` with no awaited sibling and no local async decl
+        // carries no Promise evidence, so the name `save` alone never fires.
+        assert!(run_on("db.save(user);").is_empty());
     }
 
     #[test]
-    fn allows_weakmap_delete() {
-        assert!(run_on("weakMap.delete(obj);").is_empty());
+    fn allows_canvas_context_save() {
+        // `CanvasRenderingContext2D.save()` — synchronous graphics-state push.
+        assert!(run_on("context.save();").is_empty());
     }
 
     #[test]
-    fn allows_weakset_delete() {
-        assert!(run_on("weakSet.delete(obj);").is_empty());
-    }
-
-    #[test]
-    fn still_flags_genuine_promise_returning_member_call() {
-        let d = run_on("repo.save(entity);");
-        assert_eq!(d.len(), 1);
-    }
-
-    // Regression tests for issue #208: URLSearchParams mutator methods
-    // (`delete`, `set`, `append`, `sort`) return `void` per WHATWG URL spec —
-    // none should be flagged. `delete` was dropped from the heuristic in #183;
-    // the others were never on the list. These tests lock that contract in.
-
-    #[test]
-    fn allows_urlsearchparams_delete() {
+    fn allows_better_sqlite3_run_without_evidence() {
+        // better-sqlite3 is fully synchronous; its `.run()` is never awaited, so
+        // no evidence is recorded and the call is not flagged — without any
+        // library-specific carve-out.
         let src = "\
-const params = new URLSearchParams(\"?a=1\");
-params.delete(\"a\");
+this.client.exec(script);
+stmt.run();
 ";
         assert!(run_on(src).is_empty());
     }
 
     #[test]
-    fn allows_urlsearchparams_set() {
-        let src = "\
-const params = new URLSearchParams(\"?a=1\");
-params.set(\"a\", \"b\");
-";
-        assert!(run_on(src).is_empty());
+    fn allows_dispatch_without_evidence() {
+        // Redux/NgRx `.dispatch(...)` is synchronous; never awaited.
+        assert!(run_on("store.dispatch(action);").is_empty());
     }
 
     #[test]
-    fn allows_urlsearchparams_append() {
-        let src = "\
-const params = new URLSearchParams(\"?a=1\");
-params.append(\"x\", \"y\");
-";
-        assert!(run_on(src).is_empty());
+    fn allows_audio_node_connect() {
+        // Web Audio `.connect(...)` returns the node; never awaited.
+        assert!(run_on("masterGain.connect(ctx.destination);").is_empty());
     }
-
-    #[test]
-    fn allows_urlsearchparams_sort() {
-        let src = "\
-const params = new URLSearchParams(\"?b=1&a=2\");
-params.sort();
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_url_searchparams_chain_delete() {
-        // Real-world pattern from the issue's repro file: parsed.searchParams.delete(key).
-        let src = "\
-const parsed = new URL(\"https://example.com/?a=1\");
-parsed.searchParams.delete(\"a\");
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    // Regression tests for issue #1190: `close`, `write`, `emit`, and `send` are
-    // dominated by synchronous, callback-based Node.js APIs that return
-    // non-Promise values — flagging them on name alone produces more false
-    // positives than true positives, so they are not part of the heuristic.
-
-    #[test]
-    fn allows_server_close() {
-        // The issue's exact example: `http.Server.close([cb])` returns the
-        // `Server`, not a Promise.
-        let src = "\
-afterAll(() => {
-  externalServer.close();
-});
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_stream_write() {
-        // `stream.write(chunk)` returns `boolean` (the backpressure signal).
-        assert!(run_on("stream.write(chunk);").is_empty());
-    }
-
-    #[test]
-    fn allows_emitter_emit() {
-        // `EventEmitter.emit(event)` returns `boolean` (whether a listener fired).
-        assert!(run_on("emitter.emit(event);").is_empty());
-    }
-
-    #[test]
-    fn allows_websocket_send() {
-        // `WebSocket.send(data)` returns `void`.
-        assert!(run_on("ws.send(data);").is_empty());
-    }
-
-    #[test]
-    fn still_flags_genuine_floating_async_method() {
-        // Negative-space guard: an async-dominant method name still fires exactly
-        // one diagnostic.
-        let d = run_on("db.save(user);");
-        assert_eq!(d.len(), 1);
-    }
-
-    // Regression tests for issue #2051: `node:diagnostics_channel`
-    // `Channel.publish(message)` returns void — it fires subscribers synchronously,
-    // so `channel.X.publish(...)` must not be flagged.
-
-    #[test]
-    fn allows_diagnostics_channel_publish() {
-        let src = "\
-channel.error.publish(context);
-channel.end.publish(context);
-channel.asyncEnd.publish(context);
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_direct_channel_publish() {
-        assert!(run_on("channel.publish(context);").is_empty());
-    }
-
-    #[test]
-    fn still_flags_non_channel_publish() {
-        let d = run_on("broker.publish(topic, message);");
-        assert_eq!(d.len(), 1);
-    }
-
-    // Regression tests for issue #1978: a method call whose receiver is a type
-    // assertion (`(api as any).save(...)`) gives the heuristic no type basis to
-    // infer a Promise return, so an async-looking method on a cast receiver must
-    // not be flagged.
-
-    #[test]
-    fn allows_method_on_cast_receiver() {
-        assert!(run_on(";(api as any).save({ id: 1 })").is_empty());
-    }
-
-    #[test]
-    fn allows_method_on_named_cast_receiver() {
-        assert!(run_on("(foo as Bar).fetch(x);").is_empty());
-    }
-
-    #[test]
-    fn still_flags_method_on_non_cast_receiver() {
-        let d = run_on("repo.save(entity);");
-        assert_eq!(d.len(), 1);
-    }
-
-    // Regression tests for issue #3246: `dispatch` is too common and ambiguous a
-    // method name to reliably signal an async call — across Redux, NgRx, zustand,
-    // ProseMirror's `EditorView`, and Express's `Route` it is a synchronous
-    // action / transaction / middleware dispatch returning the action, `void`, or
-    // `boolean`, not a Promise. It was dropped from the heuristic, so no
-    // statement-level `.dispatch(...)` is flagged regardless of receiver.
-
-    #[test]
-    fn allows_zustand_api_dispatch() {
-        // The issue's exact example from zustand's devtools middleware: `api` is
-        // narrowed to `{ dispatch: (...args) => void }`, so there is no Promise.
-        let src = "\
-if (shouldDispatchFromDevtools(api)) {
-  api.dispatch(action);
-}
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_redux_store_dispatch() {
-        let src = "\
-const store = createRechartsStore();
-store.dispatch(
-  setMouseOverAxisIndex({
-    activeCoordinate: { x: 3, y: 4 },
-    activeDataKey: 'uv',
-    activeIndex: '1',
-  }),
-);
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_ngrx_this_store_dispatch() {
-        let src = "\
-closeSidenav() {
-  this.store.dispatch(LayoutActions.closeSidenav());
-}
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_editor_view_dispatch() {
-        let src = "\
-view.dispatch(tr);
-this.editor.view.dispatch(tr);
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_express_route_dispatch() {
-        assert!(run_on("route.dispatch(req, {}, done);").is_empty());
-    }
-
-    #[test]
-    fn allows_arbitrary_dispatch() {
-        // A `.dispatch(...)` on any other receiver (job queue, message broker) is
-        // no longer flagged — the name alone is too weak an async signal.
-        assert!(run_on("this.queue.dispatch(job);").is_empty());
-    }
-
-    #[test]
-    fn still_flags_genuine_floating_promise_after_dispatch_drop() {
-        // Negative-space guard: dropping `dispatch` must not weaken the strong
-        // async signals — a discarded `.save(...)` still fires.
-        let d = run_on("repo.save(entity);");
-        assert_eq!(d.len(), 1);
-    }
-
-    // Regression tests for issue #1817: tiptap's fluent command builder
-    // `editor.chain()...run()` ends in a `.run()` that returns `boolean` (whether
-    // the queued commands applied), not a Promise — it must not be flagged.
 
     #[test]
     fn allows_tiptap_chain_run() {
-        assert!(
-            run_on("editor.chain().setContent('<code>test</code>').setTextSelection({ from: 2, to: 3 }).run()").is_empty()
-        );
+        // tiptap fluent builder `.run()` returns boolean; never awaited.
+        assert!(run_on("editor.chain().focus().toggleBold().run();").is_empty());
     }
 
-    #[test]
-    fn allows_tiptap_chain_run_short() {
-        assert!(run_on("editor.chain().focus().toggleBold().run()").is_empty());
-    }
+    // --- Receiver text disambiguation: the shape includes the receiver, so an
+    // awaited `db.save` does not exempt/implicate an unrelated `doc.save`. ---
 
     #[test]
-    fn allows_tiptap_chain_run_with_command() {
+    fn evidence_is_receiver_specific() {
+        // `db.save(...)` is awaited (so `db.save` floats elsewhere), but
+        // `doc.save(...)` has its own receiver and no evidence — only the `db`
+        // floating call fires.
         let src = "\
-editor
-  .chain()
-  .command(({ tr }) => { return true; })
-  .setTextSelection({ from, to })
-  .focus(undefined, { scrollIntoView: false })
-  .run();
+async function run() {
+  await db.save(a);
+  db.save(b);
+  doc.save();
+}
 ";
-        assert!(run_on(src).is_empty());
+        assert_eq!(run_on(src).len(), 1);
     }
 
-    #[test]
-    fn still_flags_run_without_chain() {
-        // A bare `.run()` whose receiver is not a `.chain()`-rooted builder stays
-        // flagged — e.g. a job/task runner.
-        let d = run_on("job.run();");
-        assert_eq!(d.len(), 1);
-    }
-
-    // Regression tests for issue #1825: `*.test-d.{ts,tsx}` are tsd /
-    // `expect-type` type-declaration tests. Their call statements are type
-    // assertions checked by `tsc --noEmit`, never executed, so a "floating"
-    // promise can never reject at runtime — they must not be flagged.
+    // --- `.test-d.` type-declaration tests are never flagged ---
 
     #[test]
     fn allows_floating_call_in_test_d_ts() {
         let src = "\
-import { graphql, HttpResponse } from 'msw'
-
-it('infers the result type', () => {
-  graphql.query(
-    createTypedDocumentString<{ user: { id: string; name: string } }>(''),
-    () => {
-      return HttpResponse.json({ data: { user: { id: '1', name: 'John Doe' } } })
-    },
-  )
-})
+async function run() {
+  await repo.save(a);
+}
+repo.save(b);
 ";
-        assert!(
-            run_at(src, "test/typings/graphql-typed-document-string.test-d.ts").is_empty(),
-            "floating promise in a .test-d.ts type-declaration test must not be flagged"
-        );
+        assert!(run_at(src, "src/Component.test-d.ts").is_empty());
     }
 
-    #[test]
-    fn allows_floating_call_in_test_d_tsx() {
-        assert!(run_at("db.save(user);", "src/Component.test-d.tsx").is_empty());
-    }
-
-    #[test]
-    fn still_flags_floating_call_in_regular_file() {
-        // Control: the same statement still fires outside a `.test-d.` file.
-        let d = run_at("db.save(user);", "src/index.ts");
-        assert_eq!(d.len(), 1);
-    }
-
-    // Regression tests for issue #1636: a promise-returning call that is the
-    // concise (expression) body of an arrow function is the function's implicit
-    // return value, not a discarded statement — it must not be flagged.
+    // --- Concise arrow body is an implicit return, not a floated statement ---
 
     #[test]
     fn allows_promise_combinator_in_arrow_concise_body() {
@@ -719,396 +446,27 @@ it('infers the result type', () => {
     #[test]
     fn allows_member_call_in_arrow_concise_body() {
         // `repo.save(item)` is the concise body of the `.map` callback — its
-        // promise is collected by `map`, not floated.
-        assert!(
-            run_on("await Promise.all(items.map(item => repo.save(item)));").is_empty()
-        );
+        // promise is collected by `map`, not floated — even though `repo.save` is
+        // awaited elsewhere.
+        let src = "\
+async function run() {
+  await repo.save(first);
+  await Promise.all(items.map(item => repo.save(item)));
+}
+";
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
-    fn allows_promise_reject_in_async_arrow_concise_body() {
-        assert!(
-            run_on("const fail = async () => Promise.reject(new Error('error'));").is_empty()
-        );
-    }
-
-    #[test]
-    fn still_flags_floating_call_in_arrow_block_body() {
+    fn flags_floating_call_in_arrow_block_body() {
         // Negative-space guard: a promise-returning call as a discarded statement
         // inside an arrow's *block* body (not the concise body) still fires.
-        let d = run_on("const run = () => { db.save(user); };");
-        assert_eq!(d.len(), 1);
-    }
-
-    // Regression tests for issue #1649: Web Audio's
-    // `AudioNode.prototype.connect(destination)` returns the destination AudioNode
-    // (for chaining) or void — never a Promise — so chained `.connect().connect()`
-    // calls and `.connect(ctx.destination)` calls must not be flagged.
-
-    #[test]
-    fn allows_audio_node_connect_to_destination() {
         let src = "\
-let ctx = new AudioContext();
-let masterGain = ctx.createGain();
-masterGain.connect(ctx.destination);
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_chained_audio_node_connect() {
-        let src = "\
-osc.connect(gain).connect(masterGain);
-noise.connect(band).connect(noiseGain).connect(masterGain);
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_non_audio_connect() {
-        // Negative-space guard: a genuine Promise-returning `.connect()` (e.g. a
-        // DB/socket client) on a plain receiver with no Web Audio signal stays
-        // flagged.
-        let d = run_on("client.connect(connectionString);");
-        assert_eq!(d.len(), 1);
-    }
-
-    #[test]
-    fn still_flags_floating_async_call() {
-        // Negative-space guard: a discarded async-function result still fires.
-        let d = run_on("repo.save(entity);");
-        assert_eq!(d.len(), 1);
-    }
-
-    // Regression tests for issue #3377: `.commit()` and `.flush()` are dominated
-    // by synchronous APIs (data-loader state staging, transaction commits, buffer
-    // / scheduler / resolver draining), so both names were dropped from the
-    // heuristic. A statement-level `.commit(...)` / `.flush()` must not be flagged.
-
-    #[test]
-    fn allows_void_commit_call() {
-        // Vue Router data-loader `entry.commit(to)` — a synchronous void commit.
-        let src = "\
-entry.commit(to);
-childEntry.commit(to);
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_void_flush_call() {
-        // Vue Router e2e `scrollWaiter.flush()` — a synchronous void resolver, on a
-        // receiver that does not read as a test scheduler.
-        assert!(run_on("scrollWaiter.flush();").is_empty());
-    }
-
-    #[test]
-    fn still_flags_genuine_async_save_after_commit_flush_drop() {
-        // Over-exemption guard: dropping `commit`/`flush` must not weaken the
-        // strong async signals — a discarded `.save(...)` still fires.
-        let d = run_on("repo.save(entity);");
-        assert_eq!(d.len(), 1);
-    }
-
-    // Regression tests for issue #2391: better-sqlite3 is a fully synchronous
-    // library — its `Statement.run()` and `Database.exec()` return non-Promise
-    // values. When a file imports `better-sqlite3`, these statement-level calls
-    // must not be flagged.
-
-    #[test]
-    fn allows_better_sqlite3_sync_methods() {
-        // The issue's exact examples from prisma's better-sqlite3 adapter.
-        let src = "\
-import Database from 'better-sqlite3';
-
-class Adapter {
-  executeScript(script: string): Promise<void> {
-    this.client.exec(script);
-    return Promise.resolve();
-  }
-
-  async startTransaction(): Promise<void> {
-    this.client.prepare('BEGIN').run();
-  }
-
-  runStatement(stmt: Statement): void {
-    stmt.run();
-  }
+async function run() {
+  await db.save(a);
 }
+const go = () => { db.save(b); };
 ";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_floating_promise_without_better_sqlite3_import() {
-        // Negative-space guard: the same `.run()` / `.exec()` names stay flagged
-        // in a file that does not import better-sqlite3.
-        let d = run_on("job.run();");
-        assert_eq!(d.len(), 1);
-    }
-
-    #[test]
-    fn still_flags_genuine_floating_promise_in_better_sqlite3_file() {
-        // Negative-space guard: only the better-sqlite3 synchronous method names
-        // (`run`, `exec`) are exempted — a genuine Promise-returning call (e.g.
-        // `repo.save(...)`) in the same file stays flagged.
-        let src = "\
-import Database from 'better-sqlite3';
-
-repo.save(entity);
-";
-        let d = run_on(src);
-        assert_eq!(d.len(), 1);
-    }
-
-    // Regression tests for issue #2364: synchronous Express `ServerResponse`
-    // methods (`res.send` / `res.json`) return the response for chaining, not a
-    // Promise. These names are not in the heuristic list, so they are not flagged.
-
-    #[test]
-    fn allows_express_res_send() {
-        let src = "app.get('/', (req, res) => { res.send('ok'); });";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_express_res_status_send() {
-        assert!(run_on("res.status(500).send('got error');").is_empty());
-    }
-
-    #[test]
-    fn allows_express_res_json() {
-        assert!(run_on("res.json(data);").is_empty());
-    }
-
-    // Regression tests for issue #2284: the Three.js / react-three-fiber
-    // ecosystem reuses `connect` / `save` / `load` for synchronous, non-Promise
-    // operations (controls DOM wiring, controls state snapshot/restore,
-    // `CanvasRenderingContext2D.save()`). In a file that imports `three` /
-    // `@react-three/*`, these statement-level calls must not be flagged.
-    // (`update` was already dropped from the heuristic in #1280.)
-
-    #[test]
-    fn allows_threejs_controls_connect() {
-        // The issue's exact example from drei's OrbitControls.tsx.
-        let src = "\
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
-controls.connect(explDomElement);
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_threejs_canvas_context_save() {
-        // The issue's exact example from drei's GradientTexture.tsx.
-        let src = "\
-import * as THREE from 'three';
-context.save();
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_react_three_fiber_controls_load() {
-        let src = "\
-import { useFrame } from '@react-three/fiber';
-controls.load();
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_save_without_threejs_import() {
-        // Negative-space guard: ORM `.save()` (TypeORM/Mongoose/Sequelize) returns
-        // a Promise — floating it is a real bug — so `.save()` stays flagged in a
-        // file with no Three.js import.
-        let d = run_on("userRepository.save(user);");
-        assert_eq!(d.len(), 1);
-    }
-
-    #[test]
-    fn still_flags_load_without_threejs_import() {
-        let d = run_on("repo.load(id);");
-        assert_eq!(d.len(), 1);
-    }
-
-    #[test]
-    fn still_flags_connect_without_threejs_import() {
-        // A genuine Promise-returning DB/socket client `.connect()` stays flagged.
-        let d = run_on("client.connect(connectionString);");
-        assert_eq!(d.len(), 1);
-    }
-
-    // Regression tests for issue #1280: Angular's `WritableSignal.update(updater)`
-    // synchronously updates the signal value and returns void. `update` is a very
-    // common synchronous mutation name (Angular signals, Immutable.js, stores,
-    // Map-likes), so it is not in the heuristic list and must not be flagged.
-
-    #[test]
-    fn allows_angular_signal_update() {
-        // The issue's exact example: `this.page.update((c) => ...)` as a statement
-        // inside an Angular component method.
-        let src = "\
-class ExampleComponent {
-  readonly page = signal(0);
-  previousPage() {
-    this.page.update((currentPage) => {
-      return Math.max(currentPage - 1, 0);
-    });
-  }
-}
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_bare_update_call() {
-        assert!(run_on("store.update(state);").is_empty());
-    }
-
-    #[test]
-    fn still_flags_genuine_floating_promise_after_update_removed() {
-        // Negative-space guard: another async-dominant method name still in the
-        // heuristic (`fetch`) used as a statement stays flagged.
-        let d = run_on("api.fetch(url);");
-        assert_eq!(d.len(), 1);
-    }
-
-    // Regression test for issue #2116: the `.sync` suffix is the synchronous
-    // counterpart of an async API (`execa.sync()`), returns a plain value, and
-    // must not be flagged.
-
-    #[test]
-    fn allows_execa_sync() {
-        let src = "\
-execa.sync('yarn', ['link', '--private', '--all', rootDirectory], {
-  cwd,
-  stdio: 'inherit',
-});
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_genuine_floating_promise_after_sync_removed() {
-        // Negative-space guard: an async-dominant method name still in the
-        // heuristic (`fetch`) used as a statement stays flagged.
-        let d = run_on("api.fetch(url);");
-        assert_eq!(d.len(), 1);
-    }
-
-    // Regression tests for issue #3262: an async-looking method call on a
-    // private-field receiver (`this.#node.insert(...)`) is a call on an internal
-    // class data structure (Hono's trie/reg-exp routers), not a public async DB
-    // adapter — it must not be flagged.
-
-    #[test]
-    fn allows_insert_on_private_field_node() {
-        // Hono's trie-router: `this.#node` is an in-memory trie node whose
-        // `insert` returns void.
-        let src = "\
-class TrieRouter {
-  #node = new Node();
-  add(method, path, handler) {
-    this.#node.insert(method, path, handler);
-  }
-}
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_insert_on_private_field_root() {
-        // Hono's reg-exp-router: `this.#root` is an in-memory trie.
-        let src = "\
-class Trie {
-  #root = new Node();
-  insert(tokens) {
-    this.#root.insert(a, b, c, d, e);
-  }
-}
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_insert_on_public_field_receiver() {
-        // Negative-space guard: only private-field receivers are exempt — a
-        // public-field `this.db.insert(...)` (a DB adapter) stays flagged.
-        let d = run_on("this.db.insert(userData);");
-        assert_eq!(d.len(), 1);
-    }
-
-    #[test]
-    fn still_flags_insert_on_identifier_receiver() {
-        // Negative-space guard: an identifier receiver `db.insert(...)` stays
-        // flagged.
-        let d = run_on("db.insert(userData);");
-        assert_eq!(d.len(), 1);
-    }
-
-    // Regression tests for issue #3295: tRPC's procedure builder reuses
-    // `.query(resolver)` to register a synchronous resolver, returning a
-    // `Procedure` value (not a Promise). In a file that imports `@trpc/`, a
-    // statement-level `.query(...)` on a procedure-builder chain must not be
-    // flagged.
-
-    #[test]
-    fn allows_trpc_procedure_use_query() {
-        // The issue's exact example from trpc/trpc.
-        let src = "\
-import { initTRPC } from '@trpc/server';
-t.procedure.use(fooMiddleware).query((opts) => {
-  expectTypeOf(opts.ctx).toEqualTypeOf<{ user: User; foo: 'foo' }>();
-});
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_trpc_procedure_query() {
-        let src = "\
-import { initTRPC } from '@trpc/server';
-t.procedure.query(() => {});
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_trpc_named_procedure_query() {
-        let src = "\
-import { publicProcedure } from '@trpc/server';
-publicProcedure.query(() => {});
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn allows_trpc_procedure_input_query() {
-        let src = "\
-import { initTRPC } from '@trpc/server';
-t.procedure.input(schema).query(() => {});
-";
-        assert!(run_on(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_db_query_in_trpc_file() {
-        // Load-bearing FN guard: a genuine Promise-returning `db.query(...)` in a
-        // file that also imports `@trpc/server` stays flagged — the receiver `db`
-        // carries no builder marker, proving the suppressor is not import-gating.
-        let src = "\
-import { initTRPC } from '@trpc/server';
-db.query(\"SELECT 1\");
-";
-        let d = run_on(src);
-        assert_eq!(d.len(), 1);
-    }
-
-    #[test]
-    fn still_flags_db_query_in_non_trpc_file() {
-        // Negative-space guard: `db.query(...)` in a non-tRPC file stays flagged.
-        let d = run_on("db.query(\"SELECT 1\");");
-        assert_eq!(d.len(), 1);
+        assert_eq!(run_on(src).len(), 1);
     }
 }

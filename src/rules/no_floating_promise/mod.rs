@@ -1,12 +1,14 @@
 //! no-floating-promise — flag promise-returning calls whose result is
 //! discarded at statement level.
 //!
-//! An async-looking method call on a private-field receiver (`this.#field.insert()`)
-//! is exempt: a private class field is an internal data structure, never a public
-//! async DB adapter, so the async-looking-method heuristic does not fire there.
+//! A call is treated as Promise-returning only on real, in-file evidence: a
+//! `Promise.<combinator>(...)`, a bare call to a locally-declared `async`
+//! function, or a `receiver.method(...)` whose same shape is `await`ed or
+//! `.then`/`.catch`-chained elsewhere in the file. The method name alone is never
+//! used, so a synchronous chainable method that shares an async-sounding name
+//! (e.g. pdfkit's `doc.save()`) is not flagged.
 
 mod oxc_typescript;
-mod shared;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
