@@ -10,6 +10,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::is_in_test_context;
 
 // Predicate prefixes accepted by the rule. The first row is the classic
 // API-surface set (`is_ready`, `has_items`, `should_retry`, …). The
@@ -75,6 +76,9 @@ fn check_node(
     }
     let name = extract_identifier(node, source)?;
     if is_std_net_toggle_setter_param(node, name, source) {
+        return None;
+    }
+    if is_assertion_value_param(node, name, source) {
         return None;
     }
     let problem = classify_name(name)?;
@@ -160,6 +164,93 @@ fn method_has_self_receiver(function_item: tree_sitter::Node) -> bool {
     params
         .children(&mut cursor)
         .any(|child| child.kind() == "self_parameter")
+}
+
+/// True for a `bool` parameter named exactly `expected`/`actual` on a
+/// test/assertion helper. `assert_eq!(expected, actual)` is the universal
+/// convention for naming the asserted value, so `expected: bool` reads as
+/// "the value the test expects", not as a state predicate; forcing `is_expected`
+/// would misname it (it names the assertion's expected value, not a predicate on
+/// some noun). The rule already accepts `expected: i32`/`&str`; this aligns the
+/// `bool` case.
+///
+/// Anchored on the param name AND a structural test/assertion context, so it
+/// cannot widen into a name allowlist. The node must be a `parameter` named
+/// exactly `expected`/`actual`, and the enclosing `function_item` must be a
+/// test/assertion helper — established by ANY of:
+/// - `is_in_test_context` (a `#[cfg(test)]` module or test-attribute ancestor,
+///   covering helpers inside a `#[cfg(test)] mod` in a normal `src` file);
+/// - the enclosing `function_item` name begins with `assert`/`expect`/`check`/
+///   `test` (assertion-helper naming); or
+/// - the enclosing `function_item` body contains an assertion macro invocation
+///   (`assert*!`/`debug_assert*!`), which is the issue's shape: a helper named
+///   `case` whose body is `assert_eq!(expected, …)`.
+///
+/// A production `expected: bool` parameter with no test/assertion context is
+/// unaffected and still flags. The walk stops at the first `closure_expression`
+/// boundary so a closure callback param named `expected`/`actual` is judged by
+/// its own enclosing function.
+fn is_assertion_value_param(node: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    if node.kind() != "parameter" || (name != "expected" && name != "actual") {
+        return false;
+    }
+    if is_in_test_context(node, source) {
+        return true;
+    }
+    let mut cursor = node;
+    while let Some(parent) = cursor.parent() {
+        if parent.kind() == "closure_expression" {
+            return false;
+        }
+        if parent.kind() == "function_item" {
+            return fn_name_is_assertion_helper(parent, source)
+                || fn_body_contains_assertion(parent, source);
+        }
+        cursor = parent;
+    }
+    false
+}
+
+/// True if `function_item`'s `name` begins with an assertion-helper verb
+/// (`assert`/`expect`/`check`/`test`).
+fn fn_name_is_assertion_helper(function_item: tree_sitter::Node, source: &[u8]) -> bool {
+    function_item
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source).ok())
+        .is_some_and(|fn_name| {
+            ["assert", "expect", "check", "test"]
+                .iter()
+                .any(|prefix| fn_name.starts_with(prefix))
+        })
+}
+
+/// True if `function_item`'s body contains an assertion macro invocation
+/// (`assert!`/`assert_eq!`/`assert_ne!`/`debug_assert*!`).
+fn fn_body_contains_assertion(function_item: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(body) = function_item.child_by_field_name("body") else {
+        return false;
+    };
+    let mut cursor = body.walk();
+    let mut stack = vec![body];
+    while let Some(current) = stack.pop() {
+        if current.kind() == "macro_invocation"
+            && current
+                .child_by_field_name("macro")
+                .and_then(|m| m.utf8_text(source).ok())
+                .is_some_and(is_assertion_macro_name)
+        {
+            return true;
+        }
+        stack.extend(current.children(&mut cursor));
+    }
+    false
+}
+
+/// True if `name` is an assertion macro: `assert`, `assert_eq`, `assert_ne`,
+/// or any `debug_assert*` counterpart.
+fn is_assertion_macro_name(name: &str) -> bool {
+    matches!(name, "assert" | "assert_eq" | "assert_ne")
+        || matches!(name, "debug_assert" | "debug_assert_eq" | "debug_assert_ne")
 }
 
 fn extract_identifier<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
@@ -384,6 +475,73 @@ mod tests {
         // The setter exemption does not weaken the strict rule elsewhere:
         // a bare adjective local still flags.
         assert_eq!(run_on("fn f() { let disabled: bool = true; }").len(), 1);
+    }
+
+    #[test]
+    fn allows_expected_bool_param_in_assertion_helper() {
+        // `assert_eq!(expected, actual)` convention: `expected: bool` names the
+        // value the test asserts, not a predicate. The helper is detected by its
+        // body containing an assertion macro. (Closes #5405)
+        let src = "fn case(expected: bool, value: T) {\n\
+                   assert_eq!(expected, value.is_empty());\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_actual_bool_param_in_assertion_helper() {
+        let src = "fn case(actual: bool, value: T) {\n\
+                   assert_eq!(true, actual);\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_expected_bool_param_in_cfg_test_module() {
+        // A helper inside a `#[cfg(test)] mod` in a normal src file: no path
+        // signal, the AST `#[cfg(test)]` ancestor establishes the test context.
+        let src = "#[cfg(test)]\nmod tests {\n\
+                   fn helper(expected: bool) {}\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_expected_bool_param_by_assertion_helper_name() {
+        for fn_name in ["assert_state", "expect_value", "check_flag", "test_it"] {
+            let src = format!("fn {fn_name}(expected: bool) {{}}");
+            assert!(run_on(&src).is_empty(), "`{fn_name}` should be allowed");
+        }
+    }
+
+    #[test]
+    fn still_flags_expected_bool_param_in_production_fn() {
+        // No test context, no assertion macro, non-assertion fn name: strictness
+        // is preserved — `expected: bool` still requires a predicate prefix.
+        let diags = run_on("fn configure(expected: bool) {}");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'expected'"));
+    }
+
+    #[test]
+    fn still_flags_disabled_bool_param_alongside_assertion_exemption() {
+        // The exemption is anchored to `expected`/`actual`; a different bare
+        // adjective param in the same assertion helper still flags.
+        let src = "fn case(expected: bool, disabled: bool) {\n\
+                   assert_eq!(expected, disabled);\n}";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'disabled'"));
+    }
+
+    #[test]
+    fn still_flags_closure_expected_param_nested_in_assertion_helper() {
+        // The walk stops at the closure boundary: a closure callback param
+        // named `expected` inside an assertion helper is judged by its own
+        // (closure) scope, not the helper's assertion context.
+        let src = "fn case() {\n\
+                   assert!(true);\n\
+                   let f = |expected: bool| {};\n}";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'expected'"));
     }
 
     #[test]
