@@ -3,8 +3,13 @@
 //! initializer, or static initialization block).
 //!
 //! In a static context `this` is the class constructor itself and `super` is the
-//! parent class — almost always a mistake for code meant to operate on an
-//! instance. The class name / parent class name should be used instead.
+//! parent class. A bare `this` used as a value (`foo(this)`, `return this`,
+//! `this === x`) is almost always a mistake for code meant to operate on an
+//! instance and is flagged. Constructing or member-accessing through `this`
+//! (`new this()`, `this.member`, `this[k]`, `this.#field`) is exempt: there
+//! `this` resolves to the actual — possibly subclass — class, so these reach
+//! inherited/overridden static members polymorphically. Replacing them with a
+//! hardcoded class name would break subclassing.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -31,22 +36,26 @@ fn is_new_this_callee(
     new_expr.callee.span() == this_node.kind().span()
 }
 
-/// True when `this_node` is the receiver of a private member access
-/// (`this.#field` / `this.#method()`). Accessing a private static member through
-/// `this` is the correct idiom — `this` resolves to the actual (possibly
-/// subclass) class so the access stays polymorphic, and `#` makes the receiver
-/// unambiguous, so replacing it with the class name would be wrong. Public
-/// accesses (`this.x`) parse as a `StaticMemberExpression`, not a
-/// `PrivateFieldExpression`, and stay flagged.
-fn is_private_member_receiver(
+/// True when `this_node` is the *object* of a member access on `this`
+/// (`this.member`, `this[member]`, or `this.#member`). In a static context
+/// `this` resolves to the class the method was invoked on — possibly a subclass
+/// — so member access reaches inherited / overridden static members through the
+/// class hierarchy (`this.MAPPINGS`, `this.staticHelper()`, `this.#field`).
+/// Hardcoding the declaring class name instead would break that polymorphism, so
+/// this access is exempt. The member *property* and any computed-key `this` are
+/// distinct nodes and are not exempted.
+fn is_this_member_object(
     this_node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
     let nodes = semantic.nodes();
-    let AstKind::PrivateFieldExpression(member) = nodes.kind(nodes.parent_id(this_node.id())) else {
-        return false;
-    };
-    member.object.span() == this_node.kind().span()
+    let this_span = this_node.kind().span();
+    match nodes.kind(nodes.parent_id(this_node.id())) {
+        AstKind::StaticMemberExpression(member) => member.object.span() == this_span,
+        AstKind::ComputedMemberExpression(member) => member.object.span() == this_span,
+        AstKind::PrivateFieldExpression(member) => member.object.span() == this_span,
+        _ => false,
+    }
 }
 
 /// Determines whether the `this`/`super` at `node` is bound to a `static` class
@@ -138,7 +147,7 @@ impl OxcCheck for Check {
             let (keyword, span) = match node.kind() {
                 AstKind::ThisExpression(this_expr) => {
                     if is_new_this_callee(node, semantic)
-                        || is_private_member_receiver(node, semantic)
+                        || is_this_member_object(node, semantic)
                     {
                         continue;
                     }
@@ -245,16 +254,17 @@ mod tests {
     // --- Invalid cases (mirrors Biome's invalid.js) ---
 
     #[test]
-    fn flags_this_and_super_in_static_block() {
-        // `static { this.CONSTANT += super.foo(); }` — two diagnostics.
+    fn flags_super_in_static_block() {
+        // `static { this.CONSTANT += super.foo(); }` — `this.CONSTANT` is an
+        // inherited-static access (exempt); `super.foo()` is flagged.
         let diags = run_on("class B extends A { static { this.CONSTANT += super.foo(); } }");
-        assert_eq!(diags.len(), 2);
+        assert_eq!(diags.len(), 1);
     }
 
     #[test]
-    fn flags_this_in_static_property_initializer() {
-        let diags = run_on("class B extends A { static CONSTANT = this.OTHER; }");
-        assert_eq!(diags.len(), 1);
+    fn allows_this_member_in_static_property_initializer() {
+        // `static CONSTANT = this.OTHER;` — reads an inherited static member.
+        assert!(run_on("class B extends A { static CONSTANT = this.OTHER; }").is_empty());
     }
 
     #[test]
@@ -264,42 +274,47 @@ mod tests {
     }
 
     #[test]
-    fn flags_this_and_super_in_static_getter() {
+    fn flags_bare_this_and_super_in_static_getter() {
+        // Bare `this` value + `super.x` member access — both flagged.
         let src = "class B extends A {\n    static get property() {\n        this;\n        return super.x;\n    }\n}";
         let diags = run_on(src);
         assert_eq!(diags.len(), 2);
     }
 
     #[test]
-    fn flags_this_and_super_in_arrow_inside_static_setter() {
-        // Arrows inherit the static `this`/`super` — both fire.
+    fn flags_bare_this_and_super_in_arrow_inside_static_setter() {
+        // Arrows inherit the static `this`/`super`; bare `this` + `super.x` fire.
         let src = "class B extends A {\n    static set property(x) {\n        () => this;\n        () => super.x = x;\n    }\n}";
         let diags = run_on(src);
         assert_eq!(diags.len(), 2);
     }
 
     #[test]
-    fn flags_this_and_super_in_static_method() {
+    fn flags_super_in_static_method() {
+        // `this.CONSTANT` is an inherited-static access (exempt); `super.ANOTHER`
+        // is flagged.
         let src =
             "class B extends A { static method() { return this.CONSTANT + super.ANOTHER; } }";
         let diags = run_on(src);
-        assert_eq!(diags.len(), 2);
+        assert_eq!(diags.len(), 1);
     }
 
     #[test]
-    fn flags_in_static_method_of_named_class_expression() {
+    fn flags_super_in_static_method_of_named_class_expression() {
+        // `this.X` exempt (inherited static), `super.Y` flagged.
         let src =
             "const D = class D extends f() { static method() { return this.X + super.Y; } }";
         let diags = run_on(src);
-        assert_eq!(diags.len(), 2);
+        assert_eq!(diags.len(), 1);
     }
 
     #[test]
-    fn flags_in_static_method_of_anonymous_class_expression() {
+    fn flags_super_in_static_method_of_anonymous_class_expression() {
+        // `this.X` exempt (inherited static), `super.Y` flagged.
         let src =
             "const E = class extends f() { static method() { return this.X + super.Y; } }";
         let diags = run_on(src);
-        assert_eq!(diags.len(), 2);
+        assert_eq!(diags.len(), 1);
     }
 
     #[test]
@@ -317,28 +332,29 @@ mod tests {
     }
 
     #[test]
-    fn flags_this_in_new_member_expression() {
-        // `new this.Factory()` — `this` is the member object, not the `new`
-        // callee, so it is flagged.
-        let diags = run_on("class FactoryCases { static method() { new this.Factory(); } }");
-        assert_eq!(diags.len(), 1);
+    fn allows_this_member_in_new_member_expression() {
+        // `new this.Factory()` — `this` is the object of a member access, the
+        // inherited-static factory idiom, so it is exempt.
+        assert!(run_on("class FactoryCases { static method() { new this.Factory(); } }").is_empty());
     }
 
     #[test]
-    fn flags_all_factory_cases_together() {
-        // The full FactoryCases fixture: 3 diagnostics total.
+    fn flags_only_bare_this_arguments_in_factory_cases() {
+        // `new this(this)` callee exempt, bare-`this` argument flagged;
+        // `new Foo(this)` bare-`this` argument flagged; `new this.Factory()`
+        // member-object `this` exempt — 2 diagnostics total.
         let src = "class FactoryCases {\n    static method() {\n        new this(this);\n        new Foo(this);\n        new this.Factory();\n    }\n}";
         let diags = run_on(src);
-        assert_eq!(diags.len(), 3);
+        assert_eq!(diags.len(), 2);
     }
 
     // --- Boundary-precision guards ---
 
     #[test]
-    fn flags_this_in_nested_block_inside_static_method() {
+    fn flags_bare_this_in_nested_block_inside_static_method() {
         // Nested blocks/loops/conditionals inherit the static `this` (only
-        // non-arrow functions reset it).
-        let src = "class A { static foo() { if (x) { for (;;) { this.y; } } } }";
+        // non-arrow functions reset it); a bare `this` value there is flagged.
+        let src = "class A { static foo() { if (x) { for (;;) { foo(this); } } } }";
         let diags = run_on(src);
         assert_eq!(diags.len(), 1);
     }
@@ -351,9 +367,10 @@ mod tests {
     }
 
     #[test]
-    fn flags_this_in_arrow_nested_in_static_property() {
-        // A static property initialized with an arrow keeps the static `this`.
-        let diags = run_on("class A { static x = () => this.y; }");
+    fn flags_bare_this_in_arrow_nested_in_static_property() {
+        // A static property initialized with an arrow keeps the static `this`; a
+        // bare `this` value there is flagged.
+        let diags = run_on("class A { static x = () => foo(this); }");
         assert_eq!(diags.len(), 1);
     }
 
@@ -392,9 +409,23 @@ mod tests {
     }
 
     #[test]
-    fn flags_this_public_member_access_in_static_method() {
-        // Public `this.publicStatic` — class name should be used, still flagged.
-        let diags = run_on("class A { static m() { return this.publicStatic; } }");
+    fn allows_this_public_member_access_in_static_method() {
+        // `this.publicStatic` reaches an inherited/overridable static member
+        // through the (possibly subclass) class — exempt.
+        assert!(run_on("class A { static m() { return this.publicStatic; } }").is_empty());
+    }
+
+    #[test]
+    fn allows_this_computed_member_access_in_static_method() {
+        // `this[key]` is computed inherited-static access — exempt.
+        assert!(run_on("class A { static m(key) { return this[key]; } }").is_empty());
+    }
+
+    #[test]
+    fn flags_this_as_computed_key_in_static_method() {
+        // `obj[this]` — `this` is the computed *key*, not the member object, so
+        // it is a bare `this` value and stays flagged.
+        let diags = run_on("class A { static m() { return obj[this]; } }");
         assert_eq!(diags.len(), 1);
     }
 
@@ -402,5 +433,27 @@ mod tests {
     fn flags_bare_this_in_static_method() {
         let diags = run_on("class A { static m() { return this; } }");
         assert_eq!(diags.len(), 1);
+    }
+
+    // --- Regression: issue #5409 (class-hierarchy patterns) ---
+
+    #[test]
+    fn allows_polymorphic_factory_new_this() {
+        // `return new this()` constructs the subclass the static method was
+        // invoked on — the canonical polymorphic-factory idiom.
+        assert!(run_on("class P { static create() { return new this(); } }").is_empty());
+    }
+
+    #[test]
+    fn allows_inherited_static_property_access() {
+        // `this.DEFAULT` resolves an overridable inherited static member.
+        let src = "class M { static from() { if (!this.MAPPINGS) return; return this.DEFAULT; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_inherited_static_method_call() {
+        // `this.staticHelper()` dispatches to the subclass's static override.
+        assert!(run_on("class M { static run() { return this.staticHelper(); } }").is_empty());
     }
 }
