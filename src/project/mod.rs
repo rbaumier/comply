@@ -2281,6 +2281,14 @@ pub struct ProjectCtx {
     // scoped to one member. Built lazily on first miss and reused for the run.
     workspace_sibling_deps_cache: Mutex<FxHashMap<PathBuf, Arc<FxHashSet<String>>>>,
 
+    // Set of virtual module IDs registered by a Vite/Rollup/Nuxt plugin defined
+    // somewhere in the project source tree (a string literal co-occurring with a
+    // `resolveId`/`load` resolver hook), keyed by the resolved root directory.
+    // Such IDs look like npm package names but are resolved to generated code at
+    // build time, so `no-implicit-deps` must not flag an import of one. Built
+    // lazily on first miss by a bounded downward scan and reused for the run.
+    virtual_module_ids_cache: Mutex<FxHashMap<PathBuf, Arc<FxHashSet<String>>>>,
+
     // Files the engine read and found to contain no `comply-ignore` substring.
     // The post-filter (`ignore_comments::apply_to_all`) otherwise re-reads every
     // discovered file from disk just to run that one substring check; for files
@@ -4026,6 +4034,33 @@ impl ProjectCtx {
         found
     }
 
+    /// True if `spec` is a virtual module ID registered by a Vite/Rollup/Nuxt
+    /// plugin defined somewhere in the project source tree of `importer`.
+    ///
+    /// A plugin can register a virtual module whose ID looks like an npm package
+    /// name (`nuxt-vitest-environment-options`) but is resolved to generated code
+    /// at build time, so an `import` of it is legitimate without a `package.json`
+    /// entry. The ID is recognized structurally: a string literal that co-occurs
+    /// with a `resolveId`/`load` resolver hook in the same project source file.
+    /// The set is built once per resolved root by a bounded downward scan and
+    /// memoized; a genuinely missing package has no such registration and still
+    /// fires.
+    pub fn is_registered_virtual_module(&self, importer: &Path, spec: &str) -> bool {
+        let Some(root) = self.tree_dep_root(importer) else {
+            return false;
+        };
+        if let Some(hit) = self.virtual_module_ids_cache.lock().unwrap().get(&root) {
+            return hit.contains(spec);
+        }
+        let ids = Arc::new(collect_virtual_module_ids(&root));
+        let found = ids.contains(spec);
+        self.virtual_module_ids_cache
+            .lock()
+            .unwrap()
+            .insert(root, ids);
+        found
+    }
+
     /// Directory of the nearest ancestor `package.json` (starting at `importer`)
     /// that declares a non-empty `workspaces` field, or that has a
     /// `pnpm-workspace.yaml` beside it — the workspaces root. Walks the chain of
@@ -4445,6 +4480,55 @@ fn collect_tree_dep_names(root: &Path) -> FxHashSet<String> {
         }
     }
     names
+}
+
+/// Source file extensions a Vite/Rollup/Nuxt plugin definition may live in.
+/// Config files (`vite.config.ts`, `nuxt.config.ts`) and module/plugin source
+/// (`src/module/plugins/options.ts`) both use these.
+const PLUGIN_SOURCE_EXTS: &[&str] = &["ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx"];
+
+/// Collect every virtual module ID registered by a plugin defined under `root`
+/// (excluding `node_modules` and dot-directories), bounded by a depth limit. Each
+/// plugin-source file is read once and scanned for string literals co-occurring
+/// with a `resolveId`/`load` resolver hook; the union of those literals is the
+/// project's registered virtual module IDs.
+fn collect_virtual_module_ids(root: &Path) -> FxHashSet<String> {
+    use crate::rules::no_implicit_deps::collect_virtual_ids;
+    const MAX_DEPTH: u32 = 8;
+    let mut ids = FxHashSet::default();
+    let mut stack: Vec<(PathBuf, u32)> = vec![(root.to_path_buf(), 0)];
+
+    while let Some((dir, depth)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if depth >= MAX_DEPTH {
+                    continue;
+                }
+                let skip = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_none_or(|n| n == "node_modules" || n.starts_with('.'));
+                if !skip {
+                    stack.push((path, depth + 1));
+                }
+                continue;
+            }
+            let is_plugin_source = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| PLUGIN_SOURCE_EXTS.contains(&e));
+            if is_plugin_source
+                && let Ok(source) = std::fs::read_to_string(&path)
+            {
+                collect_virtual_ids(&source, &mut ids);
+            }
+        }
+    }
+    ids
 }
 
 /// Parse + cache the manifest `filename` located directly in `manifest_dir`.

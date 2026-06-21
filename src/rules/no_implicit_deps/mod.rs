@@ -3,6 +3,9 @@
 mod jest_module_roots;
 mod module_federation;
 mod oxc_typescript;
+mod virtual_modules;
+
+pub(crate) use virtual_modules::collect_virtual_ids;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
