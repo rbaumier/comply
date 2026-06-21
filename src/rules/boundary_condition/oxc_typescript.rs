@@ -9,7 +9,7 @@
 //! acknowledges that `arr[0]` may be `undefined`.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, resolves_to_import_from};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
 use oxc_span::GetSpan;
@@ -159,6 +159,23 @@ impl OxcCheck for Check {
         if is_first
             && let Expression::Identifier(obj_ident) = &member.object
             && resolves_to_nonempty_tuple_type(obj_ident, semantic)
+        {
+            return;
+        }
+
+        // `v[0]` / `v[v.length - 1]` where `v`'s binding is annotated with a
+        // gl-matrix fixed-size vector/matrix type (`vec2`/`vec3`/`vec4`,
+        // `mat2`/`mat3`/`mat4`/`mat2d`, `quat`/`quat2`) imported from `gl-matrix`.
+        // Those aliases denote fixed-length tuples (`vec2` = `[number, number]`,
+        // `mat4` = a 16-element tuple) that are always at least two elements long,
+        // so both the first- and last-element reads are in-bounds. The aliases are
+        // `TSTypeReference`s, which the literal-tuple guard above cannot resolve,
+        // so they are recognized by name — but only when the type name actually
+        // resolves to a `gl-matrix` import, so a same-named local type can't
+        // trigger the exemption.
+        if (is_first || is_last)
+            && let Expression::Identifier(obj_ident) = &member.object
+            && resolves_to_glmatrix_fixed_type(obj_ident, semantic)
         {
             return;
         }
@@ -1197,6 +1214,67 @@ fn ts_type_is_nonempty_tuple(ty: &TSType) -> bool {
         }
         _ => false,
     }
+}
+
+/// gl-matrix fixed-size vector/matrix/quaternion type names. Each is a
+/// fixed-length tuple of at least two `number`s (`vec2` = `[number, number]`,
+/// `mat4` = a 16-element tuple), so any in-range index — including `[0]` and
+/// `[length - 1]` — is always present.
+const GLMATRIX_FIXED_TYPES: [&str; 9] =
+    ["vec2", "vec3", "vec4", "mat2", "mat2d", "mat3", "mat4", "quat", "quat2"];
+
+/// Returns true when `ident`'s binding is annotated with a gl-matrix fixed-size
+/// type ([`GLMATRIX_FIXED_TYPES`]) that is imported from `gl-matrix` — making any
+/// in-range index read in-bounds. Mirrors [`resolves_to_nonempty_tuple_type`]:
+/// resolves the receiver to its declaration and reads the `type_annotation` on
+/// the enclosing `FormalParameter` (`v: vec2`) or `VariableDeclarator`
+/// (`const v: mat4`). The annotation must be a bare `TSTypeReference` whose name
+/// is a gl-matrix type AND resolves to a `gl-matrix` import, so a same-named
+/// local type cannot trigger the exemption.
+fn resolves_to_glmatrix_fixed_type(
+    ident: &IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let nodes = semantic.nodes();
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    for kind in std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        let annotation = match kind {
+            AstKind::FormalParameter(param) => &param.type_annotation,
+            AstKind::VariableDeclarator(decl) => &decl.type_annotation,
+            // Leaving the binding's own declaration without finding an annotation.
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
+                return false;
+            }
+            _ => continue,
+        };
+        return annotation
+            .as_ref()
+            .is_some_and(|ann| ts_type_is_glmatrix_fixed(&ann.type_annotation, semantic));
+    }
+    false
+}
+
+/// Returns true when `ty` is a `TSTypeReference` to a gl-matrix fixed-size type
+/// name ([`GLMATRIX_FIXED_TYPES`]) whose name resolves to a `gl-matrix` import.
+/// Anchoring to the import keeps a same-named local type or alias from matching.
+fn ts_type_is_glmatrix_fixed(ty: &TSType, semantic: &oxc_semantic::Semantic) -> bool {
+    let TSType::TSTypeReference(reference) = ty else {
+        return false;
+    };
+    let TSTypeName::IdentifierReference(name) = &reference.type_name else {
+        return false;
+    };
+    GLMATRIX_FIXED_TYPES.contains(&name.name.as_str())
+        && resolves_to_import_from(name, semantic, &["gl-matrix"])
 }
 
 /// Returns true when `ident`'s binding has a type annotation denoting a `string`:
@@ -2463,6 +2541,62 @@ mod tests {
         // Negative space: a bare `.should` on the array (not on its `.length` and
         // not a `.have.length` assertion) says nothing about its size.
         let src = "rows.should.be.an('array'); const first = rows[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_glmatrix_vec2_param_index0_issue_5276() {
+        // The issue's `uniform_binding.ts` case: a `vec2` parameter is a fixed
+        // two-element tuple, so `v[0]` is always in-bounds.
+        let src = "import { vec2 } from 'gl-matrix'; function set(v: vec2) { return v[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_glmatrix_mat4_param_index0_issue_5276() {
+        // The issue's `fast_maths.ts` case: a `mat4` parameter is a fixed 16-element
+        // tuple, so `src[0]` is always in-bounds.
+        let src = "import { mat4 } from 'gl-matrix'; function inv(src: mat4) { return src[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_glmatrix_type_import_index0_issue_5276() {
+        // gl-matrix types are commonly brought in via `import type`.
+        let src = "import type { vec3 } from 'gl-matrix'; function f(v: vec3) { return v[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_glmatrix_mat4_last_index_issue_5276() {
+        // A fixed-size matrix has a known length, so the last-element read is also
+        // in-bounds.
+        let src = "import { mat4 } from 'gl-matrix'; function f(m: mat4) { return m[m.length - 1]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_glmatrix_quat_param_index0_issue_5276() {
+        // Beyond the issue's listed types: `quat` is also a fixed-size tuple, so
+        // the same exemption applies.
+        let src = "import { quat } from 'gl-matrix'; function f(q: quat) { return q[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_glmatrix_named_type_not_imported_issue_5276() {
+        // Negative space: a same-named local type that is NOT imported from
+        // `gl-matrix` must not trigger the exemption — without type info it could
+        // be any shape, so the read stays flagged.
+        let src = "type vec2 = number[]; function f(v: vec2) { return v[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_plain_number_array_param_index0_issue_5276() {
+        // Negative space: a genuine variable-length array stays flagged even when
+        // `gl-matrix` is imported elsewhere in the file.
+        let src = "import { vec2 } from 'gl-matrix'; function f(arr: number[]) { return arr[0]; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
