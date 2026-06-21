@@ -19,7 +19,12 @@
 //!   (`Err(Self::REGISTERED) => {}`, `Err(MAX_RETRIES) => {}`): the arm
 //!   pins itself to one specific known value — the self-documenting
 //!   lock-free CAS "already in this exact state" no-op — just like a
-//!   named-variant arm.
+//!   named-variant arm. Finally, an arm is exempt when its guard
+//!   (`match_pattern.condition`) references `WouldBlock`
+//!   (`Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}`): this is
+//!   the canonical non-blocking I/O reactor signal where the correct
+//!   action is to do nothing and let the loop await readability, so the
+//!   guard itself documents the inaction.
 //! - `for_expression.body` / `while_expression.body` /
 //!   `loop_expression.body` — empty loop body.
 //!
@@ -60,7 +65,35 @@ fn match_arm_needs_justification(arm: tree_sitter::Node, source: &[u8]) -> bool 
     let Some(pattern) = arm.child_by_field_name("pattern") else {
         return true;
     };
+    if guard_is_self_documenting(pattern, source) {
+        return false;
+    }
     pattern_needs_justification(pattern, source)
+}
+
+/// True when the arm's guard (`match_pattern.condition`) references `WouldBlock`,
+/// the canonical non-blocking I/O signal. The guard makes the empty body the
+/// self-documenting async-reactor no-op ("the op would block — do nothing and
+/// await readability"), e.g. `Err(e) if e.kind() == io::ErrorKind::WouldBlock`.
+/// Anchored on the `WouldBlock` path in the guard subtree (an `identifier`
+/// node), covering `ErrorKind::WouldBlock`, `io::ErrorKind::WouldBlock`,
+/// `std::io::ErrorKind::WouldBlock`, and a bare `WouldBlock` brought in by
+/// `use`. An arm with no such guard is not affected and still flags.
+fn guard_is_self_documenting(pattern: tree_sitter::Node, source: &[u8]) -> bool {
+    pattern
+        .child_by_field_name("condition")
+        .is_some_and(|guard| subtree_references_would_block(guard, source))
+}
+
+fn subtree_references_would_block(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() == "identifier"
+        && node.utf8_text(source).is_ok_and(|name| name == "WouldBlock")
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| subtree_references_would_block(child, source))
 }
 
 fn pattern_needs_justification(node: tree_sitter::Node, source: &[u8]) -> bool {
@@ -377,6 +410,47 @@ mod tests {
         // Narrowness guard: a lowercase identifier is a FRESH BINDING, not a
         // const — `Err(frame) => {}` still needs justification and must fire.
         let src = "fn f(r: Result<u8, E>) { match r { Ok(v) => go(v), Err(frame) => {} } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_would_block_guard_arm_issue_5361() {
+        // Canonical async non-blocking I/O reactor pattern: the guard
+        // `e.kind() == io::ErrorKind::WouldBlock` documents the empty body.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Err(e) if e.kind() == io::ErrorKind::WouldBlock => {} \
+                   res => return res, \
+                   } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_would_block_guard_arm_bare_path_issue_5361() {
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Err(e) if e.kind() == ErrorKind::WouldBlock => {} \
+                   res => return res, \
+                   } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_would_block_guard_arm_bare_ident_issue_5361() {
+        // `use std::io::ErrorKind::WouldBlock;` brings in the bare identifier.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Err(e) if e.kind() == WouldBlock => {} \
+                   res => return res, \
+                   } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_err_arm_with_unrelated_guard_issue_5361() {
+        // Narrowness guard: a guard that does NOT name a recognized
+        // do-nothing I/O condition leaves the empty arm unjustified.
+        let src = "fn f(r: Result<u8, E>) { match r { \
+                   Err(e) if e.is_timeout() => {} \
+                   res => return res, \
+                   } }";
         assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 
