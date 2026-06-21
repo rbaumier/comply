@@ -320,6 +320,15 @@ fn merge_and_emit(
     //    are parallel color-theme variants (e.g. catppuccin Mocha vs Macchiato)
     //    that share a key schema but hold distinct palette values — they ARE the
     //    data, not an abstraction over it, so the shared structure is intentional.
+    //
+    // G) Complete/streaming variant: the two paths are identical except for one
+    //    segment that is `complete` on one side and `streaming` on the other
+    //    (e.g. `bytes/complete.rs` vs `bytes/streaming.rs`, or
+    //    `complete/tag.rs` vs `streaming/tag.rs`). Parser-combinator libraries
+    //    (nom, winnow, …) deliberately ship two symmetric module trees that
+    //    differ only in end-of-input handling (`complete` errors, `streaming`
+    //    returns `Incomplete`); the near-identical bodies ARE the public-API
+    //    design, not refactorable copy-paste.
     let mut suppressed = FxHashSet::<usize>::default();
     {
         let mut by_pair: FxHashMap<(usize, usize), Vec<usize>> = FxHashMap::default();
@@ -344,12 +353,15 @@ fn merge_and_emit(
                 are_test_spec_siblings(&files[*rfi].path, &files[*cfi].path);
             let theme_variants =
                 are_theme_palette_pair(&files[*rfi].path, &files[*cfi].path);
+            let complete_streaming_variants =
+                are_complete_streaming_pair(&files[*rfi].path, &files[*cfi].path);
             if small_gap
                 || name_siblings
                 || locale_variants
                 || scaffold_variants
                 || test_spec_siblings
                 || theme_variants
+                || complete_streaming_variants
             {
                 suppressed.extend(idxs);
             }
@@ -688,6 +700,60 @@ fn are_theme_palette_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
         return false;
     }
     is_theme_data_file(a) && is_theme_data_file(b)
+}
+
+// --- Complete/streaming-variant detection ---
+
+/// Splits a path into normalized component segments, stripping the file
+/// extension from the final component so a sibling-file pair (`complete.rs` /
+/// `streaming.rs`) and a sibling-directory pair (`complete/tag.rs` /
+/// `streaming/tag.rs`) are compared on the same footing.
+fn path_segments_no_ext(path: &std::path::Path) -> Vec<&str> {
+    let mut segs: Vec<&str> = path
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => s.to_str(),
+            _ => None,
+        })
+        .collect();
+    if let Some(last) = segs.last_mut()
+        && let Some((stem, _ext)) = last.rsplit_once('.')
+    {
+        *last = stem;
+    }
+    segs
+}
+
+/// True when two paths are the `complete`/`streaming` counterparts of a
+/// parser-combinator library: identical except for exactly one segment that is
+/// `complete` on one side and `streaming` on the other. Covers both the
+/// sibling-file shape (`bytes/complete.rs` vs `bytes/streaming.rs`) and the
+/// sibling-directory shape (`complete/tag.rs` vs `streaming/tag.rs`). nom,
+/// winnow, etc. deliberately ship two symmetric module trees differing only in
+/// end-of-input handling, so their near-identical bodies are intentional public
+/// API, not refactorable copy-paste. Requiring all other segments to match keeps
+/// genuine duplication between unrelated files flagged.
+fn are_complete_streaming_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let segs_a = path_segments_no_ext(a);
+    let segs_b = path_segments_no_ext(b);
+    if segs_a.len() != segs_b.len() {
+        return false;
+    }
+    let mut diff_pos: Option<usize> = None;
+    for (i, (sa, sb)) in segs_a.iter().zip(segs_b.iter()).enumerate() {
+        if sa != sb {
+            if diff_pos.is_some() {
+                return false; // more than one differing segment
+            }
+            diff_pos = Some(i);
+        }
+    }
+    let Some(pos) = diff_pos else {
+        return false; // identical paths are not a complete/streaming pair
+    };
+    let (x, y) = (segs_a[pos], segs_b[pos]);
+    (x.eq_ignore_ascii_case("complete") && y.eq_ignore_ascii_case("streaming"))
+        || (x.eq_ignore_ascii_case("streaming") && y.eq_ignore_ascii_case("complete"))
 }
 
 // --- Tokenization ---
@@ -1975,5 +2041,85 @@ mod tests {
             Path::new("src/handlers/ar-SA/index.ts"),
             Path::new("src/handlers/ar-EG/index.ts"),
         ));
+    }
+
+    #[test]
+    fn are_complete_streaming_pair_recognizes_examples() {
+        use std::path::Path;
+        // Sibling-file shape (nom): bytes/complete.rs vs bytes/streaming.rs.
+        assert!(are_complete_streaming_pair(
+            Path::new("src/bytes/complete.rs"),
+            Path::new("src/bytes/streaming.rs"),
+        ));
+        // Order-independent.
+        assert!(are_complete_streaming_pair(
+            Path::new("src/character/streaming.rs"),
+            Path::new("src/character/complete.rs"),
+        ));
+        // Sibling-directory shape: complete/<x>.rs vs streaming/<x>.rs.
+        assert!(are_complete_streaming_pair(
+            Path::new("src/parsers/complete/tag.rs"),
+            Path::new("src/parsers/streaming/tag.rs"),
+        ));
+        // Same stem in the differing position but not complete/streaming.
+        assert!(!are_complete_streaming_pair(
+            Path::new("src/bytes/complete.rs"),
+            Path::new("src/bytes/partial.rs"),
+        ));
+        // More than one differing segment → not a counterpart pair.
+        assert!(!are_complete_streaming_pair(
+            Path::new("src/bytes/complete/tag.rs"),
+            Path::new("src/character/streaming/tag.rs"),
+        ));
+        // Identical paths are not a pair.
+        assert!(!are_complete_streaming_pair(
+            Path::new("src/bytes/complete.rs"),
+            Path::new("src/bytes/complete.rs"),
+        ));
+    }
+
+    #[test]
+    fn no_false_positive_on_complete_streaming_siblings() {
+        // Regression test for issue #5115.
+        // nom (and winnow, …) split their public API into two symmetric module
+        // trees, `complete` and `streaming`, whose functions share near-identical
+        // bodies — the only difference is end-of-input handling. The duplication
+        // is the documented API design, not refactorable copy-paste, so sibling
+        // complete.rs/streaming.rs files must not be flagged as clones.
+        let dir = tempfile::tempdir().unwrap();
+        let block = format!("fn f() {{\n{}\n}}", large_rust_block(20));
+        let pa = dir.path().join("src/bytes/complete.rs");
+        let pb = dir.path().join("src/bytes/streaming.rs");
+        std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
+        std::fs::write(&pa, &block).unwrap();
+        std::fs::write(&pb, &block).unwrap();
+        let fa = SourceFile { path: pa, language: Language::Rust };
+        let fb = SourceFile { path: pb, language: Language::Rust };
+        assert!(
+            lint_files(&[&fa, &fb]).is_empty(),
+            "complete/streaming sibling modules must not be flagged as clones"
+        );
+    }
+
+    #[test]
+    fn complete_streaming_exemption_requires_both_siblings() {
+        // Negative guard for issue #5115: the exemption fires only when the two
+        // paths differ in exactly one segment that is complete↔streaming. A file
+        // merely named `complete.rs` cloned against an ordinarily-named sibling is
+        // still a genuine smell and must stay flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let block = format!("fn f() {{\n{}\n}}", large_rust_block(20));
+        let pa = dir.path().join("src/bytes/complete.rs");
+        let pb = dir.path().join("src/bytes/helpers.rs");
+        std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
+        std::fs::write(&pa, &block).unwrap();
+        std::fs::write(&pb, &block).unwrap();
+        let fa = SourceFile { path: pa, language: Language::Rust };
+        let fb = SourceFile { path: pb, language: Language::Rust };
+        assert_eq!(
+            lint_files(&[&fa, &fb]).len(),
+            1,
+            "a `complete.rs` cloned against an ordinarily-named sibling must still be flagged"
+        );
     }
 }
