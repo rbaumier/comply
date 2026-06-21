@@ -344,7 +344,13 @@ impl TextCheck for Check {
         if super::is_file_based_route_segment(ctx.path, file_name) {
             return Vec::new();
         }
-        if super::is_nuxt_server_route_file(ctx.path, file_name) {
+        // Nitro's file-system server router maps a filename under `server/api/`,
+        // `server/routes/`, or `server/middleware/` directly to the URL it serves,
+        // so the whole filename — including any underscore (`sitemap_index.xml.ts`
+        // → `/sitemap_index.xml`) — is dictated by the route path, not an author
+        // naming choice. Renaming would change the URL, so no casing convention
+        // applies to these files.
+        if super::is_nuxt_server_route_file(ctx.path) {
             return Vec::new();
         }
         if super::is_nextjs_numeric_error_page(ctx.path, stem) {
@@ -1075,9 +1081,9 @@ mod tests {
     }
 
     // Regression for #3280: Nuxt's Nitro file-system router derives a server route
-    // path from bracket-param `.ts`/`.js` filenames under `server/api/`,
-    // `server/routes/`, or `server/middleware/`. The bracket name is mandated by
-    // the framework, so it must not be flagged.
+    // path from `.ts`/`.js` filenames under `server/api/`, `server/routes/`, or
+    // `server/middleware/`. The filename maps to the URL served, so it is mandated
+    // by the framework and must not be flagged.
     #[test]
     fn allows_nuxt_server_api_dynamic_route_issue_3280() {
         assert!(run("examples/nuxt/server/api/trpc/[trpc].ts").is_empty());
@@ -1098,17 +1104,34 @@ mod tests {
         assert!(run("server/middleware/[name].js").is_empty());
     }
 
-    // Guard: the server-route allowance requires BOTH the bracket param AND the
-    // `server/<api|routes|middleware>` ancestor — a genuinely mis-named non-bracket
-    // file under `server/api/` (snake_case, which `.ts` does not allow) still fires.
+    // Regression for #5159: a non-bracket Nitro server route maps its whole
+    // filename to the URL it serves, so an underscore (`server/api/my_handler.ts`
+    // → `/api/my_handler`) is part of the route path, not a naming choice, and is
+    // not flagged.
     #[test]
-    fn flags_snake_case_handler_under_server_api_issue_3280() {
-        assert_eq!(run("server/api/my_handler.ts").len(), 1);
+    fn allows_snake_case_handler_under_server_api_issue_5159() {
+        assert!(run("server/api/my_handler.ts").is_empty());
+    }
+
+    // Regression for #5159: the exact issue file — a static Nitro route under
+    // `server/routes/` whose underscore is part of the URL `/sitemap_index.xml`.
+    #[test]
+    fn allows_underscore_server_route_url_file_issue_5159() {
+        assert!(run("src/runtime/server/routes/sitemap_index.xml.ts").is_empty());
+        assert!(run("server/routes/sitemap_index.xml.ts").is_empty());
+    }
+
+    // Load-bearing scope guard for #5159: the exemption is gated on the
+    // `server/<api|routes|middleware>` ancestor — an ordinary snake_case source
+    // file with no server-route ancestor must STILL be flagged.
+    #[test]
+    fn flags_snake_case_ordinary_file_outside_server_dir_issue_5159() {
+        assert_eq!(run("src/my_component.ts").len(), 1);
     }
 
     // Guard: a bracket-named file NOT under any Nuxt route dir is not exempted by
     // the server-route branch (nor by the `pages/`/`routes/` branch) and still
-    // fires — both signals are required.
+    // fires — the `server/<api|routes|middleware>` ancestor is required.
     #[test]
     fn flags_bracket_stem_outside_nuxt_route_dirs_issue_3280() {
         assert_eq!(run("src/[weird].ts").len(), 1);
