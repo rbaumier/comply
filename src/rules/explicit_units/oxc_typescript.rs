@@ -23,6 +23,11 @@ use std::sync::Arc;
 /// array-index, scroll, file-pointer, or timezone offset all share the name
 /// but denote no single physical unit, so a unit suffix (`offsetMs`/
 /// `offsetBytes`) is not generally correct.
+///
+/// `frequency` is excluded as a named physical quantity with a canonical SI
+/// unit (Hz): in Web Audio / DSP code (`OscillatorNode.frequency`,
+/// `frequencyMin`/`frequencyMax`) the unit is implicit and a suffix adds
+/// nothing, while the suggested `frequencyMs`/`frequencyBytes` are nonsensical.
 const AMBIGUOUS_BASES: &[&str] = &[
     "delay",
     "timeout",
@@ -34,7 +39,6 @@ const AMBIGUOUS_BASES: &[&str] = &[
     "distance",
     "limit",
     "rate",
-    "frequency",
     "threshold",
 ];
 
@@ -283,6 +287,23 @@ mod tests {
         );
         assert!(run_on("const WIDTH = 1200;").is_empty());
         assert!(run_on("const HEIGHT = 600;").is_empty());
+    }
+
+    #[test]
+    fn allows_frequency_named_physical_quantity() {
+        // `frequency` names a physical quantity with a canonical unit (Hz) in
+        // Web Audio / DSP code; the unit is implicit and a suffix adds nothing,
+        // while `frequencyMs`/`frequencyBytes` are nonsensical (#5063).
+        assert!(run_on("function f(frequency: number) {}").is_empty());
+        assert!(run_on("function f(frequencyMin: number, frequencyMax: number) {}").is_empty());
+        assert!(run_on("const frequency: number = 440;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_other_temporal_bases_after_frequency_removal() {
+        // Removing `frequency` must not loosen genuinely unit-ambiguous bases.
+        assert_eq!(run_on("function f(timeout: number) {}").len(), 1);
+        assert_eq!(run_on("function f(delay: number) {}").len(), 1);
     }
 
     #[test]
