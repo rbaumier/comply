@@ -33,10 +33,24 @@ fn looks_like_rate_limit(text: &str) -> bool {
         || lower.contains("slowdown")
 }
 
-fn has_global_rate_limit(source: &str) -> bool {
+/// True when `source` registers a global rate-limit middleware: an
+/// `app.use(<rateLimiter>)` / `router.use(<rateLimiter>)` whose argument the
+/// rule recognizes as a rate limiter ([`looks_like_rate_limit`]). A global
+/// limiter mounted before the auth router covers every downstream route. Used
+/// both same-file (the route and the `app.use` share a file) and across the
+/// package (via [`crate::project::ProjectCtx::has_global_rate_limit`], which
+/// scans the indexed sources so a limiter in a separate setup file still
+/// counts).
+pub(crate) fn has_global_rate_limit(source: &str) -> bool {
     let lower = source.to_ascii_lowercase();
     for (i, _) in lower.match_indices(".use(") {
-        let end = (i + 125).min(lower.len());
+        // Window of up to 125 bytes after the `.use(`, snapped to the next char
+        // boundary so non-ASCII source (an accented char/emoji in a nearby
+        // comment) can't slice mid-codepoint and panic.
+        let mut end = (i + 125).min(lower.len());
+        while end < lower.len() && !lower.is_char_boundary(end) {
+            end += 1;
+        }
         let window = &lower[i..end];
         if looks_like_rate_limit(window) {
             return true;
@@ -103,8 +117,12 @@ impl OxcCheck for Check {
             }
         }
 
-        // Check for global rate-limit middleware.
-        if has_global_rate_limit(ctx.source) {
+        // Check for a global rate-limit middleware — first same-file, then
+        // across the package. A limiter registered with `app.use(<rateLimiter>)`
+        // before the auth router covers every downstream route; in larger apps
+        // (e.g. Directus) that registration lives in a separate setup file from
+        // the route definitions, so we also consult the package-wide scan.
+        if has_global_rate_limit(ctx.source) || ctx.project.has_global_rate_limit(ctx.path) {
             return;
         }
 
@@ -190,5 +208,171 @@ mod tests {
         let d = crate::rules::test_helpers::run_rule_gated(&Check, src, "src/routes.ts");
         assert_eq!(d.len(), 1, "{d:?}");
         assert!(d[0].message.contains("/login"));
+    }
+
+    // Run the rule against `target_rel` with the whole `files` set indexed into
+    // a real `ProjectCtx`, so the package-wide global-rate-limit scan sees the
+    // sibling setup file. Non-TS/JS entries (e.g. `package.json`) are written to
+    // disk to establish package boundaries but not indexed. When no
+    // `package.json` is provided, a root manifest is written.
+    fn run_in_project(files: &[(&str, &str)], target_rel: &str) -> Vec<Diagnostic> {
+        use crate::files::{Language, SourceFile};
+        use crate::project::ProjectCtx;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        if !files.iter().any(|(rel, _)| *rel == "package.json") {
+            fs::write(dir.path().join("package.json"), r#"{"name":"app"}"#).unwrap();
+        }
+        let mut source_files: Vec<SourceFile> = Vec::new();
+        for (rel, content) in files {
+            let p = dir.path().join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, content).unwrap();
+            if let Some(language) = Language::from_path(&p) {
+                source_files.push(SourceFile { path: p, language });
+            }
+        }
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let project = ProjectCtx::load(&refs, &crate::config::Config::default());
+        let target = dir.path().join(target_rel);
+        let source = fs::read_to_string(&target).unwrap();
+        crate::oxc_helpers::reset_file_caches();
+        let allocator = oxc_allocator::Allocator::default();
+        let source_type = crate::oxc_helpers::source_type_for_path(&target);
+        let parse_ret =
+            oxc_parser::Parser::new(&allocator, &source, source_type).parse();
+        let semantic = oxc_semantic::SemanticBuilder::new()
+            .build(&parse_ret.program)
+            .semantic;
+        let ctx = CheckCtx::for_test_with_project(&target, &source, &project);
+        let mut diagnostics = Vec::new();
+        for node in semantic.nodes().iter() {
+            if Check.interested_kinds().contains(&node.kind().ty()) {
+                Check.run(node, &ctx, &semantic, &mut diagnostics);
+            }
+        }
+        diagnostics
+    }
+
+    // Regression for #5370 (directus/directus): the auth route lives in
+    // `controllers/auth.ts`, but the rate limiter is registered globally in a
+    // separate `app.ts` via `app.use(rateLimiter)` before the auth router is
+    // mounted — so every auth request is rate-limited. The project-wide scan
+    // recognizes the global registration and the route is not flagged.
+    #[test]
+    fn allows_auth_route_with_app_level_global_rate_limit_in_setup_file() {
+        let app_ts = r#"
+            import { rateLimiter } from "./rate-limiter";
+            const app = express();
+            app.use(rateLimiter);
+            app.use("/auth", authRouter);
+        "#;
+        let auth_ts = r#"
+            router.post("/password/reset", asyncHandler(async (req, _res, next) => {}), respond);
+        "#;
+        let d = run_in_project(
+            &[("src/app.ts", app_ts), ("src/controllers/auth.ts", auth_ts)],
+            "src/controllers/auth.ts",
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    // No rate limiting anywhere — neither per-route on the auth route nor a
+    // global `app.use(<rateLimiter>)` in any project file — must still flag.
+    #[test]
+    fn still_flags_auth_route_with_no_rate_limit_anywhere() {
+        let app_ts = r#"
+            const app = express();
+            app.use("/auth", authRouter);
+        "#;
+        let auth_ts = r#"
+            router.post("/password/reset", asyncHandler(async (req, _res, next) => {}), respond);
+        "#;
+        let d = run_in_project(
+            &[("src/app.ts", app_ts), ("src/controllers/auth.ts", auth_ts)],
+            "src/controllers/auth.ts",
+        );
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(d[0].message.contains("/password/reset"));
+    }
+
+    // A non-rate-limit global middleware (`app.use(cors())`) must NOT count as
+    // coverage — only a genuine rate limiter suppresses the diagnostic.
+    #[test]
+    fn cors_global_middleware_does_not_count_as_rate_limit() {
+        let app_ts = r#"
+            import cors from "cors";
+            const app = express();
+            app.use(cors());
+            app.use("/auth", authRouter);
+        "#;
+        let auth_ts = r#"
+            router.post("/login", asyncHandler(async (req, _res, next) => {}), respond);
+        "#;
+        let d = run_in_project(
+            &[("src/app.ts", app_ts), ("src/controllers/auth.ts", auth_ts)],
+            "src/controllers/auth.ts",
+        );
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(d[0].message.contains("/login"));
+    }
+
+    // A global limiter in one monorepo package must NOT suppress an unprotected
+    // auth route in a different package — the scan is scoped to the auth route's
+    // own package boundary.
+    #[test]
+    fn global_limiter_in_other_package_does_not_suppress() {
+        let pkg_a_app = r#"
+            const app = express();
+            app.use(rateLimiter);
+            app.use("/auth", authRouter);
+        "#;
+        let pkg_b_auth = r#"
+            router.post("/login", asyncHandler(async (req, _res, next) => {}), respond);
+        "#;
+        let d = run_in_project(
+            &[
+                ("packages/a/package.json", r#"{"name":"a"}"#),
+                ("packages/a/src/app.ts", pkg_a_app),
+                ("packages/b/package.json", r#"{"name":"b"}"#),
+                ("packages/b/src/auth.ts", pkg_b_auth),
+            ],
+            "packages/b/src/auth.ts",
+        );
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(d[0].message.contains("/login"));
+    }
+
+    // A global limiter in the same package, with a route in a sibling file,
+    // suppresses — the package-scoped scan still finds intra-package setup.
+    #[test]
+    fn global_limiter_in_same_package_suppresses() {
+        let app_ts = r#"
+            const app = express();
+            app.use(rateLimiter);
+            app.use("/auth", authRouter);
+        "#;
+        let auth_ts = r#"
+            router.post("/login", asyncHandler(async (req, _res, next) => {}), respond);
+        "#;
+        let d = run_in_project(
+            &[
+                ("packages/api/package.json", r#"{"name":"api"}"#),
+                ("packages/api/src/app.ts", app_ts),
+                ("packages/api/src/controllers/auth.ts", auth_ts),
+            ],
+            "packages/api/src/controllers/auth.ts",
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    // Non-ASCII source within the 125-byte window after `.use(` (an accented
+    // char in a comment) must not panic on a mid-codepoint slice.
+    #[test]
+    fn non_ascii_near_use_does_not_panic() {
+        let src = "app.use(cors()); // configuração de middleware aqui ✓";
+        assert!(!has_global_rate_limit(src));
     }
 }

@@ -2542,6 +2542,19 @@ pub struct ProjectCtx {
     // `rust-impl-debug-on-public-types` consults it so a manual Debug impl in a
     // sibling file (anyhow's `Error` in `lib.rs` + impl in `error.rs`) counts.
     rust_debug_impl_targets: OnceLock<FxHashMap<PathBuf, FxHashSet<String>>>,
+
+    // "Does this package register a global rate-limit middleware?" — i.e. an
+    // `app.use(<rateLimiter>)` / `router.use(<rateLimiter>)` whose argument is a
+    // recognized rate-limit middleware, in an indexed TS/JS source belonging to
+    // the same package as the file asking. Keyed by the package boundary
+    // directory (nearest substantive `package.json`), so a limiter in one
+    // monorepo package never suppresses an unprotected auth route in another.
+    // A global limiter mounted before the auth router covers every downstream
+    // route, so `security-require-rate-limit-auth` consults this to avoid
+    // flagging auth routes whose limiter lives in a separate setup file
+    // (e.g. Directus: limiter in `app.ts`, route in `controllers/auth.ts`).
+    // Built lazily per package from `indexed_paths()` (no extra fs walk).
+    package_global_rate_limit_cache: Mutex<FxHashMap<PathBuf, bool>>,
 }
 
 impl ProjectCtx {
@@ -2882,6 +2895,68 @@ impl ProjectCtx {
                     .any(|dep| dep == "tailwindcss" || dep.starts_with("@tailwindcss/"))
             })
         })
+    }
+
+    /// True when an indexed TS/JS file in the same package as `path` registers a
+    /// genuine global rate-limit middleware — an `app.use(<rateLimiter>)` /
+    /// `router.use(<rateLimiter>)` whose argument the rule recognizes as a rate
+    /// limiter. A global limiter mounted before the auth router covers every
+    /// downstream route, so `security-require-rate-limit-auth` consults this to
+    /// avoid flagging auth routes whose limiter is registered in a separate
+    /// setup file. Recognition is delegated to the rule's own
+    /// [`crate::rules::security_require_rate_limit_auth::has_global_rate_limit`]
+    /// so there is a single notion of "is a rate limiter".
+    ///
+    /// Scoped to the package boundary (nearest substantive `package.json`) of
+    /// `path`: only indexed files resolving to the same boundary are scanned, so
+    /// a limiter in one monorepo package never suppresses an unprotected auth
+    /// route in another. When `path` has no package boundary, the scan covers
+    /// every indexed file (single-project / standalone case). Memoized per
+    /// boundary directory; each file is pruned on a literal `".use("` substring
+    /// before the per-file scan (no extra fs walk — reuses `indexed_paths()`).
+    pub fn has_global_rate_limit(&self, path: &Path) -> bool {
+        // `indexed_paths()` stores canonicalized paths, so resolve the query
+        // path's boundary from its canonical form too — otherwise the boundary
+        // dirs never compare equal (e.g. macOS `/var` vs `/private/var`).
+        let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let boundary = self.nearest_package_json_dir(&canon);
+        let cache_key = boundary.clone().unwrap_or_default();
+        if let Some(&cached) = self
+            .package_global_rate_limit_cache
+            .lock()
+            .unwrap()
+            .get(&cache_key)
+        {
+            return cached;
+        }
+        let mut found = false;
+        for indexed in self.import_index().indexed_paths() {
+            if !crate::files::Language::from_path(indexed)
+                .is_some_and(|lang| lang.is_typescript_family())
+            {
+                continue;
+            }
+            // Restrict to files in the same package as `path`. When neither has
+            // a boundary (None == None) every file is in scope.
+            if self.nearest_package_json_dir(indexed) != boundary {
+                continue;
+            }
+            let Ok(source) = std::fs::read_to_string(indexed) else {
+                continue;
+            };
+            if !source.contains(".use(") {
+                continue; // fast prune: no middleware registration possible
+            }
+            if crate::rules::security_require_rate_limit_auth::has_global_rate_limit(&source) {
+                found = true;
+                break;
+            }
+        }
+        self.package_global_rate_limit_cache
+            .lock()
+            .unwrap()
+            .insert(cache_key, found);
+        found
     }
 
     /// True if `path` matches any user-configured entrypoints glob.
