@@ -1226,10 +1226,21 @@ fn nms_is_error_constructor_interop_spread(src: &str, line_1based: usize) -> boo
 
 // ── no-redundant-type-constituents post-filter ────────────────────────────
 //
-// Drops false positives on the `keyof T & string` narrowing idiom.
-// The `& string` constituent is intentional — it filters out numeric/symbol
-// keys that `keyof T` can include. Checked in a ±5-line window around the
-// diagnostic to handle multi-line satisfies clauses.
+// Drops two false-positive shapes:
+//
+//  1. The `keyof T & string` narrowing idiom. The `& string` constituent is
+//     intentional — it filters out numeric/symbol keys that `keyof T` can
+//     include. Checked in a ±5-line window around the diagnostic to handle
+//     multi-line satisfies clauses.
+//
+//  2. The "error type that acts as 'any'" diagnostic on a constituent that is
+//     an imported type reference. When the type-aware backend cannot resolve an
+//     external package's types, those references degrade to the `error` type,
+//     which behaves like `any` and collapses the union. An unresolved import is
+//     not a genuine `any` — it carries a real (if locally-opaque) type — so the
+//     other union members are not actually redundant. Genuine `any`/`never`
+//     constituents use the separate "overrides all other types" message and
+//     stay flagged.
 
 const NRTC_WINDOW: usize = 5;
 
@@ -1240,8 +1251,130 @@ impl PostFilter for NoRedundantTypeConstituentsFilter {
         let Some(src) = source else {
             return true;
         };
-        !nrtc_is_keyof_string_narrowing_fp(src, diag.line)
+        if nrtc_is_keyof_string_narrowing_fp(src, diag.line) {
+            return false;
+        }
+        !nrtc_is_unresolved_import_error_type_fp(&diag.message, src)
     }
+}
+
+/// True when the diagnostic is the "error type that acts as 'any'" variant *and*
+/// the flagged type name is brought in by an `import` in this file. tsgolint
+/// emits this message only for the `error` type; an external import the backend
+/// could not resolve degrades to `error`, so flagging the rest of the union as
+/// redundant is a false positive. Genuine `any`/`never` constituents use the
+/// distinct "overrides all other types" message and are never matched here.
+fn nrtc_is_unresolved_import_error_type_fp(message: &str, src: &str) -> bool {
+    let Some(type_name) = nrtc_error_type_name(message) else {
+        return false;
+    };
+    nrtc_is_imported_ident(src, type_name)
+}
+
+/// Extracts the leading identifier of the flagged type from an "error type that
+/// acts as 'any'" message. The message starts with `'<typeName>' is an 'error'
+/// type …`; for a generic instantiation (`Feature<any>`) only the base
+/// identifier (`Feature`) is returned, since that is what an import binds.
+fn nrtc_error_type_name(message: &str) -> Option<&str> {
+    const MARKER: &str = "is an 'error' type that acts as 'any'";
+    if !message.contains(MARKER) {
+        return None;
+    }
+    let rest = message.strip_prefix('\'')?;
+    let quoted = &rest[..rest.find('\'')?];
+    let base = quoted.split('<').next()?.trim();
+    let ident_end = base
+        .find(|c: char| !nrtc_is_ident_byte(c as u8))
+        .unwrap_or(base.len());
+    let ident = &base[..ident_end];
+    if ident.is_empty() {
+        None
+    } else {
+        Some(ident)
+    }
+}
+
+/// True when `name` appears as an imported binding in any `import` statement of
+/// the source — named (`import { Name }`), aliased (`import { X as Name }`),
+/// default (`import Name from`) or namespace (`import * as Name`). Each import
+/// statement is scanned as a block, so multi-line named-import lists are handled,
+/// and the trailing module specifier is excluded so a package name containing
+/// the type identifier is not mistaken for a binding.
+fn nrtc_is_imported_ident(src: &str, name: &str) -> bool {
+    nrtc_import_binding_regions(src).any(|region| nrtc_text_binds_ident(region, name))
+}
+
+/// Yields, for each `import` statement, the slice of source covering its binding
+/// clause — from just after the `import` keyword up to the `from` keyword (or the
+/// statement's `;`/newline for side-effect-free forms). The module-specifier
+/// string is never included, so identifiers inside a package name are ignored.
+fn nrtc_import_binding_regions(src: &str) -> impl Iterator<Item = &str> {
+    let bytes = src.as_bytes();
+    let mut out = Vec::new();
+    let mut search_from = 0;
+    while let Some(rel) = src[search_from..].find("import") {
+        let kw_start = search_from + rel;
+        let kw_end = kw_start + "import".len();
+        let before_ok = kw_start == 0 || !nrtc_is_ident_byte(bytes[kw_start - 1]);
+        let after_ok = kw_end >= bytes.len()
+            || bytes[kw_end].is_ascii_whitespace()
+            || bytes[kw_end] == b'{'
+            || bytes[kw_end] == b'*';
+        search_from = kw_end;
+        if !before_ok || !after_ok {
+            continue;
+        }
+        let rest = &src[kw_end..];
+        // Bindings end at the ` from ` keyword; statements with no `from`
+        // (`import 'side-effect'`) end at the next `;` or newline.
+        let region_end = nrtc_find_from_keyword(rest)
+            .or_else(|| rest.find([';', '\n']))
+            .unwrap_or(rest.len());
+        out.push(&rest[..region_end]);
+        search_from = kw_end + region_end;
+    }
+    out.into_iter()
+}
+
+/// Finds the byte offset of the ` from ` keyword (whitespace-delimited) in an
+/// import statement's binding region. Matches the keyword form, not the substring
+/// inside identifiers like `fromList`.
+fn nrtc_find_from_keyword(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let needle = b"from";
+    let mut i = 0;
+    while i + needle.len() <= bytes.len() {
+        if &bytes[i..i + needle.len()] == needle {
+            let before_ok = i == 0 || bytes[i - 1].is_ascii_whitespace();
+            let after = i + needle.len();
+            let after_ok = after >= bytes.len()
+                || bytes[after].is_ascii_whitespace()
+                || bytes[after] == b'\'';
+            if before_ok && after_ok {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn nrtc_text_binds_ident(region: &str, name: &str) -> bool {
+    let bytes = region.as_bytes();
+    let nb = name.as_bytes();
+    let mut i = 0;
+    while i + nb.len() <= bytes.len() {
+        if &bytes[i..i + nb.len()] == nb {
+            let before_ok = i == 0 || !nrtc_is_ident_byte(bytes[i - 1]);
+            let after = i + nb.len();
+            let after_ok = after >= bytes.len() || !nrtc_is_ident_byte(bytes[after]);
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
 }
 
 fn nrtc_is_keyof_string_narrowing_fp(src: &str, line_1based: usize) -> bool {
@@ -2323,6 +2456,97 @@ export function loader() {
         let src_content = source_for(&path);
         let f = NoRedundantTypeConstituentsFilter;
         assert!(f.keep(&nrtc_diag(&path, 1), Some(&src_content)));
+    }
+
+    fn nrtc_diag_msg(path: &std::path::Path, line: usize, message: &str) -> Diagnostic {
+        Diagnostic {
+            path: Arc::from(path),
+            line,
+            column: 1,
+            rule_id: Cow::Borrowed("no-redundant-type-constituents"),
+            message: message.to_string(),
+            severity: crate::diagnostic::Severity::Error,
+            span: None,
+        }
+    }
+
+    #[test]
+    fn nrtc_drops_unresolved_imported_geojson_union() {
+        // Issue #5282: `Polygon | MultiPolygon` from the `geojson` package.
+        // The backend cannot resolve `geojson`, so `Polygon` degrades to the
+        // `error` type — but it is an imported reference, not a genuine `any`.
+        let src = "import { Feature, MultiPolygon, Polygon } from 'geojson';\n\
+                   type T = Polygon | MultiPolygon;\n";
+        let path = write_temp("nrtc_geojson_union.ts", src);
+        let src_content = source_for(&path);
+        let f = NoRedundantTypeConstituentsFilter;
+        let msg = "'Polygon' is an 'error' type that acts as 'any' and overrides all other types in this union type.";
+        assert!(!f.keep(&nrtc_diag_msg(&path, 2, msg), Some(&src_content)));
+    }
+
+    #[test]
+    fn nrtc_drops_unresolved_imported_generic_instantiation() {
+        // `Feature<any> | Geometry` — the flagged name is the generic
+        // instantiation `Feature<any>`; the base identifier `Feature` is what
+        // the import binds.
+        let src = "import { Feature, Geometry } from 'geojson';\n\
+                   type T = Feature<any> | Geometry;\n";
+        let path = write_temp("nrtc_geojson_generic.ts", src);
+        let src_content = source_for(&path);
+        let f = NoRedundantTypeConstituentsFilter;
+        let msg = "'Feature<any>' is an 'error' type that acts as 'any' and overrides all other types in this union type.";
+        assert!(!f.keep(&nrtc_diag_msg(&path, 2, msg), Some(&src_content)));
+    }
+
+    #[test]
+    fn nrtc_drops_unresolved_multiline_import() {
+        // Multi-line named import — the binding lives on a continuation line,
+        // so the import statement must be scanned as a block.
+        let src = "import {\n  Polygon,\n  MultiPolygon,\n} from 'geojson';\n\
+                   type T = Polygon | MultiPolygon;\n";
+        let path = write_temp("nrtc_geojson_multiline.ts", src);
+        let src_content = source_for(&path);
+        let f = NoRedundantTypeConstituentsFilter;
+        let msg = "'Polygon' is an 'error' type that acts as 'any' and overrides all other types in this union type.";
+        assert!(!f.keep(&nrtc_diag_msg(&path, 5, msg), Some(&src_content)));
+    }
+
+    #[test]
+    fn nrtc_keeps_type_name_only_in_module_specifier() {
+        // The type name appears only inside the package path, never as a
+        // binding — must NOT be treated as imported, so a genuine local error
+        // type keeps flagging.
+        let src = "import { foo } from './Polygon';\n\
+                   type T = Polygon | string;\n";
+        let path = write_temp("nrtc_specifier_only.ts", src);
+        let src_content = source_for(&path);
+        let f = NoRedundantTypeConstituentsFilter;
+        let msg = "'Polygon' is an 'error' type that acts as 'any' and overrides all other types in this union type.";
+        assert!(f.keep(&nrtc_diag_msg(&path, 2, msg), Some(&src_content)));
+    }
+
+    #[test]
+    fn nrtc_keeps_genuine_any_union() {
+        // `string | any` — genuine `any` uses the distinct "overrides all other
+        // types" message (no "error type"), so it stays flagged.
+        let src = "type T = string | any;\n";
+        let path = write_temp("nrtc_genuine_any.ts", src);
+        let src_content = source_for(&path);
+        let f = NoRedundantTypeConstituentsFilter;
+        let msg = "'any' overrides all other types in this union type.";
+        assert!(f.keep(&nrtc_diag_msg(&path, 1, msg), Some(&src_content)));
+    }
+
+    #[test]
+    fn nrtc_keeps_error_type_not_imported() {
+        // A locally-declared type that is a genuine error (not imported) keeps
+        // firing — the guard only excuses unresolved imports.
+        let src = "type T = Broken | string;\n";
+        let path = write_temp("nrtc_local_error.ts", src);
+        let src_content = source_for(&path);
+        let f = NoRedundantTypeConstituentsFilter;
+        let msg = "'Broken' is an 'error' type that acts as 'any' and overrides all other types in this union type.";
+        assert!(f.keep(&nrtc_diag_msg(&path, 1, msg), Some(&src_content)));
     }
 
     // ── no-unnecessary-type-parameters (equal probe) ────────────────────
