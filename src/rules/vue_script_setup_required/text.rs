@@ -54,4 +54,33 @@ mod tests {
     fn allows_script_setup() {
         assert!(run("<script setup lang=\"ts\">\nconst x = 1\n</script>").is_empty());
     }
+
+    /// An Options-API `<script setup()>` fixture under `tests/` deliberately
+    /// exercises the non-`<script setup>` style — `skip_in_test_dir` must
+    /// suppress the rule there, while the same component in `src/` is flagged.
+    #[test]
+    fn skips_options_api_fixture_in_test_dir() {
+        use crate::files::Language;
+        use crate::project::default_static_project_ctx;
+        use crate::rules::file_ctx::FileCtx;
+        let src = "<script lang=\"ts\">\nimport { defineComponent } from 'vue'\nexport default defineComponent({ setup(props) { return {} } })\n</script>";
+        let project = default_static_project_ctx();
+        let fixture = FileCtx::build(
+            Path::new("tests/components/EmitsEvent.vue"),
+            src,
+            Language::Vue,
+            project,
+        );
+        let component =
+            FileCtx::build(Path::new("src/components/Emits.vue"), src, Language::Vue, project);
+        assert!(
+            !super::super::META.applies_to_file(&fixture),
+            "test-fixture SFC must be skipped"
+        );
+        assert!(
+            super::super::META.applies_to_file(&component),
+            "real src/ component must still be checked"
+        );
+        assert_eq!(run(src).len(), 1, "the underlying violation must still fire");
+    }
 }

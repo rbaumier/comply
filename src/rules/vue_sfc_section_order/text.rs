@@ -54,4 +54,33 @@ mod tests {
             run("<script setup lang=\"ts\">\n</script>\n<template><div /></template>").is_empty()
         );
     }
+
+    /// A template-before-script fixture under `tests/` is a deliberate Vue
+    /// 2-style test input — `skip_in_test_dir` must suppress the rule there,
+    /// while a real component in `src/` with the same order is still flagged.
+    #[test]
+    fn skips_template_before_script_fixture_in_test_dir() {
+        use crate::files::Language;
+        use crate::project::default_static_project_ctx;
+        use crate::rules::file_ctx::FileCtx;
+        let src = "<template>\n  <button @click=\"greet\" />\n</template>\n<script lang=\"ts\">\nexport default { setup() { return {} } }\n</script>";
+        let project = default_static_project_ctx();
+        let fixture = FileCtx::build(
+            Path::new("tests/components/EmitsEvent.vue"),
+            src,
+            Language::Vue,
+            project,
+        );
+        let component =
+            FileCtx::build(Path::new("src/components/Emits.vue"), src, Language::Vue, project);
+        assert!(
+            !super::super::META.applies_to_file(&fixture),
+            "test-fixture SFC must be skipped"
+        );
+        assert!(
+            super::super::META.applies_to_file(&component),
+            "real src/ component must still be checked"
+        );
+        assert_eq!(run(src).len(), 1, "the underlying violation must still fire");
+    }
 }
