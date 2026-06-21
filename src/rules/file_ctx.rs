@@ -401,14 +401,36 @@ pub(crate) fn scan_minified(path: &Path, source: &str) -> bool {
     // Heuristic: minified content is either a handful of lines, or a normal
     // line count with one machine-generated line that dwarfs the rest. Bundles
     // often keep a few short header lines above a single multi-KB payload line.
-    if source.len() > 4096 {
+    if source.len() > MINIFIED_MIN_BYTES {
         let line_count = source.bytes().filter(|&b| b == b'\n').count() + 1;
-        if line_count <= 3 || source.split('\n').any(|line| line.len() > 4096) {
+        if line_count <= 3 || source.split('\n').any(|line| line.len() > MINIFIED_LONG_LINE) {
+            return true;
+        }
+        // Name-agnostic bundle catch: an esbuild/VitePress documentation bundle
+        // (e.g. `docs/assets/main.js`) wraps its dense output across many lines,
+        // each under `MINIFIED_LONG_LINE`, so neither check above fires. Its
+        // average line length still dwarfs hand-written source: bundles run many
+        // hundreds of characters per line, whereas even densely formatted source
+        // averages well under 100. `MINIFIED_AVG_LINE` sits far above that ceiling
+        // so normally-formatted code is never caught.
+        if source.len() / line_count > MINIFIED_AVG_LINE {
             return true;
         }
     }
     false
 }
+
+/// Below this size a file is too small for line-shape heuristics to be reliable,
+/// so only the filename markers classify it as minified.
+const MINIFIED_MIN_BYTES: usize = 4096;
+
+/// A single line this long is machine output: no hand-written line approaches it.
+const MINIFIED_LONG_LINE: usize = 4096;
+
+/// Average bytes-per-line above which the file is a bundle. Hand-written source —
+/// even Prettier-printed with long imports — averages under ~80 chars/line; 200
+/// is a wide safety margin that only minified/bundled output crosses.
+const MINIFIED_AVG_LINE: usize = 200;
 
 /// Vendored directory names — matched as exact path segments (between `/`
 /// delimiters) so that e.g. `vendor-service/` is NOT considered vendored.
@@ -1392,6 +1414,43 @@ mod tests {
         let hand = FileCtx::build(
             Path::new("site/public/admin.js"),
             "export const apiBase = '/api';\nexport function init() { return apiBase; }\n",
+            Language::JavaScript,
+            &project,
+        );
+        assert!(!hand.is_minified);
+    }
+
+    #[test]
+    fn name_agnostic_doc_bundle_sets_is_minified_issue5210() {
+        let project = ProjectCtx::empty();
+        // A VitePress/esbuild documentation bundle: dense output wrapped across
+        // many lines (none over `MINIFIED_LONG_LINE`, more than 3 lines), so the
+        // older heuristics miss it. Average line length far exceeds hand-written
+        // source. The name carries no `.min.`/`.bundle.` marker.
+        let payload_line = format!("var x={};\n", "Object.create(null),".repeat(40));
+        let bundle_src = format!(
+            "\"use strict\";(()=>{{{}}})();\n",
+            payload_line.repeat(20)
+        );
+        assert!(bundle_src.len() > 4096);
+        assert!(bundle_src.split('\n').all(|l| l.len() <= 4096));
+        assert!(bundle_src.bytes().filter(|&b| b == b'\n').count() + 1 > 3);
+        let bundle = FileCtx::build(
+            Path::new("docs/assets/main.js"),
+            &bundle_src,
+            Language::JavaScript,
+            &project,
+        );
+        assert!(bundle.is_minified);
+        // A normally-formatted hand-written file in the same dir is still linted:
+        // its average line length stays well under `MINIFIED_AVG_LINE`.
+        let hand_src = "export function add(a, b) {\n  return a + b;\n}\n".repeat(120);
+        assert!(hand_src.len() > 4096);
+        let hand_lines = hand_src.bytes().filter(|&b| b == b'\n').count() + 1;
+        assert!(hand_src.len() / hand_lines < 200);
+        let hand = FileCtx::build(
+            Path::new("docs/assets/helper.js"),
+            &hand_src,
             Language::JavaScript,
             &project,
         );
