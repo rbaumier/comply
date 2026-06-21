@@ -26,6 +26,15 @@
 //! from the same crate's build), not an external library, so it is already at
 //! its isolation boundary. Genuine external-library FFI — carrying `#[link]`,
 //! or declaring a foreign library's own symbol names — is still flagged.
+//!
+//! A block inside a dedicated native-binding crate (one declaring
+//! `[package].links`, or with a `-sys`/`-cpp` package-name suffix — see
+//! [`crate::project::CargoManifest::is_native_binding_crate`]) is left untouched
+//! too: the crate's whole purpose is exposing a C/C++ library's `extern "C"`
+//! surface, so the block already *is* the isolation layer. Ordinary
+//! application/library crates' un-isolated FFI is still flagged. (Bindgen-
+//! generated bindings files are skipped earlier by the engine's shared
+//! generated-file gate, so they never reach this rule.)
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -200,6 +209,18 @@ crate::ast_check! { on ["foreign_mod_item"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    // A dedicated native-binding crate (`[package].links`, or a `-sys`/`-cpp`
+    // name suffix) exists solely to expose a C/C++ library's `extern "C"`
+    // surface — the block itself is the isolation layer, so an inner
+    // `mod sys`/`ffi` wrapper would add nesting with no safety benefit.
+    if ctx
+        .project
+        .nearest_cargo_manifest(ctx.path)
+        .is_some_and(|manifest| manifest.is_native_binding_crate())
+    {
+        return;
+    }
+
     let mut current = node.parent();
     while let Some(ancestor) = current {
         // A function-scoped `extern` block is already isolated to one
@@ -259,9 +280,16 @@ mod tests {
     /// declares `[package] name = "{crate_name}"`, so `owns_asm_symbol`
     /// resolves against a controlled manifest.
     fn run_in_crate(crate_name: &str, rel_path: &str, source: &str) -> Vec<Diagnostic> {
-        let dir = tempfile::TempDir::new().unwrap();
         let cargo_toml =
             format!("[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n");
+        run_in_manifest(&cargo_toml, rel_path, source)
+    }
+
+    /// Run `source` at `rel_path` inside a temp crate whose `Cargo.toml` is
+    /// `cargo_toml` verbatim — lets a test control `[package].links` and other
+    /// manifest keys the binding-crate exemption reads.
+    fn run_in_manifest(cargo_toml: &str, rel_path: &str, source: &str) -> Vec<Diagnostic> {
+        let dir = tempfile::TempDir::new().unwrap();
         std::fs::write(dir.path().join("Cargo.toml"), cargo_toml).unwrap();
         let src_path = dir.path().join(rel_path);
         if let Some(parent) = src_path.parent() {
@@ -422,5 +450,42 @@ mod tests {
         // exemption does not apply and the block is flagged as before.
         let src = "extern {\n    fn rav1e_avg_8bpc_avx2(dst: *mut u8);\n}";
         assert_eq!(run_in_crate("some-other-crate", "src/lib.rs", src).len(), 1);
+    }
+
+    #[test]
+    fn allows_sys_crate_binding_block() {
+        // A `-sys` crate is a dedicated raw-FFI binding crate; its `extern "C"`
+        // block IS the isolation layer.
+        let src = "extern \"C\" {\n    fn ZSTD_compress(dst: *mut u8) -> usize;\n}";
+        assert!(run_in_crate("zstd-sys", "src/lib.rs", src).is_empty());
+    }
+
+    #[test]
+    fn allows_cpp_binding_crate_block() {
+        // rust-snappy `snappy-cpp/src/lib.rs`: a hand-written C++ binding crate
+        // (no `[package].links`, not generated) whose `-cpp` name marks it as a
+        // dedicated binding crate.
+        let src = "extern \"C\" {\n    \
+                   fn snappy_compress(input: *const u8) -> i32;\n    \
+                   fn snappy_uncompress(compressed: *const u8) -> i32;\n}";
+        assert!(run_in_crate("snappy-cpp", "src/lib.rs", src).is_empty());
+    }
+
+    #[test]
+    fn allows_links_native_library_crate_block() {
+        // A crate declaring `[package].links` is the one crate Cargo permits to
+        // bind that native library — the `extern "C"` block is its FFI surface.
+        let cargo_toml = "[package]\nname = \"mylib\"\nversion = \"0.1.0\"\nlinks = \"zstd\"\n";
+        let src = "extern \"C\" {\n    fn ZSTD_compress(dst: *mut u8) -> usize;\n}";
+        assert!(run_in_manifest(cargo_toml, "src/lib.rs", src).is_empty());
+    }
+
+    #[test]
+    fn flags_unisolated_ffi_in_ordinary_crate() {
+        // An ordinary application/library crate (no `links` key, not `-sys`/`-cpp`,
+        // not generated) with an un-isolated foreign-library `extern "C"` block is
+        // still flagged.
+        let src = "extern \"C\" {\n    fn deflate(strm: *mut u8) -> i32;\n}";
+        assert_eq!(run_in_crate("my-app", "src/lib.rs", src).len(), 1);
     }
 }
