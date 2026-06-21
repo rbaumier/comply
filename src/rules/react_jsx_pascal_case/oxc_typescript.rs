@@ -21,9 +21,18 @@ fn strip_experimental_prefix(segment: &str) -> &str {
     segment
 }
 
+/// `ɵ` (U+0275 LATIN SMALL LETTER BARRED O) is the Angular/IDux internal-API
+/// marker: it prefixes a PascalCase name to signal a private component not meant
+/// for public consumption (`ɵHeader`, `ɵInput`, `ɵOverlay`). The marker is a
+/// visibility prefix, not part of the casing, so strip a single leading marker
+/// and validate the remainder — `ɵHeader` is PascalCase, `ɵheader` is not.
+fn strip_internal_marker_prefix(segment: &str) -> &str {
+    segment.strip_prefix('ɵ').unwrap_or(segment)
+}
+
 fn is_pascal_case(name: &str) -> bool {
     for raw_segment in name.split('.') {
-        let segment = strip_experimental_prefix(raw_segment);
+        let segment = strip_internal_marker_prefix(strip_experimental_prefix(raw_segment));
         if segment.is_empty() {
             return false;
         }
@@ -438,6 +447,42 @@ mod tests {
         assert!(!is_screaming_prefix_pascal_case("Input_Shadcn_"));
         // No underscore → not this convention.
         assert!(!is_screaming_prefix_pascal_case("MyComponent"));
+    }
+
+    // Issue #5036: `ɵ` (U+0275) is the Angular/IDux internal-API marker prefix.
+    // `ɵHeader`, `ɵInput`, etc. are PascalCase names carrying a visibility marker
+    // and must not be flagged.
+    #[test]
+    fn allows_internal_marker_prefix_header() {
+        assert!(run("const x = <ɵHeader v-slots={slots} />;").is_empty());
+    }
+
+    #[test]
+    fn allows_internal_marker_prefix_overlay_with_children() {
+        assert!(run("const x = <ɵOverlay>x</ɵOverlay>;").is_empty());
+    }
+
+    // Negative space for the internal-marker relaxation: a lowercase remainder
+    // after the marker is not PascalCase and still fires; a plain lowercase
+    // component is unaffected (intrinsic).
+    #[test]
+    fn flags_internal_marker_prefix_lowercase_remainder() {
+        assert_eq!(run("const x = <ɵheader />;").len(), 1);
+    }
+
+    #[test]
+    fn is_pascal_case_internal_marker_decisions() {
+        // Marker + PascalCase remainder → accepted.
+        assert!(is_pascal_case("ɵHeader"));
+        assert!(is_pascal_case("ɵInput"));
+        // Marker + lowercase remainder → rejected.
+        assert!(!is_pascal_case("ɵheader"));
+        // Marker only (empty remainder) → rejected.
+        assert!(!is_pascal_case("ɵ"));
+        // Marker + remainder with an internal underscore → rejected.
+        assert!(!is_pascal_case("ɵBad_Name"));
+        // A plain lowercase name (no marker) is still not PascalCase.
+        assert!(!is_pascal_case("header"));
     }
 
     #[test]
