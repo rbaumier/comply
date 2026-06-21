@@ -2206,6 +2206,23 @@ impl CargoManifest {
             .as_deref()
             .is_some_and(|n| root.strip_prefix(n).is_some_and(|rest| rest.starts_with('_')))
     }
+
+    /// True when `symbol` is a foreign-function name namespaced under this
+    /// crate's own name — `<package_name>_<rest>` (e.g. package `rav1e` →
+    /// `rav1e_avg_8bpc_avx2`). A crate names its hand-written assembly /
+    /// intrinsic symbols after itself so they are recognizably first-party and
+    /// don't collide; an external library exports its own names (`SSL_connect`,
+    /// `deflate`), never under the consuming crate's name. Package-name hyphens
+    /// are normalized to `_` since Rust symbol identifiers cannot contain `-`.
+    #[must_use]
+    pub fn owns_asm_symbol(&self, symbol: &str) -> bool {
+        self.name.as_deref().is_some_and(|n| {
+            let prefix = n.replace('-', "_");
+            symbol
+                .strip_prefix(&prefix)
+                .is_some_and(|rest| rest.starts_with('_'))
+        })
+    }
 }
 
 /// Crate names of well-known Rust XML parsing/deserialization libraries,
