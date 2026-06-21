@@ -37,13 +37,35 @@ const SENSITIVE_WORDS: &[&str] = &[
 /// placeholder values, not real secrets, so the rule does not apply.
 const EXAMPLE_FILE_MARKERS: &[&str] = &["snippet", "example", "sample"];
 
-/// Qualifiers that, when they prefix a `…token` identifier, mark it as a
+/// Qualifiers that, adjacent to a `token` word in an identifier, mark it as a
 /// transaction/iteration handle rather than a credential. A lock token,
 /// continuation token, or page token is a temporary processing handle —
 /// like a database cursor — not a secret. `accessToken`/`authToken` carry
 /// no such qualifier and remain flagged.
-const BENIGN_TOKEN_PREFIXES: &[&str] =
+const BENIGN_TOKEN_QUALIFIERS: &[&str] =
     &["lock", "continuation", "cancellation", "page", "next", "reset"];
+
+/// Qualifiers that, adjacent to a `token` word, mark it as NLP/tokenizer
+/// vocabulary — a discrete unit of text or a special marker (language tag,
+/// modality placeholder, sentinel) — not an authentication secret. `image`
+/// (`imageToken`), `lang` (`tgt_lang_token`), and the standard special-token
+/// names (`bos`/`eos`/`pad`/`sep`/`cls`/`mask`/`unk`/…) are public model
+/// configuration, safe to log. `accessToken`/`apiToken`/`authToken` carry no
+/// NLP qualifier and remain flagged.
+const NLP_TOKEN_QUALIFIERS: &[&str] = &[
+    "lang", "image", "audio", "video", "vision", "bos", "eos", "pad", "sep", "cls", "mask", "unk",
+    "vocab", "special", "sentinel", "start", "end", "sub", "subword", "word", "byte",
+];
+
+/// Words that mark a `…token` identifier as an authentication/authorization
+/// credential. Their presence *anywhere* in the identifier vetoes the benign
+/// exemption, even when the word adjacent to `token` is an NLP qualifier:
+/// `accessWordToken` (`access` + `Word` + `Token`) is an access token, not
+/// vocabulary, and must stay flagged.
+const CREDENTIAL_TOKEN_QUALIFIERS: &[&str] = &[
+    "access", "refresh", "auth", "api", "bearer", "id", "csrf", "xsrf", "session", "jwt", "oauth",
+    "secret", "private",
+];
 
 pub struct Check;
 
@@ -209,25 +231,25 @@ fn is_example_file(path: &std::path::Path) -> bool {
 /// Returns true when an interpolated expression names a secret. Matching is
 /// per identifier segment (split on non-`[a-z0-9_]`) so a benign `…token`
 /// compound such as `lockToken` is not flagged on the strength of an
-/// unrelated neighbour.
+/// unrelated neighbour. The original case is preserved here so the segment can
+/// be split at camelCase boundaries downstream.
 fn text_is_sensitive(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    lower
-        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+    text.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
         .filter(|seg| !seg.is_empty())
         .any(segment_is_sensitive)
 }
 
 fn segment_is_sensitive(segment: &str) -> bool {
+    let lower = segment.to_ascii_lowercase();
     SENSITIVE_WORDS.iter().any(|w| {
         // `dsn` is only three characters and substring-collides with a whole
         // family of benign `…dsName` identifiers (`fieldsName`, `boundsName`,
         // `kidsName`, …). Anchor it to the segment suffix so it matches a DSN
         // (`dsn`, `dbDsn`, `sentryDsn`) but not those neighbours.
         if *w == "dsn" {
-            return segment.ends_with("dsn");
+            return lower.ends_with("dsn");
         }
-        if !segment.contains(w) {
+        if !lower.contains(w) {
             return false;
         }
         if *w == "token" && is_benign_token(segment) {
@@ -237,15 +259,76 @@ fn segment_is_sensitive(segment: &str) -> bool {
     })
 }
 
-/// `lockToken`, `continuationToken`, `pageToken`, … — a `…token` identifier
-/// whose qualifier marks it as a transaction or iteration handle, not a
-/// credential.
+/// A `…token` identifier whose qualifier word marks it as something other than
+/// a credential: a transaction/iteration handle (`lockToken`, `pageToken`) or
+/// NLP/tokenizer vocabulary (`imageToken`, `tgt_lang_token`, `bos_token`).
+/// Words are obtained by splitting at camelCase and `_` boundaries.
+///
+/// Biasing toward the warning, a token is benign only when ALL of:
+///  - it has at least one neighbour word (so bare `token` stays flagged);
+///  - every neighbour of the `token` word is a recognized benign qualifier;
+///  - no word *anywhere* in the identifier is a credential qualifier — a
+///    credential word vetoes the exemption even when not adjacent to `token`,
+///    so `accessWordToken` and `accessTokenImage` stay flagged.
 fn is_benign_token(segment: &str) -> bool {
-    let Some(prefix) = segment.strip_suffix("token") else {
+    let words: Vec<&str> = split_identifier_words(segment).collect();
+    let has_credential_word = words.iter().any(|w| {
+        CREDENTIAL_TOKEN_QUALIFIERS
+            .iter()
+            .any(|q| w.eq_ignore_ascii_case(q))
+    });
+    if has_credential_word {
         return false;
-    };
-    let prefix = prefix.trim_end_matches('_');
-    BENIGN_TOKEN_PREFIXES.contains(&prefix)
+    }
+    let mut benign_qualifier_found = false;
+    for (i, word) in words.iter().enumerate() {
+        if !word.eq_ignore_ascii_case("token") {
+            continue;
+        }
+        let neighbours: Vec<&str> = [i.checked_sub(1).map(|p| words[p]), words.get(i + 1).copied()]
+            .into_iter()
+            .flatten()
+            .collect();
+        let all_neighbours_benign = !neighbours.is_empty()
+            && neighbours.iter().all(|n| {
+                BENIGN_TOKEN_QUALIFIERS
+                    .iter()
+                    .chain(NLP_TOKEN_QUALIFIERS)
+                    .any(|q| n.eq_ignore_ascii_case(q))
+            });
+        if !all_neighbours_benign {
+            return false;
+        }
+        benign_qualifier_found = true;
+    }
+    benign_qualifier_found
+}
+
+/// Splits an identifier into word tokens at camelCase boundaries and any
+/// non-alphanumeric separator (`_`, `-`, `.`). `imageToken` → `image`, `Token`;
+/// `tgt_lang_token` → `tgt`, `lang`, `token`.
+fn split_identifier_words(name: &str) -> impl Iterator<Item = &str> {
+    let bytes = name.as_bytes();
+    let mut start = 0;
+    let mut boundaries = Vec::new();
+    for (i, &b) in bytes.iter().enumerate() {
+        let is_sep = !b.is_ascii_alphanumeric();
+        let is_camel_boundary =
+            i > 0 && b.is_ascii_uppercase() && bytes[i - 1].is_ascii_lowercase();
+        if is_sep {
+            if start < i {
+                boundaries.push((start, i));
+            }
+            start = i + 1;
+        } else if is_camel_boundary {
+            boundaries.push((start, i));
+            start = i;
+        }
+    }
+    if start < bytes.len() {
+        boundaries.push((start, bytes.len()));
+    }
+    boundaries.into_iter().map(move |(s, e)| &name[s..e])
 }
 
 #[cfg(test)]
@@ -338,6 +421,71 @@ mod tests {
         // The benign-token exemption is about the *name*, not the file: a real
         // secret token in the same file still fires.
         assert_eq!(run_on("logger.info(`token: ${authToken}`);").len(), 1);
+    }
+
+    // #5410 — NLP/tokenizer "token" terminology is model vocabulary, not a
+    // secret: language tags and modality placeholders are public config and
+    // are logged in validation errors so a developer can debug bad input.
+    #[test]
+    fn allows_nlp_lang_token_in_error() {
+        let src = "throw new Error(`Target language code \"${tgt_lang_token}\" is not valid.`);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_nlp_src_lang_token() {
+        assert!(run_on("logger.info(`routing ${src_lang_token}`);").is_empty());
+    }
+
+    #[test]
+    fn allows_nlp_image_token() {
+        let src =
+            "throw new Error(`The text does not contain the image token ${image_token}.`);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_nlp_special_token_camel_case() {
+        assert!(run_on("console.log(`placeholder ${imageToken}`);").is_empty());
+    }
+
+    #[test]
+    fn allows_nlp_bos_token() {
+        assert!(run_on("logger.info(`bos ${bos_token} eos ${eos_token}`);").is_empty());
+    }
+
+    // Security controls: genuine auth/secret tokens must still fire, even
+    // alongside the NLP exemption.
+    #[test]
+    fn still_flags_access_token_with_nlp_exemption() {
+        assert_eq!(run_on("logger.info(`auth: ${access_token}`);").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_api_token_camel_case() {
+        assert_eq!(run_on("logger.info(`auth: ${apiToken}`);").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_bare_token() {
+        assert_eq!(run_on("logger.info(`auth: ${token}`);").len(), 1);
+    }
+
+    // A credential qualifier on either side keeps the token flagged even when
+    // the other neighbour is a benign NLP word: an access token for an image
+    // API is still a secret.
+    #[test]
+    fn still_flags_access_token_with_nlp_neighbour() {
+        assert_eq!(run_on("logger.info(`auth: ${access_token_image}`);").len(), 1);
+        assert_eq!(run_on("logger.info(`auth: ${accessTokenImage}`);").len(), 1);
+    }
+
+    // A credential word vetoes the exemption even when it is not adjacent to
+    // `token`: `accessWordToken` is an access token, not vocabulary.
+    #[test]
+    fn still_flags_credential_word_not_adjacent_to_token() {
+        assert_eq!(run_on("logger.info(`auth: ${accessWordToken}`);").len(), 1);
+        assert_eq!(run_on("logger.info(`auth: ${auth_lang_token}`);").len(), 1);
     }
 
     // #3769 — secrets in thrown Error messages leak into stack traces and
