@@ -368,6 +368,12 @@ struct CommentEntry {
     /// the same `aes128_decrypt`, or a runtime props object and the TS type
     /// declaring the same prop — so their identical docs are not a smell.
     decl_name: Option<String>,
+    /// Name of the enum that owns the variant this comment documents, when the
+    /// documented declaration is an enum variant. Variants of two *different*
+    /// enums that share a name (`FlushCompress::None` / `FlushDecompress::None`)
+    /// are parallel API surfaces describing the same concept, so their identical
+    /// docs are intentional per-item documentation, not a copy-paste smell.
+    enum_owner: Option<String>,
 }
 
 /// A logical comment block: either one `/* */` node or a run of consecutive
@@ -380,6 +386,8 @@ struct CommentGroup {
     stripped: String,
     /// Name of the declaration immediately documented by this block.
     decl_name: Option<String>,
+    /// Name of the enum owning the variant this block documents, if any.
+    enum_owner: Option<String>,
     /// Any line of the block documents a `#[cfg(...)]`-gated item or sits in a
     /// `cfg_if!` arm (see `RawComment::cfg_conditional`).
     cfg_conditional: bool,
@@ -395,6 +403,8 @@ struct RawComment {
     /// the comment is an outer doc-comment whose next sibling (skipping
     /// attributes) is a named declaration.
     decl_name: Option<String>,
+    /// Name of the enum owning the variant this comment documents, if any.
+    enum_owner: Option<String>,
     /// The documented item compiles only under a `#[cfg(...)]` predicate — the
     /// comment sits inside a `cfg_if!` macro arm or directly precedes a
     /// `#[cfg(...)]`-gated item. Such doc-comments are necessarily identical
@@ -547,6 +557,22 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
             {
                 continue;
             }
+            // Parallel enum variants: two variants of *different* enums that
+            // share a name (a `FlushCompress::None` and a `FlushDecompress::None`
+            // mirroring the same zlib flush mode for the two directions) describe
+            // the same concept, so their identical doc-comments are intentional
+            // per-item documentation. A variant name is unique within its enum,
+            // so requiring distinct owners means a same-file copy-paste inside one
+            // enum can never qualify; this exemption therefore applies regardless
+            // of file, unlike the top-level cross-file one above.
+            if are_parallel_enum_variants(
+                entry.decl_name.as_deref(),
+                entry.enum_owner.as_deref(),
+                partner.decl_name.as_deref(),
+                partner.enum_owner.as_deref(),
+            ) {
+                continue;
+            }
             // Tailor the remediation to reach: a copy in the same file is best
             // collapsed to one comment the others reference, while the same
             // rationale spread across files belongs in a doc the comments cite.
@@ -604,6 +630,25 @@ fn are_parallel_decl_names(a: Option<&str>, b: Option<&str>) -> bool {
         return true;
     }
     is_variant_suffix_of(a, b) || is_variant_suffix_of(b, a)
+}
+
+/// Two doc-comments document parallel enum variants when both name a variant
+/// (each carries an enum owner), the variant names match as a parallel-API pair,
+/// and the *owning enums differ*. Distinct owners are what makes this safe to
+/// apply within a single file: a variant name is unique inside its enum, so two
+/// matching variant docs can only ever come from two different enums — mirrored
+/// directions of one concept (`FlushCompress::None` / `FlushDecompress::None`),
+/// never a botched copy-paste of one variant onto a sibling.
+fn are_parallel_enum_variants(
+    a_name: Option<&str>,
+    a_owner: Option<&str>,
+    b_name: Option<&str>,
+    b_owner: Option<&str>,
+) -> bool {
+    let (Some(a_owner), Some(b_owner)) = (a_owner, b_owner) else {
+        return false;
+    };
+    a_owner != b_owner && are_parallel_decl_names(a_name, b_name)
 }
 
 /// `root` is `name` with a trailing `_<suffix>` appended at a `_` boundary, and
@@ -666,6 +711,7 @@ fn extract_entries(
             words,
             prefix_key,
             decl_name: group.decl_name,
+            enum_owner: group.enum_owner,
         });
     }
     entries
@@ -741,29 +787,60 @@ fn member_name(member: tree_sitter::Node, source: &[u8]) -> Option<String> {
     key.utf8_text(source).ok().map(str::to_owned)
 }
 
-/// The name of the declaration or member a comment immediately documents: its
-/// next named sibling, skipping attributes/decorators, when that sibling is a
-/// named declaration or object/type member. `None` for free-floating comments
-/// (no following declaration) or declarations without a recognizable name.
+/// The name of the declaration or member a comment immediately documents, plus
+/// the owning enum's name when that declaration is an enum variant. Looks at the
+/// comment's next named sibling, skipping attributes/decorators. `(None, _)` for
+/// free-floating comments (no following declaration) or declarations without a
+/// recognizable name.
 ///
-/// A top-level declaration is only documented by a *doc*-comment (`///`, `/**`,
-/// …) — a plain `//` above it is incidental prose, so a copy-pasted one is still
-/// a smell. Object/type members are an exception: their docs are conventionally
-/// a plain `//` above the field, so a plain `//` above a member still names it.
-fn documented_decl_name(comment: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut sibling = comment.next_named_sibling()?;
+/// A top-level declaration or enum variant is only documented by a *doc*-comment
+/// (`///`, `/**`, …) — a plain `//` above it is incidental prose, so a
+/// copy-pasted one is still a smell. Object/type members are an exception: their
+/// docs are conventionally a plain `//` above the field, so a plain `//` above a
+/// member still names it. The enum owner is returned only for variants; it lets
+/// the caller treat same-named variants of *different* enums as parallel API
+/// surfaces while a botched copy-paste within one enum (impossible — variant
+/// names are unique per enum) cannot slip through.
+fn documented_decl_name(comment: tree_sitter::Node, source: &[u8]) -> (Option<String>, Option<String>) {
+    let Some(mut sibling) = comment.next_named_sibling() else {
+        return (None, None);
+    };
     while matches!(sibling.kind(), "attribute_item" | "decorator") {
-        sibling = sibling.next_named_sibling()?;
+        let Some(next) = sibling.next_named_sibling() else {
+            return (None, None);
+        };
+        sibling = next;
     }
     if is_named_member(sibling.kind()) {
-        return member_name(sibling, source);
+        return (member_name(sibling, source), None);
     }
-    if !is_doc_comment(&source[comment.start_byte()..comment.end_byte()])
-        || !is_named_declaration(sibling.kind())
-    {
+    let is_doc = is_doc_comment(&source[comment.start_byte()..comment.end_byte()]);
+    if is_doc && sibling.kind() == "enum_variant" {
+        let name = sibling
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+            .map(str::to_owned);
+        return (name, enclosing_enum_name(sibling, source));
+    }
+    if !is_doc || !is_named_declaration(sibling.kind()) {
+        return (None, None);
+    }
+    let name = sibling
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source).ok())
+        .map(str::to_owned);
+    (name, None)
+}
+
+/// The name of the `enum_item` enclosing a variant node, via its
+/// `enum_variant_list` parent. `None` when the variant is not inside a named
+/// enum (defensive — the Rust grammar always nests a variant under one).
+fn enclosing_enum_name(variant: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let enum_item = variant.parent()?.parent()?;
+    if enum_item.kind() != "enum_item" {
         return None;
     }
-    sibling
+    enum_item
         .child_by_field_name("name")
         .and_then(|n| n.utf8_text(source).ok())
         .map(str::to_owned)
@@ -778,13 +855,15 @@ fn collect_raw_comments(tree: &tree_sitter::Tree, source: &[u8]) -> Vec<RawComme
             let start = node.start_byte();
             let end = node.end_byte();
             let is_line = source[start..end].starts_with(b"//");
+            let (decl_name, enum_owner) = documented_decl_name(node, source);
             out.push(RawComment {
                 start_byte: start,
                 end_byte: end,
                 row: node.start_position().row,
                 col: node.start_position().column,
                 is_line,
-                decl_name: documented_decl_name(node, source),
+                decl_name,
+                enum_owner,
                 cfg_conditional: is_cfg_conditional_comment(node, source),
             });
         }
@@ -817,6 +896,7 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
             // The documented declaration is attached to the last line of the
             // run (the one directly above the declaration).
             let mut decl_name = c.decl_name.clone();
+            let mut enum_owner = c.enum_owner.clone();
             let mut texts = vec![first_text.to_string()];
             let mut cfg_conditional = c.cfg_conditional;
             let mut j = i + 1;
@@ -834,6 +914,7 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
                 last_row = n.row;
                 end_byte = n.end_byte;
                 decl_name = n.decl_name.clone();
+                enum_owner = n.enum_owner.clone();
                 j += 1;
             }
             groups.push(CommentGroup {
@@ -843,6 +924,7 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
                 end_byte,
                 stripped: texts.join(" "),
                 decl_name,
+                enum_owner,
                 cfg_conditional,
             });
             i = j;
@@ -854,6 +936,7 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
                 end_byte: c.end_byte,
                 stripped: strip_block(&source[c.start_byte..c.end_byte]),
                 decl_name: c.decl_name.clone(),
+                enum_owner: c.enum_owner.clone(),
                 cfg_conditional: c.cfg_conditional,
             });
             i += 1;
@@ -1679,6 +1762,47 @@ type Clock = MacClock;
         let b = write(&dir, "b.rs", &format!("{doc}#[inline]\npub fn two() {{}}\n"));
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "duplicated docs on non-cfg items are still a smell");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn ignores_parallel_enum_variant_docs_intra_file() {
+        // Regression (#5316): flate2's `FlushCompress` and `FlushDecompress` are
+        // parallel enums for the two directions of one zlib operation, so their
+        // same-named variants (`None`/`Sync`) carry identical doc-comments
+        // describing the same flush mode. Both enums live in one file, so this is
+        // not the cross-file exemption — distinct enum owners keep it out.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "\
+    /// A typical parameter for passing to compression and decompression functions,
+    /// this indicates that the underlying stream decides how much data to accumulate
+    /// before producing output in order to maximize the resulting compression ratio.\n";
+        let content = format!(
+            "pub enum FlushCompress {{\n{doc}    None = 0,\n}}\n\
+             pub enum FlushDecompress {{\n{doc}    None = 0,\n}}\n"
+        );
+        let a = write(&dir, "mem.rs", &content);
+        let b = write(&dir, "filler.rs", "pub fn x() {}\n");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "identical docs on same-named variants of different enums must not flag"
+        );
+    }
+
+    #[test]
+    fn still_flags_duplicate_doc_on_differently_named_enum_variants() {
+        // Over-exclusion guard for #5316: the variant exemption is name-keyed. An
+        // identical doc-comment copy-pasted onto two *differently named* variants
+        // (even across different enums) is real duplication and must still flag.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "\
+    /// A typical parameter for passing to compression and decompression functions,
+    /// this indicates that the underlying stream decides how much data to accumulate
+    /// before producing output in order to maximize the resulting compression ratio.\n";
+        let a = write(&dir, "a.rs", &format!("pub enum A {{\n{doc}    Alpha = 0,\n}}\n"));
+        let b = write(&dir, "b.rs", &format!("pub enum B {{\n{doc}    Beta = 0,\n}}\n"));
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "identical doc on differently-named variants is a smell");
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
