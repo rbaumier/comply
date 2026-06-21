@@ -5,10 +5,11 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::path_utils::is_cargo_example_path;
 use crate::rules::sql_helpers::RUST_STRING_KINDS;
 
-/// Macros whose first string argument is a compile-time format template.
-/// `format!`/`panic!`/etc. require a string *literal* — the template
-/// cannot be hoisted to a `const &str` and still expand, so a repeated
-/// template is not a duplicate worth extracting.
+/// Macros whose first string argument is a compile-time format template or
+/// panic/diagnostic message. `format!`/`panic!`/`unreachable!`/etc. require a
+/// string *literal* — the template cannot be hoisted to a `const &str` and
+/// still expand, and panic-family messages are idiomatically inlined at each
+/// site, so a repeated template/message is not a duplicate worth extracting.
 const FORMAT_MACROS: &[&str] = &[
     "format",
     "write",
@@ -18,9 +19,15 @@ const FORMAT_MACROS: &[&str] = &[
     "eprint",
     "eprintln",
     "panic",
+    "unreachable",
+    "todo",
+    "unimplemented",
     "assert",
     "assert_eq",
     "assert_ne",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
     "format_args",
 ];
 
@@ -299,6 +306,40 @@ mod tests {
             }
         "#;
         assert_eq!(run_at(src, "src/render.rs").len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_unreachable_sentinel_across_stub_methods() {
+        // The issue's FP (async-std): a doc-only struct compiled solely for
+        // rustdoc, every method stubbed with the same `unreachable!` message.
+        // The message is a panic-family sentinel that is idiomatically
+        // inlined, not extracted to a `const`.
+        let src = r#"
+            impl Metadata {
+                pub fn file_type(&self) -> FileType {
+                    unreachable!("this impl only appears in the rendered docs")
+                }
+                pub fn is_dir(&self) -> bool {
+                    unreachable!("this impl only appears in the rendered docs")
+                }
+                pub fn is_file(&self) -> bool {
+                    unreachable!("this impl only appears in the rendered docs")
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_todo_or_unimplemented_message() {
+        // `todo!` / `unimplemented!` messages are panic-family literals,
+        // inlined at each call site rather than hoisted to a constant.
+        let src = r#"
+            fn a() { todo!("wire up the storage backend later") }
+            fn b() { todo!("wire up the storage backend later") }
+            fn c() { unimplemented!("wire up the storage backend later") }
+        "#;
+        assert!(run(src).is_empty());
     }
 
     #[test]
