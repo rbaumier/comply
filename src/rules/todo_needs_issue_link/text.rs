@@ -82,16 +82,61 @@ fn line_has_ref(rest: &str, full_line: &str) -> bool {
     false
 }
 
+/// Is `line` a comment line that continues the marker's comment block?
+///
+/// Matches `//`, `/*`, or a block-comment continuation (`*` not followed by
+/// `/`). Leading whitespace is ignored so indented blocks still match.
+fn is_comment_continuation(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("//")
+        || trimmed.starts_with("/*")
+        || (trimmed.starts_with('*') && !trimmed.starts_with("*/"))
+}
+
+/// Scan the comment lines immediately following the marker's line for an issue
+/// reference. The marker is satisfied when its own contiguous comment block
+/// documents the reference on a following line:
+///
+/// ```text
+/// // FIXME: temporary fix for a libc bug
+/// // https://github.com/rust-lang/libc/pull/704
+/// ```
+///
+/// The scan starts at `lines[start]` (the line after the marker) and walks
+/// forward while each line is a comment continuation. It stops — without
+/// inspecting that line — at the first line that is not a comment, is
+/// blank/whitespace-only (a gap breaks the block), or carries its own marker
+/// (that block belongs to the next TODO, not this one).
+fn block_has_ref(lines: &[&str], start: usize) -> bool {
+    for &line in &lines[start..] {
+        if !is_comment_continuation(line) {
+            return false;
+        }
+        if find_marker_in_comment(line).is_some() {
+            return false;
+        }
+        if has_issue_ref(line) {
+            return true;
+        }
+    }
+    false
+}
+
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
+        let lines: Vec<&str> = ctx.source.lines().collect();
 
-        for (idx, line) in ctx.source.lines().enumerate() {
+        for (idx, line) in lines.iter().enumerate() {
             let Some((marker, rest)) = find_marker_in_comment(line) else {
                 continue;
             };
 
             if line_has_ref(rest, line) {
+                continue;
+            }
+
+            if block_has_ref(&lines, idx + 1) {
                 continue;
             }
 
@@ -220,6 +265,67 @@ mod tests {
         let diags = run(src);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].line, 2);
+    }
+
+    #[test]
+    fn ref_on_following_comment_line() {
+        // The issue shape: marker on one line, URL on the next comment line.
+        let src = "// FIXME: temporary fix for a libc bug\n\
+                   // https://github.com/rust-lang/libc/pull/704\n";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ref_on_following_comment_line_issue_number() {
+        let src = "// TODO: migrate to v2\n// see #1234 for context\n";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ref_two_comment_lines_below() {
+        // The reference may sit further down the contiguous block.
+        let src = "// FIXME: this is a long explanation\n\
+                   // that wraps across several comment lines\n\
+                   // https://github.com/org/repo/issues/9\n";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_ref_in_block_still_flagged() {
+        // A multi-line comment block with no reference anywhere is flagged.
+        let src = "// FIXME: this is broken\n// and we should fix it someday\n";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 1);
+    }
+
+    #[test]
+    fn blank_gap_breaks_the_block() {
+        // A blank line separates the marker from the later comment with the
+        // URL — they are not the same block, so the marker is still flagged.
+        let src = "// TODO: fix this\n\n// https://github.com/org/repo/issues/1\n";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 1);
+    }
+
+    #[test]
+    fn non_comment_line_breaks_the_block() {
+        // Code follows the marker before any reference — still flagged.
+        let src = "// TODO: fix this\nlet x = 1; // https://example.com/1\n";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 1);
+    }
+
+    #[test]
+    fn next_marker_does_not_satisfy_previous() {
+        // The second marker carries the URL, but it is its own TODO; the first
+        // marker's block stops at it and the first is still flagged.
+        let src = "// TODO: first thing\n// TODO: second thing #42\n";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 1);
     }
 
     #[test]
