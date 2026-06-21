@@ -54,6 +54,15 @@ impl TextCheck for Check {
                 continue;
             }
             if let Some(kind) = scan_line(line) {
+                // Crypto libraries commit armored PGP key pairs as test vectors
+                // to verify encryption/signing against known values. Inside a
+                // test directory an armored PGP key block is fixture data, not a
+                // leaked production secret. Every other secret shape (AWS/GitHub/
+                // Stripe/PEM private key) still flags in test files, because
+                // those are genuine credentials wherever they appear.
+                if ctx.file.path_segments.in_test_dir && is_pgp_armored_key_block(line) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
                     line: idx + 1,
@@ -193,6 +202,15 @@ fn contains_slack_token(line: &str) -> bool {
         }
     }
     false
+}
+
+/// True when the line carries an armored PGP key block header — the public or
+/// private variant. Crypto test suites embed these as deterministic test
+/// vectors; the test-directory exemption in [`Check::check`] relies on this to
+/// drop those fixtures while keeping production-code PGP keys flagged.
+fn is_pgp_armored_key_block(line: &str) -> bool {
+    line.contains("-----BEGIN PGP PRIVATE KEY BLOCK-----")
+        || line.contains("-----BEGIN PGP PUBLIC KEY BLOCK-----")
 }
 
 fn contains_private_key_header(line: &str) -> bool {
@@ -439,6 +457,17 @@ mod tests {
         Check.check(&CheckCtx::for_test(Path::new("t.ts"), source))
     }
 
+    /// Run the check as if the file lived under a test directory, so the
+    /// `in_test_dir` PGP-fixture exemption is exercised.
+    fn run_in_test_dir(source: &str) -> Vec<Diagnostic> {
+        use crate::rules::file_ctx::{FileCtx, PathSegments};
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..PathSegments::default() },
+            ..FileCtx::default()
+        };
+        Check.check(&CheckCtx::for_test_with_file(Path::new("t.ts"), source, &file))
+    }
+
     #[test]
     fn flags_aws_key() {
         assert_eq!(run("const k = 'AKIAIOSFODNN7EXAMPLE';").len(), 1);
@@ -512,6 +541,49 @@ mod tests {
         // substitution: the PEM header is still hardcoded and must flag.
         assert_eq!(
             run(r#"const pem = "-----BEGIN PRIVATE KEY-----${notInterp}";"#).len(),
+            1
+        );
+    }
+
+    // Regression tests for #5109 — crypto libraries commit armored PGP key
+    // blocks as deterministic test vectors. Inside a test directory these are
+    // fixture data, not leaked production secrets.
+    #[test]
+    fn allows_pgp_private_key_block_in_test_dir() {
+        assert!(
+            run_in_test_dir("'-----BEGIN PGP PRIVATE KEY BLOCK-----',").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_pgp_public_key_block_in_test_dir() {
+        assert!(
+            run_in_test_dir("'-----BEGIN PGP PUBLIC KEY BLOCK-----',").is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_pgp_private_key_block_in_production_code() {
+        // A PGP private key block in non-test code is still a hardcoded secret.
+        assert_eq!(run("const k = '-----BEGIN PGP PRIVATE KEY BLOCK-----';").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_pem_private_key_in_test_dir() {
+        // The exemption is scoped to armored PGP blocks. A genuine PEM private
+        // key (RSA/EC/OPENSSH) is a real credential even in a test directory.
+        assert_eq!(
+            run_in_test_dir("const k = '-----BEGIN RSA PRIVATE KEY-----';").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn still_flags_real_api_secret_in_test_dir() {
+        // Non-PGP secret shapes (AWS access key here) remain leaks wherever
+        // they appear — the test-dir exemption only covers PGP key blocks.
+        assert_eq!(
+            run_in_test_dir("const k = 'AKIAIOSFODNN7EXAMPLE';").len(),
             1
         );
     }
