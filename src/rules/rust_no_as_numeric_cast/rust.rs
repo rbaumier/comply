@@ -42,8 +42,9 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
     cast_operand_bit_width, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
-    cast_operand_is_enum_discriminant, cast_operand_is_range_guarded, cast_operand_is_repr_enum_field,
-    cast_operand_literal_value, find_identifier_type, is_in_enum_discriminant, is_in_test_context,
+    cast_operand_is_enum_discriminant, cast_operand_is_non_negative_guarded,
+    cast_operand_is_range_guarded, cast_operand_is_repr_enum_field, cast_operand_literal_value,
+    find_identifier_type, is_in_enum_discriminant, is_in_test_context,
 };
 
 const KINDS: &[&str] = &["type_cast_expression"];
@@ -162,6 +163,9 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
         return false;
     }
     if cast_operand_is_range_guarded(node, source_bytes) {
+        return false;
+    }
+    if cast_operand_is_non_negative_guarded(node, source_bytes) {
         return false;
     }
     if cast_operand_is_assert_bounded(node, source_bytes) {
@@ -935,5 +939,45 @@ mod tests {
         // A variable operand is not a literal — its value is unknown, so a
         // narrowing cast stays flagged.
         assert_eq!(run_on("fn f(x: i32) -> i8 { x as i8 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_5262_match_guard_not_negative_not_flagged() {
+        // The Symphonia pattern: `Some(diff) if !diff.is_negative()` proves the
+        // i64 binding is non-negative, so `diff as u64` is lossless. The source
+        // type is unresolved (a match-arm binding has no AST annotation), so the
+        // 64-bit-or-wider target gates the exemption.
+        let src = "fn f(o: Option<i64>) -> Option<u64> { \
+                   match o { Some(diff) if !diff.is_negative() => Some(diff as u64), \
+                   _ => None } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5262_if_ge_zero_not_flagged() {
+        // `if x >= 0` proves the signed source is non-negative; `i32 as u32` is a
+        // signed→unsigned widening (equal width here) that is then lossless.
+        assert!(run_on("fn f(x: i32) -> u32 { if x >= 0 { x as u32 } else { 0 } }").is_empty());
+    }
+
+    #[test]
+    fn repro_5262_is_positive_guard_not_flagged() {
+        assert!(
+            run_on("fn f(x: i64) -> u64 { if x.is_positive() { x as u64 } else { 0 } }").is_empty()
+        );
+    }
+
+    #[test]
+    fn repro_5262_unguarded_signed_to_unsigned_still_flagged() {
+        // No non-negativity guard — the signed value can be negative and wrap.
+        assert_eq!(run_on("fn f(x: i32) -> u32 { x as u32 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_5262_guarded_narrowing_still_flagged() {
+        // `i64 >= 0` does not prove the value fits u8 — a non-negative i64 can
+        // exceed 255, so the narrowing stays flagged.
+        let src = "fn f(x: i64) -> u8 { if x >= 0 { x as u8 } else { 0 } }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }

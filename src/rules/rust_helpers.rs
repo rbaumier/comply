@@ -1900,6 +1900,241 @@ pub fn cast_operand_is_range_guarded(cast: Node, source: &[u8]) -> bool {
     enclosing_upper_bound_fits(cast, name, target_bits, source)
 }
 
+/// True if `cast` (a `type_cast_expression`) casts a signed integer to an
+/// unsigned integer whose value an enclosing guard proves is non-negative, so
+/// the cast cannot wrap — e.g. `Some(diff) if !diff.is_negative() => diff as u64`
+/// or `if x >= 0 { x as u32 }`. For a signed→unsigned cast, non-negativity is
+/// exactly the condition that makes it lossless: a non-negative `iN` fits any
+/// `uM` with `M >= N` (the non-negative range of `iN` is `0..=2^(N-1)-1`, which
+/// is within `0..=2^M-1`).
+///
+/// The exemption is deliberately narrow to stay sound — every condition must
+/// hold:
+///
+/// - the operand is a bare `identifier` (`diff`), not an expression;
+/// - the target is an **unsigned** integer (`u8`..`u128`/`usize`);
+/// - the operand's source type, when it resolves from the AST, is a **signed**
+///   integer `iN` no wider than the target (`target_bits >= N`); a narrowing
+///   `i64 as u8` is not exempted because a non-negative `i64` can still exceed
+///   `u8`. When the source type does not resolve (a match-arm binding has no
+///   AST type annotation), the cast is exempted only into a **64-bit-or-wider**
+///   unsigned target (`u64`/`u128`/`usize`) — the widening idiom the issue
+///   describes; a non-negative-guarded cast into a narrow unresolved target
+///   (`as u8`) stays flagged;
+/// - a dominating guard proves the operand is non-negative — either a
+///   `match_arm` guard on a pattern that binds the operand (`Some(diff) if
+///   <guard>`), or an enclosing `if_expression` reached through its
+///   `consequence` (`if <guard> { … diff as uM … }`). The recognized guard
+///   forms are `!name.is_negative()`, `name.is_positive()`, `name >= 0`,
+///   `name > 0`, `name > -1` (and the mirrored `0 <= name` / `0 < name` /
+///   `-1 < name`);
+/// - the operand is not re-bound (a shadowing `let name`) or reassigned inside
+///   the guarded body before the cast, which would break the link between the
+///   guard and the value the cast reads.
+///
+/// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`, which both
+/// otherwise flag the cast because the operand's proven non-negativity is not
+/// visible from the cast in isolation.
+pub fn cast_operand_is_non_negative_guarded(cast: Node, source: &[u8]) -> bool {
+    let Some(value) = cast.child_by_field_name("value") else {
+        return false;
+    };
+    if value.kind() != "identifier" {
+        return false;
+    }
+    let Ok(name) = value.utf8_text(source) else {
+        return false;
+    };
+    // Target must be an unsigned integer; capture its bit width.
+    let Some(target_bits) = cast
+        .child_by_field_name("type")
+        .and_then(|t| t.utf8_text(source).ok())
+        .and_then(unsigned_int_bits)
+    else {
+        return false;
+    };
+    // Width gating: a non-negative value is lossless only if the unsigned target
+    // is wide enough to hold the source's non-negative range. A resolved signed
+    // source `iN` fits when `target_bits >= N`; an unresolved source (a match-arm
+    // binding carries no AST type) is accepted only for the widening idiom into a
+    // 64-bit-or-wider target.
+    match find_identifier_type(cast, name, source).and_then(|t| signed_int_bits(&t)) {
+        Some(source_bits) => {
+            if target_bits < source_bits {
+                return false;
+            }
+        }
+        None => {
+            if target_bits < 64 {
+                return false;
+            }
+        }
+    }
+    enclosing_guard_proves_non_negative(cast, name, source)
+}
+
+/// The bit width of a signed-integer type name (`i8` → 8, … `isize` → host
+/// width), or `None` for any unsigned, float, or non-numeric type.
+fn signed_int_bits(type_text: &str) -> Option<u16> {
+    match type_text.trim() {
+        "i8" => Some(8),
+        "i16" => Some(16),
+        "i32" => Some(32),
+        "i64" => Some(64),
+        "i128" => Some(128),
+        "isize" => Some(usize::BITS as u16),
+        _ => None,
+    }
+}
+
+/// True if a dominating guard proves `name` is non-negative at `cast`. Two guard
+/// sites count: a `match_arm` whose `pattern` binds `name` and whose guard
+/// condition proves non-negativity (reached through the arm's `value` body), and
+/// an enclosing `if_expression` reached through its `consequence`. The walk stops
+/// at the enclosing `function_item` / `closure_expression` boundary. A guard
+/// reached through an `else` branch (the `alternative`) does not apply, since it
+/// is the negation of the condition.
+fn enclosing_guard_proves_non_negative(cast: Node, name: &str, source: &[u8]) -> bool {
+    let mut child = cast;
+    while let Some(parent) = child.parent() {
+        match parent.kind() {
+            "function_item" | "closure_expression" => return false,
+            "match_arm" => {
+                if parent.child_by_field_name("value") == Some(child)
+                    && let Some(pattern) = parent.child_by_field_name("pattern")
+                    && pattern_contains_identifier(pattern, name, source)
+                    && let Some(condition) = pattern.child_by_field_name("condition")
+                    && condition_proves_non_negative(condition, name, source)
+                    && !name_rebound_before_cast(child, cast, name, source)
+                {
+                    return true;
+                }
+            }
+            "if_expression" => {
+                if parent.child_by_field_name("consequence") == Some(child)
+                    && let Some(condition) = parent.child_by_field_name("condition")
+                    && condition_proves_non_negative(condition, name, source)
+                    && !name_rebound_before_cast(child, cast, name, source)
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        child = parent;
+    }
+    false
+}
+
+/// True if `condition` proves the identifier `name` is non-negative (`>= 0`).
+///
+/// Recognized forms:
+/// - `!name.is_negative()` — a non-negative signed integer;
+/// - `name.is_positive()` — a strictly positive signed integer (also `>= 0`);
+/// - `name >= 0` / `name > 0` / `name > -1` (identifier on the left);
+/// - `0 <= name` / `0 < name` / `-1 < name` (identifier on the right).
+fn condition_proves_non_negative(condition: Node, name: &str, source: &[u8]) -> bool {
+    match condition.kind() {
+        // `!name.is_negative()`
+        "unary_expression" => {
+            condition
+                .child(0)
+                .and_then(|op| op.utf8_text(source).ok())
+                .is_some_and(|op| op == "!")
+                && condition
+                    .named_child(0)
+                    .is_some_and(|inner| ident_method_call(inner, name, "is_negative", source))
+        }
+        // `name.is_positive()`
+        "call_expression" => ident_method_call(condition, name, "is_positive", source),
+        // `name >= 0` / `name > 0` / `name > -1` and the mirrored forms.
+        "binary_expression" => binary_proves_non_negative(condition, name, source),
+        _ => false,
+    }
+}
+
+/// True if `node` is a no-argument method call `<name>.<method>()` on the bare
+/// identifier `name` — e.g. `diff.is_negative()`.
+fn ident_method_call(node: Node, name: &str, method: &str, source: &[u8]) -> bool {
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    if node
+        .child_by_field_name("arguments")
+        .is_some_and(|args| args.named_child_count() > 0)
+    {
+        return false;
+    }
+    let Some(function) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    function
+        .child_by_field_name("value")
+        .is_some_and(|recv| recv.kind() == "identifier" && recv.utf8_text(source) == Ok(name))
+        && function
+            .child_by_field_name("field")
+            .and_then(|f| f.utf8_text(source).ok())
+            == Some(method)
+}
+
+/// True if `condition` is a comparison proving `name >= 0`: `name >= 0`,
+/// `name > 0`, `name > -1` (identifier on the left), or the mirrored
+/// `0 <= name`, `0 < name`, `-1 < name` (identifier on the right). A bound that
+/// does not parse, or that fails to establish non-negativity, returns false.
+fn binary_proves_non_negative(condition: Node, name: &str, source: &[u8]) -> bool {
+    let (Some(left), Some(op), Some(right)) = (
+        condition.child_by_field_name("left"),
+        condition
+            .child_by_field_name("operator")
+            .and_then(|o| o.utf8_text(source).ok()),
+        condition.child_by_field_name("right"),
+    ) else {
+        return false;
+    };
+    let ident_left = left.kind() == "identifier" && left.utf8_text(source) == Ok(name);
+    let ident_right = right.kind() == "identifier" && right.utf8_text(source) == Ok(name);
+    match op {
+        // `name >= 0` — `0` proves non-negativity exactly.
+        ">=" if ident_left => signed_int_value(right, source) == Some(0),
+        // `name > 0` and `name > -1` — both prove `name >= 0`.
+        ">" if ident_left => matches!(signed_int_value(right, source), Some(0) | Some(-1)),
+        // `0 <= name`
+        "<=" if ident_right => signed_int_value(left, source) == Some(0),
+        // `0 < name` and `-1 < name`
+        "<" if ident_right => matches!(signed_int_value(left, source), Some(0) | Some(-1)),
+        _ => false,
+    }
+}
+
+/// Parse an integer literal node's value as `i128`, handling an optional leading
+/// `-` (`unary_expression`) and a type suffix / digit separators. Returns `None`
+/// for non-literal nodes or values that do not parse.
+fn signed_int_value(node: Node, source: &[u8]) -> Option<i128> {
+    match node.kind() {
+        "integer_literal" => parse_int_literal(node, source).and_then(|v| i128::try_from(v).ok()),
+        "unary_expression" => {
+            let is_neg = node
+                .child(0)
+                .and_then(|op| op.utf8_text(source).ok())
+                .is_some_and(|op| op == "-");
+            if !is_neg {
+                return None;
+            }
+            let inner = node.named_child(0)?;
+            if inner.kind() != "integer_literal" {
+                return None;
+            }
+            parse_int_literal(inner, source)
+                .and_then(|v| i128::try_from(v).ok())
+                .map(|v| -v)
+        }
+        _ => None,
+    }
+}
+
 /// The bit width of an unsigned-integer type name (`u8` → 8, … `usize` → host
 /// width), or `None` for any signed, float, or non-numeric type.
 fn unsigned_int_bits(type_text: &str) -> Option<u16> {
@@ -4238,6 +4473,61 @@ mod tests {
                 cast_operand_is_range_guarded(cast, src.as_bytes()),
                 expected,
                 "cast_operand_is_range_guarded mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn cast_operand_is_non_negative_guarded_requires_dominating_proof() {
+        let cases = [
+            // Match-arm guard, unresolved source, widening into u64 (issue #5262).
+            (
+                "fn f(o: Option<i64>) -> Option<u64> { match o { Some(diff) if !diff.is_negative() => Some(diff as u64), _ => None } }",
+                true,
+            ),
+            // `if x >= 0` with a resolved signed source, equal-width unsigned.
+            ("fn f(x: i32) -> u32 { if x >= 0 { x as u32 } else { 0 } }", true),
+            // `x.is_positive()` guard, signed widening.
+            ("fn f(x: i32) -> u64 { if x.is_positive() { x as u64 } else { 0 } }", true),
+            // `x > 0` and `x > -1` both prove non-negativity.
+            ("fn f(x: i32) -> u32 { if x > 0 { x as u32 } else { 0 } }", true),
+            ("fn f(x: i32) -> u32 { if x > -1 { x as u32 } else { 0 } }", true),
+            // Mirrored `0 <= x` / `0 < x` / `-1 < x` (identifier on the right).
+            ("fn f(x: i32) -> u32 { if 0 <= x { x as u32 } else { 0 } }", true),
+            ("fn f(x: i32) -> u32 { if 0 < x { x as u32 } else { 0 } }", true),
+            ("fn f(x: i32) -> u32 { if -1 < x { x as u32 } else { 0 } }", true),
+            // `!x.is_negative()` at the if-expression site (not only match arms).
+            ("fn f(x: i32) -> u32 { if !x.is_negative() { x as u32 } else { 0 } }", true),
+            // Shadowing `let x` inside the branch reads a different binding.
+            ("fn f(x: i32) -> u32 { if x >= 0 { let x: i32 = q(); x as u32 } else { 0 } }", false),
+            // No guard at all.
+            ("fn f(x: i32) -> u32 { x as u32 }", false),
+            // Guarded narrowing: a non-negative i64 can still exceed u8.
+            ("fn f(x: i64) -> u8 { if x >= 0 { x as u8 } else { 0 } }", false),
+            // Unresolved source narrowing into u8 is not the widening idiom.
+            (
+                "fn f(o: Option<i64>) -> Option<u8> { match o { Some(d) if !d.is_negative() => Some(d as u8), _ => None } }",
+                false,
+            ),
+            // Guard reached through the `else` branch is the condition's negation.
+            ("fn f(x: i32) -> u32 { if x >= 0 { 0 } else { x as u32 } }", false),
+            // Guard on a different variable.
+            ("fn f(a: i32, b: i32) -> u32 { if a >= 0 { b as u32 } else { 0 } }", false),
+            // An upper-bound guard does not prove non-negativity.
+            ("fn f(x: i32) -> u32 { if x < 256 { x as u32 } else { 0 } }", false),
+            // Reassignment after the guard invalidates the proof.
+            ("fn f(mut x: i32) -> u32 { if x >= 0 { x = -9; x as u32 } else { 0 } }", false),
+            // Target is signed — out of scope (this predicate is signed→unsigned).
+            ("fn f(x: i32) -> i64 { if x >= 0 { x as i64 } else { 0 } }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_of_kind(tree.root_node(), "type_cast_expression")
+                .expect("snippet should contain a type_cast_expression");
+            assert_eq!(
+                cast_operand_is_non_negative_guarded(cast, src.as_bytes()),
+                expected,
+                "cast_operand_is_non_negative_guarded mismatch for `{src}`"
             );
         }
     }
