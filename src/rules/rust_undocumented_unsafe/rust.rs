@@ -79,23 +79,51 @@ fn inside_unsafe_fn(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-/// True if the line directly above the unsafe block contains a
-/// `// SAFETY:` comment. We scan by text (the comment may be on any
-/// of the preceding lines up to the previous non-blank code line)
-/// because tree-sitter doesn't attach comments to expressions.
+/// True if a `// SAFETY:` comment documents this unsafe block, either
+/// directly above it or above an enclosing `impl`/`fn` whose scope wraps
+/// it. The latter covers the convention of documenting a shared invariant
+/// once above an `impl` block whose methods all perform the same unsafe
+/// operation, instead of repeating the comment above each inner block.
+/// One such comment therefore suppresses every unsafe block in the impl's
+/// methods — the granularity is the enclosing scope, not the block.
+///
+/// We check the lines directly above the unsafe block, then walk up the
+/// ancestor chain and check the lines directly above each enclosing
+/// `impl_item` / `function_item`. Leakage from an unrelated sibling item
+/// is prevented by the per-row scan stopping at the first real-code line
+/// above each ancestor: a sibling's comment is never directly above an
+/// ancestor's start row. The walk bound (`source_file`) only caps how far
+/// up the chain we look.
 fn has_safety_comment_above(node: tree_sitter::Node, source: &str) -> bool {
-    let start_row = node.start_position().row;
-    if start_row == 0 {
-        return false;
-    }
     let lines: Vec<&str> = source.lines().collect();
-    // Walk upward past blank lines / other comments until we hit code.
+    if safety_comment_above_row(node.start_position().row, &lines) {
+        return true;
+    }
+    let mut cur = node.parent();
+    while let Some(p) = cur {
+        if matches!(p.kind(), "impl_item" | "function_item")
+            && safety_comment_above_row(p.start_position().row, &lines)
+        {
+            return true;
+        }
+        cur = p.parent();
+    }
+    false
+}
+
+/// True if a `// SAFETY:` comment sits on the lines directly above
+/// `start_row`. We scan by text (the comment may be on any of the
+/// preceding lines up to the previous code line) because tree-sitter
+/// doesn't attach comments to expressions. Blank lines, other comments,
+/// and outer attributes (`#[...]`) are skipped so a comment above an
+/// `impl` carrying `#[allow(unsafe_code)]` still counts.
+fn safety_comment_above_row(start_row: usize, lines: &[&str]) -> bool {
     let mut row = start_row;
     while row > 0 {
         row -= 1;
         let Some(line) = lines.get(row) else { break };
         let trimmed = line.trim_start();
-        if trimmed.is_empty() {
+        if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
         if trimmed.starts_with("//") || trimmed.starts_with("/*") {
@@ -233,6 +261,40 @@ mod tests {
         assert!(
             crate::rules::test_helpers::run_rule(&Check, source, "src/metadata/value.rs").is_empty()
         );
+    }
+
+    #[test]
+    fn allows_impl_block_level_safety_comment_issue_5046() {
+        // Issue #5046: indexmap src/map/slice.rs — a single `// SAFETY:`
+        // comment above an `impl` block (carrying `#[allow(unsafe_code)]`)
+        // documents the shared invariant for every unsafe block its methods
+        // contain, instead of repeating it above each one.
+        let source = "// SAFETY: `Slice<K, V>` is a transparent wrapper around `[Bucket<K, V>]`.\n\
+                      #[allow(unsafe_code)]\n\
+                      impl<K, V> Slice<K, V> {\n\
+                      pub(crate) const fn from_slice(entries: &[Bucket<K, V>]) -> &Self {\n\
+                      unsafe { &*(entries as *const [Bucket<K, V>] as *const Self) }\n\
+                      }\n\
+                      pub(super) const fn from_mut_slice(entries: &mut [Bucket<K, V>]) -> &mut Self {\n\
+                      unsafe { &mut *(entries as *mut [Bucket<K, V>] as *mut Self) }\n\
+                      }\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_unsafe_in_impl_without_any_safety_comment() {
+        // Negative: an unsafe block inside an impl with no SAFETY comment
+        // anywhere in its enclosing scope chain still fires (once per block).
+        let source = "impl<K, V> Slice<K, V> {\n\
+                      pub(crate) const fn from_slice(entries: &[Bucket<K, V>]) -> &Self {\n\
+                      unsafe { &*(entries as *const [Bucket<K, V>] as *const Self) }\n\
+                      }\n\
+                      pub(super) const fn from_mut_slice(entries: &mut [Bucket<K, V>]) -> &mut Self {\n\
+                      unsafe { &mut *(entries as *mut [Bucket<K, V>] as *mut Self) }\n\
+                      }\n\
+                      }";
+        assert_eq!(run_on(source).len(), 2);
     }
 
     #[test]
