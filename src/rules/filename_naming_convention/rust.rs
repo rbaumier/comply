@@ -3,9 +3,12 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 
 /// Rust backend for `filename-naming-convention`: flags `.rs` filenames whose
 /// stem is not snake_case, after stripping a numeric ordering prefix
-/// (`0065_`) and a leading `_` private-module marker. Cargo target, trybuild
-/// and rustc-UI fixture paths are exempt because their kebab-case name is the
-/// build-target / scenario identifier. Files carrying a machine-generated
+/// (`0065_`) and a leading `_` private-module marker. Cargo target paths
+/// (`src/bin/`, `examples/`, `benches/`, and any file declared as an explicit
+/// `[[bin]]` / `[[example]]` / `[[bench]]` / `[[test]]` target via a
+/// `path = "..."` field), trybuild and rustc-UI fixture paths are exempt
+/// because their kebab-case name
+/// is the build-target / scenario identifier. Files carrying a machine-generated
 /// marker near the top of their content are also exempt: the generator
 /// dictates the name (e.g. wasm-bindgen WebIDL `gen_*.rs`).
 #[derive(Debug)]
@@ -123,6 +126,19 @@ impl TextCheck for Check {
         // `--bench <stem>`, where the stem is a freely-chosen target name that
         // conventionally uses kebab-case; nested modules under `benches/` are not.
         if crate::rules::path_utils::is_cargo_bench_target_path(ctx.path) {
+            return Vec::new();
+        }
+        // Cargo targets declared with an explicit `path = "..."` in the nearest
+        // `Cargo.toml` (`[[bin]]`/`[[example]]`/`[[bench]]`/`[[test]]`) may sit
+        // anywhere in the crate, not just `src/bin/` or `examples/`. Their
+        // filename is the author-declared build-target path and mirrors the
+        // kebab-case binary name, so it is not a module name subject to the
+        // snake_case convention.
+        if ctx
+            .project
+            .nearest_cargo_manifest(ctx.path)
+            .is_some_and(|m| m.declares_executable_at(ctx.path))
+        {
             return Vec::new();
         }
         if is_snake_case(strip_ordering_prefix(strip_private_prefix(stem))) {
@@ -252,6 +268,33 @@ mod tests {
     fn allows_kebab_case_cargo_bin_target() {
         assert!(run("src/bin/stdio-fixture.rs").is_empty());
         assert!(run("crates/searcher/src/bin/my-tool.rs").is_empty());
+    }
+
+    #[test]
+    fn allows_kebab_case_explicit_cargo_bin_target_with_custom_path() {
+        // Regression #5180: a `[[bin]]` target declared with an explicit
+        // `path =` pointing outside `src/bin/` (nextest's `cargo-nextest-dup`
+        // helper) carries the kebab-case binary name as its filename. With a
+        // real on-disk Cargo.toml + ProjectCtx the file is exempt, while an
+        // ordinary kebab-case `src/` module in the same crate is still flagged.
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"helpers\"\nversion = \"0.1.0\"\n\n\
+             [[bin]]\nname = \"cargo-nextest-dup\"\npath = \"test-helpers/cargo-nextest-dup.rs\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("test-helpers")).unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        let target = dir.path().join("test-helpers/cargo-nextest-dup.rs");
+        let module = dir.path().join("src/my-module.rs");
+
+        let project = crate::project::ProjectCtx::empty();
+        let target_diags = Check.check(&CheckCtx::for_test_with_project(&target, "", &project));
+        assert!(target_diags.is_empty());
+
+        let module_diags = Check.check(&CheckCtx::for_test_with_project(&module, "", &project));
+        assert_eq!(module_diags.len(), 1);
     }
 
     #[test]
