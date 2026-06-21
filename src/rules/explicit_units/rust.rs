@@ -25,8 +25,8 @@ const AMBIGUOUS_BASES: &[&str] = &[
 ];
 
 const KNOWN_SUFFIXES: &[&str] = &[
-    "_ms", "_sec", "_seconds", "_minutes", "_hours", "_days", "_bytes", "_kb", "_mb", "_gb",
-    "_kib", "_mib", "_gib", "_px", "_em", "_rem", "_pct", "_percent", "_rps", "_qps", "_hz",
+    "_ms", "_sec", "_secs", "_seconds", "_minutes", "_hours", "_days", "_bytes", "_kb", "_mb",
+    "_gb", "_kib", "_mib", "_gib", "_px", "_em", "_rem", "_pct", "_percent", "_rps", "_qps", "_hz",
     "_khz", "_count",
 ];
 
@@ -201,5 +201,22 @@ mod tests {
     #[test]
     fn still_flags_bare_duration_param() {
         assert_eq!(run_on("fn f(duration: u64) {}").len(), 1);
+    }
+
+    #[test]
+    fn allows_timeout_secs() {
+        // `_secs` is the plural of `_sec` (Duration::as_secs) — an unambiguous
+        // time-unit suffix that must be accepted just like `_sec`/`_seconds`.
+        assert!(run_on("fn f(timeout_secs: f64) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_delay_secs_let() {
+        assert!(run_on("fn f() { let delay_secs: u64 = 30; }").is_empty());
+    }
+
+    #[test]
+    fn allows_timeout_sec_singular() {
+        assert!(run_on("fn f(timeout_sec: u64) {}").is_empty());
     }
 }
