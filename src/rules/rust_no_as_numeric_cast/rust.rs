@@ -29,6 +29,14 @@
 //! let y = x as u8;` — is exempt: the assertion aborts before the cast unless
 //! the value fits.
 //!
+//! A cast from a resolved `usize`/`isize` operand into a same-signedness
+//! fixed-width integer of at least 64 bits — `usize as u64`/`u128`,
+//! `isize as i64`/`i128` — is exempt: `usize`/`isize` are at most 64 bits on
+//! every supported target, so the cast is always lossless, and no
+//! `From<usize>`/`From<isize>` impl exists for a fixed-width integer, so `as`
+//! is the only infallible conversion. Narrowing (`usize as u32`) and
+//! sign-changing (`usize as i64`) casts stay flagged.
+//!
 //! Float-target casts (`as f32` / `as f64`) are only flagged when the
 //! source type is statically known to have a matching `From` impl
 //! (`f64: From<{i8,i16,i32,u8,u16,u32,f32}>`, `f32: From<{i8,i16,u8,u16}>`).
@@ -172,6 +180,9 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
     if cast_operand_is_assert_bounded(node, source_bytes) {
         return false;
     }
+    if cast_is_pointer_sized_widening(node, source_bytes, target) {
+        return false;
+    }
     let source_type = source_numeric_type(node, source_bytes);
     if target_type.kind == NumericKind::Float {
         // `as f32`/`as f64` is the only std conversion unless the source
@@ -184,6 +195,37 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
     } else {
         true
     }
+}
+
+/// True when the operand's resolved source type is `usize`/`isize` and `target`
+/// is a same-signedness fixed-width integer of at least 64 bits — `usize as
+/// u64`/`u128`, `isize as i64`/`i128`.
+///
+/// Stable Rust guarantees `usize`/`isize` are at most 64 bits on every supported
+/// target, so these casts are always lossless. There is no `From<usize>` /
+/// `From<isize>` impl for any fixed-width integer (the width is platform-
+/// dependent), so `as` is the only infallible conversion: the rule's
+/// `u64::from(x)` suggestion would not compile and `u64::try_from(x)?` forces a
+/// semantically-impossible error path. A narrowing (`usize as u32`), a
+/// sign-changing (`usize as i64`), or a `From`-available cast resolves a
+/// non-`usize`/`isize` source here and stays governed by `is_dangerous_cast`.
+fn cast_is_pointer_sized_widening(node: tree_sitter::Node, source: &[u8], target: &str) -> bool {
+    let Some(value) = node.child_by_field_name("value") else {
+        return false;
+    };
+    if value.kind() != "identifier" {
+        return false;
+    }
+    let Ok(name) = value.utf8_text(source) else {
+        return false;
+    };
+    let Some(source_text) = find_identifier_type(node, name, source) else {
+        return false;
+    };
+    matches!(
+        (source_text.trim(), target),
+        ("usize", "u64" | "u128") | ("isize", "i64" | "i128")
+    )
 }
 
 fn numeric_type(type_text: &str) -> Option<NumericType> {
@@ -1035,5 +1077,49 @@ mod tests {
         // `let buf = make();` has no annotation — element type unresolvable.
         let src = "fn f() -> u32 { let buf = make(); buf[0] as u32 }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_5357_usize_as_u64_not_flagged() {
+        // The async-std io::copy pattern: a byte count accumulated into a u64
+        // total. `u64::from(usize)` is not in stable Rust, so `as` is the only
+        // infallible conversion.
+        assert!(run_on("fn f(x: usize) -> u64 { x as u64 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5357_usize_as_u128_not_flagged() {
+        assert!(run_on("fn f(x: usize) -> u128 { x as u128 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5357_isize_as_i64_not_flagged() {
+        assert!(run_on("fn f(x: isize) -> i64 { x as i64 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5357_isize_as_i128_not_flagged() {
+        assert!(run_on("fn f(x: isize) -> i128 { x as i128 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5357_usize_as_u32_still_flagged() {
+        // Narrowing on a 64-bit target: `usize` can exceed `u32`, so the cast
+        // is lossy and must keep recommending `try_from`.
+        assert_eq!(run_on("fn f(x: usize) -> u32 { x as u32 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_5357_usize_as_i64_sign_change_still_flagged() {
+        // A sign change is not a same-signedness widening; a `usize` near
+        // `u64::MAX` overflows `i64`, so the cast stays flagged.
+        assert_eq!(run_on("fn f(x: usize) -> i64 { x as i64 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_5357_let_binding_usize_as_u64_not_flagged() {
+        // The exemption resolves the source type from a `let` annotation too.
+        let src = "fn f() -> u64 { let n: usize = g(); n as u64 }";
+        assert!(run_on(src).is_empty());
     }
 }
