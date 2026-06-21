@@ -3,6 +3,8 @@
 //! Flags top-level reads of `window`, `document`, `localStorage`,
 //! `sessionStorage`, or `navigator` in a Nuxt file. Allowed only inside
 //! any function or behind a `process.client` / `import.meta.client` guard.
+//! Nuxt `*.client.*` files (stripped from the SSR bundle) are exempt — they
+//! never run on the server, so a browser global there cannot crash it.
 
 use std::sync::Arc;
 
@@ -44,6 +46,14 @@ impl OxcCheck for Check {
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
         if !is_nuxt_source(ctx.source) {
+            return Vec::new();
+        }
+
+        // Nuxt strips `*.client.{ts,js,vue}` files from the SSR bundle, so they
+        // execute only in the browser and never during server rendering — a
+        // browser global there cannot crash the server, making a client guard
+        // redundant noise.
+        if crate::rules::path_utils::is_nuxt_client_only_file(ctx.path) {
             return Vec::new();
         }
 
@@ -115,5 +125,55 @@ impl OxcCheck for Check {
         }
 
         diagnostics
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, path)
+    }
+
+    // #5105 — Nuxt strips `*.client.ts` from the SSR bundle, so the file runs
+    // only in the browser; `window` access there is safe by convention and a
+    // client guard would be redundant.
+    #[test]
+    fn allows_window_in_client_only_plugin() {
+        let src = "import { defineNuxtPlugin } from '#imports'\nlet helper = window['__app__'] as unknown\nexport default defineNuxtPlugin(() => {})";
+        assert!(run_on_path(src, "src/runtime/plugin.client.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_document_in_client_only_plugin_js() {
+        let src = "import { defineNuxtPlugin } from '#imports'\nconst el = document.body\nexport default defineNuxtPlugin(() => {})";
+        assert!(run_on_path(src, "plugins/sentry.client.js").is_empty());
+    }
+
+    // Load-bearing negative: a universal Nuxt file (no `.client.` infix) runs
+    // during SSR, so the same top-level browser global must still be flagged.
+    #[test]
+    fn still_flags_window_in_universal_plugin() {
+        let src = "import { defineNuxtPlugin } from '#imports'\nlet helper = window['__app__']\nexport default defineNuxtPlugin(() => {})";
+        let d = run_on_path(src, "plugins/foo.ts");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("window"));
     }
 }
