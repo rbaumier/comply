@@ -1783,6 +1783,80 @@ fn merge_tsconfig(parent: Tsconfig, child: Tsconfig) -> Tsconfig {
     }
 }
 
+/// A crate's declared minimum supported Rust version (`[package].rust-version`).
+///
+/// Carries only the `(major, minor)` pair — patch is irrelevant for std-API
+/// stabilization gating. `WorkspaceInherited` is the `rust-version.workspace =
+/// true` form, resolved against the workspace root by
+/// [`ProjectCtx::nearest_cargo_manifest`]; an unresolved one stays
+/// `WorkspaceInherited`. `Unspecified` means no `rust-version` was declared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RustVersion {
+    /// `rust-version = "1.66"` / `"1.66.0"` — parsed `(major, minor)`.
+    Specified(u32, u32),
+    /// `rust-version.workspace = true` — defined in the workspace root.
+    WorkspaceInherited,
+    /// No `rust-version` field declared.
+    Unspecified,
+}
+
+impl RustVersion {
+    /// Parse a `rust-version` string like `"1.66"` / `"1.66.0"` into
+    /// `Specified(major, minor)`. The patch component is ignored. Returns
+    /// `Unspecified` when the string lacks a numeric major and minor.
+    fn parse_str(raw: &str) -> Self {
+        let mut parts = raw.trim().split('.');
+        let major = parts.next().and_then(|s| s.trim().parse::<u32>().ok());
+        let minor = parts.next().and_then(|s| s.trim().parse::<u32>().ok());
+        match (major, minor) {
+            (Some(major), Some(minor)) => RustVersion::Specified(major, minor),
+            _ => RustVersion::Unspecified,
+        }
+    }
+
+    /// True when a declared MSRV is below `(major, minor)` — i.e. a std API
+    /// stabilized at that version is unavailable to the crate. `Unspecified`
+    /// and an unresolved `WorkspaceInherited` are NOT below (assume a recent
+    /// toolchain), so std-API suggestions stay enabled.
+    #[must_use]
+    pub fn is_below(self, major: u32, minor: u32) -> bool {
+        match self {
+            RustVersion::Specified(m, n) => (m, n) < (major, minor),
+            RustVersion::WorkspaceInherited | RustVersion::Unspecified => false,
+        }
+    }
+}
+
+/// Read `[package].rust-version` from already-parsed TOML. Accepts the string
+/// form (`rust-version = "1.66"`) and the workspace-inheritance form
+/// (`rust-version.workspace = true`). Returns `Unspecified` when absent.
+fn parse_package_rust_version(value: &toml::Value) -> RustVersion {
+    let Some(field) = value.get("package").and_then(|p| p.get("rust-version")) else {
+        return RustVersion::Unspecified;
+    };
+    if let Some(raw) = field.as_str() {
+        return RustVersion::parse_str(raw);
+    }
+    if field
+        .get("workspace")
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return RustVersion::WorkspaceInherited;
+    }
+    RustVersion::Unspecified
+}
+
+/// Read `[workspace.package].rust-version` (a workspace root) from parsed TOML.
+fn parse_workspace_rust_version(value: &toml::Value) -> RustVersion {
+    value
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("rust-version"))
+        .and_then(toml::Value::as_str)
+        .map_or(RustVersion::Unspecified, RustVersion::parse_str)
+}
+
 /// Parsed `Cargo.toml` manifest, classified for the Rust lint rules. Built
 /// once per manifest directory by [`ProjectCtx::nearest_cargo_manifest`] and
 /// shared via `Arc`. Stores the manifest *directory* so `is_binary_only` can
@@ -1812,6 +1886,9 @@ pub struct CargoManifest {
     async_runtime: bool,
     /// `[package].categories` lists `"no-std"`.
     no_std_category: bool,
+    /// `[package].rust-version` (MSRV). `WorkspaceInherited` until resolved
+    /// against the workspace root by [`ProjectCtx::nearest_cargo_manifest`].
+    rust_version: RustVersion,
 }
 
 /// Split a relative path into its normalized segments, treating `\` as a
@@ -1896,6 +1973,8 @@ impl CargoManifest {
                     .any(|category| category.as_str() == Some("no-std"))
             });
 
+        let rust_version = parse_package_rust_version(&value);
+
         Some(CargoManifest {
             manifest_dir,
             name,
@@ -1907,6 +1986,7 @@ impl CargoManifest {
             explicit_target_paths,
             async_runtime,
             no_std_category,
+            rust_version,
         })
     }
 
@@ -1976,6 +2056,13 @@ impl CargoManifest {
     /// True when `[package].categories` lists `"no-std"`.
     pub fn is_no_std(&self) -> bool {
         self.no_std_category
+    }
+
+    /// The crate's declared minimum supported Rust version (`rust-version`),
+    /// with any `workspace = true` inheritance already resolved against the
+    /// workspace root by [`ProjectCtx::nearest_cargo_manifest`].
+    pub fn rust_version(&self) -> RustVersion {
+        self.rust_version
     }
 
     /// Directory containing this crate's `Cargo.toml` — the crate root used to
@@ -3842,18 +3929,42 @@ impl ProjectCtx {
 
         let candidate = manifest_dir.join("Cargo.toml");
         let raw = std::fs::read_to_string(&candidate).ok()?;
-        let manifest = match CargoManifest::parse(&raw, manifest_dir.clone()) {
+        let mut manifest = match CargoManifest::parse(&raw, manifest_dir.clone()) {
             Some(manifest) => manifest,
             None => {
                 eprintln!("comply: ignoring malformed {}", candidate.display());
                 return None;
             }
         };
+        if manifest.rust_version == RustVersion::WorkspaceInherited {
+            manifest.rust_version = self.resolve_workspace_rust_version(&manifest_dir);
+        }
         let arc = Arc::new(manifest);
         if let Ok(mut map) = self.cargo_manifest_cache.lock() {
             map.entry(manifest_dir).or_insert_with(|| Arc::clone(&arc));
         }
         Some(arc)
+    }
+
+    /// Resolve a `rust-version.workspace = true` inheritance: walk up from the
+    /// member crate's directory looking for the workspace root `Cargo.toml`
+    /// (the one carrying a `[workspace]` table) and read its
+    /// `[workspace.package].rust-version`. Returns `WorkspaceInherited`
+    /// unchanged when no reachable workspace root specifies one — callers treat
+    /// that as "unconstrained" (the safe, keep-flagging default).
+    fn resolve_workspace_rust_version(&self, member_dir: &Path) -> RustVersion {
+        let mut dir = member_dir.parent();
+        while let Some(current) = dir {
+            let candidate = current.join("Cargo.toml");
+            if let Ok(raw) = std::fs::read_to_string(&candidate)
+                && let Ok(value) = raw.parse::<toml::Value>()
+                && value.get("workspace").is_some()
+            {
+                return parse_workspace_rust_version(&value);
+            }
+            dir = current.parent();
+        }
+        RustVersion::WorkspaceInherited
     }
 
     /// True when the crate owning `path` declares `#![no_std]` at its root.
@@ -6551,6 +6662,34 @@ mod tests {
         .unwrap();
         let ctx = load_ctx_in(&dir);
         assert!(!ctx.is_react_project(&dir.path().join("app.tsx")));
+    }
+
+    #[test]
+    fn rust_version_parses_and_compares_numerically() {
+        assert_eq!(RustVersion::parse_str("1.66.0"), RustVersion::Specified(1, 66));
+        assert_eq!(RustVersion::parse_str("1.70"), RustVersion::Specified(1, 70));
+        // Numeric, not lexical: "1.69" < "1.70" and "1.100" > "1.70".
+        assert!(RustVersion::Specified(1, 69).is_below(1, 70));
+        assert!(!RustVersion::Specified(1, 70).is_below(1, 70));
+        assert!(!RustVersion::Specified(1, 100).is_below(1, 70));
+        assert!(!RustVersion::Specified(2, 0).is_below(1, 70));
+        // Unspecified / unresolved-workspace are never "below" → keep flagging.
+        assert!(!RustVersion::Unspecified.is_below(1, 70));
+        assert!(!RustVersion::WorkspaceInherited.is_below(1, 70));
+    }
+
+    #[test]
+    fn nearest_cargo_manifest_resolves_rust_version() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"c\"\nversion = \"0.1.0\"\nedition = \"2021\"\nrust-version = \"1.66.0\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        let ctx = ProjectCtx::empty();
+        let manifest = ctx.nearest_cargo_manifest(&dir.path().join("src/foo.rs")).unwrap();
+        assert_eq!(manifest.rust_version(), RustVersion::Specified(1, 66));
     }
 
     #[test]
