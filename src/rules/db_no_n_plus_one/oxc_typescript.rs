@@ -38,6 +38,15 @@ impl OxcCheck for Check {
             return;
         };
 
+        // One-off data/schema migration scripts process rows per-row by design
+        // (memory bounds, per-row transaction control, progress reporting), so
+        // the per-row query in a loop is intentional, not the hot-path N+1
+        // anti-pattern this rule targets. Per-rule exemption — migrations still
+        // run every other lint.
+        if ctx.file.is_migration_file() {
+            return;
+        }
+
         if !is_db_call(&await_expr.argument) {
             return;
         }
@@ -186,6 +195,18 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, s, "t.ts")
     }
 
+    fn run_at(s: &str, path: &str) -> Vec<Diagnostic> {
+        let path = std::path::Path::new(path);
+        let project = crate::project::default_static_project_ctx();
+        let file = crate::rules::file_ctx::FileCtx::build(
+            path,
+            s,
+            crate::files::Language::TypeScript,
+            project,
+        );
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, s, path, project, &file)
+    }
+
     #[test]
     fn flags_await_db_query_in_loop_with_db_import() {
         let s = "import { db } from 'drizzle-orm';\nfor (let i = 0; i < n; i++) {\n  const orders = await db.query('SELECT 1');\n}";
@@ -243,5 +264,33 @@ mod tests {
     fn still_flags_genuine_n_plus_one_in_map_issue_2372() {
         let s = "import { db } from 'drizzle-orm';\nusers.map(async (u) => {\n  await db.query('SELECT * WHERE id = ' + u.id);\n});";
         assert_eq!(run(s).len(), 1);
+    }
+
+    // Regression for #5371: a one-off data migration under a `migrations/`
+    // directory processes rows per-row inside a loop on purpose (per-row
+    // transactions for atomic upsert/delete). The migration-script exemption
+    // must suppress the N+1 diagnostic. Mirrors the issue: the awaited DB call
+    // sits inside a `while` batch loop.
+    #[test]
+    fn ignores_per_row_loop_in_migration_dir_issue_5371() {
+        let s = "import { db } from 'drizzle-orm';\nwhile (hasMore) {\n  const rows = await db.query('SELECT 1');\n  await db.query('UPDATE x');\n}";
+        assert!(run_at(s, "api/src/database/migrations/20240909A-separate-comments.ts").is_empty());
+    }
+
+    // Regression for #5371: a TypeORM migration class (implements
+    // MigrationInterface) outside a migrations/ directory is still exempt via
+    // the interface signal.
+    #[test]
+    fn ignores_per_row_loop_in_typeorm_migration_class_issue_5371() {
+        let s = "import { MigrationInterface, QueryRunner } from 'typeorm';\nexport class Seed implements MigrationInterface {\n  async up(q: QueryRunner) {\n    while (hasMore) { await db.query('SELECT 1'); }\n  }\n}";
+        assert!(run_at(s, "src/db/Seed.ts").is_empty());
+    }
+
+    // Negative space for #5371: an ordinary application service with the same
+    // per-row N+1 loop is NOT a migration and must STILL be flagged.
+    #[test]
+    fn still_flags_n_plus_one_in_regular_service_issue_5371() {
+        let s = "import { db } from 'drizzle-orm';\nwhile (hasMore) {\n  const rows = await db.query('SELECT 1');\n}";
+        assert_eq!(run_at(s, "src/services/comments.ts").len(), 1);
     }
 }
