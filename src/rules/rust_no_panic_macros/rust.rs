@@ -19,6 +19,10 @@
 //! targets (files under a `fuzz_targets/` directory) are also exempt:
 //! in a libfuzzer-sys target, `panic!` is the deliberate
 //! crash-signaling mechanism the fuzzer catches to report a found bug.
+//! `proc-macro = true` crates are exempt too: their code runs at compile
+//! time during macro expansion, so a panic surfaces as a compile error in
+//! the downstream build, never a runtime abort of a shipped program — the
+//! rule's "aborts at runtime" premise does not hold there.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -63,6 +67,17 @@ impl AstCheck for Check {
             || is_under_tests_dir(ctx.path)
             || ctx.file.path_segments.in_fuzz_targets
             || crate::rules::path_utils::is_fuzz_targets_path(ctx.path)
+        {
+            return;
+        }
+        // A `proc-macro = true` crate runs at compile time during macro
+        // expansion: a panic there is a compile error in the downstream
+        // build, not a runtime abort. The "aborts at runtime" premise is
+        // structurally inapplicable, so all panic-family macros are exempt.
+        if ctx
+            .project
+            .nearest_cargo_manifest(ctx.path)
+            .is_some_and(|m| m.is_proc_macro())
         {
             return;
         }
@@ -229,6 +244,32 @@ mod tests {
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
     }
+
+    /// Run on a file next to the given `Cargo.toml` so the manifest
+    /// (`proc-macro = true` exemption) resolves via `nearest_cargo_manifest`.
+    fn run_on_with_cargo(cargo_toml_contents: &str, source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_with_cargo(&Check, cargo_toml_contents, source, "src/x.rs")
+    }
+
+    const PROC_MACRO_CARGO_TOML: &str = r#"
+[package]
+name = "thiserror-impl-like"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+"#;
+
+    const LIB_CARGO_TOML: &str = r#"
+[package]
+name = "normal-lib"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "normal_lib"
+"#;
 
     #[test]
     fn flags_panic_macro() {
@@ -560,5 +601,57 @@ mod tests {
             .len(),
             1
         );
+    }
+
+    /// Closes #5287: in a `proc-macro = true` crate (thiserror's `impl/`),
+    /// `unreachable!`/`panic!`/`unimplemented!` run at compile time during
+    /// expansion and surface as compile errors, not runtime aborts — exempt.
+    #[test]
+    fn allows_panic_family_in_proc_macro_crate() {
+        assert!(
+            run_on_with_cargo(
+                PROC_MACRO_CARGO_TOML,
+                r#"fn f() -> bool { match x { Ok(_) => true, _ => unreachable!() } }"#,
+            )
+            .is_empty(),
+            "bare unreachable!() in a proc-macro crate must not flag"
+        );
+        assert!(
+            run_on_with_cargo(PROC_MACRO_CARGO_TOML, r#"fn f() { panic!("boom"); }"#).is_empty(),
+            "panic! in a proc-macro crate must not flag"
+        );
+        assert!(
+            run_on_with_cargo(PROC_MACRO_CARGO_TOML, "fn f() { unimplemented!(); }").is_empty(),
+            "unimplemented! in a proc-macro crate must not flag"
+        );
+    }
+
+    /// A normal library crate (`[lib]` without `proc-macro = true`) ships a
+    /// runtime — the exemption is proc-macro-only, so panic-family macros
+    /// must still flag.
+    #[test]
+    fn still_flags_panic_family_in_normal_lib_crate() {
+        assert_eq!(
+            run_on_with_cargo(LIB_CARGO_TOML, r#"fn f() { panic!("boom"); }"#).len(),
+            1,
+            "panic! in a normal lib crate must still flag"
+        );
+        assert_eq!(
+            run_on_with_cargo(LIB_CARGO_TOML, "fn f() { unreachable!(); }").len(),
+            1,
+            "bare unreachable!() in a normal lib crate must still flag"
+        );
+    }
+
+    /// The manifest predicate the exemption keys on: `[lib] proc-macro = true`
+    /// parses to `is_proc_macro()`; a plain `[lib]` table does not.
+    #[test]
+    fn manifest_detects_proc_macro_crate() {
+        use crate::project::CargoManifest;
+        use std::path::PathBuf;
+        let proc_macro = CargoManifest::parse(PROC_MACRO_CARGO_TOML, PathBuf::from("/c")).unwrap();
+        assert!(proc_macro.is_proc_macro());
+        let normal = CargoManifest::parse(LIB_CARGO_TOML, PathBuf::from("/c")).unwrap();
+        assert!(!normal.is_proc_macro());
     }
 }
