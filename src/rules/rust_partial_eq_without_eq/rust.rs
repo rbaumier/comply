@@ -780,4 +780,24 @@ struct Outer {
         let source = "#[derive(PartialEq)]\nstruct A { p: (u32, bool) }";
         assert_eq!(run_on(source).len(), 1);
     }
+
+    #[test]
+    fn allows_fixture_in_cargo_integration_test_dir() {
+        // Issue #5420: a `#[derive(PartialEq)]` fixture in a Cargo integration
+        // test file (`tests/into.rs`) carries no `#[cfg(test)]` — it is compiled
+        // only by Cargo's test harness. It is not API surface, so the central
+        // test-dir gate (`skip_in_test_dir`) must suppress the rule here.
+        let source = "#[derive(Debug, PartialEq)]\nstruct Unit;";
+        let diags = crate::rules::test_helpers::run_rule_gated(&Check, source, "tests/into.rs");
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn flags_fixture_in_src_dir() {
+        // The same shape in the project's own `src/` is real API surface and
+        // must still be flagged through the production gate.
+        let source = "#[derive(Debug, PartialEq)]\nstruct Unit;";
+        let diags = crate::rules::test_helpers::run_rule_gated(&Check, source, "src/api.rs");
+        assert_eq!(diags.len(), 1);
+    }
 }
