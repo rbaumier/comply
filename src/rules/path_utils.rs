@@ -683,24 +683,44 @@ pub fn is_type_test_file(path: &Path) -> bool {
 /// `test()`/`it()`/`expect()` calls by design, using type annotations
 /// (`const err: QueryError | null = _e`) as compile-time assertions instead.
 /// `tsc-build` is the node-mysql2 convention; `type-tests`/`types-tests`/
-/// `type-check` are the general names projects give such suites.
-const TYPE_COMPILATION_TEST_DIR_SEGMENTS: &[&str] =
-    &["tsc-build", "type-tests", "types-tests", "type-check"];
+/// `type-check` are the general names projects give such suites; `typecheck` is
+/// the Vue-ecosystem convention (e.g. vue-virtual-scroller's `src/typecheck/`).
+const TYPE_COMPILATION_TEST_DIR_SEGMENTS: &[&str] = &[
+    "tsc-build",
+    "type-tests",
+    "types-tests",
+    "type-check",
+    "typecheck",
+];
 
-/// True when `path` lives under a type-compilation-test directory
-/// ([`TYPE_COMPILATION_TEST_DIR_SEGMENTS`]). Files there verify the public API
-/// type-checks and have no runtime test cases, so checks that demand runtime
-/// assertions (e.g. `no-empty-test-file`) must not flag them. Segment match keeps
-/// an unrelated `src/type-checker/` from matching.
+/// True when the file name carries a `.typecheck.` infix (e.g.
+/// `generic-composables.typecheck.ts`), the Vue-ecosystem convention for
+/// type-compilation-test files that live beside their source rather than in a
+/// `typecheck/` directory. Such files annotate the public API purely to confirm
+/// it type-checks and are never bundled or run as runtime code.
+fn has_typecheck_infix(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name.to_ascii_lowercase().contains(".typecheck."))
+}
+
+/// True when `path` is a type-compilation test: one under a type-compilation-test
+/// directory ([`TYPE_COMPILATION_TEST_DIR_SEGMENTS`]) or carrying a `.typecheck.`
+/// filename infix. Files there annotate the public API to verify it type-checks
+/// and have no runtime test cases or runtime semantics, so checks that demand
+/// runtime assertions (e.g. `no-empty-test-file`) or that model runtime behavior
+/// of imported modules (e.g. `no-side-effects-in-initialization`'s tree-shaking
+/// concern) must not flag them. Segment match keeps an unrelated
+/// `src/type-checker/` from matching.
 ///
 /// Deliberately separate from [`is_type_test_file`]: that predicate tells
 /// type-ban rules "the banned types named here are deliberate subjects of
-/// assertions", whereas this one tells `no-empty-test-file` "the absence of
-/// runtime tests is expected here". Folding these segments into
-/// `TYPE_TEST_DIR_SEGMENTS` would silently relax those unrelated type-ban rules
-/// for `tsc-build/` files, so the two sets stay distinct.
+/// assertions", whereas this one tells consumers "this file never runs at
+/// runtime". Folding these segments into `TYPE_TEST_DIR_SEGMENTS` would silently
+/// relax those unrelated type-ban rules for `tsc-build/` files, so the two sets
+/// stay distinct.
 pub fn is_type_compilation_test_path(path: &Path) -> bool {
-    has_path_segment(path, TYPE_COMPILATION_TEST_DIR_SEGMENTS)
+    has_typecheck_infix(path) || has_path_segment(path, TYPE_COMPILATION_TEST_DIR_SEGMENTS)
 }
 
 /// True when the file name carries a `.actual.` or `.expected.` infix (e.g.
@@ -1464,6 +1484,32 @@ mod aux_path_tests {
         assert!(!is_type_test_file(&PathBuf::from("src/widget.ts")));
         // Segment (not substring) match — `test-data/` is not a type-test dir.
         assert!(!is_type_test_file(&PathBuf::from("test-data/widget.ts")));
+    }
+
+    #[test]
+    fn type_compilation_test_path_covers_typecheck_convention_issue4940() {
+        // Issue #4940: vue-virtual-scroller's `.typecheck.ts` infix and
+        // `typecheck/` directory are type-compilation-test files.
+        assert!(is_type_compilation_test_path(&PathBuf::from(
+            "packages/vue-virtual-scroller/src/typecheck/generic-composables.typecheck.ts"
+        )));
+        assert!(is_type_compilation_test_path(&PathBuf::from(
+            "src/typecheck/index.ts"
+        )));
+        assert!(is_type_compilation_test_path(&PathBuf::from(
+            "src/generic-composables.typecheck.ts"
+        )));
+        // Pre-existing type-compilation-test directory conventions still match.
+        assert!(is_type_compilation_test_path(&PathBuf::from("tsc-build/index.ts")));
+        assert!(is_type_compilation_test_path(&PathBuf::from("type-tests/api.ts")));
+        // Segment (not substring) match — an unrelated `type-checker/` dir or a
+        // `typecheck` token embedded in a longer name must NOT match.
+        assert!(!is_type_compilation_test_path(&PathBuf::from("src/type-checker/run.ts")));
+        assert!(!is_type_compilation_test_path(&PathBuf::from("src/typecheckers/run.ts")));
+        assert!(!is_type_compilation_test_path(&PathBuf::from("src/widget.ts")));
+        // The infix requires surrounding dots — a bare `typecheck.ts` filename
+        // (no leading dot, e.g. a `typecheck` runtime module) does NOT match.
+        assert!(!is_type_compilation_test_path(&PathBuf::from("src/typecheck.ts")));
     }
 
     #[test]
