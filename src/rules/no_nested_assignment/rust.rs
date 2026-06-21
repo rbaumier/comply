@@ -34,7 +34,17 @@ match node.kind() {
 
 fn contains_assignment(node: tree_sitter::Node) -> bool {
     match node.kind() {
-        "assignment_expression" => return true,
+        // tree-sitter-rust splits the `..=` inclusive-range operator into a
+        // `..` range plus a trailing `= N`, synthesizing a spurious
+        // `assignment_expression` whose `left` is a `range_expression` (e.g.
+        // `f(..=16)` or `arr[..=n]`). A real Rust assignment targets a place
+        // expression, never a range, so only flag when `left` is not a range.
+        "assignment_expression" => {
+            let left_is_range = node
+                .child_by_field_name("left")
+                .is_some_and(|left| left.kind() == "range_expression");
+            return !left_is_range;
+        }
         // A `block` or `closure_expression` opens a new value-yielding scope;
         // an assignment inside it is the assign-then-yield idiom or a closure
         // mutation, not a condition-level `=`. In Rust the bare `if x = 5 {}`
@@ -108,5 +118,35 @@ mod tests {
     #[test]
     fn flags_bare_assignment_in_condition() {
         assert_eq!(run_on("fn f() { if x = 5 { } }").len(), 1);
+    }
+
+    // Regression for #5362: `..=N` passed as a call argument is misparsed as an
+    // `assignment_expression` over a `range_expression` left, not a real `=`.
+    #[test]
+    fn allows_inclusive_range_arg_in_comparison() {
+        assert!(run_on("fn f() { if web_rng.usize(..=16) == 16 { } }").is_empty());
+    }
+
+    // Sibling shapes around #5362 that must also stay clean.
+    #[test]
+    fn allows_inclusive_range_in_index_comparison() {
+        assert!(run_on("fn f() { if arr[..=n] == y { } }").is_empty());
+    }
+
+    #[test]
+    fn allows_inclusive_range_in_macro() {
+        assert!(run_on("fn f() { if matches!(x, ..=16) { } }").is_empty());
+    }
+
+    // A genuine nested assignment used inside a comparison must still fire even
+    // though it sits under a `binary_expression`/`parenthesized_expression`.
+    #[test]
+    fn flags_nested_assignment_in_comparison() {
+        assert_eq!(run_on("fn f() { if (x = compute()) != 0 { } }").len(), 1);
+    }
+
+    #[test]
+    fn flags_nested_assignment_in_while_comparison() {
+        assert_eq!(run_on("fn f() { while (n = next()) > 0 { } }").len(), 1);
     }
 }
