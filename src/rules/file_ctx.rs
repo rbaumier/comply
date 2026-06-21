@@ -89,6 +89,11 @@ pub struct PathSegments {
     /// than `in_test_dir` — it does NOT cover ordinary `.test.`/`.spec.` unit
     /// tests. See [`crate::rules::path_utils::is_type_test_file`].
     pub is_type_test_file: bool,
+    /// A migrations directory (`migrations`/`migrate` path segment). One-off
+    /// data/schema migration scripts process rows per-row by design, so the N+1
+    /// rule exempts them. Segment match. See
+    /// [`crate::rules::path_utils::is_migration_dir_path`].
+    pub in_migration_dir: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -99,6 +104,7 @@ pub struct FileCtx {
     pub path_segments: PathSegments,
     pub is_generated: bool,
     pub is_minified: bool,
+    pub is_migration: bool,
 }
 
 impl FileCtx {
@@ -122,6 +128,17 @@ impl FileCtx {
         self.path_segments.is_type_test_file
     }
 
+    /// True when this file is a one-off data/schema migration script: a
+    /// `migrations`/`migrate` directory segment, or an implementation of a known
+    /// migration interface (TypeORM `MigrationInterface`, or a Knex/Umzug
+    /// `exports.up`/`exports.down` pair). Opt-in: consulted only by rules that
+    /// target hot-path application code and must not fire on migrations, where
+    /// per-row processing (memory bounds, per-row transactions, progress
+    /// reporting) is intentional rather than the N+1 anti-pattern.
+    pub fn is_migration_file(&self) -> bool {
+        self.is_migration
+    }
+
     pub fn build(path: &Path, source: &str, language: Language, project: &ProjectCtx) -> Self {
         let directives = scan_directives(source);
         let path_segments = scan_path(path);
@@ -129,6 +146,7 @@ impl FileCtx {
         let is_generated =
             is_generated_content(source) || is_generated_filename(path) || is_in_generated_dir(path);
         let is_minified = scan_minified(path, source);
+        let is_migration = path_segments.in_migration_dir || implements_migration_interface(source);
         FileCtx {
             language: Some(language),
             directives,
@@ -136,8 +154,59 @@ impl FileCtx {
             path_segments,
             is_generated,
             is_minified,
+            is_migration,
         }
     }
+}
+
+/// True when `source` implements a known migration interface even though it does
+/// not sit in a migrations directory: TypeORM's `implements MigrationInterface`,
+/// or the Knex/Umzug contract of an exported `up`/`down` pair
+/// (`export async function up`/`down`, `export const up`/`down`, or
+/// `exports.up`/`exports.down`). Both `up` and `down` must be present so an
+/// ordinary module that merely exports an `up` helper is not matched.
+fn implements_migration_interface(source: &str) -> bool {
+    if source.contains("implements MigrationInterface") {
+        return true;
+    }
+    has_exported_migration_hook(source, "up") && has_exported_migration_hook(source, "down")
+}
+
+/// True when `source` exports a `name`d migration hook via one of the
+/// Knex/Umzug forms: `export ... function <name>`, `export const <name>`, or
+/// `exports.<name>`. Each prefix must be followed by a non-identifier character
+/// (or end of source) so the hook name matches as a whole word — `up` must not
+/// match `update`/`upload`/`upsert`, and `down` must not match
+/// `download`/`downstream`.
+fn has_exported_migration_hook(source: &str, name: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "export function ",
+        "export async function ",
+        "export const ",
+        "export let ",
+        "exports.",
+    ];
+    PREFIXES.iter().any(|prefix| matches_hook_after_prefix(source, prefix, name))
+}
+
+/// True when `source` contains `prefix` immediately followed by `name` as a
+/// whole identifier (the next character after `name` is not an identifier
+/// character, or `name` ends the source).
+fn matches_hook_after_prefix(source: &str, prefix: &str, name: &str) -> bool {
+    let needle = format!("{prefix}{name}");
+    let mut from = 0;
+    while let Some(rel) = source[from..].find(&needle) {
+        let end = from + rel + needle.len();
+        let next_is_ident = source[end..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$');
+        if !next_is_ident {
+            return true;
+        }
+        from = end;
+    }
+    false
 }
 
 /// Scan the start of the source for one or two top-level string expression
@@ -659,6 +728,7 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
         is_framework_hook_file: is_framework_hook_file(path),
         is_linter_spec_fixture: crate::rules::path_utils::is_linter_spec_fixture(path),
         is_type_test_file: crate::rules::path_utils::is_type_test_file(path),
+        in_migration_dir: crate::rules::path_utils::is_migration_dir_path(path),
     }
 }
 
@@ -1043,6 +1113,87 @@ mod tests {
     fn in_fuzz_targets_set_for_cargo_fuzz_path() {
         assert!(scan_path(&PathBuf::from("fuzz/fuzz_targets/x.rs")).in_fuzz_targets);
         assert!(!scan_path(&PathBuf::from("src/lib.rs")).in_fuzz_targets);
+    }
+
+    #[test]
+    fn in_migration_dir_set_for_migration_path_segments_issue5371() {
+        // `migrations`/`migrate` directory segments (TypeORM, Knex, Prisma,
+        // Rails-style) — matched as exact segments.
+        assert!(
+            scan_path(&PathBuf::from(
+                "api/src/database/migrations/20240909A-separate-comments.ts"
+            ))
+            .in_migration_dir
+        );
+        assert!(scan_path(&PathBuf::from("prisma/migrations/0001/migration.sql")).in_migration_dir);
+        assert!(scan_path(&PathBuf::from("knex/migrate/20240101_init.ts")).in_migration_dir);
+        // Segment match — `migrationsHelper.ts` and a `migrate-utils/` dir are not
+        // migration directories; a plain source file is not either.
+        assert!(!scan_path(&PathBuf::from("src/migrationsHelper.ts")).in_migration_dir);
+        assert!(!scan_path(&PathBuf::from("src/migrate-utils/run.ts")).in_migration_dir);
+        assert!(!scan_path(&PathBuf::from("src/foo.ts")).in_migration_dir);
+    }
+
+    #[test]
+    fn is_migration_file_via_dir_and_interface_issue5371() {
+        let project = ProjectCtx::empty();
+        // Path signal: a migrations directory.
+        let in_dir = FileCtx::build(
+            Path::new("src/migrations/20240909A-seed.ts"),
+            "export async function run() {}",
+            Language::TypeScript,
+            &project,
+        );
+        assert!(in_dir.is_migration_file());
+        // Interface signal (TypeORM) outside a migrations directory.
+        let typeorm = FileCtx::build(
+            Path::new("src/db/Seed.ts"),
+            "export class Seed implements MigrationInterface { async up() {} async down() {} }",
+            Language::TypeScript,
+            &project,
+        );
+        assert!(typeorm.is_migration_file());
+        // Interface signal (Knex/Umzug): exported `up` AND `down` pair.
+        let knex = FileCtx::build(
+            Path::new("db/0001-init.ts"),
+            "export async function up() {}\nexport async function down() {}",
+            Language::TypeScript,
+            &project,
+        );
+        assert!(knex.is_migration_file());
+        // A module exporting only `up` (no `down`) is not a migration.
+        let only_up = FileCtx::build(
+            Path::new("src/lib.ts"),
+            "export function up() {}",
+            Language::TypeScript,
+            &project,
+        );
+        assert!(!only_up.is_migration_file());
+        // An ordinary source file is not a migration.
+        let plain = FileCtx::build(
+            Path::new("src/services/comments.ts"),
+            "export function process() {}",
+            Language::TypeScript,
+            &project,
+        );
+        assert!(!plain.is_migration_file());
+        // Whole-word hook match: a storage service exporting `uploadFile` +
+        // `downloadFile` must NOT be misread as an `up`/`down` migration.
+        let storage = FileCtx::build(
+            Path::new("src/services/storage.ts"),
+            "export async function uploadFile() {}\nexport async function downloadFile() {}",
+            Language::TypeScript,
+            &project,
+        );
+        assert!(!storage.is_migration_file());
+        // Same guard for the `const` form: `update` + `download` is not `up`/`down`.
+        let crud = FileCtx::build(
+            Path::new("src/services/admin.ts"),
+            "export const update = 1;\nexport const download = 2;",
+            Language::TypeScript,
+            &project,
+        );
+        assert!(!crud.is_migration_file());
     }
 
     #[test]

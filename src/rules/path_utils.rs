@@ -231,6 +231,21 @@ pub fn is_fuzz_targets_path(path: &Path) -> bool {
     path.components().any(|c| c.as_os_str() == "fuzz_targets")
 }
 
+/// Directory names that hold one-off data/schema migration scripts (TypeORM,
+/// Knex, Prisma, Umzug, Rails-style). Matched as exact path segments, so
+/// `src/migrations/` matches but `src/migrationsHelper.ts` (a `migrationsHelper`
+/// segment) does not.
+const MIGRATION_DIR_SEGMENTS: &[&str] = &["migrations", "migrate"];
+
+/// True when `path` lives under a migrations directory (a `migrations`/`migrate`
+/// path segment). Migrations process rows per-row by design (memory bounds,
+/// per-row transaction control, progress reporting), so rules that target the
+/// hot-path application code (e.g. N+1) exempt them. Segment match keeps an
+/// unrelated `src/migrationsHelper.ts` from matching.
+pub fn is_migration_dir_path(path: &Path) -> bool {
+    has_path_segment(path, MIGRATION_DIR_SEGMENTS)
+}
+
 /// True when `path` lives under a `tests/ui/` directory: a `ui` segment that
 /// appears after a `tests` segment. These are `trybuild`/`rustc` UI-test
 /// fixtures, where each `.rs` scenario is paired with a sibling `.stderr` holding
