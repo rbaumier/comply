@@ -81,6 +81,9 @@ fn check_node(
     if is_assertion_value_param(node, name, source) {
         return None;
     }
+    if is_loop_iteration_toggle(node, name, source) {
+        return None;
+    }
     let problem = classify_name(name)?;
     let pos = node.start_position();
     Some(Diagnostic {
@@ -251,6 +254,105 @@ fn fn_body_contains_assertion(function_item: tree_sitter::Node, source: &[u8]) -
 fn is_assertion_macro_name(name: &str) -> bool {
     matches!(name, "assert" | "assert_eq" | "assert_ne")
         || matches!(name, "debug_assert" | "debug_assert_eq" | "debug_assert_ne")
+}
+
+/// Names that read as a first-iteration sentinel in the separator/join idiom.
+const ITERATION_TOGGLE_NAMES: &[&str] = &["first"];
+
+/// True for the canonical separator/join idiom: a `let` binding named `first`
+/// initialized to a boolean literal (`let mut first = true;`) and reassigned to
+/// a boolean literal (`first = false;`) inside an enclosing loop body. Such a
+/// binding tracks whether the current iteration is the first one, so its value
+/// changes across iterations — an iteration flag, not an ordinary boolean.
+///
+/// Anchored on the name AND the init-literal AND an in-loop reassignment, so it
+/// cannot widen into a name allowlist. The node must be a `let_declaration`
+/// named exactly `first`, initialized with a boolean literal, and there must be
+/// a `for`/`while`/`loop` within the enclosing function body that reassigns
+/// `first` to a boolean literal. A `first: bool` parameter, a `first` binding
+/// with no in-loop reassignment, or a `first` reassigned only outside a loop is
+/// an ordinary boolean and still requires a predicate prefix.
+fn is_loop_iteration_toggle(node: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    if node.kind() != "let_declaration" || !ITERATION_TOGGLE_NAMES.contains(&name) {
+        return false;
+    }
+    if !initialized_with_boolean_literal(node, source) {
+        return false;
+    }
+    let Some(scope) = enclosing_function_body(node) else {
+        return false;
+    };
+    loop_body_reassigns_to_bool_literal(scope, name, source)
+}
+
+/// True if a `let_declaration` has a `= true` / `= false` initializer.
+fn initialized_with_boolean_literal(node: tree_sitter::Node, source: &[u8]) -> bool {
+    node.child_by_field_name("value")
+        .is_some_and(|value| value.kind() == "boolean_literal" && value.utf8_text(source).is_ok())
+}
+
+/// Walk up to the nearest enclosing function/closure body (`block`), which
+/// bounds the search for the in-loop reassignment.
+fn enclosing_function_body(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let mut cursor = node.parent();
+    let mut last_block = None;
+    while let Some(parent) = cursor {
+        if parent.kind() == "block" {
+            last_block = Some(parent);
+        }
+        if parent.kind() == "function_item" || parent.kind() == "closure_expression" {
+            break;
+        }
+        cursor = parent.parent();
+    }
+    last_block
+}
+
+/// True if any loop (`for`/`while`/`loop`) within `scope` reassigns `name` to a
+/// boolean literal — `name = true` / `name = false`.
+fn loop_body_reassigns_to_bool_literal(
+    scope: tree_sitter::Node,
+    name: &str,
+    source: &[u8],
+) -> bool {
+    let mut cursor = scope.walk();
+    let mut stack = vec![scope];
+    while let Some(current) = stack.pop() {
+        if matches!(
+            current.kind(),
+            "for_expression" | "while_expression" | "loop_expression"
+        ) && subtree_reassigns_to_bool_literal(current, name, source)
+        {
+            return true;
+        }
+        stack.extend(current.children(&mut cursor));
+    }
+    false
+}
+
+/// True if `node`'s subtree contains `name = <boolean_literal>`.
+fn subtree_reassigns_to_bool_literal(
+    node: tree_sitter::Node,
+    name: &str,
+    source: &[u8],
+) -> bool {
+    let mut cursor = node.walk();
+    let mut stack = vec![node];
+    while let Some(current) = stack.pop() {
+        if current.kind() == "assignment_expression"
+            && current
+                .child_by_field_name("left")
+                .is_some_and(|left| left.kind() == "identifier"
+                    && left.utf8_text(source).is_ok_and(|t| t == name))
+            && current
+                .child_by_field_name("right")
+                .is_some_and(|right| right.kind() == "boolean_literal")
+        {
+            return true;
+        }
+        stack.extend(current.children(&mut cursor));
+    }
+    false
 }
 
 fn extract_identifier<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
@@ -549,5 +651,68 @@ mod tests {
         // `issuer` starts with `is` letters but is not a boolean predicate.
         // It won't be flagged because its type isn't bool.
         assert!(run_on("fn f() { let issuer: &str = \"ACME\"; }").is_empty());
+    }
+
+    #[test]
+    fn allows_first_iteration_toggle_in_loop() {
+        // The canonical separator/join idiom: `first` is initialized to a
+        // boolean literal and toggled inside a loop body. (Closes #5404)
+        let src = "fn f<I: Iterator>(iter: I) {\n\
+                   let mut first = true;\n\
+                   for token in iter {\n\
+                       if !first { op(); }\n\
+                       first = false;\n\
+                       emit(token);\n\
+                   }\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_first_iteration_toggle_in_while_loop() {
+        let src = "fn f() {\n\
+                   let mut first = true;\n\
+                   while next() {\n\
+                       if !first { sep(); }\n\
+                       first = false;\n\
+                   }\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_first_with_no_loop_toggle() {
+        // A `first` boolean never reassigned inside a loop is an ordinary
+        // boolean and still requires a predicate prefix.
+        assert_eq!(run_on("fn f() { let first = true; }").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_first_param() {
+        // A `first: bool` parameter is an ordinary boolean, not a loop toggle.
+        assert_eq!(run_on("fn f(first: bool) {}").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_first_reassigned_outside_loop() {
+        // Reassignment must be inside a loop body; a plain reassignment outside
+        // any loop is not an iteration toggle.
+        assert_eq!(run_on("fn f() { let mut first = true; first = false; }").len(), 1);
+    }
+
+    #[test]
+    fn iteration_toggle_does_not_widen_sibling_booleans() {
+        // The exemption is anchored on `first`; a sibling boolean in the same
+        // loop scope is unaffected and still flags.
+        let src = "fn f<I: Iterator>(iter: I) {\n\
+                   let mut first = true;\n\
+                   let mut verbose = false;\n\
+                   for token in iter {\n\
+                       if !first { sep(); }\n\
+                       first = false;\n\
+                       verbose = true;\n\
+                       emit(token);\n\
+                   }\n}";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'verbose'"));
     }
 }
