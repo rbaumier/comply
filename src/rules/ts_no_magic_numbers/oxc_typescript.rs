@@ -138,6 +138,18 @@ impl OxcCheck for Check {
             return;
         }
 
+        // An element of a long, homogeneously-numeric array literal is embedded
+        // data (a byte array, lookup table, or serialized binary such as an
+        // inlined ONNX protobuf), not a magic number. Naming individual elements
+        // is meaningless — there is no semantic name for "byte 42 of the ONNX
+        // header". The array length gate keeps small meaningful tuples flagged.
+        let min_data_array_len = ctx
+            .config
+            .threshold("no-magic-numbers", "min_data_array_len", ctx.lang);
+        if is_numeric_data_array_element(node.id(), semantic, min_data_array_len) {
+            return;
+        }
+
         if is_allowed_context(node.id(), semantic) {
             return;
         }
@@ -152,6 +164,59 @@ impl OxcCheck for Check {
             severity: Severity::Warning,
             span: None,
         });
+    }
+}
+
+/// True when this literal is an element of an array literal that is embedded
+/// numeric data: at least `min_len` elements, every one a numeric literal
+/// (optionally unary-negated). Such arrays are byte arrays, lookup tables, or
+/// serialized binary (e.g. an inlined ONNX protobuf) where naming an individual
+/// element is meaningless. Anchored on the literal's parent being an
+/// `ArrayExpression`, not on any variable name. A non-numeric element (string,
+/// identifier, spread, nested array) makes the array heterogeneous and disables
+/// the exemption, so a small meaningful tuple keeps each literal flagged.
+fn is_numeric_data_array_element(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+    min_len: usize,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    // The element is the literal itself, or a `-literal` unary.
+    let mut element_id = node_id;
+    let parent_id = nodes.parent_id(element_id);
+    if parent_id != element_id
+        && let AstKind::UnaryExpression(unary) = nodes.get_node(parent_id).kind()
+        && unary.operator == oxc_ast::ast::UnaryOperator::UnaryNegation
+    {
+        element_id = parent_id;
+    }
+
+    let array_id = nodes.parent_id(element_id);
+    if array_id == element_id {
+        return false;
+    }
+    let AstKind::ArrayExpression(array) = nodes.get_node(array_id).kind() else {
+        return false;
+    };
+
+    array.elements.len() >= min_len && array.elements.iter().all(is_numeric_array_element)
+}
+
+/// True when an array element is a numeric literal, optionally wrapped in a
+/// unary minus (`-1`). Anything else — string, identifier, spread, elision,
+/// nested array/object — is non-numeric.
+fn is_numeric_array_element(element: &oxc_ast::ast::ArrayExpressionElement<'_>) -> bool {
+    let Some(expr) = element.as_expression() else {
+        return false;
+    };
+    match expr {
+        Expression::NumericLiteral(_) => true,
+        Expression::UnaryExpression(unary) => {
+            unary.operator == oxc_ast::ast::UnaryOperator::UnaryNegation
+                && matches!(unary.argument, Expression::NumericLiteral(_))
+        }
+        _ => false,
     }
 }
 
@@ -806,6 +871,48 @@ mod tests {
         // exemption does not apply.)
         let src = "function f(x) { let y = x & 0xDEAD; g(); /* note */ return y; }";
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for issue #5414: a long array of raw bytes (an inlined ONNX
+    // protobuf, as in transformers.js `registry.js`) is embedded binary data,
+    // not a list of magic numbers. Naming `byte 42 of the ONNX header` is
+    // meaningless, so no element of such an array may be flagged.
+    #[test]
+    fn allows_long_numeric_data_array() {
+        let src = r#"const m = wrap([8, 10, 18, 0, 58, 129, 1, 10, 41, 10, 1, 120, 10, 0, 10, 0, 10], opts, 'y');"#;
+        assert!(
+            run(src).is_empty(),
+            "elements of a long numeric byte array must not be flagged"
+        );
+    }
+
+    #[test]
+    fn allows_numeric_data_array_with_negative_bytes() {
+        // Unary-negated numeric elements still count as numeric data.
+        let src = r#"load([-1, 2, -3, 4, -5, 6, -7, 8, -9, 10, -11, 12]);"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_short_numeric_tuple() {
+        // A short numeric tuple is below the data-array length gate, so the
+        // data-array exemption does not apply; each value stays flagged. Passed
+        // as a call argument so the const-initializer exemption does not mask it.
+        let src = r#"draw([255, 128, 64]);"#;
+        assert_eq!(
+            run(src).len(),
+            3,
+            "a short numeric tuple is not embedded data"
+        );
+    }
+
+    #[test]
+    fn flags_long_heterogeneous_array() {
+        // A long array mixing strings with numbers is not raw numeric data; its
+        // magic numbers are still flagged. Passed as a call argument so the
+        // const-initializer exemption does not mask it.
+        let src = r#"load(["a", 86400, "b", 3600, "c", 1440, "d", 720, "e", 360, "f", 180]);"#;
+        assert_eq!(run(src).len(), 6);
     }
 
     #[test]

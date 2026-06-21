@@ -299,6 +299,13 @@ min_normalized_chars = 51
 [rules.no-small-switch]
 min_cases = 3
 
+# Minimum length of a homogeneously-numeric array literal before its elements
+# are treated as embedded data (byte arrays, lookup tables, serialized binary
+# such as ONNX protobuf) rather than magic numbers. Naming individual bytes of
+# such data is meaningless, so the elements are not flagged.
+[rules.no-magic-numbers]
+min_data_array_len = 10
+
 # Minimum element count before a const array `.includes()` is worth a `Set`.
 # Below this, a linear scan beats constructing a `Set` + hashing + the extra
 # allocation, so suggesting `Set#has()` is a net pessimization.
