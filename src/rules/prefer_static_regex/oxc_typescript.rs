@@ -26,6 +26,15 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Build/tooling config files (`webpack.config.js`, `vite.config.ts`, …)
+        // are evaluated once at build/startup. A config factory's regex literals
+        // are instantiated a single time, not on a hot path, so hoisting them
+        // gains nothing while separating each regex from the loader rule it
+        // documents.
+        if crate::rules::path_utils::is_config_file(ctx.path) {
+            return;
+        }
+
         // Walk ancestors to check if inside a function.
         let mut inside_function = false;
         for ancestor in semantic.nodes().ancestors(node.id()) {
@@ -136,5 +145,15 @@ mod tests {
     fn flags_regex_in_non_test_source_file() {
         let code = "function f() { return /abc/.test(s); }";
         assert_eq!(run_at(code, "src/foo.ts").len(), 1);
+    }
+
+    #[test]
+    fn allows_regex_in_bundler_config_factory() {
+        // Regression for issue #5057: a webpack config factory runs once at
+        // build startup; its `test` regex literals are not on a hot path.
+        let code = "module.exports = (env = {}) => ({ module: { rules: [{ test: /\\.vue$/, use: 'vue-loader' }] } })";
+        assert!(run_at(code, "webpack.config.js").is_empty());
+        assert!(run_at(code, "vite.config.ts").is_empty());
+        assert!(run_at(code, "rollup.config.mjs").is_empty());
     }
 }
