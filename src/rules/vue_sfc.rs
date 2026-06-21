@@ -100,6 +100,67 @@ pub fn template_block<'src>(tree: &tree_sitter::Tree, source: &'src str) -> Opti
     source.get(content_start..content_end)
 }
 
+/// Blank every byte that lies outside the SFC's `<script>` and `<template>`
+/// blocks, so a `TextCheck` rule never matches a needle inside a custom block
+/// (`<docs>`, `<i18n>`, `<config>`, …) or a `<style>` block, whose content is
+/// documentation / i18n JSON / CSS — not executable Vue code.
+///
+/// The mask is **offset-preserving**: every blanked byte becomes a single
+/// space except `\n`, kept verbatim, so the result has the same byte length and
+/// newline positions as `source` and byte offsets stay aligned.
+///
+/// Only the `<script>`/`<script setup>` raw text and the root `<template>`
+/// content are preserved; the surrounding tags themselves are blanked too,
+/// since they hold no operand-shaped code. If the source is not a Vue SFC
+/// (the grammar finds neither a `script_element` nor a `template_element`),
+/// the source is returned unchanged so plain-script callers are unaffected.
+#[must_use]
+pub fn mask_non_code_blocks(source: &str) -> String {
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_vue_updated::language())
+        .is_err()
+    {
+        return source.to_string();
+    }
+    let Some(tree) = parser.parse(source, None) else {
+        return source.to_string();
+    };
+
+    // Collect the byte ranges of the script raw_text and root template content
+    // to keep. Reusing the existing extractors means the same grammar-driven
+    // block selection that the rest of vue_sfc uses.
+    let mut keep: Vec<std::ops::Range<usize>> = Vec::new();
+    for block in extract_scripts(&tree, source) {
+        let start = block.text.as_ptr() as usize - source.as_ptr() as usize;
+        keep.push(start..start + block.text.len());
+    }
+    if let Some(template) = template_block(&tree, source) {
+        let start = template.as_ptr() as usize - source.as_ptr() as usize;
+        keep.push(start..start + template.len());
+    }
+    if keep.is_empty() {
+        return source.to_string();
+    }
+
+    let bytes = source.as_bytes();
+    let mut out = bytes.to_vec();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'\n' {
+            continue;
+        }
+        if keep.iter().any(|r| r.contains(&i)) {
+            continue;
+        }
+        out[i] = b' ';
+    }
+    // Kept bytes are untouched; blanked bytes become ASCII spaces over single
+    // ASCII bytes or individual bytes of a fully-blanked multibyte sequence, so
+    // char boundaries are never split and the buffer stays valid UTF-8.
+    String::from_utf8(out)
+        .expect("mask_non_code_blocks only writes ASCII spaces, output stays valid UTF-8")
+}
+
 fn script_block_from_element<'src>(
     node: tree_sitter::Node,
     _source: &'src str,
@@ -186,5 +247,60 @@ mod tests {
             .unwrap();
         let tree = p.parse("const x = 1;", None).unwrap();
         assert!(extract_scripts(&tree, "const x = 1;").is_empty());
+    }
+
+    #[test]
+    fn mask_keeps_script_template_blanks_custom_blocks_and_preserves_offsets() {
+        let src = concat!(
+            "<docs>\n",
+            "secret prose\n",
+            "</docs>\n",
+            "<script setup>\n",
+            "const count = ref(0)\n",
+            "</script>\n",
+            "<template>\n",
+            "  <div>{{ count }}</div>\n",
+            "</template>\n",
+            "<style>\n",
+            ".x { color: red }\n",
+            "</style>",
+        );
+        let masked = mask_non_code_blocks(src);
+        // Offset-preserving: identical byte length and newline positions.
+        assert_eq!(masked.len(), src.len());
+        let nl = |s: &str| {
+            s.bytes()
+                .enumerate()
+                .filter(|(_, b)| *b == b'\n')
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(nl(&masked), nl(src));
+        // Script and template content survive.
+        assert!(masked.contains("const count = ref(0)"));
+        assert!(masked.contains("{{ count }}"));
+        // Custom-block and style content are blanked to spaces.
+        assert!(!masked.contains("secret prose"));
+        assert!(!masked.contains("color: red"));
+        // The `<docs>`/`<style>` regions are spaces, not removed.
+        assert!(masked.contains("            ")); // blanked "secret prose"
+    }
+
+    #[test]
+    fn mask_preserves_multibyte_outside_kept_blocks() {
+        // A multibyte char inside a blanked custom block must not corrupt UTF-8;
+        // the result stays valid and offset-preserving.
+        let src = "<docs>\n最多显示\n</docs>\n<script setup>\nconst c = ref(0)\n</script>";
+        let masked = mask_non_code_blocks(src);
+        assert_eq!(masked.len(), src.len());
+        assert!(!masked.contains("最多显示"));
+        assert!(masked.contains("const c = ref(0)"));
+    }
+
+    #[test]
+    fn mask_returns_plain_script_unchanged() {
+        // Non-SFC source (no script_element/template_element) passes through.
+        let src = "const x = 1;\nconst y = x + 1;";
+        assert_eq!(mask_non_code_blocks(src), src);
     }
 }
