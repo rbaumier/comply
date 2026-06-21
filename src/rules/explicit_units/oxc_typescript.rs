@@ -74,6 +74,26 @@ const KNOWN_SUFFIXES: &[&str] = &[
     "Milliseconds", "Microseconds", "Nanoseconds",
     // Storage (full-word variants; Bytes already above)
     "Kilobytes", "Megabytes", "Gigabytes", "Terabytes",
+    // Angle
+    "Radians", "Degrees",
+];
+
+/// Coordinate-space / domain qualifiers that, when present as a camelCase
+/// segment of the identifier, already pin down the abstract unit-space — so a
+/// physical-unit suffix is neither expected nor meaningful.
+///
+/// In GIS / mapping / 3D-graphics code a quantity lives in a projected or
+/// device coordinate space (mercator units, tile units, screen/camera/clip
+/// space, NDC) that has no conventional physical unit; the qualifier IS the
+/// unit. `distanceToTile2D` is in tile units, `mercatorDistance` is in
+/// mercator units — appending `Ms`/`Bytes` would be actively wrong.
+///
+/// `center` is the projected map/viewport anchor point: `distanceToCenter`
+/// quantities in mapping code are measured in the same abstract projected
+/// space, so they belong here too. A bare `distance` with no such qualifier
+/// stays flagged.
+const COORDINATE_SPACE_QUALIFIERS: &[&str] = &[
+    "mercator", "tile", "camera", "screen", "world", "clip", "ndc", "pixel", "viewport", "center",
 ];
 
 pub struct Check;
@@ -136,6 +156,9 @@ fn check_name(name: &str, offset: u32, ctx: &CheckCtx, diagnostics: &mut Vec<Dia
     if has_known_suffix(name) {
         return;
     }
+    if has_coordinate_space_qualifier(name) {
+        return;
+    }
     let (line, column) = byte_offset_to_line_col(ctx.source, offset as usize);
     diagnostics.push(Diagnostic {
         path: Arc::clone(&ctx.path_arc),
@@ -174,6 +197,34 @@ fn is_handle_continuation(name: &str, base_len: usize) -> bool {
 
 fn has_known_suffix(name: &str) -> bool {
     KNOWN_SUFFIXES.iter().any(|s| name.ends_with(s))
+}
+
+/// Whether the identifier carries a coordinate-space/domain qualifier as one of
+/// its camelCase segments. The qualifier pins the abstract unit-space, so the
+/// quantity is already explicit and needs no physical-unit suffix.
+fn has_coordinate_space_qualifier(name: &str) -> bool {
+    camel_segments(name).any(|seg| {
+        COORDINATE_SPACE_QUALIFIERS
+            .iter()
+            .any(|q| seg.starts_with(q))
+    })
+}
+
+/// Splits a camelCase / PascalCase identifier into lowercase segments at each
+/// uppercase boundary (`distanceToTile2D` → `distance`, `to`, `tile2`, `d`).
+fn camel_segments(name: &str) -> impl Iterator<Item = String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    for ch in name.chars() {
+        if ch.is_ascii_uppercase() && !current.is_empty() {
+            segments.push(std::mem::take(&mut current));
+        }
+        current.push(ch.to_ascii_lowercase());
+    }
+    if !current.is_empty() {
+        segments.push(current);
+    }
+    segments.into_iter()
 }
 
 #[cfg(test)]
@@ -366,5 +417,33 @@ mod tests {
     fn still_flags_non_handle_continuation() {
         // A continuation that is not a handle word stays ambiguous.
         assert_eq!(run_on("const timeoutValue: number = 5000;").len(), 1);
+    }
+
+    #[test]
+    fn allows_coordinate_space_qualified_distance() {
+        // GIS/mapping quantities whose name carries a coordinate-space qualifier
+        // (tile/camera/center/mercator units) are already explicit about their
+        // abstract unit-space — a physical-unit suffix would be wrong (#5279).
+        assert!(run_on("function f(distanceToTile2D: number) {}").is_empty());
+        assert!(run_on("function f(distanceToTileZ: number) {}").is_empty());
+        assert!(run_on("function f(distanceToCenter3D: number) {}").is_empty());
+        assert!(run_on("const distanceToCenter: number = 0;").is_empty());
+    }
+
+    #[test]
+    fn allows_radians_suffix() {
+        // `Radians`/`Degrees` are full-word angle units — recognized like Ms/Bytes.
+        // `limited`/`distance` match ambiguous bases, so the suffix is what clears them.
+        assert!(run_on("const limitedPitchRadians: number = 0;").is_empty());
+        assert!(run_on("const distanceDegrees: number = 0;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_bare_distance_without_qualifier() {
+        // A bare physical distance, or one whose continuation is not a recognized
+        // coordinate-space qualifier, still needs an explicit unit — the gate must
+        // not be a blanket exemption for every `distance*` name.
+        assert_eq!(run_on("function f(distance: number) {}").len(), 1);
+        assert_eq!(run_on("const distanceTraveled: number = 5;").len(), 1);
     }
 }
