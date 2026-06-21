@@ -1889,6 +1889,10 @@ pub struct CargoManifest {
     /// A derive-based error-handling library (`thiserror`, `snafu`, `miette`,
     /// `derive_more`, `error-stack`) is declared in any dependency section.
     error_derive_crate: bool,
+    /// `[package].links` is set — the crate declares it links a native library.
+    /// Cargo allows exactly one crate per native library to set this key, so its
+    /// presence marks a dedicated native-binding crate.
+    links_native_library: bool,
     /// `[package].rust-version` (MSRV). `WorkspaceInherited` until resolved
     /// against the workspace root by [`ProjectCtx::nearest_cargo_manifest`].
     rust_version: RustVersion,
@@ -1981,6 +1985,12 @@ impl CargoManifest {
                     .any(|category| category.as_str() == Some("no-std"))
             });
 
+        let links_native_library = value
+            .get("package")
+            .and_then(|p| p.get("links"))
+            .and_then(toml::Value::as_str)
+            .is_some();
+
         let rust_version = parse_package_rust_version(&value);
 
         Some(CargoManifest {
@@ -1995,6 +2005,7 @@ impl CargoManifest {
             async_runtime,
             no_std_category,
             error_derive_crate,
+            links_native_library,
             rust_version,
         })
     }
@@ -2243,6 +2254,24 @@ impl CargoManifest {
                 .strip_prefix(&prefix)
                 .is_some_and(|rest| rest.starts_with('_'))
         })
+    }
+
+    /// True when the crate is a dedicated native-binding crate: a single-purpose
+    /// wrapper whose whole reason to exist is exposing a C/C++ library's
+    /// `extern "C"` surface. Recognized by either Cargo's own `[package].links`
+    /// key (Cargo permits exactly one crate per native library to declare it) or
+    /// the established Rust naming convention of a `-sys` / `-cpp` package-name
+    /// suffix (both `-` and `_` separator spellings). In such a crate the
+    /// `extern "C"` blocks *are* the FFI isolation layer, so an inner
+    /// `mod sys`/`ffi` wrapper would add nesting with no safety benefit.
+    #[must_use]
+    pub fn is_native_binding_crate(&self) -> bool {
+        self.links_native_library
+            || self.name.as_deref().is_some_and(|n| {
+                ["-sys", "_sys", "-cpp", "_cpp"]
+                    .iter()
+                    .any(|suffix| n.ends_with(suffix))
+            })
     }
 }
 
@@ -6957,6 +6986,50 @@ path = "tools/tool.rs"
         assert!(
             !no_name.is_test_helper(),
             "no [package].name => not a test-helper crate"
+        );
+    }
+
+    #[test]
+    fn cargo_manifest_classifies_native_binding_crate() {
+        let dir = PathBuf::from("/crate");
+
+        let parse_name = |name: &str| {
+            CargoManifest::parse(
+                &format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n"),
+                dir.clone(),
+            )
+            .unwrap()
+        };
+
+        for name in ["zstd-sys", "libz_sys", "snappy-cpp", "foo_cpp"] {
+            assert!(
+                parse_name(name).is_native_binding_crate(),
+                "name `{name}` with a `-sys`/`-cpp` suffix => native-binding crate"
+            );
+        }
+        assert!(
+            !parse_name("system").is_native_binding_crate(),
+            "`-sys` must be a `-`/`_`-delimited suffix, not a substring of `system`"
+        );
+        assert!(
+            !parse_name("my-app").is_native_binding_crate(),
+            "ordinary crate name => not a native-binding crate"
+        );
+
+        let links = CargoManifest::parse(
+            "[package]\nname = \"mylib\"\nversion = \"0.1.0\"\nlinks = \"zstd\"\n",
+            dir.clone(),
+        )
+        .unwrap();
+        assert!(
+            links.is_native_binding_crate(),
+            "[package].links set => native-binding crate"
+        );
+
+        let no_name = CargoManifest::parse("[lib]\nname = \"anon\"\n", dir).unwrap();
+        assert!(
+            !no_name.is_native_binding_crate(),
+            "no [package].name and no links => not a native-binding crate"
         );
     }
 
