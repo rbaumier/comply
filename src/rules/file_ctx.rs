@@ -379,7 +379,7 @@ pub(crate) fn is_generated_path(path: &Path) -> bool {
     is_generated_filename(path) || is_in_generated_dir(path)
 }
 
-fn scan_minified(path: &Path, source: &str) -> bool {
+pub(crate) fn scan_minified(path: &Path, source: &str) -> bool {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     if !matches!(ext, "js" | "css" | "mjs" | "cjs") {
         return false;
@@ -387,9 +387,15 @@ fn scan_minified(path: &Path, source: &str) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     // `.min.` is the canonical minified marker; `.min_` covers the
     // `name.min_<version>.js` convention some packages use (e.g.
-    // `docsearch.min_2.6.3.js`). The `.` before `min` keeps ordinary source
-    // files that merely contain `min` (e.g. `mixin.js`, `admin.js`) from matching.
-    if name.contains(".min.") || name.contains(".min_") {
+    // `docsearch.min_2.6.3.js`); `-min.` covers the hyphen convention
+    // (e.g. `jsrsasign-all-min.js`); `.bundle.` covers webpack-style bundles.
+    // The separator before `min` keeps ordinary source files that merely
+    // contain `min` (e.g. `mixin.js`, `admin.js`, `min_max.js`) from matching.
+    if name.contains(".min.")
+        || name.contains(".min_")
+        || name.contains("-min.")
+        || name.contains(".bundle.")
+    {
         return true;
     }
     // Heuristic: minified content is either a handful of lines, or a normal

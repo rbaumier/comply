@@ -167,7 +167,15 @@ fn extract_functions(
     let Ok(source) = std::fs::read_to_string(&file.path) else {
         return Vec::new();
     };
-    if crate::rules::file_ctx::is_generated_content(&source) {
+    // Minified/bundled files (e.g. `*-min.js`, `*.min.js`, webpack bundles, or a
+    // multi-KB single payload line) are machine-emitted build artifacts whose
+    // inlined/copy-pasted helpers flood this pass. Skip them via the same
+    // predicate the per-file engine uses, so cross-file detection stays scoped to
+    // authored source. (Reads source here because the name marker alone misses
+    // unmarked bundles that the content heuristic catches.)
+    if crate::rules::file_ctx::is_generated_content(&source)
+        || crate::rules::file_ctx::scan_minified(&file.path, &source)
+    {
         return Vec::new();
     }
     let Some(tree) = parse_with_grammar(parser, file.language, source.as_bytes()) else {
@@ -594,6 +602,50 @@ function toOption(e: ScopeEntity): Option {
         let a = write(&dir, "a.rs", f);
         let b = write(&dir, "b.rs", f);
         assert!(run(&[&a, &b]).is_empty(), "Rust functions are not in scope");
+    }
+
+    #[test]
+    fn minified_bundle_not_flagged() {
+        // Issue #5114: jsrsasign ships `*-min.js` bundles that inline every source
+        // function. A duplicate where one side lives in a `-min.js` bundle is a
+        // build artifact, not authored duplication, so it must not be reported.
+        let dir = tempfile::tempdir().unwrap();
+        let src = write(&dir, "src/util.js", CELL_TO_STRING);
+        let bundle = write(&dir, "jsrsasign-all-min.js", CELL_TO_STRING);
+        assert!(
+            run(&[&src, &bundle]).is_empty(),
+            "a duplicate involving a -min.js bundle is exempt"
+        );
+    }
+
+    #[test]
+    fn dot_min_bundle_not_flagged() {
+        // The canonical `.min.js` naming is equally a build artifact.
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "min/base64x-1.1.min.js", CELL_TO_STRING);
+        let b = write(&dir, "npm/lib/base64x-1.1.min.js", CELL_TO_STRING);
+        assert!(run(&[&a, &b]).is_empty(), "two .min.js bundles are exempt");
+    }
+
+    #[test]
+    fn webpack_bundle_not_flagged() {
+        // Webpack-style `*.bundle.js` artifacts are equally machine-emitted.
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "dist/app.bundle.js", CELL_TO_STRING);
+        let b = write(&dir, "src/util.js", CELL_TO_STRING);
+        assert!(run(&[&a, &b]).is_empty(), "a .bundle.js artifact is exempt");
+    }
+
+    #[test]
+    fn real_source_still_flagged_alongside_min_in_name() {
+        // A real source file whose name merely contains `min` (e.g. `admin.js`)
+        // must stay linted: the duplicate across two authored files is reported.
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "src/admin.js", CELL_TO_STRING);
+        let b = write(&dir, "src/reader.js", CELL_TO_STRING);
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "duplicates across real source files are still flagged");
+        assert!(diags[0].message.contains("`cellToString`"));
     }
 
     #[test]
