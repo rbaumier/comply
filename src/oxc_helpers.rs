@@ -1435,6 +1435,137 @@ pub fn expression_is_array(
     }
 }
 
+/// True when `expr` is a **statically-bounded** array — one whose element count
+/// is fixed at compile time, so spreading it (`Math.max(...expr)`) cannot exhaust
+/// the engine's argument-count limit. Recognizes three structural shapes:
+///
+/// - an array literal with no spread element (`[a, b, c]`) — arity is the literal's
+///   element count;
+/// - a length-non-increasing member-call chain (`.map` / `.filter` / `.slice`)
+///   rooted at one of the recognized bounded shapes (`[a, b].map(f)`,
+///   `corners.filter(g).map(h)`) — none of these methods can produce *more*
+///   elements than its receiver, so a bounded root stays bounded;
+/// - an identifier binding resolving to a `VariableDeclarator` that is either
+///   - typed as a fixed-length tuple with no rest element
+///     (`const corners: [P, P, P, P]`; a `[P, ...P[]]` rest tuple is unbounded
+///     and does *not* qualify) — the type is the binding's contract, so this
+///     holds even for a `let`; or
+///   - a `const` whose initializer is one of the bounded shapes above and which
+///     is never grown in place (`arr.push`/`unshift`/`splice`). `const` rules
+///     out reassignment to a dynamic array, and the growth-method check rules
+///     out a `const arr = []; …arr.push(x)` accumulator — either would make the
+///     arity unknown.
+///
+/// Returns `false` for a dynamic/unbounded array — a `number[]` / `Array<T>`
+/// binding, a function-return value, a fetched or accumulated list, or a `.map`
+/// rooted at any of those — so a genuine stack-overflow risk stays detectable.
+/// `.flatMap` / `.concat` are excluded because they can grow the result beyond
+/// the receiver's length.
+#[must_use]
+pub fn expression_is_statically_bounded_array(
+    expr: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{
+        ArrayExpressionElement, Expression, TSTupleElement, TSType, VariableDeclarationKind,
+    };
+
+    match expr {
+        // `[a, b, c]` — arity known, as long as no inner spread reintroduces an
+        // unbounded element (`[...rest]`).
+        Expression::ArrayExpression(arr) => !arr
+            .elements
+            .iter()
+            .any(|el| matches!(el, ArrayExpressionElement::SpreadElement(_))),
+
+        // `<root>.map(f)` / `.filter(g)` / `.slice(...)` — length-non-increasing;
+        // recurse into the receiver.
+        Expression::CallExpression(call) => {
+            let Expression::StaticMemberExpression(member) = &call.callee else {
+                return false;
+            };
+            if !matches!(member.property.name.as_str(), "map" | "filter" | "slice") {
+                return false;
+            }
+            expression_is_statically_bounded_array(&member.object, semantic)
+        }
+
+        // An identifier binding: resolve to its declarator and inspect the
+        // initializer (literal / bounded `.map`-chain) or a fixed-length tuple
+        // type annotation.
+        Expression::Identifier(ident) => {
+            let Some(ref_id) = ident.reference_id.get() else {
+                return false;
+            };
+            let scoping = semantic.scoping();
+            let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+                return false;
+            };
+            let decl_node_id = scoping.symbol_declaration(sym_id);
+            let nodes = semantic.nodes();
+            for kind in std::iter::once(nodes.kind(decl_node_id))
+                .chain(nodes.ancestor_kinds(decl_node_id))
+            {
+                if let AstKind::VariableDeclarator(decl) = kind {
+                    // A fixed-length tuple annotation (no rest element) is the
+                    // binding's contract: it cannot hold more than its arity even
+                    // for a `let`, so it qualifies regardless of reassignment.
+                    if decl.type_annotation.as_ref().is_some_and(|ann| {
+                        matches!(
+                            &ann.type_annotation,
+                            TSType::TSTupleType(tuple)
+                                if !tuple.element_types.iter().any(|el| {
+                                    matches!(el, TSTupleElement::TSRestType(_))
+                                })
+                        )
+                    }) {
+                        return true;
+                    }
+                    // A bounded-array initializer only proves boundedness while
+                    // the binding keeps that value: it must be `const` (no
+                    // reassignment to a dynamic array) and never grown in place
+                    // (`arr.push(...)` in a loop). Otherwise the arity is no
+                    // longer known and the spread stays flagged.
+                    return decl.kind == VariableDeclarationKind::Const
+                        && decl
+                            .init
+                            .as_ref()
+                            .is_some_and(|init| expression_is_statically_bounded_array(init, semantic))
+                        && scoping
+                            .get_resolved_references(sym_id)
+                            .all(|r| !reference_is_array_growth_receiver(r.node_id(), semantic));
+                }
+            }
+            false
+        }
+
+        _ => false,
+    }
+}
+
+/// True when the reference at `ref_node_id` is the receiver of an in-place array
+/// **growth** method call — `arr.push(...)`, `arr.unshift(...)`, `arr.splice(...)`
+/// — which can add elements beyond the binding's initial arity. Any such call
+/// makes a literal-initialized binding no longer statically bounded.
+fn reference_is_array_growth_receiver(
+    ref_node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+
+    let nodes = semantic.nodes();
+    let ref_span = nodes.get_node(ref_node_id).kind().span();
+    let AstKind::StaticMemberExpression(member) = nodes.kind(nodes.parent_id(ref_node_id)) else {
+        return false;
+    };
+    if member.object.span() != ref_span {
+        return false;
+    }
+    matches!(member.property.name.as_str(), "push" | "unshift" | "splice")
+}
+
 /// True when `id` resolves (via its binding) to an import whose source module
 /// is one of `modules`. Returns `false` for an unresolved reference or a binding
 /// that is not an import (e.g. a local function/param shadowing the name), so a
