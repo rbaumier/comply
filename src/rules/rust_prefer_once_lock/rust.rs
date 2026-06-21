@@ -19,11 +19,34 @@
 //! (and `lazy_static!`) are the portable fallbacks. Both arms are silenced
 //! when the file declares `#![no_std]` itself or its crate root does (the
 //! attribute usually lives in `lib.rs`/`main.rs`, not the flagged file).
+//!
+//! ## MSRV exemption
+//!
+//! `std::sync::OnceLock` stabilized in Rust 1.70. A crate whose declared
+//! `[package].rust-version` (MSRV) is below 1.70 cannot adopt the suggestion,
+//! so `once_cell` / `lazy_static!` is the correct choice. Both arms are
+//! silenced when the nearest `Cargo.toml` declares an MSRV below 1.70
+//! (`rust-version.workspace = true` is resolved against the workspace root).
+//! No declared `rust-version` keeps the rule firing (assume a recent toolchain).
 
 use crate::diagnostic::{Diagnostic, Severity};
 
+/// Rust version that stabilized the suggested replacement (`std::sync::OnceLock`).
+/// `LazyLock` only arrived in 1.80, but the message offers `OnceLock` too, so
+/// 1.70 is the floor below which the whole suggestion is unavailable.
+const ONCE_LOCK_STABILIZED: (u32, u32) = (1, 70);
+
 crate::ast_check! { on ["macro_invocation", "generic_type"] => |node, source, ctx, diagnostics|
     if crate::project::source_declares_no_std(ctx.source) || ctx.project.crate_root_is_no_std(ctx.path) {
+        return;
+    }
+    // MSRV gate: a crate whose `rust-version` predates `OnceLock` (1.70) cannot
+    // adopt the suggested std API, so `once_cell` / `lazy_static!` is correct.
+    if ctx
+        .project
+        .nearest_cargo_manifest(ctx.path)
+        .is_some_and(|m| m.rust_version().is_below(ONCE_LOCK_STABILIZED.0, ONCE_LOCK_STABILIZED.1))
+    {
         return;
     }
     let msg = "Use `std::sync::LazyLock` or `OnceLock` (stable since Rust 1.70) instead of `lazy_static!` or `once_cell`.";
@@ -190,12 +213,19 @@ mod tests {
     /// files: `Cargo.toml`, a crate root (`src/lib.rs`), and `src/foo.rs`
     /// holding the source under test. The rule runs on `foo.rs`.
     fn run_in_crate(crate_root: &str, foo_src: &str) -> Vec<Diagnostic> {
-        let dir = TempDir::new().unwrap();
-        fs::write(
-            dir.path().join("Cargo.toml"),
+        run_with_manifest(
             "[package]\nname = \"c\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+            crate_root,
+            foo_src,
         )
-        .unwrap();
+    }
+
+    /// Like [`run_in_crate`] but with a caller-supplied `Cargo.toml`, so the
+    /// MSRV gate resolves a real `[package].rust-version` from disk via
+    /// `ProjectCtx::nearest_cargo_manifest`.
+    fn run_with_manifest(cargo_toml: &str, crate_root: &str, foo_src: &str) -> Vec<Diagnostic> {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("Cargo.toml"), cargo_toml).unwrap();
         fs::create_dir_all(dir.path().join("src")).unwrap();
         fs::write(dir.path().join("src/lib.rs"), crate_root).unwrap();
         let foo_path = dir.path().join("src/foo.rs");
@@ -378,5 +408,104 @@ mod tests {
     fn still_flags_once_cell_when_no_std_only_in_comment() {
         let src = "// also works in no_std environments\nstatic FOO: once_cell::sync::Lazy<String> = once_cell::sync::Lazy::new(|| compute());";
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // ── MSRV exemption regression tests (Closes #5166) ──────────────────
+
+    const ONCE_CELL_SRC: &str =
+        "use once_cell::sync::Lazy;\nstatic FOO: Lazy<String> = Lazy::new(|| compute());";
+
+    fn cargo_toml_with_msrv(msrv: &str) -> String {
+        format!("[package]\nname = \"c\"\nversion = \"0.1.0\"\nedition = \"2021\"\nrust-version = \"{msrv}\"\n")
+    }
+
+    /// #5166: a crate with `rust-version = "1.66.0"` (insta's MSRV) cannot use
+    /// `std::sync::OnceLock` (stable 1.70), so `once_cell` is correct → no flag.
+    #[test]
+    fn allows_once_cell_when_msrv_below_once_lock() {
+        assert!(
+            run_with_manifest(&cargo_toml_with_msrv("1.66.0"), "fn main() {}\n", ONCE_CELL_SRC)
+                .is_empty(),
+            "must not suggest std OnceLock when MSRV is below 1.70"
+        );
+    }
+
+    /// #5166: `lazy_static!` is also a sub-1.70 fallback — silence it too.
+    #[test]
+    fn allows_lazy_static_when_msrv_below_once_lock() {
+        let src = "lazy_static! { static ref FOO: String = String::new(); }";
+        assert!(
+            run_with_manifest(&cargo_toml_with_msrv("1.66"), "fn main() {}\n", src).is_empty(),
+            "must not flag lazy_static! when MSRV is below 1.70"
+        );
+    }
+
+    /// #5166: numeric comparison — `1.69` < `1.70` (must not lexically compare
+    /// "1.7" vs "1.69"). MSRV just below the floor is still exempt.
+    #[test]
+    fn allows_once_cell_when_msrv_is_1_69() {
+        assert!(
+            run_with_manifest(&cargo_toml_with_msrv("1.69"), "fn main() {}\n", ONCE_CELL_SRC)
+                .is_empty(),
+            "1.69 < 1.70 must exempt"
+        );
+    }
+
+    /// #5166 negative space: MSRV exactly 1.70 permits `OnceLock` → still flags.
+    #[test]
+    fn still_flags_once_cell_when_msrv_is_1_70() {
+        assert_eq!(
+            run_with_manifest(&cargo_toml_with_msrv("1.70"), "fn main() {}\n", ONCE_CELL_SRC).len(),
+            1,
+            "MSRV 1.70 permits OnceLock — must keep flagging"
+        );
+    }
+
+    /// #5166 negative space: MSRV 1.80 permits both `OnceLock` and `LazyLock`.
+    #[test]
+    fn still_flags_once_cell_when_msrv_is_1_80() {
+        assert_eq!(
+            run_with_manifest(&cargo_toml_with_msrv("1.80"), "fn main() {}\n", ONCE_CELL_SRC).len(),
+            1,
+            "MSRV 1.80 permits OnceLock and LazyLock — must keep flagging"
+        );
+    }
+
+    /// #5166 negative space: no `rust-version` keeps the rule firing (assume a
+    /// recent toolchain).
+    #[test]
+    fn still_flags_once_cell_when_msrv_unspecified() {
+        assert_eq!(
+            run_in_crate("fn main() {}\n", ONCE_CELL_SRC).len(),
+            1,
+            "no rust-version must keep flagging"
+        );
+    }
+
+    /// #5166: workspace-inherited MSRV (`rust-version.workspace = true`) below
+    /// 1.70 must resolve against the workspace root and exempt the crate.
+    #[test]
+    fn allows_once_cell_when_workspace_msrv_below_once_lock() {
+        let dir = TempDir::new().unwrap();
+        // Workspace root declares the MSRV.
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/c\"]\n\n[workspace.package]\nrust-version = \"1.66.0\"\n",
+        )
+        .unwrap();
+        let member = dir.path().join("crates/c");
+        fs::create_dir_all(member.join("src")).unwrap();
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"c\"\nversion = \"0.1.0\"\nedition = \"2021\"\nrust-version.workspace = true\n",
+        )
+        .unwrap();
+        fs::write(member.join("src/lib.rs"), "fn main() {}\n").unwrap();
+        let foo_path = member.join("src/foo.rs");
+        fs::write(&foo_path, ONCE_CELL_SRC).unwrap();
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, ONCE_CELL_SRC, &foo_path).is_empty(),
+            "workspace-inherited MSRV below 1.70 must exempt"
+        );
     }
 }
