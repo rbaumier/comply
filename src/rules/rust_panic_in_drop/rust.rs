@@ -17,6 +17,13 @@
 //! panic!()` unwinds, runs the `Drop`, and the second panic aborts the
 //! process), and the rule's "return instead" advice is impossible in a
 //! function that can never return.
+//!
+//! A `Drop` impl whose target type names the drop-bomb idiom
+//! (`PanicOnDrop`, `AbortOnDrop`, `DropBomb`, or any `*Bomb`) is exempt:
+//! the panic is the type's declared contract — the guard is armed before
+//! an uninterruptible operation and defused on success via `mem::forget`,
+//! a sibling call this `Drop`-scoped walk cannot see, so the panic fires
+//! only when the operation was abandoned, where aborting is intended.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -145,6 +152,31 @@ fn impl_is_in_diverging_fn(node: tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
+/// Type names whose `Drop` panic is the type's declared contract — a
+/// "drop bomb" / panic guard, not an accidental cleanup panic. Such a
+/// guard is armed before an operation that must not be interrupted and
+/// defused on the happy path (typically `mem::forget`, a sibling call
+/// the rule cannot see). The panic only fires when the operation was
+/// abandoned mid-way, where aborting is the intended outcome. Matched on
+/// the last `::` segment of the impl's target type, case-sensitively, so
+/// only types that self-document the intent are exempt.
+const PANIC_GUARD_TYPE_MARKERS: &[&str] = &["PanicOnDrop", "AbortOnDrop", "DropBomb"];
+
+/// True when the `impl Drop` target type names itself a panic guard, e.g.
+/// `PanicOnDrop`, `AbortOnDrop`, `DropBomb`, or any `*Bomb`. The panic is
+/// then the type's purpose, defused on success out of this `Drop`'s scope,
+/// so it must not be flagged as an accidental panic-in-drop.
+fn is_panic_guard_type(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(type_node) = node.child_by_field_name("type") else {
+        return false;
+    };
+    let type_text = type_node.utf8_text(source).unwrap_or("");
+    let name = type_text.rsplit("::").next().unwrap_or(type_text);
+    // Strip generic args / lifetimes so `DropBomb<'a>` still matches.
+    let name = name.split(['<', ' ']).next().unwrap_or(name);
+    PANIC_GUARD_TYPE_MARKERS.contains(&name) || name.ends_with("Bomb")
+}
+
 #[derive(Debug)]
 pub struct Check;
 
@@ -174,6 +206,14 @@ impl AstCheck for Check {
         // runs the `Drop`, and the second panic aborts the process. The "return
         // instead" advice is impossible in a `-> !` function, so do not flag it.
         if impl_is_in_diverging_fn(node, source_bytes) {
+            return;
+        }
+        // A type named after the drop-bomb idiom (`PanicOnDrop`, `AbortOnDrop`,
+        // `DropBomb`, `*Bomb`) panics in `Drop` on purpose: it is armed before
+        // an uninterruptible operation and defused on success via `mem::forget`
+        // — a sibling call this `Drop`-scoped AST walk cannot see. The panic
+        // fires only when the operation was abandoned, where abort is intended.
+        if is_panic_guard_type(node, source_bytes) {
             return;
         }
         let Some(body) = node.child_by_field_name("body") else {
@@ -420,6 +460,54 @@ mod tests {
     fn flags_panic_in_drop_inside_non_diverging_fn() {
         let source = "fn foo() { struct X; \
                       impl Drop for X { fn drop(&mut self) { panic!(); } } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_panic_in_panic_on_drop_guard() {
+        // slotmap's drop-bomb: defused via `mem::forget` in `clone_from`.
+        let source = "pub struct PanicOnDrop(pub &'static str); \
+                      impl Drop for PanicOnDrop { fn drop(&mut self) { \
+                      panic!(\"{}\", self.0); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_panic_in_abort_on_drop_guard() {
+        let source = "struct AbortOnDrop; impl Drop for AbortOnDrop { \
+                      fn drop(&mut self) { panic!(\"aborting\"); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_panic_in_drop_bomb_with_generics() {
+        let source = "struct DropBomb<'a>(&'a str); impl<'a> Drop for DropBomb<'a> { \
+                      fn drop(&mut self) { panic!(); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_unwrap_in_bomb_suffixed_guard() {
+        let source = "struct CommitBomb; impl Drop for CommitBomb { \
+                      fn drop(&mut self) { self.h.unwrap(); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_panic_in_unrelated_named_drop() {
+        // A type that does not declare drop-bomb intent still gets flagged,
+        // even with an unconditional hardcoded panic.
+        let source = "struct Connection; impl Drop for Connection { \
+                      fn drop(&mut self) { panic!(\"cleanup failed\"); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_unwrap_in_guard_named_type() {
+        // `*Guard` is intentionally NOT exempt: most guards do real cleanup
+        // that can accidentally panic.
+        let source = "struct MutexGuard; impl Drop for MutexGuard { \
+                      fn drop(&mut self) { self.h.unwrap(); } }";
         assert_eq!(run_on(source).len(), 1);
     }
 }
