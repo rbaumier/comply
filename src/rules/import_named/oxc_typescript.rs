@@ -109,6 +109,14 @@ impl OxcCheck for Check {
                     CompanionExports::Unenumerable => return None,
                     CompanionExports::None => {}
                 }
+                // Members a project `declare module '<spec>' { … }` block merges
+                // into this module's namespace are importable by name even though
+                // the source file never declares them. Fold them in so the
+                // standard augmentation pattern (a file that augments a module
+                // and imports the augmented member) isn't reported as missing.
+                if let Some(aug) = index.augmented_exports(src) {
+                    names.extend(aug.iter().cloned());
+                }
                 Some(names)
             });
 
@@ -941,6 +949,86 @@ mod tests {
             "real missing named import must still be flagged: {diags:?}"
         );
         assert!(diags[0].message.contains("Missing"));
+    }
+
+    #[test]
+    fn no_fp_on_same_file_module_augmentation_issue_5269() {
+        // Regression for #5269 — BabylonJS glTF extension pattern: the importing
+        // file both augments `glTFFileLoader` via `declare module` (adding a
+        // `MaterialVariantsController` type) and imports that type back from the
+        // same module. The target file never declares it, so the augmented
+        // member must be folded into the module's export set.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/glTFFileLoader.ts",
+                "export class GLTFFileLoader {}\nexport const glTFFileLoaderName = 'gltf';\n",
+            ),
+            (
+                "src/Extensions/KHR_materials_variants.ts",
+                "import { type MaterialVariantsController } from \"../glTFFileLoader\";\n\
+                 declare module \"../glTFFileLoader\" {\n\
+                 \x20   type MaterialVariantsController = { variants: string[] };\n\
+                 }\n\
+                 export { MaterialVariantsController };\n\
+                 const x: MaterialVariantsController = { variants: [] };\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/Extensions/KHR_materials_variants.ts");
+        assert!(
+            diags.is_empty(),
+            "import of a same-file module-augmentation member must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_cross_file_module_augmentation_issue_5269() {
+        // A third file augments the module; the consumer imports the augmented
+        // member from the (un-declaring) target. The augmentation contributed by
+        // any project file must widen the target's export set.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/loader.ts", "export class Loader {}\n"),
+            (
+                "src/augment.ts",
+                "declare module \"./loader\" {\n\
+                 \x20   export interface LoaderExtras { id: string }\n\
+                 }\n\
+                 export {};\n",
+            ),
+            (
+                "src/consumer.ts",
+                "import type { LoaderExtras } from \"./loader\";\n\
+                 const x: LoaderExtras = { id: '1' };\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/consumer.ts");
+        assert!(
+            diags.is_empty(),
+            "import of a cross-file module-augmentation member must not be flagged: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_missing_name_from_augmented_module_issue_5269() {
+        // True positive preserved: a name neither declared by the target nor
+        // added by any augmentation is still flagged, even when the module is
+        // augmented with some other member.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/loader.ts", "export class Loader {}\n"),
+            (
+                "src/augment.ts",
+                "declare module \"./loader\" {\n\
+                 \x20   type Added = number;\n\
+                 }\n\
+                 export {};\n",
+            ),
+            (
+                "src/consumer.ts",
+                "import type { NotAdded } from \"./loader\";\ntype B = NotAdded;\n",
+            ),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/consumer.ts");
+        assert_eq!(diags.len(), 1, "name absent from target and augmentation must still be flagged: {diags:?}");
+        assert!(diags[0].message.contains("NotAdded"));
     }
 
     #[test]

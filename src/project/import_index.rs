@@ -265,6 +265,13 @@ pub struct ImportIndex {
     /// submodule file in its module tree, which `mod foo;` (unlike a `use`
     /// import) does not record as an import edge.
     mod_edges: FxHashMap<PathBuf, Vec<PathBuf>>,
+    /// Augmented (canonical) file → member names contributed to it by every
+    /// `declare module '<specifier>' { … }` block in the project that resolves
+    /// to it. TypeScript merges these members into the module's exports, so a
+    /// named import of one resolves even though the augmented file's own source
+    /// never declares it. `import-named` folds these into the module's export
+    /// set before checking a named import.
+    augmented_exports: FxHashMap<PathBuf, FxHashSet<String>>,
     /// `true` when any indexed TS/JS/TSX file declares a class method named
     /// `removeChild`. Signals the project owns a tree type whose nodes are
     /// detached via `parent.removeChild(child)` rather than the DOM `Node` API,
@@ -328,7 +335,7 @@ impl ImportIndex {
         // the rayon pool. The resolvers it reads (`rust_graph`, `known_paths`,
         // `path_resolver`) are immutable and `Sync`. Map insertion below stays
         // sequential: it's pure in-memory work and would only contend on locks.
-        let resolved: Vec<(PathBuf, FileExtract, Vec<PathBuf>)> = per_file
+        let resolved: Vec<(PathBuf, FileExtract, Vec<PathBuf>, Vec<(PathBuf, Vec<String>)>)> = per_file
             .into_par_iter()
             .map(|(path, mut extract)| {
                 let is_rust = matches!(path.extension().and_then(|e| e.to_str()), Some("rs"));
@@ -350,18 +357,39 @@ impl ImportIndex {
                     .iter()
                     .filter_map(|rel| resolve_dynamic_dir(&path, rel))
                     .collect();
-                (path, extract, dyn_dirs)
+                // Resolve each `declare module '<specifier>'` augmentation's
+                // specifier against the declaring file into the augmented file.
+                // Only augmentations whose specifier resolves to an indexed file
+                // can be folded into that file's export set. (Rust has no
+                // module-augmentation concept, so this is empty there.)
+                let augmentations: Vec<(PathBuf, Vec<String>)> = if is_rust {
+                    Vec::new()
+                } else {
+                    extract
+                        .module_augmentations
+                        .iter()
+                        .filter_map(|aug| {
+                            resolve_specifier(&path, &aug.specifier, &known_paths, &path_resolver)
+                                .map(|target| (target, aug.members.clone()))
+                        })
+                        .collect()
+                };
+                (path, extract, dyn_dirs, augmentations)
             })
             .collect();
 
         let mut dynamic_import_dirs: Vec<PathBuf> = Vec::new();
         let mut defines_remove_child_method = false;
-        for (path, extract, dyn_dirs) in resolved {
+        let mut augmented_exports: FxHashMap<PathBuf, FxHashSet<String>> = FxHashMap::default();
+        for (path, extract, dyn_dirs, augmentations) in resolved {
             defines_remove_child_method |= extract.defines_remove_child;
             exports.insert(path.clone(), extract.exports);
             imports.insert(path.clone(), extract.imports);
             file_calls.insert(path, extract.calls);
             dynamic_import_dirs.extend(dyn_dirs);
+            for (target, members) in augmentations {
+                augmented_exports.entry(target).or_default().extend(members);
+            }
         }
         dynamic_import_dirs.sort();
         dynamic_import_dirs.dedup();
@@ -520,6 +548,7 @@ impl ImportIndex {
             reexport_edges,
             dynamic_import_dirs,
             mod_edges,
+            augmented_exports,
             defines_remove_child_method,
         }
     }
@@ -535,6 +564,16 @@ impl ImportIndex {
     #[must_use]
     pub fn get_exports(&self, path: &Path) -> &[ExportedSymbol] {
         self.exports.get(path).map_or(&[], Vec::as_slice)
+    }
+
+    /// Member names added to `path`'s module namespace by every project
+    /// `declare module '<specifier>' { … }` augmentation that resolves to it, or
+    /// an empty slice when `path` is not augmented. TypeScript merges these into
+    /// the module's exports, so a named import of one is valid even though
+    /// `path`'s own source never declares it.
+    #[must_use]
+    pub fn augmented_exports(&self, path: &Path) -> Option<&FxHashSet<String>> {
+        self.augmented_exports.get(path)
     }
 
     /// Imports declared in `path`, or empty slice if the file isn't indexed.
@@ -1171,12 +1210,30 @@ struct FileExtract {
     /// import, so reachability needs these to follow the module tree from a
     /// crate root down to `mod.rs` and submodule files.
     mod_decls: Vec<String>,
+    /// TypeScript module augmentations declared in this file: each
+    /// `declare module '<specifier>' { … }` block paired with the member names
+    /// it adds to the augmented module's namespace. The augmented members
+    /// (interfaces/types/consts/functions, with or without an `export` keyword)
+    /// merge into the target module's exports at compile time, so a named import
+    /// of one of them resolves even though the target file's own source never
+    /// declares it. Resolved to the augmented file in `ImportIndex::build`.
+    module_augmentations: Vec<ModuleAugmentation>,
     /// `true` when this file declares a class method named `removeChild`. A
     /// user-defined `removeChild` means the project has its own tree type whose
     /// nodes are removed via `parent.removeChild(child)`, not the DOM `Node`
     /// API — so `prefer-dom-node-remove` (which suggests the DOM-only
     /// `child.remove()`) must not fire anywhere in the project.
     defines_remove_child: bool,
+}
+
+/// A `declare module '<specifier>' { … }` augmentation declared in a file.
+/// `specifier` is the raw module specifier being augmented (resolved against the
+/// declaring file later); `members` are the names the block adds to that
+/// module's namespace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ModuleAugmentation {
+    specifier: String,
+    members: Vec<String>,
 }
 
 /// A `new X(...)` / `X(...)` site captured during per-file extract. The
@@ -1210,6 +1267,7 @@ fn extract_for(parser: &mut Parser, file: &SourceFile) -> Option<(PathBuf, FileE
                 calls: Vec::new(),
                 dynamic_dirs: Vec::new(),
                 mod_decls,
+                module_augmentations: Vec::new(),
                 defines_remove_child: false,
             },
         ));
@@ -1326,6 +1384,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
             calls,
             dynamic_dirs,
             mod_decls: Vec::new(),
+            module_augmentations: Vec::new(),
             defines_remove_child: false,
         },
     ))
@@ -2404,6 +2463,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
     let mut imports = Vec::new();
     let mut calls = Vec::new();
     let mut dynamic_dirs = Vec::new();
+    let mut module_augmentations: Vec<ModuleAugmentation> = Vec::new();
     let mut defines_remove_child = false;
     let lines = oxc_line_starts(source);
 
@@ -2458,6 +2518,19 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
                     is_type_only: false,
                     local_name: None,
                 });
+            }
+            // `declare module '<specifier>' { … }` — a TypeScript module
+            // augmentation. Its block members merge into the augmented module's
+            // namespace at compile time, so they are importable from that
+            // module even though the target file never declares them. Capture
+            // the specifier and member names so `import-named` can fold them
+            // into the augmented module's export set (resolved in `build`).
+            // A namespace (`namespace Foo { … }`, identifier-named) is not an
+            // augmentation and is handled by the export arms above.
+            AstKind::TSModuleDeclaration(decl) => {
+                if let Some(aug) = oxc_extract_module_augmentation(decl) {
+                    module_augmentations.push(aug);
+                }
             }
             // CommonJS exports: `module.exports = { … }`, `exports.foo = …`,
             // `module.exports.foo = …`. Node and TS (`esModuleInterop`) treat
@@ -2539,8 +2612,80 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
         calls,
         dynamic_dirs,
         mod_decls: Vec::new(),
+        module_augmentations,
         defines_remove_child,
     })
+}
+
+/// A `declare module '<specifier>' { … }` augmentation: its target specifier and
+/// the member names its block adds to the augmented module's namespace, or `None`
+/// when `decl` is not a string-literal-named module (a `namespace`/`module Foo`
+/// identifier-named block is not a module augmentation). A member inside an
+/// augmentation block is merged into the target module whether or not it carries
+/// an `export` keyword, so both bare declarations (`type Foo = …`) and exported
+/// ones (`export interface Foo {}`) are collected.
+fn oxc_extract_module_augmentation(
+    decl: &oxc_ast::ast::TSModuleDeclaration,
+) -> Option<ModuleAugmentation> {
+    use oxc_ast::ast::{Statement, TSModuleDeclarationBody, TSModuleDeclarationName};
+
+    let TSModuleDeclarationName::StringLiteral(name) = &decl.id else {
+        return None;
+    };
+    let Some(TSModuleDeclarationBody::TSModuleBlock(block)) = &decl.body else {
+        return None;
+    };
+
+    let mut members = Vec::new();
+    for stmt in &block.body {
+        // `export type Foo = …` / `export interface Foo {}` / `export const …`.
+        if let Statement::ExportNamedDeclaration(export) = stmt {
+            if let Some(decl) = &export.declaration {
+                oxc_collect_declaration_names(decl, &mut members);
+            }
+        // Bare `type Foo = …` / `interface Foo {}` — inside an augmentation
+        // block these still merge into the target module's namespace.
+        } else if let Some(decl) = stmt.as_declaration() {
+            oxc_collect_declaration_names(decl, &mut members);
+        }
+    }
+
+    Some(ModuleAugmentation {
+        specifier: name.value.as_str().to_string(),
+        members,
+    })
+}
+
+/// Append the binding name(s) a TypeScript declaration introduces. Covers the
+/// declaration kinds that can appear in a module-augmentation block —
+/// type aliases, interfaces, enums, functions, classes, and `const`/`let`/`var`
+/// bindings (including destructured ones). Nested namespaces/imports inside a
+/// block do not contribute importable members of the augmented module, so they
+/// are skipped.
+fn oxc_collect_declaration_names(decl: &oxc_ast::ast::Declaration, out: &mut Vec<String>) {
+    use oxc_ast::ast::Declaration;
+
+    match decl {
+        Declaration::TSTypeAliasDeclaration(d) => out.push(d.id.name.as_str().to_string()),
+        Declaration::TSInterfaceDeclaration(d) => out.push(d.id.name.as_str().to_string()),
+        Declaration::TSEnumDeclaration(d) => out.push(d.id.name.as_str().to_string()),
+        Declaration::FunctionDeclaration(f) => {
+            if let Some(id) = &f.id {
+                out.push(id.name.as_str().to_string());
+            }
+        }
+        Declaration::ClassDeclaration(c) => {
+            if let Some(id) = &c.id {
+                out.push(id.name.as_str().to_string());
+            }
+        }
+        Declaration::VariableDeclaration(var) => {
+            for d in &var.declarations {
+                oxc_collect_pattern_names(&d.id, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Module specifiers from every JSDoc `@import … from "<spec>"` tag in a block
@@ -6067,6 +6212,7 @@ mod tests {
             calls,
             dynamic_dirs,
             mod_decls: Vec::new(),
+            module_augmentations: Vec::new(),
             defines_remove_child,
         }
     }
@@ -6218,5 +6364,41 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn oxc_extracts_module_augmentation_members() {
+        // `declare module '<spec>' { … }` captures the specifier and every
+        // member the block adds to the augmented module — both `export`-prefixed
+        // and bare declarations merge into the target's namespace. The block's
+        // members are not recorded as the declaring file's own exports.
+        let src = "declare module \"../glTFFileLoader\" {\n\
+                   \x20   type MaterialVariantsController = { variants: string[] };\n\
+                   \x20   export interface Extra { id: string }\n\
+                   \x20   export const helper = 1;\n\
+                   }\n\
+                   export const local = 2;\n";
+        let extract = extract_ts_oxc(src, Path::new("aug.ts")).expect("oxc extract");
+        assert_eq!(extract.module_augmentations.len(), 1);
+        let aug = &extract.module_augmentations[0];
+        assert_eq!(aug.specifier, "../glTFFileLoader");
+        let mut members = aug.members.clone();
+        members.sort();
+        assert_eq!(members, vec!["Extra", "MaterialVariantsController", "helper"]);
+        // The augmentation block's members are not the file's own exports — only
+        // the top-level `local` is.
+        let own: Vec<&str> = extract.exports.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(own, vec!["local"]);
+    }
+
+    #[test]
+    fn oxc_ignores_namespace_as_augmentation() {
+        // A `namespace Foo { … }` is identifier-named, not a string-literal
+        // module augmentation, so it produces no augmentation entry.
+        let src = "export namespace Foo {\n\
+                   \x20   export const bar = 1;\n\
+                   }\n";
+        let extract = extract_ts_oxc(src, Path::new("ns.ts")).expect("oxc extract");
+        assert!(extract.module_augmentations.is_empty());
     }
 }
