@@ -15,7 +15,6 @@ const BANNED: &[(&str, &str)] = &[
     ("request-promise", "Use fetch or undici"),
     ("bluebird", "Use native Promises"),
     ("q", "Use native Promises"),
-    ("async", "Use native Promise.all/race/allSettled"),
     ("left-pad", "Use String.prototype.padStart"),
     ("is-number", "Use typeof or Number.isFinite"),
     ("is-string", "Use typeof"),
@@ -86,5 +85,57 @@ impl OxcCheck for Check {
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.js")
+    }
+
+    #[test]
+    fn allows_caolan_async_require() {
+        // caolan/async is a maintained callback flow-control library; it is the
+        // correct tool when the orchestrated code is inherently callback-based.
+        assert!(run("var async = require('async');").is_empty());
+        assert!(run("async.each(ops, function(op, cb) {}, done);").is_empty());
+    }
+
+    #[test]
+    fn allows_caolan_async_import() {
+        assert!(run("import async from 'async';").is_empty());
+    }
+
+    #[test]
+    fn still_flags_deprecated_request() {
+        let d = run("var request = require('request');");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("'request' is banned"));
+    }
+
+    #[test]
+    fn still_flags_moment() {
+        let d = run("import moment from 'moment';");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("'moment' is banned"));
     }
 }
