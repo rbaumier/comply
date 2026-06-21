@@ -10,7 +10,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
     byte_offset_to_line_col, is_get_context_call_binding, is_local_object_builder_binding,
     is_node_module_system_target, is_react_display_name_assignment, is_reduce_accumulator_param,
-    is_vue_reactive_object_target, is_vue_ref_value_target,
+    is_typed_array_binding, is_vue_reactive_object_target, is_vue_ref_value_target,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
@@ -179,6 +179,20 @@ fn root_identifier_of_expr<'a>(expr: &'a Expression<'a>) -> Option<&'a Identifie
         Expression::ComputedMemberExpression(m) => root_identifier_of_expr(&m.object),
         _ => None,
     }
+}
+
+/// True when `object` (the base of a computed-member write `base[i]`) is a direct
+/// identifier resolving to a TypedArray binding — `buf[i] = v`, `buf[i]++`. Only
+/// the direct indexed write on a TypedArray is exempt; a deeper chain
+/// (`obj.buf[i]`) keeps its non-identifier base and stays flagged.
+fn is_typed_array_element_object(
+    object: &Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    matches!(
+        object,
+        Expression::Identifier(id) if is_typed_array_binding(id, semantic)
+    )
 }
 
 /// True when `ident` resolves to a binding initialised via `document.createElement(...)`
@@ -392,6 +406,10 @@ impl OxcCheck for Check {
                         if obj_text == "module" || obj_text == "exports" { return; }
                         // Node Module-system object: `Module._cache[id] = …`.
                         if is_node_module_system_target(&m.object, semantic) { return; }
+                        // TypedArray element write `buf[i] = v`: indexed assignment
+                        // is the only way to populate a TypedArray (a fixed-length
+                        // binary buffer with no immutable element-setter).
+                        if is_typed_array_element_object(&m.object, semantic) { return; }
                         if let Expression::StringLiteral(key) = &m.expression
                             && is_imperative_host_write(obj_text, key.value.as_str()) { return; }
                         if is_rooted_at_this(&m.object)
@@ -454,6 +472,8 @@ impl OxcCheck for Check {
                         });
                     }
                     SimpleAssignmentTarget::ComputedMemberExpression(m) => {
+                        // TypedArray element update `buf[i]++`: same in-place-write idiom.
+                        if is_typed_array_element_object(&m.object, semantic) { return; }
                         if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
@@ -1449,6 +1469,71 @@ mod tests {
             function store(cache, id, value) {
                 cache[id] = value;
             }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // TypedArray indexed element assignment — issue #5328
+
+    #[test]
+    fn allows_typed_array_element_assignment_issue_5328() {
+        // Regression for rbaumier/comply#5328 — pdf-lib pdfDocEncoding: a
+        // Uint16Array lookup table populated by indexed writes during module
+        // init. Indexed assignment is the only way to write a TypedArray's
+        // contents; there is no immutable element-setter to suggest.
+        let src = r#"
+            const pdfDocEncodingToUnicode = new Uint16Array(256);
+            for (let idx = 0; idx < 256; idx++) {
+                pdfDocEncodingToUnicode[idx] = idx;
+            }
+            pdfDocEncodingToUnicode[0x16] = toCharCode('^W');
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_typed_array_element_compound_and_update() {
+        // Compound assignment (`buf[i] += v`) and update (`buf[i]++`) on a
+        // TypedArray element are the same in-place buffer write.
+        let src = r#"
+            const buf = new Float64Array(8);
+            buf[0] += 1.5;
+            buf[1]++;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_typed_array_element_assignment_via_type_annotation() {
+        // A `: Uint8Array` type annotation is the same TypedArray signal even
+        // when the initializer is an opaque call.
+        let src = r#"
+            const buf: Uint8Array = getBuffer();
+            buf[0] = 255;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_plain_array_element_assignment() {
+        // Negative space: a plain `Array` element write has immutable
+        // alternatives (spread, map) — it stays flagged.
+        let src = r#"
+            const arr = new Array(3);
+            arr[0] = 1;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_object_property_mutation_alongside_typed_array() {
+        // Negative space: the TypedArray exemption must not leak — a plain
+        // object property write stays flagged even in a file that also has a
+        // TypedArray element write.
+        let src = r#"
+            const buf = new Uint8Array(4);
+            buf[0] = 1;
+            obj.x = 2;
         "#;
         assert_eq!(run(src).len(), 1);
     }
