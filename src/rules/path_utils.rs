@@ -757,6 +757,29 @@ pub fn has_codemod_snapshot_infix(path: &Path) -> bool {
         })
 }
 
+/// True when the file name carries a `.worklet.` infix (e.g.
+/// `DelayLine.worklet.ts`, `gain-processor.worklet.js`), the Web Audio API
+/// AudioWorklet processor-module convention. AudioWorklet modules run in a
+/// dedicated `AudioWorkletGlobalScope` thread, loaded by the browser via
+/// `audioContext.audioWorklet.addModule(url)` — they are never imported by other
+/// modules and are never tree-shaken. The spec *requires* their processor to be
+/// registered at module top level (`registerProcessor('name', Processor)`, or a
+/// library wrapper such as Tone.js's `addToWorklet(src)`), so the top-level call
+/// is the module's mandated entry point, not an avoidable initialization side
+/// effect. The surrounding dots keep a bare `worklet.ts` (no leading dot) from
+/// matching, and the extension gate restricts it to JS/TS modules.
+pub fn is_audio_worklet_module(path: &Path) -> bool {
+    if !matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs")
+    ) {
+        return false;
+    }
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name.to_ascii_lowercase().contains(".worklet."))
+}
+
 /// True when the file's basename stem ends with a PascalCase `Tests` or `Spec`
 /// suffix (capital `T`/`S`), e.g. `apolloServerTests.ts`, `httpServerSpec.tsx`.
 /// This is the test-suite-factory convention: files exporting `describe()`-block

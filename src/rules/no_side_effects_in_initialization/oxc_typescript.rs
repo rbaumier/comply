@@ -140,6 +140,16 @@
 //!   intentional initialization. A module with real logic that is not dominated
 //!   by `export *` re-exports, or one with no `export *` re-export at all, is
 //!   still flagged;
+//! - AudioWorklet processor modules matched by the `.worklet.` filename infix
+//!   (`DelayLine.worklet.ts`, `gain-processor.worklet.js`): Web Audio API
+//!   AudioWorklet modules run in a dedicated `AudioWorkletGlobalScope` thread,
+//!   loaded by the browser via `audioContext.audioWorklet.addModule(url)` — they
+//!   are never imported by other modules and never tree-shaken. The spec requires
+//!   the processor to be registered at module top level
+//!   (`registerProcessor('name', Processor)`, or a library wrapper such as
+//!   Tone.js's `addToWorklet(src)`), so that top-level call is the module's
+//!   mandated entry point, not an avoidable side effect. The `.worklet.` infix is
+//!   the signal, so an ordinary `worklet.ts` (no leading dot) is still flagged;
 //! - static browser assets under a `public/`, `static/`, or `assets/`
 //!   directory: vanilla `<script>`-loaded scripts served verbatim by the web
 //!   server, never bundled, so the tree-shaking concern does not apply (a
@@ -268,7 +278,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use crate::rules::path_utils::{
-    is_browser_asset_dir_path, is_config_file, is_framework_entry_point,
+    is_audio_worklet_module, is_browser_asset_dir_path, is_config_file, is_framework_entry_point,
     is_top_level_script_dir_path, is_type_compilation_test_path,
 };
 use oxc_ast::ast::{
@@ -2123,6 +2133,7 @@ impl OxcCheck for Check {
             || is_mcp_server_file(program)
             || is_data_generation_script(program)
             || is_entry_barrel_shape(program)
+            || is_audio_worklet_module(ctx.path)
         {
             return Vec::new();
         }
@@ -2225,6 +2236,50 @@ mod tests {
     fn flags_top_level_new_expression() {
         let diags = crate::rules::test_helpers::run_rule(&Check, "new EventEmitter();", "t.ts");
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn skips_audio_worklet_module_by_extension() {
+        // Issue #5072: AudioWorklet processor modules carry the `.worklet.`
+        // filename infix (Tone.js's `DelayLine.worklet.ts`). The Web Audio API
+        // loads them in a dedicated `AudioWorkletGlobalScope` via
+        // `audioContext.audioWorklet.addModule(url)` — never imported, never
+        // tree-shaken — and *requires* the processor to be registered at module
+        // top level, whether via `registerProcessor(...)` or a library wrapper
+        // such as Tone.js's `addToWorklet(src)`.
+        let src = "const delayLine = `class DelayLine {}`;\naddToWorklet(delayLine);\n";
+        for path in [
+            "Tone/core/worklet/DelayLine.worklet.ts",
+            "src/audio/gain-processor.worklet.js",
+            "src/audio/Compressor.worklet.tsx",
+            "src/audio/Limiter.worklet.mjs",
+        ] {
+            let diags = crate::rules::test_helpers::run_rule(&Check, src, path);
+            assert!(diags.is_empty(), "{path} should be exempt, got {diags:?}");
+        }
+        // A native `registerProcessor` registration in a worklet file is exempt too.
+        let register = crate::rules::test_helpers::run_rule(
+            &Check,
+            "registerProcessor('gain', GainProcessor);",
+            "src/audio/gain.worklet.ts",
+        );
+        assert!(register.is_empty(), "registerProcessor in a worklet file must be exempt");
+    }
+
+    #[test]
+    fn flags_side_effects_outside_worklet_module() {
+        // The `.worklet.` infix is what grants the exemption. The same
+        // `registerProcessor(...)` call in an ordinary module — and a genuine
+        // avoidable init side effect like a top-level `fetch(...)` in a worklet
+        // file — are still flagged.
+        let prod = crate::rules::test_helpers::run_rule(
+            &Check,
+            "registerProcessor('gain', GainProcessor);",
+            "src/audio/registry.ts",
+        );
+        assert_eq!(prod.len(), 1, "registerProcessor in a non-worklet module must flag");
+        let bare = crate::rules::test_helpers::run_rule(&Check, "addToWorklet(x);", "src/worklet.ts");
+        assert_eq!(bare.len(), 1, "bare worklet.ts (no leading dot) must still flag");
     }
 
     #[test]
