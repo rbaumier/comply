@@ -371,6 +371,29 @@ mod tests {
     }
 
     #[test]
+    fn allows_bg_clip_with_bg_color_in_vue() {
+        // Regression for rbaumier/comply#5041 — `bg-white` (background-color)
+        // and `bg-clip-padding` (background-clip) target distinct CSS
+        // properties; `bg-clip-*` utilities exist to be combined with a
+        // background-color, so the pair must not conflict. This is the real
+        // `.vue` reproduction from headlessui.
+        let source = r#"<template>
+  <Combobox class="shadow-xs w-full overflow-hidden rounded-sm border border-black/5 bg-white bg-clip-padding" />
+</template>"#;
+        assert!(run_vue(source).is_empty());
+    }
+
+    #[test]
+    fn allows_bg_size_with_bg_color_in_vue() {
+        // A second non-conflicting `bg-` pair: `bg-cover` (background-size)
+        // and `bg-red-500` (background-color) are orthogonal.
+        let source = r#"<template>
+  <div class="bg-cover bg-red-500" />
+</template>"#;
+        assert!(run_vue(source).is_empty());
+    }
+
+    #[test]
     fn flags_conflicting_bg_color_in_vue() {
         // Two background-color utilities still conflict.
         let source = r#"<template>
