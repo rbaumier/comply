@@ -1148,6 +1148,27 @@ pub fn is_nuxt_server_dir_file(path: &Path) -> bool {
     has_path_segment(path, &["server"])
 }
 
+/// True when `path` is a Nuxt client-only module: a file whose basename carries a
+/// `.client.` infix before its extension (e.g. `plugins/foo.client.ts`,
+/// `components/Map.client.vue`, `plugins/sentry.client.js`). Nuxt's build strips
+/// these files entirely from the SSR bundle by naming convention, so they execute
+/// only in the browser and never during server rendering — browser globals
+/// (`window`, `document`) there are safe by construction. The match is on the
+/// stem ending in `.client` (segment, not substring), so a `client/` directory or
+/// a `myclient.ts` file does not qualify. Callers gate on Nuxt detection.
+pub fn is_nuxt_client_only_file(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    // Strip the final extension, then require the remaining stem to end in
+    // `.client` (e.g. `foo.client.ts` -> stem `foo.client`). `Path::file_stem`
+    // removes only the last extension, so `.client.vue` -> `foo.client`.
+    Path::new(name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .is_some_and(|stem| stem == "client" || stem.ends_with(".client"))
+}
+
 /// True when `path` is a Nuxt plugin module: a file directly inside a `plugins/`
 /// directory (e.g. `plugins/wagmi.ts`, or Nuxt 4's `app/plugins/wagmi.ts`). Nuxt
 /// auto-discovers every file in `plugins/` and loads its `export default
@@ -1682,6 +1703,32 @@ mod aux_path_tests {
         // Segment (not substring) match.
         assert!(!is_nuxt_server_dir_file(Path::new("src/myserver.ts")));
         assert!(!is_nuxt_server_dir_file(Path::new("src/serverless/fn.ts")));
+    }
+
+    #[test]
+    fn nuxt_client_only_file_infix() {
+        // Issue #5105: Nuxt strips `*.client.*` files from the SSR bundle, so
+        // they run only in the browser and browser globals are safe there.
+        assert!(is_nuxt_client_only_file(Path::new(
+            "src/runtime/plugin.client.ts"
+        )));
+        assert!(is_nuxt_client_only_file(Path::new("plugins/foo.client.ts")));
+        assert!(is_nuxt_client_only_file(Path::new(
+            "plugins/sentry.client.js"
+        )));
+        assert!(is_nuxt_client_only_file(Path::new(
+            "components/Map.client.vue"
+        )));
+        // A bare `client.{ts,js}` module is itself the client-only entry.
+        assert!(is_nuxt_client_only_file(Path::new("plugins/client.ts")));
+        // No `.client.` infix — universal files run during SSR and stay subject.
+        assert!(!is_nuxt_client_only_file(Path::new("plugins/foo.ts")));
+        assert!(!is_nuxt_client_only_file(Path::new(
+            "components/Map.server.vue"
+        )));
+        // `client` as a directory or a name fragment must not match.
+        assert!(!is_nuxt_client_only_file(Path::new("client/index.ts")));
+        assert!(!is_nuxt_client_only_file(Path::new("src/myclient.ts")));
     }
 
     #[test]
