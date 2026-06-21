@@ -627,6 +627,21 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
     }
 
+    /// Run with a `FileCtx` built from `path` so path-derived flags
+    /// (`in_benchmark_dir`) are populated — the bare `run_rule` helper supplies
+    /// the empty static `FileCtx`, where those flags are always false.
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        let path = std::path::Path::new(path);
+        let project = crate::project::default_static_project_ctx();
+        let file = crate::rules::file_ctx::FileCtx::build(
+            path,
+            source,
+            crate::files::Language::Rust,
+            project,
+        );
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, source, path, project, &file)
+    }
+
     #[test]
     fn flags_let_underscore_call() {
         let src = "fn f() { let _ = do_something(); }";
@@ -1004,10 +1019,8 @@ mod tests {
                 });
             }
         "#;
-        let bench_dir =
-            crate::rules::test_helpers::run_rule(&Check, src, "benches/varint_bench.rs");
-        let bench_marker =
-            crate::rules::test_helpers::run_rule(&Check, src, "src/varint_bench.rs");
+        let bench_dir = run_on_path(src, "benches/varint_bench.rs");
+        let bench_marker = run_on_path(src, "src/varint_bench.rs");
         assert!(bench_dir.is_empty());
         assert!(bench_marker.is_empty());
     }
