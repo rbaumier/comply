@@ -575,6 +575,10 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
             || lower.starts_with("test-tsd/")
             || lower.contains("/spec/")
             || lower.starts_with("spec/")
+            // node-tap discovers tests under a `tap/` directory by default
+            // (e.g. panva/oauth4webapi `tap/modulus_length.ts`).
+            || lower.contains("/tap/")
+            || lower.starts_with("tap/")
             || crate::rules::path_utils::has_test_d_infix(path)
             || crate::rules::path_utils::has_type_probe_infix(path)
             || crate::rules::path_utils::has_codemod_snapshot_infix(path)
@@ -776,6 +780,11 @@ mod tests {
         assert!(!scan_path(&PathBuf::from("src/models/business-unit.ts")).in_test_dir);
         // Jasmine/Angular underscore-spec convention (issue #1737).
         assert!(scan_path(&PathBuf::from("packages/schematics/recorder_spec.ts")).in_test_dir);
+        // node-tap `tap/` test root (issue #5118): no `.test.`/`.spec.` infix.
+        assert!(scan_path(&PathBuf::from("tap/modulus_length.ts")).in_test_dir);
+        assert!(scan_path(&PathBuf::from("packages/oauth/tap/keys.ts")).in_test_dir);
+        // A production module merely named `tap` is not a test root.
+        assert!(!scan_path(&PathBuf::from("src/tap.ts")).in_test_dir);
         // Test-helper infrastructure directories (issue #481).
         assert!(scan_path(&PathBuf::from("src/api/test-helpers/als-proxy.ts")).in_test_dir);
         assert!(scan_path(&PathBuf::from("src/test-helper/db.ts")).in_test_dir);

@@ -1,4 +1,10 @@
 //! no-weak-keys
+//!
+//! The harm is a weak crypto key reaching production. Test files
+//! (`skip_in_test_dir`) never ship a real credential — a weak key generated
+//! there is deliberate negative-test input (e.g. asserting the library rejects
+//! a 1024-bit RSA key), so it is out of scope and not flagged. A production copy
+//! of the same weak key is still flagged in its own (non-test) file.
 
 mod oxc_typescript;
 mod rust;
@@ -17,7 +23,7 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["security"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: true,
 };
 
