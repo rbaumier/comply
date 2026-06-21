@@ -9,8 +9,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
     byte_offset_to_line_col, is_get_context_call_binding, is_local_object_builder_binding,
-    is_react_display_name_assignment, is_reduce_accumulator_param, is_vue_reactive_object_target,
-    is_vue_ref_value_target,
+    is_node_module_system_target, is_react_display_name_assignment, is_reduce_accumulator_param,
+    is_vue_reactive_object_target, is_vue_ref_value_target,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
@@ -357,6 +357,9 @@ impl OxcCheck for Check {
                         // Vue 3 reactive() object: `state.n = x` is the idiomatic update.
                         if is_vue_reactive_object_target(m, semantic) { return; }
                         if obj_text == "module" || obj_text == "exports" { return; }
+                        // Node Module-system object: `mod.loaded = true`,
+                        // `Module._cache[id] = …` — mutation is the loader contract.
+                        if is_node_module_system_target(&m.object, semantic) { return; }
                         if prop_text == "current" { return; }
                         if obj_text == "document" && prop_text == "cookie" { return; }
                         if is_imperative_host_write(obj_text, prop_text) { return; }
@@ -387,6 +390,8 @@ impl OxcCheck for Check {
                             [m.object.span().start as usize..m.object.span().end as usize];
 
                         if obj_text == "module" || obj_text == "exports" { return; }
+                        // Node Module-system object: `Module._cache[id] = …`.
+                        if is_node_module_system_target(&m.object, semantic) { return; }
                         if let Expression::StringLiteral(key) = &m.expression
                             && is_imperative_host_write(obj_text, key.value.as_str()) { return; }
                         if is_rooted_at_this(&m.object)
@@ -1380,6 +1385,70 @@ mod tests {
             import { reactive } from 'vue'
             const state = reactive({ inner: { n: 0 } });
             state.inner.n = 1;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_module_instance_property_mutation_issue_5256() {
+        // jiti's CJS module loader mutates a `Module` instance in place — the
+        // module-loader contract. `new Module()` keeps the prototype + cache
+        // identity, so a spread alternative is impossible.
+        let src = r#"
+            import { Module } from "node:module";
+            const mod = new Module(filename);
+            mod.filename = filename;
+            mod.require = _jiti;
+            mod.path = dirname(filename);
+            mod.paths = Module._nodeModulePaths(mod.path);
+            mod.loaded = true;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_module_cache_computed_assignment_issue_5256() {
+        // `Module._cache[id] = mod` populates the CJS require cache — the loader
+        // contract; `Module` resolves to the node:module builtin.
+        let src = r#"
+            import { Module } from "node:module";
+            Module._cache[id] = mod;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_module_instance_via_require_issue_5256() {
+        // Same exemption for a CommonJS `require("module")` binding.
+        let src = r#"
+            const { Module } = require("module");
+            const mod = new Module(filename);
+            mod.loaded = true;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_module_lookalike_not_from_node_module_issue_5256() {
+        // Negative space: a `new Module()` whose `Module` is a local class (not
+        // imported from node:module) is an ordinary object — still flagged.
+        let src = r#"
+            class Module {}
+            const mod = new Module(filename);
+            mod.loaded = true;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_ordinary_cache_computed_assignment_issue_5256() {
+        // Negative space: a `cache[id] = x` on a foreign object (a parameter, not
+        // a local builder) stays flagged — the exemption is keyed on the `Module`
+        // builtin, not on a `cache`/`_cache` member name.
+        let src = r#"
+            function store(cache, id, value) {
+                cache[id] = value;
+            }
         "#;
         assert_eq!(run(src).len(), 1);
     }

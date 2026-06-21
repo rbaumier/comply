@@ -1043,6 +1043,188 @@ pub fn is_local_object_builder_binding(
     false
 }
 
+/// Node module-system specifiers a `Module` binding can be imported/required from.
+const NODE_MODULE_SPECIFIERS: &[&str] = &["module", "node:module"];
+
+/// True when the mutation receiver `obj_expr` resolves to a Node.js Module-system
+/// object, whose in-place mutation is the module-loader contract rather than
+/// accidental mutation of shared state. A module loader (jiti, ts-node, tsx) must
+/// populate `Module` instances and `Module._cache` to interoperate with native
+/// `require()`. Recognised receivers:
+///
+/// - the `Module` builtin itself (`Module._cache[id]`, `Module.xxx`) — the base
+///   identifier resolves to an import/require of `Module` from `module`/
+///   `node:module`;
+/// - a binding constructed as `new Module(...)` where the constructor resolves to
+///   that same `Module` builtin (`const mod = new Module(f); mod.loaded = true`);
+/// - a member chain reaching a Module record's `children` array via a
+///   `parent`/`parentModule` segment (`ctx.parentModule.children.push(mod)`) —
+///   the Node CJS dependency-graph array Node owns and the loader must mutate.
+///
+/// Resolution is structural (import/require binding + `new Module()` initializer),
+/// never a bare member-name match on a foreign object: a `cache[id] = …` on an
+/// ordinary `cache` object, or a `mod.x = …` on a binding that is not a
+/// `new Module()`, stays flagged.
+#[must_use]
+pub fn is_node_module_system_target(
+    obj_expr: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    // `<base>.children` reached through a `parentModule`/`parent` segment — the
+    // Module dependency-graph array (`ctx.parentModule.children.push(mod)`).
+    if member_chain_reaches_module_children(obj_expr, semantic) {
+        return true;
+    }
+
+    // Base identifier of the receiver chain.
+    let Some(root) = receiver_root_identifier_ref(obj_expr) else {
+        return false;
+    };
+    // `Module._cache[...]`, `Module.xxx` — the builtin itself.
+    if root.name.as_str() == "Module" && resolves_to_node_module_ctor(root, semantic) {
+        return true;
+    }
+    // A `const mod = new Module(...)` instance — any property mutation on it.
+    is_node_module_instance_binding(root, semantic)
+}
+
+/// Leftmost `IdentifierReference` of a member chain, preserving the reference so
+/// its binding can be resolved. `Module._cache[id]` → the `Module` reference.
+fn receiver_root_identifier_ref<'a>(
+    expr: &'a oxc_ast::ast::Expression<'a>,
+) -> Option<&'a oxc_ast::ast::IdentifierReference<'a>> {
+    use oxc_ast::ast::Expression;
+    match expr {
+        Expression::Identifier(id) => Some(id),
+        Expression::StaticMemberExpression(m) => receiver_root_identifier_ref(&m.object),
+        Expression::ComputedMemberExpression(m) => receiver_root_identifier_ref(&m.object),
+        _ => None,
+    }
+}
+
+/// True when the receiver chain ends in a `.children` access reached through a
+/// Module-record segment — the Node CJS dependency-graph array:
+/// - `<base>.parentModule.children` — `parentModule` is the Node module-loader
+///   convention for a parent `Module` record, so the name alone qualifies
+///   (`ctx.parentModule.children.push(mod)`);
+/// - `<base>.parent.children` — `parent` is a generic name (DOM/AST/tree
+///   walkers use `node.parent.children.push(...)`), so it qualifies only when
+///   the chain's base identifier resolves to a `new Module(...)` instance
+///   (`mod.parent.children.push(...)`).
+///
+/// A bare `obj.children` (no `parent`/`parentModule` segment) and a foreign
+/// `node.parent.children` (base not a Module instance) do not match.
+fn member_chain_reaches_module_children(
+    expr: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::Expression;
+    let Expression::StaticMemberExpression(children_member) = expr else {
+        return false;
+    };
+    if children_member.property.name.as_str() != "children" {
+        return false;
+    }
+    let Expression::StaticMemberExpression(parent_member) = &children_member.object else {
+        return false;
+    };
+    match parent_member.property.name.as_str() {
+        "parentModule" => true,
+        "parent" => receiver_root_identifier_ref(&parent_member.object)
+            .is_some_and(|root| is_node_module_instance_binding(root, semantic)),
+        _ => false,
+    }
+}
+
+/// True when `ident` resolves to a `const`/`let` binding whose initializer is
+/// `new Module(...)` and that `Module` constructor resolves to the Node
+/// module-system builtin.
+fn is_node_module_instance_binding(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            let Some(Expression::NewExpression(new_expr)) = &decl.init else {
+                return false;
+            };
+            let Expression::Identifier(ctor) = &new_expr.callee else {
+                return false;
+            };
+            return ctor.name.as_str() == "Module"
+                && resolves_to_node_module_ctor(ctor, semantic);
+        }
+    }
+    false
+}
+
+/// True when `ident` (named `Module`) resolves to a binding imported or required
+/// from `module` / `node:module`: an ESM `import { Module } from "node:module"`,
+/// or a CommonJS `const { Module } = require("module")` /
+/// `const Module = require("module").Module`.
+fn resolves_to_node_module_ctor(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{Argument, Expression};
+
+    if resolves_to_import_from(ident, semantic, NODE_MODULE_SPECIFIERS) {
+        return true;
+    }
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            let Some(init) = &decl.init else {
+                return false;
+            };
+            // `require("module")` or `require("module").Module`.
+            let require_call = match init {
+                Expression::CallExpression(call) => Some(call.as_ref()),
+                Expression::StaticMemberExpression(member) => match &member.object {
+                    Expression::CallExpression(call) => Some(call.as_ref()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let Some(call) = require_call else {
+                return false;
+            };
+            let is_require =
+                matches!(&call.callee, Expression::Identifier(id) if id.name == "require");
+            return is_require
+                && matches!(call.arguments.first(), Some(Argument::StringLiteral(lit))
+                    if NODE_MODULE_SPECIFIERS.contains(&lit.value.as_str()));
+        }
+    }
+    false
+}
+
 /// True when `ident` resolves to a local `const`/`let` binding whose initializer
 /// is a freshly allocated array — a `CallExpression` (`rollups(...)`,
 /// `nodes.leaves().map(...)`) or an `ArrayExpression` (`[...]`) — and that array
