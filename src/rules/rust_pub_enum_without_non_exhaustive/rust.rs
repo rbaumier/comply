@@ -66,6 +66,16 @@ impl AstCheck for Check {
         if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
             return;
         }
+        // Vendored third-party source: a file opening with a `Vendored from` /
+        // `Copied from` banner is a verbatim copy of upstream code (e.g.
+        // proc-macro2's `src/rustc_literal_escaper.rs`, copied from rustc). It
+        // follows upstream's conventions, not this project's public-API guidance;
+        // adding `#[non_exhaustive]` would diverge from upstream and falsely imply
+        // the project controls the variant set. Not the project's own API surface,
+        // so it is exempt from this SemVer-stability rule.
+        if crate::rules::path_utils::has_vendored_source_banner(ctx.source) {
+            return;
+        }
         // Binary-only crate (no `[lib]` target): no external consumers, so
         // adding a variant is never a SemVer break.
         if ctx
@@ -547,6 +557,55 @@ mod tests {
         .unwrap();
         let src_path = dir.path().join("src/lib.rs");
         let source = "pub enum OutputType { Pager, Stdout }";
+        fs::write(&src_path, source).unwrap();
+
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, source, &src_path).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn does_not_flag_vendored_pub_enum_in_src() {
+        // #5407: a published lib crate's `src/` file that opens with a
+        // `Vendored from` banner (proc-macro2's `src/rustc_literal_escaper.rs`,
+        // a verbatim copy of rustc internals) is third-party code, not the
+        // project's own API surface — so its `pub enum`s are exempt even though
+        // they live in `src/` of a published crate.
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"proc-macro2\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+        let src_path = dir.path().join("src/rustc_literal_escaper.rs");
+        let source = "// Vendored from rustc-literal-escaper v0.0.5\n\
+                      // https://github.com/rust-lang/literal-escaper/tree/v0.0.5\n\
+                      #[derive(Debug, PartialEq, Eq)]\n\
+                      pub enum EscapeError { ZeroChars, MoreThanOneChar }\n";
+        fs::write(&src_path, source).unwrap();
+
+        assert!(crate::rules::test_helpers::run_rule(&Check, source, &src_path).is_empty());
+    }
+
+    #[test]
+    fn flags_authored_pub_enum_in_src_without_banner() {
+        // #5407 negative space: the same published crate, same file path, but
+        // without a vendored banner — the project's own `pub enum` is still
+        // flagged. The banner content, not the file location, is what exempts.
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"proc-macro2\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+        let src_path = dir.path().join("src/rustc_literal_escaper.rs");
+        let source = "#[derive(Debug, PartialEq, Eq)]\n\
+                      pub enum EscapeError { ZeroChars, MoreThanOneChar }\n";
         fs::write(&src_path, source).unwrap();
 
         assert_eq!(
