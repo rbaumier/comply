@@ -2346,6 +2346,31 @@ mod tests {
     }
 
     #[test]
+    fn skips_keystone_type_tests_file_stem_issue5368() {
+        // Issue #5368: KeystoneJS names a compile-time type-assertion suite by the
+        // file stem (`src/types/type-tests.ts`). The top-level calls initialize a
+        // `undefined!` value and call methods solely to verify type signatures —
+        // they never run at runtime, so the tree-shaking concern does not apply.
+        let src = "const someContext: KeystoneContext = undefined!;\n\
+                   someContext.query.Singleton.findOne({});\n\
+                   someContext.query.List.findOne({ where: { id: '1' } });";
+        assert!(
+            crate::rules::test_helpers::run_rule(
+                &Check,
+                src,
+                "packages/core/src/types/type-tests.ts",
+            )
+            .is_empty()
+        );
+        // The two top-level method calls in a normal runtime module are STILL
+        // flagged — the exemption keys on the curated type-test file stem.
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, src, "src/foo.ts").len(),
+            2
+        );
+    }
+
+    #[test]
     fn skips_cypress_e2e_file_by_extension() {
         // Issue #1868: Cypress E2E specs use the `.cy.*` extension and always
         // open with a top-level `describe(...)` — required Cypress API. These

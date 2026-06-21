@@ -779,14 +779,42 @@ fn has_d_test_infix(path: &Path) -> bool {
         .is_some_and(|name| name.to_ascii_lowercase().contains(".d-test."))
 }
 
+/// File stems that unambiguously name a compile-time type-assertion suite, e.g.
+/// KeystoneJS's `src/types/type-tests.ts`. The plural `-tests` forms are never a
+/// runtime module name, so an exact-stem match is safe; bare `typecheck`/
+/// `type-check`/`tsc-build` stems are deliberately excluded because they can name
+/// a runtime module (a `typecheck.ts` helper), and they remain recognized only as
+/// directory segments in [`TYPE_COMPILATION_TEST_DIR_SEGMENTS`].
+const TYPE_COMPILATION_TEST_STEMS: &[&str] = &["type-tests", "types-tests"];
+
+/// True when the file stem (basename minus extension) exactly equals a
+/// type-compilation-test name ([`TYPE_COMPILATION_TEST_STEMS`]) under a JS/TS
+/// extension, e.g. KeystoneJS's `src/types/type-tests.ts`. Such a file is a
+/// compile-time type-assertion suite that names the convention in its file stem
+/// rather than a parent directory. The stem must match a curated name exactly, so
+/// a runtime test file like `widget-tests.ts` (stem `widget-tests`, not in the
+/// list) does not match.
+fn has_type_compilation_test_stem(path: &Path) -> bool {
+    if !matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs")
+    ) {
+        return false;
+    }
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .is_some_and(|stem| TYPE_COMPILATION_TEST_STEMS.contains(&stem))
+}
+
 /// True when `path` is a type-compilation test: one under a type-compilation-test
-/// directory ([`TYPE_COMPILATION_TEST_DIR_SEGMENTS`]) or carrying a `.typecheck.`
-/// or `.d-test.` filename infix. Files there annotate the public API to verify
-/// it type-checks and have no runtime test cases or runtime semantics, so checks
-/// that demand runtime assertions (e.g. `no-empty-test-file`) or that model
-/// runtime behavior of imported modules (e.g.
-/// `no-side-effects-in-initialization`'s tree-shaking concern) must not flag
-/// them. Segment match keeps an unrelated
+/// directory ([`TYPE_COMPILATION_TEST_DIR_SEGMENTS`]), carrying a `.typecheck.`
+/// or `.d-test.` filename infix, or whose file stem exactly equals a
+/// type-compilation-test name (e.g. KeystoneJS's `src/types/type-tests.ts`).
+/// Files there annotate the public API to verify it type-checks and have no
+/// runtime test cases or runtime semantics, so checks that demand runtime
+/// assertions (e.g. `no-empty-test-file`) or that model runtime behavior of
+/// imported modules (e.g. `no-side-effects-in-initialization`'s tree-shaking
+/// concern) must not flag them. Segment match keeps an unrelated
 /// `src/type-checker/` from matching.
 ///
 /// Deliberately separate from [`is_type_test_file`]: that predicate tells
@@ -798,6 +826,7 @@ fn has_d_test_infix(path: &Path) -> bool {
 pub fn is_type_compilation_test_path(path: &Path) -> bool {
     has_typecheck_infix(path)
         || has_d_test_infix(path)
+        || has_type_compilation_test_stem(path)
         || has_path_segment(path, TYPE_COMPILATION_TEST_DIR_SEGMENTS)
 }
 
@@ -1676,6 +1705,26 @@ mod aux_path_tests {
         assert!(!is_type_compilation_test_path(&PathBuf::from(
             "src/myd-test.ts"
         )));
+    }
+
+    #[test]
+    fn type_compilation_test_path_covers_file_stem_convention_issue5368() {
+        // Issue #5368: KeystoneJS names a compile-time type-assertion suite by the
+        // file stem (`src/types/type-tests.ts`), not a parent directory. The stem
+        // must equal a curated plural type-test name exactly.
+        assert!(is_type_compilation_test_path(&PathBuf::from(
+            "packages/core/src/types/type-tests.ts"
+        )));
+        assert!(is_type_compilation_test_path(&PathBuf::from("src/types-tests.ts")));
+        // Stem match (not substring) — a runtime test file whose stem merely ends
+        // in `-tests` (e.g. `widget-tests.ts`) is NOT a type-compilation test.
+        assert!(!is_type_compilation_test_path(&PathBuf::from("src/widget-tests.ts")));
+        assert!(!is_type_compilation_test_path(&PathBuf::from("src/type-tests-helpers.ts")));
+        assert!(!is_type_compilation_test_path(&PathBuf::from("src/utils.ts")));
+        // Bare `typecheck`/`type-check` stems can name a runtime module, so they
+        // stay non-matching at the file-stem level (issue #4940 invariant).
+        assert!(!is_type_compilation_test_path(&PathBuf::from("src/typecheck.ts")));
+        assert!(!is_type_compilation_test_path(&PathBuf::from("src/type-check.ts")));
     }
 
     #[test]
