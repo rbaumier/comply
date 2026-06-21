@@ -41,8 +41,15 @@ use std::sync::Arc;
 /// are all wrong. Data-transfer rates carry their unit in a qualifier
 /// (`sampleRate`→Hz, `bitRate`→bps); those do not start with `rate` and are
 /// unaffected by this exclusion.
+///
+/// `delay` is excluded as a named temporal quantity whose unit is conventional
+/// (the sibling of `duration`): the time to wait before something runs is
+/// expressed without a suffix everywhere it appears — `setTimeout(fn, delay)`,
+/// the Web Animations API, and every JS animation/UI-timing library
+/// (GSAP/anime.js/Framer Motion/Theatre.js) use a bare `delay`. The dimension
+/// (time) is unambiguous, so a suffix adds little and the suggested
+/// `delayBytes`/`delayCount` are nonsensical.
 const AMBIGUOUS_BASES: &[&str] = &[
-    "delay",
     "timeout",
     "interval",
     "elapsed",
@@ -251,8 +258,27 @@ mod tests {
     }
 
     #[test]
-    fn flags_bare_delay() {
-        assert_eq!(run_on("const delay: number = 100;").len(), 1);
+    fn allows_delay_named_temporal_quantity() {
+        // `delay` is the time to wait before something runs — expressed without a
+        // suffix everywhere (`setTimeout`, Web Animations API, every JS animation
+        // library). The dimension (time) is unambiguous, so `delayBytes`/
+        // `delayCount` are nonsensical and it must not be flagged (#5317). Covers
+        // the three reported shapes: a `number`-typed param, a numeric-init local,
+        // and a callback param annotation.
+        assert!(run_on("function interpolate(visualElement: unknown, delay: number) {}").is_empty());
+        assert!(run_on("function animateParticle() { let delay = 0; }").is_empty());
+        assert!(
+            run_on("const setIsOpen = (shouldOpen: boolean, delay: number) => {};").is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_other_temporal_bases_after_delay_removal() {
+        // Removing `delay` must not loosen genuinely unit-ambiguous temporal
+        // bases — a bare `timeout`/`interval`/`wait` still demands a suffix (#5317).
+        assert_eq!(run_on("function f(timeout: number) {}").len(), 1);
+        assert_eq!(run_on("function f(interval: number) {}").len(), 1);
+        assert_eq!(run_on("function f(wait: number) {}").len(), 1);
     }
 
     #[test]
@@ -365,7 +391,7 @@ mod tests {
     fn still_flags_other_temporal_bases_after_frequency_removal() {
         // Removing `frequency` must not loosen genuinely unit-ambiguous bases.
         assert_eq!(run_on("function f(timeout: number) {}").len(), 1);
-        assert_eq!(run_on("function f(delay: number) {}").len(), 1);
+        assert_eq!(run_on("function f(interval: number) {}").len(), 1);
     }
 
     #[test]
@@ -382,8 +408,8 @@ mod tests {
     fn still_flags_other_temporal_bases_after_duration_removal() {
         // Removing `duration` must not loosen genuinely unit-ambiguous bases.
         assert_eq!(run_on("function f(timeout: number) {}").len(), 1);
-        assert_eq!(run_on("function f(delay: number) {}").len(), 1);
         assert_eq!(run_on("function f(interval: number) {}").len(), 1);
+        assert_eq!(run_on("function f(elapsed: number) {}").len(), 1);
     }
 
     #[test]
@@ -401,7 +427,7 @@ mod tests {
     fn still_flags_other_ambiguous_bases_after_rate_removal() {
         // Removing `rate` must not gut the rest of the set.
         assert_eq!(run_on("function f(timeout: number) {}").len(), 1);
-        assert_eq!(run_on("const delay: number = 100;").len(), 1);
+        assert_eq!(run_on("function f(wait: number) {}").len(), 1);
         assert_eq!(run_on("function g(interval: number) {}").len(), 1);
     }
 
