@@ -3,7 +3,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::AstKind;
+use oxc_ast::ast::{BinaryOperator, Expression, LogicalOperator};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -39,6 +40,18 @@ impl OxcCheck for Check {
         // algorithm is dictated by the wire format, not chosen for security, so
         // "use SHA-256" would break interop.
         if crate::oxc_helpers::references_protocol_mandated_weak_hash(source) {
+            return;
+        }
+
+        // Skip a digest computed only when an input overflows a length limit
+        // (`if (name.length > 128) { name = createHash('sha1')…digest() }`). That
+        // is a deterministic name-shortening fingerprint — e.g. fitting an
+        // auto-generated index/constraint identifier into a database engine's
+        // identifier-length cap — not a security hash: a password, signature,
+        // HMAC or token is never gated on the input being too long. The signal is
+        // the enclosing length-overflow comparison, not the variable names, so it
+        // survives renaming and does not slip genuine crypto uses through.
+        if enclosed_in_length_overflow_guard(node.id(), semantic) {
             return;
         }
 
@@ -97,6 +110,59 @@ impl OxcCheck for Check {
             });
         }
     }
+}
+
+/// True when the call node sits inside an `if`/ternary whose condition tests a
+/// `.length` overflow (`x.length > N` or `x.length >= N`). Walks ancestors and
+/// inspects each conditional's test for a length comparison; logical `&&`/`||`
+/// chains and parentheses in the test are traversed so a compound guard
+/// (`if (x.length > N && y)`) still matches.
+fn enclosed_in_length_overflow_guard(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+    nodes.ancestors(node_id).any(|ancestor| match ancestor.kind() {
+        AstKind::IfStatement(if_stmt) => test_is_length_overflow(&if_stmt.test),
+        AstKind::ConditionalExpression(cond) => test_is_length_overflow(&cond.test),
+        _ => false,
+    })
+}
+
+/// True when `expr` is — or contains via `&&`/`||`/parentheses — a comparison of
+/// the form `<member>.length > <numeric literal>` or `>= <numeric literal>` (or
+/// the flipped `N < x.length` / `N <= x.length`), i.e. an "input too long" test.
+fn test_is_length_overflow(expr: &Expression) -> bool {
+    match expr.without_parentheses() {
+        Expression::LogicalExpression(logical)
+            if matches!(logical.operator, LogicalOperator::And | LogicalOperator::Or) =>
+        {
+            test_is_length_overflow(&logical.left) || test_is_length_overflow(&logical.right)
+        }
+        Expression::BinaryExpression(bin) => match bin.operator {
+            BinaryOperator::GreaterThan | BinaryOperator::GreaterEqualThan => {
+                is_length_access(&bin.left) && is_numeric_literal(&bin.right)
+            }
+            BinaryOperator::LessThan | BinaryOperator::LessEqualThan => {
+                is_numeric_literal(&bin.left) && is_length_access(&bin.right)
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// True when `expr` is a `<something>.length` member access.
+fn is_length_access(expr: &Expression) -> bool {
+    matches!(
+        expr.without_parentheses(),
+        Expression::StaticMemberExpression(member) if member.property.name.as_str() == "length"
+    )
+}
+
+/// True when `expr` is a numeric literal.
+fn is_numeric_literal(expr: &Expression) -> bool {
+    matches!(expr.without_parentheses(), Expression::NumericLiteral(_))
 }
 
 #[cfg(test)]
@@ -211,5 +277,53 @@ mod tests {
             1,
             "production weak SHA-1 hash must still be flagged"
         );
+    }
+
+    // directus/directus oracle dialect (#5373): SHA-1 shortens an auto-generated
+    // index name only when it overflows Oracle's identifier-length cap — a name
+    // fingerprint, not a security hash.
+    #[test]
+    fn allows_sha1_for_length_overflow_index_name() {
+        let src = r#"
+            function getIndexName(indexName) {
+              if (indexName.length > 128) {
+                indexName = crypto.createHash('sha1').update(indexName).digest('base64').replace('=', '');
+              }
+              return indexName;
+            }
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // The flipped comparison form (`N <= x.length`) is the same overflow guard.
+    #[test]
+    fn allows_sha1_for_flipped_length_overflow_guard() {
+        let src = r#"
+            const id = name.length >= 63
+              ? createHash('sha1').update(name).digest('hex')
+              : name;
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // A full digest with no length-overflow guard is still flagged — the
+    // exemption only covers shorten-when-too-long fingerprints.
+    #[test]
+    fn still_flags_unguarded_full_sha1_digest() {
+        let src = "const sig = createHash('sha1').update(payload).digest('hex');";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // A weak-crypto use whose surrounding `.length` test is an emptiness check
+    // (`=== 0`), not an overflow comparison, is still flagged.
+    #[test]
+    fn still_flags_md5_signature_with_emptiness_length_check() {
+        let src = r#"
+            if (token.length === 0) {
+              throw new Error('empty');
+            }
+            const sig = createHash('md5').update(token).digest('hex');
+        "#;
+        assert_eq!(run_on(src).len(), 1);
     }
 }
