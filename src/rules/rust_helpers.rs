@@ -2361,6 +2361,253 @@ pub fn cast_operand_is_enum_discriminant(cast: Node, source: &[u8]) -> bool {
     }
 }
 
+/// True if `cast` (a `type_cast_expression`) reads a struct field typed as a
+/// `#[repr(intN)]` fieldless enum and casts it to `target`, an integer wide
+/// enough to hold that repr — `<receiver>.<field> as <int>` where `field`'s
+/// declared type is such an enum defined in the same file. `#[repr(uN)]`
+/// guarantees every discriminant fits `uN`, so the cast to `uN` (or wider, with
+/// the same or compatible signedness) is lossless and total; `as` is also the
+/// only conversion the language offers there (no `From`/`TryFrom<Enum> for
+/// {integer}`), so the rules' usual remediations would not compile.
+///
+/// Resolution is purely structural (no type inference). The receiver of the
+/// field access is resolved to a struct name in two cases:
+///
+/// - `self.<field>` inside an `impl <Struct>` block whose target `<Struct>` is a
+///   `struct_item` defined in the same file; or
+/// - `<binding>.<field>` where `<binding>` is a local/parameter annotated with a
+///   `<Struct>` type (resolved via `find_identifier_type`), the reference/`mut`
+///   prefix peeled off.
+///
+/// The struct's in-file definition is then searched for a `field_declaration`
+/// named `<field>`; its declared type must name a fieldless `enum_item` carrying
+/// `#[repr(intN)]`, and `target` must be wide enough (unsigned repr `uN` →
+/// unsigned/signed target of ≥ N bits with the signed target one bit wider when
+/// equal width would not fit, mirroring the numeric-fit logic). A wider-int
+/// field cast to a narrower int (`u16` field `as u8`) is NOT exempted — only a
+/// repr-enum field is.
+///
+/// LIMITATION: the receiver must be a directly-annotated binding or `self`;
+/// method-return receivers, nested field chains (`a.b.field`), and bindings whose
+/// type is inferred are not resolved and fall through to the conservative branch.
+/// The struct and enum are matched by bare name anywhere in the file (modules are
+/// not scoped), like `cast_operand_is_enum_discriminant`; a name collision can
+/// only suppress a cast, never wrongly flag one, so it stays on the FP-safe side.
+///
+/// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`.
+pub fn cast_operand_is_repr_enum_field(cast: Node, source: &[u8], target: &str) -> bool {
+    let Some(target_repr) = repr_int_width(target) else {
+        return false;
+    };
+    let Some(value) = cast.child_by_field_name("value") else {
+        return false;
+    };
+    if value.kind() != "field_expression" {
+        return false;
+    }
+    let Some(field) = value
+        .child_by_field_name("field")
+        .and_then(|f| f.utf8_text(source).ok())
+    else {
+        return false;
+    };
+    let Some(receiver) = value.child_by_field_name("value") else {
+        return false;
+    };
+    let Some(struct_name) = field_receiver_struct_name(cast, receiver, source) else {
+        return false;
+    };
+    let Some(struct_item) = find_struct_item(cast, &struct_name, source) else {
+        return false;
+    };
+    let Some(field_type) = struct_field_type(struct_item, field, source) else {
+        return false;
+    };
+    let Some(enum_item) = find_enum_item(cast, &field_type, source) else {
+        return false;
+    };
+    if !enum_is_fieldless(enum_item) {
+        return false;
+    }
+    let Some(repr) = enum_repr_int_width(enum_item, source) else {
+        return false;
+    };
+    repr_fits(repr, target_repr)
+}
+
+/// The (signedness, bit-width) of an integer type name (`u8`, `i32`, `usize`),
+/// or `None` for any non-integer (`f32`, a custom type).
+fn repr_int_width(type_text: &str) -> Option<(bool, u16)> {
+    let (signed, bits) = match type_text.trim() {
+        "u8" => (false, 8),
+        "u16" => (false, 16),
+        "u32" => (false, 32),
+        "u64" => (false, 64),
+        "u128" => (false, 128),
+        "usize" => (false, usize::BITS as u16),
+        "i8" => (true, 8),
+        "i16" => (true, 16),
+        "i32" => (true, 32),
+        "i64" => (true, 64),
+        "i128" => (true, 128),
+        "isize" => (true, usize::BITS as u16),
+        _ => return None,
+    };
+    Some((signed, bits))
+}
+
+/// True if every value of a `repr`-typed integer is representable in `target`.
+/// An unsigned source needs an unsigned target of ≥ its width, or a signed
+/// target strictly wider (one extra bit for the sign). A signed source needs a
+/// signed target of ≥ its width (a signed value never fits an unsigned target).
+fn repr_fits(repr: (bool, u16), target: (bool, u16)) -> bool {
+    let (repr_signed, repr_bits) = repr;
+    let (target_signed, target_bits) = target;
+    match (repr_signed, target_signed) {
+        (false, false) => target_bits >= repr_bits,
+        (false, true) => target_bits > repr_bits,
+        (true, true) => target_bits >= repr_bits,
+        (true, false) => false,
+    }
+}
+
+/// Resolve the struct name a field-access receiver refers to, structurally:
+/// `self` → the enclosing `impl <Struct>` target, or an annotated binding's
+/// declared type with any `&`/`&mut` prefix peeled. Returns `None` for receivers
+/// that need type inference (method calls, nested fields, inferred bindings).
+fn field_receiver_struct_name(cast: Node, receiver: Node, source: &[u8]) -> Option<String> {
+    match receiver.kind() {
+        "self" => enclosing_impl_type_name(cast, source),
+        "identifier" => {
+            let name = receiver.utf8_text(source).ok()?;
+            let ty = find_identifier_type(cast, name, source)?;
+            Some(strip_reference_prefix(&ty).to_string())
+        }
+        _ => None,
+    }
+}
+
+/// The `type_identifier` name of `node`'s nearest enclosing `impl_item`, or
+/// `None` if the target is not a plain named type.
+fn enclosing_impl_type_name(node: Node, source: &[u8]) -> Option<String> {
+    let mut current = node.parent();
+    while let Some(ancestor) = current {
+        if ancestor.kind() == "impl_item" {
+            return ancestor
+                .child_by_field_name("type")
+                .filter(|target| target.kind() == "type_identifier")
+                .and_then(|target| target.utf8_text(source).ok())
+                .map(str::to_string);
+        }
+        current = ancestor.parent();
+    }
+    None
+}
+
+/// Peel a leading `&`/`&mut`/`mut` from a type's source text, leaving the inner
+/// type name (`&DisposeOp` → `DisposeOp`).
+fn strip_reference_prefix(type_text: &str) -> &str {
+    let mut t = type_text.trim();
+    loop {
+        let stripped = t
+            .strip_prefix('&')
+            .map(str::trim_start)
+            .map(|s| s.strip_prefix("mut").map_or(s, str::trim_start));
+        match stripped {
+            Some(rest) if rest != t => t = rest,
+            _ => return t,
+        }
+    }
+}
+
+/// The first `struct_item` named `name` in the file containing `node`, or `None`.
+fn find_struct_item<'a>(node: Node<'a>, name: &str, source: &[u8]) -> Option<Node<'a>> {
+    let mut root = node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    let mut cursor = root.walk();
+    let mut stack = vec![root];
+    while let Some(current) = stack.pop() {
+        if current.kind() == "struct_item"
+            && current
+                .child_by_field_name("name")
+                .and_then(|name_node| name_node.utf8_text(source).ok())
+                == Some(name)
+        {
+            return Some(current);
+        }
+        for child in current.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    None
+}
+
+/// The declared type-name text of the field `field` in `struct_item`, when that
+/// field's type is a plain `type_identifier`, or `None`.
+fn struct_field_type(struct_item: Node, field: &str, source: &[u8]) -> Option<String> {
+    let body = struct_item.child_by_field_name("body")?;
+    let mut cursor = body.walk();
+    for decl in body.named_children(&mut cursor) {
+        if decl.kind() != "field_declaration" {
+            continue;
+        }
+        if decl
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+            != Some(field)
+        {
+            continue;
+        }
+        let type_node = decl.child_by_field_name("type")?;
+        if type_node.kind() != "type_identifier" {
+            return None;
+        }
+        return type_node.utf8_text(source).ok().map(str::to_string);
+    }
+    None
+}
+
+/// The (signedness, bit-width) of an `enum_item`'s `#[repr(intN)]` attribute, or
+/// `None` if it has no integer `repr` (a `#[repr(C)]` or no `repr` at all has no
+/// guaranteed discriminant width).
+fn enum_repr_int_width(enum_item: Node, source: &[u8]) -> Option<(bool, u16)> {
+    let mut sibling = enum_item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "line_comment" | "block_comment" | "attribute_item" => {
+                if s.kind() == "attribute_item"
+                    && let Some(repr) = repr_attribute_int(s, source)
+                {
+                    return Some(repr);
+                }
+            }
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    None
+}
+
+/// If `attribute_item` is a `#[repr(...)]` whose arguments name an integer type
+/// (`u8`, `i32`, …), return that type's (signedness, bit-width). Other reprs
+/// (`C`, `transparent`, `packed`) yield `None`.
+fn repr_attribute_int(attribute_item: Node, source: &[u8]) -> Option<(bool, u16)> {
+    let mut item_cursor = attribute_item.walk();
+    let attribute = attribute_item
+        .children(&mut item_cursor)
+        .find(|child| child.kind() == "attribute")?;
+    let path = attribute.named_child(0)?;
+    if path.utf8_text(source) != Ok("repr") {
+        return None;
+    }
+    let token_tree = attribute.child_by_field_name("arguments")?;
+    let text = token_tree.utf8_text(source).ok()?;
+    let inner = text.trim().trim_start_matches('(').trim_end_matches(')');
+    inner.split(',').find_map(|tok| repr_int_width(tok.trim()))
+}
+
 /// True if the `scoped_identifier` operand `value` of `cast` reads a fieldless
 /// enum's discriminant. Resolves the enum in-file when possible; otherwise falls
 /// back to the `<EnumType>::<Variant>` shape heuristic for imported enums.
@@ -2984,6 +3231,86 @@ mod tests {
                 .expect("source should contain a cast");
             assert_eq!(
                 cast_operand_is_enum_discriminant(cast, src.as_bytes()),
+                expected,
+                "src: {src}"
+            );
+        }
+    }
+
+    #[test]
+    fn cast_operand_is_repr_enum_field_resolves_struct_field_repr_enums() {
+        let cases = [
+            // `self.field as u8`: field type is an in-file `#[repr(u8)]` enum.
+            (
+                "#[repr(u8)] enum E { A, B } struct S { f: E } \
+                 impl S { fn ser(&self) -> u8 { self.f as u8 } }",
+                true,
+            ),
+            // `<binding>.field as u8`: annotated parameter, repr(u8) field enum.
+            (
+                "#[repr(u8)] enum E { A } struct S { f: E } \
+                 fn g(s: &S) -> u8 { s.f as u8 }",
+                true,
+            ),
+            // repr(u8) field cast to a wider u16 is still lossless.
+            (
+                "#[repr(u8)] enum E { A } struct S { f: E } \
+                 fn g(s: &S) -> u16 { s.f as u16 }",
+                true,
+            ),
+            // repr(u16) field does not fit u8 — not exempt.
+            (
+                "#[repr(u16)] enum E { A } struct S { f: E } \
+                 fn g(s: &S) -> u8 { s.f as u8 }",
+                false,
+            ),
+            // No `#[repr(intN)]`: discriminant width is unspecified — not exempt.
+            (
+                "enum E { A } struct S { f: E } fn g(s: &S) -> u8 { s.f as u8 }",
+                false,
+            ),
+            // `#[repr(C)]` is not an integer repr — not exempt.
+            (
+                "#[repr(C)] enum E { A } struct S { f: E } \
+                 fn g(s: &S) -> u8 { s.f as u8 }",
+                false,
+            ),
+            // The field is a plain wider integer, not a repr-enum — not exempt.
+            (
+                "struct S { count: u16 } fn g(s: &S) -> u8 { s.count as u8 }",
+                false,
+            ),
+            // Unknown receiver type (inferred binding) — cannot resolve, not exempt.
+            (
+                "#[repr(u8)] enum E { A } struct S { f: E } \
+                 fn g() -> u8 { let s = make(); s.f as u8 }",
+                false,
+            ),
+            // repr(u8) field to a signed i8: an i8 cannot hold a u8 discriminant
+            // of 128..=255, so it does not fit — not exempt.
+            (
+                "#[repr(u8)] enum E { A } struct S { f: E } \
+                 fn g(s: &S) -> i8 { s.f as i8 }",
+                false,
+            ),
+            // repr(u8) field to a wider signed i16 fits — exempt.
+            (
+                "#[repr(u8)] enum E { A } struct S { f: E } \
+                 fn g(s: &S) -> i16 { s.f as i16 }",
+                true,
+            ),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_type_cast_expression(tree.root_node())
+                .expect("source should contain a cast");
+            let target = cast
+                .child_by_field_name("type")
+                .and_then(|t| t.utf8_text(src.as_bytes()).ok())
+                .map(str::trim)
+                .expect("cast should have a target type");
+            assert_eq!(
+                cast_operand_is_repr_enum_field(cast, src.as_bytes(), target),
                 expected,
                 "src: {src}"
             );
