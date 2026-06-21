@@ -19,9 +19,15 @@
 //! source type is locally visible.
 //!
 //! Widening casts with the same signedness (e.g. `u8 as u32`) are
-//! silenced when the source type is locally visible.  When the source
-//! type is not locally annotated (e.g. a method return or a custom
-//! type alias), the cast is flagged conservatively.  Use
+//! silenced when the source type is locally visible, as is an unsigned
+//! source cast to a strictly wider signed target (`u16 as i32`): the
+//! extra bit accommodates the sign, so every value is represented
+//! exactly.  A dereference operand (`*x as i32` where `x: &u16`) resolves
+//! through its referent — the leading borrow is stripped and `u16 as i32`
+//! is analysed as the widening cast it is.  When the source type is not
+//! locally annotated
+//! (e.g. a method return or a custom type alias), the cast is flagged
+//! conservatively.  Use
 //! `// comply-ignore: rust-no-lossy-as-cast — <justification>` to
 //! suppress known-safe casts in that situation.
 //!
@@ -189,6 +195,16 @@ fn is_dangerous_cast(source: NumericType, target: NumericType) -> bool {
     {
         return false;
     }
+    // Unsigned -> signed of strictly greater width (`u16 as i32`, `u8 as i16`)
+    // is a widening cast: the target's extra bit accommodates the sign, so
+    // every source value is represented exactly. (`u16 as i16` is excluded —
+    // same width, handled as a reinterpretation above.)
+    if source.kind == NumericKind::Unsigned
+        && target.kind == NumericKind::Signed
+        && target.bits > source.bits
+    {
+        return false;
+    }
     if target.kind == NumericKind::Float
         && matches!(source.kind, NumericKind::Unsigned | NumericKind::Signed)
     {
@@ -208,12 +224,49 @@ fn char_fits(target: NumericType) -> bool {
 
 fn source_numeric_type(node: tree_sitter::Node, source: &[u8]) -> Option<NumericType> {
     let value = node.child_by_field_name("value")?;
-    if value.kind() != "identifier" {
+    let ident = deref_identifier(value, source).unwrap_or(value);
+    if ident.kind() != "identifier" {
         return None;
     }
-    let name = value.utf8_text(source).ok()?;
+    let name = ident.utf8_text(source).ok()?;
     let type_text = find_identifier_type(node, name, source)?;
-    numeric_type(&type_text)
+    // For a dereference operand (`*x`), the binding type is a reference
+    // (`&u16` / `&mut u16`); the cast acts on the referent, so strip the
+    // leading borrow and analyse the underlying numeric type.
+    let type_text = referent_type(&type_text);
+    numeric_type(type_text)
+}
+
+/// Strip a single leading `&` / `&mut` borrow from a type's source text so a
+/// dereferenced operand resolves to its referent (`&u16` → `u16`). A non-
+/// reference type is returned unchanged.
+fn referent_type(type_text: &str) -> &str {
+    match type_text.trim_start().strip_prefix('&') {
+        Some(rest) => rest.trim_start().strip_prefix("mut ").unwrap_or(rest).trim_start(),
+        None => type_text,
+    }
+}
+
+/// If `value` is a unary dereference of an identifier (`*x`), return the inner
+/// identifier node; otherwise `None`. Peels a single parenthesized wrapper so
+/// `(*x) as i32` is covered too.
+fn deref_identifier<'a>(value: tree_sitter::Node<'a>, source: &[u8]) -> Option<tree_sitter::Node<'a>> {
+    if value.kind() == "parenthesized_expression" {
+        return value.named_child(0).and_then(|inner| deref_identifier(inner, source));
+    }
+    if value.kind() != "unary_expression" {
+        return None;
+    }
+    let is_deref = value
+        .child(0)
+        .and_then(|op| op.utf8_text(source).ok())
+        .is_some_and(|op| op == "*");
+    if !is_deref {
+        return None;
+    }
+    value
+        .named_child(0)
+        .filter(|operand| operand.kind() == "identifier")
 }
 
 #[cfg(test)]
@@ -278,6 +331,18 @@ mod tests {
     #[test]
     fn allows_widening_i16_to_i32() {
         assert!(run_on("fn f(x: i16) -> i32 { x as i32 }").is_empty());
+    }
+
+    #[test]
+    fn allows_widening_u16_to_i32() {
+        // Unsigned -> strictly wider signed: every u16 fits in i32 (the extra
+        // bit covers the sign), so the cast is lossless.
+        assert!(run_on("fn f(x: u16) -> i32 { x as i32 }").is_empty());
+    }
+
+    #[test]
+    fn allows_widening_u8_to_i16() {
+        assert!(run_on("fn f(x: u8) -> i16 { x as i16 }").is_empty());
     }
 
     #[test]
@@ -608,6 +673,53 @@ mod tests {
         // `rust-no-as-numeric-cast` owns the span.
         let src = "fn w(val: u64) -> u8 { if val < 1000 { val as u8 } else { 0 } }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5117_deref_ref_u16_as_i32_not_flagged() {
+        // Issue #5117 (chumsky pratt.rs): `*x as i32` where `x: &u16`. The
+        // deref yields u16, and `u16 as i32` is a widening cast — every u16
+        // fits in i32. The parameter `x` is `&u16`, so the rule must see
+        // through the deref and strip the borrow.
+        let src = "fn p(x: &u16) -> i32 { *x as i32 * 2 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5117_deref_let_ref_u16_as_i32_not_flagged() {
+        let src = "fn p(r: &u16) -> i32 { let x: &u16 = r; *x as i32 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5117_deref_mut_ref_u16_as_i32_not_flagged() {
+        let src = "fn p(x: &mut u16) -> i32 { *x as i32 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5117_deref_i16_as_i32_not_flagged() {
+        // Same-signedness widening through a deref.
+        let src = "fn p(x: &i16) -> i32 { *x as i32 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5117_deref_narrowing_still_flagged() {
+        // `*x as i8` where `*x: u16` discards the high byte — genuinely lossy.
+        // A deref operand parses as a `unary_expression`, which
+        // `rust-no-as-numeric-cast` treats as a literal cast and never owns, so
+        // this rule is the sole owner and must flag it.
+        let src = "fn p(x: &u16) -> i8 { *x as i8 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_5117_deref_sign_loss_still_flagged() {
+        // `*x as u16` where `*x: i32` narrows 32→16 bits — genuinely lossy, and
+        // this rule owns the deref span (see above), so it must flag it.
+        let src = "fn p(x: &i32) -> u16 { *x as u16 }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
