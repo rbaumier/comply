@@ -358,11 +358,59 @@ fn file_has_test_framework_context(
     })
 }
 
+/// Get the root `IdentifierReference` of an assignment target's object chain
+/// (`table[key]` / `table.key` / `a.b.c[key]` → the `table` / `a` reference).
+/// A bare-identifier target (`x = …`) or a non-member target has no base object
+/// to resolve and returns `None`.
+fn root_identifier_of_target<'a>(
+    target: &'a AssignmentTarget<'a>,
+) -> Option<&'a IdentifierReference<'a>> {
+    fn root_of_expr<'a>(expr: &'a Expression<'a>) -> Option<&'a IdentifierReference<'a>> {
+        match expr {
+            Expression::Identifier(id) => Some(id),
+            Expression::StaticMemberExpression(m) => root_of_expr(&m.object),
+            Expression::ComputedMemberExpression(m) => root_of_expr(&m.object),
+            _ => None,
+        }
+    }
+    match target {
+        AssignmentTarget::StaticMemberExpression(m) => root_of_expr(&m.object),
+        AssignmentTarget::ComputedMemberExpression(m) => root_of_expr(&m.object),
+        _ => None,
+    }
+}
+
+/// Is `expr` a plain `=` assignment populating a locally-declared data table —
+/// `staticTests[key] = value`, `lookup.foo = value` — where the target's base
+/// object resolves to a same-module `const`/`let` binding initialised to an
+/// object literal?
+///
+/// Populating such a table at module scope is static data construction (the
+/// multi-statement form of an object-literal initializer), not stateful setup
+/// that risks cross-test pollution: tests cannot reset it, but nothing outside
+/// the module observes the writes. Assignments whose base object is an imported,
+/// global, or external binding (`process.env.X = …`, `window.foo = …`) do not
+/// resolve to a local object-literal binding and stay flagged, as do compound
+/// assignments (`+=`, `||=`) which read-then-mutate.
+fn is_local_data_table_assignment(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bool {
+    let Expression::AssignmentExpression(assign) = expr else {
+        return false;
+    };
+    if assign.operator != AssignmentOperator::Assign {
+        return false;
+    }
+    let Some(root) = root_identifier_of_target(&assign.left) else {
+        return false;
+    };
+    crate::oxc_helpers::is_local_object_builder_binding(root, semantic)
+}
+
 /// Classify a top-level statement.
 fn top_level_is_allowed(
     stmt: &Statement,
     node_test_mode: bool,
     package_bindings: &FxHashSet<&str>,
+    semantic: &oxc_semantic::Semantic,
 ) -> bool {
     match stmt {
         Statement::ImportDeclaration(_)
@@ -400,6 +448,13 @@ fn top_level_is_allowed(
                 peel_parens(expr),
                 Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_)
             ) {
+                return true;
+            }
+            // Populating a locally-declared data table (`table[key] = value`) is
+            // static data construction, not stateful setup — see
+            // `is_local_data_table_assignment`. An assignment to imported/global
+            // state still falls through and is flagged.
+            if is_local_data_table_assignment(expr, semantic) {
                 return true;
             }
             // Must be a call expression.
@@ -1160,6 +1215,70 @@ describe("x", () => { it("works", () => {}); });
     }
 
     #[test]
+    fn allows_top_level_local_data_table_population() {
+        let src = r#"
+import { describe, it, expect } from 'vitest'
+
+const staticTests: Record<string, unknown> = {
+  'import defaultMember from "module-name";': { specifier: "module-name" },
+};
+
+staticTests[`import { member1, member2 } from "module-name";`] = {
+  specifier: "module-name",
+  namedImports: { member1: "member1", member2: "member2" },
+};
+staticTests[`import { Component } from '@angular2/core';`] = {
+  specifier: "@angular2/core",
+  type: "static",
+};
+
+describe("imports", () => {
+  it("works", () => { expect(Object.keys(staticTests).length).toBe(3); });
+});
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "imports.test.ts");
+        assert!(
+            d.is_empty(),
+            "populating a module-scope const data table (table[key] = value) must be allowed: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_top_level_assignment_to_imported_binding() {
+        let src = r#"
+import { describe, it } from 'vitest'
+import { config } from './config'
+
+config.endpoint = 'http://localhost:3000';
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "config.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "mutating an imported binding at top level is stateful setup and must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
+    fn flags_top_level_assignment_to_global() {
+        let src = r#"
+import { describe, it } from 'vitest'
+
+globalThis.fetch = mockFetch;
+
+describe("x", () => { it("works", () => {}); });
+"#;
+        let d = crate::rules::test_helpers::run_rule(&Check, src, "global.test.ts");
+        assert_eq!(
+            d.len(),
+            1,
+            "assigning to a global (globalThis.fetch) at top level must still be flagged: {d:?}"
+        );
+    }
+
+    #[test]
     fn flags_top_level_setup_server_call() {
         let src = r#"
 import { setupServer } from 'msw/node'
@@ -1527,7 +1646,7 @@ impl OxcCheck for Check {
         let mut diagnostics = Vec::new();
 
         for stmt in &program.body {
-            if top_level_is_allowed(stmt, node_test_mode, &package_bindings) {
+            if top_level_is_allowed(stmt, node_test_mode, &package_bindings, semantic) {
                 continue;
             }
             let span = stmt.span();
