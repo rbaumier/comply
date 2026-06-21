@@ -7,7 +7,13 @@
 use tree_sitter::Node;
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::{enclosing_fn, has_outer_attribute, is_in_test_context};
+
+/// Deprecated methods of the `std::error::Error` trait. Implementing one of
+/// these on a wrapper type forces a delegating call to the inner type's
+/// same-name deprecated method, which is what `#[allow(deprecated)]` suppresses
+/// — the deprecated context is the justification.
+const DEPRECATED_TRAIT_METHODS: &[&str] = &["description", "cause"];
 
 crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
     let text = node.utf8_text(source).unwrap_or("");
@@ -22,6 +28,10 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
     if (allow_list_contains(text, "unused") || allow_list_contains(text, "deprecated"))
         && is_in_test_context(node, source)
     {
+        return;
+    }
+
+    if allow_list_contains(text, "deprecated") && is_in_deprecated_context(node, source) {
         return;
     }
 
@@ -104,6 +114,28 @@ fn has_inline_reason(attribute_item: Node, source: &[u8]) -> bool {
             && triple[1].kind() == "="
             && triple[2].kind() == "string_literal"
     })
+}
+
+/// True when an `#[allow(deprecated)]` is self-justified by its enclosing
+/// function: either the function carries its own `#[deprecated]` attribute, or
+/// its name is a deprecated standard trait method whose implementation must
+/// delegate to the inner type's deprecated method.
+///
+/// In both cases the deprecation *is* the reason — a delegating implementation
+/// of deprecated code necessarily touches deprecated APIs — so an extra `//`
+/// comment would only restate what the surrounding code already shows.
+fn is_in_deprecated_context(node: Node, source: &[u8]) -> bool {
+    let Some(func) = enclosing_fn(node) else {
+        return false;
+    };
+
+    if has_outer_attribute(func, source, "deprecated") {
+        return true;
+    }
+
+    func.child_by_field_name("name")
+        .and_then(|name| name.utf8_text(source).ok())
+        .is_some_and(|name| DEPRECATED_TRAIT_METHODS.contains(&name))
 }
 
 fn allow_list_contains(attribute: &str, name: &str) -> bool {
@@ -225,8 +257,45 @@ mod tests {
 
     #[test]
     fn flags_deprecated_outside_test_context() {
-        // Load-bearing guard: the deprecated exemption is test-scoped only.
+        // Load-bearing guard: the bare deprecated exemption is test-scoped only;
+        // an ordinary `fn f()` is neither a deprecated trait method nor
+        // `#[deprecated]`, so it stays flagged.
         assert_eq!(run("#[allow(deprecated)]\nfn f() {}").len(), 1);
+    }
+
+    #[test]
+    fn allows_deprecated_in_deprecated_trait_method_impl() {
+        // #5204: implementing a deprecated `std::error::Error` trait method on a
+        // wrapper forces a delegating call to the inner type's deprecated method;
+        // the deprecated context is the justification.
+        assert!(
+            run("impl StdError for BoxedError {\n    fn description(&self) -> &str {\n        #[allow(deprecated)]\n        self.0.description()\n    }\n}")
+                .is_empty()
+        );
+        assert!(
+            run("impl StdError for BoxedError {\n    fn cause(&self) -> Option<&dyn StdError> {\n        #[allow(deprecated)]\n        self.0.cause()\n    }\n}")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_deprecated_inside_deprecated_fn() {
+        // A `#[deprecated]` function that maintains deprecated code self-justifies
+        // an inner `#[allow(deprecated)]`.
+        assert!(
+            run("#[deprecated]\nfn old_api() {\n    #[allow(deprecated)]\n    legacy_call();\n}")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_deprecated_in_ordinary_method() {
+        // Load-bearing guard: the deprecated-context exemption keys on the
+        // function name / `#[deprecated]` attribute, not on being inside any fn.
+        assert_eq!(
+            run("impl Foo for Bar {\n    fn run(&self) {\n        #[allow(deprecated)]\n        legacy_call();\n    }\n}").len(),
+            1
+        );
     }
 
     #[test]
