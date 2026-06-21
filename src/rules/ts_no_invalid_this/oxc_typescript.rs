@@ -410,15 +410,19 @@ fn is_event_emitter_listener_callback(
 }
 
 /// True when `func_id` is a non-arrow `function` passed as a callback argument
-/// to a `CallExpression` that also passes a trailing `this` argument
-/// (`arr.map(function () {…}, this)`). `Array.prototype.{map,forEach,filter,…}`
-/// and util libraries following the `(collection, callback, context)` convention
-/// (zrender `map`/`each`, lodash) invoke the callback with the trailing argument
-/// bound as `this`, so `this` in the callback body is the bound context.
+/// to a `CallExpression` that also passes at least one trailing argument
+/// (`arr.map(function () {…}, this)`, `arr.forEach(function () {…}, thisArg)`,
+/// `of(…).pipe(every(function () {…}, thisArg))`). `Array.prototype.{map,forEach,
+/// filter,…}`, RxJS predicate operators, and util libraries following the
+/// `(collection, callback, context)` convention (zrender `map`/`each`, lodash)
+/// invoke the callback with the trailing argument bound as `this`, so `this` in
+/// the callback body is the bound context. The trailing argument is the `thisArg`
+/// whether it is the literal `this` keyword or any other value (a local variable,
+/// an object literal, …).
 ///
-/// The `this` argument must come *after* the callback in the argument list — a
-/// `this` passed before the callback (`foo(this, function () {…})`) is data, not
-/// the `thisArg`, so it does not bind the callback's `this`.
+/// The `thisArg` must come *after* the callback in the argument list — an argument
+/// passed before the callback (`foo(this, function () {…})`) is data, not the
+/// `thisArg`, so it does not bind the callback's `this`.
 fn is_callback_with_trailing_this_arg(
     func_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
@@ -443,9 +447,7 @@ fn is_callback_with_trailing_this_arg(
     else {
         return false;
     };
-    call.arguments[callback_index + 1..]
-        .iter()
-        .any(|arg| matches!(arg, oxc_ast::ast::Argument::ThisExpression(_)))
+    callback_index + 1 < call.arguments.len()
 }
 
 /// True when `call` is a `$(this)` call — a call to the bare `$` identifier
@@ -676,10 +678,11 @@ fn is_valid_this_context(
                     return true;
                 }
                 // Trailing-thisArg callback: a `function` passed to a call that
-                // also passes a later `this` argument (`arr.map(function () {…},
-                // this)`) is invoked with that `this` bound — the ECMAScript
-                // `thisArg` convention shared by `Array.prototype.{map,forEach,…}`
-                // and `(collection, callback, context)` util libraries.
+                // also passes a later argument (`arr.map(function () {…}, this)`,
+                // `arr.forEach(function () {…}, thisArg)`) is invoked with that
+                // argument bound as `this` — the ECMAScript `thisArg` convention
+                // shared by `Array.prototype.{map,forEach,…}`, RxJS predicate
+                // operators, and `(collection, callback, context)` util libraries.
                 if is_callback_with_trailing_this_arg(ancestor.id(), semantic) {
                     return true;
                 }
@@ -1266,6 +1269,26 @@ mod tests {
         // callback — `this` in the callback is the bound context. The trailing
         // `this` argument sits in a class method so it is itself a valid context.
         let src = "class Foo {\n  run() {\n    return map(arr, function () {\n      return this.x;\n    }, this);\n  }\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_foreach_callback_with_local_var_this_arg() {
+        // Regression for #5169: the trailing `thisArg` need not be the literal
+        // `this` keyword — `Array.prototype.forEach(callbackFn, thisArg)` binds
+        // `this` inside the non-arrow callback to whatever value (here a local
+        // variable) is passed after the callback.
+        let src = "const ctx = { x: 1 };\n[1, 2, 3].forEach(function () {\n  return this.x;\n}, ctx);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_rxjs_predicate_callback_with_local_var_this_arg() {
+        // Regression for #5169: RxJS predicate operators (`every`/`filter`/`find`/
+        // `map`) accept a trailing `thisArg` that binds `this` inside the non-arrow
+        // callback, exactly like the Array methods. The `thisArg` here is a local
+        // variable, not the literal `this`.
+        let src = "const thisArg = { limit: 5 };\nof(1, 2, 3).pipe(every(function (val) {\n  const limit = this.limit;\n  return val < limit;\n}, thisArg));";
         assert!(run_on(src).is_empty());
     }
 
