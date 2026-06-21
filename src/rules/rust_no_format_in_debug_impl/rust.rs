@@ -21,6 +21,12 @@
 //!   return value of a closure (`unwrap_or_else(|e| format!(...))`,
 //!   `.map(|i| { ...; format!(...) })`). There is no formatter in scope to
 //!   `write!` to — the closure or binding must yield an owned `String`.
+//!
+//! Nested helper functions (`fn helper() { ... }` declared inside the `fmt`
+//! method body) are skipped entirely: they open a new scope where the outer
+//! `fmt`'s formatter is not visible, so a `format!` there returns an owned
+//! `String` that the helper cannot `write!` anywhere. Only `format!` in the
+//! impl's own method bodies is scanned.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -289,8 +295,20 @@ fn collect_format_macros_in(
     ctx: &CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    let body_id = body.id();
     let mut stack = vec![body];
     while let Some(node) = stack.pop() {
+        // A `function_item` nested below the impl body is a helper function
+        // declared inside a method (e.g. inside `fmt`). It opens its own scope
+        // where the method's formatter is not visible, so a `format!` there is
+        // the helper's concern, not the method's formatting flow — don't
+        // descend into it. The impl's own methods are direct children of the
+        // impl body (`declaration_list`) and must still be scanned.
+        if node.kind() == "function_item"
+            && node.parent().map(|parent| parent.id()) != Some(body_id)
+        {
+            continue;
+        }
         if node.kind() == "macro_invocation"
             && let Some(macro_node) = node.child_by_field_name("macro")
             && let Ok(name) = macro_node.utf8_text(source)
@@ -520,6 +538,45 @@ mod tests {
             }
         }"#;
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_format_in_nested_helper_fn_inside_fmt() {
+        // criterion.rs src/report.rs: the `format!` is inside `fn format_opt`,
+        // a helper declared inside `fmt`. The outer formatter `f` is not in
+        // scope there; the helper must return an owned `String`. See #5174.
+        let source = r#"impl fmt::Debug for BenchmarkId {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                fn format_opt(opt: &Option<String>) -> String {
+                    match *opt {
+                        Some(ref string) => format!("\"{}\"", string),
+                        None => "None".to_owned(),
+                    }
+                }
+                write!(
+                    f,
+                    "BenchmarkId {{ value_str: {} }}",
+                    format_opt(&self.value_str),
+                )
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_direct_fmt_format_alongside_nested_helper_fn() {
+        // The nested-fn helper's `format!` is exempt, but a `format!` written
+        // directly in the `fmt` body is still the waste the rule targets. See
+        // #5174 — the exclusion must not leak to the method's own flow.
+        let source = r#"impl fmt::Debug for Foo {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                fn helper(x: u32) -> String {
+                    format!("{x}")
+                }
+                f.write_str(&format!("Foo({})", helper(self.x)))
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
