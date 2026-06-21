@@ -42,8 +42,8 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
     cast_operand_bit_width, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
-    cast_operand_is_enum_discriminant, cast_operand_is_range_guarded, find_identifier_type,
-    is_in_enum_discriminant, is_in_test_context,
+    cast_operand_is_enum_discriminant, cast_operand_is_range_guarded, cast_operand_is_repr_enum_field,
+    find_identifier_type, is_in_enum_discriminant, is_in_test_context,
 };
 
 const KINDS: &[&str] = &["type_cast_expression"];
@@ -151,6 +151,9 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
         return false;
     }
     if cast_operand_is_enum_discriminant(node, source_bytes) {
+        return false;
+    }
+    if cast_operand_is_repr_enum_field(node, source_bytes, target) {
         return false;
     }
     if cast_operand_is_range_guarded(node, source_bytes) {
@@ -816,5 +819,33 @@ mod tests {
     fn repro_5257_plain_numeric_cast_still_flagged() {
         // A real numeric narrowing with no bit-reader operand stays flagged.
         assert_eq!(run_on("fn f(x: u32) -> u8 { x as u8 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_5260_repr_enum_field_as_u8_not_flagged() {
+        // `self.dispose_op as u8` where the field is a `#[repr(u8)]` enum is
+        // lossless; this rule must not flag it either.
+        let src = "#[repr(u8)] enum DisposeOp { None = 0, Background = 1 } \
+                   struct Frame { dispose_op: DisposeOp } \
+                   impl Frame { fn ser(&self) -> u8 { self.dispose_op as u8 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5260_integer_field_narrowing_still_flagged() {
+        // The repr-enum exemption must not leak to a genuine integer narrowing:
+        // a `u16` field `as u8` is lossy and still flagged here.
+        let src = "struct S { count: u16 } fn g(s: &S) -> u8 { s.count as u8 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_5260_repr_u16_enum_field_as_u8_still_flagged() {
+        // A `#[repr(u16)]` enum's discriminant does not fit u8; the exemption
+        // must not apply, so the narrowing stays a finding.
+        let src = "#[repr(u16)] enum E { A } \
+                   struct S { f: E } \
+                   fn g(s: &S) -> u8 { s.f as u8 }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }

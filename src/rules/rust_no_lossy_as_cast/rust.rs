@@ -51,8 +51,8 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
     cast_operand_bit_width, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
     cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
-    cast_operand_is_enum_discriminant, cast_operand_is_range_guarded, find_identifier_type,
-    is_in_enum_discriminant,
+    cast_operand_is_enum_discriminant, cast_operand_is_range_guarded, cast_operand_is_repr_enum_field,
+    find_identifier_type, is_in_enum_discriminant,
 };
 use crate::rules::rust_no_as_numeric_cast::rust::fires_on_cast;
 
@@ -117,6 +117,9 @@ impl AstCheck for Check {
             return;
         }
         if cast_operand_is_enum_discriminant(node, source_bytes) {
+            return;
+        }
+        if cast_operand_is_repr_enum_field(node, source_bytes, target) {
             return;
         }
         if cast_operand_is_range_guarded(node, source_bytes) {
@@ -899,5 +902,75 @@ mod tests {
         // A non-literal count is not statically bounded; the narrowing stays a
         // finding, owned by `rust-no-as-numeric-cast`.
         assert!(run_on("fn f(r: R, n: u32) -> u8 { r.read_bits(n) as u8 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5260_self_repr_enum_field_as_u8_not_flagged() {
+        // The issue's shape (image-png common.rs): `self.dispose_op as u8` where
+        // `dispose_op: DisposeOp` and `DisposeOp` is `#[repr(u8)]`. The repr
+        // guarantees every discriminant fits u8, so the cast is lossless.
+        let src = "#[repr(u8)] enum DisposeOp { None = 0, Background = 1, Previous = 2 } \
+                   struct Frame { dispose_op: DisposeOp } \
+                   impl Frame { fn ser(&self) -> u8 { self.dispose_op as u8 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5260_param_repr_enum_field_as_u8_not_flagged() {
+        // The issue's other shape (stream.rs): `frame.dispose_op as u8` where
+        // `frame: &FrameControl` is a parameter and the field type is `#[repr(u8)]`.
+        let src = "#[repr(u8)] enum DisposeOp { None, Background } \
+                   struct FrameControl { dispose_op: DisposeOp } \
+                   fn ser(frame: &FrameControl) -> u8 { frame.dispose_op as u8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5260_repr_u8_enum_field_to_wider_u16_not_flagged() {
+        // Widening a repr(u8) enum to u16 is also lossless.
+        let src = "#[repr(u8)] enum E { A } \
+                   struct S { f: E } \
+                   fn g(s: &S) -> u16 { s.f as u16 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5260_direct_variant_as_u8_not_flagged() {
+        // A direct `EnumName::Variant as u8` of a repr(u8) enum (already covered
+        // by the discriminant helper) stays silent.
+        let src = "#[repr(u8)] enum E { A = 0, B = 1 } fn f() -> u8 { E::B as u8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5260_repr_u16_enum_field_as_u8_owned_by_numeric_cast() {
+        // A `#[repr(u16)]` enum can hold discriminants up to 65535, which do not
+        // fit u8 — the repr-enum exemption must NOT apply. The narrowing stays a
+        // finding (here owned by `rust-no-as-numeric-cast`).
+        let src = "#[repr(u16)] enum E { A } \
+                   struct S { f: E } \
+                   fn g(s: &S) -> u8 { s.f as u8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5260_non_repr_enum_field_as_u8_owned_by_numeric_cast() {
+        // Without `#[repr(intN)]` the discriminant width is not guaranteed, so
+        // the exemption must not apply; the narrowing stays a finding.
+        let src = "enum E { A } \
+                   struct S { f: E } \
+                   fn g(s: &S) -> u8 { s.f as u8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5260_integer_field_narrowing_owned_by_numeric_cast() {
+        // The cast must NOT be un-flagged when the field is a wider integer, not
+        // a repr-enum: `u16` field `as u8` is genuinely lossy. The repr-enum
+        // exemption does not apply; `rust-no-as-numeric-cast` owns the span (the
+        // field operand's source type is unresolved), so this rule suppresses.
+        let src = "struct S { count: u16 } \
+                   fn g(s: &S) -> u8 { s.count as u8 }";
+        assert!(run_on(src).is_empty());
     }
 }
