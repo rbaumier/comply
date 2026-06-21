@@ -293,19 +293,26 @@ fn byte_to_line_col(source: &str, byte_offset: usize) -> (usize, usize) {
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        let bindings = collect_ref_bindings(ctx.source);
+        // Blank every SFC block that is not `<script>`/`<template>` — custom
+        // blocks (`<docs>`, `<i18n>`, `<config>`, …) and `<style>` hold
+        // documentation / i18n JSON / CSS, not executable code, so a ref name
+        // appearing there is prose and must not be analyzed. Non-SFC sources
+        // (plain script) pass through unchanged. The mask is byte-length- and
+        // newline-preserving, so all offset-based checks below stay valid.
+        let code_only = crate::rules::vue_sfc::mask_non_code_blocks(ctx.source);
+        let bindings = collect_ref_bindings(&code_only);
         if bindings.is_empty() {
             return Vec::new();
         }
-        // Blank every `<!-- ... -->` HTML comment, then every `//` and
+        // Then blank every `<!-- ... -->` HTML comment, every `//` and
         // `/* ... */` (incl. `/** ... */` JSDoc) JS/TS comment, so a ref name
         // that appears only in prose — template comment or `<script>` doc
         // comment — can't be matched as an operand. `mask_comments` skips string
-        // literals, so a comment marker inside a string is left intact. Both
+        // literals, so a comment marker inside a string is left intact. All
         // masks are byte-length-preserving, so all offset-based checks below
         // stay valid.
         let scan_source = crate::oxc_helpers::mask_comments(
-            &crate::rules::vue_template_helpers::mask_html_comments(ctx.source),
+            &crate::rules::vue_template_helpers::mask_html_comments(&code_only),
         );
         let shadow_scopes = collect_shadow_scopes(ctx.source);
         // Vue 3 auto-unwraps top-level refs/computed inside `<template>` expressions,
@@ -580,6 +587,64 @@ mod tests {
         // The misuse is in `<script>`, where `.value` IS required; the template
         // skip must not over-suppress script-context misuse.
         let src = "<script setup lang=\"ts\">\nconst count = ref(0)\nconst doubled = count + 1\n</script>\n<template>\n  <div />\n</template>";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_ref_name_in_docs_custom_block() {
+        // ant-design-vue repro: the ref name appears as YAML/Markdown prose in a
+        // `<docs>` custom block (`en-US: set ... maxTagTextLength`). That is not
+        // code — masking non-script/template blocks removes the match.
+        let src = concat!(
+            "<docs>\n",
+            "---\n",
+            "title:\n",
+            "  en-US: set maxTagCount or maxTagTextLength\n",
+            "---\n",
+            "</docs>\n",
+            "<script setup lang=\"ts\">\n",
+            "const maxTagTextLength = ref(10);\n",
+            "</script>\n",
+            "<template>\n",
+            "  <a-button @click=\"maxTagTextLength++\">x</a-button>\n",
+            "</template>",
+        );
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_ref_name_in_i18n_custom_block() {
+        // An `<i18n>` block whose text places the ref name in an operand-shaped
+        // position (` count ++`, preceded by whitespace so the left boundary
+        // matches) would be flagged if scanned. Masking the block removes it;
+        // the genuine usage in `<script>` correctly uses `.value`.
+        let src = concat!(
+            "<i18n>\n",
+            "increment by count ++ steps\n",
+            "</i18n>\n",
+            "<script setup lang=\"ts\">\n",
+            "const count = ref(0)\n",
+            "const doubled = count.value + 1\n",
+            "</script>",
+        );
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_genuine_ref_misuse_alongside_custom_block() {
+        // A real `count + 1` misuse in `<script setup>` must still flag exactly
+        // once even when the same ref name also appears in an operand-shaped
+        // phrase (` count ++`) inside a `<docs>` custom block: the masked prose
+        // is ignored, the script misuse is not.
+        let src = concat!(
+            "<docs>\n",
+            "incremented as count ++ here\n",
+            "</docs>\n",
+            "<script setup lang=\"ts\">\n",
+            "const count = ref(0)\n",
+            "const doubled = count + 1\n",
+            "</script>",
+        );
         assert_eq!(run(src).len(), 1);
     }
 }
