@@ -2527,6 +2527,16 @@ pub struct ProjectCtx {
     // manifest parse run at most once per directory.
     registry_root_cache: Mutex<FxHashMap<PathBuf, Option<PathBuf>>>,
 
+    // Absolute paths of the server entry files a PartyKit `partykit.json`
+    // declares (`main` plus every `parties.<name>` value), keyed by that
+    // manifest's directory. The PartyKit runtime loads these classes by
+    // resolving the entry from `partykit.json`, never through a static import,
+    // so they have no in-repo importer yet are live. Resolved lazily on first
+    // miss and memoized — an empty set caches a directory with no enclosing
+    // `partykit.json` so the disk walk and manifest parse run at most once per
+    // manifest directory.
+    partykit_entry_files_cache: Mutex<FxHashMap<PathBuf, Arc<FxHashSet<PathBuf>>>>,
+
     // The project's dominant TS/JS filename-casing convention and that
     // convention's share of all classifiable TS/JS stems, or `None` when no stem
     // classifies (empty/non-TS-JS project). Computed once over the indexed file
@@ -3561,6 +3571,62 @@ impl ProjectCtx {
         };
         let root = self.registry_distribution_root(start_dir);
         root.is_some_and(|root| path.starts_with(&root))
+    }
+
+    /// True when `path` is a PartyKit server entry file — declared as `main` or
+    /// as a `parties.<name>` value in the nearest enclosing `partykit.json`. The
+    /// PartyKit runtime loads these server classes by resolving the entry from
+    /// `partykit.json` (PartyKit is built on Cloudflare Durable Objects), never
+    /// through a static TS import, so the file's default-exported server class
+    /// has no in-repo importer yet is a live framework entry point. `path` must
+    /// be absolute.
+    pub fn is_partykit_entry_file(&self, path: &Path) -> bool {
+        let Some(start_dir) = path.parent() else {
+            return false;
+        };
+        self.partykit_entry_files(start_dir).contains(path)
+    }
+
+    /// True when a `partykit.json` manifest encloses `start_dir` — the marker
+    /// that the project is a PartyKit app. Used to gate the path-convention
+    /// fallback (a `party/`-directory server class) so a stray `party/` folder
+    /// in a non-PartyKit project stays subject to the rule.
+    pub fn has_partykit_manifest(&self, start_dir: &Path) -> bool {
+        walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "partykit.json").is_some()
+    }
+
+    /// Absolute entry-file paths the nearest enclosing `partykit.json` declares
+    /// (`main` plus every `parties.<name>` value, each resolved against the
+    /// manifest directory). Resolved once per starting directory's manifest and
+    /// memoized by manifest directory; an empty set when no `partykit.json`
+    /// encloses `start_dir`.
+    fn partykit_entry_files(&self, start_dir: &Path) -> Arc<FxHashSet<PathBuf>> {
+        let Some(manifest_dir) =
+            walk_up_finding_cached(&self.manifest_dir_cache, start_dir, "partykit.json")
+        else {
+            return Arc::new(FxHashSet::default());
+        };
+        if let Ok(cache) = self.partykit_entry_files_cache.lock()
+            && let Some(hit) = cache.get(&manifest_dir)
+        {
+            return Arc::clone(hit);
+        }
+        let rel_paths =
+            load_manifest_at(&manifest_dir, "partykit.json", parse_partykit_entry_paths)
+                .unwrap_or_default();
+        let mut files = FxHashSet::default();
+        for rel in &rel_paths {
+            if let Some(resolved) = resolve_local_source_path(&manifest_dir, rel) {
+                files.insert(resolved);
+            }
+        }
+        let files = Arc::new(files);
+        if let Ok(mut cache) = self.partykit_entry_files_cache.lock() {
+            cache
+                .entry(manifest_dir)
+                .or_insert_with(|| Arc::clone(&files));
+        }
+        files
     }
 
     /// Distribution root for `start_dir`: the common-ancestor directory of every
@@ -5162,6 +5228,58 @@ fn parse_shadcn_registry_file_paths(raw: &str) -> Option<Vec<String>> {
         return None;
     }
     Some(paths)
+}
+
+/// Manifest-relative entry-file paths a PartyKit `partykit.json` declares: the
+/// `main` string plus every value of the `parties` object (`parties.<name>`),
+/// each normalized to forward slashes with any leading `./` stripped. Returns
+/// `None` when the text is unparseable or declares no entry-file path, so a
+/// `partykit.json` without `main`/`parties` exempts nothing.
+fn parse_partykit_entry_paths(raw: &str) -> Option<Vec<String>> {
+    let json: Value = serde_json::from_str(raw).ok()?;
+    let mut paths: Vec<String> = Vec::new();
+    if let Some(main) = json.get("main").and_then(Value::as_str) {
+        paths.push(normalize_rel_path(main));
+    }
+    if let Some(parties) = json.get("parties").and_then(Value::as_object) {
+        for value in parties.values() {
+            if let Some(rel) = value.as_str() {
+                paths.push(normalize_rel_path(rel));
+            }
+        }
+    }
+    paths.retain(|p| !p.is_empty());
+    if paths.is_empty() {
+        return None;
+    }
+    Some(paths)
+}
+
+/// A manifest-relative path normalized to forward slashes with any leading `./`
+/// stripped, so it joins cleanly onto the manifest directory.
+fn normalize_rel_path(rel: &str) -> String {
+    rel.strip_prefix("./").unwrap_or(rel).replace('\\', "/")
+}
+
+/// Resolve a manifest-relative module path (which may omit its extension) to the
+/// absolute path of the on-disk source file it names, using the same extension
+/// probing as the import resolver. `None` when no matching file exists.
+fn resolve_local_source_path(base: &Path, rel: &str) -> Option<PathBuf> {
+    let candidate = base.join(rel);
+    if candidate.is_file() {
+        return Some(candidate);
+    }
+    if let Some(name) = candidate.file_name().and_then(|n| n.to_str())
+        && let Some(parent) = candidate.parent()
+    {
+        for ext in TS_SOURCE_EXTENSIONS {
+            let with_ext = parent.join(format!("{name}.{ext}"));
+            if with_ext.is_file() {
+                return Some(with_ext);
+            }
+        }
+    }
+    None
 }
 
 /// Deepest directory under `base` that contains every entry of `rel_paths`
