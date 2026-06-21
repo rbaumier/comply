@@ -31,8 +31,13 @@ const FRESH_ARRAY_METHODS: &[&str] =
 /// mutating it in place is not observable through any other reference.
 fn is_fresh_array(expr: &Expression, source: &str) -> bool {
     match expr {
-        // Spread copy: `[...arr]`
+        // An array literal is a fresh allocation: an empty literal (`[]`, often
+        // filled later via `.push(...)`) or a spread copy (`[...arr]`). Either way
+        // no other reference aliases it, so mutating it in place is unobservable.
         Expression::ArrayExpression(arr) => {
+            if arr.elements.is_empty() {
+                return true;
+            }
             let text = &source[arr.span.start as usize..arr.span.end as usize];
             text.contains("...")
         }
@@ -439,5 +444,50 @@ mod oxc_tests {
             run("function f(shared: number[]) { const b: number[] = shared; return b.sort(); }").len(),
             1
         );
+    }
+
+    // === issue #5211: empty array literal built via `push` is a fresh local array ===
+
+    #[test]
+    fn allows_empty_const_built_with_push_then_sort() {
+        // The receiver is a `const` empty array literal populated in place — the
+        // sole reference to a fresh allocation — so sorting it is unobservable.
+        assert!(
+            run("function f(items) { const matches: string[] = []; items.forEach((i) => matches.push(i)); return matches.sort((a, b) => b.length - a.length); }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_empty_array_literal_reverse() {
+        // A direct empty-literal receiver is a fresh allocation.
+        assert!(run("const r = [].reverse();").is_empty());
+    }
+
+    #[test]
+    fn flags_parameter_array_reverse() {
+        // GUARD: a function-parameter array is a shared reference owned by the
+        // caller — reversing it in place is still misleading.
+        assert_eq!(
+            run("function f(xs: number[]) { const r = xs.reverse(); return r; }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_let_empty_array_sort() {
+        // GUARD: an empty array literal bound to a `let` could be reassigned to a
+        // shared array later, so ownership is not provable — stay conservative.
+        assert_eq!(
+            run("function f() { let b: number[] = []; return b.sort(); }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_hole_array_literal_reverse() {
+        // GUARD: a sparse literal with a hole (`[,]`) has a non-empty element list,
+        // so it is not the empty-literal fresh case — locks the empty-vs-hole edge.
+        assert_eq!(run("const r = [,].reverse();").len(), 1);
     }
 }
