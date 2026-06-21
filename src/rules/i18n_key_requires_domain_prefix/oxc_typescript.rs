@@ -115,6 +115,7 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::test_helpers::run_rule_gated;
 
     fn run(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
@@ -129,5 +130,30 @@ mod tests {
     #[test]
     fn flags_missing_domain() {
         assert_eq!(run("t('welcome')").len(), 1);
+    }
+
+    // Regression for rbaumier/comply#5054 — vue-i18n's own test suite passes
+    // flat single-segment keys (`'test'`) to `t()` as minimal fixtures while
+    // exercising the locale-fallback/composer engine. Those are not application
+    // i18n usage, so the central `skip_in_test_dir` gate suppresses the rule.
+    #[test]
+    fn gated_no_fp_on_flat_key_in_test_file() {
+        let src = "watch(locale, () => (result = t('test')), { immediate: true })\n";
+        assert!(
+            run_rule_gated(&Check, src, "packages/vue-i18n-core/test/composer.test.ts").is_empty(),
+            "skip_in_test_dir must suppress flat fixture keys in test files"
+        );
+    }
+
+    // A flat key in a production/source file is real application i18n usage and
+    // must still require a domain prefix.
+    #[test]
+    fn gated_still_flags_flat_key_in_production() {
+        let src = "t('title')\n";
+        assert_eq!(
+            run_rule_gated(&Check, src, "src/components/login.ts").len(),
+            1,
+            "production i18n keys must still require a domain prefix"
+        );
     }
 }

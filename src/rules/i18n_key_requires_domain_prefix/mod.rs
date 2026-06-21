@@ -1,3 +1,11 @@
+//! i18n-key-requires-domain-prefix — flag t() keys missing a `domain.subkey`
+//! prefix so locale files stay organised.
+//!
+//! Skipped in test directories (`skip_in_test_dir`): flat single-segment keys
+//! there are intentional fixtures (e.g. an i18n library exercising its own
+//! locale-fallback/lookup engine with minimal message catalogs), not real
+//! application i18n usage.
+
 mod oxc_typescript;
 
 use crate::diagnostic::Severity;
@@ -14,7 +22,7 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["i18n"],
 
-    skip_in_test_dir: false,
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
