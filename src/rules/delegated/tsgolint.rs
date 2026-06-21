@@ -340,11 +340,12 @@ pub fn register_all() -> Vec<RuleDef> {
             "Interface with `new()` or class with `constructor` type is wrong.",
             "Use proper constructor signature.",
         ),
-        entry(
+        entry_with_filter(
             "no-empty-interface",
             "no-empty-interface",
             "Empty interface has no members — use `type` or remove it.",
             "Add members, use `type = {}`, or remove the interface.",
+            Some(Arc::new(NoEmptyInterfaceFilter)),
         ),
         entry(
             "no-empty-object-type",
@@ -717,6 +718,187 @@ fn has_empty_braces_then_ampersand(bytes: &[u8]) -> bool {
         i += 1;
     }
     false
+}
+
+// ── no-empty-interface post-filter ─────────────────────────────────────────
+//
+// An empty single-`extends` interface whose extends type arguments reference a
+// type that participates in a recursion cycle back to the interface cannot be
+// rewritten as a `type` alias — TypeScript rejects `type Foo = X<…Foo…>` with
+// "circularly references itself". The empty-interface form is the documented
+// workaround for recursive type aliases. Two cycle shapes are exempted:
+//   1. Direct: `interface Foo extends X<Foo> {}` — own name in own extends args
+//      (incl. nested generics, e.g. `extends A<B<Foo>>`).
+//   2. Mutual: `interface Foo extends X<G> {}` + `type G = … | Foo | …` — the
+//      extends args reference a union/intersection alias `G` that lists `Foo`
+//      back (gcanti/io-ts pattern). (Closes #5293)
+
+struct NoEmptyInterfaceFilter;
+
+impl PostFilter for NoEmptyInterfaceFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        let Some(src) = source else { return true };
+        !nei_is_recursive_alias_interface(src, diag.line)
+    }
+}
+
+// Reconstruct the interface declaration starting at the diagnostic line and
+// decide whether it is a recursive nominal alias that must stay an interface.
+fn nei_is_recursive_alias_interface(src: &str, line_1based: usize) -> bool {
+    let lines: Vec<&str> = src.lines().collect();
+    if line_1based == 0 || line_1based > lines.len() {
+        return false;
+    }
+    // Gather the header text from the flagged line up to the opening body brace
+    // `{`. Single-line declarations are the common case; allow a few lines for
+    // wrapped headers.
+    let end = (line_1based + 5).min(lines.len());
+    let header: String = lines[line_1based - 1..end].join("\n");
+
+    let Some((name, extends_args)) = nei_parse_extends_args(&header) else {
+        return false;
+    };
+    let arg_names = nei_extends_arg_names(&extends_args);
+    // Direct self-recursion: the interface name appears in its own extends args.
+    if arg_names.iter().any(|n| n == &name) {
+        return true;
+    }
+    // Mutual recursion: an args type name resolves to a union/intersection alias
+    // that lists this interface back.
+    arg_names
+        .iter()
+        .any(|g| g != &name && nei_alias_references(src, g, &name))
+}
+
+// Parse `interface <Name> extends <Base>(<Args>) {` from the header, returning
+// the interface name and the raw text inside the extends clause's outermost
+// `<…>` type-argument list. Returns `None` when there is no parameterized
+// extends clause (no `<…>` before the body `{`), so a plain
+// `interface Foo extends Bar {}` is never exempted here.
+fn nei_parse_extends_args(header: &str) -> Option<(String, String)> {
+    let after_kw = header.split_once("interface")?.1;
+    let after_kw = after_kw.trim_start();
+    let name: String = after_kw
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
+        .collect();
+    if name.is_empty() {
+        return None;
+    }
+    let rest = &after_kw[name.len()..];
+    // Stop at the body brace; the extends clause and its args live before it.
+    let body = rest.find('{').unwrap_or(rest.len());
+    let heritage = &rest[..body];
+    let after_extends = heritage.split_once("extends")?.1;
+
+    // Capture the args of the first parameterized base in the heritage clause.
+    // An interface extending two generic bases (`extends X<A>, Y<Foo>`) only has
+    // its first base scanned — conservative: a missed self-reference keeps the
+    // diagnostic, never wrongly suppresses one.
+    let bytes = after_extends.as_bytes();
+    let open = after_extends.find('<')?;
+    let mut depth = 0i32;
+    let mut i = open;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'<' => depth += 1,
+            b'>' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((name, after_extends[open + 1..i].to_string()));
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+// Collect the top-level identifier names referenced in a type-argument list,
+// excluding property-access suffixes (`t.UnionType` yields `t`, not `UnionType`).
+fn nei_extends_arg_names(args: &str) -> Vec<String> {
+    let bytes = args.as_bytes();
+    let mut names = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c.is_ascii_alphabetic() || c == b'_' || c == b'$' {
+            let start = i;
+            while i < bytes.len()
+                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$')
+            {
+                i += 1;
+            }
+            // Skip the segment if it is a property access (`.Name`): the head of
+            // a qualified name (`t` in `t.UnionType`) is the only identifier we
+            // keep, the suffix is not a free type reference.
+            let preceded_by_dot = start > 0 && bytes[start - 1] == b'.';
+            if !preceded_by_dot {
+                names.push(args[start..i].to_string());
+            }
+        } else {
+            i += 1;
+        }
+    }
+    names
+}
+
+// Whether `src` declares `type <alias> = …` whose RHS references `iface` as a
+// union/intersection member or type argument — the mutual-recursion link.
+fn nei_alias_references(src: &str, alias: &str, iface: &str) -> bool {
+    let Some(rhs) = nei_type_alias_rhs(src, alias) else {
+        return false;
+    };
+    nei_extends_arg_names(&rhs).iter().any(|n| n == iface)
+}
+
+// Extract the right-hand side of `type <alias> = …` up to the terminating `;`.
+// Scans every `type <alias>` occurrence so a longer-named alias sharing the
+// prefix (`type GenerableUnion` vs `type Generable`) does not mask the match.
+fn nei_type_alias_rhs(src: &str, alias: &str) -> Option<String> {
+    let needle = format!("type {alias}");
+    let mut search_from = 0usize;
+    while let Some(rel) = src[search_from..].find(&needle) {
+        let start = search_from + rel;
+        search_from = start + needle.len();
+        let after = &src[start + needle.len()..];
+        let Some(eq) = after.find('=') else { continue };
+        // Between the alias name and `=` only whitespace is allowed, otherwise
+        // this is a different, longer-named alias (`Generable` vs `GenerableX`).
+        if !after[..eq].trim().is_empty() {
+            continue;
+        }
+        let rhs = &after[eq + 1..];
+        return Some(nei_alias_rhs_slice(rhs));
+    }
+    None
+}
+
+// Bound a type-alias RHS: stop at the first `;`, a blank line, or the next
+// top-level declaration keyword, so an unterminated union doesn't swallow the
+// rest of the file.
+fn nei_alias_rhs_slice(rhs: &str) -> String {
+    if let Some(semi) = rhs.find(';') {
+        return rhs[..semi].to_string();
+    }
+    let mut out = String::new();
+    for line in rhs.lines() {
+        let trimmed = line.trim_start();
+        if !out.is_empty()
+            && (trimmed.is_empty()
+                || trimmed.starts_with("type ")
+                || trimmed.starts_with("interface ")
+                || trimmed.starts_with("export ")
+                || trimmed.starts_with("const ")
+                || trimmed.starts_with("function "))
+        {
+            break;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
 }
 
 // ── no-unsafe-assignment post-filter ──────────────────────────────────────
@@ -2197,6 +2379,98 @@ mod tests {
         let src_content = source_for(&path);
         let f = BanTypesFilter;
         assert!(f.keep(&ban_types_diag(&path, 1), Some(&src_content)));
+    }
+
+    // ── no-empty-interface ──────────────────────────────────────────────────
+
+    fn empty_interface_diag(path: &std::path::Path, line: usize) -> Diagnostic {
+        Diagnostic {
+            path: std::sync::Arc::from(path),
+            line,
+            column: 1,
+            rule_id: Cow::Borrowed("no-empty-interface"),
+            message: "an interface declaring no members is equivalent to its supertype".into(),
+            severity: Severity::Error,
+            span: None,
+        }
+    }
+
+    // Regression for #5293: direct self-recursion `interface Foo extends X<Foo> {}`
+    // cannot be a type alias (circular) — must be suppressed.
+    #[test]
+    fn drops_empty_interface_direct_self_recursion() {
+        let src = "interface Foo extends X<Foo> {}\n";
+        let path = write_temp("nei_direct.ts", src);
+        let line = line_of(src, "interface Foo");
+        let src_content = source_for(&path);
+        let f = NoEmptyInterfaceFilter;
+        assert!(!f.keep(&empty_interface_diag(&path, line), Some(&src_content)));
+    }
+
+    // Nested-generic self-recursion `interface T extends A<B<T>> {}`.
+    #[test]
+    fn drops_empty_interface_nested_self_recursion() {
+        let src = "interface T extends A<B<T>> {}\n";
+        let path = write_temp("nei_nested.ts", src);
+        let line = line_of(src, "interface T");
+        let src_content = source_for(&path);
+        let f = NoEmptyInterfaceFilter;
+        assert!(!f.keep(&empty_interface_diag(&path, line), Some(&src_content)));
+    }
+
+    // Regression for #5293: gcanti/io-ts mutual recursion through a union alias.
+    #[test]
+    fn drops_empty_interface_mutual_recursion_via_union_alias() {
+        let src = r#"interface GenerableRecord extends t.DictionaryType<Generable, Generable> {}
+interface GenerableUnion extends t.UnionType<Array<Generable>> {}
+
+type Generable =
+  | t.StringC
+  | GenerableRecord
+  | GenerableUnion
+"#;
+        let path = write_temp("nei_io_ts.ts", src);
+        let src_content = source_for(&path);
+        let f = NoEmptyInterfaceFilter;
+        let l1 = line_of(src, "interface GenerableRecord");
+        let l2 = line_of(src, "interface GenerableUnion");
+        assert!(!f.keep(&empty_interface_diag(&path, l1), Some(&src_content)));
+        assert!(!f.keep(&empty_interface_diag(&path, l2), Some(&src_content)));
+    }
+
+    // A plain single-extends empty interface with no self/mutual recursion is
+    // genuinely rewritable to a type alias — must still flag.
+    #[test]
+    fn keeps_empty_interface_non_recursive_single_extends() {
+        let src = "interface Foo extends Bar {}\n";
+        let path = write_temp("nei_plain.ts", src);
+        let line = line_of(src, "interface Foo");
+        let src_content = source_for(&path);
+        let f = NoEmptyInterfaceFilter;
+        assert!(f.keep(&empty_interface_diag(&path, line), Some(&src_content)));
+    }
+
+    // A parameterized extends whose args do NOT cycle back to the interface is
+    // still rewritable — must still flag.
+    #[test]
+    fn keeps_empty_interface_generic_extends_no_cycle() {
+        let src = "interface Foo extends X<Bar> {}\ntype Baz = Bar | Qux;\n";
+        let path = write_temp("nei_no_cycle.ts", src);
+        let line = line_of(src, "interface Foo");
+        let src_content = source_for(&path);
+        let f = NoEmptyInterfaceFilter;
+        assert!(f.keep(&empty_interface_diag(&path, line), Some(&src_content)));
+    }
+
+    // A bodiless empty interface with no extends at all is still redundant.
+    #[test]
+    fn keeps_empty_interface_no_extends() {
+        let src = "interface Foo {}\n";
+        let path = write_temp("nei_no_extends.ts", src);
+        let line = line_of(src, "interface Foo");
+        let src_content = source_for(&path);
+        let f = NoEmptyInterfaceFilter;
+        assert!(f.keep(&empty_interface_diag(&path, line), Some(&src_content)));
     }
 
     // ── no-unsafe-assignment ────────────────────────────────────────────────
