@@ -448,6 +448,74 @@ fn is_callback_with_trailing_this_arg(
         .any(|arg| matches!(arg, oxc_ast::ast::Argument::ThisExpression(_)))
 }
 
+/// True when `call` is a `$(this)` call — a call to the bare `$` identifier
+/// whose first argument is a `this` expression. This is the canonical
+/// jQuery/cheerio idiom for wrapping the element the library bound to `this` in
+/// an iterator callback (`$(this).attr(...)`); it only makes sense when the
+/// caller has rebound `this` to the current element.
+fn is_jquery_wrap_of_this(call: &oxc_ast::ast::CallExpression) -> bool {
+    let Expression::Identifier(callee) = &call.callee else {
+        return false;
+    };
+    callee.name == "$"
+        && matches!(
+            call.arguments.first(),
+            Some(oxc_ast::ast::Argument::ThisExpression(_))
+        )
+}
+
+/// True when `func_id`'s own body contains the jQuery/cheerio `$(this)` idiom —
+/// a `$(this)` call whose nearest enclosing non-arrow `function` is `func_id`
+/// itself (arrows are transparent). jQuery and cheerio invoke iterator callbacks
+/// (`.map`/`.each`/`.filter`/…) with `this` bound to the current element, and
+/// wrapping it as `$(this)` is the documented way to read that element. Such a
+/// non-arrow `function` callback has had its `this` rebound by the library, so
+/// every `this` in its body is the bound element, not a stray reference.
+///
+/// The scan keys on the `$(this)` call specifically, so a `function` that merely
+/// references `$` for something else, or uses `this` with no `$(this)` wrap, is
+/// not exempted. A `$(this)` inside a *nested* function binds that inner
+/// function, not this one, so it does not exempt an outer function's `this`.
+/// Arrow functions never reach this check (they are transparent to the
+/// `this`-boundary walk), and a top-level `this` has no enclosing `function` so
+/// it is never exempted either.
+fn function_body_has_jquery_this(
+    func_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let func_span = nodes.kind(func_id).span();
+    nodes.iter().any(|node| {
+        let AstKind::CallExpression(call) = node.kind() else {
+            return false;
+        };
+        if call.span.start < func_span.start
+            || call.span.end > func_span.end
+            || !is_jquery_wrap_of_this(call)
+        {
+            return false;
+        }
+        // The `$(this)` must bind `func_id` directly: its nearest enclosing
+        // non-arrow `function` is `func_id`, not a nested inner function.
+        nearest_non_arrow_function(node.id(), semantic) == Some(func_id)
+    })
+}
+
+/// The `NodeId` of the nearest non-arrow `Function` ancestor of `node_id`, or
+/// `None` if there is none before module scope. Arrow functions are transparent
+/// (an arrow does not introduce a `this` binding), matching the boundary the
+/// `this`-validity walk uses.
+fn nearest_non_arrow_function(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> Option<oxc_semantic::NodeId> {
+    semantic
+        .nodes()
+        .ancestors(node_id)
+        .find(|ancestor| matches!(ancestor.kind(), AstKind::Function(_)))
+        .map(|ancestor| ancestor.id())
+}
+
 /// True when `name` follows the constructor-function convention: after any
 /// leading underscores, the first character is an uppercase ASCII letter (e.g.
 /// `Suspense`, `Component`, or the module-private `_Reply`). Such functions are
@@ -613,6 +681,13 @@ fn is_valid_this_context(
                 // `thisArg` convention shared by `Array.prototype.{map,forEach,…}`
                 // and `(collection, callback, context)` util libraries.
                 if is_callback_with_trailing_this_arg(ancestor.id(), semantic) {
+                    return true;
+                }
+                // jQuery/cheerio iterator callback: a non-arrow `function` whose
+                // body wraps `this` as `$(this)` (`.map(function () { $(this) })`,
+                // `.each(...)`, …) has had its `this` rebound by the library to the
+                // current element, so `this` in the body is the bound element.
+                if function_body_has_jquery_this(ancestor.id(), semantic) {
                     return true;
                 }
                 // Constructor function: a PascalCase `function`, or one
@@ -1250,6 +1325,62 @@ mod tests {
         // cannot distinguish it from a real bug, so it stays flagged — the fix is
         // to add an explicit `this:` parameter.
         let src = "export function formatLanguageCode(code) {\n  if (this.options.lowerCaseLng) {\n    return code.toLowerCase();\n  }\n  return code;\n}";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_jquery_map_callback() {
+        // Regression for #5192: jQuery/cheerio bind `this` to the current element
+        // inside a non-arrow `function` iterator callback. Wrapping it as
+        // `$(this)` is the documented idiom (mjml's `wrapper-gap.test.js`), so
+        // every `this` in the callback body is the bound element, not unbound.
+        let src = "$('.my-section')\n  .map(function getAttr() {\n    const str = $(this).attr('style');\n    if (str.includes('margin-top:')) {\n      return $(this).attr('style');\n    }\n    return undefined;\n  })\n  .get();";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_jquery_each_callback() {
+        // Regression for #5192: `.each(function () { $(this).hide() })` is the
+        // same caller-binds-`this` idiom as `.map`.
+        let src = "$(sel).each(function () {\n  $(this).hide();\n});";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_function_callback_without_jquery_wrap() {
+        // Negative-space guard for #5192: a non-arrow `function` callback that
+        // uses `this.x` directly with no `$(this)` wrap has no caller-binding
+        // evidence — `this` stays unbound and must fire.
+        let diags = run_on("list.map(function () {\n  return this.x;\n});");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_this_at_top_level_even_with_jquery_in_scope() {
+        // Negative-space guard for #5192: a `this` at module scope (no enclosing
+        // non-arrow `function`) is never reached by the `$(this)` body scan and
+        // stays flagged.
+        let diags = run_on("$(this);");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_this_in_arrow_callback_with_jquery_wrap() {
+        // Negative-space guard for #5192: an arrow function cannot have its `this`
+        // rebound by the caller — `$(this)` inside an arrow at module scope reads
+        // the module `this`, a genuine bug, so it must still fire.
+        let diags = run_on("list.map(() => {\n  return $(this).text();\n});");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_outer_function_this_when_only_nested_function_uses_jquery() {
+        // Negative-space guard for #5192: the `$(this)` exemption binds the
+        // function that directly contains it. An outer standalone `function` with
+        // a stray `this.x` is not rescued by a *nested* inner callback's legit
+        // `$(this)` — the outer `this` must still fire, only the inner is exempt.
+        let src = "function outer() {\n  const v = this.x;\n  list.each(function () {\n    return $(this).text();\n  });\n  return v;\n}";
         let diags = run_on(src);
         assert_eq!(diags.len(), 1);
     }
