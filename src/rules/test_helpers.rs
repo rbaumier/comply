@@ -110,6 +110,41 @@ pub fn run_rule_with_ctx(
     check.execute_with_ctx(src, path.as_ref(), project, file)
 }
 
+/// Run a rule on a file written next to a `Cargo.toml`, so manifest-aware
+/// guards (e.g. the `proc-macro = true` exemption) resolve the temp crate's
+/// manifest via `nearest_cargo_manifest`. Writes `cargo_toml` at the crate
+/// root and `source` at `rel_src` (relative to that root), indexes both via
+/// `ProjectCtx::for_test_with_files`, and runs `check` on the source file.
+#[must_use]
+pub fn run_rule_with_cargo(
+    check: &dyn AstCheck,
+    cargo_toml: &str,
+    source: &str,
+    rel_src: &str,
+) -> Vec<Diagnostic> {
+    use std::fs;
+    use tempfile::TempDir;
+    let dir = TempDir::new().expect("tempdir");
+    let cargo_path = dir.path().join("Cargo.toml");
+    fs::write(&cargo_path, cargo_toml).expect("write Cargo.toml");
+    let src_path = dir.path().join(rel_src);
+    fs::create_dir_all(src_path.parent().expect("src parent")).expect("create src dir");
+    fs::write(&src_path, source).expect("write source");
+    let source_files = [
+        SourceFile { path: cargo_path, language: Language::Toml },
+        SourceFile { path: src_path.clone(), language: Language::Rust },
+    ];
+    let refs: Vec<&SourceFile> = source_files.iter().collect();
+    let project = ProjectCtx::for_test_with_files(&refs);
+    run_ast_check(
+        check,
+        source,
+        &src_path,
+        &project,
+        crate::rules::file_ctx::default_static_file_ctx(),
+    )
+}
+
 /// Run a rule through the production applicability gate (`applies_to_file`).
 /// Returns `[]` when the rule would be skipped for the given path (e.g., when
 /// `meta.skip_in_test_dir = true` and the path is inside `__tests__/`).
