@@ -119,6 +119,12 @@ impl TextCheck for Check {
         if crate::rules::path_utils::is_cargo_bin_target_path(ctx.path) {
             return Vec::new();
         }
+        // Cargo benchmark targets directly in `benches/` are auto-discovered with
+        // `--bench <stem>`, where the stem is a freely-chosen target name that
+        // conventionally uses kebab-case; nested modules under `benches/` are not.
+        if crate::rules::path_utils::is_cargo_bench_target_path(ctx.path) {
+            return Vec::new();
+        }
         if is_snake_case(strip_ordering_prefix(strip_private_prefix(stem))) {
             return Vec::new();
         }
@@ -251,6 +257,17 @@ mod tests {
     #[test]
     fn still_flags_kebab_case_module_nested_under_src_bin() {
         assert_eq!(run("src/bin/foo/my-helper.rs").len(), 1);
+    }
+
+    #[test]
+    fn allows_kebab_case_cargo_bench_target() {
+        assert!(run("fixtures/fixture-project/benches/my-bench.rs").is_empty());
+        assert!(run("crates/searcher/benches/io.rs").is_empty());
+    }
+
+    #[test]
+    fn still_flags_kebab_case_module_nested_under_benches() {
+        assert_eq!(run("benches/my_bench/my-helper.rs").len(), 1);
     }
 
     #[test]
