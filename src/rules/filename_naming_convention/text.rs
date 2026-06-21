@@ -205,6 +205,33 @@ fn is_regression_test_name(stem: &str) -> bool {
     digits > 0 && rest.as_bytes().get(digits) == Some(&b'-')
 }
 
+/// Strips a trailing `@<version>` discriminator from a test-file `stem`,
+/// returning the base name the convention is then validated against. The
+/// `<name>@<version>` form names a test suite after the dependency major
+/// version it targets — `tailwind@3`, `tailwind@4`, `vue@next` — borrowing
+/// npm's version-pinning syntax. Because the stem is the segment before the
+/// first `.`, the version can carry no dot, so it is recognised only as either
+/// a numeric major (`@3`, `@4`) or a lowercase dist-tag word (`@next`,
+/// `@canary`, `@latest`, `@beta`, `@alpha`, `@rc`). The `@` and its version are
+/// removed and the base (e.g. `tailwind`) is returned for the ordinary
+/// convention checks, so a malformed base (`Tailwind_Thing@3`) still fails.
+/// Returns `stem` unchanged when there is no recognised discriminator.
+fn strip_version_discriminator(stem: &str) -> &str {
+    let Some((base, version)) = stem.rsplit_once('@') else {
+        return stem;
+    };
+    if base.is_empty() {
+        return stem;
+    }
+    let is_numeric_major = !version.is_empty() && version.bytes().all(|b| b.is_ascii_digit());
+    let is_dist_tag = matches!(version, "next" | "canary" | "latest" | "beta" | "alpha" | "rc");
+    if is_numeric_major || is_dist_tag {
+        base
+    } else {
+        stem
+    }
+}
+
 /// Returns `true` when `path` is a test file by path alone: a `.test.`/`.spec.`
 /// filename infix or a `regression/` ancestor directory. The signal the
 /// regression-test-name allowance is gated on, so an `issue-NNNN-` stem in
@@ -335,7 +362,13 @@ impl TextCheck for Check {
         // A leading `_`/`__` marks a private/internal module and a leading `$`
         // marks a framework-internal/reactive value; validate the convention
         // against the name after the prefix.
-        let convention_stem = strip_private_prefix(stem);
+        let mut convention_stem = strip_private_prefix(stem);
+        // In test files, `<name>@<version>` names a suite after the dependency
+        // major version it targets (`tailwind@3.test.ts`); strip the recognised
+        // `@<version>` discriminator so the base name is validated as usual.
+        if is_test_context_path(ctx.path) {
+            convention_stem = strip_version_discriminator(convention_stem);
+        }
         if is_kebab_case(convention_stem) {
             return Vec::new();
         }
@@ -1138,5 +1171,42 @@ mod tests {
     #[test]
     fn flags_snake_case_without_dominant_convention_issue_2298() {
         assert_eq!(run_in_project(&[], "src/user_profile.ts").len(), 1);
+    }
+
+    // Regression for #5107: `<name>@<version>.test.ts` names a test suite after
+    // the dependency major version it targets (tailwind v3 vs v4). The kebab base
+    // `tailwind` is convention-compliant; the `@<version>` discriminator must be
+    // stripped in test files before the check.
+    #[test]
+    fn allows_versioned_test_file_numeric_major_issue_5107() {
+        assert!(run("test/css-frameworks/tailwind@3.test.ts").is_empty());
+        assert!(run("test/css-frameworks/tailwind@4.test.ts").is_empty());
+    }
+
+    #[test]
+    fn allows_versioned_test_file_dist_tag_issue_5107() {
+        assert!(run("test/vue@next.spec.ts").is_empty());
+        assert!(run("test/react@canary.test.ts").is_empty());
+    }
+
+    // Guard: the `@<version>` strip does not exempt a malformed base — a
+    // snake_cased base (`tailwind_thing`) before the discriminator still fires.
+    #[test]
+    fn flags_versioned_test_file_bad_base_issue_5107() {
+        assert_eq!(run("test/tailwind_thing@3.test.ts").len(), 1);
+    }
+
+    // Guard: the strip is scoped to test files — a non-test file with an `@`
+    // segment is not a versioned test suite and still fires.
+    #[test]
+    fn flags_versioned_non_test_file_issue_5107() {
+        assert_eq!(run("src/tailwind@3.ts").len(), 1);
+    }
+
+    // Guard: only a recognised version (numeric major or dist-tag) is stripped —
+    // an arbitrary `@<word>` is not a version and the `@`-bearing stem still fires.
+    #[test]
+    fn flags_versioned_test_file_arbitrary_suffix_issue_5107() {
+        assert_eq!(run("test/tailwind@foo.test.ts").len(), 1);
     }
 }
