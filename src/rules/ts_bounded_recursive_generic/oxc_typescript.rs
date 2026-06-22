@@ -46,7 +46,7 @@ impl OxcCheck for Check {
         // Must reference itself as a *type*. Walking the AST (not the source
         // text) ensures a property key or an indexed-access string literal that
         // merely shares the alias name does not count as a recursive call.
-        if !type_annotation_references_type(&alias.type_annotation, name) {
+        if !type_annotation_references_type(&alias.type_annotation, name, false) {
             return;
         }
 
@@ -121,81 +121,194 @@ fn is_conditional_or_mapped(ty: &oxc_ast::ast::TSType) -> bool {
 /// Return true if `ty` contains a `TSTypeReference` whose name is `name`,
 /// i.e. the alias genuinely references itself as a *type*. Property keys and
 /// indexed-access string literals that share the name are not type references,
-/// so they do not match. Mirrors the traversal in [`collect`].
-fn type_annotation_references_type(ty: &oxc_ast::ast::TSType, name: &str) -> bool {
+/// so they do not match. `shadowed` is true once an enclosing conditional's
+/// `extends` clause binds an `infer <name>` of the same name: under that binding
+/// a *bare* (no-type-argument) reference to `name` is the inferred variable, not
+/// a self-call, so it does not count. A reference *with* type arguments
+/// (`name<...>`) cannot apply to an inferred type variable, so it is always a
+/// genuine recursive reference. Mirrors the traversal in [`collect`].
+fn type_annotation_references_type(
+    ty: &oxc_ast::ast::TSType,
+    name: &str,
+    shadowed: bool,
+) -> bool {
     use oxc_ast::ast::{TSType, TSTypeName};
 
     match ty {
         TSType::TSTypeReference(tref) => {
-            let is_self = matches!(
+            let is_self_name = matches!(
                 &tref.type_name,
                 TSTypeName::IdentifierReference(id) if id.name.as_str() == name
             );
-            is_self
-                || tref.type_arguments.as_ref().is_some_and(|args| {
-                    args.params.iter().any(|arg| type_annotation_references_type(arg, name))
-                })
+            match &tref.type_arguments {
+                // Applied form `name<...>`: a self-call regardless of shadowing,
+                // and its arguments may themselves reference the alias.
+                Some(args) => {
+                    is_self_name
+                        || args
+                            .params
+                            .iter()
+                            .any(|arg| type_annotation_references_type(arg, name, shadowed))
+                }
+                // Bare form `name`: a self-reference only when not shadowed by an
+                // `infer name` binding.
+                None => is_self_name && !shadowed,
+            }
         }
         TSType::TSConditionalType(cond) => {
-            type_annotation_references_type(&cond.check_type, name)
-                || type_annotation_references_type(&cond.extends_type, name)
-                || type_annotation_references_type(&cond.true_type, name)
-                || type_annotation_references_type(&cond.false_type, name)
+            // `infer name` in the `extends` clause shadows the alias name for the
+            // rest of this conditional, so bare references below are the inferred
+            // variable rather than self-calls.
+            let inner_shadowed = shadowed || extends_clause_binds_infer(&cond.extends_type, name);
+            type_annotation_references_type(&cond.check_type, name, inner_shadowed)
+                || type_annotation_references_type(&cond.extends_type, name, inner_shadowed)
+                || type_annotation_references_type(&cond.true_type, name, inner_shadowed)
+                || type_annotation_references_type(&cond.false_type, name, inner_shadowed)
         }
-        TSType::TSArrayType(arr) => type_annotation_references_type(&arr.element_type, name),
+        TSType::TSArrayType(arr) => {
+            type_annotation_references_type(&arr.element_type, name, shadowed)
+        }
         TSType::TSIndexedAccessType(idx) => {
-            type_annotation_references_type(&idx.object_type, name)
-                || type_annotation_references_type(&idx.index_type, name)
+            type_annotation_references_type(&idx.object_type, name, shadowed)
+                || type_annotation_references_type(&idx.index_type, name, shadowed)
         }
         TSType::TSUnionType(u) => {
-            u.types.iter().any(|t| type_annotation_references_type(t, name))
+            u.types.iter().any(|t| type_annotation_references_type(t, name, shadowed))
         }
         TSType::TSIntersectionType(i) => {
-            i.types.iter().any(|t| type_annotation_references_type(t, name))
+            i.types.iter().any(|t| type_annotation_references_type(t, name, shadowed))
         }
         TSType::TSTupleType(tuple) => tuple
             .element_types
             .iter()
-            .any(|el| tuple_element_references_type(el, name)),
+            .any(|el| tuple_element_references_type(el, name, shadowed)),
         TSType::TSNamedTupleMember(member) => {
-            tuple_element_references_type(&member.element_type, name)
+            tuple_element_references_type(&member.element_type, name, shadowed)
         }
         TSType::TSTypeOperatorType(op) => {
-            type_annotation_references_type(&op.type_annotation, name)
+            type_annotation_references_type(&op.type_annotation, name, shadowed)
         }
         TSType::TSParenthesizedType(paren) => {
-            type_annotation_references_type(&paren.type_annotation, name)
+            type_annotation_references_type(&paren.type_annotation, name, shadowed)
         }
         TSType::TSTemplateLiteralType(tpl) => {
-            tpl.types.iter().any(|t| type_annotation_references_type(t, name))
+            tpl.types.iter().any(|t| type_annotation_references_type(t, name, shadowed))
         }
         TSType::TSMappedType(mapped) => {
-            type_annotation_references_type(&mapped.constraint, name)
+            type_annotation_references_type(&mapped.constraint, name, shadowed)
                 || mapped
                     .name_type
                     .as_ref()
-                    .is_some_and(|t| type_annotation_references_type(t, name))
+                    .is_some_and(|t| type_annotation_references_type(t, name, shadowed))
                 || mapped
                     .type_annotation
                     .as_ref()
-                    .is_some_and(|t| type_annotation_references_type(t, name))
+                    .is_some_and(|t| type_annotation_references_type(t, name, shadowed))
         }
         _ => false,
     }
 }
 
-fn tuple_element_references_type(el: &oxc_ast::ast::TSTupleElement, name: &str) -> bool {
+/// Return true if `extends_type` contains an `infer <name>` binding, i.e. the
+/// conditional's `extends` clause introduces a type variable that shadows the
+/// alias name `name`.
+fn extends_clause_binds_infer(extends_type: &oxc_ast::ast::TSType, name: &str) -> bool {
+    use oxc_ast::ast::TSType;
+    match extends_type {
+        TSType::TSInferType(infer) => infer.type_parameter.name.name.as_str() == name,
+        TSType::TSTypeReference(tref) => tref.type_arguments.as_ref().is_some_and(|args| {
+            args.params.iter().any(|arg| extends_clause_binds_infer(arg, name))
+        }),
+        TSType::TSArrayType(arr) => extends_clause_binds_infer(&arr.element_type, name),
+        TSType::TSIndexedAccessType(idx) => {
+            extends_clause_binds_infer(&idx.object_type, name)
+                || extends_clause_binds_infer(&idx.index_type, name)
+        }
+        TSType::TSUnionType(u) => u.types.iter().any(|t| extends_clause_binds_infer(t, name)),
+        TSType::TSIntersectionType(i) => {
+            i.types.iter().any(|t| extends_clause_binds_infer(t, name))
+        }
+        TSType::TSTupleType(tuple) => tuple
+            .element_types
+            .iter()
+            .any(|el| tuple_element_binds_infer(el, name)),
+        TSType::TSNamedTupleMember(member) => {
+            tuple_element_binds_infer(&member.element_type, name)
+        }
+        TSType::TSTypeOperatorType(op) => extends_clause_binds_infer(&op.type_annotation, name),
+        TSType::TSParenthesizedType(paren) => {
+            extends_clause_binds_infer(&paren.type_annotation, name)
+        }
+        TSType::TSFunctionType(f) => {
+            function_signature_binds_infer(&f.params, &f.return_type, name)
+        }
+        TSType::TSConstructorType(c) => {
+            function_signature_binds_infer(&c.params, &c.return_type, name)
+        }
+        TSType::TSTemplateLiteralType(tpl) => {
+            tpl.types.iter().any(|t| extends_clause_binds_infer(t, name))
+        }
+        TSType::TSTypeLiteral(literal) => {
+            use oxc_ast::ast::TSSignature;
+            literal.members.iter().any(|member| {
+                let TSSignature::TSPropertySignature(prop) = member else {
+                    return false;
+                };
+                prop.type_annotation
+                    .as_ref()
+                    .is_some_and(|ann| extends_clause_binds_infer(&ann.type_annotation, name))
+            })
+        }
+        _ => false,
+    }
+}
+
+/// Return true if a function or constructor type signature binds an
+/// `infer <name>` in any parameter type or the return type — e.g.
+/// `(x: infer A) => infer R` in an `extends` clause.
+fn function_signature_binds_infer(
+    params: &oxc_ast::ast::FormalParameters,
+    return_type: &oxc_ast::ast::TSTypeAnnotation,
+    name: &str,
+) -> bool {
+    let param_binds = params.items.iter().any(|param| {
+        param
+            .type_annotation
+            .as_ref()
+            .is_some_and(|ann| extends_clause_binds_infer(&ann.type_annotation, name))
+    });
+    param_binds || extends_clause_binds_infer(&return_type.type_annotation, name)
+}
+
+fn tuple_element_binds_infer(el: &oxc_ast::ast::TSTupleElement, name: &str) -> bool {
     use oxc_ast::ast::TSTupleElement;
     match el {
         TSTupleElement::TSOptionalType(opt) => {
-            type_annotation_references_type(&opt.type_annotation, name)
+            extends_clause_binds_infer(&opt.type_annotation, name)
         }
         TSTupleElement::TSRestType(rest) => {
-            type_annotation_references_type(&rest.type_annotation, name)
+            extends_clause_binds_infer(&rest.type_annotation, name)
+        }
+        other => other.as_ts_type().is_some_and(|inner| extends_clause_binds_infer(inner, name)),
+    }
+}
+
+fn tuple_element_references_type(
+    el: &oxc_ast::ast::TSTupleElement,
+    name: &str,
+    shadowed: bool,
+) -> bool {
+    use oxc_ast::ast::TSTupleElement;
+    match el {
+        TSTupleElement::TSOptionalType(opt) => {
+            type_annotation_references_type(&opt.type_annotation, name, shadowed)
+        }
+        TSTupleElement::TSRestType(rest) => {
+            type_annotation_references_type(&rest.type_annotation, name, shadowed)
         }
         other => other
             .as_ts_type()
-            .is_some_and(|inner| type_annotation_references_type(inner, name)),
+            .is_some_and(|inner| type_annotation_references_type(inner, name, shadowed)),
     }
 }
 
@@ -731,6 +844,56 @@ export type TuplifyUnion<
         // A degenerate `Exclude<T>` (one argument) is not a union difference and
         // proves no shrinkage, so the recursion stays flagged.
         let src = "type Loop<T> = [T] extends [never] ? [] : Loop<Exclude<T>>;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn exempts_infer_binding_returned_directly_tuple_rest() {
+        // `Tail` in the true branch is the `infer Tail` tuple-rest binding, not a
+        // recursive call to the alias `Tail`. The alias is not recursive at all.
+        let src = r#"
+export type Tail<T extends any[]> = T extends [any, ...infer Tail]
+  ? Tail
+  : never;
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn exempts_infer_binding_returned_directly_object_property() {
+        // `GetSerializedErrorType` in the true branch is the `infer
+        // GetSerializedErrorType` binding from the object pattern, not a self-call.
+        let src = r#"
+type GetSerializedErrorType<ThunkApiConfig> = ThunkApiConfig extends {
+  serializedErrorType: infer GetSerializedErrorType;
+}
+  ? GetSerializedErrorType
+  : SerializedError;
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn exempts_infer_binding_in_function_parameter() {
+        // `F` in the true branch is the `infer F` parameter binding, not a self-call.
+        let src = "type F<T> = T extends (x: infer F) => any ? F : never;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn exempts_infer_binding_in_function_return() {
+        // `R` in the true branch is the `infer R` return-type binding, not a self-call.
+        let src = "type R<T> = T extends () => infer R ? R : never;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_applied_self_call_despite_infer_binding_same_name() {
+        // Even when an `infer Loop` shadows the name, an *applied* `Loop<...>` is a
+        // genuine recursive call (type arguments cannot apply to an inferred
+        // variable). The argument `T` does not shrink, so the unbounded recursion
+        // stays flagged.
+        let src = "type Loop<T> = T extends { x: infer Loop } ? Loop<T> : never;";
         assert_eq!(run_on(src).len(), 1);
     }
 
