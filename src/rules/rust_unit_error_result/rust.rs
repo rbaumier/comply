@@ -49,11 +49,20 @@
 //! it stays flagged.
 //!
 //! [logos]: https://github.com/maciejhirsz/logos
+//!
+//! Local-`Result`-alias exception: when the file declares its own
+//! `type Result<…> = …` alias (e.g. `type Result<'a, T> =
+//! core::result::Result<T, Box<Error<'a>>>`), the alias can reorder std's
+//! `Result<T, E>` parameters so the `()` we match sits in the *success*
+//! position, not the error position. The positional "second arg is the error"
+//! check no longer holds for `Result<…>` usages in that file, so the rule does
+//! not fire there. A genuine std `Result<_, ()>` in a file with no such alias
+//! still flags.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
-    enclosing_fn, is_in_test_context, is_in_trait_definition, is_in_trait_impl,
-    is_suppressed_by_clippy_allow, result_error_type, result_ok_type,
+    enclosing_fn, file_has_local_result_alias, is_in_test_context, is_in_trait_definition,
+    is_in_trait_impl, is_suppressed_by_clippy_allow, result_error_type, result_ok_type,
 };
 use tree_sitter::Node;
 
@@ -62,6 +71,11 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
         return;
     };
     if err_type.kind() != "unit_type" {
+        return;
+    }
+    // A file-local `Result` alias may reorder T/E; see the module docs and
+    // `file_has_local_result_alias`.
+    if file_has_local_result_alias(node, source) {
         return;
     }
     if is_in_test_context(node, source) {
@@ -767,6 +781,60 @@ mod tests {
                  }"
             )
             .is_empty()
+        );
+    }
+
+    // --- local `Result` alias reorders T/E positions (#5544) ---
+
+    #[test]
+    fn allows_unit_in_file_with_local_result_alias_swapping_params() {
+        // The wgpu/naga repro: a file-local `type Result<'a, T> =
+        // core::result::Result<T, Box<Error<'a>>>` puts the success type first,
+        // so `Result<'static, ()>` has `()` as the success type, not the error.
+        assert!(
+            run_on_src(
+                "type Result<'a, T> = core::result::Result<T, Box<Error<'a>>>;\n\
+                 fn set() -> Result<'static, ()> { Ok(()) }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_unit_in_file_with_std_result_alias() {
+        // The minimal alias form `type Result<'a, T> =
+        // std::result::Result<T, Error>` — `Result<'a, ()>` is `Ok(())`.
+        assert!(
+            run_on_src(
+                "type Result<'a, T> = std::result::Result<T, Error>;\n\
+                 fn f<'a>() -> Result<'a, ()> { Ok(()) }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_unit_when_result_alias_lives_in_nested_mod() {
+        // The alias is detected anywhere in the file, including a nested `mod`.
+        assert!(
+            run_on_src(
+                "mod inner {\n\
+                 \x20   type Result<T> = std::result::Result<T, Error>;\n\
+                 \x20   fn f() -> Result<()> { Ok(()) }\n\
+                 }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_genuine_std_unit_error_without_local_result_alias() {
+        // Load-bearing negative: a genuine `std::result::Result<T, ()>` in a
+        // file with no local `Result` alias still flags — the `()` really is
+        // the error type there.
+        assert_eq!(
+            run_on_src("fn g() -> std::result::Result<i32, ()> { Ok(0) }").len(),
+            1
         );
     }
 }

@@ -240,6 +240,44 @@ pub fn result_ok_type<'a>(node: Node<'a>, source: &[u8]) -> Option<Node<'a>> {
     Some(positional[0])
 }
 
+/// True when the file containing `node` declares a local `type Result<…> = …`
+/// alias that shadows `std::result::Result`.
+///
+/// A local `Result` alias can reorder the standard `Result<T, E>` type
+/// parameters — e.g. `type Result<'a, T> = core::result::Result<T, Box<Error>>`
+/// puts the success type first and pins the error type. Under such an alias a
+/// `Result<_, ()>` usage has the `()` in the *success* position, not the error
+/// position, so the positional "second arg is the error" assumption that
+/// `result_error_type` encodes no longer holds. Rules keyed on the error
+/// position must not fire on `Result<…>` usages in a file that shadows `Result`.
+///
+/// Detection is structural: any `type_item` whose `name` is `Result` reachable
+/// from the file root, including inside nested modules.
+pub fn file_has_local_result_alias(node: Node, source: &[u8]) -> bool {
+    let mut root = node;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    subtree_declares_result_alias(root, source)
+}
+
+/// Recursively true when `node` or any descendant is a `type_item` named
+/// `Result`. Used by [`file_has_local_result_alias`] to spot a `Result` alias
+/// anywhere in the file, including nested `mod` blocks.
+fn subtree_declares_result_alias(node: Node, source: &[u8]) -> bool {
+    if node.kind() == "type_item"
+        && node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+            == Some("Result")
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .any(|child| subtree_declares_result_alias(child, source))
+}
+
 /// True if `node` is inside any form of Rust test context:
 ///
 /// - inside a `#[test]` function
