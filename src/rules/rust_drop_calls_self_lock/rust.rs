@@ -7,12 +7,17 @@
 //! acquisition methods; doing so in `Drop` deadlocks if the lock is
 //! already held on the dropping thread.
 //!
-//! A single-level `self.<field>` receiver is exempt when `<field>` is a
+//! Only a receiver that is a DIRECT field of `self` (`self.<field>.lock()`,
+//! exactly one field access between `self` and the lock call) is a candidate,
+//! plus bare `self.lock()` (the struct derefs to the lock). A multi-hop chain
+//! (`self.a.b.lock()`) reaches a mutex owned by a nested/other object — not
+//! `self`'s own mutex — so it cannot self-deadlock and is not flagged.
+//!
+//! A single-level `self.<field>` receiver is further exempt when `<field>` is a
 //! borrowed reference (`&T` / `&'a T` / `&mut T`) in the Drop target struct
 //! defined in the same file: the locked mutex lives outside `self`, so the
 //! struct cannot hold it and self-deadlock. Owned mutex fields (`Mutex<T>`,
-//! `Arc<Mutex<T>>`), nested receivers (`self.a.b.lock()`), and a struct not
-//! resolvable in the file all stay flagged.
+//! `Arc<Mutex<T>>`) and a struct not resolvable in the file stay flagged.
 //!
 //! Test-only `Drop` impls are exempt: a fixture that locks shared state in
 //! `Drop` to record drop order for assertions is intentional instrumentation,
@@ -84,7 +89,7 @@ impl AstCheck for Check {
                 let method = field.utf8_text(source_bytes).unwrap_or("");
                 if LOCK_METHODS.contains(&method)
                     && let Some(receiver) = func.child_by_field_name("value")
-                    && receiver_starts_with_self(receiver, source_bytes)
+                    && receiver_is_self_or_direct_self_field(receiver)
                     && !locks_borrowed_self_field(node, receiver, source_bytes)
                 {
                     diagnostics.push(Diagnostic::at_node(
@@ -107,11 +112,19 @@ impl AstCheck for Check {
     }
 }
 
-fn receiver_starts_with_self(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let Ok(text) = node.utf8_text(source) else {
-        return false;
-    };
-    text == "self" || text.starts_with("self.")
+/// True when the lock receiver is `self`'s own mutex: either bare `self`
+/// (the struct derefs to the lock) or a DIRECT field of `self`
+/// (`self.<field>`, exactly one field access). A multi-hop chain
+/// (`self.a.b.lock()`) reaches a mutex owned by a nested/other object and is
+/// rejected — only `self`'s own lock can self-deadlock in `Drop`.
+fn receiver_is_self_or_direct_self_field(node: tree_sitter::Node) -> bool {
+    match node.kind() {
+        "self" => true,
+        "field_expression" => node
+            .child_by_field_name("value")
+            .is_some_and(|base| base.kind() == "self"),
+        _ => false,
+    }
 }
 
 /// True when the lock receiver is exactly `self.<field>` and `<field>` is a
@@ -119,9 +132,10 @@ fn receiver_starts_with_self(node: tree_sitter::Node, source: &[u8]) -> bool {
 /// to `self`, so no self-deadlock is possible. `impl_item` is the enclosing
 /// `impl Drop for …` node (the `visit_node` argument).
 ///
-/// Only a single-level `self.<field>` receiver is resolved; nested chains
-/// (`self.a.b.lock()`) and bare `self.lock()` keep the conservative behavior
-/// (flag), since the locked object's ownership can't be resolved structurally.
+/// The receiver is already known to be `self` or a direct `self.<field>`; only
+/// the direct-field shape with a resolvable reference type is exempted here. An
+/// owned mutex field, or a struct not resolvable in the file, keeps the
+/// conservative behavior (flag).
 fn locks_borrowed_self_field(
     impl_item: tree_sitter::Node,
     receiver: tree_sitter::Node,
@@ -251,6 +265,41 @@ mod tests {
     fn flags_lock_on_self_field_when_struct_not_in_file() {
         let source =
             "impl Drop for A { fn drop(&mut self) { let _g = self.m.lock(); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    // Regression for #5548 (ash/vulkano, gfx-rs/wgpu): a two-hop receiver
+    // `self.device.queue_locks.lock()` acquires a lock on a *different* object
+    // (the `Device` reached through `self.device`), not `self`'s own mutex, so
+    // it cannot self-deadlock. Must not fire.
+    #[test]
+    fn allows_lock_on_nested_object_field_in_drop() {
+        let source = "struct Queue; impl Drop for Queue { \
+            fn drop(&mut self) { let _g = self.device.queue_locks.lock(); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    // Regression for #5548 (wgpu-core `Queue`): `self.device.snatchable_lock.read()`
+    // — a two-hop `RwLock` read on the nested `Device`. Must not fire.
+    #[test]
+    fn allows_read_on_nested_object_field_in_drop() {
+        let source = "struct Queue; impl Drop for Queue { \
+            fn drop(&mut self) { let _g = self.device.snatchable_lock.read(); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    // Three-hop chains (`self.a.b.c.lock()`) are equally not `self`'s own lock.
+    #[test]
+    fn allows_lock_on_three_hop_chain_in_drop() {
+        let source = "struct A; impl Drop for A { \
+            fn drop(&mut self) { let _g = self.a.b.c.lock(); } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    // Preserve bare `self.lock()` (the struct derefs to the lock): still fires.
+    #[test]
+    fn flags_bare_self_lock_in_drop() {
+        let source = "struct A; impl Drop for A { fn drop(&mut self) { let _g = self.lock(); } }";
         assert_eq!(run_on(source).len(), 1);
     }
 
