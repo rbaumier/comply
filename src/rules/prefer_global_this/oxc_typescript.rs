@@ -158,6 +158,14 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Inside a named function serialized via `<fn>.toString()` and injected
+        // as a script string (Playwright `safeNonStallingEvaluateInAllFrames`,
+        // bootstrap polyfills) the body also runs in the browser page realm, so
+        // `window` is the intended global there.
+        if crate::oxc_helpers::is_inside_tostring_serialized_function(node, semantic) {
+            return;
+        }
+
         // A file that feature-detects this global with a `typeof` check
         // (`typeof window !== "undefined"`) is deliberately environment-aware
         // code where the bare alias is the intended object, not a portability
@@ -325,6 +333,154 @@ mod tests {
         // member (no local `self` in scope) is still flagged.
         let d = run_ts("self['location'].reload();");
         assert_eq!(d.len(), 1, "global `self[...]` must still fire: {d:?}");
+        assert!(d[0].message.contains("globalThis"));
+    }
+
+    #[test]
+    fn ignores_window_in_tostring_serialized_function_declaration() {
+        // Regression for #5534 (crDragDrop.ts): a named `function` whose body is
+        // serialized via `fn.toString()` into a template-literal script and
+        // injected into the browser. `window.*` is the correct browser global.
+        let src = "function setupDragListeners() {\n  \
+                   window.addEventListener('mousemove', l, { once: true });\n  \
+                   window.__cleanupDrag = async () => {\n    \
+                   delete window.__cleanupDrag;\n  \
+                   };\n\
+                   }\n\
+                   evaluateInAllFrames(`(${setupDragListeners.toString()})()`);";
+        assert!(
+            run_ts(src).is_empty(),
+            "`window.*` inside a `.toString()`-serialized function must not be flagged: {:?}",
+            run_ts(src)
+        );
+    }
+
+    #[test]
+    fn ignores_window_in_tostring_serialized_function_returned_string() {
+        // Regression for #5534 (wvPage.ts): the serialized script is built in a
+        // `return` of a template literal interpolating `fn.toString()`.
+        let src = "function polyfill() {\n  \
+                   window.PublicKeyCredential ??= {} as any;\n\
+                   }\n\
+                   function makeScript() {\n  \
+                   return `(${polyfill.toString()})();`;\n\
+                   }";
+        assert!(
+            run_ts(src).is_empty(),
+            "`window.*` in a returned `.toString()` script must not be flagged: {:?}",
+            run_ts(src)
+        );
+    }
+
+    #[test]
+    fn ignores_window_in_tostring_serialized_function_concat() {
+        // Regression for #5534 (screenshotter.ts): the script is built with
+        // string concatenation `'(' + fn.toString() + ')(...)'`.
+        let src = "function inPagePrepare() {\n  \
+                   window.__pwCleanupScreenshot = () => {};\n\
+                   }\n\
+                   const script = '(' + inPagePrepare.toString() + ')(arg)';";
+        assert!(
+            run_ts(src).is_empty(),
+            "`window.*` in a concatenated `.toString()` script must not be flagged: {:?}",
+            run_ts(src)
+        );
+    }
+
+    #[test]
+    fn ignores_window_in_tostring_serialized_arrow_const() {
+        // The injected function can also be an arrow bound to a `const`.
+        let src = "const inject = () => {\n  \
+                   window.__pwHook = 1;\n\
+                   };\n\
+                   page.evaluateOnNewDocument(`(${inject.toString()})()`);";
+        assert!(
+            run_ts(src).is_empty(),
+            "`window.*` in a `.toString()`-serialized arrow const must not be flagged: {:?}",
+            run_ts(src)
+        );
+    }
+
+    #[test]
+    fn ignores_window_in_tostring_serialized_function_expression_const() {
+        // The injected function can be an anonymous function expression bound to
+        // a `const`; the binding name is what carries `.toString()`.
+        let src = "const inject = function () {\n  \
+                   window.__pwHook = 1;\n\
+                   };\n\
+                   page.evaluate(`(${inject.toString()})()`);";
+        assert!(
+            run_ts(src).is_empty(),
+            "`window.*` in a `.toString()`-serialized function-expression const must not be flagged: {:?}",
+            run_ts(src)
+        );
+    }
+
+    #[test]
+    fn ignores_window_in_outer_when_outer_is_serialized() {
+        // Nested case: the serialized function is the OUTER one, and `window.*`
+        // sits directly in the outer body. The ancestor walk reaches the outer
+        // function and finds its `.toString()` reference.
+        let src = "function outer() {\n  \
+                   window.__pwHook = 1;\n  \
+                   function inner() { return 1; }\n  \
+                   return inner();\n\
+                   }\n\
+                   page.evaluate(`(${outer.toString()})()`);";
+        assert!(
+            run_ts(src).is_empty(),
+            "`window.*` in the outer of a serialized function must not be flagged: {:?}",
+            run_ts(src)
+        );
+    }
+
+    #[test]
+    fn flags_window_when_only_inner_function_serialized() {
+        // Nested case: `window.*` is in the OUTER body but only the INNER
+        // function is `.toString()`-serialized. The outer is never serialized,
+        // so its `window.*` must still be flagged.
+        let src = "function outer() {\n  \
+                   const u = window.location;\n  \
+                   function inner() { return 1; }\n  \
+                   return `(${inner.toString()})()`;\n\
+                   }\n\
+                   outer();";
+        let d = run_ts(src);
+        assert_eq!(
+            d.len(),
+            1,
+            "`window.*` in a non-serialized outer must stay flagged even when an inner is serialized: {d:?}"
+        );
+        assert!(d[0].message.contains("globalThis"));
+    }
+
+    #[test]
+    fn flags_window_in_function_not_serialized() {
+        // Negative-space guard: a plain named function that is never
+        // `.toString()`-serialized still gets the `globalThis` suggestion — the
+        // exemption is keyed on serialization, not on being inside any function.
+        let src = "function setup() {\n  \
+                   const u = window.location;\n\
+                   }\n\
+                   setup();";
+        let d = run_ts(src);
+        assert_eq!(d.len(), 1, "non-serialized `window.*` must still fire: {d:?}");
+        assert!(d[0].message.contains("globalThis"));
+    }
+
+    #[test]
+    fn flags_top_level_window_with_tostring_elsewhere() {
+        // A `.toString()` call on an *unrelated* function must not exempt a
+        // top-level `window.*` in ordinary application code.
+        let src = "function other() {}\n\
+                   const tag = other.toString();\n\
+                   const url = window.location;";
+        let d = run_ts(src);
+        assert_eq!(
+            d.len(),
+            1,
+            "top-level `window.*` must stay flagged despite an unrelated `.toString()`: {d:?}"
+        );
         assert!(d[0].message.contains("globalThis"));
     }
 }

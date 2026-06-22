@@ -2836,6 +2836,126 @@ pub fn is_in_browser_eval_callback<'a>(
     false
 }
 
+/// True when `node` is lexically inside a named function whose body is
+/// serialized via `<fn>.toString()` and injected to run inside a browser realm
+/// — the Playwright/Puppeteer "function-to-string" injection idiom:
+///
+/// ```ignore
+/// function setupDragListeners() {
+///   window.__cleanupDrag = () => { /* runs in the browser */ };
+/// }
+/// evaluateInAllFrames(`(${setupDragListeners.toString()})()`);
+/// ```
+///
+/// The function is defined in the TypeScript source but its `.toString()` text
+/// is concatenated into a script string (template literal, `'(' + fn.toString()
+/// + ')'`, or `return` of such a string) and run in the page, where `window` is
+/// the canonical global. `prefer-global-this` must stay silent on `window.*`
+/// inside such a function, exactly as it does for a direct `*.evaluate(cb)`
+/// callback ([`is_in_browser_eval_callback`]).
+///
+/// Detection is structural, not name-based: the nearest enclosing **named**
+/// function (a `function f(){}` declaration, or a function/arrow expression bound
+/// to a `const`/`let`/`var`) is resolved to its symbol, and the symbol's resolved
+/// references are scanned for one used as the receiver of a `.toString()` call
+/// (`f.toString()`). A plain top-level `window.foo`, or `window.*` inside a
+/// function that is never `.toString()`-serialized, has no such reference and
+/// stays flagged.
+#[must_use]
+pub fn is_inside_tostring_serialized_function<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    use oxc_ast::AstKind;
+
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        let symbol_id = match ancestor.kind() {
+            // `function f() { ... }` declaration uses its own binding name; an
+            // anonymous function expression bound to a name (`const f =
+            // function () { ... }`) falls back to the enclosing declarator.
+            AstKind::Function(func) => func
+                .id
+                .as_ref()
+                .and_then(|id| id.symbol_id.get())
+                .or_else(|| enclosing_declarator_symbol(ancestor.id(), semantic)),
+            // `const f = () => { ... }` — the enclosing variable declarator's
+            // binding name.
+            AstKind::ArrowFunctionExpression(_) => {
+                enclosing_declarator_symbol(ancestor.id(), semantic)
+            }
+            _ => continue,
+        };
+        let Some(symbol_id) = symbol_id else {
+            continue;
+        };
+        if symbol_has_tostring_call(symbol_id, semantic) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Symbol of the `const`/`let`/`var` binding that the function/arrow expression
+/// at `fn_node_id` is the *initializer* of, i.e. `const f = () => {}` → `f`.
+/// `None` when the expression is not directly a declarator initializer (an inline
+/// callback, an object-property value, …), since only a named binding can be
+/// referenced by a later `.toString()` call.
+fn enclosing_declarator_symbol(
+    fn_node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> Option<oxc_semantic::SymbolId> {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::BindingPattern;
+    use oxc_span::GetSpan;
+
+    let nodes = semantic.nodes();
+    let fn_span = nodes.get_node(fn_node_id).kind().span();
+    let parent = nodes.get_node(nodes.parent_id(fn_node_id));
+    let AstKind::VariableDeclarator(decl) = parent.kind() else {
+        return None;
+    };
+    // The function must be the declarator's initializer, not nested deeper.
+    if decl.init.as_ref().map(GetSpan::span) != Some(fn_span) {
+        return None;
+    }
+    let BindingPattern::BindingIdentifier(id) = &decl.id else {
+        return None;
+    };
+    id.symbol_id.get()
+}
+
+/// True when any resolved reference to `symbol_id` is the receiver of a
+/// `.toString()` call — `f.toString()` for the function bound to `symbol_id`.
+fn symbol_has_tostring_call(
+    symbol_id: oxc_semantic::SymbolId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+
+    let nodes = semantic.nodes();
+    semantic
+        .scoping()
+        .get_resolved_references(symbol_id)
+        .any(|reference| {
+            let ref_span = nodes.get_node(reference.node_id()).kind().span();
+            // The reference must be the *object* of a `.toString` member access
+            // (`f.toString`) whose member is then called.
+            let AstKind::StaticMemberExpression(member) =
+                nodes.kind(nodes.parent_id(reference.node_id()))
+            else {
+                return false;
+            };
+            member.property.name.as_str() == "toString"
+                && member.object.span() == ref_span
+                && matches!(
+                    nodes.kind(nodes.parent_id(nodes.parent_id(reference.node_id()))),
+                    AstKind::CallExpression(_)
+                )
+        })
+}
+
 /// Which of `window`/`self`/`global` the file feature-detects via a `typeof`
 /// check (`typeof window !== "undefined"`, `typeof self`, …). A file that probes
 /// for a global before using it is deliberately writing environment-aware code:
