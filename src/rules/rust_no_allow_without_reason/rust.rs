@@ -17,18 +17,25 @@ const DEPRECATED_TRAIT_METHODS: &[&str] = &["description", "cause"];
 
 /// Lints whose suppression names its own reason, so a separate `//` comment or
 /// `reason = "..."` would only restate the lint:
-/// - `non_upper_case_globals` / `nonstandard_style`: the item's name
-///   deliberately mirrors an external identifier (e.g. IANA timezone names like
-///   `Africa__Abidjan`, ISO codes, generated lookup tables) and cannot be
-///   upper-cased without losing the mapping. comply already honors this same
-///   opt-out in `screaming-snake-for-constants`.
+/// - The `nonstandard_style` naming-convention family (`nonstandard_style`
+///   itself and its members `non_upper_case_globals`, `non_camel_case_types`,
+///   `non_snake_case`): the item's name deliberately mirrors an external
+///   identifier — IANA timezone names like `Africa__Abidjan`, or C/FFI type
+///   names like `VkFooBar`/`size_t` defined by a foreign spec — and cannot be
+///   renamed to Rust's casing without losing the mapping. comply already honors
+///   this same opt-out in `screaming-snake-for-constants`.
 /// - `missing_docs`: suppressing the missing-documentation lint *is* the
 ///   statement that the item is intentionally undocumented.
 ///
 /// These are stylistic-convention lints, not correctness/safety concerns
 /// (`dead_code`, `unused`, `deprecated`), which still require a justification.
-const SELF_JUSTIFYING_LINTS: &[&str] =
-    &["non_upper_case_globals", "nonstandard_style", "missing_docs"];
+const SELF_JUSTIFYING_LINTS: &[&str] = &[
+    "non_upper_case_globals",
+    "non_camel_case_types",
+    "non_snake_case",
+    "nonstandard_style",
+    "missing_docs",
+];
 
 crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
     let text = node.utf8_text(source).unwrap_or("");
@@ -399,6 +406,28 @@ mod tests {
             run("#[allow(non_upper_case_globals)]\npub const Africa__Abidjan: Self = Self::Tz(chrono_tz::Africa::Abidjan);")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn allows_self_justifying_non_camel_case_types() {
+        // #5551: ash's Vulkan FFI bindings carry `#[allow(non_camel_case_types)]`
+        // on C-style type aliases (`VK_MAKE_API_VERSION`); the lint name is the
+        // reason — the names come from the Vulkan spec and cannot be renamed.
+        assert!(run("#[allow(non_camel_case_types)]\npub type VK_MAKE_API_VERSION = ();").is_empty());
+    }
+
+    #[test]
+    fn allows_self_justifying_non_snake_case() {
+        // Same naming-convention family: a binding mirroring a foreign C symbol.
+        assert!(run("#[allow(non_snake_case)]\npub fn VkCreateInstance() {}").is_empty());
+    }
+
+    #[test]
+    fn flags_concern_lint_on_foreign_named_item() {
+        // Load-bearing guard: the exemption keys on the lint name, never on the
+        // item; a genuine-concern lint like `dead_code` still requires a
+        // justification even on a foreign-named type.
+        assert_eq!(run("#[allow(dead_code)]\npub type VkFoo = ();").len(), 1);
     }
 
     #[test]
