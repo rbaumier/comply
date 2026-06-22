@@ -39,11 +39,21 @@
 //! ok-type must be a reference (`&str`, `&[u8]`, `&T`) and the `Result` must sit
 //! in the function's return type — an owned ok-type or a non-accessor name
 //! stays flagged.
+//!
+//! Logos-callback exception: a `Result<T, ()>` that is the return type of a
+//! function taking `&mut Lexer<…>` as a parameter is a [logos] lexer callback.
+//! Logos invokes such callbacks with `&mut Lexer<Token>` and interprets
+//! `Err(())` as "reject this token match" — the `()` error type is mandated by
+//! the library's callback contract, not the author's choice. The `&mut Lexer<…>`
+//! parameter is the structural signature of the callback API; a function without
+//! it stays flagged.
+//!
+//! [logos]: https://github.com/maciejhirsz/logos
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
-    is_in_test_context, is_in_trait_definition, is_in_trait_impl, is_suppressed_by_clippy_allow,
-    result_error_type, result_ok_type,
+    enclosing_fn, is_in_test_context, is_in_trait_definition, is_in_trait_impl,
+    is_suppressed_by_clippy_allow, result_error_type, result_ok_type,
 };
 use tree_sitter::Node;
 
@@ -73,6 +83,9 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
         return;
     }
     if is_borrowed_narrowing_accessor(node, source) {
+        return;
+    }
+    if is_logos_lexer_callback(node, source) {
         return;
     }
     let pos = node.start_position();
@@ -131,6 +144,67 @@ fn is_borrowed_narrowing_accessor(node: Node, source: &[u8]) -> bool {
         cur = parent;
     }
     false
+}
+
+/// True when this `Result<T, ()>` is the return type of a logos lexer callback —
+/// a function that takes `&mut Lexer<…>` as a parameter.
+///
+/// Logos invokes callbacks with `&mut Lexer<Token>` and reads `Err(())` as
+/// "reject this token match", so the `()` error is mandated by the library's
+/// callback contract. The `Result` must sit in the enclosing function's
+/// `return_type` and that function must have a `&mut Lexer<…>` parameter — a
+/// `Result<_, ()>` elsewhere (struct field, type alias, or a function without
+/// the lexer parameter) stays flagged.
+fn is_logos_lexer_callback(node: Node, source: &[u8]) -> bool {
+    let Some(func) = enclosing_fn(node) else {
+        return false;
+    };
+    // The Result must be the function's RETURN TYPE, not its body or parameters.
+    let Some(ret) = func.child_by_field_name("return_type") else {
+        return false;
+    };
+    if node.start_byte() < ret.start_byte() || node.end_byte() > ret.end_byte() {
+        return false;
+    }
+    let Some(params) = func.child_by_field_name("parameters") else {
+        return false;
+    };
+    let mut cursor = params.walk();
+    params
+        .named_children(&mut cursor)
+        .filter(|p| p.kind() == "parameter")
+        .filter_map(|p| p.child_by_field_name("type"))
+        .any(|ty| type_is_mut_ref_to_lexer(ty, source))
+}
+
+/// True when `ty` is `&mut Lexer<…>` — a mutable reference to a `Lexer`
+/// generic type. The referent must be a `generic_type` whose base path ends in
+/// the `Lexer` identifier (so `logos::Lexer<'s, Token>` matches as well as the
+/// bare `Lexer<Token>`).
+fn type_is_mut_ref_to_lexer(ty: Node, source: &[u8]) -> bool {
+    if ty.kind() != "reference_type" {
+        return false;
+    }
+    // `&mut` is exposed as an anonymous `mutable_specifier` child, not a field.
+    let mut ty_cursor = ty.walk();
+    if !ty
+        .children(&mut ty_cursor)
+        .any(|c| c.kind() == "mutable_specifier")
+    {
+        return false;
+    }
+    let Some(referent) = ty.child_by_field_name("type") else {
+        return false;
+    };
+    if referent.kind() != "generic_type" {
+        return false;
+    }
+    let Some(base) = referent.child_by_field_name("type") else {
+        return false;
+    };
+    // `Lexer` (type_identifier) or `logos::Lexer` (scoped_type_identifier).
+    base.utf8_text(source)
+        .is_ok_and(|t| t == "Lexer" || t.ends_with("::Lexer"))
 }
 
 /// True when this `Result<_, ()>` is an idiomatic axum/tower use of the unit
@@ -604,6 +678,95 @@ mod tests {
         assert_eq!(
             run_on_src("struct S { x: Result<&'static str, ()> }").len(),
             1
+        );
+    }
+
+    // --- logos lexer callback: `Result<T, ()>` is library-mandated (#5119) ---
+
+    #[test]
+    fn allows_logos_callback_with_mut_lexer_param() {
+        // The logos repro: a `#[regex(..., lex_single_line_string)]` callback
+        // takes `&mut Lexer<Token>` and returns `Result<String, ()>`; `Err(())`
+        // is logos's "reject this token match", so the `()` is mandated.
+        assert!(
+            run_on_src(
+                "pub fn lex_single_line_string(lexer: &mut Lexer<Token>) \
+                 -> Result<String, ()> { Err(()) }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_logos_callback_with_fully_qualified_lexer() {
+        // logos generates callbacks against `logos::Lexer<'s, Self>`; the
+        // scoped path is recognized too.
+        assert!(
+            run_on_src(
+                "fn cb<'s>(lex: &mut logos::Lexer<'s, Token>) \
+                 -> Result<u8, ()> { Err(()) }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_without_lexer_param() {
+        // Load-bearing negative: a `&mut Foo<Token>` param is not a logos
+        // lexer, so the unit error stays flagged.
+        assert_eq!(
+            run_on_src(
+                "fn f(x: &mut Foo<Token>) -> Result<String, ()> { Err(()) }"
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_with_shared_ref_lexer_param() {
+        // Load-bearing negative: logos callbacks take `&mut Lexer`; a shared
+        // `&Lexer<Token>` is not the callback signature, so it stays flagged.
+        assert_eq!(
+            run_on_src("fn f(x: &Lexer<Token>) -> Result<String, ()> { Err(()) }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_struct_field_next_to_lexer_fn() {
+        // Load-bearing negative: the exemption is scoped to the function's
+        // return type; a struct field stays flagged even in a logos crate.
+        assert_eq!(
+            run_on_src("struct S { last: Result<u8, ()> }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_unit_error_with_bare_non_generic_lexer_param() {
+        // Load-bearing negative: the logos callback parameter is `Lexer<…>`; a
+        // bare non-generic `&mut Lexer` is not the callback signature, so it
+        // stays flagged.
+        assert_eq!(
+            run_on_src("fn f(x: &mut Lexer) -> Result<String, ()> { Err(()) }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_logos_callback_method_with_self_and_lexer() {
+        // logos callbacks can be methods: a `(&self, lex: &mut Lexer<T>)`
+        // receiver alongside the lexer parameter is still exempt — the `self`
+        // parameter is skipped, the `&mut Lexer<T>` parameter matches.
+        assert!(
+            run_on_src(
+                "impl C {\n\
+                 \x20   fn cb(&self, lex: &mut Lexer<Token>) \
+                 -> Result<u8, ()> { Err(()) }\n\
+                 }"
+            )
+            .is_empty()
         );
     }
 }
