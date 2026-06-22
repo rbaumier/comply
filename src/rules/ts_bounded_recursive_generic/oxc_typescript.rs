@@ -126,7 +126,8 @@ fn is_conditional_or_mapped(ty: &oxc_ast::ast::TSType) -> bool {
 /// a *bare* (no-type-argument) reference to `name` is the inferred variable, not
 /// a self-call, so it does not count. A reference *with* type arguments
 /// (`name<...>`) cannot apply to an inferred type variable, so it is always a
-/// genuine recursive reference. Mirrors the traversal in [`collect`].
+/// genuine recursive reference. Shares the conditional/indexed/union traversal
+/// shape of [`collect`].
 fn type_annotation_references_type(
     ty: &oxc_ast::ast::TSType,
     name: &str,
@@ -423,6 +424,24 @@ fn collect<'a>(
         TSType::TSParenthesizedType(paren) => {
             collect(&paren.type_annotation, alias_name, infer_names, self_call_args);
         }
+        TSType::TSFunctionType(f) => {
+            collect_function_signature(
+                &f.params,
+                &f.return_type,
+                alias_name,
+                infer_names,
+                self_call_args,
+            );
+        }
+        TSType::TSConstructorType(c) => {
+            collect_function_signature(
+                &c.params,
+                &c.return_type,
+                alias_name,
+                infer_names,
+                self_call_args,
+            );
+        }
         TSType::TSTemplateLiteralType(tpl) => {
             for t in &tpl.types {
                 collect(t, alias_name, infer_names, self_call_args);
@@ -439,6 +458,26 @@ fn collect<'a>(
         }
         _ => {}
     }
+}
+
+/// Walk a function or constructor type signature, recording `infer` bindings in
+/// its parameter and return types — e.g. the `infer R` of
+/// `(...args: any[]) => infer R` in an `extends` clause. The function's return
+/// type is a sub-part of the matched input, so a recursive call fed that `infer`
+/// binding (the function-return-unwinding pattern) strictly shrinks each step.
+fn collect_function_signature<'a>(
+    params: &'a oxc_ast::ast::FormalParameters<'a>,
+    return_type: &'a oxc_ast::ast::TSTypeAnnotation<'a>,
+    alias_name: &str,
+    infer_names: &mut Vec<&'a str>,
+    self_call_args: &mut Vec<&'a str>,
+) {
+    for param in &params.items {
+        if let Some(ann) = &param.type_annotation {
+            collect(&ann.type_annotation, alias_name, infer_names, self_call_args);
+        }
+    }
+    collect(&return_type.type_annotation, alias_name, infer_names, self_call_args);
 }
 
 fn collect_tuple_element<'a>(
@@ -903,6 +942,57 @@ type GetSerializedErrorType<ThunkApiConfig> = ThunkApiConfig extends {
         // descent, not a member-descent into a nested child, so it stays flagged
         // — unlike the two-level `T["items"][K]`.
         let src = "type Walk<T> = T extends { items: object } ? Walk<T[\"items\"]> : T;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn exempts_function_return_unwinding_shape_from_id_columns() {
+        // ShapeFromIdColumns recurses on `R`, the `infer R` return-type binding of
+        // the factory-function branch. Each step unwraps one function layer, so the
+        // recursion is bounded by the function-nesting depth and the `never` branch
+        // is the base case.
+        let src = r#"
+export type ShapeFromIdColumns<
+  Types extends SchemaTypes,
+  Table extends keyof Types['DrizzleRelations'],
+  IDColumns,
+> = IDColumns extends Column
+  ? IDColumns['_']['data']
+  : IDColumns extends Column[]
+    ? {
+        [K in IDColumns[number]['_']['name']]: Extract<
+          IDColumns[number],
+          { _: { name: K } }
+        >['_']['data'];
+      }
+    : IDColumns extends ((...args: any[]) => infer R extends Column | Column[])
+      ? ShapeFromIdColumns<Types, Table, R>
+      : never;
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn exempts_function_return_unwinding_minimal() {
+        // Minimal function-return-unwinding: recurse on the `infer R` return-type
+        // binding of a function-type `extends` clause.
+        let src = "type Unwrap<T> = T extends () => infer R ? Unwrap<R> : T;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn exempts_constructor_return_unwinding() {
+        // Same pattern via a constructor type signature.
+        let src = "type Unwrap<T> = T extends new () => infer R ? Unwrap<R> : T;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_function_type_self_call_on_original_input() {
+        // The function-type branch binds `infer R`, but the recursive call passes
+        // the original input `T`, not `R`. The input does not shrink, so the
+        // recursion stays unbounded and must still flag.
+        let src = "type Loop<T> = T extends () => infer R ? Loop<T> : never;";
         assert_eq!(run_on(src).len(), 1);
     }
 }
