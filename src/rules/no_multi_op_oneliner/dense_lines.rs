@@ -198,6 +198,16 @@ pub(super) fn count_operators(line: &str) -> usize {
     count
 }
 
+/// Count the operator bytes (`+ - * / % (`) in `slice` — the same set
+/// `count_operators` recognizes, without string handling. Used to total a
+/// pure-arithmetic formula's operators so they can be collapsed to one.
+pub(super) fn count_arithmetic_bytes(slice: &str) -> usize {
+    slice
+        .bytes()
+        .filter(|&b| matches!(b, b'+' | b'-' | b'*' | b'/' | b'%' | b'('))
+        .count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
