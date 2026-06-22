@@ -8,14 +8,10 @@ use std::sync::Arc;
 
 pub fn register_all() -> Vec<RuleDef> {
     vec![
-        entry(
-            "typescript/no-explicit-any",
-            "typescript/no-explicit-any",
-            Severity::Error,
-            "Using `any` defeats the type system.",
-            "Replace `any` with a concrete type. When the shape is genuinely \
-             unknown at the boundary, use `unknown` and narrow it before use.",
-        ),
+        // `no-explicit-any` is enforced by the native oxc rule `ts-no-explicit-any`
+        // (src/rules/ts_no_explicit_any/), the canonical id for the explicit-`any`
+        // check. The oxlint passthrough and the tsgolint type-aware variant are not
+        // registered so one `any` produces one finding under one id (#5768).
         entry_with_filter(
             "typescript/no-unsafe-type-assertion",
             "typescript/no-unsafe-type-assertion",
@@ -33,8 +29,13 @@ pub fn register_all() -> Vec<RuleDef> {
             "Prefer `T[]` over `Array<T>`. Mixing the two styles creates \
              pointless review churn.",
         ),
+        // Canonical id `consistent-type-imports` (matches the upstream
+        // typescript-eslint rule name). The oxlint key stays
+        // `typescript/consistent-type-imports` — only the comply id is
+        // canonicalised, so one finding is reported under one id and the
+        // tsgolint variant of this rule is not registered (#5768).
         entry(
-            "typescript/consistent-type-imports",
+            "consistent-type-imports",
             "typescript/consistent-type-imports",
             Severity::Error,
             "Import types with `import type` so the bundler can strip them.",
