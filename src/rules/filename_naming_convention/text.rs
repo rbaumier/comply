@@ -329,6 +329,43 @@ fn is_in_locale_dir(path: &std::path::Path) -> bool {
     })
 }
 
+/// Returns `true` when any whole path segment of `path` is a `middleware`
+/// directory. Nuxt's route middleware lives in a `middleware/` directory (root
+/// `middleware/` in Nuxt 3, `app/middleware/` in Nuxt 4); the segment match
+/// covers both. Gates the numeric-load-order-prefix allowance so the convention
+/// only applies to middleware files, not a like-named file elsewhere.
+fn is_in_middleware_dir(path: &std::path::Path) -> bool {
+    path.components()
+        .any(|c| c.as_os_str() == std::ffi::OsStr::new("middleware"))
+}
+
+/// Strips a leading numeric load-order prefix (`<digits>` followed by a `.`, `_`,
+/// or `-` separator) from a Nuxt route-middleware `file_name`, returning the
+/// remaining name. Nuxt runs route middleware in alphabetical/numeric filename
+/// order, so a leading `01.`, `02.` (also `01_`, `01-`) ordering prefix is a
+/// documented framework convention used to sequence middleware, not part of the
+/// author's chosen name. The prefix is removed so the convention is validated
+/// against the real name that follows (`01.auth.global.ts` → `auth.global.ts`).
+/// Returns `None` when there is no leading numeric prefix, so an ordinary
+/// middleware filename is validated unchanged.
+/// See https://nuxt.com/docs/guide/directory-structure/middleware.
+fn strip_numeric_order_prefix(file_name: &str) -> Option<&str> {
+    let digits = file_name.bytes().take_while(|b| b.is_ascii_digit()).count();
+    if digits == 0 {
+        return None;
+    }
+    let rest = &file_name[digits..];
+    let sep = rest.as_bytes().first()?;
+    if !matches!(sep, b'.' | b'_' | b'-') {
+        return None;
+    }
+    let name = &rest[1..];
+    if name.is_empty() {
+        return None;
+    }
+    Some(name)
+}
+
 fn is_ts_or_jsx_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
     s.ends_with(".ts")
@@ -363,7 +400,16 @@ impl TextCheck for Check {
         let Some(file_name) = ctx.path.file_name().and_then(|s| s.to_str()) else {
             return Vec::new();
         };
-        let stem = file_name.split('.').next().unwrap_or(file_name);
+        // Nuxt route middleware in a `middleware/` directory may carry a leading
+        // numeric load-order prefix (`01.auth.global.ts`) to sequence execution;
+        // strip it so the convention is validated against the real name that
+        // follows, not the numeric ordering segment.
+        let name_to_check = if is_in_middleware_dir(ctx.path) {
+            strip_numeric_order_prefix(file_name).unwrap_or(file_name)
+        } else {
+            file_name
+        };
+        let stem = name_to_check.split('.').next().unwrap_or(name_to_check);
         if stem.is_empty() {
             return Vec::new();
         }
@@ -1348,5 +1394,62 @@ mod tests {
     fn rejects_bare_grad_stem_unit_issue_5418() {
         assert!(!is_tfjs_gradient_stem("_grad"));
         assert!(!is_tfjs_gradient_stem("grad"));
+    }
+
+    // Regression for #5156: Nuxt route middleware in a `middleware/` directory may
+    // carry a leading numeric load-order prefix (`01.`, `02.`) to sequence
+    // execution. The prefix is stripped and the real name that follows is
+    // validated, so a kebab-case middleware name with a numeric prefix and the
+    // `.global` marker is not flagged.
+    #[test]
+    fn allows_nuxt_middleware_numeric_prefix_global_issue_5156() {
+        assert!(run("examples/app-vitest-full/middleware/01.global-counter.global.ts").is_empty());
+        assert!(run("middleware/01.auth.global.ts").is_empty());
+        assert!(run("middleware/02.redirect.global.ts").is_empty());
+    }
+
+    // The numeric prefix is also stripped for a non-`.global` middleware name.
+    #[test]
+    fn allows_nuxt_middleware_numeric_prefix_named_issue_5156() {
+        assert!(run("app/middleware/01.auth.ts").is_empty());
+    }
+
+    // The underscore and hyphen prefix separators are recognised too.
+    #[test]
+    fn allows_nuxt_middleware_underscore_hyphen_prefix_issue_5156() {
+        assert!(run("middleware/01_auth.global.ts").is_empty());
+        assert!(run("middleware/02-redirect.ts").is_empty());
+    }
+
+    // Load-bearing scope guard for #5156: the numeric-prefix strip is gated on the
+    // `middleware/` directory — the same numeric-prefixed name elsewhere must STILL
+    // fire, since the stem `01` is not a valid convention name on its own.
+    #[test]
+    fn flags_numeric_prefix_outside_middleware_dir_issue_5156() {
+        assert_eq!(run("src/utils/01.auth.ts").len(), 1);
+    }
+
+    // Guard: stripping the numeric prefix does not exempt a mis-cased remainder —
+    // a snake_case middleware name after the prefix still fires.
+    #[test]
+    fn flags_nuxt_middleware_numeric_prefix_snake_remainder_issue_5156() {
+        assert_eq!(run("middleware/01.bad_name.global.ts").len(), 1);
+    }
+
+    // Guard: a middleware file with no numeric prefix is validated unchanged — a
+    // snake_case name with no prefix still fires.
+    #[test]
+    fn flags_nuxt_middleware_snake_no_prefix_issue_5156() {
+        assert_eq!(run("middleware/bad_name.ts").len(), 1);
+    }
+
+    // Guard (unit): a numeric prefix with no separator, no trailing name, or no
+    // leading digits is not a load-order prefix.
+    #[test]
+    fn rejects_malformed_numeric_prefix_unit_issue_5156() {
+        assert!(strip_numeric_order_prefix("01auth.ts").is_none());
+        assert!(strip_numeric_order_prefix("01.").is_none());
+        assert!(strip_numeric_order_prefix("auth.ts").is_none());
+        assert_eq!(strip_numeric_order_prefix("01.auth.ts"), Some("auth.ts"));
     }
 }
