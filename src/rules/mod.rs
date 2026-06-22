@@ -240,4 +240,46 @@ mod tests {
             panic!("duplicate rule IDs detected: {:?}", dups);
         }
     }
+
+    #[test]
+    fn canonical_alias_rules_registered_once() {
+        // Regression for rbaumier/comply#5768 — one logical check must be
+        // enforced under exactly one canonical id. The issue observed a single
+        // `any` reported under three ids (ts-no-explicit-any,
+        // typescript/no-explicit-any, no-explicit-any) because the same check was
+        // registered on three backends. De-registering the duplicate
+        // oxlint-passthrough and tsgolint backends makes one violation produce one
+        // finding. This test fails if any duplicate backend is re-added.
+        //
+        // `emittable` is every id a diagnostic can carry: native and
+        // oxlint-passthrough rules live in all_rule_defs(); type-aware rules live
+        // in register_tsgolint().
+        let mut emittable: rustc_hash::FxHashSet<&'static str> = rustc_hash::FxHashSet::default();
+        for rule in all_rule_defs() {
+            emittable.insert(rule.meta.id);
+        }
+        for rule in delegated::register_tsgolint() {
+            emittable.insert(rule.meta.id);
+        }
+
+        // (canonical id kept) → (former alias ids that must NOT be registered).
+        let groups: [(&str, &[&str]); 4] = [
+            ("ts-no-explicit-any", &["typescript/no-explicit-any", "no-explicit-any"]),
+            ("ts-no-inferrable-types", &["no-inferrable-types"]),
+            ("promise-prefer-await-to-then", &["promise/prefer-await-to-then"]),
+            ("consistent-type-imports", &["typescript/consistent-type-imports"]),
+        ];
+        for (canonical, aliases) in groups {
+            assert!(
+                emittable.contains(canonical),
+                "canonical id `{canonical}` must be registered",
+            );
+            for alias in aliases {
+                assert!(
+                    !emittable.contains(*alias),
+                    "alias `{alias}` must not be registered alongside canonical `{canonical}` (#5768)",
+                );
+            }
+        }
+    }
 }

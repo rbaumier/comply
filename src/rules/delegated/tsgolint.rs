@@ -55,12 +55,9 @@ pub fn register_all() -> Vec<RuleDef> {
         // ══════════════════════════════════════════════════════════════════
         // TYPE SAFETY — ANY LEAKS
         // ══════════════════════════════════════════════════════════════════
-        entry(
-            "no-explicit-any",
-            "no-explicit-any",
-            "Explicit `any` defeats TypeScript's type safety.",
-            "Use `unknown`, a specific type, or a generic.",
-        ),
+        // `no-explicit-any` is enforced by the native oxc rule `ts-no-explicit-any`
+        // (the canonical id); the syntactic `any` keyword needs no type program, so
+        // the type-aware variant is not registered here (one finding, one id — #5768).
         entry(
             "no-unsafe-argument",
             "no-unsafe-argument",
@@ -313,12 +310,10 @@ pub fn register_all() -> Vec<RuleDef> {
             "`A | A` has duplicate — likely a copy-paste error.",
             "Remove the duplicate type constituent.",
         ),
-        entry(
-            "no-inferrable-types",
-            "no-inferrable-types",
-            "`const x: number = 5` — the type is inferred from the value.",
-            "Remove the type annotation.",
-        ),
+        // `no-inferrable-types` is enforced by the native oxc rule
+        // `ts-no-inferrable-types` (the canonical id); a redundant annotation on a
+        // literal initializer is syntactic, so the type-aware variant is not
+        // registered here (one finding, one id — #5768).
         // ══════════════════════════════════════════════════════════════════
         // TYPES — BAD PATTERNS
         // ══════════════════════════════════════════════════════════════════
@@ -402,12 +397,10 @@ pub fn register_all() -> Vec<RuleDef> {
             "Type-only exports should use `export type`.",
             "Add the `type` keyword: `export type { Foo }`.",
         ),
-        entry(
-            "consistent-type-imports",
-            "consistent-type-imports",
-            "Type-only imports should use `import type`.",
-            "Add the `type` keyword: `import type { Foo }`.",
-        ),
+        // `consistent-type-imports` is enforced via the oxlint passthrough
+        // (delegated/ts.rs, canonical id `consistent-type-imports`); it is
+        // scope-based and needs no type program, so the type-aware variant is not
+        // registered here (one finding, one id — #5768).
         entry(
             "no-import-type-side-effects",
             "no-import-type-side-effects",

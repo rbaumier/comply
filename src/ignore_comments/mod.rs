@@ -136,14 +136,23 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
     }
 }
 
-/// Rules that share a span's intent: a `comply-ignore` for the key rule also
-/// suppresses each listed sibling on the same line/file. `no-clones` and
-/// `no-duplicate-type-definition` both flag the exact same intentional
-/// structural duplication, so one acknowledgement of it covers both rather than
-/// forcing the author to stack two markers on the same construct.
+/// Sibling ids whose `comply-ignore` directive also suppresses `rule_id`. Two
+/// cases share this map:
+///
+/// 1. **Shared-intent siblings.** `no-clones` and `no-duplicate-type-definition`
+///    both flag the exact same intentional structural duplication, so one
+///    acknowledgement covers both rather than forcing two stacked markers.
+/// 2. **Canonicalised aliases (#5768).** Each value-typed rule below is enforced
+///    under a single canonical id (the duplicate oxlint-passthrough / tsgolint
+///    backends were de-registered). A directive that still cites a former alias id
+///    keeps suppressing the canonical finding now emitted in its place.
 fn suppression_aliases(rule_id: &str) -> &'static [&'static str] {
     match rule_id {
         "no-duplicate-type-definition" => &["no-clones"],
+        "ts-no-explicit-any" => &["typescript/no-explicit-any", "no-explicit-any"],
+        "ts-no-inferrable-types" => &["no-inferrable-types"],
+        "promise-prefer-await-to-then" => &["promise/prefer-await-to-then"],
+        "consistent-type-imports" => &["typescript/consistent-type-imports"],
         _ => &[],
     }
 }
@@ -338,6 +347,28 @@ mod tests {
             apply_suppressions(vec![diag(2, "no-other")], Path::new("t.ts"), s).len(),
             1
         );
+    }
+
+    #[test]
+    fn canonicalized_alias_directive_suppresses_canonical_finding() {
+        // Regression for rbaumier/comply#5768 — the duplicate oxlint-passthrough
+        // and tsgolint backends were de-registered so each check now emits one
+        // finding under its canonical id. A pre-existing directive that still
+        // cites a former alias id must keep suppressing that canonical finding.
+        let cases: [(&'static str, &'static str); 5] = [
+            ("ts-no-explicit-any", "no-explicit-any"),
+            ("ts-no-explicit-any", "typescript/no-explicit-any"),
+            ("ts-no-inferrable-types", "no-inferrable-types"),
+            ("promise-prefer-await-to-then", "promise/prefer-await-to-then"),
+            ("consistent-type-imports", "typescript/consistent-type-imports"),
+        ];
+        for (canonical, alias) in cases {
+            let source = format!("// comply-ignore: {alias} — pre-existing\nlet x = 5;");
+            assert!(
+                apply_suppressions(vec![diag(2, canonical)], Path::new("t.ts"), &source).is_empty(),
+                "directive `{alias}` should suppress canonical finding `{canonical}`",
+            );
+        }
     }
 
     #[test]

@@ -36,12 +36,10 @@ pub fn register_all() -> Vec<RuleDef> {
             "Don't `return Promise.resolve(x)` inside `.then()` — just \
              `return x`. The then-chain already wraps non-promise values.",
         ),
-        entry(
-            "promise/prefer-await-to-then",
-            "promise/prefer-await-to-then",
-            "Use `await` instead of `.then()` chains. await keeps control \
-             flow linear and enables try/catch.",
-        ),
+        // `prefer-await-to-then` is enforced by the native oxc rule
+        // `promise-prefer-await-to-then`, the canonical id for this check. The
+        // oxlint passthrough is not registered so one `.then()` produces one
+        // finding under one id (#5768).
         entry(
             "promise/no-return-in-finally",
             "promise/no-return-in-finally",
