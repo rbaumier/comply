@@ -1,5 +1,5 @@
 //! ts-branded-type-no-direct-cast OXC backend — forbid `as BrandedType`
-//! outside validator/constructor functions.
+//! outside a function whose declared return type is that brand (its factory).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -101,42 +101,54 @@ fn local_alias_is_branded<'a>(
     found
 }
 
-fn is_validator_name(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    lower.starts_with("parse")
-        || lower.starts_with("make")
-        || lower.starts_with("create")
-        || lower.starts_with("brand")
-        || lower.starts_with("to")
-        || lower.starts_with("from")
-        || lower.starts_with("as")
-        || lower.contains("validate")
+/// Base name of a type reference (`Brand<…>` → `Brand`), or `None` for any
+/// other type form. Used to compare a return-type operand against the brand the
+/// cast targets.
+fn type_reference_base_name<'a>(ty: &TSType<'a>) -> Option<&'a str> {
+    match ty {
+        TSType::TSParenthesizedType(p) => type_reference_base_name(&p.type_annotation),
+        TSType::TSTypeReference(r) => match &r.type_name {
+            TSTypeName::IdentifierReference(id) => Some(id.name.as_str()),
+            TSTypeName::QualifiedName(q) => Some(q.right.name.as_str()),
+            TSTypeName::ThisExpression(_) => None,
+        },
+        _ => None,
+    }
 }
 
-fn enclosing_function_name<'a>(
+/// True when a declared return-type annotation IS the brand named `brand`, or a
+/// union that includes it (`Brand | undefined`, `Brand | null`).
+fn return_type_is_brand(annotation: Option<&oxc_ast::ast::TSTypeAnnotation>, brand: &str) -> bool {
+    let Some(ann) = annotation else { return false };
+    match &ann.type_annotation {
+        TSType::TSUnionType(union) => union
+            .types
+            .iter()
+            .any(|ty| type_reference_base_name(ty) == Some(brand)),
+        ty => type_reference_base_name(ty) == Some(brand),
+    }
+}
+
+/// True when an enclosing function/arrow declares `brand` as its return type.
+/// Such a function IS the brand's factory: it takes ownership of the raw value
+/// and stamps it with the brand, so the `as Brand` cast on the return path is
+/// the single sanctioned place the type boundary is crossed.
+fn is_inside_brand_factory<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
-    source: &str,
-) -> Option<String> {
-    let mut cur_id = node.id();
-    loop {
-        let parent = semantic.nodes().parent_node(cur_id);
-        match parent.kind() {
-            AstKind::Program(_) => return None,
-            AstKind::Function(f) => {
-                if let Some(id) = &f.id {
-                    return Some(id.name.to_string());
-                }
-            }
-            AstKind::VariableDeclarator(decl) => {
-                let span = decl.id.span();
-                let name = &source[span.start as usize..span.end as usize];
-                return Some(name.to_string());
-            }
-            _ => {}
-        }
-        cur_id = parent.id();
-    }
+    brand: &str,
+) -> bool {
+    // A namespace-qualified target (`Schemas.NodeId`) is declared and referenced
+    // under its bare trailing segment; compare on that, as `local_alias_is_branded` does.
+    let bare = brand.rsplit('.').next().unwrap_or(brand);
+    semantic.nodes().ancestors(node.id()).any(|ancestor| {
+        let return_type = match ancestor.kind() {
+            AstKind::Function(f) => f.return_type.as_deref(),
+            AstKind::ArrowFunctionExpression(a) => a.return_type.as_deref(),
+            _ => None,
+        };
+        return_type_is_brand(return_type, bare)
+    })
 }
 
 impl OxcCheck for Check {
@@ -170,10 +182,9 @@ impl OxcCheck for Check {
             return;
         }
 
-        if let Some(fn_name) = enclosing_function_name(node, semantic, ctx.source)
-            && is_validator_name(&fn_name) {
-                return;
-            }
+        if is_inside_brand_factory(node, semantic, base_name) {
+            return;
+        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, as_expr.span.start as usize);
         diagnostics.push(Diagnostic {
@@ -279,6 +290,71 @@ const id = raw as OrderId;"#;
 const t = raw as SessionToken;"#;
         let diags = run_rule_gated(&Check, src, "src/session/token.ts");
         assert!(diags.is_empty(), "cast to a plain string alias must not fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn allows_cast_in_brand_factory_function_declaration() {
+        // Issue #5696 — the factory whose declared return type IS the brand is
+        // the sanctioned place the cast happens; its name need not match any
+        // validator-prefix convention (`nextNodeId`, not `makeNodeId`).
+        let src = r#"type Brand<K, T> = K & { __brand: T };
+export type NodeId = Brand<string | number, 'nodeId'>;
+let nodeIdCounter = 0;
+export function nextNodeId (): NodeId {
+  return ++nodeIdCounter as NodeId;
+}"#;
+        let diags = run_rule_gated(&Check, src, "src/deps-resolver/nextNodeId.ts");
+        assert!(diags.is_empty(), "cast on the return path of the brand's factory must not fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn allows_cast_in_brand_factory_arrow_function() {
+        // Same exemption for an arrow factory with an explicit brand return type.
+        let src = r#"type UserId = string & { readonly __brand: 'UserId' };
+export const makeUserId = (raw: string): UserId => raw as UserId;"#;
+        let diags = run_rule_gated(&Check, src, "src/user/id.ts");
+        assert!(diags.is_empty(), "cast in an arrow brand factory must not fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn allows_cast_in_brand_factory_with_union_return_type() {
+        // A factory may legitimately return `Brand | undefined`; the cast on the
+        // success path is still inside the brand's own constructor.
+        let src = r#"type UserId = string & { readonly __brand: 'UserId' };
+function parseUserId(raw: string): UserId | undefined {
+  if (raw.length === 0) return undefined;
+  return raw as UserId;
+}"#;
+        let diags = run_rule_gated(&Check, src, "src/user/id.ts");
+        assert!(diags.is_empty(), "cast in a factory returning `Brand | undefined` must not fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn allows_cast_in_factory_returning_namespace_qualified_brand() {
+        // A namespace-qualified return type (`Schemas.NodeId`) resolves to the
+        // bare brand; its factory is exempt like any other.
+        let src = r#"namespace Schemas {
+    export type NodeId = string & { readonly __brand: 'NodeId' };
+}
+function makeNodeId(raw: string): Schemas.NodeId {
+  return raw as Schemas.NodeId;
+}"#;
+        let diags = run_rule_gated(&Check, src, "src/node/id.ts");
+        assert!(diags.is_empty(), "cast in a factory returning a qualified brand must not fire, got: {diags:?}");
+    }
+
+    #[test]
+    fn flags_cast_in_function_returning_other_type() {
+        // Gate: a cast to the brand inside a function whose declared return type
+        // is NOT the brand bypasses the factory and must still fire, regardless
+        // of a validator-shaped name.
+        let src = r#"type UserId = string & { readonly __brand: 'UserId' };
+function makeUserId(raw: string): string {
+  const id = raw as UserId;
+  return String(id);
+}"#;
+        let diags = run_rule_gated(&Check, src, "src/user/id.ts");
+        assert_eq!(diags.len(), 1, "cast in a function not returning the brand must fire, got: {diags:?}");
     }
 
     #[test]
