@@ -165,6 +165,24 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A literal interpolated (directly or through arithmetic) into a template
+        // literal that carries an ANSI escape sequence (`\x1b[38;5;${232 + t}m`)
+        // is an ANSI terminal constant — a 256-color palette index or SGR
+        // parameter — named by the escape it builds, not a magic number. The
+        // escape introducer in the surrounding quasi is the anchor.
+        if is_ansi_escape_interpolation(node.id(), semantic) {
+            return;
+        }
+
+        // The bound of a `for`/`while` loop whose body emits an ANSI escape
+        // (`for (let t = 0; t <= 24; ++t) … = `\x1b[38;5;${232 + t}m``) is the
+        // step count of the ANSI palette it fills (24 grayscale steps). The
+        // ANSI-emitting loop body is the anchor; an ordinary loop body keeps its
+        // bound flagged.
+        if is_ansi_loop_bound(node.id(), semantic) {
+            return;
+        }
+
         // An element of a long, homogeneously-numeric array literal is embedded
         // data (a byte array, lookup table, or serialized binary such as an
         // inlined ONNX protobuf), not a magic number. Naming individual elements
@@ -677,6 +695,199 @@ fn typed_array_member_object(
         }
         _ => false,
     }
+}
+
+/// True when this literal is interpolated into the ANSI-escape portion of a
+/// template literal (`\x1b[38;5;${232 + t}m`). Walks up from the literal through
+/// expression nodes only (arithmetic, unary, grouping, conditional) to the
+/// enclosing `TemplateLiteral`, then anchors on the *adjacent* quasi: the static
+/// part immediately before this substitution must carry an ANSI escape
+/// introducer. That escape names the literal (a 256-color palette index or SGR
+/// parameter), so only a literal that directly continues an escape sequence is
+/// exempt — a literal in an ordinary substitution of a template that merely also
+/// contains an unrelated escape still flags.
+fn is_ansi_escape_interpolation(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let mut current_id = node_id;
+
+    loop {
+        let parent_id = nodes.parent_id(current_id);
+        if parent_id == current_id {
+            return false;
+        }
+        match nodes.get_node(parent_id).kind() {
+            AstKind::TemplateLiteral(tpl) => {
+                let substitution_span = nodes.get_node(current_id).kind().span();
+                return quasi_before_substitution_is_ansi(tpl, substitution_span);
+            }
+            // Expression nodes that can legitimately wrap an interpolated value
+            // before it reaches the template substitution.
+            AstKind::BinaryExpression(_)
+            | AstKind::UnaryExpression(_)
+            | AstKind::ParenthesizedExpression(_)
+            | AstKind::ConditionalExpression(_) => {}
+            _ => return false,
+        }
+        current_id = parent_id;
+    }
+}
+
+/// True when the static quasi immediately preceding the substitution at
+/// `substitution_span` ends inside an open ANSI escape parameter list, so the
+/// substitution supplies a parameter of that escape (`\x1b[38;5;` then
+/// `${232 + t}`). Substitution `i` is preceded by `quasis[i]`; matching the
+/// substitution span to `tpl.expressions[i]` recovers `i`.
+fn quasi_before_substitution_is_ansi(
+    tpl: &oxc_ast::ast::TemplateLiteral<'_>,
+    substitution_span: oxc_span::Span,
+) -> bool {
+    tpl.expressions
+        .iter()
+        .position(|e| e.span() == substitution_span)
+        .and_then(|i| tpl.quasis.get(i))
+        .is_some_and(|q| quasi_ends_in_open_csi(q.value.raw.as_str()))
+}
+
+/// True when `raw` ends inside an unterminated ANSI Control Sequence: the last
+/// CSI introducer (ESC + `[`) is followed only by parameter bytes (`0-9`, `;`,
+/// `:`) up to the end of the quasi, with no CSI final byte. The substitution
+/// then completes a parameter of that escape. A terminated escape (`\x1b[2K`)
+/// followed by ordinary text does not match — its trailing literal is unrelated.
+fn quasi_ends_in_open_csi(raw: &str) -> bool {
+    let Some(after_csi) = last_csi_tail(raw) else {
+        return false;
+    };
+    after_csi
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == ';' || c == ':')
+}
+
+/// The text following the last ANSI CSI introducer in `raw`, or `None` if there
+/// is no introducer. Recognizes the raw ESC char and its common source escapes.
+fn last_csi_tail(raw: &str) -> Option<&str> {
+    const CSI_FORMS: &[&str] = &[
+        "\u{1b}[", "\\x1b[", "\\x1B[", "\\u001b[", "\\u001B[", "\\u{1b}[", "\\u{1B}[", "\\033[",
+        "\\e[",
+    ];
+    CSI_FORMS
+        .iter()
+        .filter_map(|form| raw.rfind(form).map(|idx| idx + form.len()))
+        .max()
+        .map(|tail_start| &raw[tail_start..])
+}
+
+/// True when this literal is the bound of a `for`/`while` loop whose body emits
+/// an ANSI escape sequence driven by the loop counter
+/// (`for (let t = 0; t <= 24; ++t) … = `\x1b[38;5;${232 + t}m``), so its bound is
+/// the step count of that ANSI palette. Two anchors must both hold: the body
+/// contains an ANSI-escape template, and one of that template's substitutions
+/// references a name from the loop test (the counter the bound governs). This
+/// rejects an outer loop whose body merely contains an unrelated escape — its
+/// bound stays flagged.
+fn is_ansi_loop_bound(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let lit_span = nodes.get_node(node_id).kind().span();
+
+    let mut current_id = node_id;
+    loop {
+        let parent_id = nodes.parent_id(current_id);
+        if parent_id == current_id {
+            return false;
+        }
+        let parent = nodes.get_node(parent_id);
+        let (test_span, body_span) = match parent.kind() {
+            AstKind::ForStatement(stmt) => {
+                // The literal must sit in the loop test (`t <= 24`), not in the
+                // body — a magic number in the body is judged on its own.
+                let Some(test) = stmt.test.as_ref() else {
+                    return false;
+                };
+                if !test.span().contains_inclusive(lit_span) {
+                    return false;
+                }
+                (test.span(), stmt.body.span())
+            }
+            AstKind::WhileStatement(stmt) => {
+                if !stmt.test.span().contains_inclusive(lit_span) {
+                    return false;
+                }
+                (stmt.test.span(), stmt.body.span())
+            }
+            _ => {
+                current_id = parent_id;
+                continue;
+            }
+        };
+        return body_has_counter_driven_ansi(test_span, body_span, semantic);
+    }
+}
+
+/// True when the loop body contains an ANSI-escape template literal whose
+/// interpolated counter comes from the loop test — the bound and the ANSI index
+/// share the loop counter. Identifiers referenced in `test_span` are the
+/// candidate counter names; an ANSI body-template must reference one of them in a
+/// substitution for the linkage to hold.
+fn body_has_counter_driven_ansi(
+    test_span: oxc_span::Span,
+    body_span: oxc_span::Span,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let counter_names = identifier_names_in_span(test_span, semantic);
+    if counter_names.is_empty() {
+        return false;
+    }
+    semantic.nodes().iter().any(|node| {
+        let AstKind::TemplateLiteral(tpl) = node.kind() else {
+            return false;
+        };
+        if !body_span.contains_inclusive(tpl.span) || !template_has_ansi_escape(tpl) {
+            return false;
+        }
+        tpl.expressions.iter().any(|expr| {
+            identifier_names_in_span(expr.span(), semantic)
+                .iter()
+                .any(|name| counter_names.contains(name))
+        })
+    })
+}
+
+/// Names of all identifier references whose span lies within `span`.
+fn identifier_names_in_span(
+    span: oxc_span::Span,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> Vec<String> {
+    semantic
+        .nodes()
+        .iter()
+        .filter_map(|node| match node.kind() {
+            AstKind::IdentifierReference(id) if span.contains_inclusive(id.span) => {
+                Some(id.name.to_string())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// True when a template literal's static parts contain an ANSI escape introducer:
+/// an ESC byte immediately followed by `[` (the Control Sequence Introducer).
+/// Read from the raw quasi text so the various source spellings of ESC
+/// (`\x1b`, `\u001b`, `\u{1b}`, `\033`, `\e`, or the raw ESC char) are
+/// recognized as written rather than their decoded form.
+fn template_has_ansi_escape(tpl: &oxc_ast::ast::TemplateLiteral<'_>) -> bool {
+    tpl.quasis.iter().any(|q| raw_has_ansi_csi(q.value.raw.as_str()))
+}
+
+/// True when `raw` contains an ANSI Control Sequence Introducer: an ESC byte
+/// followed by `[`. Matches the raw ESC char and the common source escapes for
+/// it.
+fn raw_has_ansi_csi(raw: &str) -> bool {
+    last_csi_tail(raw).is_some()
 }
 
 fn is_allowed_context(
@@ -1228,5 +1439,71 @@ mod tests {
         // still flag (a bare expression value, not a const init or stride).
         let src = r#"function f(n: number) { return n + 3 + 4; }"#;
         assert_eq!(run(src).len(), 2);
+    }
+
+    // Regression for issue #5450: in clipanion `format.ts`, a grayscale-ramp
+    // palette index (`232`, interpolated into an ANSI 256-color escape) and the
+    // step count of the loop that emits those escapes (`24`) are protocol-level
+    // ANSI terminal constants, named by the escape sequence they build.
+    #[test]
+    fn allows_ansi_palette_index_interpolated_into_escape() {
+        let src = r#"
+            const richLine = Array(80).fill("x");
+            for (let t = 0; t <= 24; ++t)
+              richLine[richLine.length - t] = `\x1b[38;5;${232 + t}m`;
+        "#;
+        assert!(
+            run(src).is_empty(),
+            "ANSI 256-color palette index and its loop step count must not be flagged"
+        );
+    }
+
+    #[test]
+    fn allows_ansi_index_directly_interpolated() {
+        // The palette index need not be wrapped in arithmetic: a bare literal
+        // interpolated into an ANSI escape is equally named by the escape.
+        let src = r#"function color(s: string) { return `[38;5;${196}m${s}`; }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_magic_number_interpolated_into_plain_template() {
+        // The exemption is anchored on the ANSI escape introducer; a literal
+        // interpolated into an ordinary template literal is still magic.
+        let src = r#"function f(s: string) { return `${s} costs ${86400}`; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_magic_number_in_non_ansi_substitution_of_ansi_template() {
+        // The anchor is the quasi *adjacent* to the substitution: `86400` here
+        // continues the plain ` progress ` quasi, not an escape, so it stays
+        // flagged even though an earlier quasi carries `\x1b[2K`.
+        let src = r#"function f() { return `\x1b[2K\r progress ${86400}`; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_for_loop_bound_without_ansi_body() {
+        // The loop-bound exemption requires the body to emit an ANSI escape; a
+        // for-loop with an ordinary body keeps its bound flagged.
+        let src = r#"function f(a: number[]) { for (let i = 0; i <= 24; ++i) a[i] = i; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_loop_bound_when_ansi_escape_is_unrelated_to_counter() {
+        // The ANSI escape in the body must be driven by the loop counter. Here
+        // the clear-screen escape ignores `i`, so the bound `999` is an ordinary
+        // magic number and stays flagged.
+        let src = r#"
+            function f(g: (n: number) => void) {
+                for (let i = 0; i <= 999; ++i) {
+                    g(i);
+                    if (i === 0) console.log(`\x1b[2J`);
+                }
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
     }
 }
