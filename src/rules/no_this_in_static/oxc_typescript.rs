@@ -5,16 +5,17 @@
 //! In a static context `this` is the class constructor itself and `super` is the
 //! parent class. A bare `this` used as a value (`foo(this)`, `return this`,
 //! `this === x`) is almost always a mistake for code meant to operate on an
-//! instance and is flagged. Constructing or member-accessing through `this`
-//! (`new this()`, `this.member`, `this[k]`, `this.#field`) is exempt: there
-//! `this` resolves to the actual — possibly subclass — class, so these reach
-//! inherited/overridden static members polymorphically. Replacing them with a
-//! hardcoded class name would break subclassing.
+//! instance and is flagged. Constructing, member-accessing, or instance-checking
+//! through `this` (`new this()`, `this.member`, `this[k]`, `this.#field`,
+//! `x instanceof this`) is exempt: there `this` resolves to the actual —
+//! possibly subclass — class, so these reach inherited/overridden static members
+//! or perform a subclass-aware identity check polymorphically. Replacing them
+//! with a hardcoded class name would break subclassing.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::MethodDefinitionKind;
+use oxc_ast::ast::{BinaryOperator, MethodDefinitionKind};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -56,6 +57,25 @@ fn is_this_member_object(
         AstKind::PrivateFieldExpression(member) => member.object.span() == this_span,
         _ => false,
     }
+}
+
+/// True when `this_node` is the right operand of an `instanceof` expression
+/// (`x instanceof this`). In a static context `this` resolves to the class the
+/// method was invoked on — possibly a subclass — so `instanceof this` is a
+/// subclass-aware identity check that follows the class hierarchy. Hardcoding the
+/// declaring class name instead would break that polymorphism, so this use is
+/// exempt. The *left* operand `this` (`this instanceof X`) is a bare value and is
+/// not exempted.
+fn is_this_instanceof_rhs(
+    this_node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let AstKind::BinaryExpression(binary) = nodes.kind(nodes.parent_id(this_node.id())) else {
+        return false;
+    };
+    binary.operator == BinaryOperator::Instanceof
+        && binary.right.span() == this_node.kind().span()
 }
 
 /// Determines whether the `this`/`super` at `node` is bound to a `static` class
@@ -148,6 +168,7 @@ impl OxcCheck for Check {
                 AstKind::ThisExpression(this_expr) => {
                     if is_new_this_callee(node, semantic)
                         || is_this_member_object(node, semantic)
+                        || is_this_instanceof_rhs(node, semantic)
                     {
                         continue;
                     }
@@ -455,5 +476,32 @@ mod tests {
     fn allows_inherited_static_method_call() {
         // `this.staticHelper()` dispatches to the subclass's static override.
         assert!(run_on("class M { static run() { return this.staticHelper(); } }").is_empty());
+    }
+
+    // --- Regression: issue #5448 (`instanceof this` subclass-aware check) ---
+
+    #[test]
+    fn allows_instanceof_this_in_static_factory() {
+        // `definitions instanceof this` — subclass-aware identity check in a
+        // static factory on a subclass of a built-in (`extends Array`); the
+        // `super.from(...)` call on the same line is still flagged.
+        let src = "class OptionDefinitions extends Array {\n    static from(definitions) {\n        if (definitions instanceof this) return definitions;\n        return super.from(definitions);\n    }\n}";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn allows_instanceof_this_rhs_in_static_method() {
+        // `x instanceof this` — `this` is the right operand, the polymorphic
+        // type-check idiom, so it is exempt.
+        assert!(run_on("class A { static m(x) { return x instanceof this; } }").is_empty());
+    }
+
+    #[test]
+    fn flags_this_as_instanceof_lhs_in_static_method() {
+        // `this instanceof X` — `this` is the left operand (a bare value), not
+        // the class being checked against, so it stays flagged.
+        let diags = run_on("class A { static m() { return this instanceof Foo; } }");
+        assert_eq!(diags.len(), 1);
     }
 }
