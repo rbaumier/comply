@@ -286,6 +286,38 @@ pub fn is_in_test_context(node: Node, source: &[u8]) -> bool {
     false
 }
 
+/// True if `node` is inside a [Kani](https://model-checking.github.io/kani/)
+/// formal-verification harness — an enclosing function carrying a `kani`
+/// proof attribute:
+///
+/// - `#[kani::proof]`
+/// - `#[kani::proof_for_contract(...)]`
+///
+/// A Kani harness symbolically executes a function over unconstrained
+/// `kani::any()` inputs to verify the absence of panics, undefined behavior,
+/// and contract violations. The harness lives in the production `src/` tree
+/// (not under `tests/`) yet is verification code, not shipping logic: a
+/// `let _ = f(..)` there exercises the call for its safety property and
+/// intentionally discards the return value.
+///
+/// Rules that relax their discipline for verification harnesses (allow
+/// `unwrap`, `let _ = fallible()`, etc.) call this helper — the verification
+/// analog of [`is_in_test_context`] — to decide whether a candidate should be
+/// skipped.
+pub fn is_in_kani_proof(node: Node, source: &[u8]) -> bool {
+    const KANI_PROOF_ATTRS: &[&str] = &["kani::proof", "kani::proof_for_contract"];
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "function_item"
+            && has_outer_attribute_path(parent, source, KANI_PROOF_ATTRS)
+        {
+            return true;
+        }
+        cur = parent;
+    }
+    false
+}
+
 /// True if a single path SEGMENT names a test directory by a `-`/`_`-delimited
 /// `test`/`tests` token.
 ///
@@ -4680,6 +4712,38 @@ mod tests {
         let call = first_call_expression(tree.root_node())
             .expect("snippet should contain a call_expression");
         assert!(enclosing_fn(call).is_none());
+    }
+
+    #[test]
+    fn is_in_kani_proof_recognizes_proof_harnesses() {
+        let cases = [
+            // `#[kani::proof]` on the enclosing fn.
+            ("#[kani::proof] fn h() { f(); }", true),
+            // `#[kani::proof_for_contract(...)]` on the enclosing fn.
+            (
+                "#[kani::proof_for_contract(crate::Epoch::weekday)] fn h() { f(); }",
+                true,
+            ),
+            // A Kani attribute on an inner closure's host fn still covers a
+            // nested call.
+            ("#[kani::proof] fn h() { let g = || { f(); }; }", true),
+            // No Kani attribute: a plain fn is not a harness.
+            ("fn h() { f(); }", false),
+            // A different `kani` attribute that is not a proof harness.
+            ("#[kani::requires(x > 0)] fn h() { f(); }", false),
+            // A non-kani attribute whose name merely ends in `proof`.
+            ("#[my::proof] fn h() { f(); }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let call = first_call_expression(tree.root_node())
+                .expect("snippet should contain a call_expression");
+            assert_eq!(
+                is_in_kani_proof(call, src.as_bytes()),
+                expected,
+                "is_in_kani_proof mismatch for `{src}`"
+            );
+        }
     }
 
     #[test]
