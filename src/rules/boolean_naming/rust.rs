@@ -235,19 +235,21 @@ fn is_toggle_enable_setter_param(
     false
 }
 
-/// True for the consuming-builder field-setter convention: a `bool` parameter
-/// whose name is identical to the enclosing method's name, where the method
-/// takes `self` by value and returns `Self`
-/// (`pub fn fit_intercept(mut self, fit_intercept: bool) -> Self`). Here the
-/// parameter name is dictated by the field it sets, named after that field per
-/// the builder convention, not chosen freely — so a predicate prefix would
-/// diverge the parameter from the field and method it mirrors.
+/// True for the builder field-setter convention: a `bool` parameter whose name
+/// is identical to the enclosing method's name, where the method is a fluent
+/// builder setter — it has a `self` receiver and returns a `Self`-shaped type,
+/// either by value (`pub fn fit_intercept(mut self, fit_intercept: bool) -> Self`)
+/// or by reference (`pub fn memory64(&mut self, memory64: bool) -> &mut Self`).
+/// Here the parameter name is dictated by the field it sets, named after that
+/// field per the builder convention, not chosen freely — so a predicate prefix
+/// would diverge the parameter from the field and method it mirrors.
 ///
 /// Anchored on three AST signals so it cannot widen into a name allowlist: the
 /// node is a `parameter` whose name equals the enclosing `function_item`'s
-/// `name` field, that function takes a by-value `self` receiver, and its return
-/// type is `Self`. A free function, a `&self`/`&mut self` accessor, a setter not
-/// returning `Self`, or any parameter whose name differs from the method name is
+/// `name` field, that function has a `self` receiver, and its return type is a
+/// `Self` form (`Self` / `&Self` / `&mut Self`). A free function, a setter that
+/// returns `()` or some other type (a plain `&mut self` mutator, not a fluent
+/// builder), or any parameter whose name differs from the method name is
 /// unaffected and still flags. The walk stops at the first `closure_expression`
 /// boundary so a closure callback param is judged by its own scope.
 fn is_builder_setter_field_param(
@@ -269,36 +271,23 @@ fn is_builder_setter_field_param(
                 .and_then(|n| n.utf8_text(source).ok())
                 .is_some_and(|fn_name| fn_name == name);
             return name_matches_method
-                && method_has_by_value_self_receiver(parent, source)
-                && method_returns_self(parent, source);
+                && method_has_self_receiver(parent)
+                && method_returns_self_type(parent, source);
         }
         cursor = parent;
     }
     false
 }
 
-/// True if `function_item`'s `parameters` declare a by-value `self` receiver
-/// (`self` / `mut self`), as opposed to `&self` / `&mut self`. A consuming
-/// builder setter takes `self` by value; the borrowed forms are accessors.
-fn method_has_by_value_self_receiver(function_item: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(params) = function_item.child_by_field_name("parameters") else {
-        return false;
-    };
-    let mut cursor = params.walk();
-    params.children(&mut cursor).any(|child| {
-        // `&self` / `&mut self` / `&'a self` all contain `&`; by-value forms
-        // (`self` / `mut self`) do not.
-        child.kind() == "self_parameter"
-            && !child.utf8_text(source).is_ok_and(|t| t.contains('&'))
-    })
-}
-
-/// True if `function_item`'s declared return type is `Self`.
-fn method_returns_self(function_item: tree_sitter::Node, source: &[u8]) -> bool {
+/// True if `function_item`'s declared return type is a `Self` form: `Self`,
+/// `&Self`, or `&mut Self`. A fluent builder setter returns one of these
+/// (consuming builders return `Self`; borrowing builders return `&mut Self`);
+/// a plain `&mut self` mutator returning `()` or another type is not.
+fn method_returns_self_type(function_item: tree_sitter::Node, source: &[u8]) -> bool {
     function_item
         .child_by_field_name("return_type")
         .and_then(|n| n.utf8_text(source).ok())
-        .is_some_and(|t| t == "Self")
+        .is_some_and(|t| matches!(t, "Self" | "&Self" | "&mut Self"))
 }
 
 /// True for a `bool` parameter named exactly `expected`/`actual` on a
@@ -1125,24 +1114,31 @@ mod tests {
 
     #[test]
     fn allows_builder_setter_field_param() {
-        // Consuming-builder field setter: the `bool` param name equals the
-        // method name, the method takes `self` by value and returns `Self`.
-        // The param is named after the field it sets per builder convention,
-        // so a predicate prefix would diverge it from that field. (Closes #5493)
+        // Builder field setter: the `bool` param name equals the method name and
+        // the method is a fluent builder setter (a `self` receiver returning a
+        // `Self` form). The param is named after the field it sets per builder
+        // convention, so a predicate prefix would diverge it from that field.
+        // Covers consuming builders (`mut self -> Self`, #5493) and borrowing
+        // builders (`&mut self -> &mut Self`, the Wasm-proposal setters in
+        // #5672: `memory64`, `threads`, `simd`).
         for src in [
             "impl X { pub fn fit_intercept(mut self, fit_intercept: bool) -> Self { self } }",
             "impl X { pub fn shrinking(mut self, shrinking: bool) -> Self { self } }",
             "impl X { pub fn scale(mut self, scale: bool) -> Self { self } }",
             "impl X { fn symmetric(self, symmetric: bool) -> Self { self } }",
+            "impl X { pub fn memory64(&mut self, memory64: bool) -> &mut Self { self } }",
+            "impl X { pub fn threads(&mut self, threads: bool) -> &mut Self { self } }",
+            "impl X { pub fn simd(&mut self, simd: bool) -> &mut Self { self } }",
+            "impl X { fn tail_call(&self, tail_call: bool) -> &Self { self } }",
         ] {
             assert!(run_on(src).is_empty(), "`{src}` should be allowed");
         }
     }
 
     #[test]
-    fn still_flags_borrowed_self_accessor_setter() {
-        // The exemption is anchored to a by-value `self` receiver; a `&mut self`
-        // setter is not a consuming builder and its param still flags.
+    fn still_flags_borrowed_self_mutator_returning_unit() {
+        // A `&mut self` setter that returns `()` is a plain mutator, not a
+        // fluent builder; its param still flags.
         let diags = run_on("impl X { fn scale(&mut self, scale: bool) { } }");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("'scale'"));
@@ -1152,18 +1148,34 @@ mod tests {
     fn still_flags_builder_setter_param_when_name_differs_from_method() {
         // The param name must equal the method name; a differently-named param
         // is not the field-setter shape and still requires a predicate prefix.
-        let diags = run_on("impl X { pub fn scale(mut self, disabled: bool) -> Self { self } }");
-        assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("'disabled'"));
+        // (The #5672 ask to also exempt `wasm_memory64(memory64: bool)`, where
+        // the param differs from the method name, is intentionally NOT granted.)
+        for src in [
+            "impl X { pub fn scale(mut self, disabled: bool) -> Self { self } }",
+            "impl X { pub fn wasm_memory64(&mut self, memory64: bool) -> &mut Self { self } }",
+        ] {
+            let diags = run_on(src);
+            assert_eq!(diags.len(), 1, "`{src}` should still flag");
+        }
     }
 
     #[test]
     fn still_flags_setter_not_returning_self() {
-        // The method must return `Self`; a `self`-consuming method returning a
-        // different type is not the builder-setter shape.
+        // The method must return a `Self` form; a `self`-consuming method
+        // returning a different type is not the builder-setter shape.
         let diags = run_on("impl X { fn scale(mut self, scale: bool) -> X { self } }");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("'scale'"));
+    }
+
+    #[test]
+    fn still_flags_self_named_free_function_returning_self_ref() {
+        // No `self` receiver — a free function named after its param returning a
+        // `&mut Self` form is not a builder setter; the param still flags.
+        assert_eq!(
+            run_on("fn simd(simd: bool) -> &mut Self { }").len(),
+            1
+        );
     }
 
     #[test]
