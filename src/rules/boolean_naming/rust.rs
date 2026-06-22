@@ -88,6 +88,9 @@ fn check_node(
     if is_std_net_toggle_setter_param(node, name, source) {
         return None;
     }
+    if is_toggle_enable_setter_param(node, name, source) {
+        return None;
+    }
     if is_assertion_value_param(node, name, source) {
         return None;
     }
@@ -183,6 +186,53 @@ fn method_has_self_receiver(function_item: tree_sitter::Node) -> bool {
     params
         .children(&mut cursor)
         .any(|child| child.kind() == "self_parameter")
+}
+
+/// True for the GPU/Vulkan toggle-setter convention: a `bool` parameter named
+/// exactly `enable`/`disable` on a `set_*_<verb>` method with a `self` receiver
+/// (`set_depth_bias_enable(&mut self, enable: bool)`). The method name already
+/// ends with the toggle verb the parameter performs, so the parameter is the
+/// imperative state argument the function records; `is_enable` would be
+/// grammatically wrong and diverge the parameter from the method it mirrors.
+///
+/// Anchored on four AST signals so it cannot widen into a name allowlist: the
+/// node is a `parameter` whose name is `enable`/`disable`, its directly-enclosing
+/// `function_item` `name` field both starts with `set_` and ends with
+/// `_<name>` (so the method's own name declares this very toggle), and that
+/// function's `parameters` declare a `self_parameter` receiver. A `bool` param
+/// named `enable` in a free function, a method whose name does not end with the
+/// param verb, or any other unprefixed boolean is unaffected and still flags.
+/// The walk stops at the first `closure_expression` boundary so a closure
+/// callback param named `enable`/`disable` nested inside such a method is not
+/// exempted.
+fn is_toggle_enable_setter_param(
+    node: tree_sitter::Node,
+    name: &str,
+    source: &[u8],
+) -> bool {
+    if node.kind() != "parameter" || (name != "enable" && name != "disable") {
+        return false;
+    }
+    let mut cursor = node;
+    while let Some(parent) = cursor.parent() {
+        if parent.kind() == "closure_expression" {
+            return false;
+        }
+        if parent.kind() == "function_item" {
+            let name_is_toggle_setter = parent
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok())
+                .is_some_and(|fn_name| {
+                    fn_name.starts_with("set_")
+                        && fn_name
+                            .strip_suffix(name)
+                            .is_some_and(|prefix| prefix.ends_with('_'))
+                });
+            return name_is_toggle_setter && method_has_self_receiver(parent);
+        }
+        cursor = parent;
+    }
+    false
 }
 
 /// True for the consuming-builder field-setter convention: a `bool` parameter
@@ -754,6 +804,73 @@ mod tests {
         // The setter exemption does not weaken the strict rule elsewhere:
         // a bare adjective local still flags.
         assert_eq!(run_on("fn f() { let disabled: bool = true; }").len(), 1);
+    }
+
+    #[test]
+    fn allows_vulkan_toggle_enable_setter_param() {
+        // GPU/Vulkan convention: `set_*_enable(&mut self, enable: bool)` toggle
+        // setters. The method name ends with the toggle verb the param performs,
+        // so `is_enable` would be grammatically wrong. (Closes #5553)
+        for src in [
+            "impl X { pub fn set_depth_bias_enable(&mut self, enable: bool) -> R { } }",
+            "impl X { pub fn set_depth_bounds_test_enable(&mut self, enable: bool) -> R { } }",
+            "impl X { pub fn set_stencil_test_enable(&mut self, enable: bool) -> R { } }",
+            "impl X { fn set_blend_enable(&self, enable: bool) {} }",
+            "impl X { pub fn set_feature_disable(&mut self, disable: bool) {} }",
+        ] {
+            assert!(run_on(src).is_empty(), "`{src}` should be allowed");
+        }
+    }
+
+    #[test]
+    fn still_flags_enable_param_when_method_name_lacks_verb_suffix() {
+        // The exemption requires the method name to END WITH `_enable`; a
+        // `set_*` method whose name does not end with the param verb is not the
+        // toggle-setter shape and its `enable` param still requires a prefix.
+        let diags = run_on("impl X { fn set_depth(&mut self, enable: bool) {} }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'enable'"));
+    }
+
+    #[test]
+    fn still_flags_enable_param_in_non_setter_method() {
+        // The exemption is anchored to the `set_` prefix; a non-setter method
+        // ending with `enable` still requires a predicate prefix.
+        let diags = run_on("impl X { fn handle_enable(&self, enable: bool) {} }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'enable'"));
+    }
+
+    #[test]
+    fn still_flags_enable_param_in_free_function() {
+        // No `self` receiver — not the toggle-setter shape.
+        assert_eq!(run_on("fn set_blend_enable(enable: bool) {}").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_enable_local_binding() {
+        // The exemption is parameter-only; a bare `enable` local still flags.
+        assert_eq!(run_on("fn f() { let enable: bool = true; }").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_unprefixed_boolean_alongside_toggle_enable_exemption() {
+        // The toggle-setter exemption does not weaken the rule elsewhere: a
+        // sibling unprefixed bool param in the same method still flags.
+        let src = "impl X { fn set_blend_enable(&mut self, enable: bool, disabled: bool) {} }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'disabled'"));
+    }
+
+    #[test]
+    fn still_flags_closure_enable_param_nested_in_toggle_setter() {
+        // The walk stops at the closure boundary: a closure callback param named
+        // `enable` inside a `set_*_enable` method is not the setter's own param.
+        let diags =
+            run_on("impl X { fn set_blend_enable(&self) { let f = |enable: bool| {}; } }");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'enable'"));
     }
 
     #[test]
