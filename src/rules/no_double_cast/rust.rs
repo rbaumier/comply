@@ -9,6 +9,13 @@
 //! cases, so the two-step chain is mandatory and has no `From`/`Into`
 //! alternative.
 //!
+//! An integer chain whose inner and outer types have the same bit width but
+//! opposite signedness (`x as u16 as i16`, `x as i8 as u8`) is exempt: it is a
+//! two's-complement bit reinterpretation (reading a bit-packed unsigned field as
+//! signed), not a redundant cast. The intermediate cast strips/sets the sign
+//! bits, and the chain has no `From`/`Into` alternative (`i8::from(u8)` does not
+//! exist).
+//!
 //! An `<expr> as <int> as <float>` chain is exempt unless the operand is
 //! provably numeric (a numeric literal or an arithmetic expression). `bool`
 //! (E0606) and `char` (E0604) can only reach a float type *through* an integer,
@@ -52,6 +59,36 @@ fn int_truncate_then_widen(inner_ty: tree_sitter::Node, outer_ty: tree_sitter::N
         return false;
     };
     inner_w < outer_w
+}
+
+/// True when an integer type name is signed (`i8`..`i128`, `isize`).
+fn int_is_signed(name: &str) -> bool {
+    name.starts_with('i')
+}
+
+/// The integer sign-reinterpret chain `x as u16 as i16` (or `as i16 as u16`):
+/// two integer primitives of the same bit width but opposite signedness. The
+/// intermediate cast strips/sets the sign bits before the reinterpret, so the
+/// chain is a two's-complement bit reinterpretation, not a redundant cast — and
+/// it has no `From`/`Into` alternative (`i8::from(u8)` does not exist; the
+/// `as uN as iN` form is the canonical way to read a bit-packed unsigned field
+/// as signed). `x as iN` directly would sign-extend a wider operand differently.
+fn int_sign_reinterpret(
+    inner_ty: tree_sitter::Node,
+    outer_ty: tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    if inner_ty.kind() != "primitive_type" || outer_ty.kind() != "primitive_type" {
+        return false;
+    }
+    let (Ok(inner_name), Ok(outer_name)) = (inner_ty.utf8_text(source), outer_ty.utf8_text(source))
+    else {
+        return false;
+    };
+    let (Some(inner_w), Some(outer_w)) = (int_width(inner_name), int_width(outer_name)) else {
+        return false;
+    };
+    inner_w == outer_w && int_is_signed(inner_name) != int_is_signed(outer_name)
 }
 
 /// True when `ty` is an integer `primitive_type` (`i8`..`i128`, `u8`..`u128`,
@@ -133,6 +170,15 @@ crate::ast_check! { on ["type_cast_expression"] => |node, source, ctx, diagnosti
     // chain is not collapsible to a single `as`.
     if let Some(outer_ty) = node.child_by_field_name("type")
         && int_truncate_then_widen(inner_ty, outer_ty, source)
+    {
+        return;
+    }
+
+    // Exempt the integer sign-reinterpret chain `x as u16 as i16`: same bit width,
+    // opposite signedness is a two's-complement reinterpretation of a bit-packed
+    // field, not a redundant cast, and has no `From`/`Into` alternative.
+    if let Some(outer_ty) = node.child_by_field_name("type")
+        && int_sign_reinterpret(inner_ty, outer_ty, source)
     {
         return;
     }
@@ -362,6 +408,46 @@ mod tests {
         // An arithmetic operand is provably numeric: `(a + b) as f32` compiles
         // directly, so the `as i32` step is redundant — still fires.
         assert_eq!(run_on("fn f(a: u8, b: u8) { let _ = (a + b) as i32 as f32; }").len(), 1);
+    }
+
+    #[test]
+    fn allows_unsigned_to_signed_bitfield_reinterpret() {
+        // #5453, BurntSushi/jiff shared/mod.rs: `(self.bits as u64 >> 48) as u16
+        // as i16` extracts a bit-packed field and reinterprets it as signed. The
+        // `as u16` strips the high bits before the sign reinterpret; `as i16`
+        // directly would sign-extend the wider value differently. Same width,
+        // opposite signedness — a non-collapsible reinterpret with no `From`/`Into`.
+        let src = "struct D { bits: u64 } impl D { \
+                   const fn year(self) -> i16 { (self.bits as u64 >> 48) as u16 as i16 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_unsigned_to_signed_byte_reinterpret() {
+        // `(x >> 40) as u8 as i8`: same width (8), opposite signedness.
+        let src = "fn f(x: u64) -> i8 { (x >> 40) as u8 as i8 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_signed_to_unsigned_reinterpret() {
+        // The reverse reinterpret `as iN as uN` is equally non-collapsible.
+        assert!(run_on("fn f(x: i64) -> u8 { x as i8 as u8 }").is_empty());
+    }
+
+    #[test]
+    fn flags_same_sign_same_width_chain() {
+        // Negative-space guard: same width AND same signedness is genuinely
+        // redundant (no reinterpret), so it still fires.
+        assert_eq!(run_on("fn f(x: u32) { let _ = x as u16 as u16; }").len(), 1);
+    }
+
+    #[test]
+    fn flags_sign_change_widen_then_narrow() {
+        // Negative-space guard: opposite signedness but DIFFERENT widths is not the
+        // same-width reinterpret idiom. `x as i16 as u8` widens-then-narrows (16 >
+        // 8), so neither this exemption nor truncate-then-widen applies — fires.
+        assert_eq!(run_on("fn f(x: u64) { let _ = x as i16 as u8; }").len(), 1);
     }
 
     #[test]
