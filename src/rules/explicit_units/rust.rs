@@ -1,9 +1,10 @@
 //! explicit-units backend for Rust.
 //!
-//! Detects numeric bindings whose name carries an ambiguous base
-//! (delay / timeout / size / duration / …) without a unit suffix.
-//! Rust convention: snake_case suffixes like `delay_ms`, `size_bytes`,
-//! `rate_rps`.
+//! Detects numeric bindings whose semantic head — the last snake_case segment
+//! — is an ambiguous measurement base (delay / timeout / duration / rate / …)
+//! lacking an explicit unit. A unit suffix moves the head off the base
+//! (`delay_ms`, `size_bytes`, `rate_rps`), and a non-final base is a qualifier
+//! on another head noun (`rate_limit`), so neither is flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -26,12 +27,6 @@ const AMBIGUOUS_BASES: &[&str] = &[
     "wait",
     "rate",
     "frequency",
-];
-
-const KNOWN_SUFFIXES: &[&str] = &[
-    "_ms", "_sec", "_secs", "_seconds", "_minutes", "_hours", "_days", "_bytes", "_kb", "_mb",
-    "_gb", "_kib", "_mib", "_gib", "_px", "_em", "_rem", "_pct", "_percent", "_rps", "_qps", "_hz",
-    "_khz", "_count",
 ];
 
 const NUMERIC_TYPES: &[&str] = &[
@@ -72,9 +67,6 @@ impl AstCheck for Check {
         let Some(base) = matches_ambiguous_base(name) else {
             return;
         };
-        if has_known_suffix(name) {
-            return;
-        }
         if matches!(base, "rate" | "frequency") && in_distribution_module(node, source_bytes) {
             return;
         }
@@ -123,18 +115,16 @@ fn identifier_of<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a st
     None
 }
 
+/// Returns the ambiguous base only when it is the *semantic head* of the
+/// identifier — the last snake_case segment, i.e. the thing actually being
+/// measured. A measurement word in a non-final position is a qualifier
+/// modifying a different head noun (`rate_limit`, `rate_limit_retry_number`:
+/// head is `limit` / `number`, `rate` qualifies it), so it does not demand a
+/// unit suffix. A standalone `rate` or `request_rate` (head is `rate`) still
+/// does.
 fn matches_ambiguous_base(name: &str) -> Option<&'static str> {
-    let lower = name.to_ascii_lowercase();
-    AMBIGUOUS_BASES
-        .iter()
-        .find(|&&base| {
-            lower == base || lower.starts_with(&format!("{base}_")) || lower.starts_with(base)
-        })
-        .copied()
-}
-
-fn has_known_suffix(name: &str) -> bool {
-    KNOWN_SUFFIXES.iter().any(|s| name.ends_with(s))
+    let head = name.rsplit('_').next()?.to_ascii_lowercase();
+    AMBIGUOUS_BASES.iter().find(|&&base| head == base).copied()
 }
 
 /// True when a top-level `impl` in the file containing `node` implements a
@@ -320,6 +310,35 @@ impl ::rand::distr::Distribution<f64> for Exp {
         // Physical events-per-second `rate` keeps needing a unit suffix when the
         // file is not a probability-distribution module.
         assert_eq!(run_on("fn f(rate: f64) {}").len(), 1);
+    }
+
+    #[test]
+    fn allows_rate_limit_compound_noun() {
+        // `rate_limit_retry_number`: the semantic head is `number`, `rate` is a
+        // leading qualifier on the "rate limit" concept (HTTP 429 handling), not
+        // a physical events-per-second measurement (#5634).
+        assert!(run_on("fn f() { let rate_limit_retry_number: u32 = 0; }").is_empty());
+        assert!(run_on("fn f() { let rate_limit: u32 = 100; }").is_empty());
+        assert!(run_on("fn f(rate_limit_window: u32) {}").is_empty());
+    }
+
+    #[test]
+    fn flags_rate_as_head_segment() {
+        // `rate` as the semantic head (standalone or last segment) still needs a
+        // unit — it is a genuine events-per-second quantity.
+        assert_eq!(run_on("fn f(rate: f64) {}").len(), 1);
+        assert_eq!(run_on("fn f() { let request_rate: f64 = 0.0; }").len(), 1);
+    }
+
+    #[test]
+    fn other_bases_only_flag_as_head_segment() {
+        // The head-position gate generalizes across all measurement bases:
+        // `timeout`/`delay`/`duration` flag as the head, but as a leading
+        // qualifier on a different head noun they do not.
+        assert_eq!(run_on("fn f() { let connect_timeout: u64 = 30; }").len(), 1);
+        assert_eq!(run_on("fn f() { let retry_delay: u64 = 5; }").len(), 1);
+        assert!(run_on("fn f() { let timeout_policy: u32 = 1; }").is_empty());
+        assert!(run_on("fn f() { let delay_strategy: u32 = 2; }").is_empty());
     }
 
     #[test]
