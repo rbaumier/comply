@@ -3006,6 +3006,48 @@ pub fn file_imports_db_library(semantic: &oxc_semantic::Semantic<'_>) -> bool {
     })
 }
 
+/// True when `source` text mentions a quoted module specifier whose root package
+/// is a known database / ORM library ([`DB_PACKAGES`]). A text-level counterpart
+/// to [`file_imports_db_library`] for backends that have no parsed AST (the `.vue`
+/// Text backend, whose `<script>` block is not parsed by oxc).
+///
+/// Matches the specifier inside any single- or double-quoted string, which covers
+/// `import … from "pg"`, `require('pg')`, and dynamic `import("pg")` without
+/// re-parsing. The quotes anchor the match to a real specifier, so `pg` inside an
+/// identifier or prose never matches, and subpaths (`drizzle-orm/node-postgres`)
+/// resolve to their root package.
+#[must_use]
+pub fn source_imports_db_library(source: &str) -> bool {
+    quoted_specifiers(source).any(|spec| DB_PACKAGES.contains(&import_root_package(spec)))
+}
+
+/// Yields the contents of every single- or double-quoted string in `source`.
+/// A crude scan with no escape handling — enough for matching import specifiers,
+/// which never contain quotes.
+fn quoted_specifiers(source: &str) -> impl Iterator<Item = &str> {
+    let bytes = source.as_bytes();
+    let mut cursor = 0;
+    std::iter::from_fn(move || {
+        while cursor < bytes.len() {
+            let quote = bytes[cursor];
+            cursor += 1;
+            if quote != b'"' && quote != b'\'' {
+                continue;
+            }
+            let start = cursor;
+            while cursor < bytes.len() && bytes[cursor] != quote && bytes[cursor] != b'\n' {
+                cursor += 1;
+            }
+            if cursor < bytes.len() && bytes[cursor] == quote {
+                let spec = &source[start..cursor];
+                cursor += 1;
+                return Some(spec);
+            }
+        }
+        None
+    })
+}
+
 /// Known HTML-email template libraries. Components built with these render to
 /// email markup, where inline `style={{…}}` is the *only* reliable styling
 /// mechanism — every major client (Outlook, Gmail, Apple Mail) strips `<style>`
@@ -3557,7 +3599,7 @@ mod oxc_helpers_tests {
         ClassShape, expression_is_or_resolves_to_literal, file_imports_db_library,
         file_imports_email_template_library, has_ts_expect_error_above, is_as_unknown_double_cast,
         is_outer_as_unknown_double_cast, node_has_preceding_deprecated_tag, peel_parens,
-        type_annotation_is_type_predicate, with_semantic,
+        source_imports_db_library, type_annotation_is_type_predicate, with_semantic,
     };
     use oxc_ast::AstKind;
     use oxc_span::SourceType;
@@ -3605,6 +3647,24 @@ mod oxc_helpers_tests {
         assert!(!imports_db("import fs from 'node:fs';"));
         assert!(!imports_db("import { foo } from './db';"));
         assert!(!imports_db("const x = 1;"));
+    }
+
+    #[test]
+    fn source_imports_db_library_detects_quoted_specifiers_and_subpaths() {
+        assert!(source_imports_db_library("import { drizzle } from 'drizzle-orm/node-postgres';"));
+        assert!(source_imports_db_library("import { PrismaClient } from \"@prisma/client\";"));
+        assert!(source_imports_db_library("const pg = require('pg');"));
+        assert!(source_imports_db_library("const m = await import(\"mongodb\");"));
+    }
+
+    #[test]
+    fn source_imports_db_library_rejects_non_db_specifiers() {
+        // PGlite (electric-sql) is an in-browser WASM Postgres not in DB_PACKAGES,
+        // so a REPL-demo component importing it is not gated as a DB-access file.
+        assert!(!source_imports_db_library("import { PGlite } from '@electric-sql/pglite';"));
+        assert!(!source_imports_db_library("import { ref } from 'vue';"));
+        // A bare `pg` outside quotes (an identifier or prose) must not match.
+        assert!(!source_imports_db_library("const pgClient = makePg();"));
     }
 
     #[test]
