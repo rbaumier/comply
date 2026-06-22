@@ -2219,7 +2219,7 @@ pub(crate) fn is_inside_browser_injection_callback(
 }
 
 /// True when `span` fully encloses `inner`.
-fn span_contains(span: oxc_span::Span, inner: oxc_span::Span) -> bool {
+pub(crate) fn span_contains(span: oxc_span::Span, inner: oxc_span::Span) -> bool {
     span.start <= inner.start && inner.end <= span.end
 }
 
