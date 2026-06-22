@@ -5,6 +5,13 @@
 //! file is treated as an intentional store and no violations are emitted.
 //! This recognises the `useSyncExternalStore` / observer idiom where
 //! module-level mutable state is the explicit architectural contract.
+//!
+//! Scheduler exception: if the module assigns the return value of a scheduling
+//! primitive (`requestAnimationFrame` / `requestIdleCallback` / `setTimeout` /
+//! `setInterval`) into a root-scope mutable binding, that binding is the frame
+//! or timer handle of an intentional batching scheduler/coordinator. The
+//! whole file is then treated as a scheduler whose module-level queue state is
+//! the stated contract, so no violations are emitted.
 
 use rustc_hash::FxHashSet;
 
@@ -34,6 +41,10 @@ impl OxcCheck for Check {
         let root_scope = scoping.root_scope_id();
 
         if has_root_scope_const_set(nodes, scoping, root_scope) {
+            return vec![];
+        }
+
+        if module_assigns_scheduler_handle(nodes, scoping, root_scope) {
             return vec![];
         }
 
@@ -131,6 +142,87 @@ fn is_new_set_expression(expr: &Expression) -> bool {
         return false;
     };
     ident.name.as_str() == "Set"
+}
+
+/// Scheduling primitives whose return value is a frame/timer handle stored to
+/// later cancel or track deferred work. Assigning one into a module-level
+/// mutable binding is the signature of an intentional batching scheduler.
+const SCHEDULER_PRIMITIVES: [&str; 4] = [
+    "requestAnimationFrame",
+    "requestIdleCallback",
+    "setTimeout",
+    "setInterval",
+];
+
+/// True when the module assigns the return value of a scheduling primitive into
+/// a root-scope mutable (`let`/`var`) binding. That binding is the scheduler's
+/// frame or timer handle, so the file is an intentional coordinator whose
+/// module-level queue state is the stated contract. Covers both the declarator
+/// form `let timer = setTimeout(...)` and the assignment form
+/// `timer = requestAnimationFrame(...)`. A bare scheduling call whose handle is
+/// discarded is not the coordinator signature and does not match.
+fn module_assigns_scheduler_handle(
+    nodes: &oxc_semantic::AstNodes,
+    scoping: &oxc_semantic::Scoping,
+    root_scope: oxc_semantic::ScopeId,
+) -> bool {
+    nodes.iter().any(|node| match node.kind() {
+        AstKind::AssignmentExpression(assign) => {
+            let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left else {
+                return false;
+            };
+            is_scheduler_primitive_call(&assign.right)
+                && target.reference_id.get().is_some_and(|ref_id| {
+                    scoping
+                        .get_reference(ref_id)
+                        .symbol_id()
+                        .is_some_and(|symbol_id| {
+                            scoping.symbol_scope_id(symbol_id) == root_scope
+                                && is_let_or_var(nodes, scoping.symbol_declaration(symbol_id))
+                        })
+                })
+        }
+        AstKind::VariableDeclarator(declarator) => {
+            declarator.kind != VariableDeclarationKind::Const
+                && declarator
+                    .init
+                    .as_ref()
+                    .is_some_and(is_scheduler_primitive_call)
+                && declarator_is_root_scope(nodes, scoping, root_scope, node.id())
+        }
+        _ => false,
+    })
+}
+
+/// True if `expr` is a direct call to one of [`SCHEDULER_PRIMITIVES`].
+fn is_scheduler_primitive_call(expr: &Expression) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    let Expression::Identifier(ident) = &call.callee else {
+        return false;
+    };
+    SCHEDULER_PRIMITIVES.contains(&ident.name.as_str())
+}
+
+/// True when `declarator_id`'s binding identifier resolves to a symbol declared
+/// in the program's root scope.
+fn declarator_is_root_scope(
+    nodes: &oxc_semantic::AstNodes,
+    scoping: &oxc_semantic::Scoping,
+    root_scope: oxc_semantic::ScopeId,
+    declarator_id: NodeId,
+) -> bool {
+    let AstKind::VariableDeclarator(declarator) = nodes.kind(declarator_id) else {
+        return false;
+    };
+    let Some(ident) = declarator.id.get_binding_identifier() else {
+        return false;
+    };
+    ident
+        .symbol_id
+        .get()
+        .is_some_and(|symbol_id| scoping.symbol_scope_id(symbol_id) == root_scope)
 }
 
 /// True if a `let`/`var` binding is never reassigned after its declarator, so
@@ -505,5 +597,138 @@ export function toggle(v: boolean) {
         let d = run(src);
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("toggle"));
+    }
+
+    // Regression for #5498 — an animation-frame scheduler/coordinator
+    // (infernojs/inferno `animationCoordinator`). A root-scope mutable binding
+    // assigned the return value of `requestAnimationFrame` is a frame handle:
+    // the module is an intentional scheduler whose queue state is the stated
+    // contract, so none of its functions are flagged.
+    #[test]
+    fn no_fp_on_animation_frame_scheduler() {
+        let src = r#"
+const IDLE = 0;
+let _animationQueue: Array<() => void> = [];
+let _nextAnimationFrame: number = IDLE;
+
+function _runAnimationPhases(): void {
+    _nextAnimationFrame = IDLE;
+    const queue = _animationQueue;
+    _animationQueue = [];
+    for (let i = 0; i < queue.length; i++) {
+        queue[i]();
+    }
+}
+
+export function queueAnimation(cb: () => void): void {
+    _animationQueue.push(cb);
+    if (_nextAnimationFrame === IDLE) {
+        _nextAnimationFrame = requestAnimationFrame(_runAnimationPhases);
+    }
+}
+
+export function hasPendingAnimations(): boolean {
+    return _nextAnimationFrame !== IDLE;
+}
+"#;
+        assert!(
+            run(src).is_empty(),
+            "rAF scheduler functions must not be flagged"
+        );
+    }
+
+    #[test]
+    fn no_fp_on_set_timeout_scheduler() {
+        // A `setTimeout`-handle scheduler is the same coordinator pattern.
+        let src = r#"
+let _queue: Array<() => void> = [];
+let _timer: ReturnType<typeof setTimeout> | null = null;
+
+function _flush(): void {
+    _timer = null;
+    const q = _queue;
+    _queue = [];
+    q.forEach((cb) => cb());
+}
+
+export function schedule(cb: () => void): void {
+    _queue.push(cb);
+    if (_timer === null) {
+        _timer = setTimeout(_flush, 0);
+    }
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_mutable_state_without_scheduler_handle() {
+        // A plain mutable counter with no scheduling primitive is genuine
+        // accidental shared state — the scheduler exception must not apply.
+        let src = r#"
+let counter = 0;
+export function increment() {
+    counter += 1;
+    return counter;
+}
+"#;
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("increment"));
+        assert!(d[0].message.contains("counter"));
+    }
+
+    #[test]
+    fn still_flags_when_set_timeout_return_is_discarded() {
+        // Calling `setTimeout` without storing its handle in a module-level
+        // binding is not the scheduler-coordinator signature; an ordinary
+        // function that also mutates shared state stays flagged.
+        let src = r#"
+let counter = 0;
+export function bump() {
+    counter += 1;
+    setTimeout(() => {}, 0);
+}
+"#;
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("bump"));
+    }
+
+    #[test]
+    fn no_fp_on_declarator_initialised_scheduler_handle() {
+        // The handle can be stored at the declarator, not just reassigned:
+        // `let timer = setInterval(...)` at module scope is the same signature.
+        let src = r#"
+let _ticks = 0;
+let _timer = setInterval(() => { _ticks += 1; }, 1000);
+
+export function getTicks(): number {
+    return _ticks;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_when_scheduler_handle_is_function_local() {
+        // A function-local `let t = setTimeout(...)` is not the module's
+        // scheduler handle, so it must not exempt unrelated top-level mutable
+        // state read by a sibling function.
+        let src = r#"
+let counter = 0;
+export function arm() {
+    let t = setTimeout(() => {}, 0);
+    return t;
+}
+export function increment() {
+    counter += 1;
+    return counter;
+}
+"#;
+        let d = run(src);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("increment"));
+        assert!(d[0].message.contains("counter"));
     }
 }
