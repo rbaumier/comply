@@ -434,22 +434,62 @@ fn timeout_exit_status() -> std::process::ExitStatus {
 }
 
 /// Parse oxlint JSON output bytes into unified Diagnostic structs.
+///
+/// The type-aware backend (tsgolint, written in Go) can panic on a TypeScript
+/// shape it does not handle — e.g. an ambient `module "x";` declaration
+/// (`KindModuleDeclaration` in a `MemberList`). The panic crashes the oxlint
+/// subprocess, which leaves non-JSON output. A third-party checker panicking on
+/// one file must not crash the whole comply run, so when the output carries a
+/// Go panic signature the batch's diagnostics are dropped with a warning instead
+/// of propagating a parse error.
 fn parse_json_bytes(
     stdout: &[u8],
     stderr: &[u8],
     remap: &FxHashMap<String, &'static RuleMeta>,
 ) -> Result<Vec<Diagnostic>> {
-    let envelope: OxlintOutput = serde_json::from_slice(stdout).with_context(|| {
-        format!(
-            "failed to parse oxlint JSON output. oxlint stderr: {}",
-            String::from_utf8_lossy(stderr)
-        )
-    })?;
+    let envelope: OxlintOutput = match serde_json::from_slice(stdout) {
+        Ok(envelope) => envelope,
+        Err(parse_err) => {
+            if let Some(panic) = tsgolint_panic_summary(stdout, stderr) {
+                eprintln!(
+                    "comply: the type-aware checker (tsgolint) crashed on a file in this \
+                     batch; skipping its type-aware diagnostics. tsgolint panic: {panic}"
+                );
+                return Ok(Vec::new());
+            }
+            return Err(parse_err).with_context(|| {
+                format!(
+                    "failed to parse oxlint JSON output. oxlint stderr: {}",
+                    String::from_utf8_lossy(stderr)
+                )
+            });
+        }
+    };
     Ok(envelope
         .diagnostics
         .into_iter()
         .filter_map(|d| into_diagnostic(d, remap))
         .collect())
+}
+
+/// Detect a tsgolint/typescript-go (Go) panic in the subprocess output and
+/// return its first line for the warning. Returns `None` for any other parse
+/// failure so genuine oxlint output-format breakage still surfaces as an error.
+///
+/// A Go panic prints `panic: <msg>` followed by a `goroutine … [running]:` stack
+/// referencing `typescript-go` or `tsgolint`; both markers are required so an
+/// ordinary diagnostic message containing the word "panic" is not misread.
+fn tsgolint_panic_summary(stdout: &[u8], stderr: &[u8]) -> Option<String> {
+    let stdout = String::from_utf8_lossy(stdout);
+    let stderr = String::from_utf8_lossy(stderr);
+    let combined = format!("{stdout}\n{stderr}");
+    let panic_line = combined.lines().find(|l| l.trim_start().starts_with("panic:"))?;
+    let is_go_panic = combined.contains("goroutine ")
+        && (combined.contains("typescript-go") || combined.contains("tsgolint"));
+    if !is_go_panic {
+        return None;
+    }
+    Some(panic_line.trim().to_string())
 }
 
 /// Convert one oxlint diagnostic into our unified format, remapping the
@@ -598,6 +638,44 @@ mod tests {
         let json = br#"{ "diagnostics": [] }"#;
         let result = parse_json_bytes(json, b"", &remap).expect("must parse");
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn tsgolint_panic_degrades_gracefully_instead_of_crashing_issue_5458() {
+        // An ambient `module "abc";` declaration makes tsgolint's no-mixed-enums
+        // rule panic on a KindModuleDeclaration in a MemberList, leaving non-JSON
+        // output. comply must skip the batch's type-aware diagnostics, not crash.
+        let remap = FxHashMap::default();
+        let stderr = b"panic: Unhandled case in Node.MemberList: KindModuleDeclaration [recovered, repanicked]\n\
+            \n\
+            goroutine 2020 [running]:\n\
+            github.com/microsoft/typescript-go/internal/ast.(*Node).MemberList(...)\n\
+            \ttypescript-go/internal/ast/ast.go:559\n\
+            github.com/typescript-eslint/tsgolint/internal/rules/no_mixed_enums.init.func1.2(...)\n";
+        let result = parse_json_bytes(b"", stderr, &remap)
+            .expect("a tsgolint panic must degrade to empty, not error");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn non_panic_parse_failure_still_errors() {
+        // Truncated/corrupt oxlint output with no Go panic signature must still
+        // surface as an error — graceful degradation is scoped to tsgolint panics.
+        let remap = FxHashMap::default();
+        let result = parse_json_bytes(b"{ not json", b"some unrelated stderr", &remap);
+        assert!(result.is_err(), "a non-panic parse failure must still error");
+    }
+
+    #[test]
+    fn diagnostic_message_containing_panic_word_still_parses() {
+        // A real diagnostic whose message merely contains "panic" is valid JSON
+        // and must parse normally — the degradation path is only taken when JSON
+        // parsing itself fails on a Go panic.
+        let remap = FxHashMap::default();
+        let json = br#"{ "diagnostics": [{"message": "do not call process.exit on panic", "code": "eslint(no-process-exit)", "severity": "error", "filename": "/tmp/x.ts", "labels": [{"span": {"line": 3, "column": 1}}]}] }"#;
+        let result = parse_json_bytes(json, b"", &remap).expect("must parse");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].line, 3);
     }
 
     #[test]
