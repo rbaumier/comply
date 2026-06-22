@@ -15,6 +15,21 @@ use crate::rules::rust_helpers::{enclosing_fn, has_outer_attribute, is_in_test_c
 /// — the deprecated context is the justification.
 const DEPRECATED_TRAIT_METHODS: &[&str] = &["description", "cause"];
 
+/// Lints whose suppression names its own reason, so a separate `//` comment or
+/// `reason = "..."` would only restate the lint:
+/// - `non_upper_case_globals` / `nonstandard_style`: the item's name
+///   deliberately mirrors an external identifier (e.g. IANA timezone names like
+///   `Africa__Abidjan`, ISO codes, generated lookup tables) and cannot be
+///   upper-cased without losing the mapping. comply already honors this same
+///   opt-out in `screaming-snake-for-constants`.
+/// - `missing_docs`: suppressing the missing-documentation lint *is* the
+///   statement that the item is intentionally undocumented.
+///
+/// These are stylistic-convention lints, not correctness/safety concerns
+/// (`dead_code`, `unused`, `deprecated`), which still require a justification.
+const SELF_JUSTIFYING_LINTS: &[&str] =
+    &["non_upper_case_globals", "nonstandard_style", "missing_docs"];
+
 crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
     let text = node.utf8_text(source).unwrap_or("");
     if !text.starts_with("#[allow(") && !text.starts_with("#[allow (") {
@@ -22,6 +37,10 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
     }
 
     if has_inline_reason(node, source) {
+        return;
+    }
+
+    if all_lints_self_justifying(text) {
         return;
     }
 
@@ -149,6 +168,31 @@ fn allow_list_contains(attribute: &str, name: &str) -> bool {
         let candidate = part.trim();
         candidate == name || candidate.ends_with(&format!("::{name}"))
     })
+}
+
+/// True when the allow attribute names at least one lint and *every* lint it
+/// names is in [`SELF_JUSTIFYING_LINTS`]. A mixed list (e.g.
+/// `#[allow(missing_docs, dead_code)]`) is not exempt, since `dead_code` still
+/// requires a justification.
+fn all_lints_self_justifying(attribute: &str) -> bool {
+    let Some(start) = attribute.find('(') else {
+        return false;
+    };
+    let Some(end) = attribute.rfind(')') else {
+        return false;
+    };
+    let mut saw_lint = false;
+    for part in attribute[start + 1..end].split(',') {
+        let candidate = part.trim();
+        if candidate.is_empty() {
+            continue;
+        }
+        saw_lint = true;
+        if !SELF_JUSTIFYING_LINTS.contains(&candidate) {
+            return false;
+        }
+    }
+    saw_lint
 }
 
 fn has_adjacent_cfg_attribute(lines: &[&str], row: usize) -> bool {
@@ -344,6 +388,49 @@ mod tests {
             run("#[allow(\n    foo,\n    // because reasons\n    bar,\n)]\nfn f() {}")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn allows_self_justifying_non_upper_case_globals() {
+        // #5455: a const whose name mirrors an external identifier (IANA tz
+        // names) carries `#[allow(non_upper_case_globals)]` as a structural
+        // opt-out; the lint name is the reason.
+        assert!(
+            run("#[allow(non_upper_case_globals)]\npub const Africa__Abidjan: Self = Self::Tz(chrono_tz::Africa::Abidjan);")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_self_justifying_missing_docs() {
+        // #5455: suppressing the missing-documentation lint is itself the
+        // statement that the item is intentionally undocumented.
+        assert!(
+            run("#[allow(missing_docs)]\npub const Africa__Accra: Self = Self::Tz(chrono_tz::Africa::Accra);")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_self_justifying_nonstandard_style() {
+        assert!(run("#[allow(nonstandard_style)]\npub const Foo__Bar: u8 = 0;").is_empty());
+    }
+
+    #[test]
+    fn allows_self_justifying_combined_list() {
+        // #5455: the rrule timezone constants combine both lints in one list;
+        // the loop must exempt only when *every* lint is self-justifying.
+        assert!(
+            run("#[allow(non_upper_case_globals, missing_docs)]\npub const Africa__Abidjan: u8 = 0;")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_mixed_self_justifying_and_concern_lint() {
+        // Load-bearing guard: a list mixing a self-justifying lint with a
+        // genuine-concern lint (`dead_code`) still requires a justification.
+        assert_eq!(run("#[allow(missing_docs, dead_code)]\nfn f() {}").len(), 1);
     }
 
     #[test]
