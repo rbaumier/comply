@@ -22,8 +22,8 @@ const BANNED_WORDS: &[&str] = &[
     "bleh", "asdf", "qwerty", "zzz", "xxx", "aaa", "bbb", "scratch", "junk", "garbage", "something",
     "anything", "whatever", "dict", "vec", "tup", "bool", "int", "float", "char", "byte", "ptr",
     "ret", "out", "vars", "entity", "entities", "dto", "resource", "resources", "entry", "entries",
-    "chunk", "chunks", "blob", "elem", "comp", "func", "widget", "record", "records", "body", "doc",
-    "idx", "curr", "cfg", "found",
+    "blob", "elem", "comp", "func", "widget", "record", "records", "body", "doc", "idx", "curr",
+    "cfg", "found",
 ];
 
 const PARAM_ALLOWED_WORDS: &[&str] = &["value", "item"];
@@ -2383,5 +2383,30 @@ mod tests {
         // descriptive HTTP nouns `request`/`response` were removed from the list.
         assert_eq!(run("const body = JSON.stringify(error);").len(), 1);
         assert_eq!(run("const payload = decode(token);").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_chunk_as_stream_data_segment_issue_5682() {
+        // Regression for #5682 — `chunk` is the canonical Node.js stream
+        // data-segment name (`stream.on('data', (chunk) => …)`, Transform
+        // `_transform(chunk, …)`, `for await (const chunk of readable)`). It
+        // denotes a discrete unit of stream/buffer data — a concrete noun like
+        // `request`/`row`, not a vague catch-all — so it is no longer banned.
+        assert!(run("child.stdout.on('data', (chunk) => { stdout += chunk; });").is_empty());
+        assert!(run("function f() { const chunk = stream.read(); return chunk; }").is_empty());
+        assert!(run("async function f(readable) { for await (const chunk of readable) { use(chunk); } }").is_empty());
+        assert!(run("function transform(chunk, encoding, cb) { cb(null, chunk); }").is_empty());
+        assert!(run("const chunks = [];").is_empty());
+    }
+
+    #[test]
+    fn still_flags_other_vague_banned_words_issue_5682() {
+        // Negative space for #5682 — removing `chunk` must not weaken the rest of
+        // the list. Bare vague catch-alls (`data`, `item`, `value`, `blob`) and
+        // descriptive-segment fillers stay flagged.
+        assert_eq!(run("const data = fetchData();").len(), 1);
+        assert_eq!(run("function f() { const item = pick(); return item; }").len(), 1);
+        assert_eq!(run("function f() { const value = compute(); return value; }").len(), 1);
+        assert_eq!(run("function f() { const blob = read(); return blob; }").len(), 1);
     }
 }
