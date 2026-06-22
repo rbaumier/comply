@@ -1,12 +1,34 @@
 //! no-multi-op-oneliner oxc backend.
 
 use rustc_hash::FxHashSet;
+use oxc_ast::ast::Expression;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
 pub struct Check;
+
+/// True when `expr` is a single arithmetic computation: a tree built only
+/// from numeric literals, identifiers, unary `+`/`-`, and `+ - * / % **`
+/// binary operators (with grouping parens). Horner-form polynomial
+/// evaluation (`a + t * (b + t * (c + ...))`) is the canonical case — it is
+/// one mathematical formula, not a chain of nameable steps, so its operators
+/// collapse to a single operation for the density count.
+fn is_pure_arithmetic(expr: &Expression) -> bool {
+    match expr.without_parentheses() {
+        Expression::NumericLiteral(_) | Expression::Identifier(_) => true,
+        Expression::UnaryExpression(unary) => {
+            unary.operator.is_arithmetic() && is_pure_arithmetic(&unary.argument)
+        }
+        Expression::BinaryExpression(bin) => {
+            bin.operator.is_arithmetic()
+                && is_pure_arithmetic(&bin.left)
+                && is_pure_arithmetic(&bin.right)
+        }
+        _ => false,
+    }
+}
 
 impl OxcCheck for Check {
     fn run_on_semantic<'a>(
@@ -42,6 +64,33 @@ impl OxcCheck for Check {
             }
         }
 
+        // Spans of pure-arithmetic expressions: a binary-arithmetic tree over
+        // numeric literals and identifiers. Each one is a single mathematical
+        // formula, so its operators count as one operation rather than as many
+        // chained steps. Collect every such span, then keep only the maximal
+        // ones (a nested sub-formula's operators must not be subtracted twice).
+        let mut all_spans: Vec<(usize, usize)> = Vec::new();
+        for node in semantic.nodes() {
+            let AstKind::BinaryExpression(bin) = node.kind() else {
+                continue;
+            };
+            if bin.operator.is_arithmetic()
+                && is_pure_arithmetic(&bin.left)
+                && is_pure_arithmetic(&bin.right)
+            {
+                all_spans.push((bin.span.start as usize, bin.span.end as usize));
+            }
+        }
+        let formula_spans: Vec<(usize, usize)> = all_spans
+            .iter()
+            .filter(|&&(s, e)| {
+                !all_spans
+                    .iter()
+                    .any(|&(os, oe)| os <= s && oe >= e && (os, oe) != (s, e))
+            })
+            .copied()
+            .collect();
+
         let mut reported_lines = FxHashSet::default();
         let mut diagnostics = Vec::new();
 
@@ -75,7 +124,25 @@ impl OxcCheck for Check {
             if stripped.len() < min_line_length {
                 continue;
             }
-            let ops = super::dense_lines::count_operators(&stripped);
+            let mut ops = super::dense_lines::count_operators(&stripped);
+            // Collapse each pure-arithmetic formula on this line to a single
+            // operation: subtract its operator bytes, add one. A formula is one
+            // mathematical computation, not a chain of nameable steps.
+            let line_end_byte = line_start_byte + line_text.len();
+            for &(fs, fe) in &formula_spans {
+                let lo = fs.max(line_start_byte);
+                let hi = fe.min(line_end_byte);
+                if lo >= hi {
+                    continue;
+                }
+                // Strip the same comment/regex ranges `count_operators` honored,
+                // so a comment between formula tokens (`a + /* */ b`) does not
+                // over-count the formula's operators and eat unrelated ops.
+                let slice = &line_text[lo - line_start_byte..hi - line_start_byte];
+                let slice = super::dense_lines::strip_comments(slice, lo, &strip_ranges);
+                let formula_ops = super::dense_lines::count_arithmetic_bytes(&slice);
+                ops = ops.saturating_sub(formula_ops) + 1;
+            }
             if ops < min_ops {
                 continue;
             }
@@ -127,6 +194,51 @@ mod tests {
     #[test]
     fn still_flags_dense_operator_chain() {
         let src = "const total = items.map(x => x.price).filter(p => p > 0).reduce((a, b) => a + b, 0) + extra;";
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
+    }
+
+    #[test]
+    fn ignores_horner_polynomial_evaluation() {
+        // Regression for issue #5680: Horner-form polynomial evaluation is a
+        // single arithmetic expression (numeric literals + one variable +
+        // `+ - * /` + grouping parens), not a chain of nameable steps.
+        let src = "const dt = 63.86 + t * (0.3345 + t * (-0.060374 + t * (0.0017275 + t * (0.000651814 + t * 0.00002373599))));";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty(),
+            "got {:?}",
+            crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+        );
+    }
+
+    #[test]
+    fn ignores_horner_polynomial_with_leading_assignment() {
+        // The issue's exact line: an assignment followed by a `return` of a
+        // Horner polynomial, both on one line. The assignment statement is the
+        // flagged node, but the line's operators are dominated by the formula.
+        let src = "if (y < 2005) { t = y - 2000; return 63.86 + t * (0.3345 + t * (-0.060374 + t * (0.0017275 + t * (0.000651814 + t * 0.00002373599)))); }";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, src, "t.ts").is_empty(),
+            "got {:?}",
+            crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+        );
+    }
+
+    #[test]
+    fn still_flags_arithmetic_over_call_operands() {
+        // Guards `is_pure_arithmetic` against over-broadening: arithmetic whose
+        // operands are call expressions is NOT a single formula — each call is a
+        // distinct nameable step — so nothing collapses and the line still flags.
+        let src = "const out = scale(base) + offset(x) * weight(y) - clamp(lo) / norm(hi) + bias(z) * gain(w);";
+        assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
+    }
+
+    #[test]
+    fn comment_inside_formula_does_not_suppress_dense_line() {
+        // A comment's operator-like bytes (`/*//////*/`) sit inside the
+        // `aa + bb` formula span. They must not be counted as formula operators
+        // and subtracted, or they would eat the trailing call chain's ops and
+        // wrongly suppress a genuine dense one-liner.
+        let src = "const out = aa + /*//////*/ bb; const q = ff(xx).gg(yy).hh(zz).ii(ww).jj(vv).kk(uu).ll(tt);";
         assert_eq!(crate::rules::test_helpers::run_rule(&Check, src, "t.ts").len(), 1);
     }
 }
