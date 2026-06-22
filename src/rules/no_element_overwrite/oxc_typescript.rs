@@ -34,14 +34,24 @@ fn bracket_target(text: &str) -> Option<String> {
     }
 }
 
-/// Extract the key from a 2-argument `<receiver>.set(key, value)` Map write
-/// -> `<receiver>.set(<key>)`.
+/// Extract the key from a 2-argument `<receiver>.set(key, value)` write on a
+/// built-in `Map`/`WeakMap` -> `<receiver>.set(<key>)`.
+///
+/// The receiver must resolve to a `Map`/`WeakMap` (`expression_is_map`): only a
+/// pure-collection `.set` stores at `key` without side effects, so a same-key
+/// re-`set` is a dead store. A dispatch-style `.set` whose receiver is a state
+/// store (e.g. a jotai `store.set(atom, value)`) is observable on every call and
+/// is not compared.
 ///
 /// Only a `.set(key, value)` call with exactly two arguments is a Map overwrite;
 /// any other arity (e.g. a composite-key cache `cache.set(a, b, c, d, e)`) is a
 /// different method and is not compared. The key is the full first-argument span
 /// text, so nested commas (`f(a, b)`, `['A', 'B']`) compare correctly.
-fn map_set_target(stmt: &Statement, source: &str) -> Option<String> {
+fn map_set_target(
+    stmt: &Statement,
+    source: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> Option<String> {
     let Statement::ExpressionStatement(expr_stmt) = stmt else {
         return None;
     };
@@ -55,6 +65,9 @@ fn map_set_target(stmt: &Statement, source: &str) -> Option<String> {
         return None;
     }
     if call.arguments.len() != 2 {
+        return None;
+    }
+    if !crate::oxc_helpers::expression_is_map(&member.object, semantic) {
         return None;
     }
     let key_span = call.arguments[0].span();
@@ -85,7 +98,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
             let stmts: Option<&oxc_allocator::Vec<'a, Statement<'a>>> = match node.kind() {
@@ -127,9 +140,10 @@ impl OxcCheck for Check {
                     }
 
                 // Check .set() calls.
-                if let (Some(t1), Some(t2)) =
-                    (map_set_target(s1, ctx.source), map_set_target(s2, ctx.source))
-                    && t1 == t2 {
+                if let (Some(t1), Some(t2)) = (
+                    map_set_target(s1, ctx.source, semantic),
+                    map_set_target(s2, ctx.source, semantic),
+                ) && t1 == t2 {
                         let (line, column) =
                             byte_offset_to_line_col(ctx.source, s2.span().start as usize);
                         diagnostics.push(Diagnostic {
@@ -177,7 +191,7 @@ mod tests {
 
     #[test]
     fn flags_consecutive_map_set() {
-        let src = "map.set(\"key\", 1);\nmap.set(\"key\", 2);";
+        let src = "const map = new Map();\nmap.set(\"key\", 1);\nmap.set(\"key\", 2);";
         assert_eq!(run_on(src).len(), 1);
     }
 
@@ -189,7 +203,7 @@ mod tests {
 
     #[test]
     fn allows_different_keys() {
-        let src = "map.set(\"a\", 1);\nmap.set(\"b\", 2);";
+        let src = "const map = new Map();\nmap.set(\"a\", 1);\nmap.set(\"b\", 2);";
         assert!(run_on(src).is_empty());
     }
 
@@ -197,7 +211,7 @@ mod tests {
     fn allows_composite_key_set_with_more_than_two_args() {
         // A 5-argument `.set(...)` is a custom composite-key cache, not a Map
         // write. Same first arg, different composite keys -> must not flag (#3939).
-        let src = "cache.set(acc, 'posts', '1', 'read', ['A']);\ncache.set(acc, 'comments', '2', 'read', ['B']);";
+        let src = "const cache = new Map();\ncache.set(acc, 'posts', '1', 'read', ['A']);\ncache.set(acc, 'comments', '2', 'read', ['B']);";
         assert!(run_on(src).is_empty());
     }
 
@@ -205,7 +219,7 @@ mod tests {
     fn allows_key_with_nested_comma() {
         // 2-arg keys whose key expression contains a nested comma must compare on
         // the full first-argument span, not the substring up to the first comma.
-        let src = "map.set(f(a, b), 1);\nmap.set(f(a, c), 2);";
+        let src = "const map = new Map();\nmap.set(f(a, b), 1);\nmap.set(f(a, c), 2);";
         assert!(run_on(src).is_empty());
     }
 
@@ -213,7 +227,7 @@ mod tests {
     fn allows_call_key_set_even_when_textually_equal() {
         // A call key (`f(a, b)`) may be impure — two calls can return different
         // values or have side effects — so the overwrite is not provable (#3753).
-        let src = "map.set(f(a, b), 1);\nmap.set(f(a, b), 2);";
+        let src = "const map = new Map();\nmap.set(f(a, b), 1);\nmap.set(f(a, b), 2);";
         assert!(run_on(src).is_empty());
     }
 
@@ -245,8 +259,41 @@ mod tests {
 
     #[test]
     fn allows_call_valued_map_key() {
-        let src = "map.set(next(), 1);\nmap.set(next(), 2);";
+        let src = "const map = new Map();\nmap.set(next(), 1);\nmap.set(next(), 2);";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_jotai_store_set_with_same_atom() {
+        // A jotai `store.set(atom, value)` is a state dispatch with side effects:
+        // each call notifies subscribers and a function updater reads the prior
+        // value, so the first set is not dead. `store` is not a Map, so the
+        // `.set()` overwrite heuristic must not fire (#5599).
+        let src = "const store = createStore();\nstore.set(testAtom, 123);\nstore.set(testAtom, (prev: number) => prev + 10);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_untyped_receiver_set() {
+        // A receiver of unknown type (a function parameter with no annotation)
+        // cannot be proven a Map, so a same-key `.set()` is not a provable dead
+        // store.
+        let src = "function f(store) {\n  store.set(k, 1);\n  store.set(k, 2);\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_typed_map_double_set() {
+        // A binding annotated `Map<string, number>` is a built-in map: a same-key
+        // re-`set` overwrites a dead store and still flags.
+        let src = "const map: Map<string, number> = getMap();\nmap.set(\"a\", 1);\nmap.set(\"a\", 2);";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_weakmap_double_set() {
+        let src = "const map = new WeakMap();\nmap.set(key, 1);\nmap.set(key, 2);";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
