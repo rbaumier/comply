@@ -64,6 +64,13 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // The remount-on-new-identity premise holds only for React's fiber
+        // reconciler. Signal-based JSX runtimes (Voby, Solid, Preact, Vue, …)
+        // keep a nested component stable for the lifetime of its enclosing
+        // reactive scope, so defining one inside a memo/render is idiomatic.
+        if crate::oxc_helpers::is_non_react_jsx_file(ctx.source, ctx.project, ctx.path) {
+            return;
+        }
         let parent = semantic.nodes().parent_node(node.id());
         // Must be a component (PascalCase name + has JSX)
         if get_component_name_from_kind(&node.kind(), &parent.kind()).is_none() {
@@ -114,5 +121,107 @@ impl OxcCheck for Check {
                 _ => {}
             }
         }
+    }
+}
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<crate::diagnostic::Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.tsx")
+    }
+
+    #[test]
+    fn flags_nested_component_in_react_file() {
+        // A genuine React file (imports `react`): the nested component gets a new
+        // identity every render and React remounts the subtree.
+        let src = r#"
+import { useState } from "react";
+function ParentComponent() {
+    const NestedComponent = () => {
+        return <div>nested</div>;
+    };
+    return <NestedComponent />;
+}
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_nested_component_with_no_framework_signal() {
+        // Default-on: a file with no resolvable JSX-runtime signal is treated as
+        // React, so the nested-component hazard still flags.
+        let src = r#"
+function ParentComponent() {
+    function ChildComponent() {
+        return <span>child</span>;
+    }
+    return <ChildComponent />;
+}
+"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_nested_component_in_voby_file_issue5507() {
+        // Issue #5507: voby is a signal-based JSX runtime, not React. A component
+        // defined inside `useMemo` is stable for the memo's lifetime — not
+        // remounted "every render" — so it must not flag.
+        let src = r#"
+import { $, useMemo, useInterval } from "voby";
+const TestStringObservableDeepStatic = (): JSX.Element => {
+    return useMemo(() => {
+        const Deep = (): JSX.Element => {
+            const o = $(String(random()));
+            return <h3>{o()}</h3>;
+        };
+        return <Deep />;
+    });
+};
+"#;
+        assert!(run(src).is_empty(), "voby nested component must not flag: {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_nested_component_in_solid_file() {
+        // SolidJS is signal-based too — the same exemption as voby.
+        let src = r#"
+import { createSignal } from "solid-js";
+function Parent() {
+    const Nested = () => {
+        return <div>nested</div>;
+    };
+    return <Nested />;
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_top_level_component_in_react_file() {
+        let src = r#"
+import { useState } from "react";
+function MyComponent() {
+    return <div>hello</div>;
+}
+"#;
+        assert!(run(src).is_empty());
     }
 }
