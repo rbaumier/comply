@@ -13,6 +13,16 @@
 //! pathfinding/A*, optimization, ML loss), is a heuristic weight rather
 //! than currency. Both carry no AST signal distinguishing them from money.
 //!
+//! A money word as a `<word>_<qualifier>` prefix where the trailing
+//! segment is a dimensionless mathematical/statistical qualifier
+//! (`factor`, `weight`, `ratio`, `coefficient`, `score`, `index`,
+//! `multiplier`, `loss`) is not flagged: the qualifier reclassifies the
+//! quantity as a unitless ratio/weight, not currency (`balance_factor`
+//! is a clustering hyperparameter, not an account balance). A bare money
+//! word and a `_<word>` suffix (`balance`, `account_balance`) still flag.
+//! `rate` is deliberately not a qualifier — `tax_rate`/`interest_rate`
+//! are financial.
+//!
 //! `total`/`subtotal` are monetary only as the bare word, a suffix
 //! (`order_total`, `cart_subtotal`), or a `_total_` infix — never as a
 //! `total_<noun>` prefix, where the trailing noun decides the domain
@@ -23,9 +33,9 @@
 //! `total_cost` is excluded — like bare `cost`, a summed planner/A*
 //! heuristic weight as often as money.
 //!
-//! False positives are possible (`average_score`, `tax_rate`) but
-//! the failure mode of using a float for money is bad enough that
-//! we err on the loud side. Suppress with `// comply-ignore`.
+//! False positives are possible (`average_score`) but the failure mode
+//! of using a float for money is bad enough that we err on the loud
+//! side. Suppress with `// comply-ignore`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -46,6 +56,21 @@ const MONEY_NAMES: &[&str] = &[
 /// `amount`), which an aggregate prefix disambiguates from its otherwise
 /// polysemous standalone use.
 const AGGREGATE_NAMES: &[&str] = &["total", "subtotal"];
+
+/// Dimensionless mathematical/statistical qualifiers. A money word as a
+/// `<money>_<qualifier>` prefix denotes a unitless ratio/weight, not
+/// currency (`balance_factor`, `price_index`), so it is not flagged.
+/// `rate` is excluded — `tax_rate`/`interest_rate` are financial.
+const NON_MONETARY_QUALIFIERS: &[&str] = &[
+    "factor",
+    "weight",
+    "ratio",
+    "coefficient",
+    "score",
+    "index",
+    "multiplier",
+    "loss",
+];
 
 #[derive(Debug)]
 pub struct Check;
@@ -100,10 +125,21 @@ fn has_money_token(lower: &str) -> bool {
 }
 
 fn has_token(lower: &str, word: &str) -> bool {
-    lower == word
-        || lower.starts_with(&format!("{word}_"))
-        || lower.ends_with(&format!("_{word}"))
-        || lower.contains(&format!("_{word}_"))
+    if lower == word || lower.ends_with(&format!("_{word}")) || lower.contains(&format!("_{word}_"))
+    {
+        return true;
+    }
+    if let Some(rest) = lower.strip_prefix(&format!("{word}_")) {
+        return !is_non_monetary_qualifier(rest);
+    }
+    false
+}
+
+/// True when the segment trailing a money-word prefix is a dimensionless
+/// qualifier, reclassifying the quantity as a unitless ratio/weight
+/// (`balance_factor`, `price_index`) rather than currency.
+fn is_non_monetary_qualifier(rest: &str) -> bool {
+    NON_MONETARY_QUALIFIERS.contains(&rest)
 }
 
 /// An aggregate word (`total`/`subtotal`) is monetary as the bare word,
@@ -218,6 +254,38 @@ mod tests {
     #[test]
     fn flags_fee_param() {
         assert_eq!(run_on("fn pay(fee: f64) {}").len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_balance_factor_field() {
+        // K-Means clustering hyperparameter: `balance` qualified by the
+        // dimensionless `factor` is a unitless weight, not currency. #5598.
+        assert!(run_on("struct KMeans { balance_factor: f32 }").is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_balance_factor_param() {
+        // #5598
+        let src = "fn compute_balance_loss(n: usize, balance_factor: f32) -> f32 { 0.0 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_price_index_field() {
+        // `price` qualified by `index` is a dimensionless statistic. #5598.
+        assert!(run_on("struct Stats { price_index: f64 }").is_empty());
+    }
+
+    #[test]
+    fn flags_account_balance_suffix_field() {
+        // `balance` as a suffix stays monetary. #5598.
+        assert_eq!(run_on("struct Account { account_balance: f64 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_tax_rate_field() {
+        // `rate` is not a non-monetary qualifier: `tax_rate` is financial. #5598.
+        assert_eq!(run_on("struct Invoice { tax_rate: f64 }").len(), 1);
     }
 
     #[test]
