@@ -1350,6 +1350,15 @@ impl OxcCheck for Check {
         }
 
         if let Some(word) = matched_banned_segment(name).or_else(|| matched_banned_prefix(name)) {
+            // A type-alias/interface declared inside a `namespace`/`module`
+            // (`namespace Prices { export interface ProductData { … } }`) is
+            // always referenced qualified (`Prices.ProductData`), so the
+            // namespace supplies the specificity even when the member name ends
+            // in a banned segment — the OpenAPI/Stripe codegen pattern where the
+            // `Data` suffix mirrors the spec's `product_data` payload field.
+            if is_namespaced_type_declaration_name(node, semantic) {
+                return;
+            }
             // An identifier mirroring a standard DOM/Web API type name in
             // camelCase (`dataTransfer` for `DataTransfer`) refers to the web
             // platform object, not a generic `data*` compound.
@@ -1948,6 +1957,37 @@ mod tests {
         assert_eq!(run("export type Value = 'off' | 'on';").len(), 1);
         assert_eq!(run("interface Result { x: number }").len(), 1);
         assert_eq!(run("namespace N { export const value = 1; }").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_namespaced_noun_data_compound_type_issue_5501() {
+        // Regression for #5501 — OpenAPI/Stripe codegen emits `NounData` compound
+        // interface/type names (`ProductData`, `TransferData`, `SubscriptionData`)
+        // nested in a namespace; the `Data` suffix mirrors the spec's
+        // `product_data` payload field and the type is always referenced qualified
+        // (`Prices.ProductData`), so the banned `Data` segment is specific here.
+        let src = r#"
+            export namespace Prices {
+                export interface ProductData {
+                    active?: boolean;
+                    id?: string;
+                }
+                export type TransferData = { destination: string };
+                export interface SubscriptionData { id?: string }
+            }
+        "#;
+        assert!(run(src).is_empty(), "namespaced `NounData` type must NOT flag");
+    }
+
+    #[test]
+    fn still_flags_data_compound_outside_namespace_issue_5501() {
+        // Negative space: the #5501 exemption hinges on the `NounData` type being
+        // nested in a namespace. A top-level `interface ProductData`/`type
+        // TransferData` still flags (the qualifier that would make `Data` specific
+        // is absent), and a generic *value* binding inside a namespace still flags.
+        assert_eq!(run("export interface ProductData { id?: string }").len(), 1);
+        assert_eq!(run("export type TransferData = { x: number };").len(), 1);
+        assert_eq!(run("namespace P { export const userData = fetch(); }").len(), 1);
     }
 
     #[test]
