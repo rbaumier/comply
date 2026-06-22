@@ -113,6 +113,14 @@
 //!     `listen`, `close`, …) by convention to drive the SSR server lifecycle at
 //!     runtime, never through a static import, so the whole file is exempt. Gated
 //!     on the `quasar` dependency (root or nearest `package.json`).
+//!   - Nuxt MCP toolkit server convention files — a module under
+//!     `server/mcp/tools/`, `server/mcp/resources/`, or `server/mcp/prompts/`.
+//!     The `@nuxtjs/mcp-toolkit` Nuxt module auto-discovers and registers these by
+//!     file-system convention (analogous to Nuxt's `server/api/` route
+//!     discovery), invoking each file's `export default
+//!     defineMcp{Tool,Resource,Prompt}(...)` at runtime, never through a static
+//!     import, so the whole file is exempt. Gated on the `@nuxtjs/mcp-toolkit`
+//!     dependency (root or nearest `package.json`).
 //!   - Framework file-system-routing entry points (`is_framework_route_export`) —
 //!     a file matching a well-known routing convention exposes reserved exports
 //!     that the framework's router consumes by name, never through a static
@@ -789,6 +797,21 @@ impl TextCheck for Check {
         // subject to the rule.
         if crate::rules::path_utils::is_quasar_ssr_entry_file(&canon)
             && ctx.project.is_quasar_for_path(&canon)
+        {
+            return Vec::new();
+        }
+        // Nuxt MCP toolkit server convention file — a module under
+        // `server/mcp/{tools,resources,prompts}/`. The `@nuxtjs/mcp-toolkit` Nuxt
+        // module auto-discovers and registers these by file-system convention
+        // (analogous to Nuxt's `server/api/` route discovery), invoking the
+        // module's `export default defineMcp{Tool,Resource,Prompt}(...)` at
+        // runtime, never through a static import, so the whole file has no
+        // in-repo importer yet is a live entry point. Gated on the
+        // `@nuxtjs/mcp-toolkit` dependency (root or nearest `package.json`) so a
+        // same-named directory layout in a project without the toolkit stays
+        // subject to the rule.
+        if crate::rules::path_utils::is_nuxt_mcp_toolkit_file(&canon)
+            && ctx.project.uses_nuxt_mcp_toolkit(&canon)
         {
             return Vec::new();
         }
@@ -2575,6 +2598,67 @@ mod tests {
             "a server entry export without the Quasar dep must still be flagged: {diags:?}"
         );
         assert!(diags[0].message.contains("create"));
+    }
+
+    #[test]
+    fn ignores_nuxt_mcp_toolkit_default_exports_issue_5121() {
+        // Regression for #5121 (nuxt/ui) — the `@nuxtjs/mcp-toolkit` Nuxt module
+        // auto-discovers and registers every module under
+        // `server/mcp/{tools,resources,prompts}/` by file-system convention and
+        // invokes its `export default defineMcp{Tool,Resource,Prompt}(...)` at
+        // runtime, never through a static import, so the default export has no
+        // importer yet is live.
+        let pkg = r#"{ "dependencies": { "@nuxtjs/mcp-toolkit": "^0.17.2", "nuxt": "^4.4.8" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "docs/server/mcp/tools/get-component.ts",
+                "export default defineMcpTool({\n  description: 'x',\n  async handler() {}\n});\n",
+            ),
+            (
+                "docs/server/mcp/resources/components.ts",
+                "export default defineMcpResource({ uri: 'x' });\n",
+            ),
+            (
+                "docs/server/mcp/prompts/find-component-for-usecase.ts",
+                "export default defineMcpPrompt({ name: 'x' });\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        for target in [
+            "docs/server/mcp/tools/get-component.ts",
+            "docs/server/mcp/resources/components.ts",
+            "docs/server/mcp/prompts/find-component-for-usecase.ts",
+        ] {
+            let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, target);
+            assert!(
+                diags.is_empty(),
+                "Nuxt MCP toolkit default export is framework-consumed ({target}): {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_mcp_default_export_without_toolkit_dep_issue_5121() {
+        // Negative-space guard for #5121 — the exemption is dep-gated. The same
+        // `server/mcp/tools/x.ts` default export in a project without the
+        // `@nuxtjs/mcp-toolkit` dependency is an ordinary unused export and must
+        // still be flagged.
+        let pkg = r#"{ "dependencies": { "lodash": "^4.0.0" } }"#;
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "server/mcp/tools/get-component.ts",
+                "export default { description: 'x' };\n",
+            ),
+            ("src/util.ts", "export const helper = () => 1;\nhelper;\n"),
+        ];
+        let (_dir, diags) =
+            run_on_project_with_pkg(Some(pkg), &files, "server/mcp/tools/get-component.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "an MCP default export without the toolkit dep must still be flagged: {diags:?}"
+        );
+        assert!(diags[0].message.contains("default"));
     }
 
     #[test]

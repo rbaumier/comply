@@ -1434,6 +1434,29 @@ pub fn is_nuxt_auto_imported_file(path: &Path) -> bool {
     has_path_segment(path, &["composables", "utils"])
 }
 
+/// True when `path` is a Nuxt MCP toolkit server convention file: a file under
+/// `server/mcp/tools/`, `server/mcp/resources/`, or `server/mcp/prompts/`
+/// (consecutive `server`, `mcp`, then the kind segment). The `@nuxtjs/mcp-toolkit`
+/// Nuxt module auto-discovers and registers every module in these directories by
+/// file-system convention — analogous to Nuxt's `server/api/` route discovery —
+/// invoking each file's `export default defineMcp{Tool,Resource,Prompt}(...)` at
+/// runtime, never through a static import, so the `default` export has no importer
+/// yet is live. The `server/mcp/` ancestor scopes the exemption to these
+/// convention directories; the caller's dependency gate keeps such a layout in a
+/// project without the toolkit subject to the rule.
+pub fn is_nuxt_mcp_toolkit_file(path: &Path) -> bool {
+    let segs: Vec<&str> = path
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => s.to_str(),
+            _ => None,
+        })
+        .collect();
+    segs.windows(3).any(|w| {
+        w[0] == "server" && w[1] == "mcp" && matches!(w[2], "tools" | "resources" | "prompts")
+    })
+}
+
 /// True when `path` is the Quasar SSR server entry module: a `server.{js,ts,mjs,mts}`
 /// file directly inside a `src-ssr/` directory (e.g. `src-ssr/server.js`). The
 /// Quasar CLI reads this module's named exports (`create`, `listen`, `close`,
@@ -1711,6 +1734,23 @@ mod aux_path_tests {
         // Other files inside `src-ssr/` are not the convention entry point.
         assert!(!is_quasar_ssr_entry_file(Path::new("src-ssr/middlewares/render.ts")));
         assert!(!is_quasar_ssr_entry_file(Path::new("src-ssr/server-config.ts")));
+    }
+
+    #[test]
+    fn nuxt_mcp_toolkit_file_matches_server_mcp_convention_dirs() {
+        // Issue #5121: `@nuxtjs/mcp-toolkit` auto-discovers modules under
+        // `server/mcp/{tools,resources,prompts}/`.
+        assert!(is_nuxt_mcp_toolkit_file(Path::new("docs/server/mcp/tools/get-component.ts")));
+        assert!(is_nuxt_mcp_toolkit_file(Path::new("server/mcp/resources/components.ts")));
+        assert!(is_nuxt_mcp_toolkit_file(Path::new(
+            "server/mcp/prompts/find-component-for-usecase.ts"
+        )));
+        // A `mcp/` directory not directly under `server/` is not the convention.
+        assert!(!is_nuxt_mcp_toolkit_file(Path::new("src/mcp/tools/x.ts")));
+        // A `server/mcp/` subdir other than the three kinds is not exempt.
+        assert!(!is_nuxt_mcp_toolkit_file(Path::new("server/mcp/utils/registry.ts")));
+        // A `server/` file without the `mcp/tools` layout stays subject to the rule.
+        assert!(!is_nuxt_mcp_toolkit_file(Path::new("server/api/tools.ts")));
     }
 
     #[test]
