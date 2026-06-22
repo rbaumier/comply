@@ -12,11 +12,11 @@ pub struct Check;
 /// Filler words flagged only when the *entire* identifier (case-insensitive)
 /// equals one of them: `result`/`Result`/`RESULT` fire, but `parsedResult` and
 /// `resultData` do not. These read as vague on their own yet are legitimate
-/// segments of a descriptive compound (`rowIndex`, `cellValue`), so they never
-/// match as a prefix or suffix.
+/// segments of a descriptive compound (`resultCount`, `inputValue`), so they
+/// never match as a prefix or suffix.
 const BANNED_WORDS: &[&str] = &[
     "info", "temp", "result", "results", "obj", "objs", "item", "items", "thing", "stuff", "val",
-    "retval", "value", "values", "foo", "bar", "row", "rows", "cell", "cells", "baz", "qux", "tmp",
+    "retval", "value", "values", "foo", "bar", "baz", "qux", "tmp",
     "dummy", "placeholder", "arr", "list", "lists", "str", "num", "output", "outputs", "input",
     "inputs", "payload", "payloads", "flag", "stub", "fake", "foobar", "quux", "corge", "blah",
     "bleh", "asdf", "qwerty", "zzz", "xxx", "aaa", "bbb", "scratch", "junk", "garbage", "something",
@@ -829,73 +829,6 @@ fn ts_type_is_descriptive(ty: &TSType) -> bool {
     }
 }
 
-/// True when the binding's type annotation references a type whose name
-/// contains `Row` (e.g. `row: UnknownRow`, `rows: ReadonlyArray<DatabaseRow>`).
-/// A `Row`-typed binding is a database record — the precise domain term for a
-/// record returned from a SQL query — not a generic placeholder, so a `row`
-/// name is the idiomatic, self-documenting choice there. Scoped at the call
-/// site to the `row`/`rows` banned words. The walk stops at the binding's own
-/// FormalParameter / VariableDeclarator surroundings.
-fn binding_type_references_row<'a>(
-    node: &oxc_semantic::AstNode<'a>,
-    semantic: &'a oxc_semantic::Semantic<'a>,
-) -> bool {
-    for kind in semantic.nodes().ancestor_kinds(node.id()) {
-        match kind {
-            AstKind::FormalParameter(p) => {
-                return p
-                    .type_annotation
-                    .as_ref()
-                    .is_some_and(|ann| ts_type_references_row(&ann.type_annotation));
-            }
-            AstKind::VariableDeclarator(d) => {
-                return d
-                    .type_annotation
-                    .as_ref()
-                    .is_some_and(|ann| ts_type_references_row(&ann.type_annotation));
-            }
-            AstKind::Function(_)
-            | AstKind::ArrowFunctionExpression(_)
-            | AstKind::Program(_) => return false,
-            _ => continue,
-        }
-    }
-    false
-}
-
-/// True when `ty` is (or wraps) a type reference whose identifier name contains
-/// `Row` (case-sensitive). Recurses through array types, `readonly` operators,
-/// unions, and single-argument generic wrappers (`Promise`/`Array`/`Readonly`/
-/// `ReadonlyArray`) so `UnknownRow[]`, `readonly DatabaseRow[]`, and
-/// `ReadonlyArray<PgRow>` all qualify.
-fn ts_type_references_row(ty: &TSType) -> bool {
-    match ty {
-        TSType::TSTypeReference(type_ref) => {
-            let name = match &type_ref.type_name {
-                TSTypeName::IdentifierReference(id) => Some(id.name.as_str()),
-                TSTypeName::QualifiedName(q) => Some(q.right.name.as_str()),
-                _ => None,
-            };
-            if name.is_some_and(|n| n.contains("Row")) {
-                return true;
-            }
-            if matches!(
-                name,
-                Some("Promise") | Some("Readonly") | Some("Array") | Some("ReadonlyArray")
-            ) && let Some(params) = &type_ref.type_arguments
-                && let Some(first) = params.params.first()
-            {
-                return ts_type_references_row(first);
-            }
-            false
-        }
-        TSType::TSArrayType(arr) => ts_type_references_row(&arr.element_type),
-        TSType::TSTypeOperatorType(op) => ts_type_references_row(&op.type_annotation),
-        TSType::TSUnionType(u) => u.types.iter().any(ts_type_references_row),
-        _ => false,
-    }
-}
-
 /// True when the binding's explicit type annotation mirrors the identifier
 /// name: the annotation's base type name (case-insensitively) equals OR ends
 /// with the identifier name. A `const item: Item`/`item: VirtualItem` is the
@@ -1270,15 +1203,6 @@ impl OxcCheck for Check {
                     if type_annotation_is_descriptive(node, semantic) {
                         return;
                     }
-                    // A `row`/`rows` binding whose type references a `Row` type
-                    // (`row: UnknownRow`, `rows: ReadonlyArray<DatabaseRow>`) is
-                    // a database record — the precise SQL-domain term — not a
-                    // generic placeholder.
-                    if matches!(lower.as_str(), "row" | "rows")
-                        && binding_type_references_row(node, semantic)
-                    {
-                        return;
-                    }
                     // The binding's explicit type annotation mirrors the
                     // identifier name (`item: Item`, `item: VirtualItem`,
                     // `item: Item[]`): the value IS its own domain type, so the
@@ -1556,12 +1480,6 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_untyped_rows_param() {
-        let src = r#"function f(rows) { return rows[0]; }"#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
     fn allows_data_table_design_system_compound() {
         // Regression for rbaumier/comply#121 — `DataTable` and its derived
         // type names are the industry-standard naming across shadcn,
@@ -1753,18 +1671,6 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_rows_without_type_assertion() {
-        // No `as T[]` — must still flag.
-        let src = r#"
-            async function genericHelper<TRef extends PgTable>(tx: any): Promise<void> {
-                const rows = await tx.select().from(table);
-                return rows;
-            }
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
     fn no_fp_run_with_context_async_local_storage_wrapper() {
         // Regression for #520 — `runWith*` is the idiomatic AsyncLocalStorage
         // wrapper pattern; `run` comes from the Node.js API, not a generic verb.
@@ -1871,20 +1777,6 @@ mod tests {
             function runProcess() {}
         "#;
         assert_eq!(run(src).len(), 4);
-    }
-
-    #[test]
-    fn flags_row_and_rows_in_iterator_callbacks() {
-        // Iterator-callback params are not exempt — `row`/`rows` are vague
-        // even as `.map`/`.flatMap` parameters (e.g. valuation-tariff readers).
-        let src = r#"
-            readSheetRows(buffer, { skipRows: 1 }).map((rows) =>
-                rows.flatMap((row): Out[] => {
-                    return [row[0]];
-                }),
-            );
-        "#;
-        assert_eq!(run(src).len(), 2);
     }
 
     #[test]
@@ -2109,17 +2001,12 @@ mod tests {
     }
 
     #[test]
-    fn flags_cell_and_cells_banned_words() {
-        assert_eq!(run("const cell = 1;").len(), 1);
-        assert_eq!(run("const cells = [];").len(), 1);
-    }
-
-    #[test]
     fn no_fp_tanstack_table_column_def_callback_params_issue_1716() {
         // Regression for #1716 — TanStack Table column definitions prescribe
-        // `row`/`cell`/`info` as the callback parameter names (`Row<TData>`,
-        // `CellContext<TData, TValue>`). The params are values of object-literal
-        // properties (`cell:`, `accessorFn:`), so the library API fixes the name.
+        // `info` as the callback parameter name (`CellContext<TData, TValue>`).
+        // The param is the value of an object-literal property (`cell:`,
+        // `header:`), so the library API fixes the name. (`row`/`cell` are no
+        // longer flagged at all — see #5623.)
         let src = r#"
             const columns = [
                 {
@@ -2139,17 +2026,14 @@ mod tests {
     }
 
     #[test]
-    fn still_flags_row_cell_info_params_in_call_argument_callbacks_issue_1716() {
+    fn still_flags_info_param_in_call_argument_callback_issue_1716() {
         // Negative space: the exemption is for callbacks that are object-literal
-        // *property values*. A `row`/`cell`/`info` param of a callback passed as
-        // a *call argument* (`.map((row) => …)`) is not API-prescribed and is
-        // still a vague name — must still flag.
-        let src = r#"
-            items.map((row) => row[0]);
-            items.forEach((cell) => use(cell));
-            items.filter((info) => info.ok);
-        "#;
-        assert_eq!(run(src).len(), 3);
+        // *property values*. An `info` param of a callback passed as a *call
+        // argument* (`.filter((info) => …)`) is not API-prescribed and is still
+        // a vague name — must still flag. (`row`/`cell` are no longer banned;
+        // see #5623.)
+        let src = r#"items.filter((info) => info.ok);"#;
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]
@@ -2244,10 +2128,11 @@ mod tests {
 
     #[test]
     fn no_fp_row_typed_with_row_type_reference_issue_1233() {
-        // Regression for #1233 — a `row`/`rows` binding whose type annotation
-        // contains `Row` (e.g. `row: UnknownRow`) is a database-domain record,
-        // not a generic placeholder. The kysely camel-case plugin maps each
-        // queried row through `mapRow(row: UnknownRow): UnknownRow`.
+        // Regression for #1233 — `row`/`rows` name database-domain records, not
+        // generic placeholders (the kysely camel-case plugin maps each queried
+        // row through `mapRow(row: UnknownRow): UnknownRow`). They are no longer
+        // flagged in any form (see #5623), so the typed and untyped cases are
+        // all clean.
         let src = r#"
             class CamelCasePlugin {
                 protected mapRow(row: UnknownRow): UnknownRow { return row; }
@@ -2257,20 +2142,6 @@ mod tests {
             const rows: ReadonlyArray<DatabaseRow> = fetchMany();
         "#;
         assert!(run(src).is_empty(), "Row-typed `row`/`rows` must not flag");
-    }
-
-    #[test]
-    fn still_flags_untyped_row_and_non_row_typed_row_issue_1233() {
-        // Negative space: the `Row`-type exemption is anchored on a `Row`-bearing
-        // type reference. An untyped `row` and a `row` typed as a non-array
-        // scalar without `Row` stay flagged — the type is what proves the
-        // domain meaning. (`row[]` arrays are exempt via the separate,
-        // pre-existing generic-helper array path.)
-        let src = r#"
-            function f() { const row = fetchOne(); return row; }
-            const row: number = 0;
-        "#;
-        assert_eq!(run(src).len(), 2);
     }
 
     #[test]
@@ -2374,10 +2245,19 @@ mod tests {
     }
 
     #[test]
-    fn does_not_flag_row_cell_as_prefix_or_suffix() {
-        // row/rows/cell/cells are exact-name bans only — compounds like
-        // `rowIndex` or `headerCell` carry meaning and must not be flagged.
+    fn no_fp_row_cell_are_descriptive_table_nouns_issue_5623() {
+        // Regression for #5623 — `row` (a horizontal line of cells) and `cell`
+        // (a discrete addressable unit) name concrete structural units of a
+        // table/grid/spreadsheet. They are the canonical, self-documenting
+        // bindings in spreadsheet libraries: `worksheet.on('row', row => …)`,
+        // `const cell = row.getCell(col)`. Bare and plural forms are all clean,
+        // and descriptive compounds (`rowIndex`, `headerCell`) were never
+        // flagged either.
         for name in [
+            "row",
+            "rows",
+            "cell",
+            "cells",
             "tableRow",
             "rowIndex",
             "firstRow",
@@ -2389,6 +2269,8 @@ mod tests {
             let src = format!("const {name} = 1;");
             assert!(run(&src).is_empty(), "'{name}' must NOT be flagged");
         }
+        assert!(run("worksheet.on('row', row => { count += 1; });").is_empty());
+        assert!(run("const cell = row.getCell(col);").is_empty());
     }
 
     #[test]
