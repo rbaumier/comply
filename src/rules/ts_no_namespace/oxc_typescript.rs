@@ -26,6 +26,39 @@ fn is_type_only_namespace(decl: &TSModuleDeclaration<'_>) -> bool {
     block.body.iter().all(statement_is_type_level)
 }
 
+/// True when a same-named `enum`, `class`, or `function` is declared in the
+/// same lexical scope as `decl` (the namespace).
+///
+/// This is the TypeScript declaration-merging companion pattern: a `namespace`
+/// merged with a co-named value declaration to attach static helper methods to
+/// it — most commonly an enum companion (`enum Color {}` + `namespace Color {
+/// export function fromString() {} }`), but also class- and function-companion
+/// namespaces. The merge target makes `Color.fromString()` call syntax part of
+/// the consumer API; a plain ES module export cannot reproduce it. Such a
+/// namespace is not the legacy module-as-namespace construct the rule targets.
+///
+/// Merging only happens in the *same* lexical scope, so the namespace's own
+/// scope is the match key.
+fn has_same_name_merge_target<'a>(
+    decl: &TSModuleDeclaration<'_>,
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let name = decl.id.name();
+    let scope = node.scope_id();
+    semantic.nodes().iter().any(|n| {
+        if n.scope_id() != scope {
+            return false;
+        }
+        match n.kind() {
+            AstKind::TSEnumDeclaration(e) => e.id.name == name,
+            AstKind::Class(c) => c.id.as_ref().is_some_and(|id| id.name == name),
+            AstKind::Function(f) => f.id.as_ref().is_some_and(|id| id.name == name),
+            _ => false,
+        }
+    })
+}
+
 /// True when a namespace-body statement declares only type-level members.
 fn statement_is_type_level(stmt: &Statement<'_>) -> bool {
     match stmt {
@@ -56,13 +89,22 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::TSModuleDeclaration(decl) = node.kind() else { return };
 
         // Allow `declare namespace` (ambient declarations).
         if decl.declare {
+            return;
+        }
+
+        // Allow a namespace that merges with a same-named `enum` / `class` /
+        // `function` in the same scope — the declaration-merging companion
+        // pattern for attaching static helper methods (e.g. `enum Color` +
+        // `namespace Color { export function fromString() {} }`). ES module
+        // syntax cannot reproduce its `Color.fromString()` call API.
+        if has_same_name_merge_target(decl, node, semantic) {
             return;
         }
 
@@ -217,5 +259,56 @@ mod tests {
     #[test]
     fn flags_namespace_with_statement() {
         assert_eq!(run("namespace Foo { console.log('side effect'); }").len(), 1);
+    }
+
+    // Regression for #5686: an enum companion namespace — a `namespace` merged
+    // with a same-name `enum` to attach static helper methods (the officially
+    // recommended TypeScript pattern for adding methods to an enum) — is not the
+    // legacy module construct the rule targets.
+    #[test]
+    fn allows_enum_companion_namespace() {
+        let diags = run(
+            "export enum ReleaseTag {\n  None = 0,\n  Internal = 1,\n  Public = 4\n}\n\
+             export namespace ReleaseTag {\n  export function getTagName(t: ReleaseTag): string {\n    return t === ReleaseTag.None ? '(none)' : '@internal';\n  }\n  export function compare(a: ReleaseTag, b: ReleaseTag): number {\n    return a - b;\n  }\n}",
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_class_companion_namespace() {
+        let diags = run(
+            "export class Point {\n  constructor(public x: number, public y: number) {}\n}\n\
+             export namespace Point {\n  export function origin(): Point {\n    return new Point(0, 0);\n  }\n}",
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_function_companion_namespace() {
+        let diags = run(
+            "export function greet(name: string): string {\n  return `Hi ${name}`;\n}\n\
+             export namespace greet {\n  export function loudly(name: string): string {\n    return greet(name).toUpperCase();\n  }\n}",
+        );
+        assert!(diags.is_empty());
+    }
+
+    // A namespace whose only same-name sibling is a `const`/`let`/`var` does not
+    // form a method-merge companion, so it still flags.
+    #[test]
+    fn flags_namespace_with_same_name_variable_only() {
+        assert_eq!(
+            run("const Foo = 1;\nnamespace Foo { export const x = 1; }").len(),
+            1
+        );
+    }
+
+    // A namespace merging with an enum of a *different* name is unrelated to the
+    // companion pattern and still flags.
+    #[test]
+    fn flags_namespace_with_unrelated_enum_in_scope() {
+        assert_eq!(
+            run("enum Color { Red }\nnamespace Foo { export const x = 1; }").len(),
+            1
+        );
     }
 }
