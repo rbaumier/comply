@@ -7,6 +7,13 @@
 //! acquisition methods; doing so in `Drop` deadlocks if the lock is
 //! already held on the dropping thread.
 //!
+//! A single-level `self.<field>` receiver is exempt when `<field>` is a
+//! borrowed reference (`&T` / `&'a T` / `&mut T`) in the Drop target struct
+//! defined in the same file: the locked mutex lives outside `self`, so the
+//! struct cannot hold it and self-deadlock. Owned mutex fields (`Mutex<T>`,
+//! `Arc<Mutex<T>>`), nested receivers (`self.a.b.lock()`), and a struct not
+//! resolvable in the file all stay flagged.
+//!
 //! Test-only `Drop` impls are exempt: a fixture that locks shared state in
 //! `Drop` to record drop order for assertions is intentional instrumentation,
 //! not a production deadlock. The exemption fires when the impl is gated by
@@ -78,6 +85,7 @@ impl AstCheck for Check {
                 if LOCK_METHODS.contains(&method)
                     && let Some(receiver) = func.child_by_field_name("value")
                     && receiver_starts_with_self(receiver, source_bytes)
+                    && !locks_borrowed_self_field(node, receiver, source_bytes)
                 {
                     diagnostics.push(Diagnostic::at_node(
                         std::sync::Arc::clone(&ctx.path_arc),
@@ -104,6 +112,37 @@ fn receiver_starts_with_self(node: tree_sitter::Node, source: &[u8]) -> bool {
         return false;
     };
     text == "self" || text.starts_with("self.")
+}
+
+/// True when the lock receiver is exactly `self.<field>` and `<field>` is a
+/// borrowed reference in the Drop target struct — the locked mutex is external
+/// to `self`, so no self-deadlock is possible. `impl_item` is the enclosing
+/// `impl Drop for …` node (the `visit_node` argument).
+///
+/// Only a single-level `self.<field>` receiver is resolved; nested chains
+/// (`self.a.b.lock()`) and bare `self.lock()` keep the conservative behavior
+/// (flag), since the locked object's ownership can't be resolved structurally.
+fn locks_borrowed_self_field(
+    impl_item: tree_sitter::Node,
+    receiver: tree_sitter::Node,
+    source: &[u8],
+) -> bool {
+    if receiver.kind() != "field_expression" {
+        return false;
+    }
+    let Some(base) = receiver.child_by_field_name("value") else {
+        return false;
+    };
+    if base.kind() != "self" {
+        return false;
+    }
+    let Some(field) = receiver
+        .child_by_field_name("field")
+        .and_then(|f| f.utf8_text(source).ok())
+    else {
+        return false;
+    };
+    crate::rules::rust_helpers::drop_impl_field_is_reference(impl_item, field, source)
 }
 
 #[cfg(test)]
@@ -172,6 +211,46 @@ mod tests {
     fn flags_try_lock_on_self() {
         let source =
             "struct A; impl Drop for A { fn drop(&mut self) { let _ = self.m.try_lock(); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    // Regression for #5545 (gfx-rs/wgpu `UsageScope`): `self.pool` is a borrowed
+    // `&'a Mutex<…>`, not an owned mutex, so locking it in `Drop` pushes into an
+    // external pool that outlives `self` — no self-deadlock. Must not fire.
+    #[test]
+    fn allows_lock_on_borrowed_self_field() {
+        let source = "struct UsageScope<'a> { pool: &'a Mutex<Vec<u8>> } \
+            impl<'a> Drop for UsageScope<'a> { \
+                fn drop(&mut self) { self.pool.lock().push(1); } \
+            }";
+        assert!(run_on(source).is_empty());
+    }
+
+    // Load-bearing positive: an OWNED `Mutex<T>` field (`generic_type`, not a
+    // `reference_type`) locked in `Drop` is the genuine self-deadlock the rule
+    // targets and must STILL fire.
+    #[test]
+    fn flags_lock_on_owned_mutex_self_field() {
+        let source = "struct A { m: Mutex<u8> } \
+            impl Drop for A { fn drop(&mut self) { let _g = self.m.lock(); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    // An owned `Arc<Mutex<T>>` field is also `generic_type`, not a reference;
+    // the struct co-owns the lock, so it must STILL fire.
+    #[test]
+    fn flags_lock_on_owned_arc_mutex_self_field() {
+        let source = "struct A { m: Arc<Mutex<u8>> } \
+            impl Drop for A { fn drop(&mut self) { let _g = self.m.lock(); } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    // Fail-closed: when the struct definition is not in the same file, the field
+    // type can't be resolved, so the conservative behavior (flag) is kept.
+    #[test]
+    fn flags_lock_on_self_field_when_struct_not_in_file() {
+        let source =
+            "impl Drop for A { fn drop(&mut self) { let _g = self.m.lock(); } }";
         assert_eq!(run_on(source).len(), 1);
     }
 

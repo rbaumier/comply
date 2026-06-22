@@ -3331,6 +3331,73 @@ fn struct_field_type(struct_item: Node, field: &str, source: &[u8]) -> Option<St
     None
 }
 
+/// True when `impl_item`'s `Drop` target struct, defined in the same file,
+/// declares `field` as a reference type (`&T` / `&'a T` / `&mut T`).
+///
+/// The lock target of `self.<field>.lock()` then lives *outside* `self`: the
+/// struct merely borrows it, so a `Drop` acquiring it cannot self-deadlock on a
+/// lock the struct itself holds. Owned mutex fields (`Mutex<T>`,
+/// `Arc<Mutex<T>>`, parsed as `generic_type`, not `reference_type`) return
+/// `false` and stay flagged.
+///
+/// Resolution is purely structural: the bare struct name is read from the
+/// `impl`'s `type` field (handling both a plain `type_identifier` and a
+/// generic `Foo<'a>`), the matching `struct_item` is searched in the same file,
+/// and its `field_declaration` for `field` is inspected. If the struct is not
+/// in the file or the field is absent, returns `false` (fail-closed: still
+/// flag), since comply analyses one file at a time.
+///
+/// Used by `rust-drop-calls-self-lock`.
+pub fn drop_impl_field_is_reference(impl_item: Node, field: &str, source: &[u8]) -> bool {
+    let Some(struct_name) = impl_type_struct_name(impl_item, source) else {
+        return false;
+    };
+    let Some(struct_item) = find_struct_item(impl_item, &struct_name, source) else {
+        return false;
+    };
+    field_declaration_is_reference(struct_item, field, source)
+}
+
+/// The bare struct name from an `impl_item`'s `type` field: the text of a plain
+/// `type_identifier`, or the leading `type_identifier` of a `generic_type`
+/// (`UsageScope<'a>` → `UsageScope`). `None` for any other target shape.
+fn impl_type_struct_name(impl_item: Node, source: &[u8]) -> Option<String> {
+    let type_node = impl_item.child_by_field_name("type")?;
+    let name_node = match type_node.kind() {
+        "type_identifier" => type_node,
+        "generic_type" => type_node
+            .child_by_field_name("type")
+            .filter(|t| t.kind() == "type_identifier")?,
+        _ => return None,
+    };
+    name_node.utf8_text(source).ok().map(str::to_string)
+}
+
+/// True when `field`'s `field_declaration` in `struct_item` has a
+/// `reference_type` declared type.
+fn field_declaration_is_reference(struct_item: Node, field: &str, source: &[u8]) -> bool {
+    let Some(body) = struct_item.child_by_field_name("body") else {
+        return false;
+    };
+    let mut cursor = body.walk();
+    for decl in body.named_children(&mut cursor) {
+        if decl.kind() != "field_declaration" {
+            continue;
+        }
+        if decl
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+            != Some(field)
+        {
+            continue;
+        }
+        return decl
+            .child_by_field_name("type")
+            .is_some_and(|t| t.kind() == "reference_type");
+    }
+    false
+}
+
 /// The (signedness, bit-width) of an `enum_item`'s `#[repr(intN)]` attribute, or
 /// `None` if it has no integer `repr` (a `#[repr(C)]` or no `repr` at all has no
 /// guaranteed discriminant width).
