@@ -42,6 +42,11 @@
 //! let y = x as u8;` — is exempt: the assertion aborts before the cast unless
 //! the value fits.
 //!
+//! A `char as <int>` cast gated by an `is_ascii()` / `is_ascii_*()` check on the
+//! same value — `self.is_ascii().then_some(*self as u8)` or `if ch.is_ascii() {
+//! ch as u8 }` — is exempt: an ASCII char is `0..=127`, which fits any integer
+//! at least 8 bits wide, so the guarded cast cannot truncate.
+//!
 //! Casts that `rust-no-as-numeric-cast` already flags are suppressed here so
 //! the pair emits one diagnostic per span; this rule keeps firing only where
 //! that one does not — notably int `as f32` (no `f32::From` for those sources).
@@ -49,9 +54,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cast_operand_bit_width, cast_operand_indexed_element_type, cast_operand_is_assert_bounded,
-    cast_operand_is_bitwise, cast_operand_is_bool, cast_operand_is_char,
-    cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
+    cast_operand_bit_width, cast_operand_indexed_element_type, cast_operand_is_ascii_guarded,
+    cast_operand_is_assert_bounded, cast_operand_is_bitwise, cast_operand_is_bool,
+    cast_operand_is_char, cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
     cast_operand_is_non_negative_guarded, cast_operand_is_range_guarded,
     cast_operand_is_repr_enum_field, cast_operand_literal_value, find_identifier_type,
     is_in_enum_discriminant,
@@ -105,6 +110,9 @@ impl AstCheck for Check {
             return;
         };
         if cast_operand_is_char(node, source_bytes) && char_fits(target_type) {
+            return;
+        }
+        if cast_operand_is_ascii_guarded(node, source_bytes) {
             return;
         }
         if cast_operand_literal_value(node, source_bytes)
@@ -544,6 +552,14 @@ mod tests {
     #[test]
     fn char_to_u16_owned_by_numeric_cast() {
         assert!(run_on("fn f(c: char) -> u16 { c as u16 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5122_is_ascii_then_some_char_as_u8_not_flagged() {
+        // Issue #5122 (chumsky): `is_ascii()` proves `*self` is in `0..=127`, so
+        // the `*self as u8` it gates is lossless.
+        let src = "fn to_ascii(&self) -> Option<u8> { self.is_ascii().then_some(*self as u8) }";
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
