@@ -66,13 +66,14 @@ pub fn register_all() -> Vec<RuleDef> {
         ),
         // --- v1.1 additions ---
         // `id-length` is handled natively — see `src/rules/id_length/`.
-        entry(
+        entry_with_filter(
             "no-param-reassign",
             "no-param-reassign",
             Severity::Error,
             "Reassigning function parameters mutates the caller's data.",
             "Copy the argument into a local `let` if you need to mutate it. \
              Mutating params silently surprises callers.",
+            Some(Arc::new(NoParamReassignFilter)),
         ),
         entry(
             "no-empty",
@@ -935,6 +936,210 @@ fn declarator_at_offset_is_definite(src: &str, path: &std::path::Path, offset: u
         .is_some_and(|decl| decl.definite)
 }
 
+// ── no-param-reassign post-filter ───────────────────────────────────────────
+//
+// `no-param-reassign` flags any reassignment of a function parameter, reading
+// it as accidental mutation of the caller's data. The false positive: the
+// Node.js SDK overload-normalization idiom (pervasive in google-api-nodejs-
+// client codegen), where a function declares `(params, options, callback)` and,
+// when called with fewer arguments, realigns the positional slots by reassigning
+// parameters inside a `typeof <param> === 'function'` guard:
+//
+//   if (typeof paramsOrCallback === 'function') {
+//     callback = paramsOrCallback;   // ← flagged
+//     params = {};                   // ← flagged
+//   }
+//
+// Here the reassignment is the deliberate overload-resolution mechanism, not the
+// accidental mutation the rule targets. The structural anchor: the assignment
+// sits in the truthy branch of an `if`/`?:`/`&&` guard whose test is a
+// `typeof <param>` comparison (`=== 'function'`, `=== 'undefined'`,
+// `=== undefined`, or their `!==` forms) where the probed identifier resolves to
+// a parameter of the enclosing function. An ordinary `function f(x){ x = x * 2 }`
+// mutation has no such guard and is still flagged.
+//
+// The delegated diagnostic arrives from oxlint with no AST, anchored on the
+// assignment-target identifier, so the filter re-parses the file and locates the
+// `AssignmentExpression` covering that position. Failing safe: an unreadable
+// source or an unresolved position keeps the diagnostic.
+
+struct NoParamReassignFilter;
+
+impl PostFilter for NoParamReassignFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        let Some(src) = source else {
+            return true;
+        };
+        let Some(offset) = byte_offset(src, diag.line, diag.column) else {
+            return true;
+        };
+        !assignment_at_offset_is_overload_normalization(src, &diag.path, offset)
+    }
+}
+
+/// Re-parse `src` and report whether the `AssignmentExpression` covering byte
+/// `offset` (the target-identifier position oxlint reports for a
+/// `no-param-reassign` diagnostic) is an overload-normalization assignment — one
+/// guarded by an enclosing `typeof <param>` test. Returns `false` when no
+/// `AssignmentExpression` covers the offset, so an unresolved position keeps the
+/// diagnostic.
+fn assignment_at_offset_is_overload_normalization(
+    src: &str,
+    path: &std::path::Path,
+    offset: usize,
+) -> bool {
+    use crate::rules::backend::AstKind;
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser;
+    use oxc_semantic::SemanticBuilder;
+    use oxc_span::GetSpan;
+
+    let allocator = Allocator::default();
+    let source_type = crate::oxc_helpers::source_type_for_path(path);
+    let parse_ret = Parser::new(&allocator, src, source_type).parse();
+    let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+
+    // The smallest `AssignmentExpression` whose span contains the offset is the
+    // one oxlint flagged; a nested assignment (`a = (b = c)`) has a wider outer
+    // span, so the minimal span pins the exact assignment.
+    let offset = offset as u32;
+    let target = semantic
+        .nodes()
+        .iter()
+        .filter(|node| matches!(node.kind(), AstKind::AssignmentExpression(_)))
+        .filter(|node| {
+            let span = node.kind().span();
+            span.start <= offset && offset < span.end
+        })
+        .min_by_key(|node| node.kind().span().size());
+    let Some(target) = target else {
+        return false;
+    };
+    assignment_is_typeof_param_guarded(target.id(), &semantic)
+}
+
+/// True when the assignment identified by `assign_id` sits in the truthy branch
+/// of a guard whose test feature-detects a parameter of the enclosing function
+/// via `typeof` (`typeof p === 'function'`, `typeof p === undefined`, the `!==`
+/// forms, …). Mirrors the truthy-branch walk of `is_typeof_existence_guarded`
+/// but resolves the probed identifier to a `FormalParameter` declaration so an
+/// arbitrary local `typeof` guard does not exempt the assignment.
+///
+/// The walk stops at the nearest enclosing function: the reassigned parameter
+/// belongs to that function, so a guard in an *outer* function (which would
+/// probe an outer-function parameter) must not exempt the inner mutation.
+fn assignment_is_typeof_param_guarded(
+    assign_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use crate::rules::backend::AstKind;
+    use oxc_ast::ast::Expression;
+    use oxc_span::GetSpan;
+
+    let nodes = semantic.nodes();
+    let mut child_span = nodes.get_node(assign_id).kind().span();
+    for ancestor in nodes.ancestors(assign_id) {
+        if matches!(
+            ancestor.kind(),
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+        ) {
+            return false;
+        }
+        let test: &Expression = match ancestor.kind() {
+            AstKind::IfStatement(stmt)
+                if crate::oxc_helpers::span_contains(stmt.consequent.span(), child_span) =>
+            {
+                &stmt.test
+            }
+            AstKind::ConditionalExpression(cond)
+                if crate::oxc_helpers::span_contains(cond.consequent.span(), child_span) =>
+            {
+                &cond.test
+            }
+            AstKind::LogicalExpression(logical)
+                if logical.operator == oxc_ast::ast::LogicalOperator::And
+                    && crate::oxc_helpers::span_contains(logical.right.span(), child_span) =>
+            {
+                &logical.left
+            }
+            _ => {
+                child_span = ancestor.kind().span();
+                continue;
+            }
+        };
+        if test_is_typeof_param_check(test, semantic) {
+            return true;
+        }
+        child_span = ancestor.kind().span();
+    }
+    false
+}
+
+/// True when `expr` contains a `typeof <param>` comparison whose probed
+/// identifier resolves to a function parameter. Recurses through the comparison
+/// itself, a logical `&&`, and parentheses — the positions that preserve the
+/// guard's domination over the truthy branch.
+fn test_is_typeof_param_check(
+    expr: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::Expression;
+    match expr {
+        Expression::BinaryExpression(bin) => {
+            typeof_operand_is_param(&bin.left, semantic)
+                || typeof_operand_is_param(&bin.right, semantic)
+        }
+        Expression::LogicalExpression(logical)
+            if logical.operator == oxc_ast::ast::LogicalOperator::And =>
+        {
+            test_is_typeof_param_check(&logical.left, semantic)
+                || test_is_typeof_param_check(&logical.right, semantic)
+        }
+        Expression::ParenthesizedExpression(paren) => {
+            test_is_typeof_param_check(&paren.expression, semantic)
+        }
+        _ => false,
+    }
+}
+
+/// True when `expr` is `typeof <ident>` and `<ident>` resolves to a
+/// `FormalParameter` declaration — the overload-normalization signal.
+fn typeof_operand_is_param(
+    expr: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::Expression;
+    let Expression::UnaryExpression(unary) = expr else {
+        return false;
+    };
+    if unary.operator != oxc_ast::ast::UnaryOperator::Typeof {
+        return false;
+    }
+    let Expression::Identifier(ident) = &unary.argument else {
+        return false;
+    };
+    identifier_resolves_to_parameter(ident, semantic)
+}
+
+/// True when `ident` resolves to a binding whose declaration is a
+/// `FormalParameter`.
+fn identifier_resolves_to_parameter(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use crate::rules::backend::AstKind;
+    let scoping = semantic.scoping();
+    let Some(symbol_id) = ident
+        .reference_id
+        .get()
+        .and_then(|ref_id| scoping.get_reference(ref_id).symbol_id())
+    else {
+        return false;
+    };
+    let decl_id = scoping.symbol_declaration(symbol_id);
+    matches!(semantic.nodes().kind(decl_id), AstKind::FormalParameter(_))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1308,5 +1513,115 @@ mod tests {
         let src = "function f() {\n  let div!: HTMLDivElement;\n  return div;\n}\n";
         let d = no_unassigned_diag("src/x.tsx", src, "div");
         assert!(NoUnassignedVarsFilter.keep(&d, None));
+    }
+
+    // ── no-param-reassign filter tests ───────────────────────────────────────
+
+    /// Build a `no-param-reassign` diagnostic pointing at the assignment-target
+    /// identifier whose `<ident> =` reassignment text first appears in `src`,
+    /// mirroring oxlint's reported position (1-based line/column on the LHS name).
+    /// Matches a plain `=` assignment, skipping `==`/`===` comparisons that share
+    /// the `<ident> =` prefix.
+    fn no_param_reassign_diag(path: &str, src: &str, target: &str) -> Diagnostic {
+        let needle = format!("{target} =");
+        let idx = src
+            .match_indices(&needle)
+            .find(|(i, _)| src.as_bytes().get(i + needle.len()) != Some(&b'='))
+            .map(|(i, _)| i)
+            .expect("source must contain the reassignment");
+        let line = src[..idx].bytes().filter(|&b| b == b'\n').count() + 1;
+        let line_start = src[..idx].rfind('\n').map_or(0, |p| p + 1);
+        let column = idx - line_start + 1;
+        Diagnostic {
+            path: Arc::from(Path::new(path)),
+            line,
+            column,
+            rule_id: Cow::Borrowed("no-param-reassign"),
+            message: format!("Assignment to function parameter '{target}'."),
+            severity: Severity::Error,
+            span: None,
+        }
+    }
+
+    #[test]
+    fn npr_dropped_for_callback_overload_normalization() {
+        // Regression for #5514 — google-api-nodejs-client codegen: `callback` is
+        // reassigned from an earlier positional param inside a `typeof` guard that
+        // realigns the overloaded `(params, options, callback)` signature.
+        let src = "async function aboutGet(\n  paramsOrCallback?: unknown,\n  optionsOrCallback?: unknown,\n  callback?: unknown\n) {\n  if (typeof paramsOrCallback === 'function') {\n    callback = paramsOrCallback;\n  }\n  return callback;\n}\n";
+        let d = no_param_reassign_diag("src/apis/drive/v3.ts", src, "callback");
+        assert!(!NoParamReassignFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn npr_dropped_for_param_reset_to_empty_object_in_guard() {
+        // The same guard also resets the params slot to `{}`; that assignment is
+        // part of the normalization and must not flag either.
+        let src = "function f(paramsOrCallback?: unknown, callback?: unknown) {\n  let params = paramsOrCallback;\n  if (typeof paramsOrCallback === 'function') {\n    callback = paramsOrCallback;\n    paramsOrCallback = {};\n  }\n  return params;\n}\n";
+        let d = no_param_reassign_diag("src/sdk.ts", src, "paramsOrCallback");
+        assert!(!NoParamReassignFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn npr_dropped_for_typeof_undefined_guard() {
+        // `typeof p === 'undefined'` is the other half of the overload idiom
+        // (supplying a default when an optional slot is omitted).
+        let src = "function f(options?: unknown, callback?: unknown) {\n  if (typeof options === 'undefined') {\n    callback = options;\n  }\n  return callback;\n}\n";
+        let d = no_param_reassign_diag("src/sdk.ts", src, "callback");
+        assert!(!NoParamReassignFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn npr_kept_for_plain_param_mutation() {
+        // The genuine foot-gun: a parameter mutated with no overload guard.
+        let src = "function double(x: number) {\n  x = x * 2;\n  return x;\n}\n";
+        let d = no_param_reassign_diag("src/math.ts", src, "x");
+        assert!(NoParamReassignFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn npr_kept_for_mutation_in_non_typeof_guard() {
+        // A param reassigned inside an ordinary `if` (no `typeof` probe) is still
+        // accidental mutation, not overload normalization.
+        let src = "function f(x: number, flag: boolean) {\n  if (flag) {\n    x = 0;\n  }\n  return x;\n}\n";
+        let d = no_param_reassign_diag("src/f.ts", src, "x");
+        assert!(NoParamReassignFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn npr_kept_for_typeof_guard_on_non_parameter() {
+        // The probed identifier must be a parameter. A `typeof local === ...`
+        // guard on a local binding does not exempt a param mutation in its branch.
+        let src = "function f(x: number) {\n  const local = getThing();\n  if (typeof local === 'function') {\n    x = 0;\n  }\n  return x;\n}\n";
+        let d = no_param_reassign_diag("src/f.ts", src, "x");
+        assert!(NoParamReassignFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn npr_kept_when_source_unavailable() {
+        let src = "function double(x: number) {\n  x = x * 2;\n  return x;\n}\n";
+        let d = no_param_reassign_diag("src/math.ts", src, "x");
+        assert!(NoParamReassignFilter.keep(&d, None));
+    }
+
+    #[test]
+    fn npr_kept_for_inner_function_param_under_outer_typeof_guard() {
+        // A genuine mutation of an INNER function's own param must still flag even
+        // when it sits inside a `typeof <outerParam>` guard of the OUTER function:
+        // the guard belongs to a different function and does not normalize the
+        // inner overload. The walk stops at the inner function boundary.
+        let src = "function outer(cb?: unknown) {\n  if (typeof cb === 'function') {\n    function inner(x: number) {\n      x = 5;\n    }\n    inner(1);\n  }\n}\n";
+        let d = no_param_reassign_diag("src/nested.ts", src, "x");
+        assert!(NoParamReassignFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn npr_kept_for_param_mutation_in_else_branch_of_typeof_guard() {
+        // The structural anchor is the truthy branch only. A param mutated in the
+        // `else` of a `typeof <param>` guard is not overload normalization and is
+        // still flagged.
+        let src = "function f(p?: unknown, x?: number) {\n  if (typeof p === 'function') {\n    p();\n  } else {\n    x = 0;\n  }\n  return x;\n}\n";
+        let d = no_param_reassign_diag("src/else.ts", src, "x");
+        assert!(NoParamReassignFilter.keep(&d, Some(src)));
     }
 }

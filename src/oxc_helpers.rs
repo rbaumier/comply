@@ -2174,7 +2174,7 @@ pub fn is_in_sslmode_no_verify_branch(
 }
 
 /// True when `span` fully encloses `inner`.
-fn span_contains(span: oxc_span::Span, inner: oxc_span::Span) -> bool {
+pub(crate) fn span_contains(span: oxc_span::Span, inner: oxc_span::Span) -> bool {
     span.start <= inner.start && inner.end <= span.end
 }
 
