@@ -100,8 +100,9 @@ impl TextCheck for Check {
         if stem.is_empty() {
             return Vec::new();
         }
-        // trybuild/rustc UI-test fixtures under `tests/ui/` conventionally use
-        // kebab-case scenario names paired with sibling `.stderr` output.
+        // rustc/compiletest fixtures under `tests/ui/` or `tests/compile-fail/`
+        // conventionally use kebab-case scenario names paired with sibling
+        // `.stderr` output.
         if crate::rules::path_utils::is_rust_ui_test_fixture(ctx.path) {
             return Vec::new();
         }
@@ -254,6 +255,12 @@ mod tests {
     #[test]
     fn allows_kebab_case_in_tests_ui_fixture() {
         assert!(run("test_suite/tests/ui/enum-representation/untagged-struct.rs").is_empty());
+    }
+
+    #[test]
+    fn allows_kebab_case_in_tests_compile_fail_fixture_issue5153() {
+        assert!(run("proptest-derive/tests/compile-fail/E0002-no-unions.rs").is_empty());
+        assert!(run("proptest-derive/tests/compile_fail/no-arbitrary.rs").is_empty());
     }
 
     #[test]

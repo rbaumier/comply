@@ -246,20 +246,23 @@ pub fn is_migration_dir_path(path: &Path) -> bool {
     has_path_segment(path, MIGRATION_DIR_SEGMENTS)
 }
 
-/// True when `path` lives under a `tests/ui/` directory: a `ui` segment that
-/// appears after a `tests` segment. These are `trybuild`/`rustc` UI-test
-/// fixtures, where each `.rs` scenario is paired with a sibling `.stderr` holding
-/// the expected compiler output. The convention names scenarios in kebab-case to
-/// mirror the hyphenated error-message style (e.g. `untagged-struct.rs`), so
-/// filename-convention checks exempt them. Segment match keeps an unrelated
-/// `src/ui/` from matching unless it sits under `tests/`.
+/// True when `path` lives under a `rustc`/`compiletest`-style compiler-test
+/// fixture directory that appears directly after a `tests` segment: `ui`,
+/// `compile-fail`, or `compile_fail`. Each `.rs` scenario is paired with a
+/// sibling `.stderr` holding the expected compiler output (e.g.
+/// `tests/ui/untagged-struct.rs`, `proptest-derive/tests/compile-fail/E0002-no-unions.rs`).
+/// The convention names scenarios in kebab-case to mirror the hyphenated
+/// error-message style, so filename-convention checks exempt them. Segment match
+/// keeps an unrelated `src/ui/` from matching unless it sits under `tests/`.
 pub fn is_rust_ui_test_fixture(path: &Path) -> bool {
     let mut seen_tests = false;
     for component in path.components() {
         if let std::path::Component::Normal(segment) = component {
             if segment == "tests" {
                 seen_tests = true;
-            } else if seen_tests && segment == "ui" {
+            } else if seen_tests
+                && matches!(segment.to_str(), Some("ui" | "compile-fail" | "compile_fail"))
+            {
                 return true;
             }
         }
@@ -2349,6 +2352,24 @@ mod aux_path_tests {
         assert!(!is_rust_trybuild_fixture(&PathBuf::from("tests/pass/x.rs")));
         // A `pass`/`fail` dir not under `tests/` is unrelated source.
         assert!(!is_rust_trybuild_fixture(&PathBuf::from("src/pass/x.rs")));
+    }
+
+    #[test]
+    fn rust_ui_test_fixture_covers_compiler_test_dirs_issue5153() {
+        // The issue's exact reproducer path (proptest-derive).
+        assert!(is_rust_ui_test_fixture(&PathBuf::from(
+            "proptest-derive/tests/compile-fail/E0002-no-unions.rs"
+        )));
+        // The snake_case spelling of the same compiletest convention.
+        assert!(is_rust_ui_test_fixture(&PathBuf::from(
+            "tests/compile_fail/no-arbitrary.rs"
+        )));
+        // The existing `tests/ui/` rustc/trybuild convention still matches.
+        assert!(is_rust_ui_test_fixture(&PathBuf::from("tests/ui/untagged-struct.rs")));
+        // A `compile-fail` dir not under `tests/` is unrelated source.
+        assert!(!is_rust_ui_test_fixture(&PathBuf::from("src/compile-fail/x.rs")));
+        // A bare `ui` segment outside `tests/` stays checked.
+        assert!(!is_rust_ui_test_fixture(&PathBuf::from("src/ui/widget.rs")));
     }
 
     #[test]
