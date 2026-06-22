@@ -2379,6 +2379,169 @@ fn is_get_context_call(expr: &oxc_ast::ast::Expression) -> bool {
     }
 }
 
+/// True when `ident` resolves to the Immer draft `state` of a Redux Toolkit
+/// reducer, so mutating it (`state.x = …`, `state.list.push(…)`, `delete
+/// state.x`) is the documented RTK pattern, not an aliased-state bug: Immer
+/// records the draft mutation and produces a new immutable state, and there is
+/// no spread/immutable form to suggest inside a reducer.
+///
+/// Two structural anchors, both resolved through the binding's declaration —
+/// never a `state` name match:
+/// - the binding is the **first formal parameter** of a function that is either
+///   lexically nested under a `createSlice(...)` / `createReducer(...)` call
+///   (the case-reducer callbacks, including the `creators.reducer((state) => …)`
+///   builder form) or supplied directly to `builder.addCase/addMatcher/
+///   addDefaultCase(...)`; or
+/// - the binding (parameter or `const`/`let` declarator) is annotated with the
+///   `Draft<…>` type from `immer` — the entity-adapter / query-slice helpers
+///   take a `Draft<T>` state by reference.
+///
+/// An ordinary parameter mutated outside any reducer, and a non-first-param /
+/// non-`Draft` local mutated inside one, both stay flagged.
+#[must_use]
+pub fn is_rtk_reducer_draft_param(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+
+    if binding_is_immer_draft(decl_node_id, semantic) {
+        return true;
+    }
+
+    // Otherwise require the binding to be the first formal parameter of a
+    // function that is an RTK case reducer.
+    if !decl_is_first_formal_parameter(decl_node_id, semantic) {
+        return false;
+    }
+    for ancestor in nodes.ancestors(decl_node_id) {
+        if matches!(
+            ancestor.kind(),
+            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_)
+        ) {
+            return function_is_rtk_case_reducer(ancestor.id(), semantic);
+        }
+    }
+    false
+}
+
+/// True when `decl_node_id` is the declaration of a function's first formal
+/// parameter (the parameter chain reaches a `FormalParameters` whose first item
+/// spans the declaration before any enclosing function boundary).
+fn decl_is_first_formal_parameter(
+    decl_node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+    let nodes = semantic.nodes();
+    let decl_span = nodes.kind(decl_node_id).span();
+    for ancestor in nodes.ancestors(decl_node_id) {
+        match ancestor.kind() {
+            AstKind::FormalParameters(params) => {
+                return params.items.first().is_some_and(|first| {
+                    first.span.start <= decl_span.start && decl_span.end <= first.span.end
+                });
+            }
+            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// True when the function node `fn_id` is a Redux Toolkit case reducer: it is
+/// supplied directly to a `builder.addCase/addMatcher/addDefaultCase(...)` call,
+/// or it is lexically nested anywhere inside the argument subtree of a
+/// `createSlice(...)` / `createReducer(...)` call.
+fn function_is_rtk_case_reducer(
+    fn_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+    let nodes = semantic.nodes();
+
+    // Direct `builder.addCase(action, (state) => …)` argument.
+    if let AstKind::CallExpression(call) = nodes.parent_node(fn_id).kind()
+        && let Expression::StaticMemberExpression(member) = &call.callee
+        && matches!(
+            member.property.name.as_str(),
+            "addCase" | "addMatcher" | "addDefaultCase"
+        )
+    {
+        return true;
+    }
+
+    // Lexically nested under a createSlice / createReducer call.
+    for ancestor in nodes.ancestors(fn_id) {
+        if let AstKind::CallExpression(call) = ancestor.kind()
+            && let Expression::Identifier(callee) = &call.callee
+            && matches!(callee.name.as_str(), "createSlice" | "createReducer")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when the binding at `decl_node_id` (a parameter or variable declarator)
+/// is annotated with the `Draft<…>` type imported from `immer` — Immer's branded
+/// draft type, taken by reference by RTK entity-adapter / query-slice mutator
+/// helpers. The `immer` import is required so a same-named domain `Draft<T>` is
+/// not mistaken for it.
+fn binding_is_immer_draft(
+    decl_node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    let nodes = semantic.nodes();
+    let ann = match nodes.kind(decl_node_id) {
+        AstKind::FormalParameter(param) => param.type_annotation.as_ref(),
+        AstKind::VariableDeclarator(decl) => decl.type_annotation.as_ref(),
+        _ => None,
+    };
+    ann.is_some_and(|ann| type_reference_name(&ann.type_annotation) == Some("Draft"))
+        && file_imports_draft_from_immer(semantic)
+}
+
+/// True when the file has a `Draft` import specifier from `immer` (value or
+/// `import type` form). Used to confirm a `Draft<…>` annotation is Immer's draft
+/// type and not a same-named domain type.
+fn file_imports_draft_from_immer(semantic: &oxc_semantic::Semantic) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::ImportDeclarationSpecifier;
+    for node in semantic.nodes().iter() {
+        let AstKind::ImportDeclaration(import) = node.kind() else {
+            continue;
+        };
+        if import.source.value.as_str() != "immer" {
+            continue;
+        }
+        let Some(specifiers) = &import.specifiers else {
+            continue;
+        };
+        for specifier in specifiers {
+            if let ImportDeclarationSpecifier::ImportSpecifier(spec) = specifier
+                && spec.imported.name().as_str() == "Draft"
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Vue 3 ref factories whose return value is a `Ref<T>` wrapper mutated
 /// through its `.value` property. `customRef` and (writable) `computed` follow
 /// the same `ref.value = x` contract.

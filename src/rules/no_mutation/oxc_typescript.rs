@@ -4,7 +4,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
     byte_offset_to_line_col, is_constant_index_expression, is_get_context_call_binding,
     is_local_dispatch_table_binding, is_local_object_builder_binding,
-    is_react_display_name_assignment, is_typed_array_binding, is_vue_ref_value_target,
+    is_react_display_name_assignment, is_rtk_reducer_draft_param, is_typed_array_binding,
+    is_vue_ref_value_target,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
@@ -102,6 +103,7 @@ impl OxcCheck for Check {
                 if let Some(id) = root_identifier_of_target(&assign.left)
                     && (is_created_dom_element(id, semantic)
                         || is_local_object_builder_binding(id, semantic)
+                        || is_rtk_reducer_draft_param(id, semantic)
                         || is_get_context_call_binding(id, semantic))
                 {
                     return;
@@ -128,6 +130,7 @@ impl OxcCheck for Check {
                 }
                 if let Some(id) = root_identifier_of_simple_target(&update.argument)
                     && (is_created_dom_element(id, semantic)
+                        || is_rtk_reducer_draft_param(id, semantic)
                         || is_get_context_call_binding(id, semantic))
                 {
                     return;
@@ -146,6 +149,7 @@ impl OxcCheck for Check {
                 }
                 if let Some(id) = root_identifier_of_expr(&unary.argument)
                     && (is_created_dom_element(id, semantic)
+                        || is_rtk_reducer_draft_param(id, semantic)
                         || is_get_context_call_binding(id, semantic))
                 {
                     return;
@@ -199,6 +203,14 @@ impl OxcCheck for Check {
                 }
 
                 if !MUTATING_ARRAY_METHODS.contains(&method) {
+                    return;
+                }
+
+                // `state.ids.push(…)` inside a Redux Toolkit reducer mutates the
+                // Immer draft — the documented RTK pattern, not aliased state.
+                if let Some(id) = root_identifier_of_expr(&member.object)
+                    && is_rtk_reducer_draft_param(id, semantic)
+                {
                     return;
                 }
 
@@ -1145,6 +1157,101 @@ mod tests {
             handlers[0] = fn;
             const cfg = getConfig();
             cfg.x = 2;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Redux Toolkit Immer draft mutations — issue #5596
+
+    #[test]
+    fn allows_draft_array_push_in_create_slice_reducer_issue_5596() {
+        // A mutating array method (`state.ids.push(…)`) on the Immer draft inside
+        // a createSlice reducer is the documented RTK pattern, not aliased state.
+        let src = r#"
+            import { createSlice } from '@reduxjs/toolkit'
+            const slice = createSlice({
+                name: 'entities',
+                initialState,
+                reducers: {
+                    addOne(state, action) {
+                        state.ids.push(action.payload.id);
+                    },
+                },
+            })
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_draft_array_push_in_create_reducer_add_case_issue_5596() {
+        // Same draft array mutation through `builder.addCase`'s case reducer.
+        let src = r#"
+            import { createReducer } from '@reduxjs/toolkit'
+            const reducer = createReducer(initialState, (builder) => {
+                builder.addCase(addTodo, (state, action) => {
+                    state.todos.push(action.payload);
+                });
+            })
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_draft_typed_array_push_issue_5596() {
+        // A `Draft<…>`-typed state parameter mutated via a helper — the entity
+        // adapter shape; the `Draft` annotation is the structural signal.
+        let src = r#"
+            import type { Draft } from 'immer';
+            function addOneMutably(entity, state: Draft<R>) {
+                state.ids.push(entity.id);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_ordinary_const_array_push_outside_reducer_issue_5596() {
+        // Negative space: `.push` on a plain const array outside any reducer (no
+        // RTK context, no `Draft<…>` type) stays flagged.
+        let src = r#"
+            function f() {
+                const list = getList();
+                list.push(1);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_non_immer_draft_typed_const_push_issue_5596() {
+        // Negative space: a `Draft<…>` annotation not imported from `immer` is a
+        // same-named domain type — `.push` on it stays flagged.
+        let src = r#"
+            type Draft<T> = T;
+            function f() {
+                const doc: Draft<Doc> = getDoc();
+                doc.items.push(1);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_non_draft_const_mutation_inside_reducer_issue_5596() {
+        // Negative space: a captured outer `const` mutated inside a reducer is not
+        // the draft (not the reducer's first param) — it stays flagged.
+        let src = r#"
+            import { createSlice } from '@reduxjs/toolkit'
+            const cache = getCache();
+            const slice = createSlice({
+                name: 's',
+                initialState,
+                reducers: {
+                    update(state, action) {
+                        cache.push(action.payload);
+                    },
+                },
+            })
         "#;
         assert_eq!(run(src).len(), 1);
     }
