@@ -38,6 +38,15 @@ impl OxcCheck for Check {
         if is_descriptor_data_key_delete(&unary.argument, semantic) {
             return;
         }
+        // Deleting a property the receiver's own type declares OPTIONAL (`prop?: T`)
+        // returns the object to the absent state the type already permits — type-safe
+        // and intentional (reactive-runtime cleanup of transition-scoped node fields),
+        // not the foot-gun the rule targets (deleting a required field). Resolved
+        // structurally from the receiver's named type + the interface declaration,
+        // never from the property name.
+        if crate::oxc_helpers::is_optional_member_delete(&unary.argument, semantic) {
+            return;
+        }
         let (line, column) = byte_offset_to_line_col(ctx.source, unary.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
@@ -243,6 +252,87 @@ mod oxc_tests {
               const desc = Reflect.getOwnPropertyDescriptor(o, k);
               delete desc.configurable;
               return desc;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn skips_optional_member_delete_via_for_of_and_cast_issue_5496() {
+        // SolidJS reactive runtime cleans up transition-scoped OPTIONAL fields on
+        // shared signal-graph nodes; deleting an optional member is type-safe.
+        let src = r#"
+            interface ComputationState {}
+            interface Owner { owned: any[] | null; sourceMap?: any[]; }
+            interface SignalState<T> { value: T; tValue?: T; }
+            interface Computation<Init> extends Owner { state: number; tState?: ComputationState; }
+            interface Memo<Prev, Next = Prev> extends SignalState<Next>, Computation<Next> {
+              value: Next;
+              tOwned?: Computation<Prev>[];
+            }
+            function finish(effects: Computation<any>[], sources: SignalState<any>[]) {
+              for (const e of effects) {
+                delete e.tState;
+              }
+              for (const v of sources) {
+                v.value = v.tValue;
+                delete v.tValue;
+                delete (v as Memo<any>).tOwned;
+              }
+            }
+            function cleanNode(node: Computation<any>) {
+              delete (node as Memo<any>).tOwned;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn skips_optional_member_delete_via_set_iterable() {
+        // A `Set<T>` iterable resolves its element type the same way an array does.
+        let src = r#"
+            interface Node { id: string; scratch?: number; }
+            function f(nodes: Set<Node>) {
+              for (const n of nodes) {
+                delete n.scratch;
+              }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_delete_required_member() {
+        // Deleting a REQUIRED field leaves a hole the type forbids — still flagged.
+        let src = r#"
+            interface Node { id: string; scratch?: number; }
+            function f(node: Node) {
+              delete node.id;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_computed_optional_member_delete() {
+        // A computed delete (`delete obj["x"]`) is not a static member access and
+        // is never exempted, even when the key names an optional member.
+        let src = r#"
+            interface Node { id: string; scratch?: number; }
+            function f(node: Node) {
+              delete node["scratch"];
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_optional_member_delete_on_unresolved_receiver() {
+        // No structural type for the receiver (untyped param) — cannot prove the
+        // member is optional, so it stays flagged.
+        let src = r#"
+            function f(node) {
+              delete node.scratch;
             }
         "#;
         assert_eq!(run(src).len(), 1);
