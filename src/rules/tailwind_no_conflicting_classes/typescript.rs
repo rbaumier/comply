@@ -261,6 +261,17 @@ mod tests {
     }
 
     #[test]
+    fn allows_border_side_width_with_border_side_color() {
+        // Regression for rbaumier/comply#4561 — `border-l-4` (border-left-width)
+        // and `border-l-destructive` (border-left-color) are distinct CSS
+        // properties and must not conflict.
+        assert!(
+            run(r#"const x = <div className="border-l-destructive border border-l-4 p-4" />;"#)
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn allows_text_sm_with_text_muted() {
         assert!(run(r#"const x = <div className="text-sm text-muted-foreground" />;"#).is_empty());
     }

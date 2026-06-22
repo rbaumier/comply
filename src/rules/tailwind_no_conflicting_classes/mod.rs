@@ -157,16 +157,50 @@ pub(crate) fn border_category(class: &str) -> Option<&'static str> {
     if suffix.chars().all(|c| c.is_ascii_digit()) {
         return Some("border-width");
     }
-    for (side, group) in [
-        ("t", "border-top"), ("r", "border-right"), ("b", "border-bottom"),
-        ("l", "border-left"), ("x", "border-x"), ("y", "border-y"),
-        ("s", "border-start"), ("e", "border-end"),
+    // Side-scoped utilities (`border-l-*`, `border-t-*`, …) split by the CSS
+    // sub-property they set: `border-l-4` is `border-left-width`,
+    // `border-l-red-500` is `border-left-color`. They target different
+    // properties and are designed to coexist (a coloured accent border needs
+    // both a width and a colour), so each side gets a distinct width key and
+    // colour key — only same-property duplicates conflict (`border-l-2
+    // border-l-4`, `border-l-red-500 border-l-blue-500`). rbaumier/comply#4561,
+    // the per-side analogue of the #4072 gap-x/gap-y axis fix.
+    for (side, width_key, color_key) in [
+        ("t", "border-top-width", "border-top-color"),
+        ("r", "border-right-width", "border-right-color"),
+        ("b", "border-bottom-width", "border-bottom-color"),
+        ("l", "border-left-width", "border-left-color"),
+        ("x", "border-x-width", "border-x-color"),
+        ("y", "border-y-width", "border-y-color"),
+        ("s", "border-start-width", "border-start-color"),
+        ("e", "border-end-width", "border-end-color"),
     ] {
-        if suffix == side || suffix.starts_with(&format!("{side}-")) {
-            return Some(group);
-        }
+        let value = match suffix.strip_prefix(side) {
+            Some("") => "",                                    // bare `border-l`
+            Some(rest) if rest.starts_with('-') => &rest[1..], // `border-l-<value>`
+            _ => continue,                                     // not this side
+        };
+        return Some(if border_side_is_color(value) { color_key } else { width_key });
     }
     Some("border-color")
+}
+
+/// True when the value of a side-scoped border utility (`border-l-<value>`) sets
+/// the side's *colour* rather than its *width*. `border-l` (empty) and
+/// `border-l-4` are width; `border-l-red-500`, `border-l-foreground`,
+/// `border-l-[#fff]` are colour. Reuses the same colour/length detection as the
+/// `text-` / `bg-` sub-categorisation.
+fn border_side_is_color(value: &str) -> bool {
+    if value.is_empty() {
+        return false; // bare `border-l` → border-left-width: 1px
+    }
+    if value.starts_with('[') && value.ends_with(']') {
+        return css_value_type(&value[1..value.len() - 1]) == Some("color");
+    }
+    if value.chars().all(|c| c.is_ascii_digit()) {
+        return false; // numeric width (`border-l-4`)
+    }
+    is_text_color_token(value)
 }
 
 pub(crate) fn font_category(class: &str) -> Option<&'static str> {
@@ -339,6 +373,60 @@ mod bg_category_tests {
         // Two utilities for the same sub-property still conflict.
         assert_eq!(conflict_key("bg-cover"), conflict_key("bg-contain")); // bg-size
         assert_eq!(conflict_key("bg-red-500"), conflict_key("bg-blue-500")); // bg-color
+    }
+}
+
+#[cfg(test)]
+mod border_category_tests {
+    use super::*;
+
+    #[test]
+    fn side_width_and_side_color_have_distinct_keys() {
+        // Regression for rbaumier/comply#4561 — `border-l-4` (border-left-width)
+        // and `border-l-destructive` (border-left-color) set different CSS
+        // properties and must not conflict.
+        assert_eq!(conflict_key("border-l-4"), Some("border-left-width"));
+        assert_eq!(conflict_key("border-l-destructive"), Some("border-left-color"));
+        assert_ne!(conflict_key("border-l-4"), conflict_key("border-l-destructive"));
+    }
+
+    #[test]
+    fn bare_side_is_width() {
+        // `border-l` sets border-left-width: 1px, so it shares the width key.
+        assert_eq!(conflict_key("border-l"), Some("border-left-width"));
+        assert_eq!(conflict_key("border-l"), conflict_key("border-l-2"));
+    }
+
+    #[test]
+    fn same_side_same_property_still_conflicts() {
+        // Two widths, or two colours, on the same side still conflict.
+        assert_eq!(conflict_key("border-l-2"), conflict_key("border-l-4"));
+        assert_eq!(conflict_key("border-l-red-500"), conflict_key("border-l-blue-500"));
+    }
+
+    #[test]
+    fn arbitrary_value_split_by_type() {
+        // `border-t-[2px]` is width, `border-t-[#fff]` is colour.
+        assert_eq!(conflict_key("border-t-[2px]"), Some("border-top-width"));
+        assert_eq!(conflict_key("border-t-[#fff]"), Some("border-top-color"));
+        assert_ne!(conflict_key("border-t-[2px]"), conflict_key("border-t-[#fff]"));
+    }
+
+    #[test]
+    fn each_side_keeps_its_own_keys() {
+        // Distinct sides never share a key, even for the same sub-property.
+        assert_ne!(conflict_key("border-l-4"), conflict_key("border-r-4"));
+        assert_ne!(conflict_key("border-t-red-500"), conflict_key("border-b-red-500"));
+    }
+
+    #[test]
+    fn all_sides_catch_all_unchanged() {
+        // The all-sides (non-side-scoped) behaviour is untouched: numeric width
+        // and named colour already had distinct keys, and `border-border`
+        // (border-color var) stays in the colour bucket.
+        assert_eq!(conflict_key("border-4"), Some("border-width"));
+        assert_eq!(conflict_key("border-red-500"), Some("border-color"));
+        assert_eq!(conflict_key("border-border"), Some("border-color"));
     }
 }
 
