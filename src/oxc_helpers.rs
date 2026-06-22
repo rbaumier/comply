@@ -3848,6 +3848,15 @@ const TYPED_ARRAY_CTORS: &[&str] = &[
     "BigUint64Array",
 ];
 
+/// True when `name` is a standard TypedArray constructor (`Uint8Array`,
+/// `Int8Array`, `Float64Array`, …). The view over the [`TYPED_ARRAY_CTORS`]
+/// family for callers that have the constructor name in hand rather than a
+/// binding.
+#[must_use]
+pub fn is_typed_array_ctor_name(name: &str) -> bool {
+    TYPED_ARRAY_CTORS.contains(&name)
+}
+
 /// True when `ident` resolves to a binding whose value is a TypedArray — a
 /// fixed-length binary buffer (`Uint8Array`, `Float64Array`, `Int32Array`, …).
 /// Indexed element assignment (`buf[i] = v`) is the only way to populate a
