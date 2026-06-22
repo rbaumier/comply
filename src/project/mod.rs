@@ -3176,6 +3176,20 @@ impl ProjectCtx {
     }
 
     /// True when the effective `package.json` chain for `path` declares the
+    /// `@nuxtjs/mcp-toolkit` dependency (any section). That Nuxt module
+    /// auto-discovers and registers every module under
+    /// `server/mcp/{tools,resources,prompts}/` by file-system convention and
+    /// invokes its `export default defineMcp{Tool,Resource,Prompt}(...)` at
+    /// runtime, so such files have no static importer — like Nuxt's built-in
+    /// route auto-discovery.
+    #[must_use]
+    pub fn uses_nuxt_mcp_toolkit(&self, path: &Path) -> bool {
+        self.effective_package_jsons(path)
+            .iter()
+            .any(|pkg| pkg.has_dep_or_engine("@nuxtjs/mcp-toolkit"))
+    }
+
+    /// True when the effective `package.json` chain for `path` declares the
     /// `vite-plugin-fake-server` dependency (any section). The plugin
     /// glob-discovers every module under its configured `include` directory
     /// (`mock/`/`mocks/`) at build/dev time and registers its `export default
