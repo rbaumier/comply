@@ -1,14 +1,18 @@
 //! OXC backend for no-unsanitized-property — flag unsafe assignments to
 //! innerHTML/outerHTML/srcdoc.
 //!
-//! A static string literal RHS and the `.__html` `dangerouslySetInnerHTML`
-//! idiom (`el.innerHTML = x.__html`) are exempt: the `.__html` member access is
-//! the React/Preact/Hono opt-in marker for raw HTML, so the caller — not this
-//! assignment — owns sanitization.
+//! Exempt right-hand sides: a static string literal; the `.__html`
+//! `dangerouslySetInnerHTML` idiom (`el.innerHTML = x.__html`), where the
+//! `.__html` member access is the React/Preact/Hono opt-in marker so the caller
+//! owns sanitization; and a template literal whose every `${...}` is provably
+//! numeric, since numbers cannot carry HTML markup. Assignments inside a
+//! Playwright/Puppeteer injection callback (`page.evaluate(...)`) are exempt too:
+//! they run in a controlled automation browser, not an application XSS sink.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_inside_browser_injection_callback};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::html_sink_helpers::is_numeric_only_template;
 use oxc_ast::ast::{AssignmentTarget, Expression};
 use std::sync::Arc;
 
@@ -45,7 +49,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::AssignmentExpression(assign) = node.kind() else { return };
@@ -74,6 +78,18 @@ impl OxcCheck for Check {
         // sanitization — so it is not an accidental unsanitized assignment. Same
         // exemption as `no-inner-html`'s `rhs_is_non_dangerous`.
         if rhs_is_dangerously_set_inner_html(&assign.right) {
+            return;
+        }
+
+        // A template whose every interpolation is provably numeric cannot inject
+        // markup (numbers serialize to digits), so it is not unsanitized.
+        if is_numeric_only_template(&assign.right) {
+            return;
+        }
+
+        // Inside a Playwright/Puppeteer injection callback the assignment runs in
+        // a controlled automation browser, not the application DOM — no XSS sink.
+        if is_inside_browser_injection_callback(node, semantic) {
             return;
         }
 
@@ -197,5 +213,30 @@ mod tests {
         let src = "safeQuerySelector('body').innerHTML = `<style data-emotion=\"css ${hash}\">.css-${hash}{${css}}</style>`;";
         let diagnostics = crate::rules::test_helpers::run_rule_gated(&Check, src, "src/app.ts");
         assert_eq!(diagnostics.len(), 1);
+    }
+
+    // Numeric-only interpolations cannot inject markup.
+    #[test]
+    fn allows_numeric_only_template() {
+        assert!(run_on("el.innerHTML = `left: ${10}px; n: ${items.length}`;").is_empty());
+    }
+
+    // A string interpolation outside any injection callback must still flag.
+    #[test]
+    fn flags_string_interpolation_template() {
+        assert_eq!(run_on("el.innerHTML = `<b>${userString}</b>`;").len(), 1);
+    }
+
+    // Repro for #5541: numeric interpolations inside a Puppeteer page.evaluate().
+    #[test]
+    fn allows_inner_html_inside_page_evaluate() {
+        let src = "page.evaluate((x, y) => { const h = document.createElement('div'); h.innerHTML = `<style>:scope { left: ${x}px; top: ${y}px; }</style>`; }, x, y);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_inner_html_outside_injection_callback() {
+        let src = "function f(html) { el.innerHTML = `<div>${html}</div>`; }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }

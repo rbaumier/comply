@@ -2,14 +2,17 @@
 //! innerHTML/outerHTML assignments, document.write/insertAdjacentHTML calls, and
 //! the dangerouslySetInnerHTML JSX attribute.
 //!
-//! A compile-time-constant string assigned to innerHTML/outerHTML (a
-//! StringLiteral or a TemplateLiteral with no expressions) is exempt: it carries
-//! no dynamic or user-controlled content, so it is neither a dynamic template nor
-//! an XSS sink.
+//! Exemptions on innerHTML/outerHTML assignments: a compile-time-constant string
+//! (a StringLiteral or a TemplateLiteral with no expressions), and a template
+//! literal whose every `${...}` is provably numeric (numbers cannot carry HTML
+//! markup). Assignments and HTML-construction calls inside a Playwright/Puppeteer
+//! injection callback (`page.evaluate(...)`) are also exempt: they run in a
+//! controlled automation browser, not the application DOM.
 
 use crate::diagnostic::Diagnostic;
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_inside_browser_injection_callback};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::html_sink_helpers::is_numeric_only_template;
 use oxc_ast::ast::{AssignmentTarget, Expression};
 use oxc_span::GetSpan;
 use std::sync::Arc;
@@ -72,9 +75,14 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        // HTML construction inside a Playwright/Puppeteer injection callback runs
+        // in a controlled automation browser, not the application DOM — no XSS sink.
+        if is_inside_browser_injection_callback(node, semantic) {
+            return;
+        }
         match node.kind() {
             AstKind::AssignmentExpression(assign) => {
                 let lhs_text = match &assign.left {
@@ -93,6 +101,11 @@ impl OxcCheck for Check {
                         // dynamic template nor an XSS sink. Same exemption as
                         // `no-unsanitized-property`'s `is_static_string`.
                         if is_static_string(&assign.right) {
+                            return;
+                        }
+                        // A template whose every interpolation is provably numeric cannot
+                        // carry HTML markup, so it is not a dynamic-HTML sink.
+                        if is_numeric_only_template(&assign.right) {
                             return;
                         }
                         emit(ctx, assign.span.start, prop, diagnostics);
@@ -217,5 +230,37 @@ mod tests {
     #[test]
     fn flags_innerhtml_variable() {
         assert_eq!(run_on("el.innerHTML = userInput;").len(), 1);
+    }
+
+    // Numbers cannot carry HTML markup, so a numeric-only template is safe.
+    #[test]
+    fn allows_numeric_only_template() {
+        assert!(run_on("el.innerHTML = `left: ${10}px; n: ${items.length}`;").is_empty());
+    }
+
+    // A string interpolation outside any injection callback must still flag.
+    #[test]
+    fn flags_string_interpolation_template() {
+        assert_eq!(run_on("el.innerHTML = `<b>${userString}</b>`;").len(), 1);
+    }
+
+    // Repro for #5541: numeric interpolations inside a Puppeteer page.evaluate().
+    #[test]
+    fn allows_inner_html_inside_page_evaluate() {
+        let src = "page.evaluate((x, y) => { const h = document.createElement('div'); h.innerHTML = `<style>:scope { left: ${x}px; top: ${y}px; }</style>`; }, x, y);";
+        assert!(run_on(src).is_empty());
+    }
+
+    // document.write inside an injection callback targets the automation browser.
+    #[test]
+    fn allows_document_write_inside_page_evaluate() {
+        let src = "page.evaluate((html) => { document.write(html); }, html);";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_inner_html_outside_injection_callback() {
+        let src = "function f(html) { el.innerHTML = `<div>${html}</div>`; }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }

@@ -31,6 +31,7 @@ pub mod backend;
 pub mod call_expression;
 pub mod elysia_helpers;
 pub mod file_ctx;
+pub mod html_sink_helpers;
 pub mod jsdoc_helpers;
 pub mod jsdoc_text_helpers;
 pub mod jsx;
