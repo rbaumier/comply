@@ -302,7 +302,7 @@ pub fn register_all() -> Vec<RuleDef> {
              zero-width space with a regular space. Invisible characters \
              cause confusing parse and diff errors.",
         ),
-        entry(
+        entry_with_filter(
             "no-unassigned-vars",
             "no-unassigned-vars",
             Severity::Error,
@@ -311,6 +311,7 @@ pub fn register_all() -> Vec<RuleDef> {
             "Assign the variable a value or remove it. A `let`/`var` that \
              is only ever read holds `undefined`, usually a forgotten \
              assignment.",
+            Some(Arc::new(NoUnassignedVarsFilter)),
         ),
         entry(
             "no-empty-pattern",
@@ -829,6 +830,73 @@ fn new_at_offset_is_throw_assertion_subject(
     crate::rules::throw_assertion::new_is_throw_assertion_subject(target.id(), &semantic)
 }
 
+// ── no-unassigned-vars post-filter ──────────────────────────────────────────
+//
+// `no-unassigned-vars` flags a `let`/`var` that is read but never assigned. The
+// false positive: a TypeScript definite-assignment assertion (`let x!: T`). The
+// `!` is the developer's explicit promise to the type checker that the binding
+// is assigned before it is read through a channel the analyzer cannot see —
+// e.g. a JSX/Solid `ref={el => (x = el)}` callback that populates a DOM
+// reference at mount time. The `!` is the canonical opt-out signal, so a
+// declarator carrying it must not be reported.
+//
+// The delegated diagnostic arrives from oxlint with no AST, anchored on the
+// binding identifier. The filter re-parses the file, finds the
+// `VariableDeclarator` covering that position, and drops the diagnostic when
+// its `definite` flag (the `!`) is set. A plain `let x: T;` with no `!` and
+// never assigned is still flagged. Failing safe: if the source is unreadable or
+// the position does not resolve to a declarator, the diagnostic is kept.
+
+struct NoUnassignedVarsFilter;
+
+impl PostFilter for NoUnassignedVarsFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        let Some(src) = source else {
+            return true;
+        };
+        let Some(offset) = byte_offset(src, diag.line, diag.column) else {
+            return true;
+        };
+        !declarator_at_offset_is_definite(src, &diag.path, offset)
+    }
+}
+
+/// Re-parse `src` and report whether the `VariableDeclarator` covering byte
+/// `offset` (the binding-identifier position oxlint reports for a
+/// `no-unassigned-vars` diagnostic) carries a definite-assignment assertion
+/// (`let x!: T`). Returns `false` when no declarator covers the offset, so an
+/// unresolved position keeps the diagnostic.
+fn declarator_at_offset_is_definite(src: &str, path: &std::path::Path, offset: usize) -> bool {
+    use oxc_allocator::Allocator;
+    use oxc_ast::AstKind;
+    use oxc_parser::Parser;
+    use oxc_semantic::SemanticBuilder;
+    use oxc_span::GetSpan;
+
+    let allocator = Allocator::default();
+    let source_type = crate::oxc_helpers::source_type_for_path(path);
+    let parse_ret = Parser::new(&allocator, src, source_type).parse();
+    let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+
+    // The smallest `VariableDeclarator` whose span contains the offset is the
+    // one oxlint flagged; with `let a!: T, b: U` the comma-separated declarators
+    // have disjoint spans, so the minimal span pins the exact binding.
+    let offset = offset as u32;
+    semantic
+        .nodes()
+        .iter()
+        .filter_map(|node| match node.kind() {
+            AstKind::VariableDeclarator(decl) => Some(decl),
+            _ => None,
+        })
+        .filter(|decl| {
+            let span = decl.span();
+            span.start <= offset && offset < span.end
+        })
+        .min_by_key(|decl| decl.span().size())
+        .is_some_and(|decl| decl.definite)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1104,5 +1172,69 @@ mod tests {
     fn no_new_kept_when_source_unavailable() {
         let d = no_new_diag("src/x.ts", "function f() {\n  new X();\n}\n");
         assert!(NoNewFilter.keep(&d, None));
+    }
+
+    // ── no-unassigned-vars filter tests ──────────────────────────────────────
+
+    /// Build a `no-unassigned-vars` diagnostic pointing at the binding
+    /// identifier `name` in `src`, mirroring oxlint's reported position (1-based
+    /// line/column on the variable name).
+    fn no_unassigned_diag(path: &str, src: &str, name: &str) -> Diagnostic {
+        let idx = src.find(name).expect("source must contain the binding name");
+        let line = src[..idx].bytes().filter(|&b| b == b'\n').count() + 1;
+        let line_start = src[..idx].rfind('\n').map_or(0, |p| p + 1);
+        let column = idx - line_start + 1;
+        Diagnostic {
+            path: Arc::from(Path::new(path)),
+            line,
+            column,
+            rule_id: Cow::Borrowed("no-unassigned-vars"),
+            message: format!("'{name}' is always 'undefined' because it's never assigned."),
+            severity: Severity::Error,
+            span: None,
+        }
+    }
+
+    #[test]
+    fn no_unassigned_dropped_for_definite_assertion() {
+        // Regression for #5492 — solidjs/solid: `let div!: T` populated via a
+        // JSX `ref={div}` callback the analyzer cannot see.
+        let src = "function f() {\n  let div!: HTMLDivElement;\n  return div.innerHTML;\n}\n";
+        let d = no_unassigned_diag("test/dynamic.spec.tsx", src, "div");
+        assert!(!NoUnassignedVarsFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn no_unassigned_dropped_for_definite_assertion_first_in_list() {
+        // `let div!: T, disposer: () => void` — only the `div` declarator carries
+        // the `!`; the minimal-span declarator pins the right one.
+        let src =
+            "function f() {\n  let div!: HTMLDivElement, disposer: () => void;\n  return div;\n}\n";
+        let d = no_unassigned_diag("test/dynamic.spec.tsx", src, "div");
+        assert!(!NoUnassignedVarsFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn no_unassigned_kept_for_plain_never_assigned_let() {
+        // A plain `let x: T;` with no `!` and never assigned still flags.
+        let src = "function g() {\n  let plain: string;\n  return plain.length;\n}\n";
+        let d = no_unassigned_diag("src/g.ts", src, "plain");
+        assert!(NoUnassignedVarsFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn no_unassigned_kept_for_plain_let_after_definite_in_list() {
+        // In `let div!: T, plain: U`, the non-definite `plain` declarator still
+        // flags even though its sibling carries the assertion.
+        let src = "function f() {\n  let div!: HTMLDivElement, plain: string;\n  return plain;\n}\n";
+        let d = no_unassigned_diag("test/dynamic.spec.tsx", src, "plain");
+        assert!(NoUnassignedVarsFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn no_unassigned_kept_when_source_unavailable() {
+        let src = "function f() {\n  let div!: HTMLDivElement;\n  return div;\n}\n";
+        let d = no_unassigned_diag("src/x.tsx", src, "div");
+        assert!(NoUnassignedVarsFilter.keep(&d, None));
     }
 }
