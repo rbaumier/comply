@@ -383,8 +383,11 @@ fn segment_is_test_token_dir(segment: &str) -> bool {
 ///   nesting depth in both snake_case and kebab-case; OR
 /// - any path SEGMENT is exactly `testing` or `testutil` (where `test` is a
 ///   prefix, not a delimited token); OR
-/// - the file NAME is exactly `testing.rs`, `test_utils.rs`, `test_helpers.rs`,
-///   or `testutil.rs`.
+/// - the file NAME is exactly `tests.rs`, `test.rs`, `testing.rs`,
+///   `test_utils.rs`, `test_helpers.rs`, or `testutil.rs`. `tests.rs` / `test.rs`
+///   is the idiomatic Rust inline-test-module convention (`mod tests;` in a
+///   parent source file resolves to a sibling `tests.rs` holding `#[test]`
+///   functions and their helpers).
 ///
 /// Cross-crate test helpers cannot be `#[cfg(test)]` (that gate hides them
 /// from integration tests in *other* crates), so their test-only nature is
@@ -398,8 +401,14 @@ fn segment_is_test_token_dir(segment: &str) -> bool {
 /// attribute walk.
 pub fn is_under_tests_dir(path: &std::path::Path) -> bool {
     const TEST_SEGMENTS: &[&str] = &["testing", "testutil"];
-    const TEST_FILE_NAMES: &[&str] =
-        &["testing.rs", "test_utils.rs", "test_helpers.rs", "testutil.rs"];
+    const TEST_FILE_NAMES: &[&str] = &[
+        "tests.rs",
+        "test.rs",
+        "testing.rs",
+        "test_utils.rs",
+        "test_helpers.rs",
+        "testutil.rs",
+    ];
 
     if path.components().any(|c| {
         c.as_os_str().to_str().is_some_and(|seg| {
@@ -4733,10 +4742,20 @@ mod tests {
             ("crates/foo/src/test_utils.rs", true),
             ("crates/foo/src/test_helpers.rs", true),
             ("crates/searcher/src/testutil.rs", true),
+            // Inline-test-module convention: `mod tests;` -> sibling `tests.rs`
+            // (and the singular `test.rs`) under `src/**/`.
+            ("crates/foo/src/payload_storage/tests.rs", true),
+            ("crates/foo/src/index/numeric_index/tests.rs", true),
+            ("crates/foo/src/parser/test.rs", true),
             // Negative space: non-exact segments / file names are production.
             ("crates/foo/src/lib.rs", false),
             ("crates/foo/src/my_testing.rs", false),
             ("crates/foo/src/testingground/k.rs", false),
+            // `test`/`tests` as a non-delimited substring of a longer file stem
+            // is production code, not the inline-test-module file.
+            ("crates/foo/src/latest.rs", false),
+            ("crates/foo/src/contest.rs", false),
+            ("crates/foo/src/greatest.rs", false),
             // `test` as a non-delimited substring is NOT a test dir.
             ("crates/foo/src/latest/v.rs", false),
             ("crates/foo/src/greatest/v.rs", false),
