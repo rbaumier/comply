@@ -94,7 +94,8 @@ pub(crate) fn scan_line(line: &str) -> Option<&'static str> {
     if contains_github_token(line) {
         return Some("GitHub token");
     }
-    // Stripe secret key: sk_live_ or sk_test_ + 24+ base62.
+    // Stripe live secret key: sk_live_ / rk_live_ + 24+ base62 (test-mode
+    // keys carry a `_test_` segment and are exempt).
     if contains_stripe_key(line) {
         return Some("Stripe secret key");
     }
@@ -163,8 +164,13 @@ fn contains_github_token(line: &str) -> bool {
     false
 }
 
+/// Stripe encodes the key's environment in the prefix: the `_test_` mode
+/// segment marks a sandbox credential with no access to production data, which
+/// projects routinely commit in examples and tests. Only `_live_` keys reach
+/// real data, so only those are flagged — a `sk_test_`/`rk_test_` key is not a
+/// secret leak.
 fn contains_stripe_key(line: &str) -> bool {
-    for prefix in ["sk_live_", "sk_test_", "rk_live_", "rk_test_"] {
+    for prefix in ["sk_live_", "rk_live_"] {
         if let Some(idx) = line.find(prefix) {
             let rest = &line.as_bytes()[idx + prefix.len()..];
             if rest.len() >= 24 && rest[..24].iter().all(|b| b.is_ascii_alphanumeric()) {
@@ -173,6 +179,16 @@ fn contains_stripe_key(line: &str) -> bool {
         }
     }
     false
+}
+
+/// True when the value is a Stripe sandbox credential, identified by the
+/// `_test_` mode segment that Stripe bakes into the prefix (`sk_test_`,
+/// `pk_test_`, `rk_test_`, `whsec_test_`). These keys have no access to
+/// production data and are committed as fixtures; they are not a secret leak.
+/// Live-mode keys carry no such marker and are not matched here.
+fn is_stripe_test_key(value: &str) -> bool {
+    const TEST_PREFIXES: &[&str] = &["sk_test_", "pk_test_", "rk_test_", "whsec_test_"];
+    TEST_PREFIXES.iter().any(|p| value.starts_with(p))
 }
 
 fn contains_openai_key(line: &str) -> bool {
@@ -367,6 +383,12 @@ fn contains_keyed_literal(line: &str) -> bool {
     if inner_lower.starts_with("test_") || inner_lower.starts_with("fake_") {
         return false;
     }
+    // Stripe sandbox keys (e.g. a `whsec_test_` webhook secret assigned to a
+    // `SECRET`-named variable) carry the `_test_` mode segment that marks them
+    // as non-production fixtures, so they are not a real credential leak.
+    if is_stripe_test_key(&inner) {
+        return false;
+    }
     // Placeholder notations from documentation and samples are never real
     // credentials: angle-bracket tokens (`<another-client-secret>`) and
     // asterisk-masked text (`***Access Token***`).
@@ -502,6 +524,46 @@ mod tests {
     #[test]
     fn flags_slack_token() {
         assert_eq!(run("const token = 'xoxb-1234567890-abcdefghij';").len(), 1);
+    }
+
+    // Regression tests for #5500 — Stripe encodes the environment in the key
+    // prefix. A `_test_` mode segment marks a sandbox credential with no access
+    // to production data; these are committed as fixtures and are not a leak.
+    // The key bodies below are synthetic 24-char fixtures (a repeated marker),
+    // not real Stripe keys — they satisfy the rule's 24+ base62 length check
+    // without tripping secret scanners.
+    const FIXTURE_KEY_BODY: &str = "EXAMPLE0EXAMPLE0EXAMPLE0";
+
+    #[test]
+    fn allows_stripe_sk_test_key() {
+        // Mirrors stripe/stripe-node test/telemetry.spec.ts — a sandbox secret key.
+        let line = format!("const stripe = require('x')('sk_test_{FIXTURE_KEY_BODY}');");
+        assert!(run(&line).is_empty());
+    }
+
+    #[test]
+    fn allows_stripe_rk_test_key() {
+        let line = format!("const k = 'rk_test_{FIXTURE_KEY_BODY}';");
+        assert!(run(&line).is_empty());
+    }
+
+    #[test]
+    fn allows_stripe_whsec_test_secret() {
+        // Mirrors stripe/stripe-node test/Webhook.spec.ts — a test webhook secret.
+        assert!(run("const SECRET = 'whsec_test_secret';").is_empty());
+    }
+
+    #[test]
+    fn still_flags_stripe_sk_live_key() {
+        // Live-mode keys reach production data and remain a real leak.
+        let line = format!("const k = 'sk_live_{FIXTURE_KEY_BODY}';");
+        assert_eq!(run(&line).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_stripe_rk_live_key() {
+        let line = format!("const k = 'rk_live_{FIXTURE_KEY_BODY}';");
+        assert_eq!(run(&line).len(), 1);
     }
 
     #[test]
