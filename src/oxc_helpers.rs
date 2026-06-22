@@ -2723,6 +2723,84 @@ pub fn is_vue_reactive_object_target(
     is_vue_reactive_binding(base, semantic)
 }
 
+/// True when `ident` resolves to a `const`/`let` binding initialised by a call to
+/// `proxy(...)` imported from `valtio`. valtio's `proxy()` returns a reactive
+/// Proxy whose *direct mutation* is the entire public API: `state.n = x`,
+/// `state.n++`, and deep writes like `state.nested.ticks++` are intercepted by the
+/// proxy to drive reactivity — there is no immutable alternative. Resolves the
+/// binding via `reference_id` → symbol → declaration node, then confirms the
+/// declarator initializer is a `proxy(...)` call whose callee is imported from
+/// `valtio` (so a same-named local `proxy` is not mistaken for it). `ident` is the
+/// *root* identifier of the mutation's member chain, so deep proxy writes are
+/// covered without restricting to a direct-identifier base.
+#[must_use]
+pub fn is_valtio_proxy_binding(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            let Some(init) = &decl.init else {
+                return false;
+            };
+            // Peel a leading non-null assertion: `proxy({…})!`.
+            let init = match init {
+                Expression::TSNonNullExpression(e) => &e.expression,
+                other => other,
+            };
+            let Expression::CallExpression(call) = init else {
+                return false;
+            };
+            let Expression::Identifier(callee) = &call.callee else {
+                return false;
+            };
+            return callee.name.as_str() == "proxy"
+                && is_imported_from_valtio(callee.name.as_str(), semantic);
+        }
+    }
+    false
+}
+
+/// True when `local_name` is the local binding of a named import from `valtio`
+/// (`import { proxy } from 'valtio'`). Used to confirm a `proxy(...)` initializer
+/// is valtio's reactive-proxy factory and not a same-named local function.
+fn is_imported_from_valtio(local_name: &str, semantic: &oxc_semantic::Semantic) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::ImportDeclarationSpecifier;
+
+    semantic.nodes().iter().any(|node| {
+        let AstKind::ImportDeclaration(decl) = node.kind() else {
+            return false;
+        };
+        if decl.source.value.as_str() != "valtio" {
+            return false;
+        }
+        let Some(specifiers) = &decl.specifiers else {
+            return false;
+        };
+        specifiers.iter().any(|spec| match spec {
+            ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                named.local.name.as_str() == local_name
+            }
+            _ => false,
+        })
+    })
+}
+
 /// True when `local_name` is the local binding of a named import from `vue`
 /// (`import { ref } from 'vue'`).
 fn is_imported_from_vue(local_name: &str, semantic: &oxc_semantic::Semantic) -> bool {

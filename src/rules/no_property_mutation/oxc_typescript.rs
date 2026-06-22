@@ -11,7 +11,8 @@ use crate::oxc_helpers::{
     byte_offset_to_line_col, is_constant_index_expression, is_get_context_call_binding,
     is_local_dispatch_table_binding, is_local_object_builder_binding, is_node_module_system_target,
     is_react_display_name_assignment, is_reduce_accumulator_param, is_rtk_reducer_draft_param,
-    is_typed_array_binding, is_vue_reactive_object_target, is_vue_ref_value_target,
+    is_typed_array_binding, is_valtio_proxy_binding, is_vue_reactive_object_target,
+    is_vue_ref_value_target,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
@@ -404,6 +405,7 @@ impl OxcCheck for Check {
                                 || is_local_object_builder_binding(id, semantic)
                                 || is_reduce_accumulator_param(id, semantic)
                                 || is_rtk_reducer_draft_param(id, semantic)
+                                || is_valtio_proxy_binding(id, semantic)
                                 || is_get_context_call_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
 
@@ -444,6 +446,7 @@ impl OxcCheck for Check {
                                 || is_local_object_builder_binding(id, semantic)
                                 || is_reduce_accumulator_param(id, semantic)
                                 || is_rtk_reducer_draft_param(id, semantic)
+                                || is_valtio_proxy_binding(id, semantic)
                                 || is_get_context_call_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
 
@@ -483,6 +486,7 @@ impl OxcCheck for Check {
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
                                 || is_rtk_reducer_draft_param(id, semantic)
+                                || is_valtio_proxy_binding(id, semantic)
                                 || is_get_context_call_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                         let (line, column) = byte_offset_to_line_col(ctx.source, update.span.start as usize);
@@ -503,6 +507,7 @@ impl OxcCheck for Check {
                         if let Some(id) = root_identifier_of_expr(&m.object)
                             && (is_created_dom_element(id, semantic)
                                 || is_rtk_reducer_draft_param(id, semantic)
+                                || is_valtio_proxy_binding(id, semantic)
                                 || is_get_context_call_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                         let (line, column) = byte_offset_to_line_col(ctx.source, update.span.start as usize);
@@ -531,6 +536,7 @@ impl OxcCheck for Check {
                                 || is_local_object_builder_binding(id, semantic)
                                 || is_reduce_accumulator_param(id, semantic)
                                 || is_rtk_reducer_draft_param(id, semantic)
+                                || is_valtio_proxy_binding(id, semantic)
                                 || is_get_context_call_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                     }
@@ -541,6 +547,7 @@ impl OxcCheck for Check {
                                 || is_local_object_builder_binding(id, semantic)
                                 || is_reduce_accumulator_param(id, semantic)
                                 || is_rtk_reducer_draft_param(id, semantic)
+                                || is_valtio_proxy_binding(id, semantic)
                                 || is_get_context_call_binding(id, semantic)) { return; }
                         if has_dom_write_intermediary(&m.object) { return; }
                     }
@@ -1750,6 +1757,49 @@ mod tests {
                     },
                 },
             })
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // valtio proxy() reactive mutations — issue #5595
+
+    #[test]
+    fn allows_valtio_proxy_property_mutation_issue_5595() {
+        // Regression for rbaumier/comply#5595 — valtio's `proxy()` returns a
+        // reactive Proxy whose direct mutation IS the API: `state.nested = {…}`
+        // and the deep update `state.nested.ticks++` drive reactivity, with no
+        // immutable alternative.
+        let src = r#"
+            import { proxy } from 'valtio'
+            const state = proxy<{ number: number; nested?: { ticks: number } }>({ number: 0 })
+            state.nested = { ticks: 0 }
+            setInterval(() => state.nested && state.nested.ticks++, 200)
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_plain_object_mutation_not_valtio_proxy() {
+        // Negative space: a binding from an external call (not initialised by
+        // `proxy()` from valtio) is not a reactive proxy — mutating its property
+        // stays flagged, even in a file that imports `proxy` from valtio.
+        let src = r#"
+            import { proxy } from 'valtio'
+            const state = proxy({ n: 0 });
+            const plain = getConfig();
+            plain.n = 1;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_local_proxy_not_imported_from_valtio() {
+        // Negative space: a same-named local `proxy()` (not imported from valtio)
+        // returns a plain object — mutating its property stays flagged.
+        let src = r#"
+            function proxy(x) { return x; }
+            const state = proxy({ n: 0 });
+            state.n = 1;
         "#;
         assert_eq!(run(src).len(), 1);
     }
