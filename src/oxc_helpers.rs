@@ -2173,6 +2173,49 @@ pub fn is_in_sslmode_no_verify_branch(
     false
 }
 
+/// Playwright/Puppeteer methods that serialize a function argument and execute
+/// it inside a controlled automation browser context, not the application DOM.
+const BROWSER_INJECTION_METHODS: &[&str] = &[
+    "evaluate",
+    "evaluateHandle",
+    "evaluateOnNewDocument",
+    "addInitScript",
+    "$eval",
+    "$$eval",
+];
+
+/// True when `node` sits inside a function/arrow that is a direct argument of a
+/// browser-injection call — `page.evaluate(() => { document.write(html) })`,
+/// `frame.addInitScript(...)`, `page.$eval(...)`, etc. The callback is
+/// serialized and run in the automation browser, so DOM writes there target a
+/// controlled automation page, not the application's XSS sink.
+///
+/// Walks ancestors from `node` to the nearest enclosing function and checks that
+/// the function is a direct argument of a `CallExpression` whose callee is a
+/// member named by [`BROWSER_INJECTION_METHODS`].
+#[must_use]
+pub(crate) fn is_inside_browser_injection_callback(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+
+    let nodes = semantic.nodes();
+    for ancestor in nodes.ancestors(node.id()) {
+        if matches!(
+            ancestor.kind(),
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+        ) && let AstKind::CallExpression(call) = nodes.parent_node(ancestor.id()).kind()
+            && let Expression::StaticMemberExpression(member) = &call.callee
+            && BROWSER_INJECTION_METHODS.contains(&member.property.name.as_str())
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// True when `span` fully encloses `inner`.
 fn span_contains(span: oxc_span::Span, inner: oxc_span::Span) -> bool {
     span.start <= inner.start && inner.end <= span.end

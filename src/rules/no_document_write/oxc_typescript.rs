@@ -1,5 +1,5 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_inside_browser_injection_callback};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
@@ -19,7 +19,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else {
@@ -36,6 +36,12 @@ impl OxcCheck for Check {
         }
         let method = member.property.name.as_str();
         if method != "write" && method != "writeln" {
+            return;
+        }
+        // Calls inside a Playwright/Puppeteer browser-injection callback run in a
+        // controlled automation browser, not the application DOM, so they are not
+        // the XSS sink this rule targets.
+        if is_inside_browser_injection_callback(node, semantic) {
             return;
         }
         let name = format!("document.{method}");
@@ -88,5 +94,30 @@ mod tests {
     #[test]
     fn allows_other_document_method() {
         assert!(run_on("document.createElement('div');").is_empty());
+    }
+
+    #[test]
+    fn allows_document_write_in_evaluate_callback() {
+        assert!(
+            run_on(
+                "context.evaluate(({ html, tag }) => {\n  document.open();\n  document.write(html);\n  document.close();\n}, { html, tag });"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_document_writeln_in_page_evaluate_callback() {
+        assert!(run_on("page.evaluate(() => { document.writeln(markup); });").is_empty());
+    }
+
+    #[test]
+    fn flags_top_level_document_write_outside_injection_callback() {
+        assert_eq!(run_on("document.write(userInput);").len(), 1);
+    }
+
+    #[test]
+    fn flags_document_write_in_non_injection_callback() {
+        assert_eq!(run_on("setTimeout(() => { document.write(x); }, 0);").len(), 1);
     }
 }
