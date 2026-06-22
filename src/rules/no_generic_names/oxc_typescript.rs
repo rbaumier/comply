@@ -639,6 +639,36 @@ fn is_for_in_value_lookup<'a>(
     false
 }
 
+/// True when the identifier is the *name* of a TypeScript type-alias or
+/// interface declaration (`type Value = …`, `interface Value {}`) nested inside
+/// a `namespace`/`module` block (`TSModuleDeclaration`). Such a member is always
+/// referenced qualified by its enclosing namespace (`DisplayPreference.Value`),
+/// so the namespace supplies the specificity and the short member name is not
+/// ambiguous — the OpenAPI-codegen pattern where nested types within a namesake
+/// namespace use short, qualified names. Scoped to the declaration's own `id`:
+/// the node's parent must be the type-alias/interface declaration, so a generic
+/// value declaration inside the namespace (`const value = …`) still flags, and a
+/// top-level (non-namespaced) `type Value = …` still flags.
+fn is_namespaced_type_declaration_name<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let parent_id = nodes.parent_id(node.id());
+    if parent_id == node.id() {
+        return false;
+    }
+    if !matches!(
+        nodes.kind(parent_id),
+        AstKind::TSTypeAliasDeclaration(_) | AstKind::TSInterfaceDeclaration(_)
+    ) {
+        return false;
+    }
+    nodes
+        .ancestor_kinds(node.id())
+        .any(|kind| matches!(kind, AstKind::TSModuleDeclaration(_)))
+}
+
 /// True when the identifier sits inside an `import { … }` / `import x from …`
 /// / `import * as x from …` declaration. The author has no rename freedom
 /// for a third-party export (e.g. `import { Result } from "better-result"`).
@@ -1200,6 +1230,13 @@ impl OxcCheck for Check {
             {
                 let lower = name.to_ascii_lowercase();
                 if BANNED_WORDS.contains(&lower.as_str()) {
+                    // A type-alias/interface declared inside a `namespace`/`module`
+                    // (`namespace P { export type Value = … }`) is always referenced
+                    // qualified (`P.Value`), so the namespace supplies the
+                    // specificity — the OpenAPI-codegen short-qualified-name pattern.
+                    if is_namespaced_type_declaration_name(node, semantic) {
+                        return;
+                    }
                     // A PascalCase binding whose initializer is a React component
                     // (`const Input = forwardRef(...)`, `const Label = (p) => <l/>`,
                     // `function Item() { return <li/>; }`) is the conventional
@@ -1873,6 +1910,44 @@ mod tests {
         // parameters) carry no meaning and must still flag.
         let src = r#"const Value = 1; const Result = 2;"#;
         assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn no_fp_namespaced_type_alias_value_issue_5502() {
+        // Regression for #5502 — a `type Value`/`interface Value` nested inside a
+        // `namespace`/`module` is always referenced qualified (`DisplayPreference.Value`),
+        // so the namespace supplies the specificity (Stripe OpenAPI-codegen SDK).
+        let src = r#"
+            export namespace Acss {
+                export interface DisplayPreference {
+                    preference: DisplayPreference.Preference;
+                    value: DisplayPreference.Value;
+                }
+                export namespace DisplayPreference {
+                    export type Preference = 'none' | 'off' | 'on';
+                    export type Value = 'off' | 'on';
+                }
+            }
+        "#;
+        assert!(run(src).is_empty(), "namespaced type alias `Value` must NOT flag");
+        // Interface member type also exempt.
+        assert!(
+            run("namespace N { export interface Value { x: number } }").is_empty(),
+            "namespaced `interface Value` must NOT flag"
+        );
+        // `module` block (legacy/ambient form) qualifies the same way.
+        assert!(run("module N { export type Result = string; }").is_empty());
+    }
+
+    #[test]
+    fn still_flags_top_level_and_value_decls_outside_namespace_issue_5502() {
+        // Negative space: the exemption hinges on the type declaration being
+        // *inside a namespace*. A top-level `type Value`/`interface Result` still
+        // flags, and a generic *value* declaration inside a namespace still flags —
+        // a `const value` is not qualified the way a nested type member is.
+        assert_eq!(run("export type Value = 'off' | 'on';").len(), 1);
+        assert_eq!(run("interface Result { x: number }").len(), 1);
+        assert_eq!(run("namespace N { export const value = 1; }").len(), 1);
     }
 
     #[test]
