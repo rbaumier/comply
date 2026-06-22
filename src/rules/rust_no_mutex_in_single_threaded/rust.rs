@@ -17,6 +17,14 @@
 //! only names the type a generic fn operates on. None can be `Arc`-wrapped at
 //! that site: the lock is owned or wrapped elsewhere.
 //!
+//! Rayon parallelism counts as cross-thread sharing: when the enclosing
+//! function contains a rayon parallel construct (`.par_iter()`,
+//! `.par_iter_mut()`, `.into_par_iter()`, `.par_bridge()`, `.par_chunks()`,
+//! `.par_chunks_mut()`, `.par_extend()`, `.par_sort*()`, `rayon::join`,
+//! `rayon::scope`, `rayon::spawn`), worker threads access the lock
+//! concurrently — no `Arc` appears because rayon borrows the container across
+//! threads — so the `Mutex`/`RwLock` is justified and stays unflagged.
+//!
 //! Test code is exempted — tests commonly use bare `Mutex` for simple
 //! state without thread sharing, and rewriting them to `RefCell`
 //! wouldn't catch a real bug.
@@ -103,6 +111,9 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     if local_mutex_is_shared_later(node, source) {
         return;
     }
+    if enclosing_fn_uses_rayon(node, source) {
+        return;
+    }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -125,6 +136,63 @@ fn local_mutex_is_shared_later(node: tree_sitter::Node, source: &[u8]) -> bool {
     };
     contains_arc_new_for(after, name)
         || (after.contains("spawn(") && contains_identifier(after, name))
+}
+
+/// Rayon `ParallelIterator` / `IntoParallelIterator` method entry points.
+/// Matched as `.<name>(` so a same-named field or free function does not count.
+const RAYON_PAR_METHODS: &[&str] = &[
+    "par_iter",
+    "par_iter_mut",
+    "into_par_iter",
+    "par_bridge",
+    "par_chunks",
+    "par_chunks_mut",
+    "par_extend",
+    "par_sort",
+];
+
+/// Rayon free-function scopes that run their body on worker threads.
+const RAYON_SCOPE_FNS: &[&str] = &["rayon::join", "rayon::scope", "rayon::spawn"];
+
+/// A `Mutex`/`RwLock` inside a function that drives a rayon parallel construct
+/// is accessed concurrently by worker threads — rayon borrows the container
+/// across threads without `Arc`, so the lock is justified. Scope is the
+/// enclosing function body (the unit the rule's other heuristics also use);
+/// when there is no enclosing function, the whole file is scanned.
+fn enclosing_fn_uses_rayon(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let whole_file = std::str::from_utf8(source).unwrap_or("");
+    let scope = enclosing_fn_text(node, source).unwrap_or(whole_file);
+    text_uses_rayon(scope)
+}
+
+fn enclosing_fn_text<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    let mut cur = node.parent();
+    while let Some(parent) = cur {
+        // Scope to the full enclosing function, not the nearest closure: a lock
+        // created inside a rayon closure (`par_iter().for_each(|_| Mutex::new(..))`)
+        // is still driven by the `.par_iter()` on the function-level receiver.
+        if parent.kind() == "function_item" {
+            return parent.utf8_text(source).ok();
+        }
+        cur = parent.parent();
+    }
+    None
+}
+
+fn text_uses_rayon(text: &str) -> bool {
+    for method in RAYON_PAR_METHODS {
+        // `par_sort` also covers `par_sort_unstable`/`par_sort_by`; matching the
+        // `.par_sort` prefix without the trailing `(` keeps those variants in.
+        let needle = if *method == "par_sort" {
+            format!(".{method}")
+        } else {
+            format!(".{method}(")
+        };
+        if text.contains(&needle) {
+            return true;
+        }
+    }
+    RAYON_SCOPE_FNS.iter().any(|f| text.contains(f))
 }
 
 fn enclosing_let_name<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
@@ -350,5 +418,69 @@ fn f() {
             run("fn f() { let v: Vec<Mutex<u32>> = Vec::new(); let _ = &v; }").len(),
             1
         );
+    }
+
+    #[test]
+    fn allows_vec_mutex_accessed_in_par_iter() {
+        let src = r#"
+fn kmeans(nodes: &[Vec<f32>], k: usize) {
+    let cluster_count: Vec<Mutex<usize>> = (0..k).map(|_| Mutex::new(0)).collect();
+    nodes.par_iter().zip(0..nodes.len()).for_each(|(node, _j)| {
+        *cluster_count[0].lock().unwrap() += 1;
+    });
+}
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mutex_created_inside_par_iter_closure() {
+        let src = "fn f(v: &[u32]) { v.par_iter().for_each(|x| { let m: Mutex<u32> = Mutex::new(*x); let _g = m.lock().unwrap(); }); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mutex_with_par_iter_mut() {
+        let src = "fn f(v: &mut [u32]) { let m: Mutex<u32> = Mutex::new(0); v.par_iter_mut().for_each(|x| { *m.lock().unwrap() += *x; }); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mutex_with_into_par_iter() {
+        let src = "fn f(v: Vec<u32>) { let m: Mutex<u32> = Mutex::new(0); v.into_par_iter().for_each(|x| { *m.lock().unwrap() += x; }); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mutex_with_rayon_scope() {
+        let src = "fn f() { let m: Mutex<u32> = Mutex::new(0); rayon::scope(|s| { s.spawn(|_| { *m.lock().unwrap() += 1; }); }); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_mutex_with_par_sort_variant() {
+        let src = "fn f(v: &mut [u32]) { let m: Mutex<u32> = Mutex::new(0); let _ = &m; v.par_sort_unstable(); }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_bare_mutex_in_fn_without_rayon() {
+        let src = "fn f() { let m: Mutex<u32> = Mutex::new(0); let _g = m.lock().unwrap(); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_mutex_with_plain_iter_not_par() {
+        let src = "fn f(v: &[u32]) { let m: Mutex<u32> = Mutex::new(0); v.iter().for_each(|x| { *m.lock().unwrap() += *x; }); }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn rayon_in_sibling_fn_does_not_exempt() {
+        let src = r#"
+fn a(v: &[u32]) { v.par_iter().for_each(|_| {}); }
+fn b() { let m: Mutex<u32> = Mutex::new(0); let _g = m.lock().unwrap(); }
+"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
