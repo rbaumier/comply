@@ -763,19 +763,27 @@ fn has_backtick_before_placeholder(content: &str) -> bool {
 // ── no-new post-filter ──────────────────────────────────────────────────────
 //
 // `no-new` flags any `new X()` used as a statement (result discarded), reading
-// it as a constructor misused for side effects. The false positive: inside a
-// throw-assertion callback the discard is the test's whole intent — the
-// assertion is that *constructing* `X` throws, so the new value is meant to be
-// thrown away (`expect(() => { new Foo() }).to.throw()`,
-// `assert.throws(() => { new Foo() })`, Jest `expect(() => { new Foo() }).toThrow()`).
+// it as a constructor misused for side effects. Two discards are legitimate and
+// dropped here:
+//
+//   1. Throw-assertion callback: the test asserts that *constructing* `X`
+//      throws, so the new value is meant to be thrown away
+//      (`expect(() => { new Foo() }).to.throw()`,
+//      `assert.throws(() => { new Foo() })`, Jest `.toThrow()`).
+//   2. Try/catch feature-detection probe: the `new X()` statement sits directly
+//      in the `try` block of a `try`/`catch`, where the constructor's throw is
+//      the probe signal and the instance is intentionally discarded
+//      (`try { new WebAssembly.Module(bytes); } catch { /* unsupported */ }`).
+//      The surrounding `catch` is what proves the author relies on the throw.
 //
 // Unlike the native `no-constructor-side-effects` rule, the delegated diagnostic
 // arrives from oxlint with no AST, so the filter re-parses the file and locates
-// the `NewExpression` at the diagnostic position, then reuses the shared
-// throw-assertion detection. A genuine side-effect-only `new Foo();` outside any
-// throw-assertion callback is still flagged. Failing safe: if the source is
-// unreadable or the position does not resolve to a `NewExpression`, the
-// diagnostic is kept.
+// the `NewExpression` at the diagnostic position, then runs the structural
+// checks. A genuine side-effect-only `new Foo();` outside any throw assertion or
+// try/catch is still flagged, as is a `new Foo();` in a try block with no catch
+// handler (a `finally`-only try is resource cleanup, not a throw probe). Failing
+// safe: if the source is unreadable or the position does not resolve to a
+// `NewExpression`, the diagnostic is kept.
 
 struct NoNewFilter;
 
@@ -787,20 +795,17 @@ impl PostFilter for NoNewFilter {
         let Some(offset) = byte_offset(src, diag.line, diag.column) else {
             return true;
         };
-        !new_at_offset_is_throw_assertion_subject(src, &diag.path, offset)
+        !new_at_offset_is_exempt(src, &diag.path, offset)
     }
 }
 
 /// Re-parse `src` and report whether the `NewExpression` covering byte `offset`
 /// (the position oxlint reports for a `no-new` diagnostic — the `new` keyword)
-/// sits inside a throw-assertion callback. Returns `false` when no
+/// is a legitimate discard: the subject of a throw assertion or a statement of a
+/// try/catch feature-detection probe. Returns `false` when no
 /// `NewExpression` covers the offset, so an unresolved position keeps the
 /// diagnostic.
-fn new_at_offset_is_throw_assertion_subject(
-    src: &str,
-    path: &std::path::Path,
-    offset: usize,
-) -> bool {
+fn new_at_offset_is_exempt(src: &str, path: &std::path::Path, offset: usize) -> bool {
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_semantic::SemanticBuilder;
@@ -828,6 +833,39 @@ fn new_at_offset_is_throw_assertion_subject(
         return false;
     };
     crate::rules::throw_assertion::new_is_throw_assertion_subject(target.id(), &semantic)
+        || new_is_try_catch_probe(target.id(), &semantic)
+}
+
+/// True when the `NewExpression` identified by `new_node_id` is the expression
+/// of an `ExpressionStatement` that is a statement of a `try` block whose
+/// `TryStatement` has a `catch` handler. The constructor's throw-or-not is the
+/// probe signal there, so discarding the instance is intentional.
+///
+/// Restricted to the `try` block itself: a `new` in the `catch` body sits under
+/// a `CatchClause` (not the `TryStatement`), and a `finally`-only try has no
+/// handler, so neither is exempted.
+fn new_is_try_catch_probe(
+    new_node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use crate::rules::backend::AstKind;
+
+    let nodes = semantic.nodes();
+    let stmt = nodes.parent_node(new_node_id);
+    if !matches!(stmt.kind(), AstKind::ExpressionStatement(_)) {
+        return false;
+    }
+    let block_node = nodes.parent_node(stmt.id());
+    let AstKind::BlockStatement(block) = block_node.kind() else {
+        return false;
+    };
+    let AstKind::TryStatement(try_stmt) = nodes.parent_node(block_node.id()).kind() else {
+        return false;
+    };
+    // The try block and the `finally` block are both direct `BlockStatement`
+    // children of the `TryStatement` (the catch body hangs off a `CatchClause`),
+    // so confirm by identity that this is the `try` block, not the finalizer.
+    try_stmt.handler.is_some() && std::ptr::eq(try_stmt.block.as_ref(), block)
 }
 
 // ── no-unassigned-vars post-filter ──────────────────────────────────────────
@@ -1172,6 +1210,40 @@ mod tests {
     fn no_new_kept_when_source_unavailable() {
         let d = no_new_diag("src/x.ts", "function f() {\n  new X();\n}\n");
         assert!(NoNewFilter.keep(&d, None));
+    }
+
+    #[test]
+    fn no_new_dropped_in_try_catch_wasm_probe() {
+        // Regression for #5461 — wasm-feature-detect's canonical probe: the
+        // constructor's throw is the feature signal, the instance is discarded.
+        let src = "export default () => {\n  try {\n    new WebAssembly.Module(bytes);\n    return true;\n  } catch (e) {\n    return false;\n  }\n};\n";
+        let d = no_new_diag("src/detectors/multi-memory/index.js", src);
+        assert!(!NoNewFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn no_new_dropped_in_try_catch_with_empty_catch() {
+        // A bare `catch {}` still proves reliance on the constructor's throw.
+        let src = "try {\n  new Foo();\n} catch {}\n";
+        let d = no_new_diag("src/probe.ts", src);
+        assert!(!NoNewFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn no_new_kept_in_try_with_finally_only() {
+        // A `finally`-only try is resource cleanup, not a throw probe — no catch
+        // handler means the discard is not justified.
+        let src = "try {\n  new Foo();\n} finally {\n  cleanup();\n}\n";
+        let d = no_new_diag("src/cleanup.ts", src);
+        assert!(NoNewFilter.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn no_new_kept_in_catch_block() {
+        // A `new` in the catch body is a genuine side-effect discard, not a probe.
+        let src = "try {\n  doWork();\n} catch (e) {\n  new Logger('err');\n}\n";
+        let d = no_new_diag("src/log.ts", src);
+        assert!(NoNewFilter.keep(&d, Some(src)));
     }
 
     // ── no-unassigned-vars filter tests ──────────────────────────────────────
