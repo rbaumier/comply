@@ -68,13 +68,13 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cast_feeds_from_bits, cast_feeds_simd_intrinsic, cast_in_const_context, cast_operand_bit_width,
-    cast_operand_indexed_element_type, cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded,
-    cast_operand_is_bitwise, cast_operand_is_bool, cast_operand_is_char,
-    cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
-    cast_operand_is_non_negative_guarded, cast_operand_is_range_guarded,
-    cast_operand_is_repr_enum_field, cast_operand_literal_value, find_identifier_type,
-    is_in_enum_discriminant,
+    cast_feeds_from_bits, cast_feeds_simd_intrinsic, cast_feeds_sized_pointer_write,
+    cast_in_const_context, cast_operand_bit_width, cast_operand_indexed_element_type,
+    cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
+    cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
+    cast_operand_is_enum_discriminant, cast_operand_is_non_negative_guarded,
+    cast_operand_is_range_guarded, cast_operand_is_repr_enum_field, cast_operand_literal_value,
+    find_identifier_type, is_in_enum_discriminant,
 };
 use crate::rules::rust_no_as_numeric_cast::rust::fires_on_cast;
 
@@ -171,6 +171,9 @@ impl AstCheck for Check {
             return;
         }
         if cast_feeds_simd_intrinsic(node, source_bytes) {
+            return;
+        }
+        if cast_feeds_sized_pointer_write(node, source_bytes) {
             return;
         }
         let source_type = source_numeric_type(node, source_bytes);
@@ -414,6 +417,19 @@ mod tests {
     #[test]
     fn allows_widening_to_u64() {
         assert!(run_on("fn f(x: u32) -> u64 { x as u64 }").is_empty());
+    }
+
+    #[test]
+    fn allows_relocation_sized_pointer_write() {
+        // Issue #5677: a value cast whose width matches the destination
+        // pointer's pointee width is a deliberate store-width truncation.
+        assert!(
+            run_on("fn f() { unsafe { write_unaligned(addr as *mut u8, abs as u8); } }").is_empty()
+        );
+        assert!(
+            run_on("fn f() { unsafe { write_unaligned(addr as *mut u16, abs as u16); } }")
+                .is_empty()
+        );
     }
 
     #[test]
