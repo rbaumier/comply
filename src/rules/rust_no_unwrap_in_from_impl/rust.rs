@@ -42,10 +42,17 @@
 //! receiver and the same type `T`: `Any::downcast` succeeds exactly when
 //! `is::<T>()` is true, so the type check proves the downcast cannot fail. A
 //! mismatched type or receiver is still flagged.
+//! A `.unwrap()` / `.expect()` is also skipped when the enclosing `from` method
+//! carries a `# Panics` rustdoc section: the author has documented the panic as
+//! an explicit API contract (the canonical Rust convention for a panicking
+//! conversion), so it is no longer the surprising, undocumented panic this rule
+//! guards against. A `from` with no `# Panics` section still flags.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{is_under_cfg_debug_assertions, local_let_binds_buffer};
+use crate::rules::rust_helpers::{
+    has_panics_doc_section, is_under_cfg_debug_assertions, local_let_binds_buffer,
+};
 
 const KINDS: &[&str] = &["impl_item"];
 
@@ -132,6 +139,11 @@ fn collect_unwraps_in(
             // `if <recv>.is::<T>()` guard (same receiver, same type) cannot
             // fail — the type check proves the downcast succeeds.
             && !is_guarded_downcast_unwrap(node, function, source)
+            // The enclosing `from` method documents its panic via a `# Panics`
+            // rustdoc section: the author has turned the panic into an explicit
+            // API contract, so it is no longer the surprising, undocumented
+            // panic this rule guards against.
+            && !enclosing_fn_documents_panic(node, source)
         {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
@@ -153,6 +165,22 @@ fn collect_unwraps_in(
             stack.push(child);
         }
     }
+}
+
+/// True when the `from` method enclosing `call` documents its panic via a
+/// `# Panics` rustdoc section. Walks up to the nearest `function_item` and
+/// defers to `has_panics_doc_section`. A documented panic is an explicit API
+/// contract, not the surprising panic this rule guards against; a bare
+/// `.unwrap()` in a `from` with no `# Panics` section still flags.
+fn enclosing_fn_documents_panic(call: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cur = call;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "function_item" {
+            return has_panics_doc_section(parent, source);
+        }
+        cur = parent;
+    }
+    false
 }
 
 /// True when a `.expect("…")` carries a message documenting an infallible
@@ -1219,6 +1247,77 @@ mod tests {
                 } else {
                     Self::Wrapped(value.downcast::<Error>().unwrap())
                 }
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// Closes #5466: a `From` impl whose `from` method documents its panic via a
+    /// `# Panics` rustdoc section (and a corroborating `#[track_caller]`) has made
+    /// the panic an explicit API contract. The reported JS/WASM interop
+    /// conversion has no pure safe path, so the documented panic is intentional
+    /// and must not be flagged.
+    #[test]
+    fn allows_expect_in_from_impl_with_panics_doc() {
+        let source = r#"impl From<js_sys::Date> for UtcDateTime {
+            /// # Panics
+            ///
+            /// This may panic if the timestamp can not be represented.
+            #[track_caller]
+            fn from(js_date: js_sys::Date) -> Self {
+                let timestamp_nanos = (js_date.get_time() * 1_000_000.0) as i128;
+                Self::from_unix_timestamp_nanos(timestamp_nanos)
+                    .expect("invalid timestamp: Timestamp cannot fit in range")
+            }
+        }"#;
+        assert!(
+            run_on(source).is_empty(),
+            "a From impl documenting its panic via # Panics is an explicit contract"
+        );
+    }
+
+    /// A `# Panics` section also exempts a bare `.unwrap()` (no message): the
+    /// documented contract is what matters, not the unwrap variant.
+    #[test]
+    fn allows_unwrap_in_from_impl_with_panics_doc() {
+        let source = r#"impl From<&str> for u32 {
+            /// # Panics
+            ///
+            /// Panics if `s` is not a valid integer.
+            fn from(s: &str) -> Self {
+                s.parse().unwrap()
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// The exemption requires a real `# Panics` rustdoc heading: an undocumented
+    /// `.unwrap()` in a `from` with no `# Panics` section (and only ordinary
+    /// prose mentioning panics) must still flag, or the rule would be gutted.
+    #[test]
+    fn flags_unwrap_in_from_impl_without_panics_doc() {
+        let source = r#"impl From<&str> for u32 {
+            /// Converts the string; this may panic on bad input.
+            fn from(s: &str) -> Self {
+                s.parse().unwrap()
+            }
+        }"#;
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "prose mentioning panics is not a # Panics section; the unwrap still flags"
+        );
+    }
+
+    /// `#[track_caller]` alone, with no `# Panics` rustdoc section, is not enough:
+    /// the canonical documented-panic contract is the `# Panics` heading, so an
+    /// otherwise undocumented panicking conversion must still flag.
+    #[test]
+    fn flags_unwrap_in_from_impl_with_track_caller_but_no_panics_doc() {
+        let source = r#"impl From<&str> for u32 {
+            #[track_caller]
+            fn from(s: &str) -> Self {
+                s.parse().unwrap()
             }
         }"#;
         assert_eq!(run_on(source).len(), 1);

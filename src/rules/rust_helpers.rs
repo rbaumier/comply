@@ -728,6 +728,58 @@ fn attr_names_path(attr_text: &str, attr_path: &str) -> bool {
         || attr_text.contains(&format!("::{attr_path}]"))
 }
 
+/// True if `item` carries a rustdoc `# Panics` section as a preceding doc-comment
+/// sibling — the canonical Rust API convention for documenting that a function
+/// may panic (per the std library API guidelines).
+///
+/// In tree-sitter-rust, doc comments (`///`, `/** */`) on an item appear as
+/// `line_comment`/`block_comment` siblings immediately before it, possibly
+/// interleaved with `attribute_item`s (e.g. `#[track_caller]`); those attribute
+/// siblings are skipped so an attribute between the doc and the item does not
+/// defeat the match. Each comment line is stripped of its `///`/`//!`/`/**`/`*`
+/// markers and matched against a `# Panics` markdown heading (one or more `#`
+/// then `Panics`), so a non-doc `// panics` comment or prose merely mentioning
+/// "panics" does not match.
+pub fn has_panics_doc_section(item: Node, source: &[u8]) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "attribute_item" => {}
+            "line_comment" | "block_comment" => {
+                if let Ok(text) = s.utf8_text(source)
+                    && comment_has_panics_heading(text)
+                {
+                    return true;
+                }
+            }
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
+/// True if a doc comment's text contains a `# Panics` markdown heading. Handles
+/// both single-line `///` comments (one line) and multi-line `/** */` blocks (a
+/// `# Panics` line among many). Only outer/inner doc comments count: a plain
+/// `//`/`/* */` comment is not rustdoc, so its text is ignored.
+fn comment_has_panics_heading(text: &str) -> bool {
+    let is_doc = text.starts_with("///")
+        || text.starts_with("//!")
+        || text.starts_with("/**")
+        || text.starts_with("/*!");
+    if !is_doc {
+        return false;
+    }
+    text.lines().any(|line| {
+        let stripped = line.trim().trim_start_matches(['/', '*', '!']).trim();
+        let Some(after_hashes) = stripped.strip_prefix('#') else {
+            return false;
+        };
+        after_hashes.trim_start_matches('#').trim() == "Panics"
+    })
+}
+
 /// True if `node` is preceded by a `// SAFETY:` / `// Safety:` comment on the
 /// lines directly above it. Scans upward from the node's start row, skipping
 /// blank lines and other comment lines, and stops at the first line of real
@@ -5186,6 +5238,38 @@ mod tests {
                 has_outer_attribute(item, src.as_bytes(), attr),
                 expected,
                 "has_outer_attribute mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn has_panics_doc_section_matches_rustdoc_heading_only() {
+        let cases = [
+            ("/// # Panics\nfn f() {}", true),
+            // Heading body and blank doc lines around it.
+            ("/// Does a thing.\n///\n/// # Panics\n///\n/// when bad.\nfn f() {}", true),
+            // `## Panics` (deeper heading) also counts.
+            ("/// ## Panics\nfn f() {}", true),
+            // A `#[track_caller]` attribute between the doc and the fn is skipped.
+            ("/// # Panics\n#[track_caller]\nfn f() {}", true),
+            // Block doc comment carrying the heading.
+            ("/** # Panics\n\n may panic. */\nfn f() {}", true),
+            // Prose that merely mentions panics is not a heading.
+            ("/// Panics if bad.\nfn f() {}", false),
+            ("/// This may panic.\nfn f() {}", false),
+            // A non-doc `//` comment is ignored even with the heading text.
+            ("// # Panics\nfn f() {}", false),
+            // No doc at all.
+            ("fn f() {}", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let item = first_function_item(tree.root_node())
+                .expect("snippet should contain a function_item");
+            assert_eq!(
+                has_panics_doc_section(item, src.as_bytes()),
+                expected,
+                "has_panics_doc_section mismatch for `{src}`"
             );
         }
     }
