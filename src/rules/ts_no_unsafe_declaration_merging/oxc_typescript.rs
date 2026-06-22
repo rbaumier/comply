@@ -3,6 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
+use oxc_semantic::ScopeId;
 use std::sync::Arc;
 
 pub struct Check;
@@ -17,14 +18,17 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        let mut class_names: Vec<(&str, u32)> = Vec::new();
-        let mut interface_names: Vec<(&str, u32)> = Vec::new();
+        // (name, byte offset, lexical scope the declaration sits in). TypeScript
+        // declaration merging only happens when both declarations live in the
+        // *same* lexical scope, so the scope id is part of the match key.
+        let mut class_decls: Vec<(&str, u32, ScopeId)> = Vec::new();
+        let mut interface_decls: Vec<(&str, u32, ScopeId)> = Vec::new();
 
         for node in semantic.nodes().iter() {
             match node.kind() {
                 AstKind::Class(class) => {
                     if let Some(id) = &class.id {
-                        class_names.push((id.name.as_str(), id.span.start));
+                        class_decls.push((id.name.as_str(), id.span.start, node.scope_id()));
                     }
                 }
                 AstKind::TSInterfaceDeclaration(decl) => {
@@ -35,7 +39,11 @@ impl OxcCheck for Check {
                     if decl.declare {
                         continue;
                     }
-                    interface_names.push((decl.id.name.as_str(), decl.id.span.start));
+                    interface_decls.push((
+                        decl.id.name.as_str(),
+                        decl.id.span.start,
+                        node.scope_id(),
+                    ));
                 }
                 _ => {}
             }
@@ -43,9 +51,12 @@ impl OxcCheck for Check {
 
         let mut diagnostics = Vec::new();
 
-        // Flag interfaces that share a name with a class
-        for (iface_name, offset) in &interface_names {
-            if class_names.iter().any(|(c, _)| c == iface_name) {
+        // Flag interfaces that merge with a same-named class in the same scope.
+        for (iface_name, offset, iface_scope) in &interface_decls {
+            if class_decls
+                .iter()
+                .any(|(c, _, c_scope)| c == iface_name && c_scope == iface_scope)
+            {
                 let (line, column) = byte_offset_to_line_col(ctx.source, *offset as usize);
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),
@@ -62,9 +73,12 @@ impl OxcCheck for Check {
             }
         }
 
-        // Flag classes that share a name with an interface
-        for (class_name, offset) in &class_names {
-            if interface_names.iter().any(|(i, _)| i == class_name) {
+        // Flag classes that merge with a same-named interface in the same scope.
+        for (class_name, offset, class_scope) in &class_decls {
+            if interface_decls
+                .iter()
+                .any(|(i, _, i_scope)| i == class_name && i_scope == class_scope)
+            {
                 let (line, column) = byte_offset_to_line_col(ctx.source, *offset as usize);
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),
@@ -117,5 +131,39 @@ export declare interface IonInputOtp extends Components.IonInputOtp {
   ionInput: EventEmitter<CustomEvent<InputInputEventDetail>>;
 }";
         assert!(run(source).is_empty());
+    }
+
+    // Regression for #5291: a class and a same-named interface declared in
+    // *different* function scopes (here, two separate test callbacks) cannot
+    // merge at the TypeScript level, so neither must be flagged.
+    #[test]
+    fn allows_class_and_interface_in_different_function_scopes() {
+        let source = "\
+it('should support getters', () => {
+  class A {
+    get a() { return 'a' }
+    get b() { return 'b' }
+  }
+  return A;
+});
+describe('lazy', () => {
+  interface A {
+    a: number
+    b?: A
+  }
+});";
+        assert!(run(source).is_empty());
+    }
+
+    // A class and an interface sharing a name inside the *same* block scope do
+    // merge, so both stay flagged.
+    #[test]
+    fn flags_class_and_interface_in_same_block_scope() {
+        let source = "\
+function f() {
+  class A {}
+  interface A { a: number }
+}";
+        assert_eq!(run(source).len(), 2);
     }
 }
