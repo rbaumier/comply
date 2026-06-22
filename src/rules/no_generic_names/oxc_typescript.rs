@@ -1066,6 +1066,48 @@ fn is_message_handler_param<'a>(
     }
 }
 
+/// First-parameter names that mark a function as a Node.js error-first
+/// (errback) callback: `(err, data) => …`, `(error, data) => …`, `(e, data) => …`.
+const ERROR_FIRST_PARAM_NAMES: &[&str] = &["err", "error", "e"];
+
+/// True when the identifier is the parameter at index ≥1 of a function whose
+/// parameter at index 0 is named `err`/`error`/`e` — the canonical Node.js
+/// error-first (errback) callback shape (`(err, data?) => void`,
+/// `cb: (err: Error, data?: T) => void`). In that contract the result
+/// parameter's name follows the established convention (the error is first, the
+/// result second), so a generic name like `data` there is idiomatic rather than
+/// vague. Works for both runtime functions and type-level callables
+/// (`TSFunctionType`, `TSMethodSignature`, …) because each binds its parameters
+/// through the same `FormalParameter` / `FormalParameters` nodes. The exemption
+/// is structural: it hinges on the first parameter's name, so a callback whose
+/// first parameter is not an error (`(req, data) => …`), or the first parameter
+/// itself, still flags.
+fn is_error_first_callback_result_param<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let param_node = nodes.parent_node(node.id());
+    let AstKind::FormalParameter(param) = param_node.kind() else {
+        return false;
+    };
+    let AstKind::FormalParameters(params) = nodes.parent_node(param_node.id()).kind() else {
+        return false;
+    };
+    let Some(first) = params.items.first() else {
+        return false;
+    };
+    // The node must not itself be the first parameter — the error parameter stays
+    // flagged on its own merits.
+    if first.span == param.span {
+        return false;
+    }
+    let BindingPattern::BindingIdentifier(first_id) = &first.pattern else {
+        return false;
+    };
+    ERROR_FIRST_PARAM_NAMES.contains(&first_id.name.as_str())
+}
+
 /// True when the identifier is a property key in an object literal.
 fn is_object_literal_key<'a>(
     node: &oxc_semantic::AstNode<'a>,
@@ -1308,6 +1350,14 @@ impl OxcCheck for Check {
                 && is_function_param(node, semantic)
                 && is_message_handler_param(node, semantic)
             {
+                return;
+            }
+            // The result parameter of a Node.js error-first callback
+            // (`(err, data) => …`, `cb: (err: Error, data?: T) => void`): the
+            // result follows the established errback convention where the error
+            // is first and the result second, so its name is dictated by the
+            // contract, not chosen lazily.
+            if word == "data" && is_error_first_callback_result_param(node, semantic) {
                 return;
             }
             let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
@@ -1609,6 +1659,32 @@ mod tests {
         // is still vague — no library convention prescribes it there.
         let src = r#"function myFunc(data) { return data; }"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_data_in_error_first_callback_type_issue_5512() {
+        // Regression for #5512 — `data` as the result parameter of a Node.js
+        // error-first (errback) callback type (`cb: (err, data?) => void`,
+        // AWS SDK v3 / Smithy-generated code). The errback convention dictates
+        // the name: error first, result second.
+        assert!(
+            run("interface S3 { op(args: I, cb: (err: any, data?: O) => void): void; }").is_empty()
+        );
+        // Arrow value form.
+        assert!(run("const cb = (err: Error, data: number) => { use(data); };").is_empty());
+        // `error` and bare `e` as the first parameter both qualify.
+        assert!(run("const cb = (error: Error, data: number) => { use(data); };").is_empty());
+        assert!(run("const cb = (e: Error, data: number) => { use(data); };").is_empty());
+    }
+
+    #[test]
+    fn still_flags_data_when_first_param_is_not_an_error_issue_5512() {
+        // Negative space: the exemption is structural — it hinges on the first
+        // parameter being named `err`/`error`/`e`. A `data` second parameter
+        // whose preceding parameter is not an error still flags, and so does a
+        // `data` first parameter even when an error follows.
+        assert_eq!(run("const cb = (req: Request, data: number) => use(data);").len(), 1);
+        assert_eq!(run("const cb = (data: number, err: Error) => use(data);").len(), 1);
     }
 
     #[test]
