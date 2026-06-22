@@ -1409,18 +1409,31 @@ fn nms_is_error_constructor_interop_spread(src: &str, line_1based: usize) -> boo
 
 // ── no-deprecated post-filter ──────────────────────────────────────────────
 //
-// A re-export forwards a symbol for backward compatibility — it is not a use of
-// the deprecated API. tsgolint flags the specifier inside the re-export, e.g.
-// `export { Line } from './shapes/Line'` where `Line` is `@deprecated`. Dropping
-// the export here means library consumers are still warned at their own import
-// sites while the maintainer keeps the compat barrel. Genuine uses (calling,
-// instantiating, referencing, or import-and-use of a deprecated symbol) still
-// fire. (Closes #5325)
+// Two false-positive shapes are dropped:
+//
+//  1. A re-export forwards a symbol for backward compatibility — it is not a use
+//     of the deprecated API. tsgolint flags the specifier inside the re-export,
+//     e.g. `export { Line } from './shapes/Line'` where `Line` is `@deprecated`.
+//     Dropping the export here means library consumers are still warned at their
+//     own import sites while the maintainer keeps the compat barrel. (Closes
+//     #5325)
+//
+//  2. A use inside a test file. Backward-compat test suites exist to verify a
+//     deprecated API still works for existing consumers, so they must call it —
+//     flagging that call is circular. This mirrors the test-file suppression
+//     that typescript-eslint documents for sibling rules (await-thenable,
+//     unbound-method). (Closes #5326)
+//
+// Genuine uses (calling, instantiating, referencing, or import-and-use of a
+// deprecated symbol) in production code still fire.
 
 struct NoDeprecatedFilter;
 
 impl PostFilter for NoDeprecatedFilter {
     fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        if is_test_path(&diag.path) {
+            return false;
+        }
         let Some(src) = source else {
             return true;
         };
@@ -3444,5 +3457,34 @@ test('a', () => {
         let f = NoDeprecatedFilter;
         let d = nd_diag(Path::new("src/foo.ts"), 1, 1);
         assert!(f.keep(&d, None));
+    }
+
+    // Regression for #5326: a backward-compat test that calls a deprecated API
+    // to verify it still works must not be flagged. The call is the test's
+    // entire purpose.
+    #[test]
+    fn nd_drops_use_in_spec_file() {
+        let src = "it('addEquals', () => {\n  const returned = point.addEquals(point2);\n});\n";
+        let (line, col) = line_col_of(src, "point.addEquals(");
+        let f = NoDeprecatedFilter;
+        let d = nd_diag(Path::new("src/Point.spec.ts"), line, col);
+        assert!(!f.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn nd_drops_use_in_test_dir() {
+        let f = NoDeprecatedFilter;
+        let d = nd_diag(Path::new("src/__tests__/Point.ts"), 1, 1);
+        assert!(!f.keep(&d, Some("const r = point.addEquals(point2);\n")));
+    }
+
+    // A genuine use in production code is unaffected by the test-file gate.
+    #[test]
+    fn nd_keeps_use_in_production_file() {
+        let src = "import { Line } from './shapes/Line';\nconst l = new Line(0, 0, 1, 1);\n";
+        let (line, col) = line_col_of(src, "new Line(");
+        let f = NoDeprecatedFilter;
+        let d = nd_diag(Path::new("src/Point.ts"), line, col + "new ".len());
+        assert!(f.keep(&d, Some(src)));
     }
 }
