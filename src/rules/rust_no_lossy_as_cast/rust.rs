@@ -18,6 +18,14 @@
 //! two's complement — so they are not lossy and are silenced when the
 //! source type is locally visible.
 //!
+//! A cast feeding a `from_bits` call — `f32::from_bits(p as u32)`,
+//! `f64::from_bits(x as u64)` — is exempt regardless of the operand's
+//! resolvability: `from_bits` reinterprets raw bits, so the `as` adapting the
+//! operand to its parameter type (e.g. the `i32` the x86 `_mm_extract_ps`
+//! intrinsic returns, cast to the `u32` `f32::from_bits` expects) is a
+//! bit-preserving reinterpretation, and a `try_from` would reject valid
+//! negative bit patterns.
+//!
 //! Widening casts with the same signedness (e.g. `u8 as u32`) are
 //! silenced when the source type is locally visible, as is an unsigned
 //! source cast to a strictly wider signed target (`u16 as i32`): the
@@ -54,12 +62,12 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cast_operand_bit_width, cast_operand_indexed_element_type, cast_operand_is_ascii_guarded,
-    cast_operand_is_assert_bounded, cast_operand_is_bitwise, cast_operand_is_bool,
-    cast_operand_is_char, cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
-    cast_operand_is_non_negative_guarded, cast_operand_is_range_guarded,
-    cast_operand_is_repr_enum_field, cast_operand_literal_value, find_identifier_type,
-    is_in_enum_discriminant,
+    cast_feeds_from_bits, cast_operand_bit_width, cast_operand_indexed_element_type,
+    cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
+    cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
+    cast_operand_is_enum_discriminant, cast_operand_is_non_negative_guarded,
+    cast_operand_is_range_guarded, cast_operand_is_repr_enum_field, cast_operand_literal_value,
+    find_identifier_type, is_in_enum_discriminant,
 };
 use crate::rules::rust_no_as_numeric_cast::rust::fires_on_cast;
 
@@ -147,6 +155,9 @@ impl AstCheck for Check {
             return;
         }
         if cast_operand_is_bitwise(node, source_bytes) {
+            return;
+        }
+        if cast_feeds_from_bits(node, source_bytes) {
             return;
         }
         let source_type = source_numeric_type(node, source_bytes);
@@ -1148,5 +1159,28 @@ mod tests {
         // literals), so this rule suppresses — the pair emits one diagnostic.
         assert!(run_on("fn f() -> u8 { 300u64 as u8 }").is_empty());
         assert!(run_on("fn f() -> u16 { 0x1_0000u64 as u16 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5593_from_bits_arg_i32_as_u32_not_flagged() {
+        // Issue #5593 (qdrant simple_avx.rs): `f32::from_bits(p1 as u32)` where
+        // `p1` is the i32 the `_mm_extract_ps` intrinsic returns (unresolvable
+        // source). The cast feeds a bit-reinterpretation sink, so it is the
+        // correct same-width tool — `u32::try_from` would reject negative bits.
+        let src = "fn f() -> f32 { let p1 = _mm_extract_ps(h, 0); f32::from_bits(p1 as u32) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5593_f64_from_bits_arg_i64_as_u64_not_flagged() {
+        let src = "fn f() -> f64 { let p = q(); f64::from_bits(p as u64) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5593_genuine_lossy_cast_outside_from_bits_still_flagged() {
+        // A real narrowing not feeding `from_bits` keeps flagging: the exemption
+        // is scoped to the bit-reinterpretation sink.
+        assert_eq!(run_on("fn f(x: f64) -> f32 { x as f32 }").len(), 1);
     }
 }

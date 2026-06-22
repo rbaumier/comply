@@ -3034,6 +3034,57 @@ pub fn cast_operand_is_bitwise(cast: Node, source: &[u8]) -> bool {
         .is_some_and(|op| matches!(op, ">>" | "<<" | "&" | "|" | "^"))
 }
 
+/// True when `cast` (a `type_cast_expression`) is the argument of a
+/// `from_bits` call — `f32::from_bits(p as u32)`, `f64::from_bits(x as u64)`,
+/// or any `<T>::from_bits(..)`.
+///
+/// `from_bits` reinterprets an integer's raw bits as another type (a float's
+/// IEEE-754 encoding, a bitflags set, …); its argument is a deliberate bit
+/// pattern, not a numeric quantity. The same-width signed↔unsigned `as` cast
+/// that adapts the operand to `from_bits`'s parameter type (e.g. the `i32` the
+/// x86 `_mm_extract_ps` intrinsic returns, cast to the `u32` `f32::from_bits`
+/// expects) preserves every bit and is the only correct conversion: a
+/// `try_from` would reject negative bit patterns. Both numeric-cast rules treat
+/// such a cast as lossless.
+///
+/// A single layer of `parenthesized_expression` between the cast and the
+/// argument list is transparent (`from_bits((p as u32))`). The match keys on
+/// the call's `function` field's last path segment being `from_bits`, so it
+/// covers any receiver type without enumerating them.
+pub fn cast_feeds_from_bits(cast: Node, source: &[u8]) -> bool {
+    let mut current = cast;
+    while let Some(parent) = current.parent() {
+        if parent.kind() == "parenthesized_expression" {
+            current = parent;
+            continue;
+        }
+        if parent.kind() == "arguments" {
+            let Some(call) = parent.parent().filter(|c| c.kind() == "call_expression") else {
+                return false;
+            };
+            let Some(function) = call.child_by_field_name("function") else {
+                return false;
+            };
+            return call_function_last_segment(function, source) == Some("from_bits");
+        }
+        return false;
+    }
+    false
+}
+
+/// The final path segment of a call's `function` node, used to match a call by
+/// method/associated-function name regardless of its receiver/path prefix.
+/// `f32::from_bits` and `core::f32::from_bits` both yield `from_bits`.
+fn call_function_last_segment<'a>(function: Node, source: &'a [u8]) -> Option<&'a str> {
+    let name = match function.kind() {
+        "scoped_identifier" => function.child_by_field_name("name")?,
+        "field_expression" => function.child_by_field_name("field")?,
+        "identifier" => function,
+        _ => return None,
+    };
+    name.utf8_text(source).ok()
+}
+
 /// The compile-time value of `cast`'s operand when it is an integer or byte
 /// literal whose value is statically known, or `None` for any other operand.
 ///
@@ -4914,6 +4965,36 @@ mod tests {
                 cast_operand_is_char(cast, src.as_bytes()),
                 expected,
                 "cast_operand_is_char mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn cast_feeds_from_bits_matches_from_bits_argument() {
+        let cases = [
+            // Issue #5593: the cast is the argument to `f32::from_bits`.
+            ("fn f() -> f32 { f32::from_bits(p as u32) }", true),
+            ("fn f() -> f64 { f64::from_bits(p as u64) }", true),
+            // A parenthesized wrapper between the cast and the arg list is
+            // transparent.
+            ("fn f() -> f32 { f32::from_bits((p as u32)) }", true),
+            // Any receiver path's `from_bits` matches via the last segment.
+            ("fn f() -> Flags { Flags::from_bits(x as u32) }", true),
+            // A different associated function is not a bit-reinterpretation sink.
+            ("fn f() -> u32 { u32::from(p as u32) }", false),
+            // An ordinary call is not exempt.
+            ("fn f(p: i32) -> u32 { consume(p as u32) }", false),
+            // A bare cast not feeding any call is not exempt.
+            ("fn f(p: i32) -> u32 { p as u32 }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_of_kind(tree.root_node(), "type_cast_expression")
+                .expect("snippet should contain a type_cast_expression");
+            assert_eq!(
+                cast_feeds_from_bits(cast, src.as_bytes()),
+                expected,
+                "cast_feeds_from_bits mismatch for `{src}`"
             );
         }
     }
