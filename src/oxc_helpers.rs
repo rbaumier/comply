@@ -2579,6 +2579,127 @@ pub fn file_typeof_guards<'a>(
     guards
 }
 
+/// True when the reference to the global `name` at `node_id` is the operand of a
+/// `typeof name` expression, or is lexically guarded by such an existence check
+/// (`typeof name !== "undefined"` and the like). `typeof` never throws on an
+/// undeclared global, so probing a global this way — then touching it only when
+/// it exists — is the canonical cross-runtime feature-detection pattern, not the
+/// implicit-global anti-pattern the runtime-portability rules target.
+///
+/// Two structural shapes are recognised:
+/// - **operand**: `node_id` is the argument of a `typeof name` unary expression
+///   (`typeof process !== "undefined"`);
+/// - **guarded access**: `node_id` sits in the truthy branch of a guard whose
+///   condition is *dominated* by a `typeof name` check —
+///   `if (typeof name !== "undefined") { name.x }` (the consequent),
+///   `typeof name !== "undefined" ? name.x : fallback` (the conditional's
+///   consequent), or `typeof name !== "undefined" && name.x` (the `&&`'s
+///   right operand). The check may sit inside an `&&`-chain in the condition
+///   (`x && typeof name !== "undefined"`), since every conjunct must hold.
+///
+/// An access *outside* such a branch is not exempted: a bare `name.x` elsewhere
+/// in the same file, the `else`/alternate branch, or a branch reachable via an
+/// `||` arm that does not test `name` (`typeof name !== "undefined" || x`),
+/// stays flagged. The check is purely structural over the AST, never a
+/// name/path allowlist.
+#[must_use]
+pub fn is_typeof_existence_guarded(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+    name: &str,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+    use oxc_span::GetSpan;
+
+    let nodes = semantic.nodes();
+
+    // (a) Direct operand of `typeof name` — `typeof process`. This is the
+    // non-throwing existence probe, so it is never a real access. A member read
+    // under a `typeof` (`typeof process.platform`) still evaluates `process`,
+    // so it is intentionally NOT matched here and stays flagged unless a guard
+    // covers it in branch (b).
+    if matches!(
+        nodes.kind(nodes.parent_id(node_id)),
+        AstKind::UnaryExpression(unary)
+            if unary.operator == oxc_ast::ast::UnaryOperator::Typeof
+    ) {
+        return true;
+    }
+
+    // (b) Guarded access: the node is in the truthy branch of a guard whose
+    // condition feature-detects `name` via `typeof`.
+    let mut child_span = nodes.get_node(node_id).kind().span();
+    for ancestor in nodes.ancestors(node_id) {
+        let test: &Expression = match ancestor.kind() {
+            AstKind::IfStatement(stmt)
+                if span_contains(stmt.consequent.span(), child_span) =>
+            {
+                &stmt.test
+            }
+            AstKind::ConditionalExpression(cond)
+                if span_contains(cond.consequent.span(), child_span) =>
+            {
+                &cond.test
+            }
+            AstKind::LogicalExpression(logical)
+                if logical.operator == oxc_ast::ast::LogicalOperator::And
+                    && span_contains(logical.right.span(), child_span) =>
+            {
+                &logical.left
+            }
+            _ => {
+                child_span = ancestor.kind().span();
+                continue;
+            }
+        };
+        if condition_guards_truthy_branch(test, name) {
+            return true;
+        }
+        child_span = ancestor.kind().span();
+    }
+    false
+}
+
+/// True when a `typeof name` existence check in `expr` *dominates* the truthy
+/// branch the condition guards — i.e. whenever the branch runs, `name` was
+/// probed and found to exist.
+///
+/// Recurses only through positions that preserve that domination:
+/// - the comparison itself (`typeof name !== "undefined"`, `typeof name ===
+///   "object"`) — either operand may be the `typeof`;
+/// - the left/right of a logical **AND** (`x && typeof name !== "undefined"`),
+///   since both conjuncts must hold for the branch to run;
+/// - a parenthesised sub-expression.
+///
+/// It deliberately does **not** descend into a logical **OR** or a negation:
+/// in `typeof name !== "undefined" || x` the branch can run via `x` while
+/// `name` is undefined, so the `typeof` does not guard it. Such an access stays
+/// flagged.
+fn condition_guards_truthy_branch(expr: &oxc_ast::ast::Expression, name: &str) -> bool {
+    use oxc_ast::ast::Expression;
+    match expr {
+        Expression::UnaryExpression(unary) => {
+            unary.operator == oxc_ast::ast::UnaryOperator::Typeof
+                && matches!(&unary.argument, Expression::Identifier(id) if id.name == name)
+        }
+        Expression::BinaryExpression(bin) => {
+            condition_guards_truthy_branch(&bin.left, name)
+                || condition_guards_truthy_branch(&bin.right, name)
+        }
+        Expression::LogicalExpression(logical)
+            if logical.operator == oxc_ast::ast::LogicalOperator::And =>
+        {
+            condition_guards_truthy_branch(&logical.left, name)
+                || condition_guards_truthy_branch(&logical.right, name)
+        }
+        Expression::ParenthesizedExpression(paren) => {
+            condition_guards_truthy_branch(&paren.expression, name)
+        }
+        _ => false,
+    }
+}
+
 /// True when `node_id` sits inside an ambient (`declare`) module context —
 /// `declare global { ... }` (parsed as `TSGlobalDeclaration`) or a `declare`
 /// module/namespace (`TSModuleDeclaration` with `declare`). Bindings inside

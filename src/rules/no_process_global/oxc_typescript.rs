@@ -8,11 +8,18 @@
 //! any other `process.<member>` access (the diagnostic always points at the
 //! `process` identifier itself).
 //!
-//! The single exception is `process.env.NODE_ENV`: bundlers (Vite/webpack/
-//! Rollup) statically replace it with a build-time string constant, so it never
-//! reaches the runtime as a real `process` object and is browser-safe. Genuine
-//! Node runtime accesses (`process.cwd()`, `process.argv`, dynamic
-//! `process.env[x]`, …) remain flagged.
+//! Two kinds of reference are exempt:
+//!
+//! - `process.env.NODE_ENV`: bundlers (Vite/webpack/Rollup) statically replace
+//!   it with a build-time string constant, so it never reaches the runtime as a
+//!   real `process` object and is browser-safe.
+//! - a reference that is the operand of a `typeof process` check, or that is
+//!   lexically guarded by one (`if (typeof process !== "undefined") { … }`):
+//!   this is cross-runtime feature detection (Node/Deno/Bun), where the
+//!   Node-specific import the rule suggests would break in the other runtimes.
+//!
+//! Genuine unguarded Node runtime accesses (`process.cwd()`, `process.argv`,
+//! dynamic `process.env[x]`, …) remain flagged.
 //!
 //! A file that declares its own binding named `process` — a local
 //! `const process = …`, a function parameter, or `import process from
@@ -90,6 +97,14 @@ impl OxcCheck for Check {
         // runtime as a real `process` object, so it is browser-safe and must
         // not be flagged.
         if is_process_env_node_env(node, semantic) {
+            return;
+        }
+        // A `process` reference that is the operand of `typeof process`, or that
+        // is lexically guarded by such an existence check
+        // (`if (typeof process !== "undefined") { process.argv }`), is
+        // deliberate cross-runtime feature detection — the Node-specific import
+        // the rule suggests would break in Deno/Bun, defeating the guard.
+        if crate::oxc_helpers::is_typeof_existence_guarded(node.id(), semantic, "process") {
             return;
         }
         let (line, column) =
@@ -177,6 +192,85 @@ mod tests {
         // bundlers (Vite/webpack/Rollup) — browser-safe, not a runtime access.
         let src = "if (process.env.NODE_ENV === 'development') {\n  console.debug('dev');\n}";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_typeof_process_operand() {
+        // `typeof process` is the canonical existence probe — `typeof` never
+        // throws on an undeclared global, so this is not a runtime access.
+        assert!(run_on("const has = typeof process !== 'undefined';").is_empty());
+    }
+
+    #[test]
+    fn allows_process_guarded_by_typeof_existence_check() {
+        // Cross-runtime detection (cacjs/cac src/runtime.ts): `process` accesses
+        // inside an `if (typeof process !== 'undefined')` guard are deliberate
+        // environment detection — the Node-specific import would break in
+        // Deno/Bun, defeating the existence check.
+        let src = "if (typeof process !== 'undefined') {\n\
+                   let runtimeName: string;\n\
+                   runtimeInfo = `${process.platform}-${process.arch} ${process.version}`;\n\
+                   runtimeProcessArgs = process.argv;\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_process_guarded_by_conditional_expression() {
+        // The ternary form of the same existence guard.
+        let src = "const v = typeof process !== 'undefined' ? process.platform : 'browser';";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_process_guarded_by_logical_and() {
+        // `typeof process !== 'undefined' && process.env.FOO` — the access is the
+        // RHS of the `&&` whose LHS is the existence guard.
+        let src = "const v = typeof process !== 'undefined' && process.env.FOO;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_process_guarded_by_typeof_object_check() {
+        // `typeof process === 'object'` is an equally valid existence probe.
+        let src = "if (typeof process === 'object') { runtimeInfo = process.platform; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_process_guarded_inside_and_chain() {
+        // The `typeof` check sits inside an `&&`-chain; every conjunct must hold
+        // for the branch to run, so it still guards the access.
+        let src = "if (ready && typeof process !== 'undefined') { x = process.argv; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_process_in_or_guarded_branch() {
+        // `typeof process !== 'undefined' || x` — the branch can run via `x`
+        // while `process` is undefined, so the `typeof` does not guard it.
+        let src = "if (typeof process !== 'undefined' || fallback) { y = process.argv; }";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_typeof_process_member_access() {
+        // `typeof process.platform` evaluates `process` (throws if undefined),
+        // so it is a real access, not the bare `typeof process` existence probe.
+        let d = run_on("const t = typeof process.platform;");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_process_outside_typeof_guard() {
+        // A `typeof process` guard in one branch does not exempt an unguarded
+        // `process.argv` access elsewhere in the same file.
+        let src = "if (typeof process !== 'undefined') { runtimeInfo = process.platform; }\n\
+                   const args = process.argv;";
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].line, 2);
     }
 
     #[test]
