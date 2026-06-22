@@ -177,6 +177,24 @@ mod tests {
     }
 
     #[test]
+    fn allows_border_side_width_with_border_side_color() {
+        // Regression for rbaumier/comply#4561 — `border-l-4` (border-left-width)
+        // and `border-l-destructive` (border-left-color) target different CSS
+        // properties; the coloured accent-border combo must not conflict.
+        assert!(
+            run(r#"const x = <div className="border-l-destructive bg-card border border-l-4 p-4" />;"#)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_two_widths_on_same_border_side() {
+        // Same side, same sub-property (width) still conflicts.
+        let diags = run(r#"const x = <div className="border-l-2 border-l-4" />;"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
     fn flags_conflicting_gap_x_same_axis() {
         let diags = run(r#"const x = <div className="gap-x-4 gap-x-8" />;"#);
         assert_eq!(diags.len(), 1);
