@@ -23,15 +23,17 @@
 //! `rate` is deliberately not a qualifier — `tax_rate`/`interest_rate`
 //! are financial.
 //!
-//! `total`/`subtotal` are monetary only as the bare word, a suffix
-//! (`order_total`, `cart_subtotal`), or a `_total_` infix — never as a
-//! `total_<noun>` prefix, where the trailing noun decides the domain
-//! (`total_weight`, `total_edges` are graph/statistics quantities).
-//! A `total_<money-word>` compound stays flagged because the money word
-//! carries the signal: `total_price` matches `price`, and `total_amount`
-//! matches because `amount` is monetary once disambiguated by `total`.
+//! `total`/`subtotal` are monetary only as a `total_<money-word>` prefix,
+//! where the trailing money word carries the signal: `total_price` matches
+//! `price`, and `total_amount` matches because `amount` is monetary once
+//! disambiguated by `total`. A bare `total`/`subtotal`, a `_total` suffix
+//! (`order_total`), or a `_total_` infix is not flagged: a standalone
+//! aggregate is a total of *any* quantity (bytes, requests, items, money)
+//! and carries no AST signal that it is currency — `total: f64` is as
+//! likely a throughput accumulator (tests/sec) as a cart total.
 //! `total_cost` is excluded — like bare `cost`, a summed planner/A*
-//! heuristic weight as often as money.
+//! heuristic weight as often as money — and `total_weight`/`total_edges`
+//! are graph/statistics quantities.
 //!
 //! False positives are possible (`average_score`) but the failure mode
 //! of using a float for money is bad enough that we err on the loud
@@ -48,13 +50,12 @@ const MONEY_NAMES: &[&str] = &[
     "price", "balance", "fee", "tax", "discount", "revenue", "salary", "wage", "fare", "charge",
 ];
 
-/// Aggregate words that are monetary on their own or as a suffix but
-/// polysemous as a `<word>_<noun>` prefix (`total_weight`, `total_edges`
-/// are graph quantities). Matched bare, as a `_<word>` suffix, or a
-/// `_<word>_` infix. As a `<word>_…` prefix they only count when the
-/// rest of the name carries a monetary token (a `MONEY_NAMES` word or
-/// `amount`), which an aggregate prefix disambiguates from its otherwise
-/// polysemous standalone use.
+/// Aggregate words that are too polysemous to signal money on their own:
+/// a `total`/`subtotal` of *any* quantity (bytes, requests, items, money).
+/// They count only as a `<word>_…` prefix whose remainder carries a
+/// monetary token (a `MONEY_NAMES` word or `amount`), which the aggregate
+/// prefix disambiguates as currency (`total_price`, `total_amount`). Bare,
+/// suffix (`order_total`), and infix uses are not flagged.
 const AGGREGATE_NAMES: &[&str] = &["total", "subtotal"];
 
 /// Dimensionless mathematical/statistical qualifiers. A money word as a
@@ -142,15 +143,12 @@ fn is_non_monetary_qualifier(rest: &str) -> bool {
     NON_MONETARY_QUALIFIERS.contains(&rest)
 }
 
-/// An aggregate word (`total`/`subtotal`) is monetary as the bare word,
-/// a `_<word>` suffix, or a `_<word>_` infix. As a `<word>_…` prefix it
-/// counts only when the rest of the name carries a monetary token
+/// An aggregate word (`total`/`subtotal`) counts as monetary only as a
+/// `<word>_…` prefix whose remainder carries a monetary token
 /// (`total_amount`, `total_price`) — never `total_weight`/`total_cost`.
+/// Bare, `_<word>` suffix, and `_<word>_` infix uses are not flagged: a
+/// standalone aggregate is too polysemous to signal currency on its own.
 fn matches_aggregate(lower: &str, word: &str) -> bool {
-    if lower == word || lower.ends_with(&format!("_{word}")) || lower.contains(&format!("_{word}_"))
-    {
-        return true;
-    }
     if let Some(rest) = lower.strip_prefix(&format!("{word}_")) {
         return rest == "amount" || rest.starts_with("amount_") || has_money_token(rest);
     }
@@ -332,14 +330,25 @@ mod tests {
     }
 
     #[test]
-    fn flags_order_total_suffix_field() {
-        // `total` as a suffix stays monetary. #4748.
-        assert_eq!(run_on("struct Order { order_total: f64 }").len(), 1);
+    fn does_not_flag_order_total_suffix_field() {
+        // A `_total` suffix aggregates an unknown quantity — `order_total`
+        // could be an order count as readily as currency. #5635.
+        assert!(run_on("struct Order { order_total: f64 }").is_empty());
     }
 
     #[test]
-    fn flags_bare_total_field() {
-        assert_eq!(run_on("struct Order { total: f64 }").len(), 1);
+    fn does_not_flag_bare_total_param() {
+        // foundry `rate_per_sec(total: f64, elapsed: Duration)`: `total` is a
+        // throughput accumulator (tests/sec), not currency. A standalone
+        // aggregate is too polysemous to signal money on its own. #5635.
+        let src = "fn rate_per_sec(total: f64, elapsed: Duration) -> f64 { 0.0 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_bare_total_field() {
+        // #5635
+        assert!(run_on("struct Order { total: f64 }").is_empty());
     }
 
     #[test]
@@ -364,5 +373,17 @@ mod tests {
     fn flags_total_amount_due_field() {
         // Multi-token money compound stays flagged. #4748.
         assert_eq!(run_on("struct Invoice { total_amount_due: f64 }").len(), 1);
+    }
+
+    #[test]
+    fn flags_subtotal_amount_field() {
+        // `subtotal_<money-noun>` compound stays monetary, like `total_`. #5635.
+        assert_eq!(run_on("struct Cart { subtotal_amount: f64 }").len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_bare_subtotal_field() {
+        // A bare aggregate is too polysemous to signal currency. #5635.
+        assert!(run_on("struct Cart { subtotal: f64 }").is_empty());
     }
 }
