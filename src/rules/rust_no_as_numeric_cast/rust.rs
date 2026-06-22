@@ -66,13 +66,13 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cast_feeds_from_bits, cast_feeds_simd_intrinsic, cast_in_const_context, cast_operand_bit_width,
-    cast_operand_indexed_element_type, cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded,
-    cast_operand_is_bitwise, cast_operand_is_bool, cast_operand_is_char,
-    cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
-    cast_operand_is_non_negative_guarded, cast_operand_is_range_guarded,
-    cast_operand_is_repr_enum_field, cast_operand_literal_value, find_identifier_type,
-    is_in_enum_discriminant, is_in_test_context,
+    cast_feeds_from_bits, cast_feeds_simd_intrinsic, cast_feeds_sized_pointer_write,
+    cast_in_const_context, cast_operand_bit_width, cast_operand_indexed_element_type,
+    cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
+    cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
+    cast_operand_is_enum_discriminant, cast_operand_is_non_negative_guarded,
+    cast_operand_is_range_guarded, cast_operand_is_repr_enum_field, cast_operand_literal_value,
+    find_identifier_type, is_in_enum_discriminant, is_in_test_context,
 };
 
 const KINDS: &[&str] = &["type_cast_expression"];
@@ -177,6 +177,9 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
         return false;
     }
     if cast_feeds_simd_intrinsic(node, source_bytes) {
+        return false;
+    }
+    if cast_feeds_sized_pointer_write(node, source_bytes) {
         return false;
     }
     if cast_operand_is_collection_size(node, source_bytes) {
@@ -429,6 +432,33 @@ mod tests {
     #[test]
     fn flags_float_cast() {
         assert_eq!(run_on("fn f(x: i32) -> f64 { x as f64 }").len(), 1);
+    }
+
+    #[test]
+    fn allows_relocation_sized_pointer_write() {
+        // Issue #5677: relocation-patch writes where the value cast's width
+        // matches the destination pointer's pointee width are deliberate
+        // truncation-to-store-width, not accidental loss.
+        assert!(
+            run_on("fn f() { unsafe { write_unaligned(addr as *mut u8, abs as u8); } }").is_empty()
+        );
+        assert!(
+            run_on("fn f() { unsafe { write_unaligned(addr as *mut u16, abs as u16); } }")
+                .is_empty()
+        );
+        assert!(
+            run_on("fn f() { unsafe { write_unaligned(addr as *mut u32, abs as u32); } }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_pointer_write_with_width_mismatch() {
+        // The value cast's width differs from the pointee width: still lossy.
+        assert_eq!(
+            run_on("fn f() { unsafe { write_unaligned(addr as *mut u8, abs as u16); } }").len(),
+            1
+        );
     }
 
     #[test]

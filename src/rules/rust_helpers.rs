@@ -3134,6 +3134,79 @@ pub fn cast_feeds_from_bits(cast: Node, source: &[u8]) -> bool {
     false
 }
 
+/// True when `cast` is the *value* argument of a `ptr::write` / `write_unaligned`
+/// / `write_volatile` call whose *destination* argument is a raw pointer cast to
+/// a fixed-width integer of the SAME width as the cast's target.
+///
+/// `write_unaligned(addr as *mut u16, value as u16)` is the idiomatic "store the
+/// low N bytes at this address" operation: the destination pointer's pointee type
+/// fixes the store width, and the `as uN` on the value IS that width truncation —
+/// exactly the lossy cast the typed store requires. This is the relocation-patch
+/// pattern in JIT linkers (`Abs1`/`Abs2`/`Abs4` → `as u8`/`as u16`/`as u32`),
+/// where the destination width is the structural proof of intent, not a name. A
+/// `try_into()` is wrong here: the truncation to the store width is deliberate.
+/// Both numeric-cast rules treat such a cast as lossless.
+///
+/// The match keys on the destination argument's pointee width equalling the
+/// value cast's target width, so a *mismatched* store (`addr as *mut u8`, `value
+/// as u16`) is NOT exempt, and an ordinary lossy cast with no pointer-write feed
+/// still flags. The call's last path segment must name one of the three write
+/// intrinsics, covering any receiver path (`ptr::write_unaligned`, `core::ptr::
+/// write`, …) without enumerating them. A single layer of
+/// `parenthesized_expression` between the cast and the argument list is
+/// transparent.
+pub fn cast_feeds_sized_pointer_write(cast: Node, source: &[u8]) -> bool {
+    let mut current = cast;
+    while let Some(parent) = current.parent() {
+        if parent.kind() == "parenthesized_expression" {
+            current = parent;
+            continue;
+        }
+        if parent.kind() != "arguments" {
+            return false;
+        }
+        let Some(call) = parent.parent().filter(|c| c.kind() == "call_expression") else {
+            return false;
+        };
+        let Some(function) = call.child_by_field_name("function") else {
+            return false;
+        };
+        if !matches!(
+            call_function_last_segment(function, source),
+            Some("write" | "write_unaligned" | "write_volatile")
+        ) {
+            return false;
+        }
+        // The value cast must not itself be the destination pointer argument.
+        let mut cursor = parent.walk();
+        let mut args = parent.named_children(&mut cursor);
+        let Some(dest) = args.next() else {
+            return false;
+        };
+        if dest == current {
+            return false;
+        }
+        let Some((_, value_bits)) = cast_target_int_kind(cast, source) else {
+            return false;
+        };
+        return pointer_cast_pointee_bits(dest, source) == Some(value_bits);
+    }
+    false
+}
+
+/// If `node` is `<expr> as *[const|mut] <int>` (a `type_cast_expression` whose
+/// target is a `pointer_type` over a fixed-width integer), the pointee's bit
+/// width; otherwise `None`.
+fn pointer_cast_pointee_bits(node: Node, source: &[u8]) -> Option<u16> {
+    if node.kind() != "type_cast_expression" {
+        return None;
+    }
+    let pointer_type = node.child_by_field_name("type").filter(|t| t.kind() == "pointer_type")?;
+    let pointee = pointer_type.child_by_field_name("type")?;
+    let text = pointee.utf8_text(source).ok()?.trim();
+    fixed_width_int_kind(text).map(|(_, bits)| bits)
+}
+
 /// True when `cast` (a `type_cast_expression`) is a direct argument of an x86/
 /// x86-64 SIMD intrinsic call (`_mm_*`, `_mm256_*`, `_mm512_*`) and is a
 /// same-width signed↔unsigned bit reinterpretation.
@@ -5327,6 +5400,67 @@ mod tests {
                 "cast_feeds_from_bits mismatch for `{src}`"
             );
         }
+    }
+
+    #[test]
+    fn cast_feeds_sized_pointer_write_gates_matching_pointee_width() {
+        let cases = [
+            // Issue #5677: relocation-patch writes — the value cast's width
+            // matches the destination pointer's pointee width.
+            ("fn f() { unsafe { write_unaligned(a as *mut u8, v as u8); } }", true),
+            ("fn f() { unsafe { write_unaligned(a as *mut u16, v as u16); } }", true),
+            ("fn f() { unsafe { write_unaligned(a as *mut u32, v as u32); } }", true),
+            // `ptr::write` and `write_volatile`, any receiver path, are covered.
+            ("fn f() { unsafe { ptr::write(a as *mut u8, v as u8); } }", true),
+            ("fn f() { unsafe { core::ptr::write_volatile(a as *mut u16, v as u16); } }", true),
+            // A `*const` destination is recognized too.
+            ("fn f() { unsafe { write(a as *const u32, v as u32); } }", true),
+            // A parenthesized wrapper around the value cast is transparent.
+            ("fn f() { unsafe { write_unaligned(a as *mut u8, (v as u8)); } }", true),
+            // Width MISMATCH between pointee and value cast is NOT exempt.
+            ("fn f() { unsafe { write_unaligned(a as *mut u8, v as u16); } }", false),
+            ("fn f() { unsafe { write_unaligned(a as *mut u32, v as u8); } }", false),
+            // The destination-pointer cast itself is never exempted by this
+            // predicate (it is a pointer cast, not a numeric one, but guard it).
+            ("fn f() { unsafe { write_unaligned(a as *mut u8, v as u8); } }", true),
+            // A non-write call with the same shape is not exempt.
+            ("fn f() { consume(a as *mut u8, v as u8); }", false),
+            // A write whose destination is not a typed pointer cast is not exempt.
+            ("fn f() { unsafe { write_unaligned(dst, v as u8); } }", false),
+            // A bare lossy cast feeding no call still flags.
+            ("fn f(x: u64) -> u8 { x as u8 }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            // The value cast is the LAST `type_cast_expression` whose target is a
+            // plain numeric type; grab the numeric (non-pointer) cast.
+            let cast = numeric_cast(tree.root_node(), src.as_bytes())
+                .expect("snippet should contain a numeric type_cast_expression");
+            assert_eq!(
+                cast_feeds_sized_pointer_write(cast, src.as_bytes()),
+                expected,
+                "cast_feeds_sized_pointer_write mismatch for `{src}`"
+            );
+        }
+    }
+
+    /// Find the first `type_cast_expression` whose target is NOT a pointer type —
+    /// i.e. the numeric value cast, skipping `addr as *mut uN` destination casts.
+    fn numeric_cast<'tree>(node: Node<'tree>, source: &[u8]) -> Option<Node<'tree>> {
+        if node.kind() == "type_cast_expression"
+            && node.child_by_field_name("type").is_some_and(|t| {
+                fixed_width_int_kind(t.utf8_text(source).unwrap_or("").trim()).is_some()
+            })
+        {
+            return Some(node);
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(found) = numeric_cast(child, source) {
+                return Some(found);
+            }
+        }
+        None
     }
 
     #[test]
