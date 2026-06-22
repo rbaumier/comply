@@ -25,6 +25,12 @@
 //! The two clean impls together are the redundancy `strum::Display` +
 //! `strum::EnumString` is designed to remove.
 //!
+//! `no_std` crates are skipped entirely: `strum`'s string conversions require
+//! `alloc`/`std`, so the derive is not adoptable. The skip fires when the
+//! current file declares `#![no_std]`, when the nearest `Cargo.toml` is in the
+//! `no-std` category, or when the crate root (`src/lib.rs` / `src/main.rs`)
+//! declares `#![no_std]` — covering enums in submodules of a `no_std` crate.
+//!
 //! `strum::EnumString` hardcodes `type Err = strum::ParseError` and can only
 //! report `VariantNotFound`. A `FromStr` whose `Err` is anything other than
 //! `()` carries a richer contract (custom error type and/or messages) that the
@@ -36,6 +42,17 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
+    // `strum`'s string conversions need `String` (i.e. `alloc`/`std`); a `no_std`
+    // crate cannot adopt the derive without taking on `strum` plus alloc/feature
+    // plumbing the crate deliberately avoids, so the suggestion is unactionable.
+    // `no_std` is a crate-level inner attribute that lives in the crate root
+    // (`src/lib.rs` / `src/main.rs`); a flagged enum may sit in a submodule, so
+    // the current file alone is not enough — also check the manifest's `no-std`
+    // category and the crate root's `#![no_std]` declaration.
+    if ctx.source_contains("no_std") { return; }
+    if ctx.project.nearest_cargo_manifest(ctx.path).is_some_and(|m| m.is_no_std()) { return; }
+    if ctx.project.crate_root_is_no_std(ctx.path) { return; }
+
     let mut enums: Vec<(tree_sitter::Node, String)> = Vec::new();
     let mut display_targets: FxHashSet<String> = FxHashSet::default();
     let mut from_str_impls: FxHashMap<String, tree_sitter::Node> = FxHashMap::default();
@@ -767,5 +784,125 @@ impl std::str::FromStr for E {
 }
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    // ── no_std exemption (Closes #5695) ─────────────────────────────────
+    //
+    // `strum`'s string conversions need `alloc`/`std`, so a `no_std` crate
+    // (kernel / compiler-core such as cranelift-codegen) cannot adopt the
+    // derive. A clean round-trip `Display` + `FromStr` enum that WOULD be
+    // flagged in a std crate must be skipped under `no_std`, detected via the
+    // current file, the manifest `no-std` category, or the crate root.
+
+    /// A clean 1:1 `Display` + `FromStr` round-trip enum — flagged in a std
+    /// crate, exempt under `no_std`. `{PREFIX}` is replaced per test to inject
+    /// the `#![no_std]` inner attribute (or nothing) at file scope.
+    const CLEAN_ROUND_TRIP_SRC: &str = r#"{PREFIX}enum LibCall { CeilF32, CeilF64 }
+
+impl core::fmt::Display for LibCall {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            LibCall::CeilF32 => f.write_str("CeilF32"),
+            LibCall::CeilF64 => f.write_str("CeilF64"),
+        }
+    }
+}
+
+impl core::str::FromStr for LibCall {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "CeilF32" => Ok(LibCall::CeilF32),
+            "CeilF64" => Ok(LibCall::CeilF64),
+            _ => Err(()),
+        }
+    }
+}
+"#;
+
+    #[test]
+    fn allows_no_std_in_current_file() {
+        let src = CLEAN_ROUND_TRIP_SRC.replace("{PREFIX}", "#![no_std]\n\n");
+        assert!(
+            run_on(&src).is_empty(),
+            "must not suggest strum when the file declares #![no_std]"
+        );
+    }
+
+    #[test]
+    fn still_flags_std_crate() {
+        let src = CLEAN_ROUND_TRIP_SRC.replace("{PREFIX}", "");
+        assert_eq!(
+            run_on(&src).len(),
+            1,
+            "a normal std crate must still get the strum suggestion"
+        );
+    }
+
+    const NO_STD_CARGO_TOML: &str = r#"
+[package]
+name = "no-std-lib"
+version = "0.1.0"
+edition = "2021"
+categories = ["no-std"]
+"#;
+
+    const STD_CARGO_TOML: &str = r#"
+[package]
+name = "std-lib"
+version = "0.1.0"
+edition = "2021"
+"#;
+
+    /// Run the rule on a submodule file `dir/src/ir/libcall.rs` in a crate whose
+    /// root is `dir/src/lib.rs`, so `crate_root_is_no_std` resolves the crate's
+    /// `#![no_std]` from a *different* file than the one being flagged.
+    fn run_on_submodule_with_lib(
+        cargo_toml: &str,
+        lib_rs: &str,
+        submodule_src: &str,
+    ) -> Vec<Diagnostic> {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), cargo_toml).unwrap();
+        std::fs::create_dir_all(dir.path().join("src/ir")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), lib_rs).unwrap();
+        let submodule_path = dir.path().join("src/ir/libcall.rs");
+        std::fs::write(&submodule_path, submodule_src).unwrap();
+        crate::rules::test_helpers::run_rule(&Check, submodule_src, &submodule_path)
+    }
+
+    #[test]
+    fn allows_no_std_manifest_category() {
+        // The submodule source has no `#![no_std]`; only the manifest's `no-std`
+        // category marks the crate, so the manifest gate must catch it.
+        let src = CLEAN_ROUND_TRIP_SRC.replace("{PREFIX}", "");
+        assert!(
+            run_on_submodule_with_lib(NO_STD_CARGO_TOML, "", &src).is_empty(),
+            "must not suggest strum when the crate manifest is in the no-std category"
+        );
+    }
+
+    #[test]
+    fn allows_submodule_when_crate_root_is_no_std() {
+        // cranelift-codegen: `src/lib.rs` declares `#![no_std]`, the flagged enum
+        // lives in `src/ir/libcall.rs`. The manifest has no `no-std` category, so
+        // only the crate-root `#![no_std]` can exempt the submodule.
+        let src = CLEAN_ROUND_TRIP_SRC.replace("{PREFIX}", "");
+        assert!(
+            run_on_submodule_with_lib(STD_CARGO_TOML, "#![no_std]\n", &src).is_empty(),
+            "must not suggest strum when the crate root declares #![no_std]"
+        );
+    }
+
+    #[test]
+    fn still_flags_submodule_in_std_crate() {
+        // Negative counterpart: same submodule enum, but a plain std crate root —
+        // the suggestion must still fire.
+        let src = CLEAN_ROUND_TRIP_SRC.replace("{PREFIX}", "");
+        assert_eq!(
+            run_on_submodule_with_lib(STD_CARGO_TOML, "", &src).len(),
+            1,
+            "must keep suggesting strum for a submodule enum in a std crate"
+        );
     }
 }
