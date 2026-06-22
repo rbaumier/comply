@@ -106,6 +106,102 @@ fn is_written_as_dictionary<'a>(
     })
 }
 
+/// Symbol an identifier reference resolves to, or `None` for an unresolved
+/// reference (a global or an unbound name). Used to compare two occurrences of a
+/// name by *binding* rather than by spelling, so a rebound/shadowed name can't be
+/// mistaken for the original.
+fn reference_symbol(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> Option<oxc_semantic::SymbolId> {
+    let ref_id = ident.reference_id.get()?;
+    semantic.scoping().get_reference(ref_id).symbol_id()
+}
+
+/// True when `receiver` and `iterand` denote the same object: the same resolved
+/// binding for a bare identifier, or the same base binding followed by an
+/// identical static-property chain for a member access (`obj.nested`). Computed
+/// or non-identifier-rooted shapes return `false`, so only structurally-equal
+/// receivers bound to the same symbol match.
+fn same_object(
+    receiver: &Expression,
+    iterand: &Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    match (receiver, iterand) {
+        (Expression::Identifier(a), Expression::Identifier(b)) => {
+            match (reference_symbol(a, semantic), reference_symbol(b, semantic)) {
+                (Some(sa), Some(sb)) => sa == sb,
+                _ => false,
+            }
+        }
+        (Expression::StaticMemberExpression(a), Expression::StaticMemberExpression(b)) => {
+            a.property.name.as_str() == b.property.name.as_str()
+                && same_object(&a.object, &b.object, semantic)
+        }
+        _ => false,
+    }
+}
+
+/// True when the `delete obj[k]` at `delete_id` removes the current key of an
+/// enclosing `for (const k in obj)` enumeration — the receiver `obj` is the same
+/// object as the loop iterand and the deleted key `k` is the loop's binding.
+///
+/// `for…in` enumerates an object's own enumerable string keys, so iterating one is
+/// itself evidence the object is used as a dynamic string-keyed map rather than a
+/// fixed-shape interface; pruning an enumerated key is the canonical
+/// remove-during-enumeration idiom, not a dynamic delete on a fixed-shape object.
+///
+/// Both halves are matched by resolved binding, never by spelling: the key must
+/// resolve to the loop's binding symbol, and the receiver must resolve to the
+/// same symbol(s) as the iterand. The ancestor walk stops at the first function
+/// boundary, so a delete inside a closure nested in the loop body — where `k` is a
+/// different binding — does not match the outer loop.
+fn is_for_in_enumeration_delete(
+    delete_id: oxc_semantic::NodeId,
+    receiver: &Expression,
+    key: &Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::{BindingPattern, ForStatementLeft};
+
+    let Expression::Identifier(key_ident) = key else {
+        return false;
+    };
+    let Some(key_symbol) = reference_symbol(key_ident, semantic) else {
+        return false;
+    };
+
+    for kind in semantic.nodes().ancestor_kinds(delete_id) {
+        // A for-in binding is in scope only up to the enclosing function; a
+        // nested closure introduces its own `k`, so stop the walk there.
+        if matches!(
+            kind,
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+        ) {
+            return false;
+        }
+        let AstKind::ForInStatement(stmt) = kind else {
+            continue;
+        };
+        let ForStatementLeft::VariableDeclaration(decl) = &stmt.left else {
+            continue;
+        };
+        // A for-in head declares exactly one binding.
+        let Some(BindingPattern::BindingIdentifier(bound)) =
+            decl.declarations.first().map(|d| &d.id)
+        else {
+            continue;
+        };
+        if bound.symbol_id.get() == Some(key_symbol)
+            && same_object(receiver, &stmt.right, semantic)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::UnaryExpression]
@@ -146,6 +242,14 @@ impl OxcCheck for Check {
         // polyfill stores like EventEmitter `events[type]`, HTTP `this._headers`,
         // and the `process.env` proxy's `env[prop]`.
         if is_written_as_dictionary(&member.object, semantic) {
+            return;
+        }
+
+        // Allow `delete obj[k]` that prunes the current key of an enclosing
+        // `for (const k in obj)` loop: enumerating an object treats it as a
+        // dynamic string-keyed map, so removing an enumerated key is the
+        // canonical remove-during-enumeration idiom, not a fixed-shape delete.
+        if is_for_in_enumeration_delete(node.id(), &member.object, &member.expression, semantic) {
             return;
         }
 
@@ -358,5 +462,124 @@ function reset(config, userKey) {
 "#;
         let diags = run_on(src);
         assert_eq!(diags.len(), 1);
+    }
+
+    // Regression #5539 — mongoose ODM projection / schema-path maps.
+
+    #[test]
+    fn allows_mongoose_query_select_projection_maps() {
+        let src = r#"
+function select(arg, fields, userProvidedFields) {
+  Object.entries(arg).forEach(([key, value]) => {
+    if (value) {
+      if (fields['-' + key] != null) {
+        delete fields['-' + key];
+      }
+      fields[key] = userProvidedFields[key] = sanitizeValue(value);
+    } else {
+      Object.keys(userProvidedFields).forEach(field => {
+        if (isSubpath(key, field)) {
+          delete fields[field];
+          delete userProvidedFields[field];
+        }
+      });
+    }
+  });
+}
+"#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 0, "{diags:?}");
+    }
+
+    #[test]
+    fn allows_mongoose_schema_nested_path_for_in_delete() {
+        let src = r#"
+function applySchema(newSchema, paths) {
+  for (const nested in newSchema.singleNestedPaths) {
+    if (paths.includes(nested)) {
+      delete newSchema.singleNestedPaths[nested];
+    }
+  }
+}
+"#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 0, "{diags:?}");
+    }
+
+    #[test]
+    fn allows_for_in_enumeration_delete_bare_receiver() {
+        let src = r#"
+function prune(map) {
+  for (const k in map) {
+    delete map[k];
+  }
+}
+"#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 0, "{diags:?}");
+    }
+
+    #[test]
+    fn still_flags_delete_of_non_loop_key_inside_for_in() {
+        // The deleted key is not the loop variable, so this is a genuine dynamic
+        // delete on a possibly fixed-shape object, not enumeration pruning.
+        let src = r#"
+function prune(obj, other) {
+  for (const k in obj) {
+    delete obj[other];
+  }
+}
+"#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn still_flags_delete_of_different_receiver_inside_for_in() {
+        // The delete receiver is not the iterand; enumerating `keys` says nothing
+        // about `config` being a dictionary.
+        let src = r#"
+function prune(keys, config) {
+  for (const k in keys) {
+    delete config[k];
+  }
+}
+"#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn still_flags_delete_when_receiver_rebound_inside_for_in() {
+        // `obj` is shadowed by a new binding before the delete, so the deleted
+        // receiver is a different object than the loop iterand even though the
+        // name matches — symbol resolution keeps this flagged.
+        let src = r#"
+function prune(obj, other) {
+  for (const k in obj) {
+    const obj = other;
+    delete obj[k];
+  }
+}
+"#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    #[test]
+    fn still_flags_delete_in_nested_closure_with_shadowed_key() {
+        // The delete sits in a closure nested in the loop body; its `k` is a
+        // distinct parameter, not the enumeration key, so the delete must flag.
+        let src = r#"
+function prune(map) {
+  for (const k in map) {
+    [1].forEach((k) => {
+      delete map[k];
+    });
+  }
+}
+"#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
     }
 }
