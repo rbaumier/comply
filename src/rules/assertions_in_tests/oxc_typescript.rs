@@ -173,6 +173,9 @@ impl OxcCheck for Check {
                             call, semantic,
                         )
                         || crate::rules::test_assertion_helpers::is_cypress_assertion_call(call)
+                        || crate::rules::test_assertion_helpers::is_ava_context_assertion_call(
+                            call, semantic,
+                        )
                     {
                         true
                     } else {
@@ -928,6 +931,93 @@ mod tests {
     #[test]
     fn still_flags_equal_member_on_non_strict_receiver() {
         let src = r#"it("x", () => { foo.equal(a, b); });"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Regression for #5123 — AVA passes its assertion API as the test callback's
+    // first parameter (`t`); assertions are methods on it (`t.throwsAsync(...)`,
+    // `t.notThrowsAsync(...)`, `t.is(...)`, `t.deepEqual(...)`, …). A method call
+    // on that context parameter is an assertion, so these tests must not flag.
+    #[test]
+    fn allows_ava_context_throws_async_assertion() {
+        let src = r#"
+            import test from 'ava';
+            test('introspectionRequest()', async (t) => {
+                await t.throwsAsync(lib.introspectionRequest(issuer, tClient, lib.None(), 'token'), {
+                    message: 'authorization server metadata is missing',
+                });
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_ava_context_not_throws_async_assertion() {
+        let src = r#"
+            import test from 'ava';
+            test('introspectionRequest() w/ Extra Parameters', async (t) => {
+                await t.notThrowsAsync(lib.introspectionRequest(tIssuer, tClient, lib.None(), 'token'));
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_ava_context_equality_assertions() {
+        let src = r#"
+            import test from 'ava';
+            test('values match', (t) => {
+                t.is(actual, expected);
+                t.deepEqual(obj, { id: 1 });
+                t.truthy(result);
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Negative-space guard for #5123: a method call on an object that is NOT the
+    // test callback's context parameter (`foo.is(...)`, where `foo` is a local
+    // binding) is not an AVA assertion, so an otherwise empty test still fires.
+    #[test]
+    fn still_flags_method_call_on_non_context_receiver() {
+        let src = r#"
+            import test from 'ava';
+            test('x', (t) => {
+                const foo = make();
+                foo.throwsAsync(thing);
+            });
+        "#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Negative-space guard for #5123: a method call on a local binding that
+    // shadows the context name (`const t2 = obj; t2.is(a, b)`) is not an AVA
+    // assertion — only the actual first parameter resolves through the binding.
+    #[test]
+    fn still_flags_method_call_on_shadowing_local() {
+        let src = r#"
+            import test from 'ava';
+            test('x', (t) => {
+                const t2 = obj;
+                t2.is(a, b);
+            });
+        "#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // Negative-space guard for #5123: a `describe` callback's first parameter is
+    // not the AVA execution context — only the direct `it`/`test` callback's
+    // first param is. A method call on it does not clear an empty inner test.
+    #[test]
+    fn still_flags_method_on_describe_callback_param() {
+        let src = r#"
+            import test from 'ava';
+            describe('suite', (d) => {
+                test('x', () => {
+                    d.something(1);
+                });
+            });
+        "#;
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 }
