@@ -445,4 +445,22 @@ mod tests {
                       }";
         assert_eq!(run_on(source).len(), 1);
     }
+
+    #[test]
+    fn allows_safety_comment_separated_by_cfg_attr_issue_5451() {
+        // Issue #5451: jiff src/fmt/buffer.rs — a `// SAFETY:` comment
+        // documents the unsafe block but a `#[cfg(...)]` attribute attached
+        // to the enclosing `if let` sits between them. The unsafe block sits
+        // on the `if let` line; the attribute is the preceding line. The
+        // upward scan skips the attribute and finds the comment.
+        let source = "fn f(wtr: &mut W, n: usize, with: usize) {\n\
+                      // SAFETY: We only ever write valid UTF-8. Namely, `BorrowedBuffer`\n\
+                      // enforces this invariant.\n\
+                      #[cfg(feature = \"alloc\")]\n\
+                      if let Some(buf) = unsafe { wtr.as_mut_vec() } {\n\
+                      buf.reserve(n);\n\
+                      }\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
 }
