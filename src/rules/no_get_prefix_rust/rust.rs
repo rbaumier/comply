@@ -655,4 +655,26 @@ mod tests {
         let src = "impl Phone {\n    fn get_android(&self) -> &Os { &self.android }\n}";
         assert_eq!(run(src).len(), 1);
     }
+
+    #[test]
+    fn allows_get_prefix_in_cargo_integration_test_dir_issue_5423() {
+        // `get_*` helpers in a Cargo integration-test file (`tests/`) are never
+        // part of the crate's public API — the C-GETTER naming convention does
+        // not apply. The central `skip_in_test_dir` gate suppresses the rule for
+        // any file under a test directory.
+        let src = "impl<T> TestErr<T> {\n\
+            fn get_stored_backtrace(&self) -> &Backtrace { &self.stored }\n\
+            fn get_unused_backtrace(&self) -> &Backtrace { &self.unused }\n\
+            fn get_source_backtrace(&self) -> &Backtrace { &self.source }\n\
+        }";
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(
+                &Check,
+                src,
+                "tests/error/nightly/derives_for_generic_enums_with_backtrace.rs",
+            )
+            .is_empty(),
+            "skip_in_test_dir must suppress the rule for Cargo integration-test files"
+        );
+    }
 }
