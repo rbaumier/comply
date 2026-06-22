@@ -4,7 +4,7 @@
 //! 0/1/-1).
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::{byte_offset_to_line_col, is_typed_array_binding};
+use crate::oxc_helpers::{byte_offset_to_line_col, is_typed_array_binding, is_typed_array_ctor_name};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BinaryOperator, Expression, PropertyKey};
 use oxc_span::GetSpan;
@@ -198,6 +198,17 @@ impl OxcCheck for Check {
             return;
         }
 
+        // An element of an array literal passed to a TypedArray constructor
+        // (`new Uint8Array([0x00, 0x61, 0x73, 0x6d, …])`) is a raw byte of the
+        // binary buffer being built — a WASM module header, a protocol frame, a
+        // packed struct. The TypedArray constructor names the array as binary
+        // data, so naming individual bytes (`WASM_MAGIC_BYTE_0 = 0x00`) adds
+        // noise. The constructor is the anchor: a numeric literal in a plain
+        // array (not wrapped in a TypedArray constructor) is judged on its own.
+        if is_typed_array_constructor_element(node.id(), semantic) {
+            return;
+        }
+
         // An element of a long, homogeneously-numeric array literal is embedded
         // data (a byte array, lookup table, or serialized binary such as an
         // inlined ONNX protobuf), not a magic number. Naming individual elements
@@ -225,6 +236,54 @@ impl OxcCheck for Check {
             span: None,
         });
     }
+}
+
+/// True when this literal is an element of an array literal that is an
+/// argument to a `new <TypedArray>(...)` constructor — `new Uint8Array([0x00,
+/// 0x61, …])`, `new Int8Array([…])`, etc. for the standard TypedArray family.
+/// The array is the raw contents of a binary buffer (a WASM module header, a
+/// protocol frame, a packed struct), so each element is a byte/word of binary
+/// data, not a nameable application constant. No length gate: binary data of any
+/// length is still binary data. The TypedArray constructor is the anchor — a
+/// literal in a plain array (or an array passed elsewhere) is judged on its own.
+fn is_typed_array_constructor_element(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    // The element is the literal itself, or a `-literal` unary.
+    let mut element_id = node_id;
+    let parent_id = nodes.parent_id(element_id);
+    if parent_id != element_id
+        && let AstKind::UnaryExpression(unary) = nodes.get_node(parent_id).kind()
+        && unary.operator == oxc_ast::ast::UnaryOperator::UnaryNegation
+    {
+        element_id = parent_id;
+    }
+
+    let array_id = nodes.parent_id(element_id);
+    if array_id == element_id {
+        return false;
+    }
+    let AstKind::ArrayExpression(array) = nodes.get_node(array_id).kind() else {
+        return false;
+    };
+    let array_span = array.span;
+
+    // The array must be an argument to a `new <TypedArray>(...)` construction.
+    let new_id = nodes.parent_id(array_id);
+    if new_id == array_id {
+        return false;
+    }
+    let AstKind::NewExpression(new_expr) = nodes.get_node(new_id).kind() else {
+        return false;
+    };
+    let Expression::Identifier(callee) = &new_expr.callee else {
+        return false;
+    };
+    is_typed_array_ctor_name(callee.name.as_str())
+        && new_expr.arguments.iter().any(|a| a.span() == array_span)
 }
 
 /// True when this literal is an element of an array literal that is embedded
@@ -1698,5 +1757,49 @@ mod tests {
         // arithmetic compound assignment (`x *= 86400`) keeps flagging.
         let src = r#"function f(x: number) { let v = x; v *= 86400; return v; }"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for issue #5456: WebAssembly feature-detection libraries
+    // (GoogleChromeLabs/wasm-feature-detect, webassemblyjs, …) construct a WASM
+    // module from its raw bytes — the `\0asm` magic header, the version field,
+    // section ids and lengths — passed as an array literal to a TypedArray
+    // constructor. Each byte is intrinsic to the WASM binary format; naming
+    // `WASM_MAGIC_BYTE_0 = 0x00` adds noise, not meaning.
+    #[test]
+    fn allows_typed_array_constructor_byte_elements() {
+        let src = r#"
+            new WebAssembly.Module(
+                new Uint8Array([
+                    0x00, 0x61, 0x73, 0x6d,
+                    0x01, 0x00, 0x00, 0x00,
+                    0x05,
+                    0x05,
+                    0x02,
+                    0x00, 0x00,
+                    0x00, 0x00,
+                ]),
+            );
+        "#;
+        assert!(
+            run(src).is_empty(),
+            "byte elements of a TypedArray constructor must not be flagged"
+        );
+    }
+
+    #[test]
+    fn allows_short_typed_array_constructor_byte_elements() {
+        // The TypedArray-constructor anchor needs no length gate: even a short
+        // byte sequence is binary data, not a meaningful tuple of named values.
+        let src = r#"new Int8Array([0x42, 0x7f, 0x80]);"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_magic_number_in_plain_array_not_typed_array() {
+        // The anchor is the TypedArray constructor, not any array literal: a
+        // short numeric tuple in a plain array (not below the data-array gate and
+        // not a TypedArray argument) keeps every element flagged.
+        let src = r#"draw([86400, 3600, 1440]);"#;
+        assert_eq!(run(src).len(), 3);
     }
 }
