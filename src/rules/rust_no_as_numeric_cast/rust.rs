@@ -66,7 +66,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cast_feeds_from_bits, cast_feeds_simd_intrinsic, cast_operand_bit_width,
+    cast_feeds_from_bits, cast_feeds_simd_intrinsic, cast_in_const_context, cast_operand_bit_width,
     cast_operand_indexed_element_type, cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded,
     cast_operand_is_bitwise, cast_operand_is_bool, cast_operand_is_char,
     cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
@@ -157,6 +157,9 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
         return false;
     }
     if is_in_enum_discriminant(node) {
+        return false;
+    }
+    if cast_in_const_context(node, source_bytes) {
         return false;
     }
     if is_literal_cast(node, source_bytes) {
@@ -463,6 +466,31 @@ mod tests {
     fn allows_in_test_context() {
         let source = "#[test]\nfn t() { let _ = 1u8 as u64; }";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_signed_to_unsigned_in_const_initializer() {
+        // wasmerio/wasmer constants.rs: `as` is the only const-callable
+        // conversion for a signed→unsigned bit-pattern embedding (#5679).
+        assert!(run_on("const LEF32_GEQ_I32_MIN: u64 = i32::MIN as u64;").is_empty());
+        assert!(run_on("const GEF64_LEQ_I32_MAX: u64 = i32::MAX as u64;").is_empty());
+        assert!(run_on("const LEF32_GEQ_I64_MIN: u64 = i64::MIN as u64;").is_empty());
+    }
+
+    #[test]
+    fn allows_cast_in_static_initializer() {
+        assert!(run_on("static S: u64 = i64::MIN as u64;").is_empty());
+    }
+
+    #[test]
+    fn allows_cast_in_const_fn_body() {
+        assert!(run_on("const fn f(x: i64) -> u32 { x as u32 }").is_empty());
+    }
+
+    #[test]
+    fn flags_cast_in_non_const_fn_body() {
+        // A runtime body is unaffected — `try_into()` is available there.
+        assert_eq!(run_on("fn f(x: i64) -> u32 { x as u32 }").len(), 1);
     }
 
     #[test]

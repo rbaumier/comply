@@ -88,6 +88,59 @@ fn fn_modifiers_contain_const(function_item: Node, source: &[u8]) -> bool {
     false
 }
 
+/// True when `cast` (a `type_cast_expression`) lies in a const-evaluation
+/// context where trait-based conversions are unavailable, so `as` is the only
+/// conversion the language offers and the `as`-cast lints have no valid
+/// remediation to suggest.
+///
+/// In a const-evaluated position the rules' usual alternatives do not compile:
+/// `From::from` is not implemented for signed↔unsigned integer pairs
+/// (`u64::from(i32::MIN)` is rejected), and `TryFrom`/`TryInto` are not
+/// const-stable. The cast is therefore mandatory, making the diagnostic a
+/// guaranteed false positive.
+///
+/// Walks up parents and decides at the first enclosing const-relevant node:
+///
+/// - `const_item` / `static_item`: const when the subtree it ascended through
+///   is the item's `value` field (the initializer after `=`), so the type
+///   annotation is not exempted;
+/// - `function_item`: const iff that function carries the `const` modifier (a
+///   `const fn` body is fully const-evaluated; a normal runtime body is not);
+/// - `array_type` / `array_expression`: const when ascended through the
+///   `length` field — an array-length type (`[u8; N as usize]`) or
+///   array-repeat count (`[0u8; N as usize]`);
+/// - `const_block`: a `const { … }` block is const-evaluated;
+/// - `type_arguments`: a const-generic argument (`Foo<{ X as usize }>`), where
+///   the cast is part of a compile-time generic argument.
+///
+/// The walk stops at the first `closure_expression` (closures are not const)
+/// and at any non-const `function_item`, so a runtime cast nested in a module
+/// alongside a `const` keeps being flagged.
+///
+/// Shared by `rust-no-as-numeric-cast` and `rust-no-lossy-as-cast`.
+pub fn cast_in_const_context(cast: Node, source: &[u8]) -> bool {
+    let mut cur = cast;
+    while let Some(parent) = cur.parent() {
+        match parent.kind() {
+            "const_item" | "static_item" => {
+                return parent.child_by_field_name("value") == Some(cur);
+            }
+            "array_type" | "array_expression" => {
+                if parent.child_by_field_name("length") == Some(cur) {
+                    return true;
+                }
+            }
+            "const_block" => return true,
+            "type_arguments" => return true,
+            "function_item" => return fn_modifiers_contain_const(parent, source),
+            "closure_expression" => return false,
+            _ => {}
+        }
+        cur = parent;
+    }
+    false
+}
+
 /// True if `node` is the discriminant initializer of an enum variant — the
 /// expression after `=` in `Variant = <expr>` (tree-sitter-rust: the `value`
 /// field of an `enum_variant`).
@@ -4330,6 +4383,36 @@ mod tests {
             }
         }
         None
+    }
+
+    #[test]
+    fn cast_in_const_context_distinguishes_const_eval_from_runtime() {
+        let cases = [
+            // `const` item initializer — the issue's exact shape.
+            ("const X: u64 = i32::MIN as u64;", true),
+            // `static` item initializer.
+            ("static S: u64 = i64::MIN as u64;", true),
+            // `const fn` body — fully const-evaluated.
+            ("const fn f() -> u32 { let _x = -1i32 as u32; 0 }", true),
+            // Array-length type expression `[u8; N as usize]`.
+            ("struct A { arr: [u8; LEN as usize] }", true),
+            // Array-repeat count expression `[0u8; N as usize]`.
+            ("fn g() { let _a = [0u8; LEN as usize]; }", true),
+            // `const { … }` block.
+            ("fn g() { let _x = const { -1i32 as u32 }; }", true),
+            // Array-repeat element inside a const item initializer.
+            ("const X: [u8; 4] = [i8::MIN as u8; 4];", true),
+            // A plain runtime `let` binding still flags.
+            ("fn g(a: i64) { let _x = a as u32; }", false),
+            // A normal (non-const) fn body still flags.
+            ("fn h(a: i64) -> u32 { a as u32 }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_type_cast_expression(tree.root_node())
+                .expect("source should contain a cast");
+            assert_eq!(cast_in_const_context(cast, src.as_bytes()), expected, "src: {src}");
+        }
     }
 
     #[test]
