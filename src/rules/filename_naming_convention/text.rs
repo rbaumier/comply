@@ -205,6 +205,24 @@ fn is_tfjs_gradient_stem(stem: &str) -> bool {
         .is_some_and(is_pascal_case)
 }
 
+/// Returns `true` for a stem whose trailing `$`/`$$` is the query-command marker:
+/// a valid ECMAScript IdentifierName ending in one or more `$`, where the base
+/// (the stem with its trailing `$` run removed) is empty or itself an accepted
+/// convention. `$` is a legal identifier character, and WebdriverIO names each
+/// element-query command file verbatim after the command it exports — `$.ts`
+/// (`$()`), `$$.ts` (`$$()`), `react$.ts` (`react$()`), `shadow$$.ts`
+/// (`shadow$$()`) — so the file-to-API mapping cannot adopt a `$`-free casing.
+/// The base is validated against camelCase/PascalCase (the same set a `.ts` file
+/// already accepts), so a malformed base before the marker (`bad_name$`) still
+/// fails. An all-`$` stem (`$$`) has an empty base and is the bare query command.
+fn is_query_command_stem(stem: &str) -> bool {
+    let base = stem.trim_end_matches('$');
+    if base.len() == stem.len() {
+        return false;
+    }
+    base.is_empty() || is_camel_case(base) || is_pascal_case(base)
+}
+
 /// Returns `true` for the cross-ecosystem regression-test stem
 /// `issue-<digits>-<apiName>`: the literal `issue-` prefix, one or more ASCII
 /// digits naming the GitHub issue, then a `-` introducing the API-name segment.
@@ -437,10 +455,12 @@ impl TextCheck for Check {
         if is_public_api_barrel_file(ctx.path) {
             return Vec::new();
         }
-        // A lone `$` stem is the framework-internal entry-point convention
-        // (e.g. Prisma's `$.ts`, TanStack Router's splat `$.tsx`); it has no
-        // remainder to validate, so allow it outright.
-        if stem == "$" {
+        // A stem ending in the query-command marker `$`/`$$` names a file after
+        // the element-query command it exports — a lone `$` (Prisma `$.ts`,
+        // TanStack splat `$.tsx`), `$$`, or a marked base (`react$`, `shadow$$`)
+        // in WebdriverIO. `$` is a legal identifier character, so validate the
+        // base before the marker rather than rejecting the `$`.
+        if is_query_command_stem(stem) {
             return Vec::new();
         }
         // A leading `_`/`__` marks a private/internal module and a leading `$`
@@ -694,6 +714,44 @@ mod tests {
     #[test]
     fn flags_dollar_prefix_snake_case_remainder_issue_1618() {
         assert_eq!(run("src/$bad_name.ts").len(), 1);
+    }
+
+    // Regression for #5543: WebdriverIO names each element-query command file
+    // verbatim after the `$`/`$$` command it exports. The trailing `$`/`$$`
+    // marker is a legal identifier character, so these files must not be flagged.
+    #[test]
+    fn allows_webdriverio_query_command_files_issue_5543() {
+        assert!(run("packages/webdriverio/src/commands/element/$.ts").is_empty());
+        assert!(run("packages/webdriverio/src/commands/element/$$.ts").is_empty());
+        assert!(run("packages/webdriverio/src/commands/element/react$.ts").is_empty());
+        assert!(run("packages/webdriverio/src/commands/element/react$$.ts").is_empty());
+        assert!(run("packages/webdriverio/src/commands/element/shadow$.ts").is_empty());
+        assert!(run("packages/webdriverio/src/commands/element/shadow$$.ts").is_empty());
+        assert!(run("packages/webdriverio/src/commands/browser/custom$.ts").is_empty());
+        assert!(run("packages/webdriverio/src/commands/browser/custom$$.ts").is_empty());
+    }
+
+    // Guard (scope proof): the trailing-`$` marker exempts only a well-cased
+    // base. A snake_cased base before the marker (`bad_name$`) is not a valid
+    // query-command name and must still fire.
+    #[test]
+    fn flags_query_command_marker_on_bad_base_issue_5543() {
+        assert_eq!(run("src/bad_name$.ts").len(), 1);
+    }
+
+    // Guard (unit): the marker must be a trailing `$` run. A stem with no `$`
+    // is not a query command (handled by the ordinary convention branches), and
+    // a base that is neither camel/pascal nor empty before the marker is rejected.
+    #[test]
+    fn query_command_stem_unit_issue_5543() {
+        assert!(is_query_command_stem("$"));
+        assert!(is_query_command_stem("$$"));
+        assert!(is_query_command_stem("react$"));
+        assert!(is_query_command_stem("shadow$$"));
+        assert!(is_query_command_stem("Custom$"));
+        assert!(!is_query_command_stem("react"));
+        assert!(!is_query_command_stem("bad_name$"));
+        assert!(!is_query_command_stem("a-b$"));
     }
 
     // Regression for #1399: TypeScript 4.7+ ESM/CJS extensions (.mts/.cts)
