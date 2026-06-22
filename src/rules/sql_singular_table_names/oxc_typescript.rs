@@ -80,4 +80,38 @@ mod tests {
         let src = r#"const m = "CREATE TABLE user_account (id INT);";"#;
         assert!(run_on(src).is_empty());
     }
+
+    /// Regression for #5540: plural table names in expected-SQL strings inside
+    /// query-builder snapshot assertions (knex) are test oracles, not authored
+    /// schema. The central `skip_in_test_dir` gate suppresses the rule there.
+    #[test]
+    fn skips_sql_snapshot_assertions_in_test_files() {
+        let src = r#"
+            it('create a table', function() {
+              expect(tableSql[0].sql).to.equal(
+                'create table "users" ("id" integer primary key not null)'
+              );
+            });
+        "#;
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "test/unit/schema-builder/redshift.js")
+                .is_empty(),
+            "must not flag SQL oracle strings under a test/ directory"
+        );
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "test/integration2/schema/misc.spec.js")
+                .is_empty(),
+            "must not flag SQL oracle strings in a .spec.js file"
+        );
+    }
+
+    /// The convention still fires on non-test source files.
+    #[test]
+    fn still_fires_outside_test_dir() {
+        let src = r#"const m = "CREATE TABLE users (id INT);";"#;
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_gated(&Check, src, "src/db/schema.ts").len(),
+            1,
+        );
+    }
 }
