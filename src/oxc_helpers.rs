@@ -1437,6 +1437,109 @@ pub fn expression_is_array(
     }
 }
 
+/// Whether a type annotation denotes a built-in keyed map: `Map<K, V>`,
+/// `WeakMap<K, V>`, or `ReadonlyMap<K, V>`. These are the standard library
+/// containers whose `.set(key, value)` merely stores a value at `key` with no
+/// observable side effect, so a same-key re-`set` overwrites a dead store.
+fn type_is_map(ty: &oxc_ast::ast::TSType) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeName};
+    let TSType::TSTypeReference(tref) = ty else {
+        return false;
+    };
+    matches!(
+        &tref.type_name,
+        TSTypeName::IdentifierReference(id)
+            if matches!(id.name.as_str(), "Map" | "WeakMap" | "ReadonlyMap")
+    )
+}
+
+/// Whether an initializer expression evaluates to a built-in map: `new Map(...)`
+/// or `new WeakMap(...)`.
+fn initializer_is_map(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+    match expr {
+        Expression::NewExpression(new_expr) => matches!(
+            &new_expr.callee,
+            Expression::Identifier(id) if matches!(id.name.as_str(), "Map" | "WeakMap")
+        ),
+        Expression::ParenthesizedExpression(paren) => initializer_is_map(&paren.expression),
+        Expression::TSAsExpression(as_expr) => {
+            type_is_map(&as_expr.type_annotation) || initializer_is_map(&as_expr.expression)
+        }
+        Expression::TSSatisfiesExpression(sat) => initializer_is_map(&sat.expression),
+        Expression::TSNonNullExpression(nn) => initializer_is_map(&nn.expression),
+        _ => false,
+    }
+}
+
+/// Resolve an identifier reference to its declaration and decide whether that
+/// declaration proves the binding holds a built-in map — a `let`/`const`/`var`
+/// declarator carrying a `Map`/`WeakMap`/`ReadonlyMap` type annotation or
+/// initialised from `new Map()`/`new WeakMap()`, or a parameter typed as one.
+fn binding_is_map(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    let scoping = semantic.scoping();
+    let Some(symbol_id) = ident
+        .reference_id
+        .get()
+        .and_then(|ref_id| scoping.get_reference(ref_id).symbol_id())
+    else {
+        return false;
+    };
+    let nodes = semantic.nodes();
+    let decl_id = scoping.symbol_declaration(symbol_id);
+    match nodes.kind(decl_id) {
+        AstKind::VariableDeclarator(decl) => {
+            if let Some(type_ann) = &decl.type_annotation
+                && type_is_map(&type_ann.type_annotation)
+            {
+                return true;
+            }
+            decl.init.as_ref().is_some_and(initializer_is_map)
+        }
+        AstKind::FormalParameter(param) => param
+            .type_annotation
+            .as_ref()
+            .is_some_and(|ann| type_is_map(&ann.type_annotation)),
+        _ => false,
+    }
+}
+
+/// Whether `expr` is demonstrably a built-in `Map`/`WeakMap`. A `new Map(...)`
+/// expression is one directly; an identifier is one only if its binding carries
+/// a `Map`/`WeakMap`/`ReadonlyMap` type annotation or is initialised from
+/// `new Map()`/`new WeakMap()`.
+///
+/// A receiver's *name* is never evidence — names do not determine type. A
+/// receiver whose type cannot be proven a map (a state-store binding, a member
+/// chain, an untyped parameter) returns `false`. Callers gate `.set(key, value)`
+/// overwrite detection on this so a dispatch-style `.set` with side effects
+/// (e.g. a jotai `store.set(atom, value)`) is not treated as a dead store.
+#[must_use]
+pub fn expression_is_map(
+    expr: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::Expression;
+    match expr {
+        Expression::NewExpression(_) => initializer_is_map(expr),
+        Expression::Identifier(ident) => binding_is_map(ident, semantic),
+        Expression::ParenthesizedExpression(paren) => {
+            expression_is_map(&paren.expression, semantic)
+        }
+        Expression::TSAsExpression(as_expr) => {
+            type_is_map(&as_expr.type_annotation)
+                || expression_is_map(&as_expr.expression, semantic)
+        }
+        Expression::TSSatisfiesExpression(sat) => expression_is_map(&sat.expression, semantic),
+        Expression::TSNonNullExpression(nn) => expression_is_map(&nn.expression, semantic),
+        _ => false,
+    }
+}
+
 /// True when `arg` is `delete recv.prop` whose `prop` is declared **optional**
 /// (`prop?: T`) on the receiver's structurally-resolved named type. Deleting an
 /// optional member returns the object to the absent state its own type already
