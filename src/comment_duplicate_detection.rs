@@ -368,12 +368,15 @@ struct CommentEntry {
     /// the same `aes128_decrypt`, or a runtime props object and the TS type
     /// declaring the same prop — so their identical docs are not a smell.
     decl_name: Option<String>,
-    /// Name of the enum that owns the variant this comment documents, when the
-    /// documented declaration is an enum variant. Variants of two *different*
-    /// enums that share a name (`FlushCompress::None` / `FlushDecompress::None`)
-    /// are parallel API surfaces describing the same concept, so their identical
-    /// docs are intentional per-item documentation, not a copy-paste smell.
-    enum_owner: Option<String>,
+    /// Name of the type that owns the variant or member this comment documents,
+    /// when the documented declaration is an enum variant or a type/interface
+    /// member. Two members of two *different* owners that share a name (a
+    /// `FlushCompress::None` / `FlushDecompress::None` variant pair, or a
+    /// `minimum_amount` field repeated on an OpenAPI request type and its
+    /// response type) are parallel API surfaces describing the same concept, so
+    /// their identical docs are intentional per-item documentation, not a
+    /// copy-paste smell.
+    decl_owner: Option<String>,
 }
 
 /// A logical comment block: either one `/* */` node or a run of consecutive
@@ -386,8 +389,8 @@ struct CommentGroup {
     stripped: String,
     /// Name of the declaration immediately documented by this block.
     decl_name: Option<String>,
-    /// Name of the enum owning the variant this block documents, if any.
-    enum_owner: Option<String>,
+    /// Name of the type owning the variant or member this block documents, if any.
+    decl_owner: Option<String>,
     /// Any line of the block documents a `#[cfg(...)]`-gated item or sits in a
     /// `cfg_if!` arm (see `RawComment::cfg_conditional`).
     cfg_conditional: bool,
@@ -403,8 +406,8 @@ struct RawComment {
     /// the comment is an outer doc-comment whose next sibling (skipping
     /// attributes) is a named declaration.
     decl_name: Option<String>,
-    /// Name of the enum owning the variant this comment documents, if any.
-    enum_owner: Option<String>,
+    /// Name of the type owning the variant or member this comment documents, if any.
+    decl_owner: Option<String>,
     /// The documented item compiles only under a `#[cfg(...)]` predicate — the
     /// comment sits inside a `cfg_if!` macro arm or directly precedes a
     /// `#[cfg(...)]`-gated item. Such doc-comments are necessarily identical
@@ -558,19 +561,22 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
             {
                 continue;
             }
-            // Parallel enum variants: two variants of *different* enums that
-            // share a name (a `FlushCompress::None` and a `FlushDecompress::None`
-            // mirroring the same zlib flush mode for the two directions) describe
-            // the same concept, so their identical doc-comments are intentional
-            // per-item documentation. A variant name is unique within its enum,
-            // so requiring distinct owners means a same-file copy-paste inside one
-            // enum can never qualify; this exemption therefore applies regardless
-            // of file, unlike the top-level cross-file one above.
-            if are_parallel_enum_variants(
+            // Parallel members of distinct owners: two enum variants of
+            // *different* enums (`FlushCompress::None` / `FlushDecompress::None`
+            // mirroring the same zlib flush mode for the two directions), or two
+            // type/interface members of *different* types that share a name (an
+            // OpenAPI `minimum_amount` field carried by both a request type and
+            // its response type) describe the same concept, so their identical
+            // doc-comments are intentional per-item documentation. A member name
+            // is unique within its owner, so requiring distinct owners means a
+            // same-file copy-paste inside one type can never qualify; this
+            // exemption therefore applies regardless of file, unlike the
+            // top-level cross-file one above.
+            if are_parallel_owned_members(
                 entry.decl_name.as_deref(),
-                entry.enum_owner.as_deref(),
+                entry.decl_owner.as_deref(),
                 partner.decl_name.as_deref(),
-                partner.enum_owner.as_deref(),
+                partner.decl_owner.as_deref(),
             ) {
                 continue;
             }
@@ -686,14 +692,16 @@ fn strip_impl_qualifier(name: &str) -> &str {
     name
 }
 
-/// Two doc-comments document parallel enum variants when both name a variant
-/// (each carries an enum owner), the variant names match as a parallel-API pair,
-/// and the *owning enums differ*. Distinct owners are what makes this safe to
-/// apply within a single file: a variant name is unique inside its enum, so two
-/// matching variant docs can only ever come from two different enums — mirrored
-/// directions of one concept (`FlushCompress::None` / `FlushDecompress::None`),
-/// never a botched copy-paste of one variant onto a sibling.
-fn are_parallel_enum_variants(
+/// Two doc-comments document parallel members of distinct owners when both name
+/// a member (each carries an owner type), the member names match as a
+/// parallel-API pair, and the *owning types differ*. Distinct owners are what
+/// makes this safe to apply within a single file: a member name is unique inside
+/// its owner, so two matching member docs can only ever come from two different
+/// owners — mirrored directions of one concept (`FlushCompress::None` /
+/// `FlushDecompress::None`) or the same field on parallel request/response types
+/// (`Restrictions.minimum_amount` on a create-params type and its response type),
+/// never a botched copy-paste of one member onto a sibling within one owner.
+fn are_parallel_owned_members(
     a_name: Option<&str>,
     a_owner: Option<&str>,
     b_name: Option<&str>,
@@ -765,7 +773,7 @@ fn extract_entries(
             words,
             prefix_key,
             decl_name: group.decl_name,
-            enum_owner: group.enum_owner,
+            decl_owner: group.decl_owner,
         });
     }
     entries
@@ -842,19 +850,19 @@ fn member_name(member: tree_sitter::Node, source: &[u8]) -> Option<String> {
 }
 
 /// The name of the declaration or member a comment immediately documents, plus
-/// the owning enum's name when that declaration is an enum variant. Looks at the
-/// comment's next named sibling, skipping attributes/decorators. `(None, _)` for
-/// free-floating comments (no following declaration) or declarations without a
-/// recognizable name.
+/// the owning type's name when that declaration is an enum variant or a
+/// type/interface member. Looks at the comment's next named sibling, skipping
+/// attributes/decorators. `(None, _)` for free-floating comments (no following
+/// declaration) or declarations without a recognizable name.
 ///
 /// A top-level declaration or enum variant is only documented by a *doc*-comment
 /// (`///`, `/**`, …) — a plain `//` above it is incidental prose, so a
 /// copy-pasted one is still a smell. Object/type members are an exception: their
 /// docs are conventionally a plain `//` above the field, so a plain `//` above a
-/// member still names it. The enum owner is returned only for variants; it lets
-/// the caller treat same-named variants of *different* enums as parallel API
-/// surfaces while a botched copy-paste within one enum (impossible — variant
-/// names are unique per enum) cannot slip through.
+/// member still names it. The owner is returned for enum variants and TS
+/// interface/type members; it lets the caller treat same-named members of
+/// *different* owners as parallel API surfaces while a botched copy-paste within
+/// one owner (impossible — member names are unique per owner) cannot slip through.
 fn documented_decl_name(comment: tree_sitter::Node, source: &[u8]) -> (Option<String>, Option<String>) {
     let Some(mut sibling) = comment.next_named_sibling() else {
         return (None, None);
@@ -866,7 +874,7 @@ fn documented_decl_name(comment: tree_sitter::Node, source: &[u8]) -> (Option<St
         sibling = next;
     }
     if is_named_member(sibling.kind()) {
-        return (member_name(sibling, source), None);
+        return (member_name(sibling, source), enclosing_named_type(sibling, source));
     }
     let is_doc = is_doc_comment(&source[comment.start_byte()..comment.end_byte()]);
     if is_doc && sibling.kind() == "enum_variant" {
@@ -900,6 +908,30 @@ fn enclosing_enum_name(variant: tree_sitter::Node, source: &[u8]) -> Option<Stri
         .map(str::to_owned)
 }
 
+/// The name of the TS `interface_declaration` / `type_alias_declaration` whose
+/// body holds `member`, walking up past the intervening `object_type` /
+/// `interface_body`. `None` for a member that has no stable named owner — an
+/// object-literal `pair`, or a type literal nested inline rather than bound to a
+/// named type alias. Without a named owner two same-named members cannot be
+/// proven parallel, so they stay eligible to flag (the cross-file member
+/// exemption still covers the named-prop-API-mirror case separately).
+fn enclosing_named_type(member: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let mut node = member.parent();
+    while let Some(n) = node {
+        match n.kind() {
+            "interface_declaration" | "type_alias_declaration" => {
+                return n
+                    .child_by_field_name("name")
+                    .and_then(|name| name.utf8_text(source).ok())
+                    .map(str::to_owned);
+            }
+            "object_type" | "interface_body" => node = n.parent(),
+            _ => return None,
+        }
+    }
+    None
+}
+
 fn collect_raw_comments(tree: &tree_sitter::Tree, source: &[u8]) -> Vec<RawComment> {
     let mut out = Vec::new();
     let mut cursor = tree.walk();
@@ -909,7 +941,7 @@ fn collect_raw_comments(tree: &tree_sitter::Tree, source: &[u8]) -> Vec<RawComme
             let start = node.start_byte();
             let end = node.end_byte();
             let is_line = source[start..end].starts_with(b"//");
-            let (decl_name, enum_owner) = documented_decl_name(node, source);
+            let (decl_name, decl_owner) = documented_decl_name(node, source);
             out.push(RawComment {
                 start_byte: start,
                 end_byte: end,
@@ -917,7 +949,7 @@ fn collect_raw_comments(tree: &tree_sitter::Tree, source: &[u8]) -> Vec<RawComme
                 col: node.start_position().column,
                 is_line,
                 decl_name,
-                enum_owner,
+                decl_owner,
                 cfg_conditional: is_cfg_conditional_comment(node, source),
             });
         }
@@ -950,7 +982,7 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
             // The documented declaration is attached to the last line of the
             // run (the one directly above the declaration).
             let mut decl_name = c.decl_name.clone();
-            let mut enum_owner = c.enum_owner.clone();
+            let mut decl_owner = c.decl_owner.clone();
             let mut texts = vec![first_text.to_string()];
             let mut cfg_conditional = c.cfg_conditional;
             let mut j = i + 1;
@@ -968,7 +1000,7 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
                 last_row = n.row;
                 end_byte = n.end_byte;
                 decl_name = n.decl_name.clone();
-                enum_owner = n.enum_owner.clone();
+                decl_owner = n.decl_owner.clone();
                 j += 1;
             }
             groups.push(CommentGroup {
@@ -978,7 +1010,7 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
                 end_byte,
                 stripped: texts.join(" "),
                 decl_name,
-                enum_owner,
+                decl_owner,
                 cfg_conditional,
             });
             i = j;
@@ -990,7 +1022,7 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
                 end_byte: c.end_byte,
                 stripped: strip_block(&source[c.start_byte..c.end_byte]),
                 decl_name: c.decl_name.clone(),
-                enum_owner: c.enum_owner.clone(),
+                decl_owner: c.decl_owner.clone(),
                 cfg_conditional: c.cfg_conditional,
             });
             i += 1;
@@ -1490,6 +1522,55 @@ export type VueCalProps = {
         let b = write(&dir, "b.ts", &format!("export type B = {{\n{head}  sessions?: number[],\n}};\n"));
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "identical doc on differently-named props is a smell");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn ignores_same_field_jsdoc_across_request_and_response_interfaces() {
+        // Regression (#5503): an OpenAPI-generated SDK emits each API field's one
+        // canonical description as JSDoc on every type that carries the field — a
+        // response interface AND its request `CreateParams` twin. The same
+        // `minimum_amount` field documented identically on two *different*
+        // interfaces in one file is intentional parallel API documentation, not a
+        // copy-paste smell. Distinct interface owners keep the same-file member
+        // exemption surgical: a field name is unique within its interface.
+        let dir = tempfile::tempdir().unwrap();
+        let jsdoc = "\
+  /**
+   * Minimum amount required to redeem this Promotion Code into a Coupon (e.g., a
+   * purchase must be $100 or more to work) before the redemption is allowed here.
+   */\n";
+        let content = format!(
+            "export interface Restrictions {{\n{jsdoc}  minimum_amount: number | null;\n}}\n\
+             export interface RestrictionsCreateParams {{\n{jsdoc}  minimum_amount?: number;\n}}\n"
+        );
+        let a = write(&dir, "PromotionCodes.ts", &content);
+        let b = write(&dir, "filler.ts", "export const x = 1;\n");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "same field's JSDoc on a request and a response interface must not flag"
+        );
+    }
+
+    #[test]
+    fn still_flags_intra_interface_copy_pasted_field_jsdoc() {
+        // Over-exclusion guard for #5503: two *different* fields of the *same*
+        // interface carrying the same copy-pasted JSDoc is real duplication. The
+        // shared owner keeps the parallel-member exemption from firing, so a
+        // botched copy-paste within one type still flags.
+        let dir = tempfile::tempdir().unwrap();
+        let jsdoc = "\
+  /**
+   * Minimum amount required to redeem this Promotion Code into a Coupon (e.g., a
+   * purchase must be $100 or more to work) before the redemption is allowed here.
+   */\n";
+        let content = format!(
+            "export interface Restrictions {{\n{jsdoc}  minimum_amount?: number;\n{jsdoc}  maximum_amount?: number;\n}}\n"
+        );
+        let a = write(&dir, "PromotionCodes.ts", &content);
+        let b = write(&dir, "filler.ts", "export const x = 1;\n");
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "copy-pasted JSDoc on two fields of one interface is a smell");
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
