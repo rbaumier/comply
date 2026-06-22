@@ -42,6 +42,16 @@ const API_MANDATED_NAMES: &[&str] = &["hour12"];
 
 const NEGATIVE_SUBSTRINGS: &[&str] = &["_not_", "isnt_", "cannot_", "shouldnt_"];
 
+// Predicate words that, when appearing as a separated mid-name word
+// (`<noun>_is_<adjective>`, `<noun>_has_<noun>`, …), embed a predicate
+// relationship just as a leading prefix does. `sign_is_mandatory`,
+// `year_is_six_digits`, `date_is_present` read as "the sign is mandatory" —
+// the `_is_` serves the exact semantic function of an `is_` prefix, so a
+// redundant leading `is_` would be wrong. Each entry is matched bounded by
+// underscores on both sides, so a substring like `axis_` (no leading `_is`)
+// or `enabled` is unaffected and still requires a real prefix.
+const INFIX_PREDICATES: &[&str] = &["_is_", "_has_", "_should_", "_can_", "_will_"];
+
 #[derive(Debug)]
 pub struct Check;
 
@@ -376,6 +386,20 @@ fn has_flag_suffix(name: &str) -> bool {
     name == "flag" || name.ends_with("_flag")
 }
 
+/// True if `name` embeds a predicate word as a separated mid-name word
+/// (`<noun>_is_<adjective>`, `<noun>_has_<noun>`, …). The predicate word is
+/// matched bounded by underscores on both sides, and there must be a non-empty
+/// noun before it and a non-empty descriptor after it, so the name reads as
+/// "the noun is/has X" — the infix `_is_` carries the same intent signal as a
+/// leading `is_` prefix. A trailing predicate (`mandatory_is`) or a substring
+/// without word boundaries (`axis_value`) does not match.
+fn has_infix_predicate(name: &str) -> bool {
+    INFIX_PREDICATES.iter().any(|infix| match name.find(infix) {
+        Some(pos) => pos > 0 && pos + infix.len() < name.len(),
+        None => false,
+    })
+}
+
 /// Return a short problem description if the name violates the rule.
 fn classify_name(name: &str) -> Option<&'static str> {
     if NEGATIVE_SUBSTRINGS.iter().any(|neg| name.contains(neg)) {
@@ -388,6 +412,9 @@ fn classify_name(name: &str) -> Option<&'static str> {
         if name.starts_with(prefix) {
             return None;
         }
+    }
+    if has_infix_predicate(name) {
+        return None;
     }
     if IDIOMATIC_NAMES.contains(&name) {
         return None;
@@ -644,6 +671,56 @@ mod tests {
         let diags = run_on(src);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("'expected'"));
+    }
+
+    #[test]
+    fn allows_noun_is_adjective_infix_predicate() {
+        // The `<noun>_is_<adjective>` compound embeds a predicate relationship:
+        // the infix `_is_` reads as "the noun is X", serving the same function
+        // as a leading `is_` prefix. (Closes #5464)
+        for src in [
+            "fn fmt_sign(sign_is_mandatory: bool) {}",
+            "fn f() { let year_is_six_digits: bool = true; }",
+            "fn f() { let date_is_present = false; }",
+        ] {
+            assert!(run_on(src).is_empty(), "`{src}` should be allowed");
+        }
+    }
+
+    #[test]
+    fn allows_noun_has_can_should_will_infix_predicate() {
+        for name in [
+            "value_has_owner",
+            "user_can_edit",
+            "request_should_retry",
+            "task_will_run",
+        ] {
+            let src = format!("fn f({name}: bool) {{}}");
+            assert!(run_on(&src).is_empty(), "`{name}` should be allowed");
+        }
+    }
+
+    #[test]
+    fn infix_predicate_does_not_match_unbounded_substring() {
+        // `axis` contains the letters `is` but not a separated `_is_` word, so
+        // it still requires a real prefix; strictness is preserved.
+        assert_eq!(run_on("fn f(axis_locked: bool) {}").len(), 1);
+    }
+
+    #[test]
+    fn infix_predicate_requires_noun_before_and_descriptor_after() {
+        // A trailing predicate (`mandatory_is`) or a leading one is not the
+        // `<noun>_is_<adjective>` shape and still flags.
+        assert_eq!(run_on("fn f(mandatory_is: bool) {}").len(), 1);
+    }
+
+    #[test]
+    fn infix_predicate_still_flags_negative_phrasing() {
+        // The negative-substring check runs first: `value_is_not_set` embeds a
+        // negation and is flagged as negatively phrased, not exempted.
+        let diags = run_on("fn f(value_is_not_set: bool) {}");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("negatively phrased"));
     }
 
     #[test]
