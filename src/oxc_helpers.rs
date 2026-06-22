@@ -480,7 +480,7 @@ pub fn in_non_react_framework_package(
 
 /// True when the file is JSX for a framework that uses native HTML attribute
 /// names (`class`, `for`, …) rather than React's camelCase — Vue, Solid,
-/// Preact, Qwik, or Stencil. Detected three ways: via a framework import, via an
+/// Preact, Qwik, Stencil, or Voby. Detected three ways: via a framework import, via an
 /// in-file `@jsxImportSource` pragma, or via the nearest `tsconfig.json`'s
 /// `compilerOptions.jsxImportSource` set to a non-React runtime (which injects
 /// the JSX factory project-wide, so files need no framework import).
@@ -515,6 +515,8 @@ pub fn is_non_react_jsx_file(source: &str, project: &crate::project::ProjectCtx,
         || source_contains(source, "\"vue\"")
         || source_contains(source, "'preact'")
         || source_contains(source, "\"preact\"")
+        || source_contains(source, "'voby'")
+        || source_contains(source, "\"voby\"")
         || has_non_react_jsx_import_source_pragma(source)
     {
         return true;
