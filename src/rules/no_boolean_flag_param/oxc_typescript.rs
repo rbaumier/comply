@@ -10,6 +10,13 @@
 //! expression (`return parse(code, jsx)`). Such a wrapper mirrors the callee's
 //! API — the boolean is forwarded as-is, never dispatched on — so it cannot be
 //! split into two functions.
+//!
+//! Finally, a boolean parameter is exempt when its enclosing function is an
+//! inline callback passed directly as an argument to a call or `new` expression
+//! (`runFunction(args, state, meta, (x, cumulative: boolean) => …)`). The
+//! callback's parameter list is the *caller's* invocation contract — the
+//! dispatcher invokes it positionally — so the author cannot rename it or split
+//! it into two named functions.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -93,6 +100,10 @@ impl OxcCheck for Check {
         }
 
         if is_forwarded_passthrough_param(node, semantic) {
+            return;
+        }
+
+        if is_inline_callback_argument_param(node, semantic) {
             return;
         }
 
@@ -199,6 +210,41 @@ fn is_forwarded_passthrough_param<'a>(
         }
     }
     saw_reference
+}
+
+/// True when the parameter's enclosing function is an inline callback passed
+/// directly as a positional argument of a call or `new` expression
+/// (`run(args, (x, cumulative: boolean) => …)`). The callback's parameter list
+/// is the *caller's* invocation contract — the dispatcher binds arguments
+/// positionally — so the author cannot rename it or split it into two named
+/// functions. Only an anonymous function/arrow that is itself a direct argument
+/// qualifies; a named declaration, or a function nested inside another
+/// expression (object property, array element, ternary), does not.
+fn is_inline_callback_argument_param<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let nodes = semantic.nodes();
+    // node → FormalParameters → Function | ArrowFunctionExpression
+    let params_node = nodes.parent_node(node.id());
+    if !matches!(params_node.kind(), AstKind::FormalParameters(_)) {
+        return false;
+    }
+    let func_node = nodes.parent_node(params_node.id());
+    let func_span = match func_node.kind() {
+        AstKind::Function(func) => func.span,
+        AstKind::ArrowFunctionExpression(arrow) => arrow.span,
+        _ => return false,
+    };
+    let parent = nodes.parent_node(func_node.id());
+    let arguments = match parent.kind() {
+        AstKind::CallExpression(call) => &call.arguments,
+        AstKind::NewExpression(new_expr) => &new_expr.arguments,
+        _ => return false,
+    };
+    arguments
+        .iter()
+        .any(|arg| arg.as_expression().is_some_and(|expr| expr.span() == func_span))
 }
 
 fn returns_boolean(return_type: Option<&oxc_ast::ast::TSTypeAnnotation<'_>>) -> bool {
@@ -378,5 +424,59 @@ mod tests {
     #[test]
     fn still_flags_boolean_in_short_circuit_arg() {
         assert_eq!(run("function f(flag: boolean) { return run(flag && other); }").len(), 1);
+    }
+
+    // Regression for #5639: a spreadsheet-engine dispatcher (`runFunction`)
+    // binds parsed-formula arguments positionally into an inline callback. The
+    // callback's parameter list is the dispatcher's invocation contract — it
+    // cannot be renamed or split into two functions — even though the boolean
+    // is dispatched on inside an `if`. Exact reproducer shape from the issue.
+    #[test]
+    fn no_fp_inline_callback_argument_param_issue_5639() {
+        let src = "function vlookup(ast: any, state: any) {\
+                     return this.runFunction(ast.args, state, this.metadata('VLOOKUP'),\
+                       (key: any, rangeValue: any, index: number, sorted: boolean) => {\
+                         if (sorted) { return binary(); } else { return linear(); }\
+                       });\
+                   }";
+        assert!(run(src).is_empty(), "got {:#?}", run(src));
+    }
+
+    // A boolean param of an inline arrow callback dispatched on in a branch is
+    // exempt — the callback signature is the caller's contract.
+    #[test]
+    fn allows_boolean_in_inline_arrow_callback_argument() {
+        let src = "run((x: number, cumulative: boolean) => \
+                     cumulative ? cdf(x) : pdf(x));";
+        assert!(run(src).is_empty(), "got {:#?}", run(src));
+    }
+
+    // A boolean param of an inline function-expression callback argument is
+    // exempt for the same reason.
+    #[test]
+    fn allows_boolean_in_inline_function_expression_argument() {
+        let src = "register(function (cumulative: boolean) { \
+                     if (cumulative) a(); else b(); });";
+        assert!(run(src).is_empty(), "got {:#?}", run(src));
+    }
+
+    // Guard: a NAMED function declaration whose body branches on a boolean is
+    // still author-owned and splittable — it must stay flagged even if it is
+    // later passed somewhere.
+    #[test]
+    fn still_flags_named_function_with_boolean_branch() {
+        assert_eq!(
+            run("function compute(cumulative: boolean) { if (cumulative) a(); else b(); }").len(),
+            1
+        );
+    }
+
+    // Guard: a callback nested inside an object-literal argument is NOT a direct
+    // call argument — the boolean flag still fires (object-property callbacks
+    // are handled by the separate library-callback allowlist, not this gate).
+    #[test]
+    fn still_flags_boolean_in_callback_inside_object_arg() {
+        let src = "configure({ handler: (urgent: boolean) => { if (urgent) a(); else b(); } });";
+        assert_eq!(run(src).len(), 1, "got {:#?}", run(src));
     }
 }
