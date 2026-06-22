@@ -399,9 +399,13 @@ fn is_bundled_artifact(head: &str) -> bool {
     // emscripten / wasm-bindgen WebAssembly glue: identifier-shaped markers that
     // appear in the generated loader preamble and never in hand-written code.
     // The bare `wasm-bindgen` product name is deliberately not matched — it can
-    // occur in a hand-written loader comment or artifact-path string, and real
-    // wasm-bindgen glue always also carries the `__wbindgen_` prefix.
+    // occur in a hand-written loader comment or artifact-path string. `__wbg_ptr`
+    // is the instance-pointer field wasm-bindgen emits on every class wrapper; in
+    // glue whose `__wbindgen_` runtime helpers sit past the scanned head (e.g. a
+    // file that opens with class wrappers), it is the marker still present near
+    // the top.
     if head.contains("__wbindgen_")
+        || head.contains("__wbg_ptr")
         || head.contains("Module[\"asm\"]")
         || head.contains("Module['asm']")
     {
@@ -1621,6 +1625,27 @@ mod tests {
     fn wasm_bindgen_glue_is_generated_issue4799() {
         let src = "let wasm;\nexport function __wbindgen_throw(ptr, len) {\n  throw new Error('x');\n}\n";
         assert!(is_generated_content(src));
+    }
+
+    #[test]
+    fn wasm_bindgen_class_wrapper_glue_is_generated_issue5467() {
+        // Issue #5467: a wasm-bindgen `*.bg.js` binding that opens with class
+        // wrappers (so the `__wbindgen_` runtime helpers sit past the scanned
+        // head) still carries the generated `__wbg_ptr` instance-pointer field
+        // near the top. It must be classified generated so stylistic rules like
+        // `prefer-immediate-return` skip its `const ret = wasm.fn(); return ret;`.
+        let src = "export class Foo {\n    static __wrap(ptr) {\n        const obj = Object.create(Foo.prototype);\n        obj.__wbg_ptr = ptr;\n        return obj;\n    }\n}\nexport function echo_f32(a) {\n    const ret = wasm.echo_f32(a);\n    return ret;\n}\n";
+        assert!(is_generated_content(src));
+    }
+
+    #[test]
+    fn handwritten_dunder_field_is_not_wasm_bindgen_issue5467() {
+        // Guard: a hand-written object field in the `__wbg` namespace that is not
+        // the `__wbg_ptr` instance-pointer field must stay linted — the marker is
+        // that distinct field name, not the broad `__wbg` namespace prefix.
+        assert!(!is_generated_content(
+            "const obj = { __wbg_label: 'x' };\nfunction f() { const ret = compute(); return ret; }\n"
+        ));
     }
 
     #[test]
