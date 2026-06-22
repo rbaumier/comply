@@ -1986,6 +1986,200 @@ fn chars_iter_method<'a>(value: Node, source: &'a [u8]) -> Option<&'a str> {
         .and_then(|field| field.utf8_text(source).ok())
 }
 
+/// `char` inspection methods that prove their receiver is an ASCII character
+/// (Unicode scalar value `0x00..=0x7F`). `char::is_ascii` is the general check;
+/// every `is_ascii_*` variant tests a subset of ASCII, so each equally proves
+/// the value is in `0..=127`.
+const CHAR_IS_ASCII_PREDICATES: &[&str] = &[
+    "is_ascii",
+    "is_ascii_alphabetic",
+    "is_ascii_alphanumeric",
+    "is_ascii_control",
+    "is_ascii_digit",
+    "is_ascii_graphic",
+    "is_ascii_hexdigit",
+    "is_ascii_lowercase",
+    "is_ascii_punctuation",
+    "is_ascii_uppercase",
+    "is_ascii_whitespace",
+];
+
+/// True if `cast` (a `type_cast_expression`) casts a `char` to an integer in a
+/// position dominated by an `is_ascii()` check on the SAME value, so the cast is
+/// provably lossless — e.g. `self.is_ascii().then_some(*self as u8)` or
+/// `if ch.is_ascii() { ch as u8 }`.
+///
+/// An ASCII `char` is `0x00..=0x7F`, which fits every integer at least 8 bits
+/// wide (`u8`..`u128`, `i8`..`i128`). Outside the guard a `char as u8` truncates
+/// the upper bits, so the rules flag it; under the guard the value is provably in
+/// range and `try_from` there manufactures an unreachable error path.
+///
+/// The exemption is deliberately narrow to stay sound — every condition must
+/// hold:
+///
+/// - the cast operand is a single value reference: a bare `identifier` (`ch`) or
+///   a dereference of one (`*self`), optionally parenthesized;
+/// - a dominating guard tests `is_ascii` / `is_ascii_*` on that SAME value,
+///   reached either through `<value>.is_ascii().then_some(<cast>)` /
+///   `.then(|| <cast>)` (the cast is the argument of the `then_some`/`then`
+///   whose receiver is the `is_ascii` call), or through the `consequence` of an
+///   enclosing `if <value>.is_ascii() { … <cast> … }` (never the `else` branch,
+///   which is the negation).
+///
+/// The guard is matched by method name (the AST carries no receiver type), the
+/// same name-based soundness tolerance the sibling `is_positive`/`is_negative`
+/// guards already accept: a user type with a custom `is_ascii` not proving
+/// `0..=127` would be exempted, an accepted false negative.
+///
+/// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`, which both
+/// otherwise flag the cast because a `char as u8` is lossy in general.
+pub fn cast_operand_is_ascii_guarded(cast: Node, source: &[u8]) -> bool {
+    let Some(operand) = cast.child_by_field_name("value") else {
+        return false;
+    };
+    let Some(operand_text) = strip_deref_and_parens(operand, source) else {
+        return false;
+    };
+    enclosing_ascii_guard_matches(cast, operand_text, source)
+}
+
+/// The text of `node` with any leading dereferences (`*x`) and surrounding
+/// parentheses peeled off, e.g. `(*self)` → `self`. Returns `None` unless the
+/// peeled node is a bare `identifier` or `self`, so only a single named value
+/// qualifies as the guarded operand.
+fn strip_deref_and_parens<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
+    let mut current = node;
+    loop {
+        match current.kind() {
+            "identifier" | "self" => return current.utf8_text(source).ok(),
+            "parenthesized_expression" => current = current.named_child(0)?,
+            "unary_expression" => {
+                let is_deref = current
+                    .child(0)
+                    .and_then(|op| op.utf8_text(source).ok())
+                    .is_some_and(|op| op == "*");
+                if !is_deref {
+                    return None;
+                }
+                current = current.named_child(0)?;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// True if a guard dominating `cast` tests `is_ascii`/`is_ascii_*` on the value
+/// named `operand`. Ascends via `parent()`, recognizing two guard sites:
+///
+/// - `<operand>.is_ascii().then_some(<cast>)` / `.then(|| <cast>)` — the cast
+///   sits in the `arguments` of a `then_some`/`then` call whose receiver is the
+///   `is_ascii` call;
+/// - `if <operand>.is_ascii() { … <cast> … }` — the cast is reached through the
+///   `if`'s `consequence`.
+///
+/// The walk stops at the enclosing `function_item` boundary. A `closure_expression`
+/// also stops it unless the closure is the direct argument of a `then`/`then_some`
+/// ascii-guard call (`.then(|| <cast>)`): a guard cannot prove anything about a
+/// closure invoked elsewhere, but `then`/`then_some` runs its closure only when
+/// the predicate held.
+fn enclosing_ascii_guard_matches(cast: Node, operand: &str, source: &[u8]) -> bool {
+    let mut child = cast;
+    while let Some(parent) = child.parent() {
+        match parent.kind() {
+            "function_item" => return false,
+            "closure_expression" => {
+                // The closure body is in range only when the closure itself is
+                // the `then`/`then_some` arm; otherwise the guard does not reach
+                // the closure's invocation site.
+                if !closure_is_ascii_then_arm(parent, operand, source) {
+                    return false;
+                }
+            }
+            "call_expression" => {
+                if call_is_ascii_then_guard(parent, operand, source) {
+                    return true;
+                }
+            }
+            "if_expression" => {
+                if parent.child_by_field_name("consequence") == Some(child)
+                    && let Some(condition) = parent.child_by_field_name("condition")
+                    && expr_is_ascii_check(condition, operand, source)
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        child = parent;
+    }
+    false
+}
+
+/// True if `closure` is the direct argument of a `then`/`then_some` call whose
+/// receiver is an `is_ascii`/`is_ascii_*` check on `operand` — the
+/// `<operand>.is_ascii().then(|| …)` arm.
+fn closure_is_ascii_then_arm(closure: Node, operand: &str, source: &[u8]) -> bool {
+    closure
+        .parent()
+        .filter(|args| args.kind() == "arguments")
+        .and_then(|args| args.parent())
+        .filter(|call| call.kind() == "call_expression")
+        .is_some_and(|call| call_is_ascii_then_guard(call, operand, source))
+}
+
+/// True if `call` is `<operand>.is_ascii().then_some(..)` or
+/// `<operand>.is_ascii().then(..)` — a `then_some`/`then` call whose receiver is
+/// an `is_ascii`/`is_ascii_*` check on `operand`. The cast lives in the call's
+/// arguments, so the receiver's guard dominates it.
+fn call_is_ascii_then_guard(call: Node, operand: &str, source: &[u8]) -> bool {
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    let is_then = function
+        .child_by_field_name("field")
+        .and_then(|f| f.utf8_text(source).ok())
+        .is_some_and(|f| f == "then_some" || f == "then");
+    if !is_then {
+        return false;
+    }
+    function
+        .child_by_field_name("value")
+        .is_some_and(|recv| expr_is_ascii_check(recv, operand, source))
+}
+
+/// True if `expr` is a no-argument method call `<operand>.is_ascii()` (or any
+/// `is_ascii_*` variant) on the value named `operand`, after peeling any deref
+/// or parentheses from the receiver (`(*self).is_ascii()` counts).
+fn expr_is_ascii_check(expr: Node, operand: &str, source: &[u8]) -> bool {
+    if expr.kind() != "call_expression" {
+        return false;
+    }
+    if expr
+        .child_by_field_name("arguments")
+        .is_some_and(|args| args.named_child_count() > 0)
+    {
+        return false;
+    }
+    let Some(function) = expr.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    let method_is_ascii = function
+        .child_by_field_name("field")
+        .and_then(|f| f.utf8_text(source).ok())
+        .is_some_and(|f| CHAR_IS_ASCII_PREDICATES.contains(&f));
+    method_is_ascii
+        && function
+            .child_by_field_name("value")
+            .and_then(|recv| strip_deref_and_parens(recv, source))
+            == Some(operand)
+}
+
 /// True if `cast` (a `type_cast_expression`) narrows an identifier whose value
 /// an enclosing `if`/`else if` guard proves fits the unsigned target type, so
 /// the `as`-cast cannot overflow — e.g. `if val < 256 { val as u8 }`.
@@ -4563,6 +4757,75 @@ mod tests {
                 cast_operand_is_char(cast, src.as_bytes()),
                 expected,
                 "cast_operand_is_char mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn cast_operand_is_ascii_guarded_requires_matching_is_ascii_check() {
+        let cases = [
+            // Issue #5122 (chumsky): `.is_ascii().then_some(*self as u8)` — the
+            // deref'd operand `*self` is guarded by `self.is_ascii()`.
+            (
+                "fn to_ascii(&self) -> Option<u8> { self.is_ascii().then_some(*self as u8) }",
+                true,
+            ),
+            // Bare identifier operand and receiver.
+            (
+                "fn f(ch: char) -> Option<u8> { ch.is_ascii().then_some(ch as u8) }",
+                true,
+            ),
+            // `.then(|| ..)` form.
+            (
+                "fn f(ch: char) -> Option<u8> { ch.is_ascii().then(|| ch as u8) }",
+                true,
+            ),
+            // `if` consequence form.
+            (
+                "fn f(ch: char) -> Option<u8> { if ch.is_ascii() { Some(ch as u8) } else { None } }",
+                true,
+            ),
+            // An `is_ascii_*` variant (subset of ASCII) also proves the range.
+            (
+                "fn f(ch: char) -> Option<u8> { ch.is_ascii_digit().then_some(ch as u8) }",
+                true,
+            ),
+            // Widening into a wider integer is equally exempt.
+            (
+                "fn f(ch: char) -> Option<i32> { ch.is_ascii().then_some(ch as i32) }",
+                true,
+            ),
+            // No guard at all.
+            ("fn f(ch: char) -> u8 { ch as u8 }", false),
+            // Guard tests a DIFFERENT value than the one cast.
+            (
+                "fn f(a: char, b: char) -> Option<u8> { a.is_ascii().then_some(b as u8) }",
+                false,
+            ),
+            // An unrelated predicate (not `is_ascii*`) does not prove the range.
+            (
+                "fn f(ch: char) -> Option<u8> { ch.is_alphabetic().then_some(ch as u8) }",
+                false,
+            ),
+            // Guard reached only through the `else` branch is the negation.
+            (
+                "fn f(ch: char) -> Option<u8> { if ch.is_ascii() { None } else { Some(ch as u8) } }",
+                false,
+            ),
+            // `then_some`-receiver guards a different value (deref mismatch).
+            (
+                "fn f(p: &char, q: char) -> Option<u8> { p.is_ascii().then_some(q as u8) }",
+                false,
+            ),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_of_kind(tree.root_node(), "type_cast_expression")
+                .expect("snippet should contain a type_cast_expression");
+            assert_eq!(
+                cast_operand_is_ascii_guarded(cast, src.as_bytes()),
+                expected,
+                "cast_operand_is_ascii_guarded mismatch for `{src}`"
             );
         }
     }
