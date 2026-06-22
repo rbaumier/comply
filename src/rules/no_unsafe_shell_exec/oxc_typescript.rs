@@ -299,6 +299,35 @@ mod oxc_tests {
         crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
     }
 
+    // Regression for #5167: effector's `spawn` is a named import from the
+    // library's own module (`../template`), an actor/scope primitive — not
+    // `child_process.spawn`. The import resolves to a non-`child_process` source,
+    // so it is never a subprocess.
+    #[test]
+    fn allows_effector_spawn_named_import_issue_5167() {
+        let src = r#"import {createTemplate, spawn, currentLeaf} from '../template'
+const rootLeaf = spawn(usingTemplate, { parentLeaf: currentLeaf || null });"#;
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    // Regression for #5167: a `declare const exec` ambient test helper taking a
+    // callback is an ambient binding, not the `child_process` module function.
+    #[test]
+    fn allows_declare_const_exec_test_helper_issue_5167() {
+        let src = r#"declare const exec: (cb: () => any) => Promise<string[]>;
+const r = await exec(async () => { return 1; });"#;
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    // Regression for #5167: XState's own `export function spawn(...)` actor
+    // primitive resolves to a local function declaration, not `child_process`.
+    #[test]
+    fn allows_xstate_local_spawn_function_issue_5167() {
+        let src = r#"export function spawn(behavior, name) { return createActor(behavior, name); }
+const actor = spawn(machine, { input: ctx });"#;
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
     // A free `exec(...)` with no resolvable binding is an unresolved global —
     // ambiguous, so a dynamic command is flagged for safety.
     #[test]
