@@ -25,6 +25,12 @@
 //!   the canonical non-blocking I/O reactor signal where the correct
 //!   action is to do nothing and let the loop await readability, so the
 //!   guard itself documents the inaction.
+//!   An or-pattern enumerating multiple explicit, non-wildcard alternatives
+//!   (`A | B | StmtKind::Err(_) => {}`) is also exempt: listing every case by
+//!   name proves the author considered each one, so the empty body is correct
+//!   by construction — this is stronger documentation than a wildcard. The
+//!   exemption is withheld when the or-pattern includes a catch-all alternative
+//!   (`A | _ => {}`, `A | other => {}`) that hides the remaining cases.
 //! - `for_expression.body` / `while_expression.body` /
 //!   `loop_expression.body` — empty loop body.
 //!
@@ -99,12 +105,26 @@ fn subtree_references_would_block(node: tree_sitter::Node, source: &[u8]) -> boo
 fn pattern_needs_justification(node: tree_sitter::Node, source: &[u8]) -> bool {
     match node.kind() {
         "_" | "wildcard_pattern" => false,
-        "match_pattern" | "or_pattern" => {
+        "match_pattern" => {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if pattern_needs_justification(child, source) {
                     return true;
                 }
+            }
+            false
+        }
+        "or_pattern" => {
+            // An or-pattern enumerating multiple explicit, non-wildcard
+            // alternatives (`A | B | StmtKind::Err(_) => {}`) is self-documenting:
+            // listing every case by name proves the author considered each one,
+            // so an empty body is correct by construction and a comment would only
+            // restate the pattern list. The error-swallowing heuristic (applied to
+            // a standalone arm) is deliberately not run on the sub-patterns here.
+            // The exception is a catch-all alternative (`A | _ => {}`,
+            // `A | other => {}`) that hides the remaining cases — that still flags.
+            if or_pattern_has_wildcard(node, source) {
+                return true;
             }
             false
         }
@@ -126,6 +146,35 @@ fn pattern_needs_justification(node: tree_sitter::Node, source: &[u8]) -> bool {
         }
         _ => false,
     }
+}
+
+/// True when an `or_pattern` includes a catch-all alternative — a bare wildcard
+/// (`A | _ => {}`) or a rest pattern (`A | .. => {}`). Such an alternative hides
+/// which remaining cases fall into the empty arm, so the explicit-enumeration
+/// justification no longer holds and the arm still needs a comment.
+///
+/// A bare `identifier` alternative is a catch-all only when it is a FRESH BINDING
+/// (`A | other => {}`): a lowercase-leading or `_`-prefixed name in pattern
+/// position matches everything, exactly like `_`. An uppercase-leading bare
+/// `identifier` (`None | Break => {}`) is a unit-variant or const reference, not
+/// a binding — it names one specific case and keeps the enumeration explicit, so
+/// it does not make the arm a catch-all. tree-sitter-rust parses both as
+/// `identifier`; the leading-case convention is the only structural signal.
+///
+/// A `ref`/`mut` binding (`A | ref y => {}`, `A | mut z => {}`, parsed as
+/// `ref_pattern` / `mut_pattern`) and an `@`-capture over a wildcard
+/// (`A | y @ _ => {}`, parsed as `captured_pattern`) always capture whatever is
+/// left, so they are catch-alls regardless of the binding name.
+fn or_pattern_has_wildcard(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = node.walk();
+    node.children(&mut cursor).any(|child| match child.kind() {
+        "_" | "wildcard_pattern" | "remaining_field_pattern" | "ref_pattern"
+        | "mut_pattern" | "captured_pattern" => true,
+        "identifier" => child
+            .utf8_text(source)
+            .is_ok_and(|name| name.starts_with('_') || name.starts_with(char::is_lowercase)),
+        _ => false,
+    })
 }
 
 /// True when the pattern introduces at least one variable binding and every
@@ -363,6 +412,66 @@ mod tests {
     fn allows_empty_or_arm_all_underscore_bindings() {
         let src = "fn f(r: Result<u8, E>) { match r { Ok(_a) | Err(_b) => {} } }";
         assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_explicit_multi_variant_or_arm_issue_5643() {
+        // An or-pattern enumerating every leaf variant is self-documenting —
+        // listing each case by name is stronger than a wildcard `_ => {}`. The
+        // `StmtKind::Err(_)` variant here is a domain enum variant, not the std
+        // `Result::Err`, and the explicit enumeration documents the no-op.
+        let src = "fn f(stmt: S) { match stmt.kind { \
+                   StmtKind::Emit(expr) => walk(expr), \
+                   StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue | StmtKind::Err(_) => {} \
+                   } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_two_variant_or_arm_issue_5643() {
+        let src = "fn f(x: E) { match x { E::Used(v) => go(v), E::A | E::B => {} } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_or_arm_bare_unqualified_variants_issue_5643() {
+        // Bare unqualified variant names (`None | Break`) parse as `identifier`,
+        // same node kind as a binding. The uppercase-leading convention marks them
+        // as variant references — explicit enumeration, not a catch-all binding.
+        let src = "fn f(x: E) { match x { Used(v) => go(v), None | Break => {} } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_or_arm_with_wildcard_issue_5643() {
+        // `A | _ => {}` is a catch-all: the `_` hides the remaining cases, so the
+        // explicit-enumeration justification no longer holds.
+        let src = "fn f(x: E) { match x { E::Used(v) => go(v), E::A | _ => {} } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_or_arm_with_binding_catch_all_issue_5643() {
+        // `A | other => {}` — a bare binding alternative matches everything, like `_`.
+        let src = "fn f(x: E) { match x { E::Used(v) => go(v), E::A | other => {} } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_or_arm_with_ref_mut_binding_catch_all_issue_5643() {
+        // `A | ref y => {}` / `A | mut z => {}` — a ref/mut binding always captures
+        // the rest, so it is a catch-all that hides the remaining cases.
+        let with_ref = "fn f(x: E) { match x { E::Used(v) => go(v), E::A | ref y => {} } }";
+        let with_mut = "fn f(x: E) { match x { E::Used(v) => go(v), E::A | mut z => {} } }";
+        assert_eq!(run_on(with_ref).len(), 1, "{:?}", run_on(with_ref));
+        assert_eq!(run_on(with_mut).len(), 1, "{:?}", run_on(with_mut));
+    }
+
+    #[test]
+    fn flags_empty_or_arm_with_at_wildcard_capture_catch_all_issue_5643() {
+        // `A | y @ _ => {}` — an `@`-capture over a wildcard matches everything.
+        let src = "fn f(x: E) { match x { E::Used(v) => go(v), E::A | y @ _ => {} } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 
     #[test]
