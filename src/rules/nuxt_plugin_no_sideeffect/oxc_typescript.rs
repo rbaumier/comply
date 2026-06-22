@@ -65,3 +65,67 @@ impl OxcCheck for Check {
         diagnostics
     }
 }
+
+#[cfg(test)]
+impl crate::rules::test_helpers::RunRule for Check {
+    fn meta(&self) -> &'static crate::rules::meta::RuleMeta {
+        &super::META
+    }
+    fn execute_with_ctx(
+        &self,
+        src: &str,
+        path: &std::path::Path,
+        project: &crate::project::ProjectCtx,
+        file: &crate::rules::file_ctx::FileCtx,
+    ) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::test_helpers::{run_rule, run_rule_gated};
+
+    // Issue #5155 — a `*.spec.ts` file inside `plugins/` is a Vitest spec that
+    // exercises a Nuxt plugin (e.g. via `@nuxt/test-utils` `mockNuxtImport`), not
+    // a plugin itself. Its top-level `mockNuxtImport`/`it` calls are test setup,
+    // not plugin side effects. The central `skip_in_test_dir` gate exempts it.
+    const PLUGIN_SPEC: &str = r#"
+import { it, expect } from 'vitest'
+import { mockNuxtImport } from '@nuxt/test-utils/runtime'
+
+mockNuxtImport('useHead', () => {
+  return () => 'mocked-head'
+})
+
+it('plugin spec runs under nuxt env', () => {
+  expect(globalThis.window).toBeDefined()
+})
+"#;
+
+    #[test]
+    fn gated_no_fp_in_plugin_spec_file() {
+        assert!(
+            run_rule_gated(
+                &Check,
+                PLUGIN_SPEC,
+                "test/fixtures/simple/plugin-spec/plugins/customFetch.nuxt.spec.ts"
+            )
+            .is_empty(),
+            "skip_in_test_dir must suppress top-level calls in a plugins/ spec file"
+        );
+    }
+
+    // A real plugin file with a top-level side effect must still be flagged — the
+    // exemption is test-spec-specific, not a blanket disable for `plugins/`.
+    #[test]
+    fn still_fires_on_real_plugin_side_effect() {
+        let src = "console.log('boot')\nexport default defineNuxtPlugin(() => {})\n";
+        assert_eq!(
+            run_rule(&Check, src, "plugins/analytics.ts").len(),
+            1,
+            "a top-level side effect in a real Nuxt plugin is still flagged"
+        );
+    }
+}

@@ -16,7 +16,10 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: Some("https://nuxt.com/docs/guide/directory-structure/plugins"),
     categories: &["nuxt"],
 
-    skip_in_test_dir: false,
+    // `*.spec.ts`/`*.test.ts` files inside a `plugins/` directory are test specs
+    // exercising plugins (e.g. `@nuxt/test-utils` `mockNuxtImport`), not plugins
+    // themselves — their top-level calls are test setup, not plugin side effects.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
