@@ -54,13 +54,14 @@ impl TextCheck for Check {
                 continue;
             }
             if let Some(kind) = scan_line(line) {
-                // Crypto libraries commit armored PGP key pairs as test vectors
-                // to verify encryption/signing against known values. Inside a
-                // test directory an armored PGP key block is fixture data, not a
-                // leaked production secret. Every other secret shape (AWS/GitHub/
-                // Stripe/PEM private key) still flags in test files, because
-                // those are genuine credentials wherever they appear.
-                if ctx.file.path_segments.in_test_dir && is_pgp_armored_key_block(line) {
+                // Test suites embed key blocks as fixtures: crypto libraries
+                // commit armored PGP key pairs as deterministic test vectors,
+                // and GitHub Apps SDKs embed a purpose-generated RSA/EC PEM key
+                // to exercise JWT signing against mock servers. Inside a test
+                // directory such a key block is fixture data, not a leaked
+                // production secret. Token-prefix shapes (AWS/GitHub/Stripe) are
+                // genuine credentials wherever they appear, so they still flag.
+                if ctx.file.path_segments.in_test_dir && is_key_block_header(line) {
                     continue;
                 }
                 diagnostics.push(Diagnostic {
@@ -204,12 +205,14 @@ fn contains_slack_token(line: &str) -> bool {
     false
 }
 
-/// True when the line carries an armored PGP key block header — the public or
-/// private variant. Crypto test suites embed these as deterministic test
-/// vectors; the test-directory exemption in [`Check::check`] relies on this to
-/// drop those fixtures while keeping production-code PGP keys flagged.
-fn is_pgp_armored_key_block(line: &str) -> bool {
-    line.contains("-----BEGIN PGP PRIVATE KEY BLOCK-----")
+/// True when the line carries a PEM or armored-PGP key block header. The
+/// test-directory exemption in [`Check::check`] relies on this to drop fixture
+/// key blocks (PGP test vectors, GitHub-App JWT-signing RSA/EC keys) while
+/// keeping token-prefix credential shapes (AWS/GitHub/Stripe) flagged. PEM
+/// headers reuse [`contains_private_key_header`], so an interpolated PEM frame
+/// (`${key}` body) is excluded here exactly as it is everywhere else.
+fn is_key_block_header(line: &str) -> bool {
+    contains_private_key_header(line)
         || line.contains("-----BEGIN PGP PUBLIC KEY BLOCK-----")
 }
 
@@ -458,7 +461,7 @@ mod tests {
     }
 
     /// Run the check as if the file lived under a test directory, so the
-    /// `in_test_dir` PGP-fixture exemption is exercised.
+    /// `in_test_dir` key-block-fixture exemption is exercised.
     fn run_in_test_dir(source: &str) -> Vec<Diagnostic> {
         use crate::rules::file_ctx::{FileCtx, PathSegments};
         let file = FileCtx {
@@ -568,20 +571,42 @@ mod tests {
         assert_eq!(run("const k = '-----BEGIN PGP PRIVATE KEY BLOCK-----';").len(), 1);
     }
 
+    // Regression tests for #5504 — GitHub Apps SDKs embed a purpose-generated
+    // RSA/EC PEM key as a test fixture to exercise JWT signing against mock
+    // servers (octokit/octokit.js test/app.test.ts). Inside a test directory a
+    // PEM private key block is fixture data, not a leaked production secret.
     #[test]
-    fn still_flags_pem_private_key_in_test_dir() {
-        // The exemption is scoped to armored PGP blocks. A genuine PEM private
-        // key (RSA/EC/OPENSSH) is a real credential even in a test directory.
-        assert_eq!(
-            run_in_test_dir("const k = '-----BEGIN RSA PRIVATE KEY-----';").len(),
-            1
+    fn allows_rsa_pem_private_key_in_test_dir() {
+        assert!(
+            run_in_test_dir("const PRIVATE_KEY = `-----BEGIN RSA PRIVATE KEY-----`;").is_empty()
         );
     }
 
     #[test]
+    fn allows_pkcs8_pem_private_key_in_test_dir() {
+        assert!(run_in_test_dir("const k = '-----BEGIN PRIVATE KEY-----';").is_empty());
+    }
+
+    #[test]
+    fn allows_openssh_private_key_in_test_dir() {
+        assert!(run_in_test_dir("-----BEGIN OPENSSH PRIVATE KEY-----").is_empty());
+    }
+
+    #[test]
+    fn allows_ec_private_key_in_test_dir() {
+        assert!(run_in_test_dir("const k = '-----BEGIN EC PRIVATE KEY-----';").is_empty());
+    }
+
+    #[test]
+    fn still_flags_pem_private_key_in_production_code() {
+        // A PEM private key in non-test code is a real credential and must flag.
+        assert_eq!(run("const k = '-----BEGIN RSA PRIVATE KEY-----';").len(), 1);
+    }
+
+    #[test]
     fn still_flags_real_api_secret_in_test_dir() {
-        // Non-PGP secret shapes (AWS access key here) remain leaks wherever
-        // they appear — the test-dir exemption only covers PGP key blocks.
+        // Token-prefix shapes (AWS access key here) remain leaks wherever they
+        // appear — the test-dir exemption only covers PEM/PGP key blocks.
         assert_eq!(
             run_in_test_dir("const k = 'AKIAIOSFODNN7EXAMPLE';").len(),
             1
