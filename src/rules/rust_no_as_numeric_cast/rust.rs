@@ -25,6 +25,12 @@
 //! expects) is a bit-preserving reinterpretation, and a `try_from` would
 //! reject valid negative bit patterns.
 //!
+//! A same-width signed↔unsigned cast feeding an x86 SIMD intrinsic argument —
+//! `_mm_set_epi64x(hi as i64, lo as i64)` where `hi`/`lo` are `u64` — is exempt:
+//! Intel's intrinsics type integer lanes as signed (the C ABI), so passing a
+//! `u64` bit pattern requires a same-width `as i64` reinterpretation, where
+//! `try_from` would reject bit patterns above `i64::MAX`.
+//!
 //! A narrowing cast of an unsigned identifier guarded by an enclosing
 //! `if`/`else if` upper bound that proves the value fits the target type —
 //! `if val < 256 { val as u8 }` — is exempt: the branch is entered only when
@@ -60,12 +66,13 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cast_feeds_from_bits, cast_operand_bit_width, cast_operand_indexed_element_type,
-    cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
-    cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
-    cast_operand_is_enum_discriminant, cast_operand_is_non_negative_guarded,
-    cast_operand_is_range_guarded, cast_operand_is_repr_enum_field, cast_operand_literal_value,
-    find_identifier_type, is_in_enum_discriminant, is_in_test_context,
+    cast_feeds_from_bits, cast_feeds_simd_intrinsic, cast_operand_bit_width,
+    cast_operand_indexed_element_type, cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded,
+    cast_operand_is_bitwise, cast_operand_is_bool, cast_operand_is_char,
+    cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
+    cast_operand_is_non_negative_guarded, cast_operand_is_range_guarded,
+    cast_operand_is_repr_enum_field, cast_operand_literal_value, find_identifier_type,
+    is_in_enum_discriminant, is_in_test_context,
 };
 
 const KINDS: &[&str] = &["type_cast_expression"];
@@ -164,6 +171,9 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
         return false;
     }
     if cast_feeds_from_bits(node, source_bytes) {
+        return false;
+    }
+    if cast_feeds_simd_intrinsic(node, source_bytes) {
         return false;
     }
     if cast_operand_is_collection_size(node, source_bytes) {
@@ -1238,5 +1248,56 @@ mod tests {
         // A genuinely numeric operand (resolved primitive) is NOT enum-shaped:
         // `u64 as u32` stays a lossy narrowing finding.
         assert_eq!(run_on("fn f(x: u64) -> u32 { x as u32 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_5600_u64_as_i64_feeding_simd_intrinsic_not_flagged() {
+        // Issue #5600 (lance ex_dot.rs): `_mm_set_epi64x(hi as i64, lo as i64)`
+        // where `hi`/`lo` are `u64`. The SSE2 intrinsic takes `i64` lanes (Intel
+        // ABI); the `u64 as i64` is a same-width bit reinterpretation feeding it,
+        // so it is the correct tool — a `try_from` would reject bit patterns
+        // above `i64::MAX`.
+        let src = "fn f(hi: u64, lo: u64) -> __m128i { _mm_set_epi64x(hi as i64, lo as i64) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5600_u64_literal_as_i64_feeding_simd_intrinsic_not_flagged() {
+        // The hex bit-mask shape: `0x8040_2010_0804_0201u64 as i64` exceeds
+        // `i64::MAX`, so the literal-range check does not exempt it; the SIMD
+        // intrinsic argument anchor does.
+        let src = "fn f() -> __m128i { _mm_set1_epi64x(0x8040_2010_0804_0201u64 as i64) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5600_call_operand_u64_as_i64_feeding_simd_intrinsic_not_flagged() {
+        // The call-operand shape: `splat_byte(b1) as i64` where `splat_byte`
+        // returns `u64` (unresolvable source). The same-width target gates the
+        // SIMD anchor.
+        let src = "fn f() -> __m128i { _mm_set_epi64x(splat_byte(b1) as i64, splat_byte(b0) as i64) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5600_avx2_and_avx512_intrinsics_not_flagged() {
+        // `_mm256_*` and `_mm512_*` lane setters take signed lanes too.
+        assert!(run_on("fn f(x: u32) -> __m256i { _mm256_set1_epi32(x as i32) }").is_empty());
+        assert!(run_on("fn f(x: u64) -> __m512i { _mm512_set1_epi64(x as i64) }").is_empty());
+    }
+
+    #[test]
+    fn repro_5600_narrowing_cast_feeding_simd_intrinsic_still_flagged() {
+        // A genuinely narrowing cast feeding a SIMD intrinsic is NOT same-width,
+        // so the anchor must not exempt it: `u64 as i32` discards 32 bits.
+        assert_eq!(run_on("fn f(x: u64) -> __m128i { _mm_set1_epi32(x as i32) }").len(), 1);
+    }
+
+    #[test]
+    fn repro_5600_same_width_cast_outside_simd_intrinsic_still_flagged() {
+        // The anchor is scoped to SIMD-intrinsic arguments: a same-width
+        // signed↔unsigned cast feeding an ordinary call stays flagged when the
+        // source is unresolved (no non-negativity proof).
+        assert_eq!(run_on("fn f() -> u64 { consume(load() as u64) }").len(), 1);
     }
 }
