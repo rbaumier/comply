@@ -1029,6 +1029,19 @@ pub fn is_framework_generated_route_types_specifier(spec: &str) -> bool {
     spec.split('/').any(|seg| seg == "+types" || seg == "$types")
 }
 
+/// True when `path` is a TypeScript-language source file (`.ts`/`.tsx`/`.mts`/
+/// `.cts`), false for plain JavaScript (`.js`/`.jsx`/`.mjs`/`.cjs`) and every
+/// other extension. The language enum folds `.jsx` into `Tsx` and skips
+/// `.cts`/`.cjs` entirely, so a rule that is meaningful only in TypeScript (its
+/// fix relies on a TS-only construct such as `readonly`) cannot tell a plain-JS
+/// file apart from a TS one by `ctx.lang` alone — it must consult the extension.
+pub fn is_typescript_language_file(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("ts" | "tsx" | "mts" | "cts")
+    )
+}
+
 /// Collapse `.`/`..` segments in `path` without touching the filesystem. `..`
 /// pops the last normal segment; a `..` with nothing left to pop is preserved so
 /// a path escaping its base stays observable. Used to compare a resolved import
@@ -2524,5 +2537,17 @@ mod aux_path_tests {
         assert!(!has_vendored_source_banner("// the public status enum\npub enum Status {}\n"));
         // A non-comment line mentioning the phrase does not count.
         assert!(!has_vendored_source_banner("let note = \"vendored from x\";\n"));
+    }
+
+    #[test]
+    fn typescript_language_file_excludes_plain_javascript() {
+        for ts in ["a.ts", "a.tsx", "a.mts", "a.cts", "dir/Model.ts"] {
+            assert!(is_typescript_language_file(&PathBuf::from(ts)), "{ts} should be TS");
+        }
+        for js in ["a.js", "a.jsx", "a.mjs", "a.cjs", "dir/Model.js"] {
+            assert!(!is_typescript_language_file(&PathBuf::from(js)), "{js} should not be TS");
+        }
+        assert!(!is_typescript_language_file(&PathBuf::from("a.vue")));
+        assert!(!is_typescript_language_file(&PathBuf::from("noext")));
     }
 }
