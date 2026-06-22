@@ -25,7 +25,6 @@ pub fn register() -> RuleDef {
         meta: META,
         backends: vec![
             (Language::TypeScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
-            (Language::JavaScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
             (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
         ],
     }

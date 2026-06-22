@@ -47,6 +47,13 @@ impl OxcCheck for Check {
             return;
         };
 
+        // The fix suggestion is a `readonly` field, which is TypeScript-only
+        // syntax. In a plain-JS file (`.js`/`.jsx`/`.mjs`/`.cjs`) the suggestion
+        // is invalid, so the rule applies to TypeScript-language files only.
+        if !crate::rules::path_utils::is_typescript_language_file(ctx.path) {
+            return;
+        }
+
         for element in &class.body.body {
             let ClassElement::MethodDefinition(method) = element else {
                 continue;
@@ -117,6 +124,10 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, path)
     }
 
     #[test]
@@ -205,5 +216,38 @@ class Foo {
         );
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("readonly"));
+    }
+
+    // Issue #5560: `readonly` is TypeScript-only syntax, so the rule must not
+    // fire in plain-JavaScript files (`.js`/`.jsx`/`.mjs`/`.cjs`).
+    #[test]
+    fn skips_literal_getter_in_plain_javascript_files() {
+        let source = r#"
+class Foo {
+    get foo() { return 'x'; }
+}
+"#;
+        for path in ["Foo.js", "Foo.jsx", "Foo.mjs", "Foo.cjs"] {
+            assert!(
+                run_on_path(source, path).is_empty(),
+                "{path} (plain JS) must not be flagged",
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_literal_getter_in_typescript_files() {
+        let source = r#"
+class Foo {
+    get foo() { return 'x'; }
+}
+"#;
+        for path in ["Foo.ts", "Foo.tsx", "Foo.mts", "Foo.cts"] {
+            assert_eq!(
+                run_on_path(source, path).len(),
+                1,
+                "{path} (TypeScript) must still be flagged",
+            );
+        }
     }
 }
