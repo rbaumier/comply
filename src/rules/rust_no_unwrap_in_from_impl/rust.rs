@@ -54,6 +54,14 @@
 //! an explicit API contract (the canonical Rust convention for a panicking
 //! conversion), so it is no longer the surprising, undocumented panic this rule
 //! guards against. A `from` with no `# Panics` section still flags.
+//! A `.unwrap()` / `.expect()` is also skipped when an earlier statement in its
+//! enclosing block is an `assert!` / `assert_eq!` / `assert_ne!` (or their
+//! `debug_assert*` forms): the assertion documents inline the invariant that
+//! makes the unwrap unreachable — the runtime sibling of the `# Panics` /
+//! `.expect("invariant")` / `#[cfg(debug_assertions)]` idioms above. Like those,
+//! it expresses a deliberate, documented invariant rather than the surprising,
+//! undocumented panic this rule guards against. A bare `.unwrap()` with no
+//! preceding assertion in its block still flags.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -151,6 +159,11 @@ fn collect_unwraps_in(
             // API contract, so it is no longer the surprising, undocumented
             // panic this rule guards against.
             && !enclosing_fn_documents_panic(node, source)
+            // An earlier `assert!`/`assert_eq!`/`assert_ne!` (or `debug_assert*`)
+            // in the same block documents inline the invariant that makes the
+            // unwrap unreachable — a deliberate, documented invariant, not the
+            // surprising panic this rule guards against.
+            && !preceded_by_assert_in_block(node, source)
         {
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
@@ -188,6 +201,77 @@ fn enclosing_fn_documents_panic(call: tree_sitter::Node, source: &[u8]) -> bool 
         cur = parent;
     }
     false
+}
+
+/// True when an earlier statement in the `.unwrap()`/`.expect()` call's enclosing
+/// block is an `assert!`/`assert_eq!`/`assert_ne!` (or their `debug_assert*`
+/// forms). Such an assertion documents inline the invariant that makes the unwrap
+/// unreachable: if the invariant is violated the assert panics first, so the unwrap
+/// is reached only when it holds. This is the runtime sibling of the `# Panics` /
+/// `.expect("invariant")` / `#[cfg(debug_assertions)]` idioms — a deliberate,
+/// documented invariant, not the surprising panic this rule guards against.
+///
+/// Conservative: it only checks statements *before* the call's own statement in
+/// the same block, so an assertion after the unwrap (or in a sibling block) does
+/// not exempt it.
+fn preceded_by_assert_in_block(call: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some((block, call_stmt)) = enclosing_block_statement(call) else {
+        return false;
+    };
+    let mut cursor = block.walk();
+    for stmt in block.named_children(&mut cursor) {
+        if stmt.id() == call_stmt.id() {
+            return false; // reached the unwrap's own statement; no earlier assert
+        }
+        if statement_is_assert(stmt, source) {
+            return true;
+        }
+    }
+    false
+}
+
+/// The enclosing `block` and the call's own statement node within it (the direct
+/// child of the block that contains `call`), or `None` if the call is not inside a
+/// block statement (e.g. it is a tail expression nested in another expression).
+fn enclosing_block_statement(
+    call: tree_sitter::Node,
+) -> Option<(tree_sitter::Node, tree_sitter::Node)> {
+    let mut child = call;
+    while let Some(parent) = child.parent() {
+        if parent.kind() == "block" {
+            return Some((parent, child));
+        }
+        child = parent;
+    }
+    None
+}
+
+/// True when `stmt` is (or wraps) an `assert!`/`assert_eq!`/`assert_ne!` or
+/// `debug_assert!`/`debug_assert_eq!`/`debug_assert_ne!` macro invocation. An
+/// assertion appears as an `expression_statement` wrapping a `macro_invocation`.
+fn statement_is_assert(stmt: tree_sitter::Node, source: &[u8]) -> bool {
+    let macro_node = match stmt.kind() {
+        "macro_invocation" => stmt,
+        "expression_statement" => match stmt.named_child(0) {
+            Some(c) if c.kind() == "macro_invocation" => c,
+            _ => return false,
+        },
+        _ => return false,
+    };
+    let name = macro_node
+        .child_by_field_name("macro")
+        .and_then(|m| m.utf8_text(source).ok());
+    matches!(
+        name,
+        Some(
+            "assert"
+                | "assert_eq"
+                | "assert_ne"
+                | "debug_assert"
+                | "debug_assert_eq"
+                | "debug_assert_ne"
+        )
+    )
 }
 
 /// True when a `.expect("…")` carries a message documenting an infallible
@@ -1480,6 +1564,68 @@ mod tests {
             #[track_caller]
             fn from(s: &str) -> Self {
                 s.parse().unwrap()
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// Closes #5693: an `assert!(invariant); x.unwrap()` documents inline the
+    /// invariant that makes the unwrap unreachable — the runtime sibling of the
+    /// `# Panics` / `.expect("invariant")` / `#[cfg(debug_assertions)]` idioms.
+    /// The reported wasmtime `Writable<Reg> -> GprMem` conversion guards the
+    /// register-class invariant with `assert!` before the `.unwrap()`, so it must
+    /// not be flagged.
+    #[test]
+    fn allows_unwrap_preceded_by_assert_in_block() {
+        let source = r#"impl From<Writable<Reg>> for GprMem {
+            fn from(wgpr: Writable<Reg>) -> Self {
+                assert!(wgpr.to_reg().class() == RegClass::Int);
+                let wgpr = WritableGpr::from_writable_reg(wgpr).unwrap();
+                Self::Gpr(wgpr.into())
+            }
+        }"#;
+        assert!(
+            run_on(source).is_empty(),
+            "an assert! before the unwrap documents the invariant that makes it unreachable"
+        );
+    }
+
+    /// `assert_eq!` / `assert_ne!` and their `debug_assert*` forms are equally
+    /// valid inline invariant assertions and must exempt a following unwrap.
+    #[test]
+    fn allows_unwrap_preceded_by_assert_eq_and_debug_assert() {
+        for src in [
+            "impl From<A> for B { fn from(a: A) -> B { assert_eq!(a.kind(), Kind::X); B(parse(a).unwrap()) } }",
+            "impl From<A> for B { fn from(a: A) -> B { assert_ne!(a.len(), 0); B(parse(a).unwrap()) } }",
+            "impl From<A> for B { fn from(a: A) -> B { debug_assert!(a.is_valid()); B(parse(a).unwrap()) } }",
+        ] {
+            assert!(run_on(src).is_empty(), "assertion documents the invariant: {src}");
+        }
+    }
+
+    /// A bare `.unwrap()` with no preceding assertion in its block is still the
+    /// surprising panic this rule guards against — it must still flag.
+    #[test]
+    fn flags_unwrap_with_no_preceding_assert() {
+        let source = r#"impl From<A> for B {
+            fn from(a: A) -> B {
+                let x = parse(a).unwrap();
+                B(x)
+            }
+        }"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// An assertion *after* the unwrap does not make it unreachable — the unwrap
+    /// runs first, so the exemption requires the assert to precede it. This must
+    /// still flag.
+    #[test]
+    fn flags_unwrap_with_assert_after_it() {
+        let source = r#"impl From<A> for B {
+            fn from(a: A) -> B {
+                let x = parse(a).unwrap();
+                assert!(x.is_valid());
+                B(x)
             }
         }"#;
         assert_eq!(run_on(source).len(), 1);
