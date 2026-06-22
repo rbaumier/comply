@@ -6,9 +6,15 @@
 //! alone — three is the threshold where named fields start paying
 //! for themselves.
 //!
-//! Four exemptions suppress an otherwise-flagged function:
+//! Five exemptions suppress an otherwise-flagged function:
 //! - Trait-impl methods: the tuple return type is fixed by the trait
 //!   contract, so the implementor cannot swap it for a named struct.
+//! - Value decompositions: a tuple whose every element is a
+//!   lightweight type (primitive, enum, reference, bare struct name)
+//!   hands back the components of one value the way `as_hms` returns
+//!   `(u8, u8, u8)`. A named struct adds ceremony without intent. One
+//!   owning heap container (`String`, `Vec<_>`, a map, …) makes it a
+//!   bundle again and the function flags.
 //! - Private positional returns: a non-`pub` function whose tuple
 //!   elements are all textually identical, or all name the function's
 //!   own generic type parameters — named fields add no information
@@ -24,7 +30,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{has_clippy_allow, is_in_test_context, is_in_trait_impl, is_pub};
+use crate::rules::rust_helpers::{
+    has_clippy_allow, is_in_test_context, is_in_trait_impl, is_pub, trait_base_name,
+};
 
 #[derive(Debug)]
 pub struct Check;
@@ -59,6 +67,9 @@ impl AstCheck for Check {
         if is_in_trait_impl(node) {
             return;
         }
+        if tuple_is_value_decomposition(ret_type, source_bytes) {
+            return;
+        }
         if !is_pub(node, source_bytes) && tuple_is_positional(ret_type, node, source_bytes) {
             return;
         }
@@ -87,6 +98,58 @@ impl AstCheck for Check {
             span: None,
         });
     }
+}
+
+/// Owning heap containers whose presence turns a tuple into a bundle
+/// that wants a named field. Borrowed views, primitives, enums and
+/// other lightweight types are decomposition components, not bundles.
+const OWNING_CONTAINERS: &[&str] = &[
+    "String",
+    "Vec",
+    "Box",
+    "Rc",
+    "Arc",
+    "Cow",
+    "Cell",
+    "RefCell",
+    "Mutex",
+    "RwLock",
+    "VecDeque",
+    "BinaryHeap",
+    "HashMap",
+    "BTreeMap",
+    "HashSet",
+    "BTreeSet",
+];
+
+/// A tuple return is a value decomposition — the idiomatic way to hand
+/// back the scalar components of one value (`as_hms() -> (u8, u8, u8)`,
+/// `to_calendar_date() -> (i32, Month, u8)`) — when every element is a
+/// lightweight type. Naming the fields of such a tuple adds ceremony
+/// without intent: the position already documents the component.
+///
+/// An element is heavy, and the tuple a bundle worth a named struct,
+/// when it is an owning heap container (`String`, `Vec<_>`, `Box<_>`,
+/// a map/set, …). One heavy element disqualifies the whole tuple.
+///
+/// The AST carries no type information, so a bare name like `Month` is
+/// indistinguishable from a large owned struct. The exemption errs
+/// toward silence: a tuple of bare named types reads as a
+/// decomposition. Heap containers are the one element shape nameable
+/// with confidence, so they alone keep a tuple flagged.
+fn tuple_is_value_decomposition(ret_type: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut cursor = ret_type.walk();
+    ret_type
+        .named_children(&mut cursor)
+        .all(|element| !element_is_heavy(element, source))
+}
+
+/// True when `element` is an owning heap container — the only tuple
+/// element that keeps a return type flagged under the decomposition
+/// exemption. References, primitives and bare enum/struct names are
+/// lightweight components, never heavy.
+fn element_is_heavy(element: tree_sitter::Node, source: &[u8]) -> bool {
+    trait_base_name(element, source).is_some_and(|base| OWNING_CONTAINERS.contains(&base))
 }
 
 /// A tuple is positional when naming its fields would add nothing:
@@ -216,8 +279,50 @@ mod tests {
     }
 
     #[test]
-    fn flags_public_same_type_tuple_return() {
-        assert_eq!(run_on("pub fn f() -> (i64, i64, i64) { todo!() }").len(), 1);
+    fn allows_public_primitive_decomposition() {
+        assert!(run_on("pub const fn as_hms(self) -> (u8, u8, u8) { todo!() }").is_empty());
+    }
+
+    #[test]
+    fn allows_public_four_primitive_decomposition() {
+        assert!(
+            run_on("pub const fn as_hms_milli(self) -> (u8, u8, u8, u16) { todo!() }").is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_primitive_enum_mixed_decomposition() {
+        assert!(
+            run_on("pub const fn to_calendar_date(self) -> (i32, Month, u8) { todo!() }")
+                .is_empty()
+        );
+        assert!(
+            run_on("pub const fn to_iso_week_date(self) -> (i32, u8, Weekday) { todo!() }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_public_bundle_with_owning_container() {
+        assert_eq!(run_on("pub fn f() -> (String, i32, bool) { todo!() }").len(), 1);
+        assert_eq!(
+            run_on("pub fn f() -> (String, i32, bool, Vec<u8>) { todo!() }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_qualified_owning_container_bundle() {
+        assert_eq!(
+            run_on("pub fn f() -> (i32, std::collections::HashMap<String, i32>, bool) { todo!() }")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn allows_bare_named_types_decomposition() {
+        assert!(run_on("pub fn f() -> (Foo, Bar, Baz) { todo!() }").is_empty());
     }
 
     #[test]
