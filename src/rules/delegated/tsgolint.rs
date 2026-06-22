@@ -490,11 +490,12 @@ pub fn register_all() -> Vec<RuleDef> {
             "Use `readonly x = 5` instead of getter for constants.",
             "Replace getter with readonly property.",
         ),
-        entry(
+        entry_with_filter(
             "unified-signatures",
             "unified-signatures",
             "Overloads can be unified into a single signature.",
             "Use union type in single signature instead of overloads.",
+            Some(Arc::new(UnifiedSignaturesFilter)),
         ),
         entry(
             "related-getter-setter-pairs",
@@ -1405,6 +1406,118 @@ fn nms_is_error_constructor_interop_spread(src: &str, line_1based: usize) -> boo
     let end = (line_1based + 1).min(lines.len());
     let window = lines[start..end].join("\n");
     window.contains("new ") && window.contains("Error(")
+}
+
+// ── unified-signatures post-filter ─────────────────────────────────────────
+//
+// `unified-signatures` flags overload pairs it believes collapse into one
+// signature with a union or optional parameter. But when overloads declare
+// generic type parameters whose constraints differ between them, each overload
+// encodes a distinct, per-overload type relationship that a single merged
+// signature cannot express. The canonical case is the DOM `addEventListener`
+// typed-wrapper pattern (used by `lib.dom.d.ts` itself): each overload pairs a
+// target constraint with the matching event map —
+//
+//   function on<T extends Window,   U extends keyof WindowEventMap>(t: T, e: U, …): R;
+//   function on<T extends Document, U extends keyof DocumentEventMap>(t: T, e: U, …): R;
+//
+// Here `U`'s constraint (`keyof <X>EventMap`) is correlated with `T`'s
+// constraint (`X`), and that correlation differs per overload; unifying into a
+// union parameter would erase which event names are valid for which target.
+//
+// Drop the diagnostic when the overload group it points at has two members
+// whose type-parameter constraint lists differ. Overloads with no generics, or
+// with identical generic constraints (differing only in a unionizable value
+// parameter or an optional trailing parameter), stay flagged. (Closes #5506)
+
+struct UnifiedSignaturesFilter;
+
+impl PostFilter for UnifiedSignaturesFilter {
+    fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
+        if diag.line == 0 {
+            return true;
+        }
+        let Some(src) = source else {
+            return true;
+        };
+        !us_overload_group_has_divergent_generic_constraints(src, &diag.path, diag.line)
+    }
+}
+
+/// True when the function-overload group whose signatures span `line_1based`
+/// contains two members with differing type-parameter constraint lists. Parses
+/// the file and inspects every overload `Function` (a declaration with no body)
+/// sharing the diagnostic's name; correlated-generic overloads (DOM
+/// `addEventListener` style) carry distinct constraints and are not unifiable.
+fn us_overload_group_has_divergent_generic_constraints(
+    src: &str,
+    path: &std::path::Path,
+    line_1based: usize,
+) -> bool {
+    use crate::oxc_helpers::{byte_offset_to_line_col, with_oxc_parse};
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+
+    with_oxc_parse(src, path, |semantic| {
+        // Group overload signatures (body-less function declarations) by name,
+        // keeping each member's source line range and its constraint fingerprint.
+        let mut groups: rustc_hash::FxHashMap<&str, Vec<(usize, usize, String)>> =
+            rustc_hash::FxHashMap::default();
+        for node in semantic.nodes().iter() {
+            let AstKind::Function(func) = node.kind() else {
+                continue;
+            };
+            if func.body.is_some() {
+                continue; // implementation signature, not an overload
+            }
+            let Some(id) = func.id.as_ref() else {
+                continue;
+            };
+            let span = func.span();
+            let (start_line, _) = byte_offset_to_line_col(src, span.start as usize);
+            let (end_line, _) = byte_offset_to_line_col(src, span.end as usize);
+            let fingerprint = us_type_param_constraints(func, src);
+            groups
+                .entry(id.name.as_str())
+                .or_default()
+                .push((start_line, end_line, fingerprint));
+        }
+
+        groups.values().any(|members| {
+            if !members.iter().any(|(start, end, _)| line_1based >= *start && line_1based <= *end) {
+                return false;
+            }
+            // Divergent when any two members carry different constraint lists,
+            // and at least one of them actually declares constrained generics.
+            let mut iter = members.iter().map(|(_, _, fp)| fp);
+            let Some(first) = iter.next() else {
+                return false;
+            };
+            let all_same = iter.clone().all(|fp| fp == first);
+            let any_constrained =
+                members.iter().any(|(_, _, fp)| !fp.is_empty());
+            !all_same && any_constrained
+        })
+    })
+}
+
+/// A stable fingerprint of an overload's generic type-parameter constraints:
+/// the source text of each `T extends …` constraint, joined. Empty when the
+/// overload has no type parameters or none of them are constrained. Two
+/// overloads with equal fingerprints have interchangeable generics.
+fn us_type_param_constraints(func: &oxc_ast::ast::Function, src: &str) -> String {
+    use oxc_span::GetSpan;
+    let Some(params) = func.type_parameters.as_ref() else {
+        return String::new();
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for param in &params.params {
+        if let Some(constraint) = param.constraint.as_ref() {
+            let span = constraint.span();
+            parts.push(&src[span.start as usize..span.end as usize]);
+        }
+    }
+    parts.join("|")
 }
 
 // ── no-deprecated post-filter ──────────────────────────────────────────────
@@ -3486,5 +3599,101 @@ test('a', () => {
         let f = NoDeprecatedFilter;
         let d = nd_diag(Path::new("src/Point.ts"), line, col + "new ".len());
         assert!(f.keep(&d, Some(src)));
+    }
+
+    // ── unified-signatures ───────────────────────────────────────────────────
+
+    fn us_diag(path: &std::path::Path, line: usize) -> Diagnostic {
+        Diagnostic {
+            path: Arc::from(path),
+            line,
+            column: 1,
+            rule_id: Cow::Borrowed("unified-signatures"),
+            message: String::new(),
+            severity: Severity::Error,
+            span: None,
+        }
+    }
+
+    // Regression for #5506: vobyjs/voby `useEventListener` — each overload pairs
+    // a target constraint (`T extends Window`) with the matching event map
+    // (`U extends keyof WindowEventMap`). The correlated constraints differ per
+    // overload, so no single union-parameter signature expresses them. Drop.
+    #[test]
+    fn us_drops_target_type_discriminated_dom_overloads() {
+        let src = "\
+function useEventListener<T extends Window, U extends keyof WindowEventMap>(target: T, event: U): Disposer;
+function useEventListener<T extends Document, U extends keyof DocumentEventMap>(target: T, event: U): Disposer;
+function useEventListener<T extends HTMLElement, U extends keyof HTMLElementEventMap>(target: T, event: U): Disposer;
+function useEventListener(target: unknown, event: string): Disposer {
+  return () => {};
+}
+";
+        let path = write_temp("us_dom_overloads.ts", src);
+        let line = line_of(src, "T extends Document");
+        let src_content = source_for(&path);
+        let f = UnifiedSignaturesFilter;
+        assert!(!f.keep(&us_diag(&path, line), Some(&src_content)));
+    }
+
+    // Guard: overloads with no generics that genuinely collapse into one
+    // union-parameter signature still fire.
+    #[test]
+    fn us_keeps_plain_unifiable_overloads() {
+        let src = "\
+function foo(x: string): void;
+function foo(x: number): void;
+function foo(x: string | number): void {}
+";
+        let path = write_temp("us_plain_overloads.ts", src);
+        let line = line_of(src, "x: number");
+        let src_content = source_for(&path);
+        let f = UnifiedSignaturesFilter;
+        assert!(f.keep(&us_diag(&path, line), Some(&src_content)));
+    }
+
+    // Guard: overloads whose generic constraints are identical (differing only
+    // in a unionizable value parameter) remain genuinely mergeable, so fire.
+    #[test]
+    fn us_keeps_overloads_with_identical_generic_constraints() {
+        let src = "\
+function wrap<T extends object>(x: T, k: string): T;
+function wrap<T extends object>(x: T, k: number): T;
+function wrap<T extends object>(x: T, k: string | number): T {
+  return x;
+}
+";
+        let path = write_temp("us_identical_generics.ts", src);
+        let line = line_of(src, "k: number");
+        let src_content = source_for(&path);
+        let f = UnifiedSignaturesFilter;
+        assert!(f.keep(&us_diag(&path, line), Some(&src_content)));
+    }
+
+    // An overload group mixing a constrained-generic member with a plain one
+    // carries divergent constraint fingerprints (one non-empty, one empty), so
+    // it is dropped: a meaningful generic constraint and its absence are not
+    // unifiable into a single signature.
+    #[test]
+    fn us_drops_mixed_generic_and_plain_overloads() {
+        let src = "\
+function pick<T extends object>(x: T): T;
+function pick(x: string): string;
+function pick(x: unknown): unknown {
+  return x;
+}
+";
+        let path = write_temp("us_mixed_generic_plain.ts", src);
+        let line = line_of(src, "x: string");
+        let src_content = source_for(&path);
+        let f = UnifiedSignaturesFilter;
+        assert!(!f.keep(&us_diag(&path, line), Some(&src_content)));
+    }
+
+    // When the source cannot be read the filter keeps the diagnostic.
+    #[test]
+    fn us_keeps_when_source_missing() {
+        let f = UnifiedSignaturesFilter;
+        assert!(f.keep(&us_diag(Path::new("src/foo.ts"), 1), None));
     }
 }
