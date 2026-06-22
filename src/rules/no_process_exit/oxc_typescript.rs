@@ -43,6 +43,19 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
+        // CLI argument-parser library: a package whose `keywords` classify it as
+        // an argv parser (meow, yargs-parser, cac, …) owns the help/version/
+        // usage-error display, where `process.exit(code)` after printing is the
+        // canonical POSIX behavior. Resolved from the file's nearest package.json
+        // so a monorepo's parser package is recognized without flagging siblings.
+        if ctx
+            .project
+            .nearest_package_json(ctx.path)
+            .is_some_and(|pkg| pkg.is_cli_argument_parser())
+        {
+            return Vec::new();
+        }
+
         let nodes = semantic.nodes();
 
         // CLI entry point: a file that imports a CLI-argument-parsing framework
@@ -305,9 +318,34 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
+    use std::fs;
 
     fn run(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    /// Run on a source file written under a package root whose `package.json`
+    /// content is `pkg_json`. Resolves the manifest via `nearest_package_json`,
+    /// matching the production keyword-based CLI-parser detection.
+    fn run_in_package(pkg_json: &str, rel_src: &str, source: &str) -> Vec<Diagnostic> {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        fs::write(dir.path().join("package.json"), pkg_json).expect("write package.json");
+        let src_path = dir.path().join(rel_src);
+        fs::create_dir_all(src_path.parent().expect("src parent")).expect("create src dir");
+        fs::write(&src_path, source).expect("write source");
+        let canon = fs::canonicalize(&src_path).expect("canon src");
+        let file = SourceFile { path: canon.clone(), language: Language::JavaScript };
+        let refs = [&file];
+        let project = ProjectCtx::for_test_with_files(&refs);
+        crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            source,
+            &canon,
+            &project,
+            crate::rules::file_ctx::default_static_file_ctx(),
+        )
     }
 
     #[test]
@@ -497,5 +535,65 @@ export function load() {
 }
 "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression: issue #5446 — meow is a CLI argument-parser library whose
+    // validate/help/version functions call process.exit() as the canonical POSIX
+    // behavior. Its package.json keywords classify it as an argv parser, so its
+    // source files are exempt.
+    #[test]
+    fn allows_process_exit_in_cli_parser_package_validate() {
+        let pkg = r#"{
+  "name": "meow",
+  "keywords": ["cli", "bin", "argv", "command", "line", "parser", "flags"],
+  "exports": "./build/index.js"
+}"#;
+        let src = r#"
+export const checkUnknownFlags = input => {
+  const unknownFlags = input.filter(item => item.startsWith('-'));
+  if (unknownFlags.length > 0) {
+    reportUnknownFlags(unknownFlags);
+    process.exit(2);
+  }
+};
+"#;
+        assert!(run_in_package(pkg, "source/validate.js", src).is_empty());
+    }
+
+    #[test]
+    fn allows_process_exit_in_cli_parser_package_help_version() {
+        let pkg = r#"{
+  "name": "meow",
+  "keywords": ["cli", "argv", "parser"],
+  "exports": "./build/index.js"
+}"#;
+        let src = r#"
+const showHelp = code => {
+  console.log(help);
+  process.exit(typeof code === 'number' ? code : 2);
+};
+const showVersion = () => {
+  console.log(version);
+  process.exit(0);
+};
+"#;
+        assert!(run_in_package(pkg, "source/index.js", src).is_empty());
+    }
+
+    // Negative space: a generic (non-CLI) `parser` package — e.g. a JSON/CSS
+    // parser — is NOT a CLI tool, so its process.exit() stays flagged.
+    #[test]
+    fn still_flags_process_exit_in_generic_parser_package() {
+        let pkg = r#"{
+  "name": "json5",
+  "keywords": ["json", "parser", "serializer"],
+  "exports": "./lib/index.js"
+}"#;
+        let src = r#"
+export function parse(text) {
+  process.exit(1);
+}
+"#;
+        assert_eq!(run_in_package(pkg, "lib/parse.js", src).len(), 1);
     }
 }
