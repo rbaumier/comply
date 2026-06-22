@@ -16,10 +16,17 @@
 //! contains "invariant" or "unreachable") is also skipped: the author is
 //! asserting a guaranteed condition (such as a validated newtype's inner
 //! value), not handling a real failure path.
-//! A `.unwrap()` / `.expect()` whose receiver is `NonZero*::new(<nonzero
-//! integer literal>)` is also skipped: `NonZero*::new(n)` returns `None`
-//! only when `n == 0`, so a non-zero literal makes the result statically
-//! `Some` and the unwrap cannot panic.
+//! A `.unwrap()` / `.expect()` whose receiver is `NonZero*::new(<arg>)` is also
+//! skipped when `<arg>` is statically non-zero: `NonZero*::new(n)` returns
+//! `None` only when `n == 0`. Two such shapes qualify — a non-zero integer
+//! literal (`NonZeroI64::new(1)`), and a numeric cast of a guaranteed-non-null
+//! pointer (`NonZeroUsize::new(Arc::as_ptr(x) as usize)`): a live `Arc`/`Rc`/
+//! `Box`/`NonNull`/reference never points at address 0, so the cast is non-zero.
+//! Recognized non-null pointer sources are `Arc::as_ptr`/`Rc::as_ptr`/
+//! `Box::into_raw`/`NonNull::as_ptr` (including fully-qualified paths), any
+//! `.as_ptr()` method call, and a reference-to-raw cast `&x as *const _` /
+//! `&mut x as *mut _`. A cast of an arbitrary runtime integer that could be 0
+//! still flags.
 //! A `.unwrap()` / `.expect()` whose receiver is `<Type>::try_from(<ident>)`
 //! is also skipped when `<ident>` is the scrutinee of an enclosing `match`
 //! arm that has already matched a specific variant (the arm pattern is
@@ -198,9 +205,13 @@ fn expect_documents_invariant(call: tree_sitter::Node, source: &[u8]) -> bool {
     lower.contains("invariant") || lower.contains("unreachable")
 }
 
-/// True when the `.unwrap()`/`.expect()` receiver is `NonZero*::new(<nonzero
-/// integer literal>)` — statically `Some`, so the unwrap cannot panic.
-/// `field_expr` is the `<receiver>.unwrap` field_expression.
+/// True when the `.unwrap()`/`.expect()` receiver is `NonZero*::new(<arg>)` whose
+/// `<arg>` is statically `Some`, so the unwrap cannot panic. `field_expr` is the
+/// `<receiver>.unwrap` field_expression. Two infallible argument shapes qualify:
+///   - a non-zero integer literal (`NonZeroI64::new(1)`);
+///   - a numeric cast of a guaranteed-non-null pointer (`NonZeroUsize::new(
+///     Arc::as_ptr(x) as usize)`): a live `Arc`/`Rc`/`Box`/`NonNull`/reference
+///     never points at address 0, so the cast yields a non-zero integer.
 fn is_infallible_nonzero_new(field_expr: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(receiver) = field_expr.child_by_field_name("value") else {
         return false;
@@ -229,7 +240,8 @@ fn is_infallible_nonzero_new(field_expr: tree_sitter::Node, source: &[u8]) -> bo
     if !ty.starts_with("NonZero") {
         return false;
     }
-    // single argument must be a non-zero integer literal
+    // single argument must be an infallible shape: a non-zero literal, or a
+    // numeric cast of a guaranteed-non-null pointer expression.
     let Some(args) = receiver.child_by_field_name("arguments") else {
         return false;
     };
@@ -237,7 +249,83 @@ fn is_infallible_nonzero_new(field_expr: tree_sitter::Node, source: &[u8]) -> bo
     let Some(arg) = args.named_children(&mut cursor).next() else {
         return false;
     };
-    is_nonzero_int_literal(arg, source)
+    is_nonzero_int_literal(arg, source) || is_non_null_pointer_cast(arg, source)
+}
+
+/// True when `arg` is a numeric cast (`<expr> as <int>`) whose cast operand is a
+/// guaranteed-non-null pointer expression. A non-null pointer can never be
+/// address 0, so casting it to an integer yields a non-zero value and
+/// `NonZero*::new(..)` is statically `Some`.
+fn is_non_null_pointer_cast(arg: tree_sitter::Node, source: &[u8]) -> bool {
+    if arg.kind() != "type_cast_expression" {
+        return false;
+    }
+    let Some(operand) = arg.child_by_field_name("value") else {
+        return false;
+    };
+    is_non_null_pointer_expr(operand, source)
+}
+
+/// True when `node` is a pointer expression guaranteed never to be null:
+///   - `Arc::as_ptr(_)` / `Rc::as_ptr(_)` / `Box::into_raw(_)` /
+///     `NonNull::as_ptr(_)` (matched on the path's last segment, so a
+///     fully-qualified `std::sync::Arc::as_ptr` also matches);
+///   - a `.as_ptr()` method call (the `NonNull`/smart-pointer accessor form);
+///   - a reference cast to a raw pointer `&x as *const _` / `&mut x as *mut _`
+///     (a cast whose target is a `pointer_type` over a `reference_expression`).
+fn is_non_null_pointer_expr(node: tree_sitter::Node, source: &[u8]) -> bool {
+    match node.kind() {
+        "call_expression" => is_non_null_pointer_call(node, source),
+        // `&x as *const _` / `&mut x as *mut _`: a reference can never be null.
+        "type_cast_expression" => {
+            node.child_by_field_name("type")
+                .is_some_and(|ty| ty.kind() == "pointer_type")
+                && node
+                    .child_by_field_name("value")
+                    .is_some_and(|v| v.kind() == "reference_expression")
+        }
+        _ => false,
+    }
+}
+
+/// True when `call` is a non-null pointer-producing call: a free function
+/// `Arc::as_ptr`/`Rc::as_ptr`/`Box::into_raw`/`NonNull::as_ptr` (matched on the
+/// scoped path's last segment), or a `<recv>.as_ptr()` method call.
+fn is_non_null_pointer_call(call: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(func) = call.child_by_field_name("function") else {
+        return false;
+    };
+    match func.kind() {
+        // `Arc::as_ptr(x)`, `Box::into_raw(b)`, `std::sync::Arc::as_ptr(x)`, …
+        "scoped_identifier" => {
+            let Some((type_seg, method)) = scoped_type_and_method(func, source) else {
+                return false;
+            };
+            matches!(
+                (type_seg, method),
+                ("Arc", "as_ptr") | ("Rc", "as_ptr") | ("Box", "into_raw") | ("NonNull", "as_ptr")
+            )
+        }
+        // `<recv>.as_ptr()` — the `NonNull`/smart-pointer accessor form.
+        "field_expression" => {
+            func.child_by_field_name("field")
+                .and_then(|f| f.utf8_text(source).ok())
+                == Some("as_ptr")
+        }
+        _ => false,
+    }
+}
+
+/// For a `scoped_identifier` `<path>::<name>`, return the last path segment (the
+/// type, e.g. `Arc` in `std::sync::Arc::as_ptr`) and the trailing method name.
+fn scoped_type_and_method<'a>(
+    scoped: tree_sitter::Node,
+    source: &'a [u8],
+) -> Option<(&'a str, &'a str)> {
+    let method = scoped.child_by_field_name("name")?.utf8_text(source).ok()?;
+    let path = scoped.child_by_field_name("path")?.utf8_text(source).ok()?;
+    let type_seg = path.rsplit("::").next().unwrap_or(path);
+    Some((type_seg, method))
 }
 
 /// True when `node` is an integer literal (optionally negated) whose value is
@@ -930,6 +1018,80 @@ mod tests {
     fn flags_unwrap_on_nonzero_new_variable() {
         let source =
             "impl From<A> for B { fn from(a: A) -> B { B::E(NonZeroI64::new(n).unwrap()) } }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// Closes #5552: `NonZeroUsize::new(Arc::as_ptr(arc) as usize).unwrap()` is
+    /// provably infallible — a live `Arc`'s pointer is never null, so casting it
+    /// to `usize` yields a non-zero value and `NonZero*::new(..)` is statically
+    /// `Some`. The reported wgpu-core `PointerId` conversion must not be flagged.
+    #[test]
+    fn allows_unwrap_on_nonzero_new_arc_as_ptr_cast() {
+        let source = r#"impl<T> From<&alloc::sync::Arc<T>> for PointerId<T::Marker> {
+            fn from(arc: &alloc::sync::Arc<T>) -> Self {
+                PointerId::PointerId(
+                    core::num::NonZeroUsize::new(alloc::sync::Arc::as_ptr(arc) as usize).unwrap(),
+                    PhantomData,
+                )
+            }
+        }"#;
+        assert!(
+            run_on(source).is_empty(),
+            "Arc::as_ptr(arc) as usize is non-null, so NonZeroUsize::new(..).unwrap() is infallible"
+        );
+    }
+
+    /// `Rc::as_ptr` / `Box::into_raw` / `NonNull::as_ptr` are equally non-null
+    /// pointer sources whose `as usize` cast feeds an infallible `NonZero::new`.
+    #[test]
+    fn allows_unwrap_on_nonzero_new_other_non_null_ptr_casts() {
+        for src in [
+            "impl From<A> for B { fn from(a: A) -> B { B(NonZeroUsize::new(Rc::as_ptr(&a.0) as usize).unwrap()) } }",
+            "impl From<A> for B { fn from(a: A) -> B { B(NonZeroUsize::new(Box::into_raw(a.0) as usize).unwrap()) } }",
+            "impl From<A> for B { fn from(a: A) -> B { B(NonZeroUsize::new(NonNull::as_ptr(a.0) as usize).unwrap()) } }",
+        ] {
+            assert!(run_on(src).is_empty(), "non-null pointer cast is infallible: {src}");
+        }
+    }
+
+    /// A `.as_ptr()` method call (the `NonNull`/smart-pointer accessor form) is a
+    /// non-null pointer source too.
+    #[test]
+    fn allows_unwrap_on_nonzero_new_as_ptr_method_cast() {
+        let source =
+            "impl From<A> for B { fn from(a: A) -> B { B(NonZeroUsize::new(a.ptr.as_ptr() as usize).unwrap()) } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    /// A reference-to-raw cast `&x as *const _` can never be null, so its further
+    /// `as usize` cast feeds an infallible `NonZero::new`.
+    #[test]
+    fn allows_unwrap_on_nonzero_new_reference_cast() {
+        let source =
+            "impl From<A> for B { fn from(a: A) -> B { B(NonZeroUsize::new(&a.v as *const _ as usize).unwrap()) } }";
+        assert!(run_on(source).is_empty());
+    }
+
+    /// A cast of an arbitrary runtime integer (not a non-null pointer) could be
+    /// 0, so `NonZeroUsize::new(self.len as usize).unwrap()` may panic — it must
+    /// still flag. The exemption keys on the non-null-pointer shape only.
+    #[test]
+    fn flags_unwrap_on_nonzero_new_runtime_int_cast() {
+        let source =
+            "impl From<A> for B { fn from(a: A) -> B { B(NonZeroUsize::new(a.len as usize).unwrap()) } }";
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "a cast of an arbitrary runtime integer could be 0; the unwrap still flags"
+        );
+    }
+
+    /// A non-`as_ptr` method call cast (e.g. `.offset() as usize`) is not a
+    /// guaranteed-non-null pointer source, so it must still flag.
+    #[test]
+    fn flags_unwrap_on_nonzero_new_non_ptr_method_cast() {
+        let source =
+            "impl From<A> for B { fn from(a: A) -> B { B(NonZeroUsize::new(a.offset() as usize).unwrap()) } }";
         assert_eq!(run_on(source).len(), 1);
     }
 
