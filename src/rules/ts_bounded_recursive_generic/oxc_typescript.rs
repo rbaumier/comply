@@ -80,6 +80,16 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Exempt union-shrinking recursion: a recursive call whose argument is
+        // `Exclude<U, M>`. `Exclude` is TypeScript's union-difference utility, so
+        // its result is a subset of `U`; peeling a member off the union each step
+        // (the union-to-tuple pattern) drives the input toward `never`, where the
+        // conditional base case terminates. The recursion is bounded by the
+        // union's cardinality, so no numeric depth counter is needed.
+        if recurses_on_excluded_union(&alias.type_annotation, name) {
+            return;
+        }
+
         let (line, column) =
             byte_offset_to_line_col(ctx.source, alias.span.start as usize);
         diagnostics.push(Diagnostic {
@@ -450,6 +460,38 @@ fn tuple_element_as_type<'a>(
     }
 }
 
+/// Return true if `annotation` contains a recursive call to `alias_name` whose
+/// type argument is `Exclude<U, M>`. `Exclude` removes members from a union, so
+/// the argument is a subset of `U`; recursing on it shrinks the input toward
+/// `never` and the recursion is bounded by the union's cardinality.
+fn recurses_on_excluded_union(annotation: &oxc_ast::ast::TSType, alias_name: &str) -> bool {
+    let mut found = false;
+    visit_self_call_args(annotation, alias_name, &mut |arg| {
+        if is_exclude_application(arg) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Return true if `arg` is an application of the built-in `Exclude` utility type
+/// with at least the two type arguments it requires (`Exclude<U, M>`).
+fn is_exclude_application(arg: &oxc_ast::ast::TSType) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeName};
+    let TSType::TSTypeReference(tref) = arg else {
+        return false;
+    };
+    let is_exclude = matches!(
+        &tref.type_name,
+        TSTypeName::IdentifierReference(id) if id.name.as_str() == "Exclude"
+    );
+    is_exclude
+        && tref
+            .type_arguments
+            .as_ref()
+            .is_some_and(|args| args.params.len() >= 2)
+}
+
 /// Return true if `arg` is an indexed access that descends at least two levels
 /// into a base type via a named (string-literal) container property, where the
 /// innermost base is a bare type reference — e.g. `T['states'][K]`. The named
@@ -652,6 +694,44 @@ export type ToStateValue<T extends StateSchema> = T extends {
     fn exempts_nested_member_descent_items_container() {
         let src = "type Walk<T> = T extends { items: object } ? Walk<T[\"items\"][number]> : T;";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn exempts_tuplify_union_termination_flag_default() {
+        // TuplifyUnion recurses on `Exclude<T, L>`, peeling one member off the
+        // union each step; termination is the `[T] extends [never]` base case.
+        let src = r#"
+export type TuplifyUnion<
+  T,
+  L = LastOf<T>,
+  N = [T] extends [never] ? true : false
+> = true extends N ? [] : Push<TuplifyUnion<Exclude<T, L>>, L>;
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn exempts_union_shrink_without_accumulator() {
+        let src =
+            "type U2T<T> = [T] extends [never] ? [] : [Last<T>, ...U2T<Exclude<T, Last<T>>>];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_exclude_on_growing_self_call_arg() {
+        // The self-call argument is `T`, not an `Exclude<...>`, so the input does
+        // not shrink and the recursion stays unbounded even though `Exclude`
+        // appears elsewhere in the body.
+        let src = "type Loop<T> = T extends Exclude<any, never> ? Loop<T> : never;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_exclude_with_single_arg_not_exempted() {
+        // A degenerate `Exclude<T>` (one argument) is not a union difference and
+        // proves no shrinkage, so the recursion stays flagged.
+        let src = "type Loop<T> = [T] extends [never] ? [] : Loop<Exclude<T>>;";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
