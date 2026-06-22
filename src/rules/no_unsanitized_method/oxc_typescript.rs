@@ -2,7 +2,7 @@
 //! whose HTML argument is not a static string literal.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_inside_browser_injection_callback};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
@@ -39,41 +39,6 @@ fn is_document_like_receiver(expr: &Expression) -> bool {
         }
         _ => false,
     }
-}
-
-/// Playwright/Puppeteer methods that serialize a function argument and execute
-/// it inside a controlled automation browser context, not the application DOM.
-const BROWSER_INJECTION_METHODS: &[&str] = &[
-    "evaluate",
-    "evaluateHandle",
-    "evaluateOnNewDocument",
-    "addInitScript",
-    "$eval",
-    "$$eval",
-];
-
-/// True when `node` sits inside a function/arrow that is a direct argument of a
-/// browser-injection call — `page.evaluate(() => { document.write(html) })`,
-/// `frame.addInitScript(...)`, `page.$eval(...)`, etc. The callback is
-/// serialized and run in the automation browser, so the HTML written there is
-/// not the application's XSS sink.
-fn is_inside_browser_injection_callback<'a>(
-    node: &oxc_semantic::AstNode<'a>,
-    semantic: &'a oxc_semantic::Semantic<'a>,
-) -> bool {
-    let nodes = semantic.nodes();
-    for ancestor in nodes.ancestors(node.id()) {
-        if matches!(
-            ancestor.kind(),
-            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
-        ) && let AstKind::CallExpression(call) = nodes.parent_node(ancestor.id()).kind()
-            && let Expression::StaticMemberExpression(member) = &call.callee
-            && BROWSER_INJECTION_METHODS.contains(&member.property.name.as_str())
-        {
-            return true;
-        }
-    }
-    false
 }
 
 impl OxcCheck for Check {
