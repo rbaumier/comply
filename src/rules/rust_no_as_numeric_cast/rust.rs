@@ -1202,4 +1202,41 @@ mod tests {
         let src = "fn f(p: i32) -> u32 { consume(p as u32) }";
         assert_eq!(run_on(src).len(), 1);
     }
+
+    #[test]
+    fn repro_5550_external_repr_enum_param_as_u32_not_flagged() {
+        // The issue's exact shape (naga SPIR-V backend): a parameter typed as an
+        // imported `#[repr(u32)]` enum cast to u32. `as` is the only conversion
+        // the language offers (no `From<SourceLanguage> for u32`); the repr makes
+        // it lossless. The type is not in this file, so the PascalCase type-name
+        // shape identifies it as a fieldless-enum discriminant read.
+        let src =
+            "fn source(source_language: spirv::SourceLanguage) -> u32 { source_language as u32 }";
+        assert!(run_on(src).is_empty());
+        let src2 = "fn decorate(decoration: spirv::Decoration) -> u32 { decoration as u32 }";
+        assert!(run_on(src2).is_empty());
+    }
+
+    #[test]
+    fn repro_5550_local_repr_enum_binding_as_u32_not_flagged() {
+        // A `let` binding annotated with an imported enum type, cast to u32.
+        let src = "fn f() -> u32 { let op: spirv::Op = next(); op as u32 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5550_bare_pascal_type_binding_still_flagged() {
+        // A bare (unscoped) PascalCase type name is indistinguishable from a
+        // local numeric type alias (`type Decoration = u64`), so it stays
+        // conservatively flagged — only a module-qualified path is exempted.
+        let src = "fn f(d: Decoration) -> u8 { d as u8 }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_5550_numeric_param_narrowing_still_flagged() {
+        // A genuinely numeric operand (resolved primitive) is NOT enum-shaped:
+        // `u64 as u32` stays a lossy narrowing finding.
+        assert_eq!(run_on("fn f(x: u64) -> u32 { x as u32 }").len(), 1);
+    }
 }
