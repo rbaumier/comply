@@ -8,8 +8,14 @@ use std::sync::Arc;
 
 pub struct Check;
 
+// `are` is the plural copula: a valid predicate prefix for collective/plural
+// booleans (`areMutuallyExclusive`, `areEqual`) that read as "the subjects are
+// X", exactly like the singular `is`. The camelCase-boundary guard in
+// `classify_name` (the prefix must be followed by an uppercase letter) keeps
+// noun names whose first letters happen to be `are` — `area`, `arena` — out:
+// they strip to a lowercase remainder and still flag.
 const VALID_PREFIXES: &[&str] = &[
-    "is", "has", "should", "can", "will", "did", "was", "in", "seen", "found",
+    "is", "has", "should", "can", "will", "did", "was", "in", "seen", "found", "are",
 ];
 const NEGATIVE_SUBSTRINGS: &[&str] = &["Not", "Isnt", "Cannot", "Cant", "Shouldnt"];
 
@@ -18,10 +24,12 @@ const NEGATIVE_SUBSTRINGS: &[&str] = &["Not", "Isnt", "Cannot", "Cant", "Shouldn
 /// relationship just as a leading prefix does. `nextIsSingle`,
 /// `prevVNodeIsTextNode`, `valueHasOwner` read as "the subject is/has X" — the
 /// infix `Is` serves the exact semantic function of an `is*` prefix while making
-/// the subject explicit, so a redundant leading `is*` would be wrong. This is
-/// the camelCase counterpart of `INFIX_PREDICATES` in the rule's Rust backend
+/// the subject explicit, so a redundant leading `is*` would be wrong. `Are` is
+/// the plural copula: `parentFieldsAreMutuallyExclusive` reads "the parent
+/// fields are mutually exclusive", the plural-subject counterpart of `Is`. This
+/// is the camelCase counterpart of `INFIX_PREDICATES` in the rule's Rust backend
 /// (`<noun>_is_<adjective>`); the verb set is kept in sync.
-const INFIX_PREDICATES: &[&str] = &["Is", "Has", "Should", "Can", "Will"];
+const INFIX_PREDICATES: &[&str] = &["Is", "Are", "Has", "Should", "Can", "Will"];
 
 /// Standard HTML attributes and React controlled-component props whose names
 /// are dictated by the platform / component library API, plus ECMA-402 Intl
@@ -664,5 +672,37 @@ mod tests {
         let diags = run("function f(valueIsNotSet: boolean) {}");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("negatively phrased"));
+    }
+
+    #[test]
+    fn no_fp_on_plural_copula_are_prefix() {
+        // `are` is the plural copula predicate prefix (`areMutuallyExclusive`
+        // reads "the two fields are mutually exclusive"), grammatically the
+        // plural-subject counterpart of `is`. (Closes #5588)
+        assert!(run("function f(areMutuallyExclusive: boolean) {}").is_empty());
+        assert!(run("function g(parentFieldsAreMutuallyExclusive: boolean) {}").is_empty());
+        assert!(run("const areEqual: boolean = true;").is_empty());
+        assert!(run("let areCompatible = false;").is_empty());
+    }
+
+    #[test]
+    fn are_prefix_requires_camelcase_boundary() {
+        // Strictness preserved: a noun whose name merely begins with the letters
+        // `are` (`area`, `arena`) is not a predicate — the prefix must be
+        // followed by an uppercase letter, so these strip to a lowercase
+        // remainder and still flag.
+        assert_eq!(run("let area: boolean = true;").len(), 1);
+        assert_eq!(run("let arena: boolean = false;").len(), 1);
+        assert_eq!(run("function f(arenaCount: boolean) {}").len(), 1);
+    }
+
+    #[test]
+    fn are_infix_requires_subject_and_descriptor_boundary() {
+        // The plural-copula infix `Are` needs a subject before and a
+        // capitalized descriptor right after (`parentFieldsAreEqual`). A
+        // `...Are<lowercase>` boundary (`compareAreas`) is the noun `Areas`, not
+        // the copula, so it still flags; strictness is preserved.
+        assert!(run("function f(parentFieldsAreEqual: boolean) {}").is_empty());
+        assert_eq!(run("let compareAreas: boolean = true;").len(), 1);
     }
 }
