@@ -13,6 +13,16 @@ const VALID_PREFIXES: &[&str] = &[
 ];
 const NEGATIVE_SUBSTRINGS: &[&str] = &["Not", "Isnt", "Cannot", "Cant", "Shouldnt"];
 
+/// Predicate verbs that, when appearing as a capitalized mid-name word
+/// (`<subject>Is<Predicate>`, `<subject>Has<Noun>`, …), embed a predicate
+/// relationship just as a leading prefix does. `nextIsSingle`,
+/// `prevVNodeIsTextNode`, `valueHasOwner` read as "the subject is/has X" — the
+/// infix `Is` serves the exact semantic function of an `is*` prefix while making
+/// the subject explicit, so a redundant leading `is*` would be wrong. This is
+/// the camelCase counterpart of `INFIX_PREDICATES` in the rule's Rust backend
+/// (`<noun>_is_<adjective>`); the verb set is kept in sync.
+const INFIX_PREDICATES: &[&str] = &["Is", "Has", "Should", "Can", "Will"];
+
 /// Standard HTML attributes and React controlled-component props whose names
 /// are dictated by the platform / component library API, plus ECMA-402 Intl
 /// option keys (`hour12`) the developer cannot rename.
@@ -42,6 +52,35 @@ const MEDIA_API_BOOLEAN_PROPS: &[&str] = &["loop", "mute", "muted", "solo"];
 /// prefix.
 fn has_flag_suffix(name: &str) -> bool {
     name == "flag" || name.ends_with("Flag") || name.ends_with("_flag")
+}
+
+/// True if `name` embeds a predicate verb as a capitalized mid-name word —
+/// `<subject>Is<Descriptor>` (`nextIsSingle`, `prevVNodeIsTextNode`),
+/// `<subject>Has<Noun>` (`valueHasOwner`), etc. The verb must be a real infix
+/// word: there is a non-empty subject before it (so a name beginning with the
+/// verb itself, `IsReady`, is not treated as an infix) and the descriptor word
+/// starts with an uppercase letter right after it. The trailing boundary
+/// distinguishes the verb word from a longer word with the same opening letters
+/// (`Issue` after a subject is not `Is`, `nextIssue` does not match), and a
+/// trailing verb (`singleIs`) has no descriptor after it, so it is not an infix.
+/// Mirrors `has_infix_predicate` in the rule's Rust backend.
+fn has_infix_predicate(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    INFIX_PREDICATES.iter().any(|verb| {
+        let mut search_from = 0;
+        while let Some(rel) = name[search_from..].find(verb) {
+            let start = search_from + rel;
+            let after = start + verb.len();
+            let has_subject_before = start > 0;
+            let descriptor_starts_word =
+                bytes.get(after).is_some_and(|c| c.is_ascii_uppercase());
+            if has_subject_before && descriptor_starts_word {
+                return true;
+            }
+            search_from = start + 1;
+        }
+        false
+    })
 }
 
 /// A SCREAMING_SNAKE_CASE / ALL-CAPS identifier is a named-constant value label
@@ -92,6 +131,12 @@ fn classify_name(name: &str) -> Option<&'static str> {
             && (rest.is_empty() || rest.chars().next().is_some_and(|c| c.is_ascii_uppercase())) {
                 return None;
             }
+    }
+    // A `<subject>Is<Descriptor>` compound (`nextIsSingle`) embeds the predicate
+    // as a capitalized infix word, the same intent signal as a leading `is*`
+    // prefix, so a redundant prefix would be wrong.
+    if has_infix_predicate(name) {
+        return None;
     }
     Some("is missing a predicate prefix")
 }
@@ -574,5 +619,50 @@ mod tests {
         // declaration, so it still requires a predicate prefix.
         assert_eq!(run("class V { constructor(trainable: boolean) {} }").len(), 1);
         assert_eq!(run("class V { constructor(verbose: boolean) {} }").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_noun_is_adjective_infix_predicate() {
+        // A capitalized predicate verb (`Is`/`Has`/…) appearing as a mid-name
+        // word forms a `<subject>Is<Predicate>` proposition that reads as "the
+        // subject is X", serving the same function as a leading `is*` prefix
+        // while making the subject explicit (`next` vs `prev`). (Closes #5497)
+        assert!(
+            run("const nextIsSingle: boolean =\n  (nextChildFlags & 1) !== 0;").is_empty()
+        );
+        assert!(run("const prevVNodeIsTextNode: boolean = true;").is_empty());
+        assert!(run("function f(valueHasOwner: boolean) {}").is_empty());
+        assert!(run("function f(userCanEdit: boolean) {}").is_empty());
+        assert!(run("function f(requestShouldRetry: boolean) {}").is_empty());
+        assert!(run("function f(taskWillRun: boolean) {}").is_empty());
+    }
+
+    #[test]
+    fn infix_predicate_requires_subject_before_and_descriptor_after() {
+        // A trailing predicate verb (`singleIs`) has no descriptor after it, so
+        // it still flags. A name beginning with the verb itself (`IsReady`) has
+        // no subject before it, so it is not an infix and still flags.
+        assert_eq!(run("let singleIs: boolean = true;").len(), 1);
+        assert_eq!(run("let IsReady: boolean = true;").len(), 1);
+    }
+
+    #[test]
+    fn infix_predicate_does_not_match_letters_inside_a_word() {
+        // `textNode` / `axisLocked` contain the letters `is`/`node` but no
+        // capitalized predicate *word* boundary, so they still require a prefix;
+        // strictness is preserved for plain unprefixed adjective/state names.
+        assert_eq!(run("let textNode: boolean = true;").len(), 1);
+        assert_eq!(run("let axisLocked: boolean = true;").len(), 1);
+        assert_eq!(run("let single: boolean = true;").len(), 1);
+        assert_eq!(run("let visible: boolean = true;").len(), 1);
+    }
+
+    #[test]
+    fn infix_predicate_still_flags_negative_phrasing() {
+        // The negative-substring check runs first: `valueIsNotSet` embeds a
+        // negation and is flagged as negatively phrased, not exempted.
+        let diags = run("function f(valueIsNotSet: boolean) {}");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("negatively phrased"));
     }
 }
