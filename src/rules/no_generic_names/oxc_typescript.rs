@@ -22,8 +22,8 @@ const BANNED_WORDS: &[&str] = &[
     "bleh", "asdf", "qwerty", "zzz", "xxx", "aaa", "bbb", "scratch", "junk", "garbage", "something",
     "anything", "whatever", "dict", "vec", "tup", "bool", "int", "float", "char", "byte", "ptr",
     "ret", "out", "vars", "entity", "entities", "dto", "resource", "resources", "entry", "entries",
-    "blob", "elem", "comp", "func", "widget", "record", "records", "body", "doc", "idx", "curr",
-    "cfg", "found",
+    "blob", "elem", "comp", "func", "widget", "record", "records", "body", "idx", "curr", "cfg",
+    "found",
 ];
 
 const PARAM_ALLOWED_WORDS: &[&str] = &["value", "item"];
@@ -2187,7 +2187,7 @@ mod tests {
         // A sample across the new whole-name additions — placeholders,
         // type-stub abbreviations, and backend fillers all fire as bare names.
         for name in [
-            "stub", "entry", "entity", "dict", "idx", "cfg", "body", "doc", "record",
+            "stub", "entry", "entity", "dict", "idx", "cfg", "body", "record",
             "vec", "blob", "comp",
         ] {
             let src = format!("function f() {{ const {name} = compute(); return {name}; }}");
@@ -2408,5 +2408,30 @@ mod tests {
         assert_eq!(run("function f() { const item = pick(); return item; }").len(), 1);
         assert_eq!(run("function f() { const value = compute(); return value; }").len(), 1);
         assert_eq!(run("function f() { const blob = read(); return blob; }").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_doc_as_document_object_issue_5701() {
+        // Regression for #5701 — `doc` is the canonical abbreviation for a
+        // Document object across domains: a `yaml.Document` (`parseDocument`), an
+        // XML/DOM Document, an SPDX bill-of-materials document, a documentation
+        // page (`doc: Document`). It denotes a concrete parsed/structured
+        // document — a domain noun like `request`/`row`/`chunk`, not a vague
+        // catch-all — so it is no longer banned.
+        assert!(run("const doc = parseDocument(content);").is_empty());
+        assert!(run("const validate = (doc: Document, href: string) => doc.get(href);").is_empty());
+        assert!(run("const doc = { spdxVersion: 'SPDX-2.3', name: root.name };").is_empty());
+        assert!(run("const doc = yaml.parse(src);").is_empty());
+    }
+
+    #[test]
+    fn still_flags_other_vague_banned_words_issue_5701() {
+        // Negative space for #5701 — removing `doc` must not weaken the rest of
+        // the list. Bare vague catch-alls (`data`, `body`, `payload`, `tmp`) stay
+        // flagged.
+        assert_eq!(run("const data = fetchData();").len(), 1);
+        assert_eq!(run("function f() { const body = read(); return body; }").len(), 1);
+        assert_eq!(run("function f() { const payload = build(); return payload; }").len(), 1);
+        assert_eq!(run("function f() { const tmp = mk(); return tmp; }").len(), 1);
     }
 }
