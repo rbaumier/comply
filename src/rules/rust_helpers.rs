@@ -3081,6 +3081,191 @@ pub fn cast_feeds_from_bits(cast: Node, source: &[u8]) -> bool {
     false
 }
 
+/// True when `cast` (a `type_cast_expression`) is a direct argument of an x86/
+/// x86-64 SIMD intrinsic call (`_mm_*`, `_mm256_*`, `_mm512_*`) and is a
+/// same-width signed↔unsigned bit reinterpretation.
+///
+/// Intel's SIMD intrinsic headers type integer lanes as *signed* integers (the C
+/// ABI convention), so `core::arch` mirrors that: `_mm_set_epi64x` takes `i64`
+/// lanes, `_mm_set1_epi32` takes `i32`, etc. A programmer holding `u64` bit
+/// patterns (splat masks, hex bit-select constants) must cast them to the
+/// intrinsic's signed lane type. That `u64 as i64` is a same-width
+/// reinterpretation — every bit is preserved, only the sign interpretation
+/// changes — and `as` is the only correct tool: a `try_from` would reject bit
+/// patterns above `i64::MAX`. Both numeric-cast rules treat such a cast as
+/// lossless.
+///
+/// "Same width" is verified two ways so the unresolvable-source case (the cast
+/// of a `u64`-returning call's result, e.g. `splat_byte(b) as i64`) is covered:
+///
+/// - if the operand's source type resolves to a fixed-width integer, it must be
+///   the SAME width and the OPPOSITE signedness of the target (`u64 as i64`,
+///   `i32 as u32`, …); a narrowing into the lane type (`u64 as i32`) is rejected
+///   because the widths differ;
+/// - if the source is unresolvable, the intrinsic's lane width — parsed from the
+///   `epiN`/`epuN` token in its name (`set_epi64x` → 64, `set1_epi32` → 32) —
+///   must equal the target's width, confirming the target is the genuine lane
+///   type rather than a narrower one cast into the call.
+///
+/// A single layer of `parenthesized_expression` between the cast and the
+/// argument list is transparent.
+pub fn cast_feeds_simd_intrinsic(cast: Node, source: &[u8]) -> bool {
+    let Some(callee_segment) = simd_intrinsic_call_segment(cast, source) else {
+        return false;
+    };
+    let Some((target_signed, target_bits)) = cast_target_int_kind(cast, source) else {
+        return false;
+    };
+    match classify_cast_source(cast, source) {
+        // Resolved fixed-width source: a genuine same-width signed↔unsigned
+        // reinterpretation.
+        CastSource::FixedWidth(source_signed, source_bits) => {
+            source_bits == target_bits && source_signed != target_signed
+        }
+        // Resolved to a platform-width (`usize`/`isize`) source: its width is not
+        // statically known, so "same width" cannot be proven — never exempt.
+        CastSource::PlatformWidth => false,
+        // Unresolved source: the target must be the intrinsic's true lane type,
+        // i.e. the lane width encoded in the intrinsic name equals the target.
+        CastSource::Unresolved => simd_intrinsic_lane_bits(callee_segment) == Some(target_bits),
+    }
+}
+
+/// The resolution outcome for a cast operand's source type.
+enum CastSource {
+    /// A fixed-width integer (`true` = signed) of the given bit width.
+    FixedWidth(bool, u16),
+    /// A platform-width integer (`usize`/`isize`) — width not statically known.
+    PlatformWidth,
+    /// No locally-visible type (method return, un-annotated binding, …).
+    Unresolved,
+}
+
+/// If `cast` is a direct argument (through transparent parentheses) of a
+/// `call_expression` whose callee's last path segment names an x86 SIMD
+/// intrinsic (`_mm_*`, `_mm256_*`, `_mm512_*`), return that segment; otherwise
+/// `None`.
+fn simd_intrinsic_call_segment<'a>(cast: Node, source: &'a [u8]) -> Option<&'a str> {
+    let mut current = cast;
+    while let Some(parent) = current.parent() {
+        if parent.kind() == "parenthesized_expression" {
+            current = parent;
+            continue;
+        }
+        if parent.kind() == "arguments" {
+            let call = parent.parent().filter(|c| c.kind() == "call_expression")?;
+            let function = call.child_by_field_name("function")?;
+            let segment = call_function_last_segment(function, source)?;
+            return is_simd_intrinsic_name(segment).then_some(segment);
+        }
+        return None;
+    }
+    None
+}
+
+/// True if `name` is an x86/x86-64 SIMD intrinsic identifier — one prefixed by a
+/// register-width tag (`_mm_`, `_mm256_`, `_mm512_`).
+fn is_simd_intrinsic_name(name: &str) -> bool {
+    name.starts_with("_mm_") || name.starts_with("_mm256_") || name.starts_with("_mm512_")
+}
+
+/// The lane bit width encoded in a SIMD intrinsic name's `epiN`/`epuN` token
+/// (`_mm_set_epi64x` → 64, `_mm_set1_epi32` → 32, `_mm256_set1_epu16` → 16), or
+/// `None` when the name carries no such lane-width token.
+fn simd_intrinsic_lane_bits(name: &str) -> Option<u16> {
+    for tag in ["epi", "epu"] {
+        if let Some(idx) = name.find(tag) {
+            let after = &name[idx + tag.len()..];
+            let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
+            if let Ok(bits) = digits.parse::<u16>() {
+                return Some(bits);
+            }
+        }
+    }
+    None
+}
+
+/// The (signedness, bit-width) of `cast`'s target type when it is a fixed-width
+/// integer (`i8`..`i128`, `u8`..`u128`), or `None` for `usize`/`isize`, floats,
+/// and non-numeric targets. Platform-width targets are excluded so "same width"
+/// is always a definite comparison.
+fn cast_target_int_kind(cast: Node, source: &[u8]) -> Option<(bool, u16)> {
+    let target = cast.child_by_field_name("type")?.utf8_text(source).ok()?.trim();
+    fixed_width_int_kind(target)
+}
+
+/// Classify `cast`'s operand source type when locally visible: a
+/// bare/dereferenced identifier with a local annotation, or an index into a
+/// locally-typed integer container. A resolved `usize`/`isize` is reported as
+/// [`CastSource::PlatformWidth`] (width unknown), any other unresolved or
+/// non-integer operand as [`CastSource::Unresolved`].
+fn classify_cast_source(cast: Node, source: &[u8]) -> CastSource {
+    let Some(value) = cast.child_by_field_name("value") else {
+        return CastSource::Unresolved;
+    };
+    let type_text = if let Some(element_type) = cast_operand_indexed_element_type(cast, source) {
+        element_type
+    } else {
+        let ident = deref_borrow_identifier(value, source).unwrap_or(value);
+        if ident.kind() != "identifier" {
+            return CastSource::Unresolved;
+        }
+        let Ok(name) = ident.utf8_text(source) else {
+            return CastSource::Unresolved;
+        };
+        match find_identifier_type(cast, name, source) {
+            Some(t) => strip_leading_borrow(&t).to_string(),
+            None => return CastSource::Unresolved,
+        }
+    };
+    let t = type_text.trim();
+    if t == "usize" || t == "isize" {
+        return CastSource::PlatformWidth;
+    }
+    match fixed_width_int_kind(t) {
+        Some((signed, bits)) => CastSource::FixedWidth(signed, bits),
+        None => CastSource::Unresolved,
+    }
+}
+
+/// If `value` is a unary dereference of an identifier (`*x`), return the inner
+/// identifier node, peeling one parenthesized wrapper (`(*x)`); otherwise `None`.
+fn deref_borrow_identifier<'a>(value: Node<'a>, source: &[u8]) -> Option<Node<'a>> {
+    if value.kind() == "parenthesized_expression" {
+        return value.named_child(0).and_then(|inner| deref_borrow_identifier(inner, source));
+    }
+    if value.kind() != "unary_expression" {
+        return None;
+    }
+    let is_deref = value
+        .child(0)
+        .and_then(|op| op.utf8_text(source).ok())
+        .is_some_and(|op| op == "*");
+    if !is_deref {
+        return None;
+    }
+    value.named_child(0).filter(|operand| operand.kind() == "identifier")
+}
+
+/// Strip a single leading `&` / `&mut` borrow from a type's source text so a
+/// dereferenced operand resolves to its referent (`&u16` → `u16`).
+fn strip_leading_borrow(type_text: &str) -> &str {
+    match type_text.trim_start().strip_prefix('&') {
+        Some(rest) => rest.trim_start().strip_prefix("mut ").unwrap_or(rest).trim_start(),
+        None => type_text,
+    }
+}
+
+/// The (signedness, bit-width) of a fixed-width integer type name (`true` for
+/// signed), or `None` for `usize`/`isize`, floats, and non-numeric types.
+fn fixed_width_int_kind(type_text: &str) -> Option<(bool, u16)> {
+    let t = type_text.trim();
+    if let Some(bits) = signed_int_bits(t).filter(|_| t != "isize") {
+        return Some((true, bits));
+    }
+    unsigned_int_bits(t).filter(|_| t != "usize").map(|bits| (false, bits))
+}
+
 /// The final path segment of a call's `function` node, used to match a call by
 /// method/associated-function name regardless of its receiver/path prefix.
 /// `f32::from_bits` and `core::f32::from_bits` both yield `from_bits`.
@@ -5057,6 +5242,47 @@ mod tests {
                 cast_feeds_from_bits(cast, src.as_bytes()),
                 expected,
                 "cast_feeds_from_bits mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn cast_feeds_simd_intrinsic_gates_same_width_signed_unsigned() {
+        let cases = [
+            // Issue #5600: unresolved `u64` source cast to the `i64` lane of
+            // `_mm_set_epi64x` (the first cast in the call).
+            ("fn f() -> M { _mm_set_epi64x(hi as i64, lo as i64) }", true),
+            ("fn f() -> M { _mm_set1_epi64x(0x8040u64 as i64) }", true),
+            // Resolved same-width signed↔unsigned reinterpretation.
+            ("fn f(x: u32) -> M { _mm_set1_epi32(x as i32) }", true),
+            ("fn f(x: i32) -> M { _mm_set1_epi32(x as u32) }", true),
+            // AVX2/AVX-512 register-width prefixes are recognized too.
+            ("fn f(x: u32) -> M { _mm256_set1_epi32(x as i32) }", true),
+            ("fn f(x: u64) -> M { _mm512_set1_epi64(x as i64) }", true),
+            // A parenthesized wrapper is transparent.
+            ("fn f() -> M { _mm_set1_epi32((load() as i32)) }", true),
+            // Resolved NARROWING into the lane type is not same-width — flagged.
+            ("fn f(x: u64) -> M { _mm_set1_epi32(x as i32) }", false),
+            // Same signedness (not a sign reinterpretation) is not exempt.
+            ("fn f(x: u64) -> M { _mm_set1_epi32(x as u32) }", false),
+            // A non-SIMD call is not exempt.
+            ("fn f(x: u64) -> i64 { consume(x as i64) }", false),
+            // `usize`/`isize` targets are platform-width — never same-width.
+            ("fn f(x: u64) -> M { _mm_set1_epi64(x as isize) }", false),
+            // A RESOLVED platform-width source must NOT fall through to the
+            // lane-width fallback: `usize as i32` is narrowing on 64-bit targets.
+            ("fn f(x: usize) -> M { _mm_set1_epi32(x as i32) }", false),
+            // A bare cast feeding no call is not exempt.
+            ("fn f(x: u64) -> i64 { x as i64 }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_of_kind(tree.root_node(), "type_cast_expression")
+                .expect("snippet should contain a type_cast_expression");
+            assert_eq!(
+                cast_feeds_simd_intrinsic(cast, src.as_bytes()),
+                expected,
+                "cast_feeds_simd_intrinsic mismatch for `{src}`"
             );
         }
     }

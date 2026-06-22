@@ -26,6 +26,12 @@
 //! bit-preserving reinterpretation, and a `try_from` would reject valid
 //! negative bit patterns.
 //!
+//! Likewise, a same-width signed↔unsigned cast feeding an x86 SIMD intrinsic
+//! argument — `_mm_set1_epi32(x as i32)` where `x: u32` — is exempt: Intel's
+//! intrinsics type integer lanes as signed (the C ABI), so passing a `u32` bit
+//! pattern requires a same-width `as i32` reinterpretation that preserves every
+//! bit.
+//!
 //! Widening casts with the same signedness (e.g. `u8 as u32`) are
 //! silenced when the source type is locally visible, as is an unsigned
 //! source cast to a strictly wider signed target (`u16 as i32`): the
@@ -62,12 +68,13 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cast_feeds_from_bits, cast_operand_bit_width, cast_operand_indexed_element_type,
-    cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
-    cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
-    cast_operand_is_enum_discriminant, cast_operand_is_non_negative_guarded,
-    cast_operand_is_range_guarded, cast_operand_is_repr_enum_field, cast_operand_literal_value,
-    find_identifier_type, is_in_enum_discriminant,
+    cast_feeds_from_bits, cast_feeds_simd_intrinsic, cast_operand_bit_width,
+    cast_operand_indexed_element_type, cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded,
+    cast_operand_is_bitwise, cast_operand_is_bool, cast_operand_is_char,
+    cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
+    cast_operand_is_non_negative_guarded, cast_operand_is_range_guarded,
+    cast_operand_is_repr_enum_field, cast_operand_literal_value, find_identifier_type,
+    is_in_enum_discriminant,
 };
 use crate::rules::rust_no_as_numeric_cast::rust::fires_on_cast;
 
@@ -158,6 +165,9 @@ impl AstCheck for Check {
             return;
         }
         if cast_feeds_from_bits(node, source_bytes) {
+            return;
+        }
+        if cast_feeds_simd_intrinsic(node, source_bytes) {
             return;
         }
         let source_type = source_numeric_type(node, source_bytes);
@@ -1212,5 +1222,32 @@ mod tests {
         // A genuinely numeric operand is NOT enum-shaped: `u64 as u32` stays a
         // lossy narrowing, owned by `rust-no-as-numeric-cast`.
         assert!(run_on("fn f(x: u64) -> u32 { x as u32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_5600_same_width_cast_feeding_simd_intrinsic_not_flagged() {
+        // Issue #5600: a same-width signed↔unsigned cast feeding an x86 SIMD
+        // intrinsic is a bit reinterpretation, not a lossy narrowing — exempt in
+        // both rules. `u32 as i32` (an in-scope signed target here) feeding
+        // `_mm_set1_epi32`, with `x: u32` resolvable.
+        assert!(run_on("fn f(x: u32) -> __m128i { _mm_set1_epi32(x as i32) }").is_empty());
+    }
+
+    #[test]
+    fn repro_5600_unresolved_source_same_width_simd_not_flagged() {
+        // Unresolved source (call return) cast to the intrinsic's lane type:
+        // `load() as i32` feeding `_mm_set1_epi32`. The lane width (epi32 = 32)
+        // matches the target, so the cast is the genuine lane reinterpretation.
+        // Without the SIMD anchor this would leak through (numeric-cast no longer
+        // owns it), so this rule must exempt it too.
+        assert!(run_on("fn f() -> __m128i { _mm_set1_epi32(load() as i32) }").is_empty());
+    }
+
+    #[test]
+    fn repro_5600_narrowing_into_simd_intrinsic_owned_by_numeric_cast() {
+        // A genuinely narrowing cast feeding a SIMD intrinsic is NOT same-width,
+        // so the anchor must not exempt it: `u64 as i32` discards 32 bits. The
+        // narrowing stays a finding, owned by `rust-no-as-numeric-cast`.
+        assert!(run_on("fn f(x: u64) -> __m128i { _mm_set1_epi32(x as i32) }").is_empty());
     }
 }
