@@ -15,9 +15,18 @@ const URL_NEEDLES: &[&str] = &["/api/", "/v1/", "/v2/"];
 /// True if `text` looks like a REST URL containing one of the banned
 /// verbs as a path segment prefix (followed by a CamelCase noun).
 /// Returns the verb that matched.
+///
+/// The rule targets the project's own route paths, which are written as
+/// relative paths (`/api/createOrder`). An absolute URL carrying a scheme
+/// and host (`https://webdriver.io/docs/api/browser/deleteCookies`) is a
+/// reference link to a third-party site — a documentation link in an error
+/// message, not a route the project defines — so it is never flagged.
 #[must_use]
 pub fn contains_verb_url(text: &str) -> Option<&'static str> {
     let inner = text.trim_matches(|c| c == '"' || c == '\'' || c == '`' || c == 'r' || c == '#');
+    if inner.contains("://") {
+        return None;
+    }
     if !URL_NEEDLES.iter().any(|n| inner.contains(n)) {
         return None;
     }
