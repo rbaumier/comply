@@ -18,6 +18,13 @@
 //! e.g. `(x >> 8) as u8`, `(x & 0xFF) as u8`. The truncation is intentional,
 //! so `try_from` would be wrong; these are left alone.
 //!
+//! A cast feeding a `from_bits` call — `f32::from_bits(p as u32)`,
+//! `f64::from_bits(x as u64)` — is exempt: `from_bits` reinterprets raw bits,
+//! so the `as` adapting the operand to its parameter type (e.g. the `i32` the
+//! x86 `_mm_extract_ps` intrinsic returns, cast to the `u32` `f32::from_bits`
+//! expects) is a bit-preserving reinterpretation, and a `try_from` would
+//! reject valid negative bit patterns.
+//!
 //! A narrowing cast of an unsigned identifier guarded by an enclosing
 //! `if`/`else if` upper bound that proves the value fits the target type —
 //! `if val < 256 { val as u8 }` — is exempt: the branch is entered only when
@@ -53,12 +60,12 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cast_operand_bit_width, cast_operand_indexed_element_type, cast_operand_is_ascii_guarded,
-    cast_operand_is_assert_bounded, cast_operand_is_bitwise, cast_operand_is_bool,
-    cast_operand_is_char, cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
-    cast_operand_is_non_negative_guarded, cast_operand_is_range_guarded,
-    cast_operand_is_repr_enum_field, cast_operand_literal_value, find_identifier_type,
-    is_in_enum_discriminant, is_in_test_context,
+    cast_feeds_from_bits, cast_operand_bit_width, cast_operand_indexed_element_type,
+    cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
+    cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
+    cast_operand_is_enum_discriminant, cast_operand_is_non_negative_guarded,
+    cast_operand_is_range_guarded, cast_operand_is_repr_enum_field, cast_operand_literal_value,
+    find_identifier_type, is_in_enum_discriminant, is_in_test_context,
 };
 
 const KINDS: &[&str] = &["type_cast_expression"];
@@ -154,6 +161,9 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
         return false;
     }
     if cast_operand_is_bitwise(node, source_bytes) {
+        return false;
+    }
+    if cast_feeds_from_bits(node, source_bytes) {
         return false;
     }
     if cast_operand_is_collection_size(node, source_bytes) {
@@ -1158,6 +1168,38 @@ mod tests {
         // The guard tests a different value than the one cast, so it proves
         // nothing about the cast operand.
         let src = "fn f(a: char, b: char) -> Option<u8> { a.is_ascii().then_some(b as u8) }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_5593_from_bits_arg_i32_as_u32_not_flagged() {
+        // Issue #5593 (qdrant simple_avx.rs): `f32::from_bits(p1 as u32)` where
+        // `p1` is the i32 the `_mm_extract_ps` intrinsic returns. The cast feeds
+        // a bit-reinterpretation sink, so it is the correct same-width tool — a
+        // `u32::try_from` would reject negative bit patterns.
+        let src = "fn f() -> f32 { let p1 = _mm_extract_ps(h, 0); f32::from_bits(p1 as u32) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5593_f64_from_bits_arg_i64_as_u64_not_flagged() {
+        let src = "fn f() -> f64 { let p = q(); f64::from_bits(p as u64) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5593_from_bits_through_parens_not_flagged() {
+        // A single parenthesized wrapper between the cast and the argument list
+        // is transparent.
+        let src = "fn f() -> f32 { let p = q(); f32::from_bits((p as u32)) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_5593_non_from_bits_call_arg_still_flagged() {
+        // A same-width sign-changing cast feeding an ordinary call is not a
+        // bit-reinterpretation sink, so it stays flagged.
+        let src = "fn f(p: i32) -> u32 { consume(p as u32) }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
