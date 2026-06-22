@@ -1,10 +1,14 @@
 //! no-ignored-exceptions Rust backend — flag `let _ = fallible()` that
 //! discards a Result/Option without handling it.
 //!
-//! Tests and benchmarks are exempted: a `let _ = fn_under_test()` pattern is
-//! the idiomatic way to assert "this call doesn't panic" without caring about
-//! the return value. Exempt when in a test context — a `#[test]`/`#[cfg(test)]`
-//! attribute walk via `rust_helpers::is_in_test_context` — or when the file
+//! Tests, Kani harnesses, and benchmarks are exempted: a `let _ =
+//! fn_under_test()` pattern is the idiomatic way to assert "this call doesn't
+//! panic" without caring about the return value. Exempt when in a test context
+//! — a `#[test]`/`#[cfg(test)]` attribute walk via
+//! `rust_helpers::is_in_test_context` — when inside a Kani verification harness
+//! (an enclosing fn carrying `#[kani::proof]`/`#[kani::proof_for_contract(...)]`,
+//! via `rust_helpers::is_in_kani_proof`), where `let _ = f(kani::any())` is the
+//! conventional way to exercise a call for its safety property — or when the file
 //! lives under a `tests/` directory (`rust_helpers::is_under_tests_dir`), since
 //! plain helper fns there are integration-test infrastructure. Benchmark files
 //! (`FileCtx::in_benchmark_dir`) are exempt too: in a Criterion `b.iter(|| { let
@@ -77,7 +81,7 @@
 //! fix for this class of FP — document intent in the calling code if needed.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
+use crate::rules::rust_helpers::{is_in_kani_proof, is_in_test_context, is_under_tests_dir};
 use tree_sitter::Node;
 
 crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
@@ -107,12 +111,14 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    // Skip inside tests and benchmarks — `let _ = …` there is "call and don't
-    // care". Covers a `#[test]`/`#[cfg(test)]` attribute context, a file under a
-    // `tests/` directory (plain helper fns there are test infrastructure), and
-    // benchmark files (`benches/`, `_bench.rs`): a Criterion `b.iter` closure
-    // discards the result to time the call without consuming it.
+    // Skip inside tests, Kani harnesses, and benchmarks — `let _ = …` there is
+    // "call and don't care". Covers a `#[test]`/`#[cfg(test)]` attribute context,
+    // a Kani verification harness (`#[kani::proof]`/`#[kani::proof_for_contract]`),
+    // a file under a `tests/` directory (plain helper fns there are test
+    // infrastructure), and benchmark files (`benches/`, `_bench.rs`): a Criterion
+    // `b.iter` closure discards the result to time the call without consuming it.
     if is_in_test_context(node, source)
+        || is_in_kani_proof(node, source)
         || is_under_tests_dir(ctx.path)
         || ctx.file.in_benchmark_dir()
     {
@@ -691,6 +697,39 @@ mod tests {
             }
         "#;
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_let_underscore_call_inside_kani_proof_harness() {
+        // hifitime's `src/epoch/kani_verif.rs`: a Kani harness in the
+        // production `src/` tree where `let _ = f(kani::any())` exercises the
+        // call for its safety property and discards the symbolic result.
+        let proof = r#"
+            #[kani::proof]
+            fn kani_harness_january_years() {
+                let year: i32 = kani::any();
+                let _ = january_years(year);
+            }
+        "#;
+        let for_contract = r#"
+            #[kani::proof_for_contract(crate::epoch::Epoch::weekday)]
+            fn kani_harness_weekday() {
+                let dur: Duration = kani::any();
+                let callee = Epoch::from_duration(dur, TimeScale::TAI);
+                let _ = callee.weekday();
+            }
+        "#;
+        assert!(run_on(proof).is_empty());
+        assert!(run_on(for_contract).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_call_outside_kani_proof() {
+        // A plain production fn is still checked even when the file happens to
+        // contain Kani harnesses — the attribute, not the file, scopes the
+        // exemption.
+        let src = "fn produce() { let _ = persist_to_disk(record); }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
