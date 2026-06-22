@@ -88,21 +88,42 @@ fn inside_unsafe_fn(node: tree_sitter::Node, source: &[u8]) -> bool {
 /// methods — the granularity is the enclosing scope, not the block.
 ///
 /// We check the lines directly above the unsafe block, then walk up the
-/// ancestor chain and check the lines directly above each enclosing
-/// `impl_item` / `function_item`. Leakage from an unrelated sibling item
+/// ancestor chain. For the nearest enclosing statement (`let_declaration` /
+/// `expression_statement`) we check the lines above its start row: an inline
+/// `unsafe` expression in the middle of a multi-line statement
+/// (`let x = f(\n    unsafe { .. }\n);`) carries its safety comment above the
+/// statement, not above the `unsafe` keyword's own row. Only the nearest
+/// statement is consulted, and only when it starts on a different row than
+/// the `unsafe` block, so a comment above an unrelated outer statement can't
+/// leak. We then keep walking for enclosing `impl_item` / `function_item`
+/// (the shared-invariant convention). Leakage from an unrelated sibling item
 /// is prevented by the per-row scan stopping at the first real-code line
 /// above each ancestor: a sibling's comment is never directly above an
 /// ancestor's start row. The walk bound (`source_file`) only caps how far
 /// up the chain we look.
 fn has_safety_comment_above(node: tree_sitter::Node, source: &str) -> bool {
     let lines: Vec<&str> = source.lines().collect();
-    if safety_comment_above_row(node.start_position().row, &lines) {
+    if safety_comment_above_row(node.start_position().row, SkipLets::Yes, &lines) {
         return true;
     }
+    let mut checked_enclosing_statement = false;
     let mut cur = node.parent();
     while let Some(p) = cur {
+        if !checked_enclosing_statement
+            && matches!(p.kind(), "let_declaration" | "expression_statement")
+        {
+            checked_enclosing_statement = true;
+            // The comment must sit directly above the statement: preceding
+            // `let` bindings are independent statements whose own comments
+            // would otherwise leak, so we do not skip them here.
+            if p.start_position().row != node.start_position().row
+                && safety_comment_above_row(p.start_position().row, SkipLets::No, &lines)
+            {
+                return true;
+            }
+        }
         if matches!(p.kind(), "impl_item" | "function_item")
-            && safety_comment_above_row(p.start_position().row, &lines)
+            && safety_comment_above_row(p.start_position().row, SkipLets::Yes, &lines)
         {
             return true;
         }
@@ -111,18 +132,27 @@ fn has_safety_comment_above(node: tree_sitter::Node, source: &str) -> bool {
     false
 }
 
+/// Whether `safety_comment_above_row` skips a contiguous run of preparatory
+/// `let` bindings between the comment and the scanned row.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SkipLets {
+    Yes,
+    No,
+}
+
 /// True if a `// SAFETY:` comment sits on the lines directly above
 /// `start_row`. We scan by text (the comment may be on any of the
 /// preceding lines up to the previous code line) because tree-sitter
 /// doesn't attach comments to expressions. Blank lines, other comments,
 /// and outer attributes (`#[...]`) are skipped so a comment above an
-/// `impl` carrying `#[allow(unsafe_code)]` still counts. A contiguous run
-/// of simple `let` bindings directly above is also skipped: documenting
-/// the invariant once above the preparatory bindings, then performing the
-/// unsafe call, is idiomatic. The scan stops at the first non-`let` code
-/// line (a call/expression statement, an opening/closing brace, another
-/// unsafe block), so a stray faraway comment never counts.
-fn safety_comment_above_row(start_row: usize, lines: &[&str]) -> bool {
+/// `impl` carrying `#[allow(unsafe_code)]` still counts. When `skip_lets`
+/// is `Yes`, a contiguous run of simple `let` bindings directly above is
+/// also skipped: documenting the invariant once above the preparatory
+/// bindings, then performing the unsafe call, is idiomatic. The scan stops
+/// at the first non-`let` code line (a call/expression statement, an
+/// opening/closing brace, another unsafe block), so a stray faraway comment
+/// never counts.
+fn safety_comment_above_row(start_row: usize, skip_lets: SkipLets, lines: &[&str]) -> bool {
     let mut row = start_row;
     while row > 0 {
         row -= 1;
@@ -137,7 +167,7 @@ fn safety_comment_above_row(start_row: usize, lines: &[&str]) -> bool {
             }
             continue;
         }
-        if is_simple_let_binding(trimmed) {
+        if skip_lets == SkipLets::Yes && is_simple_let_binding(trimmed) {
             // Preparatory binding between the comment and the unsafe block —
             // skip it and keep looking upward for the SAFETY comment.
             continue;
@@ -462,5 +492,78 @@ mod tests {
                       }\n\
                       }";
         assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_inline_unsafe_expr_in_multiline_let_issue_5465() {
+        // Issue #5465: time-rs primitive_date_time.rs — a `// Safety:`
+        // comment documents an inline `unsafe` expression that sits on its
+        // own row inside a multi-line `let` statement (a function-call
+        // argument). The comment is above the `let` statement, not above the
+        // `unsafe` keyword's row, so the scan walks up to the enclosing
+        // statement.
+        let source = "fn f(buf: &mut [u8], date_len: usize) {\n\
+                      // Safety: The buffer is large enough that the first chunk is in bounds.\n\
+                      let time_len = self.time.fmt_into_buffer(\n\
+                      unsafe { buf[date_len + 1..].first_chunk_mut().unwrap_unchecked() }\n\
+                      );\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_inline_unsafe_expr_same_line_let_issue_5465() {
+        // Issue #5465: time-rs num_fmt.rs — a multi-line `// Safety:` comment
+        // above a `let` whose initializer is an inline `unsafe` expression on
+        // the same row. The scan above the `unsafe` row skips the trailing
+        // comment line and reaches the marker line.
+        let source = "fn f(offset: usize, size: usize) {\n\
+                      // Safety: `offset` is within the bounds of the array. The array\n\
+                      // contains only ASCII characters, so it's valid UTF-8.\n\
+                      let first_two = unsafe { str_from_raw_parts(ptr.add(offset), size) };\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_undocumented_inline_unsafe_expr_issue_5465() {
+        // Negative: an inline `unsafe` expression inside a multi-line `let`
+        // with no safety comment anywhere above the statement still fires.
+        let source = "fn f(buf: &mut [u8], date_len: usize) {\n\
+                      let time_len = self.time.fmt_into_buffer(\n\
+                      unsafe { buf[date_len + 1..].first_chunk_mut().unwrap_unchecked() }\n\
+                      );\n\
+                      }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_inline_unsafe_expr_with_unrelated_comment_issue_5465() {
+        // Negative: a comment that isn't a safety marker above the enclosing
+        // statement must not suppress an inline `unsafe` expression.
+        let source = "fn f(buf: &mut [u8], date_len: usize) {\n\
+                      // compute the length of the formatted time component\n\
+                      let time_len = self.time.fmt_into_buffer(\n\
+                      unsafe { buf[date_len + 1..].first_chunk_mut().unwrap_unchecked() }\n\
+                      );\n\
+                      }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_inline_unsafe_expr_when_comment_belongs_to_prior_let_issue_5465() {
+        // Negative: a `// SAFETY:` comment that documents a *prior* `let`
+        // statement must not leak onto an undocumented inline unsafe
+        // expression in the next statement. The enclosing-statement scan must
+        // not skip the intervening `let` (it belongs to the comment, not to
+        // the unsafe block).
+        let source = "fn f(ptr: *const u8) {\n\
+                      // SAFETY: documents the call below, not the unsafe read.\n\
+                      let a = compute();\n\
+                      let b = other(\n\
+                      unsafe { ptr.read() }\n\
+                      );\n\
+                      }";
+        assert_eq!(run_on(source).len(), 1);
     }
 }
