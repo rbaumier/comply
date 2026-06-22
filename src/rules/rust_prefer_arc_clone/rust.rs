@@ -106,6 +106,13 @@ crate::ast_check! { on ["call_expression"] prefilter = ["clone"] => |node, sourc
 
     if !is_arc_binding_at_call(node, source, node.start_byte(), obj_name) { return; }
 
+    // The explicit `Arc::clone(&x)` form is a readability convention for
+    // production code review; it adds noise without benefit in test scaffolding,
+    // where authors already treat `.clone()` on an `Arc` as a cheap ref-count
+    // bump. Skip inline `#[cfg(test)]` modules and `#[test]` functions inside
+    // `src/` files (path-based `tests/` dirs are gated by `skip_in_test_dir`).
+    if crate::rules::rust_helpers::is_in_test_context(node, source) { return; }
+
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &node,
@@ -137,6 +144,10 @@ mod tests {
 
     fn run(s: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, s, "t.rs")
+    }
+
+    fn run_gated(s: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_gated(&Check, s, path)
     }
 
     #[test]
@@ -207,5 +218,44 @@ mod tests {
             { let resolver: Arc<dyn Resolve> = make(); let _ = resolver; } \
             let y = resolver.clone(); }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_arc_clone_in_inline_cfg_test_module() {
+        // reth crates/rpc/rpc-engine-api/src/engine_api.rs:1624 — Arc clones in a
+        // test setup helper inside an inline `#[cfg(test)] mod tests` block.
+        let src = "#[cfg(test)] mod tests { \
+            fn setup_engine_api() { \
+                let provider = Arc::new(MockEthProvider::default()); \
+                let chain_spec: Arc<ChainSpec> = MAINNET.clone(); \
+                let _ = (provider.clone(), chain_spec.clone()); \
+            } }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_arc_clone_in_plain_mod_tests_without_cfg_test() {
+        // A `mod tests` without `#[cfg(test)]` is compiled into production, so the
+        // convention still applies — the exemption is tied to the attribute, not
+        // the module name.
+        let src = "mod tests { \
+            fn f() { let x = Arc::new(42); let _ = x.clone(); } }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_arc_clone_in_tests_dir_via_skip_in_test_dir() {
+        // Path-based test dir: gated by `skip_in_test_dir` through the engine's
+        // applicability check.
+        let src = "fn f() { let x = Arc::new(42); let _ = x.clone(); }";
+        assert!(run_gated(src, "tests/integration.rs").is_empty());
+    }
+
+    #[test]
+    fn flags_arc_clone_in_production_src_via_gate() {
+        // Production `src/` path is not exempt — the gate lets the rule run and it
+        // flags the Arc clone.
+        let src = "fn f() { let x = Arc::new(42); let _ = x.clone(); }";
+        assert_eq!(run_gated(src, "src/lib.rs").len(), 1);
     }
 }
