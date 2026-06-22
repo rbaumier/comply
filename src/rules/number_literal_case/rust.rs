@@ -24,6 +24,15 @@ fn canonical(raw: &str) -> Option<String> {
             if !(has_upper && has_lower) {
                 return None;
             }
+
+            // EIP-55 Ethereum addresses are 40 hex digits whose mixed case
+            // encodes a Keccak-256 checksum: uppercasing corrupts that checksum.
+            // A 40-digit `0x` literal also overflows every Rust integer type, so
+            // it is never a real numeric literal needing case normalization.
+            let digit_count = hex.chars().filter(|&c| c != '_').count();
+            if digit_count == 40 {
+                return None;
+            }
             let suffix = &after[hex_end..];
             let fixed = format!("0x{}{suffix}", hex.to_uppercase());
             if fixed == raw { None } else { Some(fixed) }
@@ -117,5 +126,18 @@ mod tests {
     #[test]
     fn allows_plain_integer() {
         assert!(crate::rules::test_helpers::run_rule(&Check, "fn f() { let x = 42; }", "t.rs").is_empty());
+    }
+
+    #[test]
+    fn allows_eip55_checksummed_ethereum_address() {
+        let src = "fn f() { let x = 0x4e59b44847b379578588920cA78FbF26c0B4956C; }";
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.rs").is_empty());
+    }
+
+    #[test]
+    fn flags_mixed_case_hex_shorter_than_address() {
+        let d = crate::rules::test_helpers::run_rule(&Check, "fn f() { let x = 0xaBcD; }", "t.rs");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("0xABCD"));
     }
 }
