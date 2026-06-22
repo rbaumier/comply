@@ -91,6 +91,9 @@ fn check_node(
     if is_assertion_value_param(node, name, source) {
         return None;
     }
+    if is_wasm_bindgen_foreign_param(node, source) {
+        return None;
+    }
     if is_loop_iteration_toggle(node, name, source) {
         return None;
     }
@@ -264,6 +267,84 @@ fn fn_body_contains_assertion(function_item: tree_sitter::Node, source: &[u8]) -
 fn is_assertion_macro_name(name: &str) -> bool {
     matches!(name, "assert" | "assert_eq" | "assert_ne")
         || matches!(name, "debug_assert" | "debug_assert_eq" | "debug_assert_ne")
+}
+
+/// Proc macros that rewrite an `extern` block into safe foreign-binding
+/// interop whose function signatures mirror an external API verbatim. A
+/// parameter in such a block carries the name dictated by the bound API (e.g.
+/// the Web IDL attribute names `cancelable`, `bubbles` in wasm-bindgen's
+/// `web-sys` bindings) and cannot be renamed by the developer.
+const BINDING_MACRO_ATTRS: &[&str] = &["wasm_bindgen"];
+
+/// True for a `bool` parameter declared inside a `foreign_mod_item`
+/// (`extern "C" { … }`) annotated with a binding-generation proc macro
+/// (`#[wasm_bindgen]`). wasm-bindgen's `web-sys` bindings declare DOM/Web API
+/// methods whose parameter names are the exact Web IDL attribute names
+/// (`cancelable`, `bubbles`, `ctrl_key`, `alt_key`, …); the signature is
+/// dictated by the bound JavaScript API, so forcing an `is_` prefix would
+/// diverge from the spec and break the 1:1 mapping developers rely on.
+///
+/// Anchored on two AST signals so it cannot widen into a name allowlist: the
+/// node is a `parameter`, and walking up its ancestors (stopping at the first
+/// `closure_expression` boundary) reaches a `foreign_mod_item` whose preceding
+/// outer attributes include a binding-generation macro. An unprefixed boolean
+/// in an ordinary function — or in an `extern` block without such an attribute
+/// — is unaffected and still requires a predicate prefix.
+fn is_wasm_bindgen_foreign_param(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() != "parameter" {
+        return false;
+    }
+    let mut cursor = node;
+    while let Some(parent) = cursor.parent() {
+        if parent.kind() == "closure_expression" {
+            return false;
+        }
+        if parent.kind() == "foreign_mod_item" {
+            return has_binding_macro_attr(parent, source);
+        }
+        cursor = parent;
+    }
+    false
+}
+
+/// True if any outer attribute immediately preceding the `foreign_mod_item`
+/// names a binding-generation proc macro (see [`BINDING_MACRO_ATTRS`]). Outer
+/// attributes are preceding siblings of the block, optionally separated from it
+/// by comments, so the scan walks back over `attribute_item` siblings and skips
+/// interleaved comments.
+fn has_binding_macro_attr(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let mut sibling = node.prev_sibling();
+    while let Some(prev) = sibling {
+        match prev.kind() {
+            "line_comment" | "block_comment" => {}
+            "attribute_item" => {
+                if attr_path_head(prev, source).is_some_and(|head| {
+                    BINDING_MACRO_ATTRS.contains(&head)
+                }) {
+                    return true;
+                }
+            }
+            _ => break,
+        }
+        sibling = prev.prev_sibling();
+    }
+    false
+}
+
+/// The leading path identifier of an `attribute_item`, e.g. `wasm_bindgen` for
+/// both `#[wasm_bindgen]` and `#[wasm_bindgen(method)]`. Returns `None` when the
+/// attribute's path is not a bare identifier (a scoped path like `crate::foo`
+/// never names a binding macro here).
+fn attr_path_head<'a>(attribute_item: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    let mut item_cursor = attribute_item.walk();
+    let attribute = attribute_item
+        .children(&mut item_cursor)
+        .find(|child| child.kind() == "attribute")?;
+    let path = attribute.named_child(0)?;
+    if path.kind() != "identifier" {
+        return None;
+    }
+    path.utf8_text(source).ok()
 }
 
 /// Names that read as a first-iteration sentinel in the separator/join idiom.
@@ -728,6 +809,69 @@ mod tests {
         // `issuer` starts with `is` letters but is not a boolean predicate.
         // It won't be flagged because its type isn't bool.
         assert!(run_on("fn f() { let issuer: &str = \"ACME\"; }").is_empty());
+    }
+
+    #[test]
+    fn allows_webidl_bool_params_in_wasm_bindgen_extern_block() {
+        // wasm-bindgen `web-sys` bindings: parameter names are the exact Web IDL
+        // attribute names; the signature is dictated by the bound JS API and
+        // cannot be renamed. (Closes #5468)
+        let src = "#[wasm_bindgen]\nextern \"C\" {\n\
+                   #[wasm_bindgen(method, js_name = \"initDragEvent\")]\n\
+                   pub fn init_drag_event(this: &DragEvent, type_: &str, can_bubble: bool, cancelable: bool);\n\
+                   #[wasm_bindgen(method, setter, js_name = \"ctrlKey\")]\n\
+                   pub fn set_ctrl_key(this: &KeyboardEventInit, val: bool);\n\
+                   #[wasm_bindgen(method, setter, js_name = \"bubbles\")]\n\
+                   pub fn set_bubbles(this: &KeyboardEventInit, bubbles: bool);\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_webidl_bool_param_in_bare_extern_block_with_wasm_bindgen() {
+        // A bare `extern { … }` (implicit "C" ABI) is the shape wasm-bindgen emits;
+        // the `#[wasm_bindgen]` attribute is the anchor, not the ABI string.
+        let src = "#[wasm_bindgen]\nextern {\n\
+                   #[wasm_bindgen(method)]\n\
+                   pub fn set_alt_key(this: &MouseEventInit, alt_key: bool);\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_bool_param_in_plain_extern_block() {
+        // Strictness preserved: a plain `extern "C"` block with no binding macro
+        // is ordinary FFI; an unprefixed boolean param still requires a prefix.
+        let src = "extern \"C\" {\n    pub fn set_thing(cancelable: bool);\n}";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'cancelable'"));
+    }
+
+    #[test]
+    fn still_flags_bool_param_in_ordinary_fn_beside_wasm_bindgen_block() {
+        // The exemption is anchored to the `foreign_mod_item` ancestor; an
+        // ordinary free function elsewhere in the file still flags.
+        let src = "#[wasm_bindgen]\nextern \"C\" {\n\
+                   #[wasm_bindgen(method)]\n\
+                   pub fn set_bubbles(this: &EventInit, bubbles: bool);\n\
+                   }\n\
+                   fn configure(cancelable: bool) {}";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'cancelable'"));
+    }
+
+    #[test]
+    fn still_flags_bool_param_in_non_wasm_extern_block_in_module() {
+        // A `foreign_mod_item` carrying a non-binding attribute (e.g. `#[link]`)
+        // is genuine C FFI, not wasm-bindgen interop; the exemption must not
+        // apply and an unprefixed boolean param still flags.
+        let src = "#[link(name = \"foo\")]\nextern \"C\" {\n\
+                   pub fn set_thing(cancelable: bool);\n}";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("'cancelable'"));
     }
 
     #[test]
