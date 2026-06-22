@@ -5,7 +5,7 @@ use crate::oxc_helpers::{
     byte_offset_to_line_col, is_constant_index_expression, is_get_context_call_binding,
     is_local_dispatch_table_binding, is_local_object_builder_binding,
     is_react_display_name_assignment, is_rtk_reducer_draft_param, is_typed_array_binding,
-    is_vue_ref_value_target,
+    is_valtio_proxy_binding, is_vue_ref_value_target,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
@@ -104,6 +104,7 @@ impl OxcCheck for Check {
                     && (is_created_dom_element(id, semantic)
                         || is_local_object_builder_binding(id, semantic)
                         || is_rtk_reducer_draft_param(id, semantic)
+                        || is_valtio_proxy_binding(id, semantic)
                         || is_get_context_call_binding(id, semantic))
                 {
                     return;
@@ -131,6 +132,7 @@ impl OxcCheck for Check {
                 if let Some(id) = root_identifier_of_simple_target(&update.argument)
                     && (is_created_dom_element(id, semantic)
                         || is_rtk_reducer_draft_param(id, semantic)
+                        || is_valtio_proxy_binding(id, semantic)
                         || is_get_context_call_binding(id, semantic))
                 {
                     return;
@@ -150,6 +152,7 @@ impl OxcCheck for Check {
                 if let Some(id) = root_identifier_of_expr(&unary.argument)
                     && (is_created_dom_element(id, semantic)
                         || is_rtk_reducer_draft_param(id, semantic)
+                        || is_valtio_proxy_binding(id, semantic)
                         || is_get_context_call_binding(id, semantic))
                 {
                     return;
@@ -206,10 +209,13 @@ impl OxcCheck for Check {
                     return;
                 }
 
-                // `state.ids.push(…)` inside a Redux Toolkit reducer mutates the
-                // Immer draft — the documented RTK pattern, not aliased state.
+                // `state.ids.push(…)` mutates an intentional-mutation target: a
+                // Redux Toolkit reducer's Immer draft (the documented RTK pattern,
+                // not aliased state) or a valtio `proxy()` binding (direct mutation
+                // is valtio's entire API).
                 if let Some(id) = root_identifier_of_expr(&member.object)
-                    && is_rtk_reducer_draft_param(id, semantic)
+                    && (is_rtk_reducer_draft_param(id, semantic)
+                        || is_valtio_proxy_binding(id, semantic))
                 {
                     return;
                 }
@@ -1252,6 +1258,50 @@ mod tests {
                     },
                 },
             })
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // valtio proxy() reactive mutations — issue #5595
+
+    #[test]
+    fn allows_valtio_proxy_mutations_issue_5595() {
+        // Regression for rbaumier/comply#5595 — valtio's `proxy()` returns a
+        // reactive Proxy whose direct mutation IS the API: property assignment,
+        // deep update, and mutating array methods on a `const` proxy binding all
+        // drive reactivity, with no immutable alternative.
+        let src = r#"
+            import { proxy } from 'valtio'
+            const state = proxy({ number: 0, nested: { ticks: 0 }, items: [] })
+            state.number = 1
+            state.nested.ticks++
+            state.items.push(1)
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_plain_const_mutation_not_valtio_proxy() {
+        // Negative space: a plain `const` object (not initialised by `proxy()`
+        // from valtio) is not a reactive proxy — mutating it stays flagged, even
+        // in a file that imports `proxy` from valtio.
+        let src = r#"
+            import { proxy } from 'valtio'
+            const state = proxy({ n: 0 });
+            const plain = getConfig();
+            plain.n = 1;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_local_proxy_not_imported_from_valtio() {
+        // Negative space: a same-named local `proxy()` (not imported from valtio)
+        // returns a plain object — mutating its property stays flagged.
+        let src = r#"
+            function proxy(x) { return x; }
+            const state = proxy({ n: 0 });
+            state.n = 1;
         "#;
         assert_eq!(run(src).len(), 1);
     }
