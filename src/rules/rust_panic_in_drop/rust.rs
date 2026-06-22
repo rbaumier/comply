@@ -510,4 +510,26 @@ mod tests {
                       fn drop(&mut self) { self.h.unwrap(); } }";
         assert_eq!(run_on(source).len(), 1);
     }
+
+    #[test]
+    fn allows_assert_in_drop_in_cargo_tests_dir() {
+        // ndarray tests/iterators.rs: a Drop fixture that asserts a value is
+        // dropped exactly once. Panicking-on-drop is the assertion mechanism.
+        let source = "struct DropCount; impl Drop for DropCount { \
+                      fn drop(&mut self) { assert_eq!(self.my_drops, 0); } }";
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(&Check, source, "tests/iterators.rs")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_expect_in_drop_in_cargo_tests_dir() {
+        // ndarray tests/array.rs: `.expect("double drop!")` in a Drop fixture.
+        let source = "struct InsertOnDrop; impl Drop for InsertOnDrop { \
+                      fn drop(&mut self) { self.value.take().expect(\"double drop!\"); } }";
+        assert!(
+            crate::rules::test_helpers::run_rule_gated(&Check, source, "tests/array.rs").is_empty()
+        );
+    }
 }
