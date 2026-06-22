@@ -238,6 +238,19 @@ mod tests {
         assert!(run("qb.select(`price/${unit}`)").is_empty());
     }
 
+    // Regression for #5542: Puppeteer's `page.select(selector, ...values)` picks
+    // <option>s in a <select> element via a CSS selector — not an XPath query.
+    // No XPath receiver and no XPath syntax in the arguments, so it must not fire.
+    #[test]
+    fn allows_puppeteer_page_select() {
+        assert!(run("page.select(selector, value)").is_empty());
+    }
+
+    #[test]
+    fn allows_puppeteer_mainframe_select() {
+        assert!(run("this.mainFrame().select(selector, ...values)").is_empty());
+    }
+
     // A genuine XPath select on the `xpath` package still fires.
     #[test]
     fn flags_xpath_package_select() {
