@@ -557,7 +557,7 @@ fn lint_one_file_with_dispatch(
         .with_context(|| format!("failed to read {}", file.path.display()))?;
     // The post-filter re-reads every discovered file solely to run this same
     // substring check; record clean files now so it can skip the read for them.
-    if !worker.source_buf.contains("comply-ignore") {
+    if !crate::ignore_comments::has_suppression_marker(&worker.source_buf) {
         project.note_clean_file(&file.path);
     }
     if ld.applicable.is_empty() {
