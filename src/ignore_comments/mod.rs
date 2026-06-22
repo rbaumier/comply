@@ -6,6 +6,7 @@
 //! - **String literals:** markers inside `"..."`, `'...'`, or `` `...` `` are ignored.
 //! - Justification is mandatory; missing → emit `comply-ignore-missing-justification`.
 
+mod eslint_config;
 mod line;
 mod payload;
 
@@ -26,6 +27,15 @@ pub struct IgnoreResult {
     pub file_suppressions: FxHashSet<String>,
     /// Diagnostics for malformed comply-ignore comments (missing justification).
     pub bad_ignores: Vec<Diagnostic>,
+}
+
+/// True when `source` might carry a suppression directive worth a full scan: a
+/// `comply-ignore` marker or an ESLint inline config comment (which always
+/// mentions `eslint`). A file with neither substring can suppress nothing, so
+/// callers skip the per-line parse entirely. One SIMD substring check each.
+#[must_use]
+pub fn has_suppression_marker(source: &str) -> bool {
+    source.contains("comply-ignore") || source.contains("eslint")
 }
 
 /// Parse all comply-ignore comments in source text.
@@ -110,6 +120,13 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
                 }
             }
         }
+    }
+
+    // ESLint inline config comments (`/* eslint <rule>: 0 */`) turn a rule off
+    // for the file. Treat each off-severity rule as a file-level suppression,
+    // honoring the same syntax codegen output (AWS SDK Smithy, etc.) relies on.
+    for rule in eslint_config::off_rules(source) {
+        file_suppressions.insert(rule);
     }
 
     IgnoreResult {
@@ -226,19 +243,19 @@ pub fn apply_to_all(
     let mut result: Vec<Diagnostic> = work
         .into_par_iter()
         .flat_map_iter(|(file, file_diags)| {
-            // The engine already read this file and saw no `comply-ignore`
-            // substring — it can carry neither a suppression nor a malformed
-            // marker, so skip the re-read. Equivalent to the fast path below.
+            // The engine already read this file and saw no suppression marker —
+            // it can carry neither a suppression nor a malformed marker, so skip
+            // the re-read. Equivalent to the fast path below.
             if clean_files.contains(&file.path) {
                 return file_diags.into_iter();
             }
             let out: Vec<Diagnostic> = match std::fs::read_to_string(&file.path) {
-                // Fast path: a file with no `comply-ignore` marker anywhere can
+                // Fast path: a file with no suppression marker anywhere can
                 // neither suppress a diagnostic nor carry a malformed marker, so
                 // the multi-pass line scan in `parse_ignores` is pure waste. One
                 // SIMD substring check over the whole file replaces two per-line
                 // `find` scans on every line of the repo.
-                Ok(src) if !src.contains("comply-ignore") => file_diags,
+                Ok(src) if !has_suppression_marker(&src) => file_diags,
                 Ok(src) => apply_suppressions(file_diags, &file.path, &src),
                 Err(e) => {
                     eprintln!("comply: skipping ignore-scan for {}: {e}", file.path.display());
@@ -455,6 +472,41 @@ mod tests {
         let kept = apply_suppressions(vec![diag(2, "no-clones")], Path::new("t.ts"), s);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].rule_id.as_ref(), "no-clones");
+    }
+
+    #[test]
+    fn eslint_config_comment_zero_severity_suppresses_whole_file() {
+        // #5510 — AWS SDK Smithy codegen heads a schema file with
+        // `/* eslint no-var: 0 */`; comply must honor it for the whole file.
+        let s = "/* eslint no-var: 0 */\nexport var S3ServiceException = [-3];\n";
+        let kept = apply_suppressions(
+            vec![diag(2, "no-var"), diag(2, "no-magic-numbers")],
+            Path::new("schemas_0.ts"),
+            s,
+        );
+        // Only no-var was set to 0; no-magic-numbers stays flagged.
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].rule_id.as_ref(), "no-magic-numbers");
+    }
+
+    #[test]
+    fn eslint_config_comment_multiple_off_rules_suppress_each() {
+        let s = "/* eslint no-var: 0, no-magic-numbers: 0 */\nexport var x = [-3];\n";
+        let kept = apply_suppressions(
+            vec![diag(2, "no-var"), diag(2, "no-magic-numbers")],
+            Path::new("schemas_0.ts"),
+            s,
+        );
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn eslint_config_comment_non_zero_severity_does_not_suppress() {
+        // A rule left at error severity must keep firing.
+        let s = "/* eslint no-var: 2 */\nexport var x = 1;\n";
+        let kept = apply_suppressions(vec![diag(2, "no-var")], Path::new("t.ts"), s);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].rule_id.as_ref(), "no-var");
     }
 
     #[test]
