@@ -1,4 +1,7 @@
-//! Bans while/do-while loops — prefer recursion or higher-order functions.
+//! Bans convertible while/do-while loops — prefer recursion or higher-order
+//! functions. Loops with a constant-truthy condition (`while (true)`) are
+//! intentional unbounded event/dispatch loops with no `for`/`for-of` equivalent
+//! and are not flagged.
 
 mod oxc_typescript;
 
@@ -10,7 +13,7 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-while-loop",
-    description: "Bans while/do-while loops.",
+    description: "Bans convertible while/do-while loops.",
     remediation: "Use recursion, Array methods, or generators instead.",
     severity: Severity::Warning,
     doc_url: None,
