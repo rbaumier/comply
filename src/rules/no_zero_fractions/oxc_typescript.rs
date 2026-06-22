@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, is_typed_array_binding};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    ArrayExpressionElement, AssignmentTarget, BinaryOperator, Expression,
+    ArrayExpressionElement, AssignmentTarget, BinaryOperator, Expression, ObjectPropertyKind,
 };
 use std::sync::Arc;
 
@@ -88,15 +88,48 @@ fn assigns_to_typed_array_element(
     matches!(&member.object, Expression::Identifier(id) if is_typed_array_binding(id, semantic))
 }
 
+/// True when `expr` is a genuine fractional float numeric literal (`0.5`, `1e-5`).
+fn is_genuine_fractional_literal(expr: &Expression, source: &str) -> bool {
+    matches!(
+        expr,
+        Expression::NumericLiteral(lit)
+            if is_genuine_fractional_float(&source[lit.span.start as usize..lit.span.end as usize])
+    )
+}
+
+/// True when the property at `node` shares an object literal with a property
+/// whose value is a genuine fractional float. Mirrors the array-sibling signal
+/// for object literals (`{ x: 0.6, y: 7.0 }`): the `.0` is kept for columnar
+/// consistency with its fractional sibling. The `N.0` literal itself never
+/// matches `is_genuine_fractional_literal`, so no self-exclusion is needed.
+fn object_has_fractional_sibling(
+    node: &oxc_semantic::AstNode,
+    source: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let prop_node = semantic.nodes().parent_node(node.id());
+    let AstKind::ObjectExpression(obj) = semantic.nodes().parent_node(prop_node.id()).kind() else {
+        return false;
+    };
+    obj.properties.iter().any(|prop| {
+        let ObjectPropertyKind::ObjectProperty(p) = prop else {
+            return false;
+        };
+        is_genuine_fractional_literal(&p.value, source)
+    })
+}
+
 /// True when the `N.0` literal at `node` sits in a floating-point computation.
 /// Signals (AST-anchored, never file name / substring):
 ///   - an element of an array literal that also holds a genuine fractional float
 ///     (a coefficient/lookup table: `[1.0, 0.5, 0.25, 0.0]`);
+///   - a property value of an object literal that also holds a genuine fractional
+///     float (`{ x: 0.6, y: 7.0 }`, `{ x: 0.0, h: 0.75 }`);
 ///   - an operand of an arithmetic `BinaryExpression` whose other side is a
 ///     genuine fractional float or a `Math.*` term (`20.0 * Math.log10(x)`);
 ///   - assigned to a `Float32Array`/`Float64Array` element (`buf[i] = 1.0`).
 /// A lone `N.0` with none of these (`const count = 1.0`, `setTimeout(fn, 1000.0)`,
-/// `arr[1.0]`) still flags.
+/// `arr[1.0]`, `{ x: 1.0, y: 2.0 }`) still flags.
 fn is_in_float_math_context(
     node: &oxc_semantic::AstNode,
     source: &str,
@@ -131,6 +164,7 @@ fn is_in_float_math_context(
         AstKind::AssignmentExpression(assign) => {
             assigns_to_typed_array_element(&assign.left, semantic)
         }
+        AstKind::ObjectProperty(_) => object_has_fractional_sibling(node, source, semantic),
         _ => false,
     }
 }
@@ -298,6 +332,42 @@ mod tests {
     fn flags_plain_array_element_assignment() {
         // Plain array binding has no float-typed evidence — still flags.
         let src = "const xs = [0, 0, 0]; xs[1] = 1.0;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_object_property_with_fractional_sibling() {
+        // #5626: `7.0` keeps `.0` for consistency with `x: 0.6` in the same object.
+        let src = r#"const m = { x: 0.6, y: 7.0, color: "FFFFFF", fontSize: 10 };"#;
+        assert!(run_on(src).is_empty(), "got {:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_object_zero_with_fractional_sibling() {
+        // #5626: `0.0` keeps `.0` for consistency with `h: 0.75` in the same object.
+        let src = r#"const r = { x: 0.0, y: "90%", w: "100%", h: 0.75 };"#;
+        assert!(run_on(src).is_empty(), "got {:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_object_with_only_zero_fractions() {
+        // No fractional sibling = no float evidence — every `N.0` value still flags.
+        let src = "const p = { x: 1.0, y: 2.0 };";
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+    #[test]
+    fn flags_standalone_object_zero_fraction() {
+        // A lone `5.0` property with no fractional sibling still flags.
+        let src = r#"const c = { size: 5.0, label: "px" };"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn fractional_sibling_in_nested_object_does_not_leak() {
+        // The `0.5` lives in a nested object, not a sibling property of `1.0` —
+        // `1.0` has no genuine fractional sibling in its own object, still flags.
+        let src = "const o = { a: 1.0, b: { c: 0.5 } };";
         assert_eq!(run_on(src).len(), 1);
     }
 }
