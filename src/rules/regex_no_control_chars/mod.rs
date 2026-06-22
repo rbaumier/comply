@@ -10,8 +10,8 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "regex-no-control-chars",
-    description: "Control characters in regex are usually unintended.",
-    remediation: "Remove `\\x00`-`\\x1f` control character escapes from the regex.",
+    description: "Raw control characters in regex are usually an accidental paste.",
+    remediation: "Replace the raw control byte with an explicit escape (e.g. `\\x1b`), or remove it.",
     severity: Severity::Warning,
     doc_url: None,
     categories: &["code-quality", "regex"],
