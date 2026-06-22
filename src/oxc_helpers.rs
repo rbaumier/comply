@@ -1435,6 +1435,272 @@ pub fn expression_is_array(
     }
 }
 
+/// True when `arg` is `delete recv.prop` whose `prop` is declared **optional**
+/// (`prop?: T`) on the receiver's structurally-resolved named type. Deleting an
+/// optional member returns the object to the absent state its own type already
+/// permits, so it is type-safe and intentional — not the foot-gun the rule
+/// targets (deleting a required field, leaving a hole the type forbids).
+///
+/// Both halves are resolved **structurally**, never from the property name:
+/// - the receiver's named type comes from an `as`/`satisfies` assertion
+///   (`(v as Memo<any>).tOwned`), a directly-annotated binding (`v: Memo`), or a
+///   `for-of` loop variable iterating an array/`Set` of a named element type
+///   (`for (const e of effects)` where `effects: Computation[]`);
+/// - the property's optionality comes from the matching `TSPropertySignature`
+///   on the named `interface`/object-`type` declaration in the same module,
+///   following `extends` heritage by name.
+///
+/// A computed delete (`delete obj["x"]`), a required member (`prop: T`), or a
+/// receiver whose named type cannot be resolved structurally all return `false`
+/// and stay flagged.
+#[must_use]
+pub fn is_optional_member_delete(
+    arg: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::Expression;
+    let Expression::StaticMemberExpression(member) = arg else {
+        return false;
+    };
+    let Some(type_name) = receiver_named_type(&member.object, semantic) else {
+        return false;
+    };
+    named_type_has_optional_property(type_name, member.property.name.as_str(), semantic, 0)
+}
+
+/// Maximum heritage/alias hops walked while resolving an optional member, so a
+/// cyclic or pathological `extends` chain cannot loop forever.
+const OPTIONAL_MEMBER_RESOLUTION_DEPTH: u32 = 8;
+
+/// The name of the receiver's declared type, when it can be resolved
+/// structurally. Recognizes an `as`/`satisfies` assertion to a named type, a
+/// binding annotated with a named type, and a `for-of` loop variable whose
+/// iterable is an array or `Set` of a named element type. Returns `None` for any
+/// receiver whose type is not a single named reference (anonymous object types,
+/// unions, inferred bindings).
+fn receiver_named_type<'a>(
+    expr: &'a oxc_ast::ast::Expression<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a str> {
+    use oxc_ast::ast::Expression;
+    match expr {
+        Expression::TSAsExpression(as_expr) => type_reference_name(&as_expr.type_annotation),
+        Expression::TSSatisfiesExpression(sat) => type_reference_name(&sat.type_annotation),
+        Expression::ParenthesizedExpression(paren) => {
+            receiver_named_type(&paren.expression, semantic)
+        }
+        Expression::Identifier(ident) => binding_named_type(ident, semantic),
+        _ => None,
+    }
+}
+
+/// The identifier name of a `T` / `Array<T>`-style type reference, or `None` for
+/// any non-reference type.
+fn type_reference_name<'a>(ty: &'a oxc_ast::ast::TSType<'a>) -> Option<&'a str> {
+    use oxc_ast::ast::{TSType, TSTypeName};
+    let TSType::TSTypeReference(tref) = ty else {
+        return None;
+    };
+    match &tref.type_name {
+        TSTypeName::IdentifierReference(id) => Some(id.name.as_str()),
+        TSTypeName::QualifiedName(_) | TSTypeName::ThisExpression(_) => None,
+    }
+}
+
+/// The named type of a binding: a declarator/parameter annotated with a named
+/// type, or a `for-of` loop variable over an array/`Set` of a named element type.
+fn binding_named_type<'a>(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a str> {
+    use oxc_ast::AstKind;
+    let scoping = semantic.scoping();
+    let symbol_id = ident
+        .reference_id
+        .get()
+        .and_then(|ref_id| scoping.get_reference(ref_id).symbol_id())?;
+    let nodes = semantic.nodes();
+    let decl_id = scoping.symbol_declaration(symbol_id);
+    match nodes.kind(decl_id) {
+        AstKind::VariableDeclarator(decl) => decl
+            .type_annotation
+            .as_ref()
+            .and_then(|ann| type_reference_name(&ann.type_annotation))
+            .or_else(|| for_of_element_type(decl_id, semantic)),
+        AstKind::FormalParameter(param) => param
+            .type_annotation
+            .as_ref()
+            .and_then(|ann| type_reference_name(&ann.type_annotation)),
+        _ => None,
+    }
+}
+
+/// When `decl_id` is the declarator of a `for-of` loop variable, the named
+/// element type of the iterable: `for (const e of effects)` where `effects`
+/// resolves to `Computation[]` / `Array<Computation>` / `Set<Computation>`
+/// yields `"Computation"`. Returns `None` when the declarator is not a `for-of`
+/// binding or the iterable's element type is not a single named reference.
+fn for_of_element_type<'a>(
+    decl_id: oxc_semantic::NodeId,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a str> {
+    use oxc_ast::AstKind;
+    let nodes = semantic.nodes();
+    let for_of = nodes.ancestor_kinds(decl_id).find_map(|kind| match kind {
+        AstKind::ForOfStatement(stmt) => Some(stmt),
+        _ => None,
+    })?;
+    iterable_element_type(&for_of.right, semantic)
+}
+
+/// The named element type of an iterable expression. An `as`/non-null/paren
+/// wrapper is peeled; an identifier is resolved to its annotated array/`Set`
+/// type. Returns `None` unless the element type is a single named reference.
+fn iterable_element_type<'a>(
+    expr: &'a oxc_ast::ast::Expression<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a str> {
+    use oxc_ast::ast::Expression;
+    match expr {
+        Expression::TSNonNullExpression(nn) => iterable_element_type(&nn.expression, semantic),
+        Expression::ParenthesizedExpression(paren) => {
+            iterable_element_type(&paren.expression, semantic)
+        }
+        Expression::TSAsExpression(as_expr) => type_element_name(&as_expr.type_annotation),
+        Expression::Identifier(ident) => {
+            let scoping = semantic.scoping();
+            let symbol_id = ident
+                .reference_id
+                .get()
+                .and_then(|ref_id| scoping.get_reference(ref_id).symbol_id())?;
+            let nodes = semantic.nodes();
+            let decl_id = scoping.symbol_declaration(symbol_id);
+            let ann = match nodes.kind(decl_id) {
+                oxc_ast::AstKind::VariableDeclarator(decl) => decl.type_annotation.as_ref(),
+                oxc_ast::AstKind::FormalParameter(param) => param.type_annotation.as_ref(),
+                _ => None,
+            }?;
+            type_element_name(&ann.type_annotation)
+        }
+        _ => None,
+    }
+}
+
+/// The named element type of an array/`Set` type: `T[]`, `readonly T[]`,
+/// `Array<T>`, `ReadonlyArray<T>`, `Set<T>`, `ReadonlySet<T>` → `"T"` (only when
+/// `T` is itself a single named reference). A `T[] | null` union is peeled to its
+/// array member. Returns `None` for any other type.
+fn type_element_name<'a>(ty: &'a oxc_ast::ast::TSType<'a>) -> Option<&'a str> {
+    use oxc_ast::ast::{TSType, TSTypeName, TSTypeOperatorOperator};
+    match ty {
+        TSType::TSArrayType(arr) => type_reference_name(&arr.element_type),
+        TSType::TSTypeOperatorType(op) if op.operator == TSTypeOperatorOperator::Readonly => {
+            type_element_name(&op.type_annotation)
+        }
+        TSType::TSTypeReference(tref) => {
+            let TSTypeName::IdentifierReference(id) = &tref.type_name else {
+                return None;
+            };
+            if !matches!(
+                id.name.as_str(),
+                "Array" | "ReadonlyArray" | "Set" | "ReadonlySet"
+            ) {
+                return None;
+            }
+            tref.type_arguments
+                .as_ref()
+                .and_then(|args| args.params.first())
+                .and_then(type_reference_name)
+        }
+        TSType::TSUnionType(union) => union.types.iter().find_map(type_element_name),
+        _ => None,
+    }
+}
+
+/// True when the `interface`/object-`type` named `type_name` declared in this
+/// module has `prop` as an **optional** property signature (`prop?: T`),
+/// following `extends` heritage by name up to a bounded depth. A required
+/// property, an unknown type name, or an exhausted depth budget returns `false`.
+fn named_type_has_optional_property(
+    type_name: &str,
+    prop: &str,
+    semantic: &oxc_semantic::Semantic,
+    depth: u32,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{Expression, TSType, TSTypeName};
+    if depth >= OPTIONAL_MEMBER_RESOLUTION_DEPTH {
+        return false;
+    }
+    for node in semantic.nodes().iter() {
+        match node.kind() {
+            AstKind::TSInterfaceDeclaration(decl) if decl.id.name.as_str() == type_name => {
+                if signatures_have_optional_property(&decl.body.body, prop) {
+                    return true;
+                }
+                for heritage in &decl.extends {
+                    if let Expression::Identifier(base) = &heritage.expression
+                        && named_type_has_optional_property(
+                            base.name.as_str(),
+                            prop,
+                            semantic,
+                            depth + 1,
+                        )
+                    {
+                        return true;
+                    }
+                }
+            }
+            AstKind::TSTypeAliasDeclaration(decl) if decl.id.name.as_str() == type_name => {
+                match &decl.type_annotation {
+                    TSType::TSTypeLiteral(lit) => {
+                        if signatures_have_optional_property(&lit.members, prop) {
+                            return true;
+                        }
+                    }
+                    // A `type X = Y` alias to another named type — follow it.
+                    TSType::TSTypeReference(tref) => {
+                        if let TSTypeName::IdentifierReference(id) = &tref.type_name
+                            && named_type_has_optional_property(
+                                id.name.as_str(),
+                                prop,
+                                semantic,
+                                depth + 1,
+                            )
+                        {
+                            return true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// True when `signatures` contains an optional, non-computed property signature
+/// named `prop`.
+fn signatures_have_optional_property(
+    signatures: &[oxc_ast::ast::TSSignature],
+    prop: &str,
+) -> bool {
+    use oxc_ast::ast::{PropertyKey, TSSignature};
+    signatures.iter().any(|sig| {
+        let TSSignature::TSPropertySignature(p) = sig else {
+            return false;
+        };
+        p.optional
+            && !p.computed
+            && match &p.key {
+                PropertyKey::StaticIdentifier(id) => id.name.as_str() == prop,
+                PropertyKey::StringLiteral(s) => s.value.as_str() == prop,
+                _ => false,
+            }
+    })
+}
+
 /// True when `expr` is a **statically-bounded** array — one whose element count
 /// is fixed at compile time, so spreading it (`Math.max(...expr)`) cannot exhaust
 /// the engine's argument-count limit. Recognizes three structural shapes:
