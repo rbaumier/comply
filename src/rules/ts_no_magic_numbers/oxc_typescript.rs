@@ -148,6 +148,21 @@ impl OxcCheck for Check {
             return;
         }
 
+        // A literal that is an operand of a *bitwise* operator — `&`/`|`/`^`,
+        // a shift (`<<`/`>>`/`>>>`), the corresponding compound assignments
+        // (`&=`/`|=`/`^=`/`<<=`/`>>=`/`>>>=`), or a hex literal compared against
+        // (`byte >= 0x80`) — is a bit-mask, shift amount, or bit-pattern test
+        // defining the bit layout, not an application magic number. The operator
+        // names the constant's role: `x | 0x80` sets a bit, `x & 0x7f` clears one,
+        // `x >> 7` selects a field, `byte >= 0x80` tests one. This is the
+        // structural shape of binary-format codecs (LEB128 varints, protobuf,
+        // DWARF, WASM) and flag/permission masks. An arithmetic-context literal
+        // (`price * 1.07`, `count >= 86400`) is unaffected — only bitwise
+        // operands and hex comparison operands are exempted.
+        if is_bitwise_operand(text, node.id(), semantic) {
+            return;
+        }
+
         // A numeric element of an array that is the value of a `color`/`colors`
         // property (`{ color: [110, 64, 170] }`) is an RGB(A) channel component,
         // named by the property key. The key is the anchor: a numeric array in a
@@ -576,6 +591,95 @@ fn is_byte_value_operator_context(
             | BinaryOperator::LessEqualThan
             | BinaryOperator::GreaterThan
             | BinaryOperator::GreaterEqualThan
+    )
+}
+
+/// True when this literal is an operand of a bitwise operator and thus a
+/// bit-mask, shift amount, or bit-pattern test rather than an arithmetic magic
+/// number. Three shapes qualify:
+///
+/// - operand of a binary bitwise expression: `x & 0x7f`, `x | 0x80`, `x ^ m`,
+///   `x << 7`, `x >> 7`, `x >>> 0`;
+/// - right-hand side of a compound bitwise assignment: `x &= 0x7f`, `x |= 0x80`,
+///   `x <<= 8`, …;
+/// - a *hex* literal that is an operand of a comparison: `byte >= 0x80`. Hex
+///   notation in a comparison is a bit-pattern test (testing the high bit), not
+///   an arithmetic threshold — a decimal comparison (`count >= 128`) is left
+///   flagged so genuine arithmetic thresholds keep firing.
+///
+/// The literal may be wrapped in a unary minus. Anchored entirely on the
+/// operator (and, for comparisons, the hex notation), so no specific value is
+/// allow-listed: `x & 0x12345` is exempt for being a mask, `x + 42` still flags.
+fn is_bitwise_operand(
+    text: &str,
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+
+    // The operand expression is the literal itself, or a `-literal` unary.
+    let mut operand_id = node_id;
+    let parent_id = nodes.parent_id(operand_id);
+    if parent_id != operand_id
+        && let AstKind::UnaryExpression(unary) = nodes.get_node(parent_id).kind()
+        && unary.operator == oxc_ast::ast::UnaryOperator::UnaryNegation
+    {
+        operand_id = parent_id;
+    }
+    let operand_span = nodes.get_node(operand_id).kind().span();
+
+    let parent_id = nodes.parent_id(operand_id);
+    if parent_id == operand_id {
+        return false;
+    }
+    match nodes.get_node(parent_id).kind() {
+        AstKind::BinaryExpression(bin) => {
+            if bin.left.span() != operand_span && bin.right.span() != operand_span {
+                return false;
+            }
+            match bin.operator {
+                BinaryOperator::BitwiseAnd
+                | BinaryOperator::BitwiseOR
+                | BinaryOperator::BitwiseXOR
+                | BinaryOperator::ShiftLeft
+                | BinaryOperator::ShiftRight
+                | BinaryOperator::ShiftRightZeroFill => true,
+                // A hex literal compared against (`byte >= 0x80`) is a
+                // bit-pattern test; a decimal comparison is an arithmetic
+                // threshold and stays flagged.
+                BinaryOperator::Equality
+                | BinaryOperator::Inequality
+                | BinaryOperator::StrictEquality
+                | BinaryOperator::StrictInequality
+                | BinaryOperator::LessThan
+                | BinaryOperator::LessEqualThan
+                | BinaryOperator::GreaterThan
+                | BinaryOperator::GreaterEqualThan => is_hex_literal(text),
+                _ => false,
+            }
+        }
+        // Compound bitwise assignment: the literal is the right-hand side
+        // (`x &= 0x7f`). Anchored on the assignment operator being bitwise.
+        AstKind::AssignmentExpression(assign) => {
+            assign.right.span() == operand_span && is_bitwise_assignment(assign.operator)
+        }
+        _ => false,
+    }
+}
+
+/// True for a compound assignment operator that performs a bitwise operation
+/// (`&=`, `|=`, `^=`, `<<=`, `>>=`, `>>>=`). The logical-assignment operators
+/// (`&&=`, `||=`, `??=`) and arithmetic ones are not bitwise.
+fn is_bitwise_assignment(op: oxc_ast::ast::AssignmentOperator) -> bool {
+    use oxc_ast::ast::AssignmentOperator;
+    matches!(
+        op,
+        AssignmentOperator::BitwiseAnd
+            | AssignmentOperator::BitwiseOR
+            | AssignmentOperator::BitwiseXOR
+            | AssignmentOperator::ShiftLeft
+            | AssignmentOperator::ShiftRight
+            | AssignmentOperator::ShiftRightZeroFill
     )
 }
 
@@ -1247,8 +1351,10 @@ mod tests {
     #[test]
     fn flags_hex_without_explanatory_comment() {
         // The exemption is the inline comment, not the hex format: an undocumented
-        // hex literal in a non-charcode context is still a magic number.
-        let src = r#"function f(x) { return x & 0xABCDEF; }"#;
+        // hex literal in a non-charcode context is still a magic number. Used in
+        // an arithmetic context (`* 0xABCDEF`) so the bitwise-operand exemption
+        // does not apply — the comment is what is under test.
+        let src = r#"function f(x) { return x * 0xABCDEF; }"#;
         assert_eq!(run(src).len(), 1);
     }
 
@@ -1264,7 +1370,9 @@ mod tests {
     fn flags_hex_when_comment_is_on_next_line() {
         // The comment must trail the literal on the same line; a comment on a
         // following line documents something else and does not exempt the hex.
-        let src = "function f(x) { return x & 0xABCDEF;\n// unrelated comment\n}";
+        // Arithmetic context (`* 0xABCDEF`) so the comment, not the operator, is
+        // what is under test.
+        let src = "function f(x) { return x * 0xABCDEF;\n// unrelated comment\n}";
         assert_eq!(run(src).len(), 1);
     }
 
@@ -1283,8 +1391,9 @@ mod tests {
         // A trailing comment must not reach across a statement boundary: the
         // undocumented `0xDEAD` is separated from the comment by `; g();`, so it
         // is still flagged. (`let`, not `const`, so the const-initializer
-        // exemption does not apply.)
-        let src = "function f(x) { let y = x & 0xDEAD; g(); /* note */ return y; }";
+        // exemption does not apply; `* 0xDEAD` keeps it out of the bitwise-operand
+        // exemption so the comment-binding logic is what is under test.)
+        let src = "function f(x) { let y = x * 0xDEAD; g(); /* note */ return y; }";
         assert_eq!(run(src).len(), 1);
     }
 
@@ -1383,8 +1492,11 @@ mod tests {
 
     #[test]
     fn flags_other_value_in_byte_operator_context() {
-        // The 8-bit exemption is value-gated to 255; a different mask still flags.
-        let src = r#"function f(x: number) { return x & 86400; }"#;
+        // The 8-bit exemption is value-gated to 255; a different value in a
+        // non-bitwise byte-operator position (`/`) still flags. (A non-255
+        // *bitwise* operand is exempt under the general bitwise-operand rule, so
+        // this uses division to isolate the byte-max value gate.)
+        let src = r#"function f(x: number) { return x / 86400; }"#;
         assert_eq!(run(src).len(), 1);
     }
 
@@ -1504,6 +1616,87 @@ mod tests {
                 }
             }
         "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Regression for issue #5462: LEB128 (and any binary-format codec) uses the
+    // `0x80` continuation-bit mask and `0x7f` 7-bit mask as bitwise operands.
+    // `x | 0x80` sets the continuation bit, `x &= 0x7f` clears the high bit,
+    // `x >> 7` shifts off a 7-bit group, `byte >= 0x80` tests the bit — the
+    // operator names each constant's role, so none is a magic number.
+    #[test]
+    fn allows_leb128_bitwise_constants() {
+        let src = r#"
+            function encode(payload: number, value: number, byte: number) {
+                const set = payload | 0x80;
+                let last = payload;
+                last &= 0x7f;
+                const group = value >> 7;
+                const more = byte >= 0x80;
+                return set + last + group + (more ? 1 : 0);
+            }
+        "#;
+        assert!(
+            run(src).is_empty(),
+            "LEB128 bit-mask / shift / bit-test constants must not be flagged"
+        );
+    }
+
+    #[test]
+    fn allows_bitwise_mask_and_shift_operands() {
+        // The exemption is structural (operator), not value-gated: an arbitrary
+        // mask or shift amount is exempt in any bitwise position.
+        let src = r#"
+            function f(x: number) {
+                const a = x & 0x12345;
+                const b = x | 96;
+                const c = x ^ 73;
+                const d = x << 13;
+                const e = x >>> 17;
+                return a + b + c + d + e;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_compound_bitwise_assignment_operands() {
+        let src = r#"
+            function f(x: number) {
+                let v = x;
+                v &= 0x7f;
+                v |= 0x80;
+                v ^= 73;
+                v <<= 8;
+                v >>= 3;
+                return v;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_arithmetic_magic_number_not_in_bitwise_context() {
+        // The exemption is anchored on bitwise operators; an arithmetic operand
+        // (`x + 42`, `price * 1.07`) is still a magic number.
+        let src = r#"function f(x: number, price: number) { return (x + 42) + price * 1.07; }"#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn flags_decimal_comparison_threshold() {
+        // A decimal literal compared against is an arithmetic threshold, not a
+        // bit-pattern test; only *hex* comparison operands (`byte >= 0x80`) are
+        // exempt, so this decimal comparison stays flagged.
+        let src = r#"function f(count: number) { return count >= 128; }"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_compound_arithmetic_assignment_operand() {
+        // The compound-assignment exemption is scoped to bitwise operators; an
+        // arithmetic compound assignment (`x *= 86400`) keeps flagging.
+        let src = r#"function f(x: number) { let v = x; v *= 86400; return v; }"#;
         assert_eq!(run(src).len(), 1);
     }
 }
