@@ -107,4 +107,20 @@ export * from \"./api/listRegistrations.js\";";
     fn still_flags_verb_in_actual_url_literal() {
         assert_eq!(run("fetch('/api/createOrder');").len(), 1);
     }
+
+    #[test]
+    fn ignores_external_documentation_url_in_error_message() {
+        // Absolute external URLs are reference links, not the project's own
+        // route paths (issue #5546).
+        let src = "throw new Error('see https://webdriver.io/docs/api/browser/deleteCookies');";
+        assert!(run(src).is_empty());
+        let src = "throw new Error('see https://webdriver.io/docs/api/browser/setCookies');";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_relative_endpoint_path_route() {
+        // A relative endpoint path registered with a router stays flagged.
+        assert_eq!(run("router.get('/api/getUser', handler);").len(), 1);
+    }
 }
