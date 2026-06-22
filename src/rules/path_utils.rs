@@ -978,10 +978,15 @@ pub fn strip_specifier_query(spec: &str) -> &str {
 
 /// True for an import specifier that traverses into a build-output or
 /// code-generated directory (`dist`/`build`/`out` bundles, `generated`/
-/// `__generated__`/`.prisma`/`prisma`/`gen` codegen output) or `node_modules`.
-/// These artifacts are produced by a build step, gitignored, and absent in a
-/// clean checkout, so an unresolved import into them is expected. Segment match
-/// over the `/`-split specifier (so `./distance` is NOT a `dist` match).
+/// `__generated__`/`.prisma`/`prisma`/`gen` codegen output) or `node_modules`,
+/// or into a framework build-generated root (`.nuxt`/`.output`/`.nitro` for
+/// Nuxt+Nitro, `.next` for Next.js, `.vinxi` for Vinxi-based stacks,
+/// `.svelte-kit` for SvelteKit). These artifacts are produced by a build/prepare
+/// step (e.g. `nuxt prepare` emits `.nuxt/eslint.config.mjs`), gitignored, and
+/// absent in a clean checkout, so an unresolved import into them is expected. The
+/// dot-prefixed framework roots cannot be hand-written source, so matching them
+/// never masks a real broken path. Segment match over the `/`-split specifier
+/// (so `./distance` is NOT a `dist` match).
 pub fn is_build_output_specifier(spec: &str) -> bool {
     spec.split('/').any(|seg| {
         matches!(
@@ -995,6 +1000,12 @@ pub fn is_build_output_specifier(spec: &str) -> bool {
                 | "prisma"
                 | "gen"
                 | "node_modules"
+                | ".nuxt"
+                | ".output"
+                | ".nitro"
+                | ".next"
+                | ".vinxi"
+                | ".svelte-kit"
         )
     })
 }
