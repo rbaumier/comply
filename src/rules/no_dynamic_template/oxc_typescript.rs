@@ -67,8 +67,7 @@ impl OxcCheck for Check {
 
     fn prefilter(&self) -> Option<&'static [&'static str]> {
         Some(&["innerHTML", "outerHTML", "document.write", "insertAdjacentHTML",
-               "createContextualFragment", "setHTMLUnsafe", "dangerouslySetInnerHTML",
-               "location.href"])
+               "createContextualFragment", "setHTMLUnsafe", "dangerouslySetInnerHTML"])
     }
 
     fn run<'a>(
@@ -111,9 +110,6 @@ impl OxcCheck for Check {
                         emit(ctx, assign.span.start, prop, diagnostics);
                         return;
                     }
-                }
-                if lhs_text.ends_with("location.href") || lhs_text == "location.href" {
-                    emit(ctx, assign.span.start, "location.href =", diagnostics);
                 }
             }
             AstKind::CallExpression(call) => {
@@ -196,9 +192,13 @@ mod tests {
         assert!(run_on("el.textContent = name;").is_empty());
     }
 
+    // Repro for #5559: `location.href = …` is URL navigation, not HTML injection.
+    // It navigates the browser; no markup is parsed or written into the DOM.
     #[test]
-    fn flags_location_href() {
-        assert_eq!(run_on("location.href = userInput;").len(), 1);
+    fn allows_location_href_assignment() {
+        assert!(run_on("location.href = `https://x/${id}`;").is_empty());
+        assert!(run_on("win.location.href = url;").is_empty());
+        assert!(run_on("window.location.href = url;").is_empty());
     }
 
     #[test]
