@@ -3320,6 +3320,37 @@ fn cast_target_int_kind(cast: Node, source: &[u8]) -> Option<(bool, u16)> {
     fixed_width_int_kind(target)
 }
 
+/// True when `cast` converts a resolvable integer operand to a float target
+/// (`<int> as f32` / `<int> as f64`).
+///
+/// A lossy integer→float conversion has no `From`/`TryFrom` alternative in std:
+/// the trait impls exist only for the lossless pairs (`f64::from(i32)`,
+/// `f32::from(i16)`, …); for the lossy pairs (`u64`/`i64`/`u128`/`i128`/`usize`/
+/// `isize` → `f64`, and `i32`/`u32` and wider → `f32`) no `From` and no
+/// `TryFrom` exists. `as` is then the only conversion the language offers, so a
+/// rule suggesting `try_into()` / `From::from(x)` would emit an impossible fix.
+///
+/// The operand's source type must be a resolvable integer (a fixed-width
+/// integer or `usize`/`isize`, seen through a deref/borrow or as a typed
+/// container's element). An unresolved operand returns `false` — its kind is not
+/// proven to be an integer, so the caller's own unresolved-operand handling
+/// applies. A `char`/`bool` operand is not an integer here, and a float→float
+/// narrowing (`f64 as f32`) has a float source, so neither is exempted.
+pub fn cast_is_int_to_float(cast: Node, source: &[u8]) -> bool {
+    let Some(target) =
+        cast.child_by_field_name("type").and_then(|t| t.utf8_text(source).ok()).map(str::trim)
+    else {
+        return false;
+    };
+    if target != "f32" && target != "f64" {
+        return false;
+    }
+    matches!(
+        classify_cast_source(cast, source),
+        CastSource::FixedWidth(..) | CastSource::PlatformWidth
+    )
+}
+
 /// Classify `cast`'s operand source type when locally visible: a
 /// bare/dereferenced identifier with a local annotation, or an index into a
 /// locally-typed integer container. A resolved `usize`/`isize` is reported as
@@ -5398,6 +5429,44 @@ mod tests {
                 cast_feeds_from_bits(cast, src.as_bytes()),
                 expected,
                 "cast_feeds_from_bits mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn cast_is_int_to_float_matches_resolved_integer_to_float() {
+        let cases = [
+            // Issue #5690: integer params cast to a float target.
+            ("fn f(n: u64) -> f32 { n as f32 }", true),
+            ("fn f(n: i64) -> f64 { n as f64 }", true),
+            ("fn f(n: u32) -> f32 { n as f32 }", true),
+            ("fn f(n: i32) -> f32 { n as f32 }", true),
+            // Platform-width integer sources have no `From<usize/isize>` for floats.
+            ("fn f(n: usize) -> f64 { n as f64 }", true),
+            ("fn f(n: isize) -> f64 { n as f64 }", true),
+            // A deref/borrow integer source resolves through the referent.
+            ("fn f(n: &u64) -> f32 { *n as f32 }", true),
+            // Lossless integer -> float is still an integer source.
+            ("fn f(n: u8) -> f32 { n as f32 }", true),
+            // A typed-container element resolves as the source.
+            ("fn f(b: &[u8]) -> f32 { b[0] as f32 }", true),
+            // Float -> int is the reverse direction — not int -> float.
+            ("fn f(x: f64) -> i32 { x as i32 }", false),
+            // Float -> float narrowing has a float source.
+            ("fn f(x: f64) -> f32 { x as f32 }", false),
+            // Int -> int narrowing has a non-float target.
+            ("fn f(x: i64) -> i32 { x as i32 }", false),
+            // An unresolved operand is not proven to be an integer.
+            ("fn f(s: S) -> f32 { s.value() as f32 }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_of_kind(tree.root_node(), "type_cast_expression")
+                .expect("snippet should contain a type_cast_expression");
+            assert_eq!(
+                cast_is_int_to_float(cast, src.as_bytes()),
+                expected,
+                "cast_is_int_to_float mismatch for `{src}`"
             );
         }
     }
